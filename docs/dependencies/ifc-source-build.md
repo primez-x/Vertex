@@ -150,8 +150,16 @@ entered Release compilation in `C:/Build/Vertex/ifc-candidate-784`, then failed
 because `SvgSerializer.cpp` requires `boost/format.hpp`. The support manifest
 now explicitly includes `boost-format`; its pinned 1.86.0 support SDK install
 passed. The fresh `C:/Build/Vertex/ifc-candidate-785` configured successfully
-and entered compilation. It must pass before packaging. The failed candidate's logs
-and `build-evidence.json` are preserved. These manifests and commands describe
+and compiled the schema/geometry dependencies, but the Python wrapper failed
+with three MSVC C2248 errors: generated code attempts to copy
+`SwigValueWrapper<IfcGeom::OpaqueCoordinate<3>>` and
+`SwigValueWrapper<IfcGeom::OpaqueCoordinate<4>>`, whose copy constructors are
+private. Its terminal `build-evidence.json` records `state: failed` and a
+nonzero `build-release` exit. It cannot be packaged as a successful candidate.
+Both failed candidates' logs and `build-evidence.json` are preserved. Diagnose
+the wrapper generation before starting another full build; no runtime
+replacement or source qualification follows from compiled intermediate libraries.
+These manifests and commands describe
 candidate inputs, not a completed source-build
 qualification. Earlier failed preflight/configure attempts are retained in
 their separate candidate directories; they are not successful build evidence.

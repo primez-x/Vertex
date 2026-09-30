@@ -1186,7 +1186,7 @@
       "requirement": "Support vertex insertion and cloning for applicable boundaries, walls, and objects without breaking constraints or area topology.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "verified",
+      "implementation_status": "in_progress",
       "acceptance": "Insertion and clone fixtures preserve valid topology, report any new degrees of freedom, and reopen identically.",
       "package": 4,
       "blocker": null,
