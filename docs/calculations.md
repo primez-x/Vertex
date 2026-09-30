@@ -133,8 +133,11 @@ totals still use the declared-facts qualification checks above.
 boundary geometries for sheets and export without depending on the currently
 selected object. The report is tied to a document revision and property, retains
 the source boundary IDs behind every category total, and includes property,
-building and floor totals from the same `calculate_appraisal_areas` result used by
-the inspector. Architectural room boundaries and site/survey boundaries are not
+building and floor totals. The declared-appraisal inspector uses this shared
+report's qualification gate and calculated totals, so contradictory floor,
+building or property references withhold automatic totals both on screen and
+in sheet output. Inspecting a conflict never silently repairs the document.
+Architectural room boundaries and site/survey boundaries are not
 appraisal measurement areas. Design-phase visibility is semantic and therefore
 participates in qualification; transient workspace visibility never changes the
 totals. If any participating boundary is incomplete, incompatible, hidden by the

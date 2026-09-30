@@ -373,7 +373,7 @@ void declared_exclusions_and_commercial_totals() {
     const auto hole = window.createBoundary(square(1, 1, 1));
     require(window.editSelectedAppraisalFacts(declarations("residential_declared", "dwelling", "above", "open_to_below")), "declare void");
     auto* qualification = window.findChild<QLabel*>(QStringLiteral("appraisalQualification"));
-    require(qualification->text().contains("Exclusion must be linked"), "unlinked exclusions must not yield plausible qualified totals");
+    require(qualification->text().contains("exclusion must be linked", Qt::CaseInsensitive), "unlinked exclusions must not yield plausible qualified totals");
     auto snapshot = window.document().snapshot();
     auto parent = snapshot.entities().at(outer.toStdString());
     parent.properties["deduction_ids"] = std::vector<std::string>{hole.toStdString()};
@@ -489,6 +489,74 @@ void declared_appraisal_reports_selected_building_floor_and_property() {
     require(window.selectEntity(first) && building->text().contains("100.00") &&
                 floor->text().contains("100.00") && property->text().contains("500.00"),
             "selecting building 1 must change building and floor totals without changing the property total");
+}
+
+void contradictory_appraisal_ownership_withholds_inspector_and_schedule_totals() {
+    sketch::desktop::MainWindow window;
+    const auto area = window.createBoundary(square(0, 0, 3.048));
+    auto* workflow = window.findChild<QComboBox*>(QStringLiteral("calculationWorkflow"));
+    workflow->setCurrentIndex(workflow->findData(QStringLiteral("appraisal")));
+    require(window.editSelectedAppraisalFacts(declarations()),
+            "ownership fixture must begin with a qualified 100 square foot area");
+    const auto other_building = window.createBuilding(QStringLiteral("property-1"),
+                                                      QStringLiteral("Other building"));
+    require(!other_building.isEmpty(), "ownership fixture needs another valid building");
+
+    auto snapshot = window.document().snapshot();
+    auto boundary = snapshot.entities().at(area.toStdString());
+    boundary.properties["building_id"] = other_building.toStdString();
+    window.document().apply(sketch::ApplyEntityChanges{
+        snapshot.revision(), {sketch::EntityChange::upsert(boundary)}, {},
+        "inject contradictory appraisal building identity"});
+    const auto invalid_snapshot = window.document().snapshot();
+    require(window.selectEntity(area), "contradictory area must remain inspectable");
+    auto* qualification = window.findChild<QLabel*>(QStringLiteral("appraisalQualification"));
+    auto* total = window.findChild<QLabel*>(QStringLiteral("appraisalPropertyTotal"));
+    auto* gla = window.findChild<QLabel*>(QStringLiteral("appraisalGlaTotal"));
+    require(qualification->text().contains("Unqualified") &&
+                qualification->text().contains("building_id disagrees with its floor") &&
+                total->text() == QStringLiteral("—") && gla->text() == QStringLiteral("—"),
+            "contradictory ownership must withhold inspector automatic totals");
+    const auto schedule = window.scheduleSnapshot();
+    require(std::any_of(schedule.snapshot.rows.begin(), schedule.snapshot.rows.end(),
+                        [](const auto& row) {
+                const auto status = row.cells.find("status");
+                return row.kind == sketch::ScheduleRowKind::appraisal &&
+                       status != row.cells.end() &&
+                       std::holds_alternative<std::string>(status->second.value) &&
+                       std::get<std::string>(status->second.value).find("totals withheld") !=
+                           std::string::npos;
+            }) &&
+                std::none_of(schedule.snapshot.rows.begin(), schedule.snapshot.rows.end(),
+                             [](const auto& row) {
+                    return row.kind == sketch::ScheduleRowKind::appraisal &&
+                           row.cells.contains("area");
+                }),
+            "contradictory ownership must also withhold schedule automatic totals");
+    require(window.document().revision() == invalid_snapshot.revision() &&
+                window.document().snapshot().entities() == invalid_snapshot.entities(),
+            "inspecting and projecting contradictory ownership must not repair or mutate it");
+
+    snapshot = window.document().snapshot();
+    boundary.properties["building_id"] = "building-1";
+    window.document().apply(sketch::ApplyEntityChanges{
+        snapshot.revision(), {sketch::EntityChange::upsert(boundary)}, {},
+        "correct appraisal building identity"});
+    require(window.selectEntity(area) && qualification->text().startsWith("Qualified") &&
+                total->text().contains("100.00") && gla->text().contains("100.00"),
+            "correcting ownership must restore qualified 100 square foot inspector totals");
+    const auto corrected_schedule = window.scheduleSnapshot();
+    require(std::any_of(corrected_schedule.snapshot.rows.begin(),
+                        corrected_schedule.snapshot.rows.end(), [](const auto& row) {
+                const auto area_cell = row.cells.find("area");
+                return row.kind == sketch::ScheduleRowKind::appraisal &&
+                       row.object_id.ends_with(":category:above_grade_finished") &&
+                       area_cell != row.cells.end() &&
+                       std::holds_alternative<sketch::ScheduleQuantity>(area_cell->second.value) &&
+                       std::abs(std::get<sketch::ScheduleQuantity>(area_cell->second.value).value -
+                                9.290304) < 1e-8;
+            }),
+            "correcting ownership must restore the same 100 square foot schedule total");
 }
 
 void appraisal_declarations_reject_read_only_documents() {
@@ -620,6 +688,7 @@ int main(int argc, char** argv) {
         declared_exclusions_and_commercial_totals();
         declared_appraisal_excludes_site_boundaries();
         declared_appraisal_reports_selected_building_floor_and_property();
+        contradictory_appraisal_ownership_withholds_inspector_and_schedule_totals();
         appraisal_declarations_reject_read_only_documents();
         malformed_appraisal_projection_prints_withheld_status();
         appraisal_summary_prints_from_the_automatic_report();

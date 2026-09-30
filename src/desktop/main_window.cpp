@@ -23613,6 +23613,11 @@ private:
                     "selected boundary is hidden by the active design phase");
             }
             const bool declared = appraisal_workflow && property->properties.contains("appraisal_policy");
+            std::optional<AppraisalDocumentReport> declared_report;
+            if (declared) {
+                declared_report = build_appraisal_document_report(
+                    snapshot, property->id, display_profile.display_unit, &phase_visible_ids);
+            }
             std::set<std::string, std::less<>> referenced_deductions;
             std::set<std::string, std::less<>> building_referenced_deductions;
             for (const auto& [id, entity] : entities) {
@@ -23808,6 +23813,16 @@ private:
                 }
             }
             if (declared) {
+                // Use the same ownership validation and qualification as the
+                // printable report. Local area inspection above preserves
+                // physical details, but cannot authorize automatic totals.
+                all_qualified = declared_report->qualified;
+                qualification_reasons.clear();
+                for (const auto& issue : declared_report->issues)
+                    qualification_reasons.push_back(QString::fromStdString(issue));
+                qualifications.clear();
+                for (const auto& boundary : declared_report->boundaries)
+                    qualifications.emplace(boundary.boundary_id, boundary.qualification);
                 m_appraisal_summary_group->setTitle(all_qualified
                     ? QStringLiteral("Automatic appraisal — Qualified (Vertex policy)")
                     : QStringLiteral("Automatic appraisal — Unqualified"));
@@ -23830,7 +23845,11 @@ private:
             std::optional<AppraisalCalculationReport> appraisal_report;
             CalculationReport report;
             if (appraisal_workflow) {
-                appraisal_report = calculate_appraisal_areas(areas, display_profile);
+                appraisal_report = declared
+                    ? declared_report->calculation
+                    : std::optional<AppraisalCalculationReport>{calculate_appraisal_areas(areas, display_profile)};
+                if (!appraisal_report)
+                    throw std::invalid_argument("qualified appraisal report has no calculation");
                 report = appraisal_report->calculation;
             } else {
                 report = calculate_areas(areas, display_profile);
