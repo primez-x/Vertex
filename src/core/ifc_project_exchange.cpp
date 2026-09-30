@@ -2,6 +2,10 @@
 
 #include "sketch/boundary_entity.hpp"
 #include "sketch/wall_semantics.hpp"
+#include "sketch/door_operation.hpp"
+#include "sketch/opening_assembly.hpp"
+#include "sketch/project_organization.hpp"
+#include "sketch/ifc_native_geometry.hpp"
 
 #include <algorithm>
 #include <charconv>
@@ -36,6 +40,8 @@ void validate_limits(const IfcExchangeLimits& limits) {
     require(limits.max_records > 0 && limits.max_records <= 500'000);
     require(limits.max_arguments > 0 && limits.max_arguments <= 4'000'000);
     require(limits.max_string_bytes > 0 && limits.max_string_bytes <= 65'536);
+    require(limits.max_mesh_vertices > 0 && limits.max_mesh_vertices <= 1'000'000);
+    require(limits.max_mesh_triangles > 0 && limits.max_mesh_triangles <= 2'000'000);
     (void)cap;
 }
 
@@ -98,7 +104,7 @@ std::vector<std::string> split_top_level(std::string_view value, std::size_t& ar
             continue;
         }
         if (quoted) continue;
-        if (c == '(') ++depth;
+        if (c == '(') { ++depth; require(depth <= 128); }
         else if (c == ')') {
             --depth;
             require(depth >= 0);
@@ -112,7 +118,11 @@ std::vector<std::string> split_top_level(std::string_view value, std::size_t& ar
     for (const auto& item : result) {
         require(!item.empty());
         if (++argument_count > limits.max_arguments) invalid();
-        printable(item, limits);
+        auto field_limits = limits;
+        // Aggregate coordinate/index lists are bounded by file and mesh budgets;
+        // max_string_bytes remains the limit for decoded STEP string values.
+        if (item.front() == '(') field_limits.max_string_bytes = limits.max_bytes;
+        printable(item, field_limits);
     }
     return result;
 }
@@ -190,6 +200,9 @@ std::string real_text(double value) {
     require(result.ec == std::errc{});
     std::string text(buffer, result.ptr);
     if (text == "-0" || text == "-0.0") text = "0";
+    // STEP distinguishes INTEGER from REAL lexically, including defined length
+    // measures. to_chars emits whole-valued doubles without a decimal point.
+    if (text.find_first_of(".eE") == std::string::npos) text += '.';
     return text;
 }
 
@@ -203,6 +216,7 @@ struct ParsedStep {
     std::vector<StepRecord> records;
     std::map<int, std::size_t> by_id;
     std::size_t argument_count{};
+    bool coordinate_operations{};
 };
 
 std::size_t statement_end(std::string_view text, std::size_t cursor, std::size_t end) {
@@ -276,6 +290,10 @@ ParsedStep parse_step(std::string_view bytes, const IfcExchangeLimits& limits) {
         require(result.records.size() < limits.max_records);
         require(result.by_id.emplace(record.id, result.records.size()).second);
         result.records.push_back(std::move(record));
+        const auto& added_type = result.records.back().type;
+        result.coordinate_operations = result.coordinate_operations ||
+            added_type == "IFCCOORDINATEOPERATION" || added_type == "IFCMAPCONVERSION" ||
+            added_type == "IFCRIGIDOPERATION";
         cursor = end + 1;
     }
     require(cursor == data_end);
@@ -469,6 +487,8 @@ struct ExportContext {
     std::size_t ordinal{};
     std::map<std::string, int, std::less<>> product_ids;
     std::vector<std::pair<std::string, std::string>> opening_host_links;
+    std::size_t mesh_vertices{};
+    std::size_t mesh_triangles{};
 
     explicit ExportContext(const IfcExchangeLimits& limits) : limits(limits), builder(limits) {
         const auto person = builder.add("IFCPERSON", "$,$,'Vertex',$,$,$,$,$");
@@ -595,6 +615,137 @@ void export_wall_construction(const Entity& entity, int product, ExportContext& 
                    "wall_layer_placement_not_exported");
 }
 
+Wall native_wall(const Entity& entity) {
+    const auto axis = read_baseline(entity);
+    require(axis.has_value());
+    Wall wall{entity.id, *axis, entity.properties.at("thickness_m").get<double>(),
+        entity.properties.at("height_m").get<double>(), entity.properties.value("elevation_m", 0.0)};
+    if (entity.properties.contains("slope_rise_m"))
+        wall.slope_rise = entity.properties.at("slope_rise_m").get<double>();
+    validate_wall_semantics(wall);
+    return wall;
+}
+
+HostedOpening native_opening(const Entity& entity) {
+    return {entity.id, entity.properties.at("offset_m").get<double>(),
+        entity.properties.at("width_m").get<double>(), entity.properties.at("sill_m").get<double>(),
+        entity.properties.at("height_m").get<double>()};
+}
+
+std::optional<DoorOperation> native_operation(const Entity& entity) {
+    if (!entity.properties.contains("door_operation")) return std::nullopt;
+    return decode_door_operation(entity.properties.at("door_operation"));
+}
+
+std::string door_operation_enum(const std::optional<DoorOperation>& operation) {
+    if (!operation) return ".NOTDEFINED.";
+    // IFC handing is viewed from the opening direction; both native hinge and
+    // swing side are retained exactly in the checked Vertex property set.
+    return operation->hinge_at_end == operation->swing_left
+        ? ".SINGLE_SWING_RIGHT." : ".SINGLE_SWING_LEFT.";
+}
+
+#ifdef SKETCH_IFC_NATIVE_GEOMETRY
+int mesh_shape(const std::vector<IfcNativeMesh>& meshes, ExportContext& context) {
+    std::string items;
+    for (const auto& mesh : meshes) {
+        require(mesh.vertices.size() <= context.limits.max_mesh_vertices - context.mesh_vertices &&
+                mesh.triangles.size() <= context.limits.max_mesh_triangles - context.mesh_triangles);
+        context.mesh_vertices += mesh.vertices.size();
+        context.mesh_triangles += mesh.triangles.size();
+        std::string coordinates = "(";
+        for (const auto& point : mesh.vertices) {
+            if (coordinates.size() > 1) coordinates += ',';
+            coordinates += "(" + real_text(point[0]) + "," + real_text(point[1]) + "," + real_text(point[2]) + ")";
+        }
+        coordinates += ')';
+        const auto points = context.builder.add("IFCCARTESIANPOINTLIST3D", std::move(coordinates));
+        std::string indices = "(";
+        for (const auto& triangle : mesh.triangles) {
+            if (indices.size() > 1) indices += ',';
+            indices += "(" + std::to_string(triangle[0] + 1) + "," +
+                std::to_string(triangle[1] + 1) + "," + std::to_string(triangle[2] + 1) + ")";
+        }
+        indices += ')';
+        const auto item = context.builder.add("IFCTRIANGULATEDFACESET",
+            ref(points) + ",$,.T.," + indices + ",$");
+        if (!items.empty()) items += ',';
+        items += ref(item);
+    }
+    require(!items.empty());
+    const auto representation = context.builder.add("IFCSHAPEREPRESENTATION",
+        ref(context.representation_context) + ",'Body','Tessellation',(" + items + ")");
+    return context.builder.add("IFCPRODUCTDEFINITIONSHAPE", "$,$,(" + ref(representation) + ")");
+}
+
+Entity mesh_metadata(const Entity& entity, std::string_view role) {
+    auto retained = entity;
+    retained.properties["_vertex_ifc_mesh"] = {{"version", 1}, {"role", role},
+        {"max_deviation_m", ifc_native_mesh_deviation_m}};
+    return retained;
+}
+
+void export_fill(const DocumentSnapshot& document, const Entity& entity, int void_id,
+    ExportContext& context, std::vector<IfcProjectDiagnostic>& diagnostics) {
+    if (!entity.properties.contains("opening_assembly")) return;
+    const auto host = resolve_vertical_placement(document,
+        document.entities().at(entity.properties.at("wall_id").get<std::string>()));
+    const auto wall = native_wall(host);
+    const auto opening = native_opening(entity);
+    const auto profile = parse_opening_assembly(entity.properties.at("opening_assembly"));
+    const auto operation = native_operation(entity);
+    require(entity.properties.value("opening_kind", std::string{}) == opening_assembly_kind_name(profile.kind));
+    require(profile.kind == OpeningAssemblyKind::door || !operation);
+    const auto meshes = ifc_native_fill_mesh(wall, opening, profile, operation,
+        context.limits.max_mesh_vertices - context.mesh_vertices,
+        context.limits.max_mesh_triangles - context.mesh_triangles);
+    const auto shape = mesh_shape(meshes, context);
+    const bool door = profile.kind == OpeningAssemblyKind::door;
+    const auto fill = context.builder.add(door ? "IFCDOOR" : "IFCWINDOW",
+        context.root("fill:" + entity.id, entity.id + " fill") + ",$," + ref(context.placement) +
+        "," + ref(shape) + ",$," + real_text(opening.height) + "," + real_text(opening.width) +
+        (door ? ",.DOOR.," + door_operation_enum(operation) + ",$" : ",.WINDOW.,.NOTDEFINED.,$"));
+    context.builder.add("IFCRELFILLSELEMENT", context.root("fills:" + entity.id, "") +
+        "," + ref(void_id) + "," + ref(fill));
+    context.contained_products.push_back(fill);
+    auto retained = mesh_metadata(entity, "fill");
+    retained.properties["_vertex_ifc_host"] = host.properties;
+    retain_properties(retained, fill, context, diagnostics);
+}
+
+bool export_curved_native(const DocumentSnapshot& document, const Entity& entity,
+    ExportContext& context, std::vector<IfcProjectDiagnostic>& diagnostics) {
+    Entity host = entity;
+    if (entity.type == "opening") host = resolve_vertical_placement(document,
+        document.entities().at(entity.properties.at("wall_id").get<std::string>()));
+    const auto axis = read_baseline(host);
+    if (!axis || std::abs(axis->sweep_radians) <= kTolerance) return false;
+    const auto wall = native_wall(host);
+    const auto meshes = entity.type == "wall"
+        ? ifc_native_wall_mesh(wall, context.limits.max_mesh_vertices - context.mesh_vertices,
+                              context.limits.max_mesh_triangles - context.mesh_triangles)
+        : ifc_native_void_mesh(wall, native_opening(entity),
+            context.limits.max_mesh_vertices - context.mesh_vertices,
+            context.limits.max_mesh_triangles - context.mesh_triangles);
+    const auto shape = mesh_shape(meshes, context);
+    const auto product = context.builder.add(entity.type == "wall" ? "IFCWALL" : "IFCOPENINGELEMENT",
+        context.root(entity.id, entity.id) + ",$," + ref(context.placement) + "," + ref(shape) +
+        (entity.type == "wall" ? ",$,.NOTDEFINED." : ",$,.OPENING."));
+    context.product_ids[entity.id] = product;
+    auto retained = mesh_metadata(entity, entity.type == "wall" ? "wall" : "void");
+    if (entity.type == "wall") {
+        context.contained_products.push_back(product);
+        export_wall_construction(entity, product, context, diagnostics);
+    } else {
+        context.opening_host_links.emplace_back(entity.id, host.id);
+        retained.properties["_vertex_ifc_host"] = host.properties;
+    }
+    retain_properties(retained, product, context, diagnostics);
+    if (entity.type == "opening") export_fill(document, entity, product, context, diagnostics);
+    return true;
+}
+#endif
+
 void export_product(const DocumentSnapshot& document, const Entity& entity,
                     ExportContext& context, std::vector<IfcProjectDiagnostic>& diagnostics) {
     const auto& type = entity.type;
@@ -604,6 +755,11 @@ void export_product(const DocumentSnapshot& document, const Entity& entity,
     bool use_solid = false;
     double depth = 0.0;
     double local_elevation = 0.0;
+
+#ifdef SKETCH_IFC_NATIVE_GEOMETRY
+    if ((type == "wall" || type == "opening") &&
+        export_curved_native(document, entity, context, diagnostics)) return;
+#endif
 
     if (type == "wall") {
         const auto baseline = read_baseline(entity);
@@ -682,7 +838,8 @@ void export_product(const DocumentSnapshot& document, const Entity& entity,
             add_diagnostic(diagnostics, entity.id, type, "opening_host_missing");
             return;
         }
-        const auto baseline = read_baseline(host->second);
+        const auto resolved_host = resolve_vertical_placement(document, host->second);
+        const auto baseline = read_baseline(resolved_host);
         if (!baseline) {
             add_diagnostic(diagnostics, entity.id, type,
                            "opening_host_baseline_not_representable");
@@ -705,8 +862,8 @@ void export_product(const DocumentSnapshot& document, const Entity& entity,
         const auto height = read_number("height_m", std::numeric_limits<double>::quiet_NaN());
         double wall_thickness = 0.0;
         for (const auto* key : {"thickness_m", "thickness"}) {
-            const auto found = host->second.properties.find(key);
-            if (found != host->second.properties.end() && found->is_number()) {
+            const auto found = resolved_host.properties.find(key);
+            if (found != resolved_host.properties.end() && found->is_number()) {
                 wall_thickness = found->get<double>();
                 break;
             }
@@ -714,15 +871,15 @@ void export_product(const DocumentSnapshot& document, const Entity& entity,
         double wall_height = 0.0;
         double wall_elevation = 0.0;
         for (const auto* key : {"height_m", "height"}) {
-            const auto found = host->second.properties.find(key);
-            if (found != host->second.properties.end() && found->is_number()) {
+            const auto found = resolved_host.properties.find(key);
+            if (found != resolved_host.properties.end() && found->is_number()) {
                 wall_height = found->get<double>();
                 break;
             }
         }
         for (const auto* key : {"elevation_m", "elevation"}) {
-            const auto found = host->second.properties.find(key);
-            if (found != host->second.properties.end() && found->is_number()) {
+            const auto found = resolved_host.properties.find(key);
+            if (found != resolved_host.properties.end() && found->is_number()) {
                 wall_elevation = found->get<double>();
                 break;
             }
@@ -730,9 +887,9 @@ void export_product(const DocumentSnapshot& document, const Entity& entity,
         // A void feature must not outlive an unsupported host body: IFC openings
         // require a host relationship, so retain both as native references.
         if (!std::isfinite(wall_height) || wall_height <= kTolerance ||
-            std::abs(host->second.properties.value("slope_rise_m", 0.0)) > kTolerance ||
-            !host->second.properties.contains("height_m") ||
-            !host->second.properties.contains("thickness_m")) {
+            std::abs(resolved_host.properties.value("slope_rise_m", 0.0)) > kTolerance ||
+            !resolved_host.properties.contains("height_m") ||
+            !resolved_host.properties.contains("thickness_m")) {
             add_diagnostic(diagnostics, entity.id, type, "opening_host_body_not_representable");
             return;
         }
@@ -774,8 +931,10 @@ void export_product(const DocumentSnapshot& document, const Entity& entity,
         local_elevation = wall_elevation + sill;
         context.opening_host_links.emplace_back(entity.id, host_id);
         if (entity.properties.contains("opening_assembly")) {
+#ifndef SKETCH_IFC_NATIVE_GEOMETRY
             add_diagnostic(diagnostics, entity.id, type,
                            "opening_assembly_not_exported");
+#endif
         }
     } else if (type == "property" || type == "building" || type == "floor" || type == "layer" ||
                type == "sheet" || type == "view" || type == "sheet_view_model" ||
@@ -867,6 +1026,9 @@ void export_product(const DocumentSnapshot& document, const Entity& entity,
     if (type == "wall" || type == "slab" || type == "opening") {
         retain_properties(entity, product_id, context, diagnostics);
     }
+#ifdef SKETCH_IFC_NATIVE_GEOMETRY
+    if (type == "opening") export_fill(document, entity, product_id, context, diagnostics);
+#endif
 }
 
 struct GeometryResult {
@@ -1078,6 +1240,7 @@ bool is_structural(std::string_view type) {
         "IFCAXIS2PLACEMENT3D", "IFCLOCALPLACEMENT", "IFCARBITRARYCLOSEDPROFILEDEF",
         "IFCEXTRUDEDAREASOLID", "IFCSHAPEREPRESENTATION", "IFCPRODUCTDEFINITIONSHAPE",
         "IFCPOLYLINE", "IFCPOLYLOOP", "IFCFACEOUTERBOUND", "IFCFACE", "IFCCLOSEDSHELL",
+        "IFCCARTESIANPOINTLIST3D", "IFCTRIANGULATEDFACESET",
         "IFCSOLIDMODEL", "IFCCONVERSIONBASEDUNIT", "IFCMEASUREWITHUNIT", "IFCDIMENSIONALEXPONENTS",
         "IFCGEOMETRICREPRESENTATIONCONTEXT", "IFCGEOMETRICREPRESENTATIONSUBCONTEXT"};
     return std::find(std::begin(values), std::end(values), type) != std::end(values);
@@ -1186,6 +1349,139 @@ bool metre_units(const ParsedStep& parsed, std::size_t& count, const IfcExchange
     return found;
 }
 
+std::optional<std::vector<IfcNativeMesh>> product_meshes(const ParsedStep& parsed,
+    const StepRecord& product, std::size_t& count, const IfcExchangeLimits& limits,
+    std::size_t& vertices, std::size_t& triangles) {
+    const auto fields = split_top_level(product.args, count, limits);
+    require(fields.size() >= 7);
+    const auto shape_id = reference(fields[6]);
+    if (!shape_id) return std::nullopt;
+    const auto* shape = find_record(parsed, *shape_id);
+    if (!shape || shape->type != "IFCPRODUCTDEFINITIONSHAPE") return std::nullopt;
+    const auto shape_fields = split_top_level(shape->args, count, limits);
+    require(shape_fields.size() == 3);
+    const auto representations = list_references(shape_fields[2], count, limits);
+    if (representations.size() != 1) return std::nullopt;
+    const auto* representation = find_record(parsed, representations.front());
+    if (!representation || representation->type != "IFCSHAPEREPRESENTATION") return std::nullopt;
+    const auto rep_fields = split_top_level(representation->args, count, limits);
+    require(rep_fields.size() == 4);
+    if (rep_fields[1] != "'Body'" || rep_fields[2] != "'Tessellation'") return std::nullopt;
+    // World-coordinate native meshes cannot be interpreted under a shifted or
+    // rotated context, subcontext, or coordinate operation.
+    const auto context_id = reference(rep_fields[0]);
+    if (!context_id) return std::nullopt;
+    const auto* context = find_record(parsed, *context_id);
+    if (!context || context->type != "IFCGEOMETRICREPRESENTATIONCONTEXT") return std::nullopt;
+    const auto context_fields = split_top_level(context->args, count, limits);
+    if (context_fields.size() != 6 || context_fields[2] != "3" || context_fields[5] != "$") return std::nullopt;
+    const auto axis_id = reference(context_fields[4]);
+    if (!axis_id) return std::nullopt;
+    const auto* axis = find_record(parsed, *axis_id);
+    if (!axis || axis->type != "IFCAXIS2PLACEMENT3D") return std::nullopt;
+    const auto axis_fields = split_top_level(axis->args, count, limits);
+    if (axis_fields.size() != 3 || axis_fields[1] != "$" || axis_fields[2] != "$") return std::nullopt;
+    const auto origin_id = reference(axis_fields[0]);
+    if (!origin_id) return std::nullopt;
+    const auto* origin = find_record(parsed, *origin_id);
+    if (!origin || origin->type != "IFCCARTESIANPOINT") return std::nullopt;
+    const auto world = point_record(*origin, count, limits);
+    if (std::abs(world.x) > kTolerance || std::abs(world.y) > kTolerance || std::abs(world.z) > kTolerance)
+        return std::nullopt;
+    if (parsed.coordinate_operations) return std::nullopt;
+    std::vector<IfcNativeMesh> result;
+    for (const auto id : list_references(rep_fields[3], count, limits)) {
+        const auto* item = find_record(parsed, id);
+        if (!item || item->type != "IFCTRIANGULATEDFACESET") return std::nullopt;
+        const auto mesh_fields = split_top_level(item->args, count, limits);
+        require(mesh_fields.size() == 5);
+        if (mesh_fields[1] != "$" || mesh_fields[2] != ".T." || mesh_fields[4] != "$")
+            return std::nullopt;
+        const auto points_id = reference(mesh_fields[0]);
+        require(points_id.has_value());
+        const auto* points = find_record(parsed, *points_id);
+        require(points && points->type == "IFCCARTESIANPOINTLIST3D");
+        const auto point_fields = split_top_level(points->args, count, limits);
+        require(point_fields.size() == 1);
+        IfcNativeMesh mesh;
+        for (const auto& point : split_top_level(inner_list(point_fields[0]), count, limits)) {
+            require(++vertices <= limits.max_mesh_vertices);
+            const auto coordinates = split_top_level(inner_list(point), count, limits);
+            require(coordinates.size() == 3);
+            mesh.vertices.push_back({number<double>(coordinates[0]), number<double>(coordinates[1]),
+                                     number<double>(coordinates[2])});
+        }
+        require(mesh.vertices.size() >= 3);
+        for (const auto& triangle : split_top_level(inner_list(mesh_fields[3]), count, limits)) {
+            require(++triangles <= limits.max_mesh_triangles);
+            const auto indices = split_top_level(inner_list(triangle), count, limits);
+            require(indices.size() == 3);
+            std::array<std::size_t, 3> values{};
+            for (std::size_t i = 0; i < 3; ++i) {
+                const auto value = number<std::size_t>(indices[i]);
+                require(value > 0 && value <= mesh.vertices.size());
+                values[i] = value - 1;
+            }
+            require(values[0] != values[1] && values[0] != values[2] && values[1] != values[2]);
+            mesh.triangles.push_back(values);
+        }
+        require(!mesh.triangles.empty());
+        result.push_back(std::move(mesh));
+    }
+    if (result.empty()) return std::nullopt;
+    // The native bridge writes world coordinates under an identity placement.
+    if (fields[5] != "$") {
+        const auto placement = reference(fields[5]); require(placement.has_value());
+        bool rotated = false; std::set<int> visited;
+        const auto translation = placement_translation(parsed, *placement, visited, rotated, count, limits);
+        if (rotated || std::abs(translation.x) > kTolerance || std::abs(translation.y) > kTolerance ||
+            std::abs(translation.z) > kTolerance) return std::nullopt;
+    }
+    return result;
+}
+
+bool native_mesh_role(const Json& properties, std::string_view role) {
+    const auto tag = properties.find("_vertex_ifc_mesh");
+    return tag != properties.end() && tag->is_object() && tag->contains("version") &&
+        tag->at("version").is_number_integer() && tag->at("version") == 1 &&
+        tag->contains("role") && tag->at("role").is_string() &&
+        tag->at("role").get<std::string>() == role && tag->contains("max_deviation_m") &&
+        tag->at("max_deviation_m").is_number() && tag->at("max_deviation_m").get<double>() ==
+        ifc_native_mesh_deviation_m;
+}
+
+#ifdef SKETCH_IFC_NATIVE_GEOMETRY
+bool matching_meshes(const std::vector<IfcNativeMesh>& source, const std::vector<IfcNativeMesh>& expected) {
+    if (source.size() != expected.size()) return false;
+    for (std::size_t i = 0; i < source.size(); ++i) {
+        if (source[i].vertices.size() != expected[i].vertices.size() ||
+            source[i].triangles != expected[i].triangles) return false;
+        for (std::size_t j = 0; j < source[i].vertices.size(); ++j)
+            for (std::size_t axis = 0; axis < 3; ++axis)
+                if (std::abs(source[i].vertices[j][axis] - expected[i].vertices[j][axis]) > kTolerance)
+                    return false;
+    }
+    return true;
+}
+#endif
+
+bool same_native_host(const Entity& host, const Json& original) {
+    for (const auto* key : {"baseline", "thickness_m", "height_m", "elevation_m"}) {
+        if (!original.contains(key) || !host.properties.contains(key) ||
+            original.at(key) != host.properties.at(key)) return false;
+    }
+    return true;
+}
+
+bool same_native_opening(const Entity& opening, const Json& metadata) {
+    for (const auto* key : {"offset_m", "width_m", "sill_m", "height_m"}) {
+        if (!metadata.contains(key) || !metadata.at(key).is_number() ||
+            !opening.properties.contains(key) || std::abs(metadata.at(key).get<double>() -
+                opening.properties.at(key).get<double>()) > kTolerance) return false;
+    }
+    return true;
+}
+
 } // namespace
 
 IfcProjectExportResult export_project_ifc(const DocumentSnapshot& document,
@@ -1194,7 +1490,8 @@ IfcProjectExportResult export_project_ifc(const DocumentSnapshot& document,
     IfcProjectExportResult result;
     ExportContext context(limits);
     for (const auto& [id, entity] : document.entities()) {
-        export_product(document, entity, context, result.diagnostics);
+        const auto resolved = resolve_vertical_placement(document, entity);
+        export_product(document, resolved, context, result.diagnostics);
         if (!context.product_ids.contains(id) &&
             (entity.required || (!result.diagnostics.empty() && result.diagnostics.back().source_id == id) ||
              entity.type == "wall" || entity.type == "slab" ||
@@ -1243,9 +1540,47 @@ IfcProjectImportResult import_project_ifc(std::string_view bytes,
     std::set<int> retained_metadata_records;
     const auto metadata_by_id = vertex_properties(parsed, argument_count, limits, retained_metadata_records);
     const auto supported_units = metre_units(parsed, argument_count, limits);
+    std::map<int, std::vector<IfcNativeMesh>> meshes_by_id;
+    std::size_t mesh_vertices = 0, mesh_triangles = 0;
+    for (const auto& record : parsed.records) {
+        if (!is_product(record.type)) continue;
+        if (auto mesh = product_meshes(parsed, record, argument_count, limits, mesh_vertices, mesh_triangles))
+            meshes_by_id.emplace(record.id, std::move(*mesh));
+    }
     if (!supported_units) add_diagnostic(result.diagnostics, {}, "PROJECT", "length_units_not_reconstructed");
     for (const auto& record : parsed.records) {
         if (is_product(record.type)) {
+#ifdef SKETCH_IFC_NATIVE_GEOMETRY
+            if (supported_units && record.type == "IFCWALL" && meshes_by_id.contains(record.id) &&
+                metadata_by_id.contains(record.id) && native_mesh_role(metadata_by_id.at(record.id), "wall")) {
+                const auto& metadata = metadata_by_id.at(record.id);
+                try {
+                    Entity candidate{"ifc-" + std::to_string(record.id), "wall", metadata};
+                    const auto wall = native_wall(candidate);
+                    if (matching_meshes(meshes_by_id.at(record.id), ifc_native_wall_mesh(wall,
+                        limits.max_mesh_vertices, limits.max_mesh_triangles))) {
+                        Json active{{"baseline", metadata.at("baseline")}, {"thickness_m", wall.thickness},
+                            {"height_m", wall.height}, {"elevation_m", wall.elevation},
+                            {"classification", "ifc_wall_axis"}, {"ifc_type", record.type},
+                            {"ifc_name", product_string(record, 2, argument_count, limits)}};
+                        if (wall.slope_rise) active["slope_rise_m"] = *wall.slope_rise;
+                        if (metadata.contains("layers")) {
+                            auto layers = parse_wall_layers(metadata.at("layers"), wall.thickness);
+                            for (auto& layer : layers) layer.material.reset();
+                            active["layers"] = wall_layers_json(layers);
+                        }
+                        candidate.properties = std::move(active);
+                        candidate.extensions = {{"ifc_source", {{"record_id", record.id},
+                            {"record_type", record.type}, {"arguments", record.args}}},
+                            {"ifc_vertex_properties", metadata}};
+                        result.entities.push_back(std::move(candidate));
+                        continue;
+                    }
+                } catch (const std::exception&) { }
+                add_diagnostic(result.diagnostics, "#" + std::to_string(record.id), record.type,
+                    "native_mesh_metadata_inconsistent");
+            }
+#endif
             const auto geometry = geometry_for(parsed, record, result.diagnostics,
                                                argument_count, limits);
             if (!geometry.boundary) {
@@ -1346,7 +1681,8 @@ IfcProjectImportResult import_project_ifc(std::string_view bytes,
             continue;
         }
         if (retained_metadata_records.contains(record.id)) continue;
-        if (is_relationship(record.type) && record.type != "IFCRELVOIDSELEMENT") {
+        if (is_relationship(record.type) && record.type != "IFCRELVOIDSELEMENT" &&
+            record.type != "IFCRELFILLSELEMENT") {
             add_diagnostic(result.diagnostics, "#" + std::to_string(record.id), record.type,
                           "relationship_not_reconstructed");
         } else if (record.type == "IFCPROPERTYSET" || record.type == "IFCPROPERTYSINGLEVALUE" ||
@@ -1354,7 +1690,8 @@ IfcProjectImportResult import_project_ifc(std::string_view bytes,
                    record.type == "IFCMATERIALLAYERSET" || record.type == "IFCINDEXEDPOLYCURVE") {
             add_diagnostic(result.diagnostics, "#" + std::to_string(record.id), record.type,
                           "property_or_geometry_not_reconstructed");
-        } else if (!is_structural(record.type) && record.type != "IFCRELVOIDSELEMENT") {
+        } else if (!is_structural(record.type) && record.type != "IFCRELVOIDSELEMENT" &&
+                   record.type != "IFCRELFILLSELEMENT") {
             add_diagnostic(result.diagnostics, "#" + std::to_string(record.id), record.type,
                           "unsupported_entity");
         }
@@ -1367,11 +1704,15 @@ IfcProjectImportResult import_project_ifc(std::string_view bytes,
         const auto host = reference(fields[4]);
         const auto opening = reference(fields[5]);
         require(host && opening && find_record(parsed, *host) && find_record(parsed, *opening));
+        require((find_record(parsed, *host)->type == "IFCWALL" ||
+                 find_record(parsed, *host)->type == "IFCWALLSTANDARDCASE") &&
+                find_record(parsed, *opening)->type == "IFCOPENINGELEMENT");
         hosts["ifc-" + std::to_string(*opening)].push_back({"ifc-" + std::to_string(*host), record.id});
     }
     std::set<int> reconstructed_relations;
     for (auto& opening : result.entities) {
-        if (opening.properties.value("classification", "") != "ifc_opening") continue;
+        if (opening.properties.value("classification", "") != "ifc_opening" &&
+            opening.properties.value("ifc_type", "") != "IFCOPENINGELEMENT") continue;
         const auto relation = hosts.find(opening.id);
         const Entity* host = nullptr;
         if (relation != hosts.end() && relation->second.size() == 1) {
@@ -1388,7 +1729,37 @@ IfcProjectImportResult import_project_ifc(std::string_view bytes,
                     diagnostic.code == "geometry_semantics_not_reconstructed");
         });
         bool recovered = false;
-        if (baseline && footprint && footprint->size() == 4 && !rotated &&
+#ifdef SKETCH_IFC_NATIVE_GEOMETRY
+        if (host && opening.properties.value("ifc_type", "") == "IFCOPENINGELEMENT" &&
+            opening.extensions.contains("ifc_vertex_properties")) {
+            const auto& metadata = opening.extensions.at("ifc_vertex_properties");
+            const auto source_id = opening.extensions.at("ifc_source").at("record_id").get<int>();
+            if (native_mesh_role(metadata, "void") && meshes_by_id.contains(source_id)) {
+                try {
+                    auto candidate = opening; candidate.properties = metadata;
+                    const auto wall = native_wall(*host);
+                    const auto cut = native_opening(candidate);
+                    if (metadata.contains("_vertex_ifc_host") &&
+                        same_native_host(*host, metadata.at("_vertex_ifc_host")) &&
+                        metadata.value("wall_id", "") == host->properties.value("ifc_name", "") &&
+                        matching_meshes(meshes_by_id.at(source_id), ifc_native_void_mesh(wall, cut,
+                            limits.max_mesh_vertices, limits.max_mesh_triangles))) {
+                        opening.type = "opening";
+                        opening.properties["wall_id"] = host->id;
+                        opening.properties["offset_m"] = cut.offset;
+                        opening.properties["width_m"] = cut.width;
+                        opening.properties["sill_m"] = cut.sill;
+                        opening.properties["height_m"] = cut.height;
+                        opening.properties["opening_kind"] = "opening";
+                        reconstructed_relations.insert(relation->second.front().second);
+                        recovered = true;
+                    }
+                } catch (const std::exception&) { }
+            }
+        }
+#endif
+        if (!recovered && baseline && std::abs(baseline->sweep_radians) <= kTolerance &&
+            footprint && footprint->size() == 4 && !rotated &&
             opening.properties.contains("ifc_extrusion_depth_m")) {
             const auto length = std::hypot(baseline->end.x - baseline->start.x, baseline->end.y - baseline->start.y);
             const Vec2 tangent{(baseline->end.x - baseline->start.x) / length,
@@ -1435,7 +1806,8 @@ IfcProjectImportResult import_project_ifc(std::string_view bytes,
                 opening.properties["opening_kind"] = kind == "IFCDOOR" ? "door" : kind == "IFCWINDOW" ? "window" : "opening";
                 if (opening.extensions.contains("ifc_vertex_properties")) {
                     const auto& metadata = opening.extensions["ifc_vertex_properties"];
-                    if (metadata.contains("opening_kind") && metadata["opening_kind"].is_string() &&
+                    if (!metadata.contains("opening_assembly") &&
+                        metadata.contains("opening_kind") && metadata["opening_kind"].is_string() &&
                         (metadata["opening_kind"] == "door" || metadata["opening_kind"] == "window"))
                         opening.properties["opening_kind"] = metadata["opening_kind"];
                 }
@@ -1452,6 +1824,84 @@ IfcProjectImportResult import_project_ifc(std::string_view bytes,
             add_diagnostic(result.diagnostics, "#" + std::to_string(record.id), record.type,
                            "relationship_not_reconstructed");
     }
+    std::map<int, std::vector<std::pair<int, int>>> fills;
+    std::map<int, std::size_t> fill_use;
+    for (const auto& record : parsed.records) {
+        if (record.type != "IFCRELFILLSELEMENT") continue;
+        const auto fields = split_top_level(record.args, argument_count, limits);
+        require(fields.size() == 6);
+        const auto void_id = reference(fields[4]), fill_id = reference(fields[5]);
+        require(void_id && fill_id && find_record(parsed, *void_id) && find_record(parsed, *fill_id));
+        require(find_record(parsed, *void_id)->type == "IFCOPENINGELEMENT" &&
+            (find_record(parsed, *fill_id)->type == "IFCDOOR" || find_record(parsed, *fill_id)->type == "IFCWINDOW"));
+        fills[*void_id].push_back({*fill_id, record.id});
+        ++fill_use[*fill_id];
+    }
+    std::set<int> reconstructed_fills;
+    std::set<int> reconstructed_fill_relations;
+#ifdef SKETCH_IFC_NATIVE_GEOMETRY
+    for (auto& opening : result.entities) {
+        if (opening.type != "opening") continue;
+        const auto void_id = opening.extensions.at("ifc_source").at("record_id").get<int>();
+        const auto links = fills.find(void_id);
+        if (links == fills.end() || links->second.size() != 1) continue;
+        const auto [fill_id, relation_id] = links->second.front();
+        if (fill_use.at(fill_id) != 1 || !metadata_by_id.contains(fill_id) ||
+            !metadata_by_id.contains(void_id) || !meshes_by_id.contains(fill_id)) continue;
+        const auto& metadata = metadata_by_id.at(fill_id);
+        const auto& void_metadata = metadata_by_id.at(void_id);
+        try {
+            const auto host = std::find_if(result.entities.begin(), result.entities.end(), [&](const auto& candidate) {
+                return candidate.id == opening.properties.at("wall_id").get<std::string>() && candidate.type == "wall";
+            });
+            if (host == result.entities.end() || !native_mesh_role(metadata, "fill") ||
+                !metadata.contains("_vertex_ifc_host") || !same_native_host(*host, metadata.at("_vertex_ifc_host")) ||
+                metadata.value("wall_id", "") != host->properties.value("ifc_name", "") ||
+                void_metadata.value("wall_id", "") != host->properties.value("ifc_name", "") ||
+                !same_native_opening(opening, metadata) || !same_native_opening(opening, void_metadata) ||
+                !metadata.contains("opening_assembly") || !void_metadata.contains("opening_assembly") ||
+                metadata.at("opening_assembly") != void_metadata.at("opening_assembly") ||
+                metadata.contains("door_operation") != void_metadata.contains("door_operation") ||
+                (metadata.contains("door_operation") && metadata.at("door_operation") != void_metadata.at("door_operation")))
+                continue;
+            const auto profile = parse_opening_assembly(metadata.at("opening_assembly"));
+            Entity candidate = opening; candidate.properties = metadata;
+            const auto operation = native_operation(candidate);
+            const bool door = profile.kind == OpeningAssemblyKind::door;
+            const auto* fill_record = find_record(parsed, fill_id);
+            const auto fields = split_top_level(fill_record->args, argument_count, limits);
+            if (fields.size() != 13 || (door ? fill_record->type != "IFCDOOR" : fill_record->type != "IFCWINDOW") ||
+                metadata.value("opening_kind", "") != opening_assembly_kind_name(profile.kind) ||
+                void_metadata.value("opening_kind", "") != opening_assembly_kind_name(profile.kind) ||
+                (!door && operation) || fields[10] != (door ? ".DOOR." : ".WINDOW.") ||
+                fields[11] != (door ? door_operation_enum(operation) : ".NOTDEFINED.") || fields[12] != "$" ||
+                std::abs(number<double>(fields[8]) - opening.properties.at("height_m").get<double>()) > kTolerance ||
+                std::abs(number<double>(fields[9]) - opening.properties.at("width_m").get<double>()) > kTolerance ||
+                !matching_meshes(meshes_by_id.at(fill_id), ifc_native_fill_mesh(native_wall(*host),
+                    native_opening(opening), profile, operation, limits.max_mesh_vertices, limits.max_mesh_triangles)))
+                continue;
+            opening.properties["opening_kind"] = opening_assembly_kind_name(profile.kind);
+            opening.properties["opening_assembly"] = metadata.at("opening_assembly");
+            if (operation) opening.properties["door_operation"] = metadata.at("door_operation");
+            opening.extensions["ifc_fill_source"] = {{"record_id", fill_id}, {"record_type", fill_record->type},
+                {"arguments", fill_record->args}, {"relationship_id", relation_id}, {"properties", metadata}};
+            reconstructed_fills.insert(fill_id);
+            reconstructed_fill_relations.insert(relation_id);
+        } catch (const std::exception&) { }
+    }
+#endif
+    std::erase_if(result.entities, [&](const auto& entity) {
+        return reconstructed_fills.contains(entity.extensions.at("ifc_source").at("record_id").template get<int>());
+    });
+    std::erase_if(result.diagnostics, [&](const auto& diagnostic) {
+        return std::any_of(reconstructed_fills.begin(), reconstructed_fills.end(), [&](int id) {
+            return diagnostic.source_id == "#" + std::to_string(id);
+        });
+    });
+    for (const auto& record : parsed.records)
+        if (record.type == "IFCRELFILLSELEMENT" && !reconstructed_fill_relations.contains(record.id))
+            add_diagnostic(result.diagnostics, "#" + std::to_string(record.id), record.type,
+                "fill_semantics_not_reconstructed");
     result.source_retention_required = !result.diagnostics.empty();
     return result;
 }

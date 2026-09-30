@@ -39,8 +39,49 @@ void printable(std::string_view s, const DxfExchangeLimits& l) {
     require(s.size() <= l.max_string_bytes);
     for (unsigned char c : s) require(c >= 32 && c <= 126);
 }
+constexpr std::string_view vertex_appid = "VERTEX_ENTITY_V1";
+constexpr std::size_t xdata_limit = 16 * 1024;
+bool utf8_string(std::string_view s) {
+    for (std::size_t i = 0; i < s.size();) {
+        const auto first = static_cast<unsigned char>(s[i++]);
+        if (first < 0x80) { if (first < 32 || first == 127) return false; continue; }
+        unsigned count = first >= 0xc2 && first <= 0xdf ? 1 :
+            first >= 0xe0 && first <= 0xef ? 2 : first >= 0xf0 && first <= 0xf4 ? 3 : 0;
+        if (!count || s.size() - i < count) return false;
+        const auto next = static_cast<unsigned char>(s[i]);
+        if ((first == 0xe0 && next < 0xa0) || (first == 0xed && next >= 0xa0) ||
+            (first == 0xf0 && next < 0x90) || (first == 0xf4 && next >= 0x90)) return false;
+        while (count--) if ((static_cast<unsigned char>(s[i++]) & 0xc0) != 0x80) return false;
+    }
+    return true;
+}
 struct Pair { int code; std::string_view value; };
 using Record = std::span<const Pair>;
+// XDATA never supplies entity geometry fields. Unknown applications are ignored
+// after bounded validation; the native application accepts string chunks only.
+Record without_xdata(Record r) {
+    const auto first = std::find_if(r.begin(), r.end(), [](const auto& p) { return p.code == 1001; });
+    return r.first(static_cast<std::size_t>(first - r.begin()));
+}
+std::string block_xdata(Record r, bool& malformed) {
+    std::string payload;
+    bool native = false, seen = false;
+    std::size_t aggregate = 0;
+    for (const auto& p : r.subspan(without_xdata(r).size())) {
+        require(p.code >= 1000 && p.code <= 1071);
+        require(p.value.size() + 3 <= xdata_limit - aggregate);
+        aggregate += p.value.size() + 3;
+        if (p.code == 1001) {
+            native = p.value == vertex_appid;
+            if (native) { if (seen) malformed = true; seen = true; }
+        } else if (native) {
+            if (p.code != 1000 || !utf8_string(p.value)) malformed = true;
+            else payload.append(p.value);
+        }
+    }
+    if (seen && payload.empty()) malformed = true;
+    return payload;
+}
 std::optional<std::string_view> field(Record r, int code) {
     std::optional<std::string_view> value;
     for (const auto& p : r) if (p.code == code) { require(!value.has_value()); value = p.value; }
@@ -73,6 +114,10 @@ void entity(DxfImportResult& result, DxfDrawing& destination, std::string_view t
     std::size_t index, std::size_t& vertices, const DxfExchangeLimits& l,
     bool allow_insert = true) {
     auto diagnostic = [&](const char* code) { result.diagnostics.push_back({index, std::string(type), code}); };
+    bool malformed_xdata = false;
+    (void)block_xdata(r, malformed_xdata);
+    if (without_xdata(r).size() != r.size()) diagnostic("xdata_not_activated");
+    r = without_xdata(r);
     if (type != "LINE" && type != "ARC" && type != "LWPOLYLINE" && type != "TEXT" &&
         type != "DIMENSION" && type != "HATCH" && type != "INSERT") {
         diagnostic("unsupported_entity"); return;
@@ -217,13 +262,24 @@ void parse_block_section(DxfImportResult& result, const std::vector<Pair>& pairs
         require(pairs[cursor].code == 0 && pairs[cursor].value == "BLOCK");
         const std::size_t header_begin = ++cursor;
         while (cursor < end && pairs[cursor].code != 0) ++cursor;
-        const Record header(pairs.data() + header_begin, cursor - header_begin);
+        const Record full_header(pairs.data() + header_begin, cursor - header_begin);
+        bool malformed_xdata = false;
+        auto native_json = block_xdata(full_header, malformed_xdata);
+        const Record header = without_xdata(full_header);
+        if (std::any_of(full_header.begin(), full_header.end(), [](const auto& pair) {
+                return pair.code == 1001 && pair.value != vertex_appid;
+            })) result.diagnostics.push_back({0, "BLOCK", "foreign_xdata_not_activated"});
+        if (malformed_xdata) {
+            native_json = "!invalid_vertex_xdata";
+            result.diagnostics.push_back({0, "BLOCK", "invalid_vertex_xdata"});
+        }
         const auto name_value = mandatory(header, 2);
         printable(name_value, limits);
         require(!name_value.empty() && names.insert(std::string(name_value)).second);
         const auto base = point(header, 10, 20);
         const bool plain_header = integer(header, 70, 0) == 0 && real(header, 30) == 0 &&
                                   field(header, 3).value_or(name_value) == name_value;
+        const auto diagnostics_before = result.diagnostics.size();
         if (!supported(header, {2, 3, 10, 20, 30, 70}, limits) || !plain_header) {
             result.diagnostics.push_back({0, "BLOCK", "unsupported_feature"});
         }
@@ -250,9 +306,14 @@ void parse_block_section(DxfImportResult& result, const std::vector<Pair>& pairs
         }
         require(closed);
         if (!plain_header) continue;
+        if (!native_json.empty() && result.diagnostics.size() != diagnostics_before) {
+            native_json = "!unsupported_vertex_block";
+            result.diagnostics.push_back({0, "BLOCK", "native_block_geometry_unsupported"});
+        }
         result.drawing.blocks.push_back({std::string(name_value), base,
                                          std::move(contents.lines), std::move(contents.arcs),
-                                         std::move(contents.polylines), std::move(contents.labels)});
+                                         std::move(contents.polylines), std::move(contents.labels),
+                                         std::move(native_json)});
     }
 }
 
@@ -260,7 +321,8 @@ class Writer {
 public:
     explicit Writer(const DxfExchangeLimits& limits) : limits_(limits) {}
     void put(int code, std::string_view value) {
-        printable(value, limits_);
+        if (code == 1000) require(value.size() <= limits_.max_string_bytes && utf8_string(value));
+        else printable(value, limits_);
         const auto c = std::to_string(code);
         require(++pairs_ <= limits_.max_pairs && c.size() + value.size() + 2 <= limits_.max_bytes - bytes.size());
         bytes += c; bytes += '\n'; bytes += value; bytes += '\n';
@@ -297,11 +359,20 @@ DxfImportResult parse_dxf_ascii(std::string_view bytes, const DxfExchangeLimits&
     while (!bytes.empty()) {
         require(pairs.size() < l.max_pairs);
         const auto c = line(); require(c.size() <= 16); const auto code = number<int>(c); require(code >= 0 && code <= 1071);
-        const auto v = line(); printable(v, l); pairs.push_back({code, v});
+        const auto v = line();
+        if (code == 1000) {
+            // Invalid native UTF-8 is a metadata activation failure; keep the
+            // independently readable block geometry available as fallback.
+            require(v.size() <= l.max_string_bytes);
+            for (const unsigned char c : v) require(c >= 32 && c != 127);
+        }
+        else printable(v, l);
+        pairs.push_back({code, v});
     }
     DxfImportResult result;
     std::size_t i = 0, entity_count = 0, entity_ordinal = 0, vertices = 0;
     bool header = false, blocks = false, entities = false, version = false, eof = false, units = false;
+    bool vertex_registered = false;
     while (i < pairs.size()) {
         const auto p = pairs[i++]; require(p.code == 0);
         if (p.value == "EOF") { require(i == pairs.size()); eof = true; break; }
@@ -322,6 +393,26 @@ DxfImportResult parse_dxf_ascii(std::string_view bytes, const DxfExchangeLimits&
                     result.drawing.insertion_units = number<int>(pairs[first].value); require(result.drawing.insertion_units >= 0 && result.drawing.insertion_units <= 20); }
                 else result.diagnostics.push_back({0, "HEADER", "unsupported_header_variable"});
             }
+        } else if (section == "TABLES") {
+            bool appid_table = false, in_table = false;
+            for (std::size_t j = begin; j < end;) {
+                require(pairs[j].code == 0);
+                const auto type = pairs[j++].value;
+                const auto first = j;
+                while (j < end && pairs[j].code != 0) ++j;
+                const Record record(pairs.data() + first, j - first);
+                if (type == "TABLE") {
+                    require(!in_table); in_table = true;
+                    appid_table = mandatory(record, 2) == "APPID";
+                } else if (type == "ENDTAB") {
+                    require(in_table); in_table = false; appid_table = false;
+                } else if (type == "APPID" && appid_table && field(record, 2).value_or("") == vertex_appid &&
+                           integer(record, 70, 0) == 0 && supported(record, {2, 70}, l))
+                    vertex_registered = true;
+                else if (type != "APPID" || !appid_table)
+                    result.diagnostics.push_back({0, "TABLES", "unsupported_table_record"});
+            }
+            require(!in_table);
         } else if (section == "BLOCKS") {
             require(!blocks); blocks = true;
             parse_block_section(result, pairs, begin, end, entity_count, vertices, l);
@@ -335,6 +426,12 @@ DxfImportResult parse_dxf_ascii(std::string_view bytes, const DxfExchangeLimits&
                        ++entity_ordinal, vertices, l);
             }
         } else result.diagnostics.push_back({0, std::string(section), "unsupported_section"});
+    }
+    if (!vertex_registered) for (auto& block : result.drawing.blocks) {
+        if (!block.vertex_entity_json.empty()) {
+            block.vertex_entity_json = "!unregistered_vertex_xdata";
+            result.diagnostics.push_back({0, "BLOCK", "unregistered_vertex_xdata"});
+        }
     }
     for (const auto& insert : result.drawing.inserts) {
         const auto found = std::find_if(result.drawing.blocks.begin(), result.drawing.blocks.end(),
@@ -398,11 +495,33 @@ std::string export_dxf_ascii(const DxfDrawing& d, const DxfExchangeLimits& l) {
     };
     w.put(0, "SECTION"); w.put(2, "HEADER"); w.put(9, "$ACADVER"); w.put(1, "AC1027");
     w.put(9, "$INSUNITS"); w.put(70, std::to_string(d.insertion_units)); w.put(0, "ENDSEC");
+    const bool native_metadata = std::any_of(d.blocks.begin(), d.blocks.end(),
+        [](const auto& block) { return !block.vertex_entity_json.empty(); });
+    if (native_metadata) {
+        w.put(0, "SECTION"); w.put(2, "TABLES"); w.put(0, "TABLE"); w.put(2, "APPID");
+        w.put(70, "1"); w.put(0, "APPID"); w.put(100, "AcDbSymbolTableRecord");
+        w.put(100, "AcDbRegAppTableRecord"); w.put(2, vertex_appid); w.put(70, "0");
+        w.put(0, "ENDTAB"); w.put(0, "ENDSEC");
+    }
     if (!d.blocks.empty()) {
         w.put(0, "SECTION"); w.put(2, "BLOCKS");
         for (const auto& block : d.blocks) {
             w.begin("BLOCK", "0", "AcDbBlockBegin"); w.put(2, block.name); w.put(3, block.name);
             w.xy(block.base); w.put(30, 0.0); w.put(70, "0");
+            if (!block.vertex_entity_json.empty()) {
+                const auto& payload = block.vertex_entity_json;
+                require(utf8_string(payload));
+                std::size_t aggregate = vertex_appid.size() + 3;
+                w.put(1001, vertex_appid);
+                for (std::size_t cursor = 0; cursor < payload.size();) {
+                    auto end = std::min(payload.size(), cursor + l.max_string_bytes);
+                    while (end < payload.size() && end > cursor &&
+                           (static_cast<unsigned char>(payload[end]) & 0xc0) == 0x80) --end;
+                    require(end > cursor && end - cursor + 3 <= xdata_limit - aggregate);
+                    aggregate += end - cursor + 3;
+                    w.put(1000, std::string_view(payload).substr(cursor, end - cursor)); cursor = end;
+                }
+            }
             for (const auto& v : block.lines) write_line(v);
             for (const auto& v : block.arcs) write_arc(v);
             for (const auto& v : block.polylines) write_polyline(v);

@@ -17,6 +17,9 @@ struct IfcExchangeLimits {
     std::size_t max_records{250'000};
     std::size_t max_arguments{2'000'000};
     std::size_t max_string_bytes{4'096};
+    // Total native tessellation storage per exchange, independent of STEP limits.
+    std::size_t max_mesh_vertices{250'000};
+    std::size_t max_mesh_triangles{500'000};
 };
 
 struct IfcProjectDiagnostic {
@@ -46,7 +49,10 @@ struct IfcProjectImportResult {
 // boundaries remain analytical polylines; straight constant-height walls and
 // closed footprints with an explicit thickness become swept solids in a default
 // project/site/building/storey hierarchy. Native wall layer stacks use IFC types
-// and material relationships. Unsupported required objects retain native payload
+// and material relationships. When the architecture bridge is enabled, curved
+// wall/void solids and door/window fill parts use closed native-kernel meshes
+// with maximum 1 mm deviation; fills remain separate from void features.
+// Unsupported required objects retain native payload
 // references with diagnostics; this subset does not claim MVD conformance.
 [[nodiscard]] IfcProjectExportResult export_project_ifc(
     const DocumentSnapshot& document,
@@ -59,6 +65,10 @@ struct IfcProjectImportResult {
 // a path or mutates a Document. Malformed input throws before returning any
 // partial result; unsupported records produce stable diagnostics and require
 // source retention.
+// With the optional native bridge, native curved hosts and exact fill profiles
+// activate only after their regenerated geometry, dimensions, contexts, and
+// host/void/fill relationships agree. Foreign tessellations remain diagnosed
+// source data; metadata alone never activates native manufacturing semantics.
 [[nodiscard]] IfcProjectImportResult import_project_ifc(
     std::string_view bytes,
     const IfcExchangeLimits& limits = {});

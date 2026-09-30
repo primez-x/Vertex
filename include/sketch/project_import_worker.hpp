@@ -4,7 +4,10 @@
 #include "sketch/document.hpp"
 #include "sketch/geometry.hpp"
 #include "sketch/wall_semantics.hpp"
+#include "sketch/opening_assembly.hpp"
+#include "sketch/door_operation.hpp"
 #include "sketch/windows_import_worker.hpp"
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -191,7 +194,7 @@ inline void validate(const ProjectImportCandidate& result) {
         (void)text(entity.id, false);
         if (!entity_ids.insert(entity.id).second || entity.required ||
             !entity.properties.is_object() || !entity.extensions.is_object()) reject();
-        const bool shared = entity.type == "boundary";
+        const bool shared = entity.type == "boundary" || entity.type == "wall" || entity.type == "opening";
         const bool dxf = entity.type == "annotation_state";
         const bool ifc = entity.type == "wall" || entity.type == "slab" ||
             entity.type == "opening" || entity.type == "ifc_reference";
@@ -217,6 +220,15 @@ inline void validate(const ProjectImportCandidate& result) {
                 const auto kind = text(entity.properties.at("opening_kind"), false);
                 if (kind != "opening" && kind != "door" && kind != "window") reject();
             }
+            try {
+                if (entity.properties.contains("opening_assembly")) {
+                    const auto assembly = parse_opening_assembly(entity.properties.at("opening_assembly"));
+                    const auto kind = entity.properties.value("opening_kind", std::string{"opening"});
+                    if (kind != opening_assembly_kind_name(assembly.kind)) reject();
+                }
+                if (entity.properties.contains("door_operation"))
+                    (void)decode_door_operation(entity.properties.at("door_operation"));
+            } catch (...) { reject(); }
             openings.emplace_back(std::move(wall_id), std::move(hosted));
         } else if (entity.type == "ifc_reference") {
             validate_ifc_reference(entity);
@@ -315,8 +327,12 @@ inline ProjectImportCandidate import_project_in_worker(std::span<const std::byte
     options.max_active_processes = 1;
     options.proj_offline_required = true;
     const auto report = broker(options);
-    if (!report.controls_attested())
+    if (!report.controls_attested()) {
+        if (report.launched && report.exit_code == 4 &&
+            std::find(report.diagnostics.begin(), report.diagnostics.end(), "worker_exit_code_failed") != report.diagnostics.end())
+            throw std::invalid_argument("The isolated importer rejected malformed or unsupported project data; the document is unchanged.");
         throw std::runtime_error("Isolated project import is unavailable. Install or repair the bundled vertex-import-worker in a read-only application directory; the Windows sandbox must be available.");
+    }
     return decode_project_import_candidate(report, kind);
 }
 } // namespace sketch

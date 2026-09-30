@@ -1,6 +1,7 @@
 #pragma once
 
 #include "sketch/geometry.hpp"
+#include "sketch/wall_semantics.hpp"
 
 namespace sketch {
 
@@ -26,5 +27,11 @@ namespace sketch {
 // Straight hosts retain the established tangent-left inset clamp.
 [[nodiscard]] Boundary window_plan_symbol(const Segment& host,
     double offset_metres, double width_metres, double wall_thickness_metres);
+
+// Plan faces and jamb ends of the remaining wall intervals. Offsets follow the
+// directed host's left normal; circular faces retain their exact sweep. An
+// opening spanning the complete host leaves no wall linework.
+[[nodiscard]] Boundary wall_plan_footprint(const Segment& host,
+    const std::vector<HostedOpening>& openings, double wall_thickness_metres);
 
 } // namespace sketch

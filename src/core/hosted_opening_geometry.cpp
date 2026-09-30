@@ -5,6 +5,7 @@
 #include <numbers>
 #include <numeric>
 #include <stdexcept>
+#include <utility>
 
 namespace sketch {
 namespace {
@@ -176,6 +177,45 @@ Boundary window_plan_symbol(const Segment& host, double offset_metres, double wi
         require(segment_length(edge) > tolerance, "Window plan symbol is not representable");
         (void)segment_bounds(edge);
     }
+    return result;
+}
+Boundary wall_plan_footprint(const Segment& host,
+    const std::vector<HostedOpening>& openings, double thickness) {
+    const auto geometry=host_geometry(host);
+    require(std::isfinite(thickness) && thickness>tolerance,
+        "Wall plan thickness must be finite and positive");
+    if(host.sweep_radians!=0)
+        require(thickness*.5<geometry.radius-tolerance,"Wall plan thickness crosses its arc centre");
+    std::vector<std::pair<double,double>> cuts;
+    for(const auto& opening:openings) {
+        const auto end=opening.offset+opening.width;
+        require(std::isfinite(opening.offset) && std::isfinite(opening.width) &&
+            opening.offset>=-tolerance && opening.width>tolerance && std::isfinite(end) &&
+            end<=geometry.length+tolerance,"Wall plan opening must fit the host");
+        cuts.emplace_back(std::max(0.0,opening.offset),std::min(end,geometry.length));
+    }
+    std::sort(cuts.begin(),cuts.end());
+    Boundary result;
+    const auto append=[&](double from,double to) {
+        if(to-from<=tolerance) return;
+        const auto part=span(host,geometry,from,to-from);
+        const auto first_normal=left_at(host,geometry,from);
+        const auto last_normal=left_at(host,geometry,to);
+        const auto shift=[](Vec2 p,Vec2 n,double d){return Vec2{p.x+n.x*d,p.y+n.y*d};};
+        const Segment left{shift(part.start,first_normal,thickness*.5),
+            shift(part.end,last_normal,thickness*.5),part.sweep_radians};
+        const Segment right{shift(part.start,first_normal,-thickness*.5),
+            shift(part.end,last_normal,-thickness*.5),part.sweep_radians};
+        result.insert(result.end(),{left,{left.end,right.end,0},
+            {right.end,right.start,-right.sweep_radians},{right.start,left.start,0}});
+    };
+    double cursor=0;
+    for(const auto& [from,to]:cuts) {
+        append(cursor,from);
+        cursor=std::max(cursor,to);
+    }
+    append(cursor,geometry.length);
+    for(const auto& edge:result) (void)segment_bounds(edge);
     return result;
 }
 } // namespace sketch

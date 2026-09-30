@@ -2,10 +2,15 @@
 #include "sketch/assembly_model.hpp"
 #include "sketch/document.hpp"
 #include "sketch/ifc_project_exchange.hpp"
+#include "sketch/door_operation.hpp"
+#include "sketch/project_import_worker.hpp"
 
 #include <algorithm>
 #include <cmath>
 #include <iostream>
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
 #include <map>
 #include <regex>
 #include <set>
@@ -71,7 +76,22 @@ void verify_export_graph(const std::string& step) {
     std::set<std::string> guids;
     std::set<std::pair<std::string, std::string>> spatial_links;
     std::set<std::string> contained;
+    const auto real_literal = [](const std::string& value) {
+        return value.find_first_of(".eE") != std::string::npos;
+    };
     for (const auto& [id, record] : graph) {
+        if (record.type == "IFCEXTRUDEDAREASOLID")
+            check(real_literal(record.fields.at(3)), "IFC extrusion depth must use STEP REAL lexical syntax");
+        if (record.type == "IFCDOOR" || record.type == "IFCWINDOW")
+            check(real_literal(record.fields.at(8)) && real_literal(record.fields.at(9)),
+                  "IFC fill dimensions must use STEP REAL lexical syntax");
+        if (record.type == "IFCCARTESIANPOINT" || record.type == "IFCDIRECTION")
+            for (const auto& coordinate : list(record.fields.at(0)))
+                check(real_literal(coordinate), "IFC coordinates and directions must use STEP REAL lexical syntax");
+        if (record.type == "IFCCARTESIANPOINTLIST3D")
+            for (const auto& row : list(record.fields.at(0)))
+                for (const auto& coordinate : list(row))
+                    check(real_literal(coordinate), "IFC tessellation coordinates must use STEP REAL lexical syntax");
         if (const auto expected = arity.find(record.type); expected != arity.end())
             check(record.fields.size() == expected->second, "IFC4 entity attribute count must match schema");
         if (record.type == "IFCPROJECT") {
@@ -167,9 +187,222 @@ sketch::Document make_document(double elevation = 0.0) {
                              std::move(opening), std::move(slab)});
 }
 
+#ifdef SKETCH_IFC_NATIVE_GEOMETRY
+void verify_worker_candidate(const sketch::IfcProjectImportResult& imported) {
+    sketch::ProjectImportCandidate candidate;
+    candidate.kind = sketch::ProjectImportKind::ifc;
+    candidate.entities = imported.entities;
+    candidate.source_retention_required = imported.source_retention_required;
+    for (const auto& diagnostic : imported.diagnostics)
+        candidate.diagnostics.push_back({diagnostic.source_id, diagnostic.source_kind, diagnostic.code});
+    check(!sketch::encode_project_import_candidate(candidate).empty(),
+          "native IFC candidate must satisfy the strict worker protocol before isolation transport");
+}
+
+void desktop_hosted_worker_protocol() {
+    using namespace sketch;
+    auto door_wall = make_document().snapshot().entities().at("wall-1");
+    auto door = make_document().snapshot().entities().at("opening-1");
+    door_wall.properties["baseline"]["end"] = {8, 0};
+    door_wall.properties["baseline"]["sweep_radians"] = 0.5;
+    door_wall.properties["height_m"] = 2.4384;
+    door_wall.properties["thickness_m"] = 0.3;
+    door.properties["width_m"] = 0.9;
+    door.properties["sill_m"] = 0;
+    door.properties["door_operation"] = encode_door_operation(DoorOperation{true, false, 67.0});
+    door.properties["opening_assembly"]["frame_depth_m"] = 0.25;
+    door.properties["opening_assembly"]["panel_thickness_m"] = 0.035;
+    door.properties["opening_assembly"]["glazing_thickness_m"] = 0.012;
+    door.properties["opening_assembly"]["inset_m"] = -0.015;
+    auto window_wall = door_wall;
+    window_wall.id = "window-wall";
+    window_wall.properties["baseline"] = {{"start", {0, 5}}, {"end", {12, 5}}, {"sweep_radians", 0.0}};
+    auto window = door;
+    window.id = "window-opening";
+    window.properties["wall_id"] = window_wall.id;
+    window.properties["opening_kind"] = "window";
+    window.properties["offset_m"] = 9.0;
+    window.properties["width_m"] = 1.0;
+    window.properties["sill_m"] = 0.8;
+    window.properties["height_m"] = 1.2;
+    window.properties.erase("door_operation");
+    window.properties["opening_assembly"] = {{"version", 1}, {"kind", "window"},
+        {"frame_width_m", 0.07}, {"frame_depth_m", 0.24}, {"panel_thickness_m", 0.03},
+        {"glazing_thickness_m", 0.014}, {"inset_m", 0.01}};
+    // Desktop projects also export source organization objects as inert native
+    // references. The exact reference property shape is part of the protocol.
+    const Entity source_property{"source-property", "property", {{"name", "Source property"}}};
+    const auto imported = import_project_ifc(export_project_ifc(Document::create(
+        {door_wall, door, window_wall, window, source_property}).snapshot()).step);
+    check(std::count_if(imported.entities.begin(), imported.entities.end(), [](const auto& entity) {
+        return entity.type == "wall" || entity.type == "opening";
+    }) == 4, "desktop-like IFC fixture must restore both hosts and both fills");
+    check(std::count_if(imported.entities.begin(), imported.entities.end(), [](const auto& entity) {
+        return entity.type == "ifc_reference" && entity.properties.size() == 2 &&
+            entity.properties.contains("ifc_name") && entity.properties.contains("ifc_type");
+    }) == 1, "source organization references must keep the canonical inert protocol shape");
+    verify_worker_candidate(imported);
+    if (const auto* path = std::getenv("VERTEX_TEST_INPUT_IFC")) {
+        std::ifstream input(path, std::ios::binary);
+        check(input.good(), "captured desktop IFC must be readable");
+        const std::string bytes((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
+        verify_worker_candidate(import_project_ifc(bytes));
+    }
+}
+
+void native_assemblies() {
+    using namespace sketch;
+    for (const bool curved : {false, true}) {
+        for (const bool window : {false, true}) {
+            for (const bool hinge_end : {false, true}) {
+                auto wall = make_document().snapshot().entities().at("wall-1");
+                auto opening = make_document().snapshot().entities().at("opening-1");
+                wall.properties["elevation_m"] = 3.0;
+                if (curved) {
+                    wall.properties["baseline"]["start"] = {0, 0};
+                    wall.properties["baseline"]["end"] = {10, 0};
+                    wall.properties["baseline"]["sweep_radians"] = 1.0;
+                }
+                opening.properties["opening_kind"] = window ? "window" : "door";
+                opening.properties["opening_assembly"]["kind"] = window ? "window" : "door";
+                opening.properties["opening_assembly"]["glazing_thickness_m"] = 0.012;
+                opening.properties["opening_assembly"]["inset_m"] = -0.015;
+                if (!window) opening.properties["door_operation"] =
+                    encode_door_operation(DoorOperation{hinge_end, true, 67.0});
+                const auto exported = export_project_ifc(Document::create({wall, opening}).snapshot());
+                const auto graph = records(exported.step);
+                std::string void_id, fill_id, host_id;
+                bool large_aggregate = false;
+                for (const auto& [id, record] : graph) {
+                    if (record.type == "IFCWALL") host_id = id;
+                    if (record.type == "IFCOPENINGELEMENT") void_id = id;
+                    if (record.type == (window ? "IFCWINDOW" : "IFCDOOR")) {
+                        fill_id = id;
+                        check(record.fields.size() == 13, "IFC4 fill must contain exactly 13 explicit attributes");
+                        check(std::stod(record.fields[8]) == 2.0 && std::stod(record.fields[9]) == 1.0,
+                              "fill dimensions must match the authoritative cut");
+                        if (!window) check(record.fields[11] ==
+                            (hinge_end ? ".SINGLE_SWING_RIGHT." : ".SINGLE_SWING_LEFT."),
+                            "both native handings must map to corresponding IFC door operations");
+                    }
+                    if (record.type == "IFCCARTESIANPOINTLIST3D")
+                        large_aggregate = large_aggregate || record.fields[0].size() > 4096;
+                    if (record.type != "IFCTRIANGULATEDFACESET") continue;
+                    check(record.fields.size() == 5 && record.fields[2] == ".T.",
+                          "native mesh must use the IFC4 closed triangulated schema");
+                    const auto coordinates = list(graph.at(record.fields[0]).fields[0]);
+                    std::vector<std::array<double, 3>> vertices;
+                    for (const auto& coordinate : coordinates) {
+                        const auto point = list(coordinate);
+                        vertices.push_back({std::stod(point[0]), std::stod(point[1]), std::stod(point[2])});
+                    }
+                    std::map<std::pair<std::size_t, std::size_t>, std::pair<int, int>> edges;
+                    double volume = 0;
+                    for (const auto& row : list(record.fields[3])) {
+                        const auto columns = list(row);
+                        const std::array<std::size_t, 3> triangle{std::stoull(columns[0]) - 1,
+                            std::stoull(columns[1]) - 1, std::stoull(columns[2]) - 1};
+                        const auto& a = vertices.at(triangle[0]);
+                        const auto& b = vertices.at(triangle[1]);
+                        const auto& c = vertices.at(triangle[2]);
+                        volume += (a[0] * (b[1]*c[2]-b[2]*c[1]) +
+                            a[1] * (b[2]*c[0]-b[0]*c[2]) + a[2] * (b[0]*c[1]-b[1]*c[0])) / 6;
+                        for (std::size_t i = 0; i < 3; ++i) {
+                            const auto first = triangle[i], second = triangle[(i+1)%3];
+                            auto& edge = edges[{std::min(first, second), std::max(first, second)}];
+                            ++edge.first; edge.second += first < second ? 1 : -1;
+                        }
+                    }
+                    check(volume > 1e-8, "every native part must enclose a positive physical volume");
+                    for (const auto& [key, edge] : edges)
+                        check(edge.first == 2 && edge.second == 0, "closed meshes require opposite shared edge incidence");
+                }
+                check(!void_id.empty() && !fill_id.empty() && !host_id.empty(), "fill must preserve separate host and void products");
+                bool fills = false, voids = false;
+                for (const auto& [id, record] : graph) {
+                    if (record.type == "IFCRELFILLSELEMENT") fills = record.fields[4] == void_id && record.fields[5] == fill_id;
+                    if (record.type == "IFCRELVOIDSELEMENT") voids = record.fields[4] == host_id && record.fields[5] == void_id;
+                }
+                check(fills && voids, "native host/void/fill relationships must remain connected");
+                if (curved) check(large_aggregate, "curved roundtrip fixture must exceed scalar string aggregate limit");
+                const auto imported = import_project_ifc(exported.step);
+                verify_worker_candidate(imported);
+                check(imported.entities.size() == 2, "validated fill must not produce a duplicate generic product");
+                const auto imported_wall = std::find_if(imported.entities.begin(), imported.entities.end(),
+                    [](const auto& entity) { return entity.type == "wall"; });
+                const auto imported_opening = std::find_if(imported.entities.begin(), imported.entities.end(),
+                    [](const auto& entity) { return entity.type == "opening"; });
+                check(imported_wall != imported.entities.end() && imported_opening != imported.entities.end(),
+                      "native curved/straight bodies must reconstruct an editable hosted graph");
+                check(imported_wall->properties.at("baseline") == wall.properties.at("baseline") &&
+                      imported_opening->properties.at("opening_assembly") == opening.properties.at("opening_assembly") &&
+                      imported_opening->properties.at("opening_kind") == opening.properties.at("opening_kind"),
+                      "exact native baseline and signed assembly profile must survive roundtrip");
+                if (!window) check(imported_opening->properties.at("door_operation") == opening.properties.at("door_operation"),
+                    "both handings and exact swing angle must survive roundtrip");
+                const auto saved_graph = Document::create(imported.entities);
+                const auto second_import = import_project_ifc(export_project_ifc(saved_graph.snapshot()).step);
+                (void)Document::create(second_import.entities);
+                const auto capture_name = std::string(curved ? "curved-" : "straight-") +
+                    (window ? "window-" : "door-") + (hinge_end ? "end" : "start");
+                if (const auto* directory = std::getenv("VERTEX_TEST_CAPTURE_DIR")) {
+                    std::filesystem::create_directories(directory);
+                    std::ofstream output(std::filesystem::path(directory) / (capture_name + ".ifc"), std::ios::binary);
+                    output << exported.step;
+                    check(output.good(), "capture export must be written completely");
+                }
+                auto contradictory = exported.step;
+                const auto fill_start = contradictory.find(fill_id + "=");
+                const auto fill_end = contradictory.find(';', fill_start);
+                auto replacement = graph.at(fill_id).fields;
+                replacement[8] = "9.";
+                std::string row = fill_id + "=" + graph.at(fill_id).type + "(";
+                for (const auto& field : replacement) { if (row.back() != '(') row += ','; row += field; }
+                row += ");";
+                contradictory.replace(fill_start, fill_end - fill_start + 1, row);
+                const auto rejected = import_project_ifc(contradictory);
+                check(std::none_of(rejected.entities.begin(), rejected.entities.end(), [](const auto& entity) {
+                    return entity.type == "opening" && entity.properties.contains("opening_assembly");
+                }) && rejected.source_retention_required, "contradictory IFC fill dimensions must not activate native assembly metadata");
+                auto transformed_context = exported.step;
+                std::string context_id;
+                for (const auto& [id, record] : graph)
+                    if (record.type == "IFCGEOMETRICREPRESENTATIONCONTEXT") context_id = id;
+                const auto context_start = transformed_context.find(context_id + "=");
+                const auto context_end = transformed_context.find(';', context_start);
+                auto context_fields = graph.at(context_id).fields;
+                context_fields[4] = "#999997";
+                std::string context_row = context_id + "=IFCGEOMETRICREPRESENTATIONCONTEXT(";
+                for (const auto& field : context_fields) { if (context_row.back() != '(') context_row += ','; context_row += field; }
+                context_row += ");";
+                transformed_context.replace(context_start, context_end-context_start+1, context_row);
+                transformed_context.insert(transformed_context.find("ENDSEC;\nEND-ISO-10303-21;"),
+                    "#999996=IFCCARTESIANPOINT((20.,0.,0.));\n#999997=IFCAXIS2PLACEMENT3D(#999996,$,$);\n");
+                const auto transformed = import_project_ifc(transformed_context);
+                check(std::none_of(transformed.entities.begin(), transformed.entities.end(), [](const auto& entity) {
+                    return entity.type == "opening" && entity.properties.contains("opening_assembly");
+                }) && transformed.source_retention_required, "context-only translation must not activate world-coordinate native meshes");
+                IfcExchangeLimits small;
+                small.max_mesh_vertices = 4;
+                bool bounded = false;
+                try { (void)export_project_ifc(Document::create({wall, opening}).snapshot(), small); }
+                catch (const std::invalid_argument&) { bounded = true; }
+                check(bounded, "insufficient native tessellation budget must fail closed");
+            }
+        }
+    }
+}
+#endif
+
 void run() {
     using namespace sketch;
     const auto exported = export_project_ifc(make_document().snapshot());
+#ifdef SKETCH_IFC_NATIVE_GEOMETRY
+    check(exported.step.find("IFCDOOR(") != std::string::npos &&
+          exported.step.find("IFCRELFILLSELEMENT(") != std::string::npos &&
+          exported.step.find("IFCTRIANGULATEDFACESET(") != std::string::npos,
+          "native door assembly must export a real fill separate from its hosted void");
+#endif
     verify_export_graph(exported.step);
     const auto repeated = export_project_ifc(make_document().snapshot());
     check(repeated.step == exported.step && repeated.diagnostics == exported.diagnostics,
@@ -332,9 +565,15 @@ void run() {
     check(std::none_of(exported.diagnostics.begin(), exported.diagnostics.end(), [](const auto& item) {
         return item.code == "wall_thickness_height_axis_only";
     }), "solid walls must no longer report axis-only export");
+#ifdef SKETCH_IFC_NATIVE_GEOMETRY
+    check(std::none_of(exported.diagnostics.begin(), exported.diagnostics.end(), [](const auto& item) {
+        return item.source_id == "opening-1" && item.code == "opening_assembly_not_exported";
+    }), "native fills must no longer report assembly loss");
+#else
     check(std::any_of(exported.diagnostics.begin(), exported.diagnostics.end(), [](const auto& item) {
         return item.source_id == "opening-1" && item.code == "opening_assembly_not_exported";
     }), "opening assembly loss must be explicit in the IFC fidelity report");
+#endif
 
     const auto imported = import_project_ifc(exported.step);
     check(imported.entities.size() >= 3, "IFC products must reconstruct editable candidates");
@@ -363,9 +602,15 @@ void run() {
           std::abs(opening.properties.at("sill_m").get<double>() - 0.1) < 1e-9 &&
           opening.properties.at("width_m") == 1.0 && opening.properties.at("offset_m") == 1.0,
           "opening must recover host, sill, width and offset");
+#ifdef SKETCH_IFC_NATIVE_GEOMETRY
     check(opening.properties.at("opening_kind") == "door" &&
+          opening.properties.at("opening_assembly") == make_document().snapshot().entities().at("opening-1").properties.at("opening_assembly"),
+          "validated native assembly must round-trip into active opening properties");
+#else
+    check(opening.properties.at("opening_kind") == "opening" &&
           opening.extensions.at("ifc_vertex_properties").contains("opening_assembly"),
-          "opening kind must recover while unmapped assembly metadata remains retained");
+          "unavailable native assembly must retain opaque metadata without activating assembly kind");
+#endif
     const auto elevated = import_project_ifc(export_project_ifc(make_document(3.0).snapshot()).step);
     for (const auto& entity : elevated.entities) {
         if (entity.type == "wall" || entity.type == "slab")
@@ -414,7 +659,7 @@ void run() {
     millimetres.replace(unit, std::string(".LENGTHUNIT.,$,.METRE.").size(), ".LENGTHUNIT.,.MILLI.,.METRE.");
     const auto unsupported_units = import_project_ifc(millimetres);
     check(std::all_of(unsupported_units.entities.begin(), unsupported_units.entities.end(), [](const auto& entity) {
-        return entity.type == "boundary";
+        return entity.type == "boundary" || entity.type == "ifc_reference";
     }) && unsupported_units.source_retention_required, "unscaled units must not yield typed metre entities");
     auto compound = exported.step;
     std::size_t shape_cursor = 0;
@@ -426,7 +671,7 @@ void run() {
     }
     const auto compounds = import_project_ifc(compound);
     check(std::all_of(compounds.entities.begin(), compounds.entities.end(), [](const auto& entity) {
-        return entity.type == "boundary";
+        return entity.type == "boundary" || entity.type == "ifc_reference";
     }), "multiple product representations must not silently become one typed entity");
 
     auto malformed_payload = exported.step;
@@ -456,10 +701,10 @@ void run() {
     }) && duplicate_hosts.source_retention_required, "ambiguous void relationships must remain unbound");
 
     auto retraced = exported.step;
-    const auto corner = retraced.find("IFCCARTESIANPOINT((2,0.10000000000000001))");
+    const auto corner = retraced.find("IFCCARTESIANPOINT((2.,0.10000000000000001))");
     check(corner != std::string::npos, "fixture must contain opening corner");
-    retraced.replace(corner, std::string("IFCCARTESIANPOINT((2,0.10000000000000001))").size(),
-                     "IFCCARTESIANPOINT((1,-0.10000000000000001))");
+    retraced.replace(corner, std::string("IFCCARTESIANPOINT((2.,0.10000000000000001))").size(),
+                     "IFCCARTESIANPOINT((1.,-0.10000000000000001))");
     const auto invalid_rectangle = import_project_ifc(retraced);
     check(std::none_of(invalid_rectangle.entities.begin(), invalid_rectangle.entities.end(), [](const auto& entity) {
         return entity.type == "opening";
@@ -469,6 +714,10 @@ void run() {
     try { (void)import_project_ifc("ISO-10303-21;\nDATA;\nENDSEC;\n"); }
     catch (const std::invalid_argument&) { rejected = true; }
     check(rejected, "malformed IFC must fail closed");
+#ifdef SKETCH_IFC_NATIVE_GEOMETRY
+    native_assemblies();
+    desktop_hosted_worker_protocol();
+#endif
 }
 
 } // namespace

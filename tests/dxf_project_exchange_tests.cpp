@@ -4,10 +4,17 @@
 #include "sketch/document.hpp"
 #include "sketch/dxf_exchange.hpp"
 #include "sketch/dxf_project_exchange.hpp"
+#include "sketch/door_operation.hpp"
+#include "sketch/opening_assembly.hpp"
+#include "sketch/document_wall.hpp"
+#include "sketch/hosted_opening_geometry.hpp"
 
 #include <algorithm>
 #include <cmath>
 #include <iostream>
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
 #include <stdexcept>
 #include <string>
 
@@ -77,10 +84,10 @@ void run() {
     const auto exported = export_project_dxf(document.snapshot());
     check(exported.drawing.insertion_units == 6, "project units must be SI metres");
     check(exported.drawing.polylines.size() >= 2, "boundary and slab geometry must export");
-    check(exported.drawing.lines.size() >= 1, "wall geometry must export");
-    check(std::count_if(exported.drawing.lines.begin(), exported.drawing.lines.end(),
-                        [](const auto& line) { return line.layer == "Openings"; }) == 3,
-          "hosted openings must export deterministic plan markers");
+    check(exported.drawing.blocks.size() == 2, "wall and opening must export native plan blocks");
+    check(std::any_of(exported.drawing.blocks.begin(), exported.drawing.blocks.end(),
+        [](const auto& block) { return block.arcs.size() == 1 && block.lines.size() == 1; }),
+          "door must export an analytical swing arc and leaf");
     check(exported.drawing.labels.size() == 1, "annotation label must export");
     const auto symbol_lines = [&] {
         std::vector<sketch::DxfLine> result;
@@ -116,16 +123,15 @@ void run() {
               std::abs(symbol_lines.front().end.y - expected_first_stroke.end.y) < 1e-12,
           "DXF symbol coordinates must preserve the shared resize and rotation transform");
     check(exported.drawing.dimensions.size() == 1, "identified dimension must export");
-    check(std::any_of(exported.diagnostics.begin(), exported.diagnostics.end(), [](const auto& item) {
-        return item.source_id == "wall-1" && item.code == "wall_3d_semantics_not_representable";
-    }), "wall 3D semantics must be explicit in the DXF fidelity report");
+    check(std::none_of(exported.diagnostics.begin(), exported.diagnostics.end(), [](const auto& item) {
+        return item.source_id == "wall-1";
+    }), "wall semantics must be retained by native metadata");
     check(std::any_of(exported.diagnostics.begin(), exported.diagnostics.end(), [](const auto& item) {
         return item.source_id == "slab-1" && item.code == "slab_3d_semantics_not_representable";
     }), "slab 3D semantics must be explicit in the DXF fidelity report");
-    check(std::any_of(exported.diagnostics.begin(), exported.diagnostics.end(), [](const auto& item) {
-        return item.source_id == "opening-1" &&
-               item.code == "opening_host_relationship_not_representable";
-    }), "opening host loss must be explicit in the DXF fidelity report");
+    check(std::none_of(exported.diagnostics.begin(), exported.diagnostics.end(), [](const auto& item) {
+        return item.source_id == "opening-1";
+    }), "opening host relationship must be retained by native metadata");
 
     const auto bytes = export_dxf_ascii(exported.drawing);
     const auto imported = import_project_dxf(bytes);
@@ -363,6 +369,137 @@ void test_unspecified_or_unsupported_units_fail_closed() {
     check(rejected, "unknown unit codes must fail closed");
 }
 
+sketch::Document native_hosted_document(bool curved) {
+    using namespace sketch;
+    Entity wall{"native-wall", "wall", {{"baseline", {{"start", {2, 3}}, {"end", {10, 9}},
+        {"sweep_radians", curved ? std::acos(-1.0) / 3 : 0.0}}},
+        {"thickness_m", 0.3}, {"height_m", 3.0}, {"elevation_m", 0.4}}, false,
+        {{"opaque", "retained"}}};
+    std::vector<Entity> entities{wall};
+    for (const auto kind : {"door", "window", "opening"}) {
+        const double offset = std::string(kind) == "door" ? 1 : std::string(kind) == "window" ? 3 : 6;
+        Entity opening{"native-" + std::string(kind), "opening", {{"wall_id", wall.id},
+            {"opening_kind", kind}, {"offset_m", offset}, {"width_m", 1.2},
+            {"sill_m", std::string(kind) == "window" ? 0.8 : 0.0}, {"height_m", 2.0}}, false,
+            {{"opaque", nlohmann::json::array({1, 2, 3})}}};
+        if (std::string(kind) != "opening") {
+            auto assembly = default_opening_assembly(std::string(kind) == "door" ?
+                OpeningAssemblyKind::door : OpeningAssemblyKind::window);
+            opening.properties["opening_assembly"] = opening_assembly_json(assembly);
+        }
+        if (std::string(kind) == "door")
+            opening.properties["door_operation"] = encode_door_operation({true, false, 65});
+        entities.push_back(opening);
+    }
+    return Document::create(std::move(entities));
+}
+
+void test_native_hosted_roundtrip_and_fallback() {
+    using namespace sketch;
+    for (const bool curved : {false, true}) {
+        const auto source = native_hosted_document(curved).snapshot();
+        const auto mapped = export_project_dxf(source);
+        check(mapped.diagnostics.empty() && mapped.drawing.blocks.size() == 4 && mapped.drawing.inserts.size() == 4,
+              "all native wall/opening plan blocks must export without semantic loss");
+        const auto block_for = [&](const char* id) -> const DxfBlock& {
+            const auto found = std::find_if(mapped.drawing.blocks.begin(), mapped.drawing.blocks.end(),
+                [&](const auto& block) { return nlohmann::json::parse(block.vertex_entity_json).at("id") == id; });
+            check(found != mapped.drawing.blocks.end(), "native block ID must exist");
+            return *found;
+        };
+        const auto& door = block_for("native-door");
+        check(door.lines.size() == 1 && door.arcs.size() == 1,
+              "door operation must produce an analytic leaf and swing");
+        const auto& window = block_for("native-window");
+        check(curved ? window.arcs.size() == 2 && window.lines.size() == 2 : window.lines.size() == 4,
+              "window rails must preserve curved or rotated hosts");
+        const auto& bare = block_for("native-opening");
+        check(curved ? bare.lines.size() == 2 && bare.arcs.size() == 1 : bare.lines.size() == 3,
+              "bare opening must have two jambs and exact threshold");
+        const auto bytes = export_dxf_ascii(mapped.drawing);
+        if (const auto* capture = std::getenv("VERTEX_TEST_CAPTURE_DIR")) {
+            std::filesystem::create_directories(capture);
+            std::ofstream output(std::filesystem::path(capture) / (curved ? "native-curved.dxf" : "native-rotated.dxf"), std::ios::binary);
+            output << bytes;
+        }
+        const auto imported = import_project_dxf(bytes);
+        check(imported.complete() && !imported.source_retention_required && imported.entities.size() == 4,
+              "valid native metadata must replace fallback symbols with complete active graph");
+        auto restored = Document::create(imported.entities);
+        const auto restored_snapshot = restored.snapshot();
+        const auto host = std::find_if(imported.entities.begin(), imported.entities.end(), [](const auto& entity) { return entity.type == "wall"; });
+        check(host != imported.entities.end() && host->id != "native-wall" && host->properties == source.entities().at("native-wall").properties,
+              "native wall properties and fresh identity must survive");
+        for (const auto& entity : imported.entities) {
+            check(entity.extensions.contains("vertex_dxf_source"), "opaque native source identity must be retained");
+            if (entity.type == "opening") {
+                const auto original = entity.extensions.at("vertex_dxf_source").at("id").get<std::string>();
+                auto expected = source.entities().at(original).properties;
+                expected["wall_id"] = host->id;
+                check(entity.properties == expected, "host, kind, sill, profile and swing must remain active");
+            }
+        }
+        auto repeat = imported.entities;
+        std::size_t previous_size = 0;
+        for (int cycle = 0; cycle < 4; ++cycle) {
+            const auto again = export_project_dxf(Document::create(repeat).snapshot());
+            const auto next = import_project_dxf(export_dxf_ascii(again.drawing));
+            check(next.complete() && next.entities.size() == 4, "repeated native exchange must remain bounded and active");
+            const auto same_source = std::find_if(again.drawing.blocks.begin(), again.drawing.blocks.end(),
+                [](const auto& block) {
+                    return nlohmann::json::parse(block.vertex_entity_json).at("extensions")
+                        .at("vertex_dxf_source").at("id") == "native-door";
+                });
+            check(same_source != again.drawing.blocks.end(), "same retained native identity must remain present");
+            const auto size = same_source->vertex_entity_json.size();
+            if (cycle > 0) check(size == previous_size, "source retention must not nest on repeated round trips");
+            previous_size = size; repeat = next.entities;
+        }
+        const auto fallback = [&](DxfDrawing altered) {
+            const auto result = import_project_dxf(export_dxf_ascii(altered));
+            check(result.source_retention_required && !result.diagnostics.empty() &&
+                std::none_of(result.entities.begin(), result.entities.end(), [](const auto& entity) { return entity.type == "wall" || entity.type == "opening"; }) &&
+                std::any_of(result.entities.begin(), result.entities.end(), [](const auto& entity) { return entity.type == "boundary"; }),
+                "unsafe native metadata must preserve visual fallback and explicit loss diagnostics");
+        };
+        auto changed = mapped.drawing;
+        changed.blocks.front().lines.front().end.x += 0.02; fallback(changed);
+        changed = mapped.drawing; changed.blocks.front().vertex_entity_json = "{"; fallback(changed);
+        changed = mapped.drawing; changed.inserts.front().rotation_degrees = 20; fallback(changed);
+        changed = mapped.drawing; changed.inserts.erase(changed.inserts.begin()); fallback(changed);
+        changed = mapped.drawing; changed.insertion_units = 4; fallback(changed);
+        changed = mapped.drawing;
+        auto payload = nlohmann::json::parse(changed.blocks.front().vertex_entity_json);
+        payload["version"] = 2; changed.blocks.front().vertex_entity_json = payload.dump(); fallback(changed);
+        changed = mapped.drawing;
+        payload = nlohmann::json::parse(changed.blocks.front().vertex_entity_json);
+        payload["type"] = "reference_asset"; changed.blocks.front().vertex_entity_json = payload.dump(); fallback(changed);
+        changed = mapped.drawing;
+        changed.blocks.front().vertex_entity_json.insert(1, "\"version\":1,"); fallback(changed);
+        changed = mapped.drawing;
+        auto nested = nlohmann::json::object();
+        for (int depth = 0; depth < 20; ++depth) nested = {{"nested", nested}};
+        payload = nlohmann::json::parse(changed.blocks.front().vertex_entity_json);
+        payload["extensions"] = nested; changed.blocks.front().vertex_entity_json = payload.dump(); fallback(changed);
+    }
+}
+
+void test_legacy_native_wall_candidates_are_canonical() {
+    using namespace sketch;
+    Entity wall{"legacy-wall", "wall", {{"baseline", {{"start", {0, 0}}, {"end", {4, 0}},
+        {"sweep_radians", 0.0}}}, {"thickness", 0.2}, {"height", 3.0}, {"elevation", 0.5}},
+        false, nlohmann::json::object()};
+    const auto mapped = export_project_dxf(Document::create({wall}).snapshot());
+    const auto imported = import_project_dxf(export_dxf_ascii(mapped.drawing));
+    check(imported.complete() && imported.entities.size() == 1 && imported.entities[0].type == "wall",
+          "legacy wall fields must retain native semantics");
+    const auto& candidate = imported.entities[0];
+    check(candidate.properties.at("thickness_m") == 0.2 && candidate.properties.at("height_m") == 3.0 &&
+          candidate.properties.at("elevation_m") == 0.5 && !candidate.properties.contains("thickness") &&
+          candidate.extensions.at("vertex_dxf_source").at("properties") == wall.properties,
+          "active candidate must use canonical SI fields while original aliases remain opaque source evidence");
+}
+
 } // namespace
 
 int main() {
@@ -373,6 +510,8 @@ int main() {
         test_unspecified_or_unsupported_units_fail_closed();
         test_non_linear_dimensions_are_not_flattened();
         test_hidden_linear_dimensions_stay_hidden_in_dxf_output();
+        test_native_hosted_roundtrip_and_fallback();
+        test_legacy_native_wall_candidates_are_canonical();
         std::cout << "DXF project exchange tests passed\n";
         return 0;
     } catch (const std::exception& error) {

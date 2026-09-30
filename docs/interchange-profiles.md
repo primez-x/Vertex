@@ -188,8 +188,8 @@ placement. Wall occurrences receive an `IFCWALLTYPE`; homogeneous materials
 use `IFCMATERIAL`, and layered constructions use an ordered
 `IFCMATERIALLAYERSET`. The exporter explicitly reports
 `wall_layer_placement_not_exported` because the layer set does not yet include
-an occurrence-relative usage axis. Curves, slab holes, opening assembly parts,
-unsupported architectural entities, and other spatial relationships are
+an occurrence-relative usage axis. In core-only builds curves and opening assembly parts remain unavailable;
+slab holes, unsupported architectural entities, and other spatial relationships are
 diagnosed instead of silently flattened.
 
 Import accepts the same IFC4 STEP subset and walks product representation
@@ -204,8 +204,9 @@ ID/type and original arguments in `extensions.ifc_source`, while the decoded
 property payload is retained in `extensions.ifc_vertex_properties`. Translation-only
 placements preserve elevations and hosted openings recover host-relative sill,
 offset, and width when the void relationship is unique. Rotated placements,
-non-metre units, compound representations, opening assemblies, materials, and
-other `IFCREL*` relationships remain explicit fidelity diagnostics. Required
+non-metre units, foreign compound representations, materials, and unsupported
+`IFCREL*` relationships remain explicit fidelity diagnostics. Architecture-enabled
+native meshes and validated opening fills are described below. Required
 native semantics that cannot be represented faithfully are emitted as an
 `IFCBUILDINGELEMENTPROXY` and reconstruct as an inert `ifc_reference` carrying
 the complete bounded native payload. The desktop accepts that reference-only
@@ -216,3 +217,31 @@ receipt as one undoable document command. `source_retention_required` tells the
 caller when those original bytes remain necessary. Reference View conformance,
 external-application certification, and complete standardized semantic mapping
 remain open production gates.
+
+
+### Hosted graph exchange
+
+DXF R2013 native wall/opening blocks register `VERTEX_ENTITY_V1` in the APPID
+table and carry bounded version-1 JSON XDATA (16 KiB per entity; UTF-8 chunks
+at most 255 bytes). Editable reconstruction requires metre units, identity
+INSERT, a complete host graph, and agreement with every supported primitive.
+Unsupported block contents, geometry drift, bad profiles, incomplete relationships
+or transformed inserts fall back to inert plan geometry with source retention.
+Desktop import remaps identities and assigns the active floor/layer atomically,
+then validates the newly imported wall and manufactured assembly solids.
+This is 2D plan exchange; manufactured profile geometry remains an explicit gap.
+
+With the architectural engine enabled, IFC4 exports native wall/void/fill meshes
+and `IfcRelFillsElement` relationships for door/window products. Import verifies
+the matching void/host graph, native profile and regenerated meshes, including
+representation context and placement. Mesh limits and 1 mm meshing deviation
+remain bounded; differently tessellated foreign products are preserved with
+fidelity diagnostics instead of activating trusted native metadata. Builds without
+the architectural engine report the unavailable native mesh capability.
+Full Reference View and third-party application certification remain open.
+
+Door-operation enum interoperability for oblique hosts is still unqualified:
+physical leaf orientation and native handing are preserved, but the current
+world-axis product placement is not an aligned door-local frame. Qualification
+must verify that standardized operation enums are interpreted consistently by
+external applications; this subset does not claim that result.

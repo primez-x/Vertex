@@ -4,6 +4,10 @@
 #include "sketch/annotation_entity_codec.hpp"
 #include "sketch/boundary_dimension.hpp"
 #include "sketch/boundary_entity.hpp"
+#include "sketch/document_wall.hpp"
+#include "sketch/hosted_opening_geometry.hpp"
+#include "sketch/door_operation.hpp"
+#include "sketch/opening_assembly.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -228,16 +232,131 @@ void add_boundary_as_dxf(DxfDrawing& drawing, const Boundary& boundary, std::str
     diagnostic(diagnostics, source_id, std::string(source_kind), "empty_boundary");
 }
 
-std::optional<Segment> native_segment(const Json& value) {
-    return read_segment(value);
-}
-
 std::optional<Boundary> native_slab_hole(const Json& value) {
     return read_boundary_value(value);
 }
 
+std::vector<const Entity*> host_openings(const DocumentSnapshot& document, std::string_view id) {
+    std::vector<const Entity*> openings;
+    for (const auto& [key, entity] : document.entities()) {
+        (void)key;
+        if (entity.type == "opening" && entity.properties.is_object() &&
+            entity.properties.value("wall_id", std::string{}) == id) openings.push_back(&entity);
+    }
+    return openings;
+}
+
+Boundary architectural_plan(const DocumentSnapshot& document, const Entity& entity) {
+    const Entity* host = &entity;
+    if (entity.type == "opening") {
+        const auto id = entity.properties.at("wall_id").get<std::string>();
+        const auto found = document.entities().find(id);
+        if (found == document.entities().end() || found->second.type != "wall")
+            throw std::invalid_argument("missing opening host");
+        host = &found->second;
+    }
+    Wall wall;
+    std::string error;
+    if (!read_document_wall(*host, host_openings(document, host->id), wall, error))
+        throw std::invalid_argument(error);
+    validate_wall_semantics(wall);
+    if (entity.type == "wall")
+        return wall_plan_footprint(wall.baseline, wall.openings, wall.thickness);
+    const auto opening = std::find_if(wall.openings.begin(), wall.openings.end(),
+        [&](const auto& value) { return value.id == entity.id; });
+    if (opening == wall.openings.end()) throw std::invalid_argument("missing hosted opening");
+    const auto kind = entity.properties.value("opening_kind", std::string("opening"));
+    if (entity.properties.contains("door_operation") && kind != "door")
+        throw std::invalid_argument("door operation requires door opening kind");
+    if (entity.properties.contains("opening_assembly")) {
+        const auto assembly = parse_opening_assembly(entity.properties.at("opening_assembly"));
+        if (opening_assembly_kind_name(assembly.kind) != kind)
+            throw std::invalid_argument("opening kind differs from assembly");
+    }
+    if (kind == "door") {
+        const auto operation = entity.properties.contains("door_operation")
+            ? decode_door_operation(entity.properties.at("door_operation")) : DoorOperation{};
+        return door_plan_symbol(wall.baseline, opening->offset, opening->width, operation);
+    }
+    if (kind == "window")
+        return window_plan_symbol(wall.baseline, opening->offset, opening->width, wall.thickness);
+    if (kind != "opening") throw std::invalid_argument("unsupported opening kind");
+    const auto span = hosted_opening_span(wall.baseline, opening->offset, opening->width);
+    auto footprint = wall_plan_footprint(span, {}, wall.thickness);
+    // The two jambs plus the directed analytical threshold.
+    if (footprint.size() != 4) throw std::invalid_argument("invalid bare opening footprint");
+    return {footprint[1], footprint[3], span};
+}
+
+DxfBlock architectural_block(const DocumentSnapshot& document, const Entity& entity,
+                              std::string name, std::string layer,
+                              std::vector<DxfProjectDiagnostic>& diagnostics) {
+    DxfDrawing plan;
+    std::vector<DxfProjectDiagnostic> plan_diagnostics;
+    for (const auto& segment : architectural_plan(document, entity))
+        add_segment_as_dxf(plan, segment, layer, plan_diagnostics, entity.id, entity.type);
+    for (const auto& item : plan_diagnostics)
+        if (item.code != "arc_exported_as_bulged_polyline") diagnostics.push_back(item);
+    return {std::move(name), {}, std::move(plan.lines), std::move(plan.arcs),
+            std::move(plan.polylines), {}, {}};
+}
+
+Json native_payload(const DocumentSnapshot& document, const Entity& entity) {
+    Json ids = Json::array();
+    if (entity.type == "wall") for (const auto* opening : host_openings(document, entity.id))
+        ids.push_back(opening->id);
+    return {{"version", 1}, {"id", entity.id}, {"type", entity.type},
+            {"properties", entity.properties}, {"extensions", entity.extensions},
+            {"hosted_opening_ids", std::move(ids)}};
+}
+
+Json bounded_native_json(std::string_view bytes) {
+    std::vector<std::set<std::string>> keys;
+    std::size_t nodes = 0;
+    const auto callback = [&](int depth, Json::parse_event_t event, Json& value) {
+        if (depth > 16 || ++nodes > 4096) throw std::invalid_argument("native JSON limit");
+        if (event == Json::parse_event_t::object_start) keys.emplace_back();
+        else if (event == Json::parse_event_t::object_end) keys.pop_back();
+        else if (event == Json::parse_event_t::key &&
+                 !keys.back().insert(value.get<std::string>()).second)
+            throw std::invalid_argument("duplicate native JSON key");
+        if (value.is_string() && value.get_ref<const std::string&>().size() > 8192)
+            throw std::invalid_argument("native JSON string limit");
+        return true;
+    };
+    return Json::parse(bytes, callback);
+}
+
+void export_architectural_entity(const DocumentSnapshot& document, const Entity& entity,
+                                DxfProjectExportResult& result) {
+    try {
+        const auto layer = layer_for(document, entity, result.diagnostics);
+        auto block = architectural_block(document, entity,
+            "VERTEX_PLAN_" + std::to_string(result.drawing.blocks.size() + 1),
+            entity.type == "opening" && layer == "0" ? "Openings" : layer, result.diagnostics);
+        block.vertex_entity_json = native_payload(document, entity).dump();
+        // Validate independently so an oversized native payload cannot erase
+        // unrelated project output. The plan block still survives as fallback.
+        DxfDrawing probe;
+        probe.blocks.push_back(block);
+        try { (void)bounded_native_json(block.vertex_entity_json); (void)export_dxf_ascii(probe); }
+        catch (const std::exception&) {
+            block.vertex_entity_json.clear();
+            diagnostic(result.diagnostics, entity.id, entity.type, "native_metadata_not_representable");
+        }
+        result.drawing.inserts.push_back({block.name, {}, 1, 1, 0, layer});
+        result.drawing.blocks.push_back(std::move(block));
+    } catch (const std::exception&) {
+        diagnostic(result.diagnostics, entity.id, entity.type, "native_architectural_plan_not_representable");
+    }
+}
+
 void export_native_entity(const DocumentSnapshot& document, const Entity& entity,
                           DxfProjectExportResult& result) {
+    if (entity.type == "wall" || entity.type == "opening") {
+        export_architectural_entity(document, entity, result);
+        return;
+    }
     const auto layer = layer_for(document, entity, result.diagnostics);
     if (can_recognize_boundary_entity_type(entity.type)) {
         const auto boundary = read_entity_boundary(entity);
@@ -247,30 +366,6 @@ void export_native_entity(const DocumentSnapshot& document, const Entity& entity
         }
         add_boundary_as_dxf(result.drawing, *boundary, layer, result.diagnostics,
                             entity.id, entity.type);
-        return;
-    }
-    if (entity.type == "wall") {
-        const auto baseline = entity.properties.is_object() && entity.properties.contains("baseline")
-            ? native_segment(entity.properties.at("baseline")) : std::nullopt;
-        if (!baseline) {
-            diagnostic(result.diagnostics, entity.id, entity.type, "wall_baseline_not_representable");
-            return;
-        }
-        // DXF project mapping carries the analytical wall baseline only. The
-        // 3D wall envelope, vertical slope, and layer/material stack have no
-        // representation in this bounded 2D exchange profile, so make that
-        // loss visible in the fidelity report.
-        if (entity.properties.contains("thickness_m") ||
-            entity.properties.contains("thickness") ||
-            entity.properties.contains("height_m") ||
-            entity.properties.contains("elevation_m") ||
-            entity.properties.contains("slope_rise_m") ||
-            entity.properties.contains("layers")) {
-            diagnostic(result.diagnostics, entity.id, entity.type,
-                       "wall_3d_semantics_not_representable");
-        }
-        add_segment_as_dxf(result.drawing, *baseline, layer, result.diagnostics,
-                           entity.id, entity.type);
         return;
     }
     if (entity.type == "slab") {
@@ -305,87 +400,6 @@ void export_native_entity(const DocumentSnapshot& document, const Entity& entity
                 }
                 ++index;
             }
-        }
-        return;
-    }
-    if (entity.type == "opening") {
-        // DXF project exchange is a bounded 2D profile.  Preserve a hosted
-        // opening as explicit jamb/threshold markers in plan while reporting
-        // the lost wall/vertical relationship instead of silently flattening
-        // it into an unrelated boundary.
-        if (!entity.properties.is_object()) {
-            diagnostic(result.diagnostics, entity.id, entity.type,
-                       "opening_properties_not_representable");
-            return;
-        }
-        const auto host_id = entity.properties.value("wall_id", std::string{});
-        const auto host = document.entities().find(host_id);
-        if (host == document.entities().end() || host->second.type != "wall") {
-            diagnostic(result.diagnostics, entity.id, entity.type,
-                       "opening_host_missing");
-            return;
-        }
-        const auto baseline = native_segment(host->second.properties.value(
-            "baseline", Json{}));
-        if (!baseline) {
-            diagnostic(result.diagnostics, entity.id, entity.type,
-                       "opening_host_baseline_not_representable");
-            return;
-        }
-        if (std::abs(baseline->sweep_radians) > kGeometryTolerance) {
-            diagnostic(result.diagnostics, entity.id, entity.type,
-                       "opening_curved_host_not_representable");
-            return;
-        }
-        const auto read_number = [&](const char* key, double fallback) {
-            const auto found = entity.properties.find(key);
-            if (found == entity.properties.end()) return fallback;
-            return found->is_number() ? found->get<double>()
-                                      : std::numeric_limits<double>::quiet_NaN();
-        };
-        const auto offset = read_number("offset_m", std::numeric_limits<double>::quiet_NaN());
-        const auto width = read_number("width_m", std::numeric_limits<double>::quiet_NaN());
-        const auto height = read_number("height_m", std::numeric_limits<double>::quiet_NaN());
-        double wall_thickness = 0.0;
-        for (const auto* key : {"thickness_m", "thickness"}) {
-            const auto found = host->second.properties.find(key);
-            if (found != host->second.properties.end() && found->is_number()) {
-                wall_thickness = found->get<double>();
-                break;
-            }
-        }
-        const auto length = std::hypot(baseline->end.x - baseline->start.x,
-                                       baseline->end.y - baseline->start.y);
-        if (!std::isfinite(offset) || !std::isfinite(width) || !std::isfinite(height) ||
-            !std::isfinite(wall_thickness) || !(offset >= -kGeometryTolerance) ||
-            !(width > kGeometryTolerance) || !(height > kGeometryTolerance) ||
-            !(wall_thickness > kGeometryTolerance) || !std::isfinite(length) ||
-            !(length > kGeometryTolerance) || offset + width > length + kGeometryTolerance) {
-            diagnostic(result.diagnostics, entity.id, entity.type,
-                       "opening_dimensions_not_representable");
-            return;
-        }
-        const Vec2 tangent{(baseline->end.x - baseline->start.x) / length,
-                           (baseline->end.y - baseline->start.y) / length};
-        const Vec2 normal{-tangent.y, tangent.x};
-        const auto at = [&](double along, double across) {
-            return DxfPoint{baseline->start.x + tangent.x * along + normal.x * across,
-                            baseline->start.y + tangent.y * along + normal.y * across};
-        };
-        const auto start = at(offset, 0.0);
-        const auto end = at(offset + width, 0.0);
-        const auto half = wall_thickness * 0.5;
-        const auto opening_layer = layer == "0" ? std::string("Openings") : layer;
-        result.drawing.lines.push_back({at(offset, -half), at(offset, half), opening_layer});
-        result.drawing.lines.push_back({at(offset + width, -half), at(offset + width, half), opening_layer});
-        result.drawing.lines.push_back({start, end, opening_layer});
-        diagnostic(result.diagnostics, entity.id, entity.type,
-                   "opening_host_relationship_not_representable");
-        diagnostic(result.diagnostics, entity.id, entity.type,
-                   "opening_vertical_dimensions_not_representable");
-        if (entity.properties.contains("opening_assembly")) {
-            diagnostic(result.diagnostics, entity.id, entity.type,
-                       "opening_assembly_not_representable");
         }
         return;
     }
@@ -661,10 +675,13 @@ void import_dimensions(const std::vector<DxfDimension>& dimensions,
     }
 }
 
-void import_inserts(const DxfDrawing& drawing, DxfProjectImportResult& result,
+void import_inserts(const DxfDrawing& drawing, const std::set<std::size_t>& native_inserts,
+                    DxfProjectImportResult& result,
                     std::size_t& boundary_counter, std::size_t& label_counter,
                     AnnotationState& annotations) {
-    for (const auto& insert : drawing.inserts) {
+    for (std::size_t insert_index = 0; insert_index < drawing.inserts.size(); ++insert_index) {
+        if (native_inserts.contains(insert_index)) continue;
+        const auto& insert = drawing.inserts[insert_index];
         const auto block = std::find_if(drawing.blocks.begin(), drawing.blocks.end(),
             [&](const auto& value) { return value.name == insert.block_name; });
         if (block == drawing.blocks.end()) continue;
@@ -723,6 +740,161 @@ std::optional<double> metres_per_source_unit(int units) {
     case 7: return 1000.0; // Kilometres.
     default: return std::nullopt;
     }
+}
+
+struct NativeCandidate {
+    Entity entity;
+    std::vector<std::string> hosted_ids;
+    std::size_t insert_index{};
+    const DxfBlock* block{};
+};
+
+NativeCandidate decode_native_candidate(const DxfBlock& block, std::size_t insert_index) {
+    const auto payload = bounded_native_json(block.vertex_entity_json);
+    const std::set<std::string> expected{"version", "id", "type", "properties", "extensions", "hosted_opening_ids"};
+    std::set<std::string> actual;
+    if (!payload.is_object()) throw std::invalid_argument("native payload must be object");
+    for (const auto& [key, value] : payload.items()) { (void)value; actual.insert(key); }
+    if (actual != expected || !payload.at("version").is_number_integer() || payload.at("version") != 1 ||
+        !payload.at("id").is_string() || !payload.at("type").is_string() ||
+        !payload.at("properties").is_object() || !payload.at("extensions").is_object() ||
+        !payload.at("hosted_opening_ids").is_array()) throw std::invalid_argument("invalid native payload schema");
+    NativeCandidate candidate{{payload.at("id").get<std::string>(), payload.at("type").get<std::string>(),
+                               payload.at("properties"), false, payload.at("extensions")}, {}, insert_index, &block};
+    if (candidate.entity.id.empty() || candidate.entity.id.size() > 255 ||
+        (candidate.entity.type != "wall" && candidate.entity.type != "opening"))
+        throw std::invalid_argument("native entity type/id not allowed");
+    std::set<std::string> hosted;
+    for (const auto& id : payload.at("hosted_opening_ids")) {
+        if (!id.is_string() || id.get_ref<const std::string&>().empty() ||
+            !hosted.insert(id.get<std::string>()).second) throw std::invalid_argument("invalid hosted ID list");
+        candidate.hosted_ids.push_back(id.get<std::string>());
+    }
+    if (candidate.entity.type == "opening" && !candidate.hosted_ids.empty())
+        throw std::invalid_argument("opening cannot host children");
+    return candidate;
+}
+
+bool same_block_geometry(const DxfBlock& a, const DxfBlock& b) {
+    const auto near = [](double x, double y) { return std::abs(x - y) <= kGeometryTolerance; };
+    const auto point = [&](DxfPoint x, DxfPoint y) { return near(x.x, y.x) && near(x.y, y.y); };
+    if (!a.labels.empty() || !b.labels.empty() || a.lines.size() != b.lines.size() ||
+        a.arcs.size() != b.arcs.size() || a.polylines.size() != b.polylines.size()) return false;
+    for (std::size_t i = 0; i < a.lines.size(); ++i)
+        if (!point(a.lines[i].start, b.lines[i].start) || !point(a.lines[i].end, b.lines[i].end) ||
+            a.lines[i].layer != b.lines[i].layer) return false;
+    for (std::size_t i = 0; i < a.arcs.size(); ++i)
+        if (!point(a.arcs[i].center, b.arcs[i].center) || !near(a.arcs[i].radius, b.arcs[i].radius) ||
+            !near(a.arcs[i].start_degrees, b.arcs[i].start_degrees) ||
+            !near(a.arcs[i].end_degrees, b.arcs[i].end_degrees) || a.arcs[i].layer != b.arcs[i].layer) return false;
+    for (std::size_t i = 0; i < a.polylines.size(); ++i) {
+        const auto& x = a.polylines[i]; const auto& y = b.polylines[i];
+        if (x.closed != y.closed || x.layer != y.layer || x.vertices.size() != y.vertices.size()) return false;
+        for (std::size_t j = 0; j < x.vertices.size(); ++j)
+            if (!point(x.vertices[j].point, y.vertices[j].point) || !near(x.vertices[j].bulge, y.vertices[j].bulge)) return false;
+    }
+    return true;
+}
+
+// Bindings to absent project scaffolding remain inert source evidence. Only
+// wall/opening identity and host relationships become active in this profile.
+Entity detached_native_entity(const Entity& source, const std::map<std::string, std::string>& ids) {
+    Entity result = source;
+    result.id = ids.at(source.id);
+    if (!result.extensions.contains("vertex_dxf_source"))
+        result.extensions["vertex_dxf_source"] = {{"version", 1}, {"id", source.id},
+            {"properties", source.properties}, {"extensions", source.extensions}};
+    for (const auto* key : {"floor_id", "layer_id", "vertical_placement", "level_connection",
+                            "material_assignment", "wall_join_id", "room_id", "building_id", "property_id"})
+        result.properties.erase(key);
+    if (result.properties.contains("layers") && result.properties.at("layers").is_array())
+        for (auto& layer : result.properties["layers"]) if (layer.is_object()) layer.erase("material_assignment");
+    if (source.type == "wall") {
+        Wall decoded;
+        std::string error;
+        if (!read_document_wall(source, {}, decoded, error)) throw std::invalid_argument(error);
+        result.properties["thickness_m"] = decoded.thickness;
+        result.properties["height_m"] = decoded.height;
+        result.properties["elevation_m"] = decoded.elevation;
+        if (decoded.slope_rise) result.properties["slope_rise_m"] = *decoded.slope_rise;
+        for (const auto* key : {"thickness", "height", "elevation", "slope_rise"}) result.properties.erase(key);
+    } else {
+        result.properties["wall_id"] = ids.at(source.properties.at("wall_id").get<std::string>());
+        for (const auto* key : {"offset", "width", "sill", "height"}) {
+            const auto canonical = std::string(key) + "_m";
+            if (!result.properties.contains(canonical) && result.properties.contains(key))
+                result.properties[canonical] = result.properties.at(key);
+            result.properties.erase(key);
+        }
+    }
+    return result;
+}
+
+std::set<std::size_t> import_native_graphs(const DxfDrawing& drawing, bool source_is_metres,
+                                         DxfProjectImportResult& result) {
+    std::map<std::string, NativeCandidate> candidates;
+    std::set<std::string> duplicate_ids;
+    std::set<std::size_t> activated;
+    for (std::size_t i = 0; i < drawing.inserts.size(); ++i) {
+        const auto& insert = drawing.inserts[i];
+        const auto block = std::find_if(drawing.blocks.begin(), drawing.blocks.end(),
+            [&](const auto& value) { return value.name == insert.block_name; });
+        if (block == drawing.blocks.end() || block->vertex_entity_json.empty()) continue;
+        try {
+            if (!source_is_metres || insert.insertion.x != 0 || insert.insertion.y != 0 ||
+                insert.scale_x != 1 || insert.scale_y != 1 || insert.rotation_degrees != 0 ||
+                block->base.x != 0 || block->base.y != 0)
+                throw std::invalid_argument("native placement/units differs");
+            auto candidate = decode_native_candidate(*block, i);
+            const auto source_id = candidate.entity.id;
+            if (!candidates.emplace(source_id, std::move(candidate)).second) duplicate_ids.insert(source_id);
+        } catch (const std::exception&) {
+            diagnostic(result.diagnostics, block->name, "BLOCK", "native_metadata_not_activated");
+        }
+    }
+    std::set<std::string> allocated_ids;
+    for (const auto& [id, candidate] : candidates) { (void)candidate; allocated_ids.insert(id); }
+    for (const auto& [id, wall] : candidates) {
+        if (wall.entity.type != "wall") continue;
+        try {
+            std::vector<const NativeCandidate*> group{&wall};
+            std::set<std::string> expected(wall.hosted_ids.begin(), wall.hosted_ids.end()), actual;
+            for (const auto& [child_id, child] : candidates) {
+                if (child.entity.type == "opening" && child.entity.properties.value("wall_id", std::string{}) == id) {
+                    actual.insert(child_id); group.push_back(&child);
+                }
+            }
+            if (expected != actual) throw std::invalid_argument("partial native host graph");
+            std::map<std::string, std::string> ids;
+            std::vector<Entity> detached;
+            for (const auto* item : group) {
+                if (duplicate_ids.contains(item->entity.id)) throw std::invalid_argument("duplicate native identity");
+                auto fresh = make_stable_id();
+                while (!allocated_ids.insert(fresh).second) fresh = make_stable_id();
+                ids.emplace(item->entity.id, std::move(fresh));
+            }
+            for (const auto* item : group) detached.push_back(detached_native_entity(item->entity, ids));
+            const auto document = Document::create(detached).snapshot();
+            for (const auto* item : group) {
+                const auto& block = *item->block;
+                const auto layer = !block.lines.empty() ? block.lines.front().layer :
+                    !block.arcs.empty() ? block.arcs.front().layer :
+                    !block.polylines.empty() ? block.polylines.front().layer : std::string("0");
+                std::vector<DxfProjectDiagnostic> geometry_diagnostics;
+                const auto expected_block = architectural_block(document, document.entities().at(ids.at(item->entity.id)),
+                    block.name, layer, geometry_diagnostics);
+                if (!same_block_geometry(block, expected_block)) throw std::invalid_argument("native geometry differs");
+            }
+            for (const auto* item : group) activated.insert(item->insert_index);
+            result.entities.insert(result.entities.end(), detached.begin(), detached.end());
+        } catch (const std::exception&) {
+            diagnostic(result.diagnostics, id, "wall", "native_host_graph_not_activated");
+        }
+    }
+    for (const auto& [id, candidate] : candidates)
+        if (!activated.contains(candidate.insert_index))
+            diagnostic(result.diagnostics, id, candidate.entity.type, "native_metadata_visual_fallback");
+    return activated;
 }
 
 void normalize_drawing_to_metres(DxfDrawing& drawing, double factor) {
@@ -790,14 +962,16 @@ DxfProjectImportResult import_project_dxf(std::string_view bytes,
         result.source_retention_required = true;
         return result;
     }
+    const bool source_is_metres = parsed.drawing.insertion_units == 6;
     normalize_drawing_to_metres(parsed.drawing, *factor);
+    const auto native_inserts = import_native_graphs(parsed.drawing, source_is_metres, result);
     std::size_t boundary_counter = 0;
     import_direct_geometry(parsed.drawing, result, boundary_counter);
     AnnotationState annotations;
     std::size_t label_counter = 0;
     import_labels(parsed.drawing.labels, annotations, label_counter);
     import_dimensions(parsed.drawing.dimensions, result, annotations, boundary_counter, label_counter);
-    import_inserts(parsed.drawing, result, boundary_counter, label_counter, annotations);
+    import_inserts(parsed.drawing, native_inserts, result, boundary_counter, label_counter, annotations);
     if (!annotations.labels.empty()) {
         try {
             result.entities.push_back(make_annotation_entity("dxf-annotations", annotations));

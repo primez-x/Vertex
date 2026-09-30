@@ -1068,96 +1068,6 @@ Boundary assembly_placement_boundary(const Boundary& source,
     return result;
 }
 
-Boundary wall_segments_without_openings(const Segment& baseline,
-                                         const std::vector<HostedOpening>& openings) {
-    if (openings.empty()) {
-        return {baseline};
-    }
-    const auto length = segment_length(baseline);
-    if (!(length > 1e-7) || !std::isfinite(length)) {
-        return {baseline};
-    }
-    std::vector<std::pair<double, double>> cuts;
-    cuts.reserve(openings.size());
-    for (const auto& opening : openings) {
-        if (!std::isfinite(opening.offset) || !std::isfinite(opening.width) ||
-            opening.width <= 1e-7) {
-            continue;
-        }
-        const auto from = std::clamp(opening.offset / length, 0.0, 1.0);
-        const auto to = std::clamp((opening.offset + opening.width) / length, 0.0, 1.0);
-        if (to > from + 1e-8) {
-            cuts.emplace_back(from, to);
-        }
-    }
-    if (cuts.empty()) {
-        return {baseline};
-    }
-    std::sort(cuts.begin(), cuts.end());
-    std::vector<std::pair<double, double>> merged;
-    for (const auto cut : cuts) {
-        if (merged.empty() || cut.first > merged.back().second + 1e-8) {
-            merged.push_back(cut);
-        } else {
-            merged.back().second = std::max(merged.back().second, cut.second);
-        }
-    }
-    Boundary visible;
-    double cursor = 0.0;
-    const auto append_interval = [&](double from, double to) {
-        if (to <= from + 1e-8) {
-            return;
-        }
-        const auto start = point_at_segment(baseline, from);
-        const auto end = point_at_segment(baseline, to);
-        if (!start.has_value() || !end.has_value()) {
-            return;
-        }
-        visible.push_back(Segment{*start, *end,
-                                  baseline.sweep_radians * (to - from)});
-    };
-    for (const auto [from, to] : merged) {
-        append_interval(cursor, from);
-        cursor = std::max(cursor, to);
-    }
-    append_interval(cursor, 1.0);
-    return visible.empty() ? Boundary{baseline} : visible;
-}
-
-Boundary wall_plan_footprint(const Segment& baseline,
-                             const std::vector<HostedOpening>& openings,
-                             double thickness) {
-    Boundary result;
-    for (const auto& part : wall_segments_without_openings(baseline, openings)) {
-        const auto dx = part.end.x - part.start.x;
-        const auto dy = part.end.y - part.start.y;
-        const auto chord = std::hypot(dx, dy);
-        const auto offset_side = [&](double offset) {
-            if (part.sweep_radians == 0.0) {
-                const Vec2 normal{-dy / chord * offset, dx / chord * offset};
-                return Segment{{part.start.x + normal.x, part.start.y + normal.y},
-                               {part.end.x + normal.x, part.end.y + normal.y}, 0};
-            }
-            const auto factor = 1.0 / (2.0 * std::tan(part.sweep_radians * 0.5));
-            const Vec2 center{(part.start.x + part.end.x) * 0.5 - dy * factor,
-                              (part.start.y + part.end.y) * 0.5 + dx * factor};
-            const auto radius = std::hypot(part.start.x - center.x, part.start.y - center.y);
-            const auto ratio = (radius - std::copysign(1.0, part.sweep_radians) * offset) / radius;
-            return Segment{{center.x + (part.start.x - center.x) * ratio,
-                             center.y + (part.start.y - center.y) * ratio},
-                            {center.x + (part.end.x - center.x) * ratio,
-                             center.y + (part.end.y - center.y) * ratio}, part.sweep_radians};
-        };
-        const auto left = offset_side(thickness * 0.5);
-        const auto right = offset_side(-thickness * 0.5);
-        result.push_back(left);
-        result.push_back({left.end, right.end, 0});
-        result.push_back({right.end, right.start, -right.sweep_radians});
-        result.push_back({right.start, left.start, 0});
-    }
-    return result;
-}
-
 std::string trim_ascii(std::string_view value) {
     std::size_t first = 0;
     while (first < value.size() && std::isspace(static_cast<unsigned char>(value[first]))) {
@@ -15831,6 +15741,37 @@ public:
         return import_project_in_worker(bytes, kind, std::move(options));
     }
 
+    void validateImportedHostedGeometry(const DocumentSnapshot& snapshot, const std::vector<std::string>& imported_ids) {
+        const std::set<std::string, std::less<>> imported(imported_ids.begin(), imported_ids.end());
+        std::vector<const Entity*> openings;
+        for (const auto& [id, entity] : snapshot.entities())
+            if (entity.type == "opening") openings.push_back(&entity);
+        for (const auto& [id, entity] : snapshot.entities()) {
+            if (entity.type != "wall" || !imported.contains(id)) continue;
+            Wall wall;
+            std::string error;
+            const auto resolved = resolve_vertical_placement(snapshot, entity);
+            std::vector<const Entity*> siblings;
+            for (const auto* opening : openings)
+                if (opening->properties.value("wall_id", std::string{}) == id) siblings.push_back(opening);
+            if (!read_document_wall(resolved, siblings, wall, error))
+                throw std::invalid_argument(error);
+            (void)make_wall(wall);
+            for (const auto* opening : openings) {
+                if (opening->properties.value("wall_id", std::string{}) != id ||
+                    !opening->properties.contains("opening_assembly")) continue;
+                const auto hosted = std::find_if(wall.openings.begin(), wall.openings.end(),
+                    [&](const auto& value) { return value.id == opening->id; });
+                if (hosted == wall.openings.end()) throw std::invalid_argument("Imported opening lost its host.");
+                const auto assembly = parse_opening_assembly(opening->properties.at("opening_assembly"));
+                std::optional<DoorOperation> operation;
+                if (assembly.kind == OpeningAssemblyKind::door && opening->properties.contains("door_operation"))
+                    operation = decode_door_operation(opening->properties.at("door_operation"));
+                (void)make_opening_assembly(wall, *hosted, assembly, operation);
+            }
+        }
+    }
+
     bool importDxf(const QString& path) {
         if (path.trimmed().isEmpty()) {
             setError(QStringLiteral("Choose a DXF file to import."));
@@ -15868,6 +15809,11 @@ public:
 
             std::vector<EntityChange> changes;
             std::vector<std::string> imported_boundary_ids;
+            std::map<std::string, std::string, std::less<>> identities;
+            for (const auto& candidate : mapped.entities) {
+                if (candidate.type == "boundary" || candidate.type == "wall" || candidate.type == "opening")
+                    identities.emplace(candidate.id, new_id(candidate.type));
+            }
             const auto existing_annotation = std::find_if(source.entities().begin(), source.entities().end(),
                 [](const auto& item) { return item.second.type == kAnnotationEntityType; });
             std::optional<AnnotationState> merged_annotations;
@@ -15893,9 +15839,12 @@ public:
                     }
                     continue;
                 }
-                if (candidate.type != "boundary") continue;
+                const auto identity = identities.find(candidate.id);
+                if (identity == identities.end())
+                    throw std::invalid_argument("DXF mapping produced an unsupported native entity.");
                 auto imported = candidate;
-                imported.id = new_id("boundary");
+                imported.id = identity->second;
+                remap_entity_references(imported, identities);
                 imported.properties["floor_id"] = floor_id;
                 imported.properties["layer_id"] = layer_id;
                 imported_boundary_ids.push_back(imported.id);
@@ -15928,7 +15877,7 @@ public:
             changes.push_back(EntityChange::upsert(std::move(source_entity)));
             const auto command = ApplyEntityChanges{source.revision(), std::move(changes),
                 {AssetChange::upsert(std::move(asset))}, "Import DXF"};
-            (void)Document::preview_command(source, command);
+            validateImportedHostedGeometry(Document::preview_command(source, command), imported_boundary_ids);
             applyDocumentCommand(command);
             if (!imported_boundary_ids.empty()) m_selected_id = id_from(imported_boundary_ids.front());
             m_active_layer_id = id_from(layer_id);
@@ -16090,7 +16039,7 @@ public:
             changes.push_back(EntityChange::upsert(std::move(source_entity)));
             const auto command = ApplyEntityChanges{source.revision(), std::move(changes),
                 {AssetChange::upsert(std::move(asset))}, "Import IFC"};
-            (void)Document::preview_command(source, command);
+            validateImportedHostedGeometry(Document::preview_command(source, command), imported_ids);
             applyDocumentCommand(command);
             if (!imported_ids.empty()) m_selected_id = id_from(imported_ids.front());
             m_active_layer_id = id_from(layer_id);

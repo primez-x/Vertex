@@ -71,6 +71,55 @@ void run() {
               imported.drawing.inserts.at(0).scale_y == 1.5,
           "block definition or insert lost");
     check(export_dxf_ascii(imported.drawing) == encoded, "round trip not deterministic");
+    auto metadata = d;
+    metadata.blocks[0].vertex_entity_json = "{\"opaque\":\"" + std::string(500, 'x') + "\xc3\xa9\"}";
+    const auto metadata_bytes = export_dxf_ascii(metadata);
+    check(metadata_bytes.find("2\nAPPID\n") != std::string::npos &&
+          metadata_bytes.find("1001\nVERTEX_ENTITY_V1\n") != std::string::npos,
+          "native XDATA must register its application");
+    const auto metadata_import = parse_dxf_ascii(metadata_bytes);
+    check(metadata_import.diagnostics.empty() && metadata_import.drawing.blocks[0].vertex_entity_json == metadata.blocks[0].vertex_entity_json,
+          "bounded UTF-8 XDATA chunks must round trip exactly");
+    auto foreign_metadata = metadata_bytes;
+    const auto native_marker = foreign_metadata.find("1001\nVERTEX_ENTITY_V1\n");
+    foreign_metadata.insert(native_marker, "1001\nFOREIGN_APP\n1000\nforeign opaque data\n");
+    const auto foreign_import = parse_dxf_ascii(foreign_metadata);
+    check(foreign_import.drawing.blocks[0].vertex_entity_json == metadata.blocks[0].vertex_entity_json &&
+          foreign_import.drawing.blocks[0].lines.size() == 1,
+          "foreign XDATA application strings must not contaminate native payload or geometry");
+    auto duplicate_metadata = metadata_bytes;
+    duplicate_metadata.insert(duplicate_metadata.find("0\nLINE\n", native_marker), "1001\nVERTEX_ENTITY_V1\n1000\n{}\n");
+    const auto duplicate_import = parse_dxf_ascii(duplicate_metadata);
+    check(!duplicate_import.diagnostics.empty() && duplicate_import.drawing.blocks[0].lines.size() == 1 &&
+          duplicate_import.drawing.blocks[0].vertex_entity_json == "!invalid_vertex_xdata",
+          "duplicate native XDATA must be inert while block geometry survives");
+    auto unregistered = metadata_bytes;
+    const auto table_start = unregistered.find("0\nSECTION\n2\nTABLES\n");
+    const auto table_end = unregistered.find("0\nENDSEC\n", table_start) + std::string("0\nENDSEC\n").size();
+    unregistered.erase(table_start, table_end - table_start);
+    const auto unregistered_import = parse_dxf_ascii(unregistered);
+    check(!unregistered_import.diagnostics.empty() && unregistered_import.drawing.blocks[0].lines.size() == 1,
+          "unregistered native XDATA must remain inert without losing visual block geometry");
+    auto invalid_utf8 = metadata_bytes;
+    invalid_utf8[invalid_utf8.find("1000\n") + 5] = static_cast<char>(0xff);
+    const auto invalid_utf8_import = parse_dxf_ascii(invalid_utf8);
+    check(!invalid_utf8_import.diagnostics.empty() && invalid_utf8_import.drawing.blocks[0].lines.size() == 1,
+          "malformed native UTF-8 must preserve readable block geometry");
+    auto unsupported_native = metadata_bytes;
+    unsupported_native.insert(unsupported_native.find("0\nLINE\n", native_marker), "0\nCIRCLE\n10\n0\n20\n0\n40\n1\n");
+    const auto unsupported_native_import = parse_dxf_ascii(unsupported_native);
+    check(!unsupported_native_import.diagnostics.empty() &&
+          unsupported_native_import.drawing.blocks[0].vertex_entity_json == "!unsupported_vertex_block",
+          "omitted unsupported block entities must prevent native metadata activation");
+    auto oversized = metadata;
+    oversized.blocks[0].vertex_entity_json = std::string(16 * 1024, 'x');
+    rejects([&] { (void)export_dxf_ascii(oversized); });
+    auto aggregate_metadata = metadata_bytes;
+    const auto foreign_position = aggregate_metadata.find("1001\nVERTEX_ENTITY_V1\n");
+    std::string oversized_foreign = "1001\nFOREIGN_APP\n";
+    for (int i = 0; i < 64; ++i) oversized_foreign += "1000\n" + std::string(255, 'x') + "\n";
+    aggregate_metadata.insert(foreign_position, oversized_foreign);
+    rejects([&] { (void)parse_dxf_ascii(aggregate_metadata); });
     auto crlf = encoded;
     for (std::size_t i = 0; i < crlf.size(); ++i) if (crlf[i] == '\n') crlf.insert(i++, 1, '\r');
     check(export_dxf_ascii(parse_dxf_ascii(crlf).drawing) == encoded, "CRLF differs");

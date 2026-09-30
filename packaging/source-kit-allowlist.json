@@ -2135,6 +2135,10 @@
     },
     {
       "category": "docs",
+      "path": "docs/verification/cad-hosted-exchange-2026-09-29.md"
+    },
+    {
+      "category": "docs",
       "path": "docs/vertical-levels.md"
     },
     {
@@ -2359,6 +2363,10 @@
     },
     {
       "category": "source",
+      "path": "include/sketch/document_wall.hpp"
+    },
+    {
+      "category": "source",
       "path": "include/sketch/door_operation.hpp"
     },
     {
@@ -2400,6 +2408,10 @@
     {
       "category": "source",
       "path": "include/sketch/hosted_opening_resize.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/ifc_native_geometry.hpp"
     },
     {
       "category": "source",
@@ -2895,6 +2907,10 @@
     },
     {
       "category": "source",
+      "path": "src/architecture/ifc_native_geometry.cpp"
+    },
+    {
+      "category": "source",
       "path": "src/architecture/plan_axis_resize.cpp"
     },
     {
@@ -3020,6 +3036,10 @@
     {
       "category": "source",
       "path": "src/core/document_schedule_adapter.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/document_wall.cpp"
     },
     {
       "category": "source",

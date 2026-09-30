@@ -75,6 +75,24 @@ void test_arc_geometry() {
     }
 }
 
+void test_wall_footprints() {
+    const Segment line{{0,0},{10,0},0};
+    const auto whole = wall_plan_footprint(line,{},.4);
+    require(whole.size()==4 && near(whole[0].start,Vec2{0,.2}), "wall faces use half thickness");
+    const std::vector<HostedOpening> cuts{{"a",2,1,0,2},{"b",6,2,0,2}};
+    require(wall_plan_footprint(line,cuts,.4).size()==12, "two openings leave three wall intervals");
+    require(wall_plan_footprint(line,{{"all",0,10,0,2}},.4).empty(), "full cut must not restore wall");
+    rejects([&]{ (void)wall_plan_footprint(line,{{"bad",9,2,0,2}},.4); });
+    rejects([&]{ (void)wall_plan_footprint(line,{},0); });
+    for (const double sweep : {std::numbers::pi/2,-std::numbers::pi/2}) {
+        const Segment arc{{10,0},{0,sweep>0?10.:-10.},sweep};
+        const auto result=wall_plan_footprint(arc,{{"cut",3,2,0,2}},.4);
+        require(result.size()==8, "curved cut leaves two exact arc footprints");
+        require(result[0].sweep_radians*sweep>0 && result[2].sweep_radians*sweep<0,
+            "opposite wall faces preserve reversed arc winding");
+    }
+}
+
 void test_invalid_geometry() {
     const Segment line{{0,0},{10,0},0};
     const double inf = std::numeric_limits<double>::infinity();
@@ -114,6 +132,7 @@ int main() {
         test_line_geometry();
         test_arc_geometry();
         test_invalid_geometry();
+        test_wall_footprints();
         std::cout << "hosted opening geometry tests passed\n";
         return 0;
     } catch (const std::exception& error) {

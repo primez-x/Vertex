@@ -52,6 +52,15 @@ function New-ImmutableDesktopFixtureRoot([string]$CaptureRoot) {
                          "Qt6Network$qtSuffix.dll", "Qt6Pdf$qtSuffix.dll")) {
         Copy-Item -LiteralPath (Join-Path $qtBin $name) -Destination $runtime
     }
+    # Native IFC reconstruction now uses the solid kernel inside the worker.
+    # Stage its inspected DLL closure before making the fixture immutable.
+    & (Join-Path $PSScriptRoot 'inspect-runtime.ps1') -EntryPoints @(
+        (Join-Path $build 'vertex-import-worker.exe')) | Out-Null
+    $inventory = Get-Content -LiteralPath (Join-Path $root 'artifacts/runtime/release-imports.json') -Raw | ConvertFrom-Json
+    foreach ($module in $inventory.modules) {
+        if ([IO.Path]::GetExtension($module.path) -ne '.dll') { continue }
+        Copy-Item -LiteralPath $module.path -Destination $runtime -Force
+    }
     $acl = [Security.AccessControl.DirectorySecurity]::new()
     $acl.SetAccessRuleProtection($true, $false)
     $inheritance = [Security.AccessControl.InheritanceFlags]::ContainerInherit -bor
@@ -160,6 +169,7 @@ public static class BoundedWorkerCapture {
             $info.RedirectStandardOutput = $true
             $info.RedirectStandardError = $true
             $info.Environment['QT_QPA_PLATFORM'] = 'offscreen'
+            $info.Environment['VERTEX_TEST_CAPTURE_DIR'] = $CaptureDirectory
             $info.Environment['QT_PLUGIN_PATH'] = Join-Path $root '.deps/qt/6.8.3/msvc2022_64/plugins'
             $native = if ($Configuration -eq 'Debug') { 'debug/bin' } else { 'bin' }
             $info.Environment['PATH'] = (Join-Path $root '.deps/qt/6.8.3/msvc2022_64/bin') + ';' +

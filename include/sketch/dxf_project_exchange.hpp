@@ -46,7 +46,10 @@ struct DxfProjectImportResult {
     const DxfExchangeLimits& limits = {});
 
 // Parses a bounded DXF R2013 drawing and reconstructs editable native
-// boundary/annotation entities where their semantics are representable. The
+// boundary/annotation entities and validated native wall/opening graphs. Native
+// VERTEX_ENTITY_V1 block metadata requires matching plan primitives and metre
+// units with identity INSERTs. This preserves 2D plan semantics, not solid
+// assembly geometry. The
 // returned entities are unparented import candidates; a desktop adapter is
 // responsible for assigning the active floor/layer and committing one atomic
 // document command. Malformed transport input throws and returns no partial

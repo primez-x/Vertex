@@ -73,9 +73,20 @@ and supports undo/redo. A door may keep zero glazing; a window requires a
 positive glazing depth. Malformed or stale edits remain visible in the dialog
 and leave the document unchanged.
 
-The derived compound is not exported as authoritative project geometry;
-native DXF/IFC and full ARCH-MOD-002 export acceptance remain production-gate
-work.
+Architecture-enabled IFC export now derives wall cuts and manufactured door/window
+parts from the same native solid kernel. Fill occurrences use IFC door/window
+products linked to their opening void with IfcRelFillsElement. Curved wall,
+void and fill solids use bounded triangulated geometry at a 1 mm mesh deviation.
+Native re-import requires matching regenerated geometry, identity representation
+context and valid host/fill relationships; metadata alone cannot activate a profile.
+This is a bounded IFC4 subset, not Reference View certification.
+
+DXF exports exact 2D wall footprints, jambs, window rails and door swing geometry.
+Registered VERTEX_ENTITY_V1 block metadata preserves editable hosted identities,
+dimensions, assembly profiles and handing only when the complete host graph and
+visible primitives agree. Unsupported edits retain visual geometry and source
+bytes with diagnostics. DXF does not yet export manufactured profile geometry;
+full ARCH-MOD-002 export acceptance and external CAD compatibility remain open.
 
 In an uncropped conventional plan, selecting a door, window or bare opening on
 a straight or circular wall shows two width handles at its jambs and a **W × H**
