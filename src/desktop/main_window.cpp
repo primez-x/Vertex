@@ -25792,16 +25792,18 @@ public:
         const auto context = captureModalContext();
         try {
             const auto boundary = decode_identified_boundary_entity(*selected);
+            const auto source = authoringSnapshot();
+            const auto workspace = m_workspace;
+            const auto original_geometry = boundary_geometry(boundary);
             QDialog dialog(owner);
             styleDialog(dialog);
             dialog.setObjectName(QStringLiteral("boundaryGeometryDialog"));
             dialog.setWindowTitle(QStringLiteral("Edit boundary geometry"));
             dialog.setModal(true);
-            dialog.resize(460, 280);
+            dialog.resize(720, 700);
             auto* layout = new QVBoxLayout(&dialog);
             auto* help = new QLabel(QStringLiteral(
-                "Choose an edge, enter its analytical length, and choose the point that stays fixed. "
-                "You can also drag the blue vertex handles directly on the canvas."), &dialog);
+                "Choose an edge, its analytical length, and the point that stays fixed."), &dialog);
             help->setWordWrap(true);
             layout->addWidget(help);
             auto* form = new QFormLayout;
@@ -25830,14 +25832,199 @@ public:
                 "Moves every other boundary vertex together; only the two edges at the fixed point reshape."));
             form->addRow(connected);
             layout->addLayout(form);
+            auto* preview = new PlanCanvas(&dialog);
+            preview->setObjectName(QStringLiteral("boundaryGeometryPreview"));
+            preview->setAccessibleName(QStringLiteral("Original and proposed boundary geometry"));
+            preview->setMinimumHeight(240);
+            preview->setCanvasBackground(QColor(248, 250, 253));
+            preview->setGridEnabled(false);
+            preview->setSnapEnabled(false);
+            preview->setOverviewMapEnabled(false);
+            preview->setSelectionTransformEnabled(false, false);
+            preview->setMetricUnits(context.metric_units);
+            layout->addWidget(preview, 1);
+            layout->addWidget(new QLabel(QStringLiteral(
+                "Gray: original    Blue: proposed    Green: fixed point"), &dialog));
+            auto* summary = new QLabel(&dialog);
+            summary->setObjectName(QStringLiteral("boundaryGeometrySummary"));
+            summary->setWordWrap(true);
+            summary->setTextFormat(Qt::PlainText);
+            layout->addWidget(summary);
+            auto* changes = new QTableWidget(0, 3, &dialog);
+            changes->setObjectName(QStringLiteral("boundaryGeometryChanges"));
+            changes->setHorizontalHeaderLabels({QStringLiteral("Movement / annotation"),
+                QStringLiteral("Before"), QStringLiteral("After")});
+            changes->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
+            changes->verticalHeader()->hide();
+            changes->setEditTriggers(QAbstractItemView::NoEditTriggers);
+            changes->setSelectionMode(QAbstractItemView::NoSelection);
+            changes->setMaximumHeight(140);
+            layout->addWidget(changes);
             auto* status = new QLabel(&dialog);
             status->setObjectName(QStringLiteral("boundaryGeometryStatus"));
             status->setWordWrap(true);
+            status->setTextFormat(Qt::PlainText);
             layout->addWidget(status);
             auto* buttons = new QDialogButtonBox(
                 QDialogButtonBox::Apply | QDialogButtonBox::Cancel, &dialog);
             buttons->setObjectName(QStringLiteral("boundaryGeometryButtons"));
             layout->addWidget(buttons);
+            std::optional<EditBoundaryGeometry> candidate;
+            std::optional<DocumentSnapshot> candidate_snapshot;
+            const QColor original_color(130, 143, 158);
+            const QColor proposed_color(36, 107, 206);
+            const auto geometry_entity = [](QString id, const Boundary& geometry, QColor color) {
+                CanvasEntity entity{std::move(id), QStringLiteral("boundary"), geometry, 0.0, false};
+                entity.stroke_color = color;
+                return entity;
+            };
+            const auto point_text = [&](Vec2 point) {
+                return QStringLiteral("(%1, %2)").arg(format_length(point.x, context.metric_units),
+                    format_length(point.y, context.metric_units));
+            };
+            const auto add_row = [&](const QString& name, const QString& before, const QString& after) {
+                const auto row = changes->rowCount();
+                changes->insertRow(row);
+                changes->setItem(row, 0, new QTableWidgetItem(name));
+                changes->setItem(row, 1, new QTableWidgetItem(before));
+                changes->setItem(row, 2, new QTableWidgetItem(after));
+            };
+            const auto clear_preview = [&](const QString& message) {
+                candidate.reset();
+                candidate_snapshot.reset();
+                preview->setEntities({geometry_entity(QStringLiteral("boundary-preview-before"),
+                    original_geometry, original_color)});
+                preview->setLabels({});
+                preview->fitView();
+                changes->setRowCount(0);
+                summary->setText(QStringLiteral("Analytical boundary area: %1    Perimeter: %2")
+                    .arg(format_dimension_area(std::abs(signed_area(original_geometry)), context.metric_units),
+                        format_length(perimeter(original_geometry), context.metric_units)));
+                status->setText(message);
+                buttons->button(QDialogButtonBox::Apply)->setEnabled(false);
+            };
+            const auto context_unchanged = [&] {
+                if (!modalContextUnchanged(context)) return false;
+                if (m_workspace != workspace) {
+                    setError(QStringLiteral("The workspace changed while the dialog was open. Reopen the tool to use the current context."));
+                    return false;
+                }
+                return true;
+            };
+            const auto update_preview = [&] {
+                clear_preview({});
+                try {
+                    if (!context_unchanged()) throw std::invalid_argument(lastError().toStdString());
+                    const auto index = edge->currentIndex();
+                    if (index < 0 || static_cast<std::size_t>(index) >= boundary.segments.size())
+                        throw std::invalid_argument("Choose a boundary edge.");
+                    const auto quantity = parse_quantity(length->text().toStdString(),
+                        context.metric_units ? Unit::metre : Unit::foot);
+                    if (!(quantity.metres > 1e-7))
+                        throw std::invalid_argument("Edge length must be greater than zero.");
+                    const auto& original_edge = boundary.segments[static_cast<std::size_t>(index)];
+                    BoundaryGeometryEdit edit{selected->id, BoundaryGeometryEditKind::resize_segment,
+                        original_edge.segment_id, {}, quantity.metres,
+                        fixed->currentData().toString() == QStringLiteral("end")
+                            ? BoundaryFixedEndpoint::end : BoundaryFixedEndpoint::start,
+                        connected->isChecked()};
+                    EditBoundaryGeometry command{source.revision(), std::move(edit)};
+                    const auto proposed = Document::preview_command(source, command);
+                    const auto& proposed_entity = proposed.entities().at(selected->id);
+                    const auto after = decode_identified_boundary_entity(proposed_entity);
+                    const auto after_geometry = boundary_geometry(after);
+                    std::vector<CanvasEntity> geometry{
+                        geometry_entity(QStringLiteral("boundary-preview-before"), original_geometry, original_color),
+                        geometry_entity(QStringLiteral("boundary-preview-after"), after_geometry, proposed_color)};
+                    std::vector<CanvasLabel> labels;
+                    const auto anchor = command.edit.fixed_endpoint == BoundaryFixedEndpoint::start
+                        ? original_edge.segment.start : original_edge.segment.end;
+                    const auto marker_size = std::max(0.035, perimeter(original_geometry) * 0.004);
+                    geometry.push_back(geometry_entity(QStringLiteral("boundary-preview-anchor"),
+                        {{{anchor.x-marker_size, anchor.y}, {anchor.x+marker_size, anchor.y}, 0},
+                         {{anchor.x, anchor.y-marker_size}, {anchor.x, anchor.y+marker_size}, 0}},
+                        QColor(24, 133, 90)));
+                    for (std::size_t i = 0; i < boundary.segments.size(); ++i) {
+                        const auto before_point = boundary.segments[i].segment.start;
+                        const auto after_point = after.segments[i].segment.start;
+                        if (before_point.x != after_point.x || before_point.y != after_point.y)
+                            add_row(QStringLiteral("Vertex %1").arg(i+1), point_text(before_point), point_text(after_point));
+                    }
+                    const auto dimension_text = [&](const BoundaryDimensionResolution& resolved) {
+                        if (resolved.kind == BoundaryDimensionKind::segment_length)
+                            return format_length(resolved.segment_length_metres, context.metric_units);
+                        if (resolved.kind == BoundaryDimensionKind::angle)
+                            return format_dimension_angle(resolved.angle_radians);
+                        return format_dimension_area(resolved.area_square_metres, context.metric_units);
+                    };
+                    const auto add_dimension = [&](const BoundaryDimension& dimension,
+                                                   const Entity& boundary_entity, QString suffix,
+                                                   QColor color, QString text) {
+                        const auto resolved = dimension.resolve(boundary_entity);
+                        std::optional<Boundary> overlay;
+                        if (resolved.kind == BoundaryDimensionKind::segment_length)
+                            overlay = dimension_overlay(resolved.segment, dimension.text_position);
+                        else if (resolved.kind == BoundaryDimensionKind::angle)
+                            overlay = angle_dimension_overlay(decode_identified_boundary_entity(boundary_entity), dimension);
+                        if (overlay) {
+                            auto line = geometry_entity(id_from(dimension.id) + suffix,
+                                *overlay, color);
+                            line.type = QStringLiteral("dimension_line");
+                            line.dimension_end_ticks = resolved.kind == BoundaryDimensionKind::segment_length;
+                            geometry.push_back(std::move(line));
+                        }
+                        if (text.isEmpty()) return;
+                        CanvasLabel label{id_from(dimension.id) + suffix, dimension.text_position,
+                            std::move(text), false};
+                        label.color = color;
+                        label.show_background = false;
+                        if (dimension.presentation) {
+                            label.paper_height_mm = dimension.presentation->text_height_mm;
+                            label.bold = dimension.presentation->bold;
+                            label.italic = dimension.presentation->italic;
+                            label.rotation_radians = dimension.presentation->rotation_radians;
+                        }
+                        labels.push_back(std::move(label));
+                    };
+                    for (const auto& [id, entity] : source.entities()) {
+                        if (!can_recognize_boundary_dimension_entity_type(entity.type)) continue;
+                        const auto decoded = decode_boundary_dimension_entity(entity);
+                        if (!decoded.supported() || decoded.dimension->boundary_id != selected->id) continue;
+                        const auto& before = *decoded.dimension;
+                        const auto decoded_after = decode_boundary_dimension_entity(proposed.entities().at(id));
+                        if (!decoded_after.supported()) throw std::invalid_argument("Dependent dimension cannot be previewed.");
+                        const auto& dimension = *decoded_after.dimension;
+                        const auto before_text = dimension_text(before.resolve(*selected));
+                        const auto after_text = dimension_text(dimension.resolve(proposed_entity));
+                        add_row(QStringLiteral("Dimension %1").arg(id_from(id)),
+                            before_text + QStringLiteral("  @ ") + point_text(before.text_position),
+                            after_text + QStringLiteral("  @ ") + point_text(dimension.text_position));
+                        if (dimension.presentation && !dimension.presentation->visible) continue;
+                        const bool same_position = before.text_position.x == dimension.text_position.x &&
+                            before.text_position.y == dimension.text_position.y;
+                        add_dimension(before, *selected, QStringLiteral("-original"), original_color,
+                            same_position ? QString{} : before_text);
+                        add_dimension(dimension, proposed_entity, QStringLiteral("-proposed"), proposed_color,
+                            same_position && before_text != after_text
+                                ? before_text + QStringLiteral(" → ") + after_text : after_text);
+                    }
+                    preview->setEntities(std::move(geometry));
+                    preview->setLabels(std::move(labels));
+                    preview->fitView();
+                    summary->setText(QStringLiteral("Edge: %1 → %2\nAnalytical boundary area: %3 → %4    Perimeter: %5 → %6")
+                        .arg(format_length(segment_length(original_edge.segment), context.metric_units),
+                            format_length(quantity.metres, context.metric_units),
+                            format_dimension_area(std::abs(signed_area(original_geometry)), context.metric_units),
+                            format_dimension_area(std::abs(signed_area(after_geometry)), context.metric_units),
+                            format_length(perimeter(original_geometry), context.metric_units),
+                            format_length(perimeter(after_geometry), context.metric_units)));
+                    candidate = std::move(command);
+                    candidate_snapshot = proposed;
+                    buttons->button(QDialogButtonBox::Apply)->setEnabled(proposed.entities() != source.entities());
+                } catch (const std::exception& error) {
+                    clear_preview(QString::fromUtf8(error.what()));
+                }
+            };
             const auto refresh_length = [&] {
                 const auto index = edge->currentIndex();
                 if (index < 0 || static_cast<std::size_t>(index) >= boundary.segments.size()) return;
@@ -25847,26 +26034,43 @@ public:
                 length->selectAll();
             };
             QObject::connect(edge, &QComboBox::currentIndexChanged, &dialog,
-                             [refresh_length](int) { refresh_length(); });
+                             [&](int) { refresh_length(); update_preview(); });
+            QObject::connect(length, &QLineEdit::textChanged, &dialog, update_preview);
+            QObject::connect(fixed, &QComboBox::currentIndexChanged, &dialog, update_preview);
+            QObject::connect(connected, &QCheckBox::toggled, &dialog, update_preview);
             QObject::connect(buttons->button(QDialogButtonBox::Cancel), &QPushButton::clicked,
                              &dialog, &QDialog::reject);
             QObject::connect(buttons->button(QDialogButtonBox::Apply), &QPushButton::clicked,
                              &dialog, [&] {
-                if (!modalContextUnchanged(context)) {
-                    status->setText(lastError());
+                if (!context_unchanged()) {
+                    clear_preview(lastError());
                     return;
                 }
-                const auto endpoint = fixed->currentData().toString() == QStringLiteral("end")
-                    ? BoundaryFixedEndpoint::end : BoundaryFixedEndpoint::start;
-                if (editSelectedBoundaryEdgeLength(
-                        edge->currentData().toString(), length->text(), endpoint,
-                        connected->isChecked(), context.revision)) {
+                if (!candidate || !candidate_snapshot) return;
+                try {
+                    const auto current = authoringSnapshot();
+                    if (current.document_id() != source.document_id() || current.revision() != source.revision() ||
+                        current.entities() != source.entities() || !current.is_editable())
+                        throw std::invalid_argument("The source changed. Reopen the geometry editor.");
+                    const auto verified = Document::preview_command(current, *candidate);
+                    if (verified.entities() != candidate_snapshot->entities())
+                        throw std::invalid_argument("The proposed geometry changed. Reopen the geometry editor.");
+                    applyDocumentCommand(*candidate);
+                    clearError();
+                    refresh();
                     dialog.accept();
-                } else {
-                    status->setText(lastError());
+                } catch (const std::exception& error) {
+                    clear_preview(QString::fromUtf8(error.what()));
                 }
             });
+            QTimer context_timer(&dialog);
+            context_timer.setInterval(100);
+            QObject::connect(&context_timer, &QTimer::timeout, &dialog, [&] {
+                if (candidate && !context_unchanged()) clear_preview(lastError());
+            });
+            context_timer.start();
             refresh_length();
+            update_preview();
             dialog.exec();
             refreshInspector();
         } catch (const std::exception& error) {

@@ -575,6 +575,19 @@ vertex moves. With it on, the remaining boundary chain translates together.
 This option does not infer connections to another object from overlapping
 coordinates.
 
+Before Apply, the editor overlays the original and proposed outlines, marks
+the fixed point, and lists changed vertices and attached dimensions. The length,
+analytical boundary area, and perimeter show their before/after values. These
+geometric values are not a qualified appraisal GLA result. Changing the anchor
+or connected-chain option recomputes the proposal through the same document
+command used by Apply. Cancel does not change the document.
+
+Invalid geometry or a locked measurement clears the proposed outline and
+disables Apply. A change to the document, selection, layer, workspace, or units
+while the dialog is open invalidates it; reopen the editor in the current
+context. Apply rechecks the exact source and proposed geometry before publishing
+one undoable operation.
+
 Both paths use the typed revision-checked document command. They preserve stable
 boundary, segment, and vertex IDs, so existing length and angle dimensions keep
 their targets. For receipt-backed geometry, Vertex archives the exact original

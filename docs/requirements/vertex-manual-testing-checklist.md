@@ -352,21 +352,21 @@ Start with the workspace, draw a room, close it with the mouse, drag-select it, 
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U061 — Change a wall or boundary edge length**
-  - Expected: The final measured length matches your entry.
+  - Expected: The proposed shape and analytical length appear before Apply. The final measured length matches your entry; Cancel leaves the original drawing unchanged.
   - Result: Not tested
-  - Steps: Select a closed boundary. Double-click it or right-click and choose **Edit boundary geometry**. Choose an edge, enter a visibly different length such as `14 ft`, and apply. Measure the edited edge and confirm it reads 14 ft. Repeat on a curved edge and confirm the displayed arc length, rather than its straight chord, matches the entry.
+  - Steps: Draw a 12 ft by 6 ft rectangle and select it. Double-click it or right-click and choose **Edit boundary geometry**. Choose its 12 ft edge and enter `14 ft`. Compare the original and proposed outlines, length, area, and moved points before applying. Cancel once and confirm the rectangle remains 12 ft by 6 ft. Repeat and apply; measure the edited edge and confirm it reads 14 ft. Repeat on a curved edge and confirm the displayed arc length, rather than its straight chord, matches the entry.
   - Notes / issues / screenshots: ____________________
 
 - [ ] **U062 — Choose which endpoint stays fixed when changing length**
-  - Expected: The chosen endpoint remains stationary.
+  - Expected: The preview identifies the fixed endpoint and shows it stationary; Apply produces the same shape shown in the preview.
   - Result: Not tested
-  - Steps: Record or dimension both endpoints of one boundary edge. Resize it once with **Keep start fixed**, undo, then resize it with **Keep end fixed**. Confirm the chosen endpoint stays in the same grid position each time and undo/redo restores the exact prior/resulting shape.
+  - Steps: Record or dimension both endpoints of one boundary edge. Enter a new length and compare the previews for **Keep start fixed** and **Keep end fixed** before applying either. Apply with start fixed, undo, then repeat with end fixed. Confirm the chosen endpoint stays in the same grid position each time and undo/redo restores the exact prior/resulting shape.
   - Notes / issues / screenshots: ____________________
 
 - [ ] **U063 — Choose whether connected geometry moves with an edit**
   - Expected: The preview and final result match your choice.
   - Result: Not tested
-  - Steps: Resize one edge with **Move connected boundary chain** off and observe that only the opposite vertex moves. Undo, repeat with the option on, and confirm the complementary boundary chain translates together while the chosen endpoint stays fixed. Coincident geometry in a different object should remain unchanged unless it has an explicit supported relationship.
+  - Steps: Enter a new edge length with **Move connected boundary chain** off and inspect the proposed outline and moved-point list. Turn the option on before Apply and compare the movement. With it off, only the opposite vertex moves; with it on, the complementary boundary chain translates together while the chosen endpoint stays fixed. Apply each choice separately with Undo between them. Coincident geometry in a different object should remain unchanged unless it has an explicit supported relationship.
   - Notes / issues / screenshots: ____________________
 
 - [ ] **U064 — Insert a vertex into an edge**

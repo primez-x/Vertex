@@ -79,6 +79,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <iostream>
 #include <limits>
 #include <memory>
@@ -2090,6 +2091,170 @@ void test_normal_receipt_boundary_redefinition_workflow() {
         require(reopened.openProject(path) && reopened.document().snapshot().entities().at(id.toStdString()) == final_source &&
             reopened.document().snapshot().entities().at(cloned.id) == cloned, "normal and derived redraws must reopen exactly");
         window.hide();
+    }
+}
+
+void test_boundary_geometry_preview_workflow() {
+    const ScenarioTiming scenario_timing(__func__);
+    using namespace sketch;
+    desktop::MainWindow window;
+    const auto width = parse_quantity("12 ft").metres;
+    const auto height = parse_quantity("6 ft").metres;
+    const auto id = window.createBoundary({{{0,0},{width,0},0}, {{width,0},{width,height},0},
+        {{width,height},{0,height},0}, {{0,height},{0,0},0}}, "living_area");
+    require(!id.isEmpty() && window.selectEntity(id), "preview fixture must select a twelve-foot boundary");
+    const auto initial = decode_identified_boundary_entity(window.document().snapshot().entities().at(id.toStdString()));
+    auto dimension = encode_boundary_dimension_entity(BoundaryDimension{"preview-length", id.toStdString(),
+        initial.segments[0].segment_id, {width * 0.5, -0.4}, BoundaryDimensionPlacement::automatic, 2});
+    window.document().apply(ApplyEntityChanges{window.document().revision(), {EntityChange::upsert(dimension)}, {}, "preview dimension"});
+    const auto source = window.document().snapshot();
+    const auto open = [&](const std::function<void(QDialog&)>& inspect) {
+        require(window.selectEntity(id), "preview source must remain selected");
+        auto* edit = window.findChild<QPushButton*>("editBoundaryGeometry");
+        require(edit, "boundary geometry editor must have its ordinary inspector entry");
+        QTimer::singleShot(0, &window, [&] {
+            auto* dialog = window.findChild<QDialog*>("boundaryGeometryDialog");
+            require(dialog, "boundary geometry dialog must open");
+            inspect(*dialog);
+        });
+        edit->click();
+    };
+    for (const auto anchor : {BoundaryFixedEndpoint::start, BoundaryFixedEndpoint::end}) {
+        for (const bool connected : {false, true}) {
+            open([&](QDialog& dialog) {
+                auto* preview = dynamic_cast<desktop::PlanCanvas*>(dialog.findChild<QWidget*>("boundaryGeometryPreview"));
+                auto* length = dialog.findChild<QLineEdit*>("boundaryEdgeLength");
+                auto* fixed = dialog.findChild<QComboBox*>("boundaryFixedEndpoint");
+                auto* move = dialog.findChild<QCheckBox*>("boundaryMoveConnected");
+                auto* summary = dialog.findChild<QLabel*>("boundaryGeometrySummary");
+                auto* changes = dialog.findChild<QTableWidget*>("boundaryGeometryChanges");
+                auto* buttons = dialog.findChild<QDialogButtonBox*>("boundaryGeometryButtons");
+                require(preview && length && fixed && move && summary && changes && buttons,
+                    "edge-length dialog must expose geometry and dependent-movement preview before Apply");
+                fixed->setCurrentIndex(anchor == BoundaryFixedEndpoint::start ? 0 : 1);
+                move->setChecked(connected);
+                length->setText("14 ft");
+                BoundaryGeometryEdit edit{id.toStdString(), BoundaryGeometryEditKind::resize_segment,
+                    initial.segments[0].segment_id, {}, parse_quantity("14 ft").metres, anchor, connected};
+                const auto expected = Document::preview_command(source, EditBoundaryGeometry{source.revision(), edit});
+                const auto after = std::find_if(preview->entities().begin(), preview->entities().end(),
+                    [](const auto& entity) { return entity.id == QStringLiteral("boundary-preview-after"); });
+                require(after != preview->entities().end() && after->segments.size() == initial.segments.size(),
+                    "a valid edit must show the candidate beside its original geometry");
+                const auto canonical = boundary_geometry(decode_identified_boundary_entity(expected.entities().at(id.toStdString())));
+                for (std::size_t i = 0; i < canonical.size(); ++i)
+                    require(after->segments[i].start.x == canonical[i].start.x && after->segments[i].start.y == canonical[i].start.y &&
+                        after->segments[i].end.x == canonical[i].end.x && after->segments[i].end.y == canonical[i].end.y,
+                        "preview must match the canonical anchored/connected command candidate");
+                const auto annotation = std::find_if(preview->labels().begin(), preview->labels().end(),
+                    [](const auto& label) { return label.id == QStringLiteral("preview-length-proposed"); });
+                const auto canonical_dimension = *decode_boundary_dimension_entity(expected.entities().at("preview-length")).dimension;
+                require(annotation != preview->labels().end() && annotation->text.contains("14") &&
+                    annotation->position.x == canonical_dimension.text_position.x &&
+                    annotation->position.y == canonical_dimension.text_position.y,
+                    "dependent annotation must use its resolved candidate value and canonical placement");
+                require(summary->text().contains("area", Qt::CaseInsensitive) && summary->text().contains("14") && changes->rowCount() >= 2 &&
+                    buttons->button(QDialogButtonBox::Apply)->isEnabled() && window.document().snapshot().entities() == source.entities() &&
+                    window.document().revision() == source.revision(), "preview must show analytical totals and dependents without mutation");
+                const auto capture = qEnvironmentVariable("VERTEX_TEST_CAPTURE_DIR");
+                if (!capture.isEmpty()) {
+                    require(QDir().mkpath(capture), "geometry preview capture directory must be writable");
+                    require(dialog.grab().save(QDir(capture).filePath(QStringLiteral("boundary-geometry-preview-%1-%2.png")
+                        .arg(anchor == BoundaryFixedEndpoint::start ? "start" : "end").arg(connected ? "connected" : "vertex"))),
+                        "canonical geometry preview dialog capture must save");
+                }
+                buttons->button(QDialogButtonBox::Cancel)->click();
+            });
+            require(window.document().snapshot().entities() == source.entities() && window.document().revision() == source.revision(),
+                "cancelled preview must preserve the exact document");
+        }
+    }
+    open([&](QDialog& dialog) {
+        auto* length = dialog.findChild<QLineEdit*>("boundaryEdgeLength");
+        auto* preview = dynamic_cast<desktop::PlanCanvas*>(dialog.findChild<QWidget*>("boundaryGeometryPreview"));
+        auto* buttons = dialog.findChild<QDialogButtonBox*>("boundaryGeometryButtons");
+        auto* status = dialog.findChild<QLabel*>("boundaryGeometryStatus");
+        length->setText("14 ft");
+        length->setText("-1 ft");
+        require(!buttons->button(QDialogButtonBox::Apply)->isEnabled() && !status->text().isEmpty() &&
+            std::none_of(preview->entities().begin(), preview->entities().end(),
+                [](const auto& entity) { return entity.id == QStringLiteral("boundary-preview-after"); }),
+            "invalid length must disable Apply and remove the preceding valid candidate");
+        length->setText("14 ft");
+        buttons->button(QDialogButtonBox::Apply)->click();
+    });
+    const auto applied = window.document().snapshot();
+    const auto exact_applied = Document::preview_command(source, EditBoundaryGeometry{source.revision(),
+        BoundaryGeometryEdit{id.toStdString(), BoundaryGeometryEditKind::resize_segment,
+            initial.segments[0].segment_id, {}, parse_quantity("14 ft").metres, BoundaryFixedEndpoint::start, false}});
+    require(applied.revision() == source.revision() + 1 &&
+        applied.entities() == exact_applied.entities() &&
+        std::abs(segment_length(decode_identified_boundary_entity(applied.entities().at(id.toStdString())).segments[0].segment) -
+            parse_quantity("14 ft").metres) < 1e-9, "Apply must commit the previewed analytical length exactly once");
+    require(window.undoCommand() && window.document().snapshot().entities() == source.entities() &&
+        window.redoCommand() && window.document().snapshot().entities() == applied.entities(), "previewed edit must navigate exactly");
+    QTemporaryDir directory;
+    const auto path = directory.filePath("boundary-preview.bldproj");
+    require(directory.isValid() && window.saveProjectAs(path), "previewed edit must save");
+    desktop::MainWindow reopened;
+    require(reopened.openProject(path) && reopened.document().snapshot().entities() == applied.entities(),
+        "previewed edit must survive save and reopen");
+
+    desktop::MainWindow locked;
+    const auto locked_id = locked.createBoundary(boundary_geometry(initial), "living_area");
+    require(!locked_id.isEmpty() && locked.selectEntity(locked_id), "locked preview fixture must select its area");
+    const auto locked_boundary = decode_identified_boundary_entity(locked.document().snapshot().entities().at(locked_id.toStdString()));
+    const auto& locked_edge = locked_boundary.segments.front();
+    const auto relation = encode_constraint_entity(PersistentConstraint{"preview-fixed-length", ConstraintRelationKind::fixed_length,
+        {{locked_id.toStdString(), WallEndpointRole::start, locked_edge.segment_id, locked_edge.start_vertex_id},
+         {locked_id.toStdString(), WallEndpointRole::end, locked_edge.segment_id, locked_edge.end_vertex_id}}, parse_quantity("12 ft")});
+    locked.document().apply(ApplyEntityChanges{locked.document().revision(), {EntityChange::upsert(relation)}, {}, "lock preview edge"});
+    const auto locked_source = locked.document().snapshot();
+    QTimer::singleShot(0, &locked, [&] {
+        auto* dialog = locked.findChild<QDialog*>("boundaryGeometryDialog");
+        require(dialog, "locked boundary geometry dialog must open");
+        dialog->findChild<QLineEdit*>("boundaryEdgeLength")->setText("14 ft");
+        const auto* canvas = dynamic_cast<desktop::PlanCanvas*>(dialog->findChild<QWidget*>("boundaryGeometryPreview"));
+        require(!dialog->findChild<QDialogButtonBox*>("boundaryGeometryButtons")->button(QDialogButtonBox::Apply)->isEnabled() &&
+            !dialog->findChild<QLabel*>("boundaryGeometryStatus")->text().isEmpty() &&
+            std::none_of(canvas->entities().begin(), canvas->entities().end(),
+                [](const auto& entity) { return entity.id == QStringLiteral("boundary-preview-after"); }) &&
+            locked.document().snapshot().entities() == locked_source.entities() && locked.document().revision() == locked_source.revision(),
+            "a locked-length conflict must clear candidate geometry and reject without mutation");
+        dialog->reject();
+    });
+    locked.findChild<QPushButton*>("editBoundaryGeometry")->click();
+
+    for (int stale_kind = 0; stale_kind < 4; ++stale_kind) {
+        desktop::MainWindow stale;
+        const auto stale_id = stale.createBoundary(boundary_geometry(initial), "living_area");
+        const auto other_id = stale.createBoundary({{{8,0},{9,0},0},{{9,0},{9,1},0},{{9,1},{8,1},0},{{8,1},{8,0},0}}, "measurement");
+        require(!stale_id.isEmpty() && !other_id.isEmpty() && stale.selectEntity(stale_id), "stale preview fixture must have two areas");
+        QTimer::singleShot(0, &stale, [&] {
+            auto* dialog = stale.findChild<QDialog*>("boundaryGeometryDialog");
+            require(dialog, "stale boundary geometry dialog must open");
+            dialog->findChild<QLineEdit*>("boundaryEdgeLength")->setText("14 ft");
+            auto* buttons = dialog->findChild<QDialogButtonBox*>("boundaryGeometryButtons");
+            require(buttons->button(QDialogButtonBox::Apply)->isEnabled(), "stale test must begin with a valid candidate");
+            if (stale_kind == 0) stale.document().apply(NameRevision{stale.document().revision(), "external revision"});
+            if (stale_kind == 1) require(stale.selectEntity(other_id), "stale test must change selection");
+            if (stale_kind == 2) stale.setWorkspace(desktop::Workspace::architectural);
+            if (stale_kind == 3) stale.setMetricUnits(true);
+            const auto changed = stale.document().snapshot();
+            QTimer::singleShot(150, dialog, [&, dialog, buttons, changed] {
+                const auto* canvas = dynamic_cast<desktop::PlanCanvas*>(dialog->findChild<QWidget*>("boundaryGeometryPreview"));
+                require(!buttons->button(QDialogButtonBox::Apply)->isEnabled() &&
+                    !dialog->findChild<QLabel*>("boundaryGeometryStatus")->text().isEmpty() &&
+                    std::none_of(canvas->entities().begin(), canvas->entities().end(),
+                        [](const auto& entity) { return entity.id == QStringLiteral("boundary-preview-after"); }),
+                    "stale revision, selection, workspace or units must proactively clear the candidate");
+                buttons->button(QDialogButtonBox::Apply)->click();
+                require(stale.document().snapshot().entities() == changed.entities() && stale.document().revision() == changed.revision(),
+                    "stale Apply must not publish a geometry command");
+                dialog->reject();
+            });
+        });
+        stale.findChild<QPushButton*>("editBoundaryGeometry")->click();
     }
 }
 
@@ -5859,6 +6024,11 @@ int main(int argc, char** argv) {
         std::cout << "Boundary redefinition workflow tests passed\n";
         return 0;
     }
+    if (argc == 2 && std::string_view(argv[1]) == "--boundary-geometry-preview-only") {
+        test_boundary_geometry_preview_workflow();
+        std::cout << "Boundary geometry preview tests passed\n";
+        return 0;
+    }
     if (argc == 2 && std::string_view(argv[1]) == "--section-overlays-only") {
         test_section_overlay_workflow();
         std::cout << "Section overlay workflow tests passed\n";
@@ -5936,6 +6106,7 @@ int main(int argc, char** argv) {
     test_direct_boundary_geometry_edit_workflow();
     test_interactive_receipt_boundary_insertion_workflow();
     test_normal_receipt_boundary_redefinition_workflow();
+    test_boundary_geometry_preview_workflow();
     test_boundary_redefinition_workflow();
     test_automatic_room_boundary_detection_workflow();
     test_explicit_boundary_geometry_operations();

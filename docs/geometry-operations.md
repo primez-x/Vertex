@@ -76,7 +76,13 @@ The desktop exposes selected boundary vertices as screen-sized handles. A drag
 previews locally and commits one revision on release through the typed
 `EditBoundaryGeometry` command. Escape cancels without a revision. The boundary
 geometry editor accepts a displayed-unit length, start/end anchor, and connected
-chain choice. Stale revisions, invalid topology, degenerate edges, and
+chain choice. It previews the canonical `Document::preview_command` result in
+an isolated canvas, including both outlines, fixed point, changed vertices,
+attached dimensions, analytical area, and perimeter. Apply retains the exact
+typed candidate and rechecks it against the unchanged captured source; Cancel
+does not publish a command. Invalid input, locked constraints, or changed
+document/selection/layer/workspace/units clear the candidate and disable Apply.
+Stale revisions, invalid topology, degenerate edges, and
 self-intersections reject atomically. Handles are interaction overlays and are
 excluded from print/export rendering.
 
