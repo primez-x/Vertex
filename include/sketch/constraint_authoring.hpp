@@ -54,6 +54,13 @@ struct WallResizeIntent {
     bool move_connected_walls{true};
 };
 
+// Keep the selected boundary's existing anchored/local-chain resize semantics;
+// solve only other owners reached through explicit persisted relations.
+struct BoundaryResizeIntent {
+    BoundaryGeometryEdit edit;
+    bool move_related_objects{true};
+};
+
 enum class ConstraintRelationMutationKind { upsert, remove };
 
 struct ConstraintRelationMutation {
@@ -76,6 +83,7 @@ struct ConstraintAuthoringIntent {
     std::optional<WallEndpointBinding> relation_anchor;
     bool relation_move_connected_walls{true};
     std::string message;
+    std::optional<BoundaryResizeIntent> boundary_resize;
 };
 
 struct ConstraintWallChange {

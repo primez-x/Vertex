@@ -13459,6 +13459,30 @@ public:
         }
     }
 
+    Command boundaryLengthCommand(const DocumentSnapshot& source,
+        const BoundaryGeometryEdit& edit, bool move_related_objects) {
+        const auto boundary=decode_identified_boundary_entity(source.entities().at(edit.boundary_id));
+        if (std::any_of(boundary.segments.begin(),boundary.segments.end(),
+                [](const auto& edge) { return edge.segment.sweep_radians != 0.0; }))
+            return EditBoundaryGeometry{source.revision(),edit};
+        ConstraintAuthoringIntent intent;
+        intent.boundary_resize=BoundaryResizeIntent{edit,move_related_objects};
+        intent.message="resize boundary edge and related objects";
+        const auto preview=preview_constraint_authoring(source,intent);
+        if (!preview.accepted()) {
+            QStringList diagnostics;
+            for (const auto& diagnostic : preview.diagnostics())
+                diagnostics.push_back(QString::fromStdString(diagnostic));
+            throw std::invalid_argument(diagnostics.join(QStringLiteral("\n")).toStdString());
+        }
+        auto candidate=Document::fork(source);
+        apply_constraint_authoring(candidate,preview);
+        const auto result=candidate.snapshot();
+        const auto& proof=result.history().back().boundary_constraint_changes;
+        if (!proof) throw std::invalid_argument("Boundary resize did not retain its geometry proof.");
+        return *proof;
+    }
+
     bool applySelectedBoundaryGeometryEdit(
         BoundaryGeometryEdit edit, std::optional<Revision> expected_revision = std::nullopt) {
         if (!m_document->is_editable()) {
@@ -13476,7 +13500,11 @@ public:
                 throw std::invalid_argument("Select an identified closed boundary first.");
             }
             const auto revision = expected_revision.value_or(source.revision());
-            const EditBoundaryGeometry command{revision, std::move(edit)};
+            if (revision != source.revision())
+                throw std::invalid_argument("The boundary changed before the edit was committed.");
+            const Command command=edit.kind==BoundaryGeometryEditKind::resize_segment
+                ? boundaryLengthCommand(source,edit,true)
+                : Command{EditBoundaryGeometry{revision,std::move(edit)}};
             (void)Document::preview_command(source, command);
             applyDocumentCommand(command);
             clearError();
@@ -26253,6 +26281,16 @@ public:
             connected->setToolTip(QStringLiteral(
                 "Moves every other boundary vertex together; only the two edges at the fixed point reshape."));
             form->addRow(connected);
+            auto* related = new QCheckBox(QStringLiteral("Move related objects"), &dialog);
+            related->setObjectName(QStringLiteral("boundaryMoveRelatedObjects"));
+            related->setChecked(true);
+            related->setEnabled(std::all_of(boundary.segments.begin(),boundary.segments.end(),
+                [](const auto& value) { return value.segment.sweep_radians==0.0; }));
+            related->setToolTip(QStringLiteral(
+                "Moves walls and other areas joined by saved endpoint relationships. "
+                "When disabled, those objects stay fixed and conflicting edits cannot apply. "
+                "Related-object solving requires straight boundaries."));
+            form->addRow(related);
             layout->addLayout(form);
             auto* preview = new PlanCanvas(&dialog);
             preview->setObjectName(QStringLiteral("boundaryGeometryPreview"));
@@ -26291,7 +26329,7 @@ public:
                 QDialogButtonBox::Apply | QDialogButtonBox::Cancel, &dialog);
             buttons->setObjectName(QStringLiteral("boundaryGeometryButtons"));
             layout->addWidget(buttons);
-            std::optional<EditBoundaryGeometry> candidate;
+            std::optional<Command> candidate;
             std::optional<DocumentSnapshot> candidate_snapshot;
             const QColor original_color(130, 143, 158);
             const QColor proposed_color(36, 107, 206);
@@ -26350,7 +26388,8 @@ public:
                         fixed->currentData().toString() == QStringLiteral("end")
                             ? BoundaryFixedEndpoint::end : BoundaryFixedEndpoint::start,
                         connected->isChecked()};
-                    EditBoundaryGeometry command{source.revision(), std::move(edit)};
+                    const auto anchor_endpoint=edit.fixed_endpoint;
+                    Command command=boundaryLengthCommand(source,edit,related->isChecked());
                     const auto proposed = Document::preview_command(source, command);
                     const auto& proposed_entity = proposed.entities().at(selected->id);
                     const auto after = decode_identified_boundary_entity(proposed_entity);
@@ -26359,7 +26398,7 @@ public:
                         geometry_entity(QStringLiteral("boundary-preview-before"), original_geometry, original_color),
                         geometry_entity(QStringLiteral("boundary-preview-after"), after_geometry, proposed_color)};
                     std::vector<CanvasLabel> labels;
-                    const auto anchor = command.edit.fixed_endpoint == BoundaryFixedEndpoint::start
+                    const auto anchor = anchor_endpoint == BoundaryFixedEndpoint::start
                         ? original_edge.segment.start : original_edge.segment.end;
                     const auto marker_size = std::max(0.035, perimeter(original_geometry) * 0.004);
                     geometry.push_back(geometry_entity(QStringLiteral("boundary-preview-anchor"),
@@ -26371,6 +26410,38 @@ public:
                         const auto after_point = after.segments[i].segment.start;
                         if (before_point.x != after_point.x || before_point.y != after_point.y)
                             add_row(QStringLiteral("Vertex %1").arg(i+1), point_text(before_point), point_text(after_point));
+                    }
+                    int related_count=0;
+                    for (const auto& [id,before_entity] : source.entities()) {
+                        if (id==selected->id) continue;
+                        const auto found=proposed.entities().find(id);
+                        if (found==proposed.entities().end() || found->second==before_entity) continue;
+                        const auto& after_entity=found->second;
+                        if (before_entity.type=="wall") {
+                            const auto before_wall=read_required_segment(before_entity.properties,"baseline");
+                            const auto after_wall=read_required_segment(after_entity.properties,"baseline");
+                            if (!before_wall || !after_wall)
+                                throw std::invalid_argument("Related wall geometry cannot be previewed.");
+                            const auto name=QString::fromStdString(before_entity.properties.value("name",
+                                "Related wall " + std::to_string(++related_count)));
+                            geometry.push_back(geometry_entity(id_from(id)+"-original",{*before_wall},original_color));
+                            geometry.push_back(geometry_entity(id_from(id)+"-proposed",{*after_wall},proposed_color));
+                            add_row(name+QStringLiteral(" · start"),point_text(before_wall->start),point_text(after_wall->start));
+                            add_row(name+QStringLiteral(" · end"),point_text(before_wall->end),point_text(after_wall->end));
+                        } else if (can_recognize_boundary_entity_type(before_entity.type)) {
+                            const auto before_area=decode_identified_boundary_entity(before_entity);
+                            const auto after_area=decode_identified_boundary_entity(after_entity);
+                            const auto name=QString::fromStdString(before_entity.properties.value("name",
+                                "Related area " + std::to_string(++related_count)));
+                            geometry.push_back(geometry_entity(id_from(id)+"-original",boundary_geometry(before_area),original_color));
+                            geometry.push_back(geometry_entity(id_from(id)+"-proposed",boundary_geometry(after_area),proposed_color));
+                            for (std::size_t i=0;i<before_area.segments.size();++i) {
+                                const auto old_point=before_area.segments[i].segment.start;
+                                const auto new_point=after_area.segments[i].segment.start;
+                                if (old_point.x!=new_point.x || old_point.y!=new_point.y)
+                                    add_row(name+QStringLiteral(" · vertex %1").arg(i+1),point_text(old_point),point_text(new_point));
+                            }
+                        }
                     }
                     const auto dimension_text = [&](const BoundaryDimensionResolution& resolved) {
                         if (resolved.kind == BoundaryDimensionKind::segment_length)
@@ -26460,6 +26531,7 @@ public:
             QObject::connect(length, &QLineEdit::textChanged, &dialog, update_preview);
             QObject::connect(fixed, &QComboBox::currentIndexChanged, &dialog, update_preview);
             QObject::connect(connected, &QCheckBox::toggled, &dialog, update_preview);
+            QObject::connect(related, &QCheckBox::toggled, &dialog, update_preview);
             QObject::connect(buttons->button(QDialogButtonBox::Cancel), &QPushButton::clicked,
                              &dialog, &QDialog::reject);
             QObject::connect(buttons->button(QDialogButtonBox::Apply), &QPushButton::clicked,

@@ -817,8 +817,19 @@ std::map<std::string, Entity, std::less<>> edited_boundary_entities_batch(
         std::map<std::string, std::vector<BoundaryGeometryEdit>, std::less<>> groups;
         for (const auto& edit : edits) groups[edit.boundary_id].push_back(edit);
         auto result = source;
-        for (const auto& [id, group] : groups)
-            result = edited_boundary_entities_impl(result, group.front(), &group);
+        for (const auto& [id, group] : groups) {
+            const bool vertices_only = std::all_of(group.begin(), group.end(), [](const auto& edit) {
+                return edit.kind == BoundaryGeometryEditKind::move_vertex;
+            });
+            if (vertices_only) {
+                result = edited_boundary_entities_impl(result, group.front(), &group);
+            } else {
+                // A different owner may require simultaneous vertex movement.
+                // Keep semantic resize/insertion/redraw proofs replayable in
+                // their original order instead of treating them as vertex edits.
+                for (const auto& edit : group) result = edited_boundary_entities(result, edit);
+            }
+        }
         (void)validate_boundary_integrity(result);
         return result;
     }

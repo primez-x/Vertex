@@ -1196,8 +1196,39 @@ void test_redraw_reference_mapping_separates_child_namespaces() {
     rejected(invalid);
 }
 
+void test_mixed_resize_and_simultaneous_vertex_batch_replay() {
+    auto owner = rectangle();
+    auto neighbor = rectangle();
+    neighbor.id = "boundary-2";
+    const auto before = Document::create({owner,neighbor}).snapshot();
+    const BoundaryGeometryEdit resize{owner.id,BoundaryGeometryEditKind::resize_segment,
+        "edge-0",{},5,BoundaryFixedEndpoint::start,false};
+    std::vector<BoundaryGeometryEdit> edits{resize};
+    const auto neighbor_before = decode_identified_boundary_entity(neighbor);
+    for (const auto& edge : neighbor_before.segments)
+        edits.push_back({neighbor.id,BoundaryGeometryEditKind::move_vertex,edge.start_vertex_id,
+            {edge.segment.start.x+10,edge.segment.start.y}});
+    const auto result = edited_boundary_entities_batch(before.entities(),edits);
+    require(result.at(owner.id) == edited_boundary_entities(before.entities(),resize).at(owner.id),
+        "simultaneous neighbor fallback lost semantic selected resize");
+    const auto after = decode_identified_boundary_entity(result.at(neighbor.id));
+    for (std::size_t i = 0; i < after.segments.size(); ++i)
+        require(after.segments[i].segment.start.x == neighbor_before.segments[i].segment.start.x+10 &&
+            after.segments[i].segment.start.y == neighbor_before.segments[i].segment.start.y,
+            "mixed proof lost a simultaneous neighbor vertex destination");
+    require(!validate_boundary_integrity(result),"mixed replay geometry integrity failed");
+    auto document = Document::fork(before);
+    (void)document.apply(ApplyBoundaryConstraintChanges{before.revision(),edits,{},"mixed replay"});
+    require(document.snapshot().entities() == result,"typed mixed resize replay differs");
+    document.undo(document.revision());
+    require(document.snapshot().entities() == before.entities(),"mixed resize replay undo differs");
+    document.redo(document.revision());
+    require(document.snapshot().entities() == result,"mixed resize replay redo differs");
+}
+
 int main() {
     try {
+        test_mixed_resize_and_simultaneous_vertex_batch_replay();
         test_raw_commands_cannot_bypass_identity_validation();
         test_typed_vertex_split_preserves_identity_and_rejects_forgery();
         test_boundary_redefinition_proofs_and_reference_policy();

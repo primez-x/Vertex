@@ -1766,6 +1766,57 @@ void test_mixed_constraint_workspace_workflow() {
     desktop::MainWindow reopened;
     require(window.saveProjectAs(path) && reopened.openProject(path) && reopened.document().snapshot().entities()==after.entities(),
         "mixed relationship and receipt-backed movement must replay after reopen");
+    require(window.undoCommand() && window.selectEntity(boundary_id),
+        "boundary-driven resize must restore and select the joined source");
+    const auto boundary_source=window.document().snapshot();
+    const auto resize_boundary=[&](bool apply) {
+        QTimer::singleShot(0,&window,[&,apply] {
+            auto* dialog=window.findChild<QDialog*>("boundaryGeometryDialog");
+            require(dialog,"boundary-driven resize must use its ordinary geometry dialog");
+            auto* related=dialog->findChild<QCheckBox*>("boundaryMoveRelatedObjects");
+            auto* length=dialog->findChild<QLineEdit*>("boundaryEdgeLength");
+            auto* buttons=dialog->findChild<QDialogButtonBox*>("boundaryGeometryButtons");
+            if (!related || !length || !buttons) { dialog->reject(); return; }
+            choices_found=true;
+            related->setChecked(false);
+            length->setText("4 m");
+            require(!buttons->button(QDialogButtonBox::Apply)->isEnabled(),
+                "preserving a joined wall must reject incompatible boundary movement");
+            related->setChecked(true);
+            require(buttons->button(QDialogButtonBox::Apply)->isEnabled(),
+                "boundary length must preview movement of explicitly related objects");
+            require(dialog->findChild<QTableWidget*>("boundaryGeometryChanges")->rowCount()>=2 &&
+                window.document().snapshot().entities()==boundary_source.entities(),
+                "boundary-driven preview must show related movement without mutating source");
+            const auto capture_directory=qEnvironmentVariable("VERTEX_TEST_CAPTURE_DIR");
+            if (apply && !capture_directory.isEmpty()) require(QDir().mkpath(capture_directory) &&
+                dialog->grab().save(QDir(capture_directory).filePath("boundary-driven-related-resize.png")),
+                "boundary-driven resize screenshot must save");
+            buttons->button(apply ? QDialogButtonBox::Apply : QDialogButtonBox::Cancel)->click();
+        });
+        auto* edit=window.findChild<QPushButton*>("editBoundaryGeometry");
+        require(edit,"joined boundary must expose geometry editing");
+        edit->click();
+    };
+    choices_found=false;
+    resize_boundary(false);
+    require(choices_found && window.document().snapshot().entities()==boundary_source.entities(),
+        "boundary length must offer related movement and Cancel must preserve both objects");
+    resize_boundary(true);
+    const auto boundary_resized=window.document().snapshot();
+    const auto resized_area=decode_identified_boundary_entity(boundary_resized.entities().at(boundary_id.toStdString()));
+    require(boundary_resized.revision()==boundary_source.revision()+1 &&
+        std::abs(resized_area.segments[0].segment.end.x-4)<1e-7 &&
+        std::abs(boundary_resized.entities().at(wall_id.toStdString()).properties.at("baseline").at("start")[0].get<double>()-4)<1e-7 &&
+        std::abs(std::abs(signed_area(boundary_geometry(resized_area)))-10.5)<1e-7,
+        "boundary-driven edit must move the joined wall and recalculate area atomically");
+    require(window.undoCommand() && window.document().snapshot().entities()==boundary_source.entities() &&
+        window.redoCommand() && window.document().snapshot().entities()==boundary_resized.entities(),
+        "boundary-driven related movement must undo/redo exactly");
+    desktop::MainWindow reopened_boundary;
+    require(window.saveProjectAs(path) && reopened_boundary.openProject(path) &&
+        reopened_boundary.document().snapshot().entities()==boundary_resized.entities(),
+        "boundary-driven typed transaction must replay through saved workspace history");
 }
 
 void test_boundary_insertion_preview_freedom_workflow() {
@@ -2158,7 +2209,10 @@ void test_direct_boundary_geometry_edit_workflow() {
     const auto persisted_transforms = std::count_if(
         reopened_snapshot.history().begin(), reopened_snapshot.history().end(),
         [](const RevisionRecord& record) { return record.boundary_transform.has_value(); });
-    require(persisted_edits == 4 && persisted_transforms == 1,
+    const auto persisted_resizes = std::count_if(
+        reopened_snapshot.history().begin(), reopened_snapshot.history().end(),
+        [](const RevisionRecord& record) { return record.boundary_constraint_changes.has_value(); });
+    require(persisted_edits == 3 && persisted_resizes == 1 && persisted_transforms == 1,
             "typed edit and transform proofs must survive save and reopen");
 }
 

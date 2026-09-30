@@ -1023,6 +1023,35 @@ void test_boundary_receipt_and_dimension_preview() {
     dimension.segment_id = "edge-0";
     const auto dimension_entity = encode_boundary_dimension_entity(dimension);
     auto document = Document::create({owner, dimension_entity});
+    ConstraintAuthoringIntent resize_receipt;
+    resize_receipt.boundary_resize = BoundaryResizeIntent{
+        {boundary.id,BoundaryGeometryEditKind::resize_segment,"edge-0",{},5},true};
+    const auto resized_receipt = preview_constraint_authoring(document.snapshot(),resize_receipt);
+    require_accepted(resized_receipt,"receipt-backed boundary resize rejected");
+    const auto& resized_owner = resized_receipt.candidate_entities().at(boundary.id);
+    require(resized_owner.extensions.at("boundary_geometry_derivation").at("source_boundary_authoring") == receipt,
+        "boundary resize rewrote exact original construction input");
+    require(resized_receipt.candidate_entities().at("dimension") == dimension_entity,
+        "boundary resize changed attached dimension identity or presentation");
+    require_near(dimension.resolve(resized_owner).segment_length(),5,1e-7,
+        "dimension did not resolve resized analytical length");
+    require(!validate_boundary_integrity(resized_receipt.candidate_entities()),
+        "boundary resize receipt failed independent replay");
+    auto resized_document = Document::fork(document.snapshot());
+    (void)apply_constraint_authoring(resized_document,resized_receipt);
+    const auto resized_state = resized_document.snapshot();
+    const auto resized_path = std::filesystem::temp_directory_path() / ("boundary-resize-receipt-"+make_stable_id()+".bldproj");
+    (void)ProjectStore::save(resized_path,resized_state);
+    auto resized_reopened = ProjectStore::load(resized_path);
+    std::filesystem::remove(resized_path);
+    require(resized_reopened.document.snapshot().entities() == resized_state.entities(),
+        "boundary resize save/reopen changed exact archived receipts");
+    resized_reopened.document.undo(resized_reopened.document.revision());
+    require(resized_reopened.document.snapshot().entities() == document.snapshot().entities(),
+        "boundary resize undo did not restore exact construction receipt");
+    resized_reopened.document.redo(resized_reopened.document.revision());
+    require(resized_reopened.document.snapshot().entities() == resized_state.entities(),
+        "boundary resize redo changed exact derivation evidence");
     ConstraintAuthoringIntent intent;
     intent.relation_anchor = WallEndpointBinding{boundary.id, WallEndpointRole::start, "edge-0", "vertex-0"};
     intent.relation_mutations.push_back(ConstraintRelationMutation::upsert(relation(
@@ -1357,9 +1386,140 @@ void test_mixed_boundary_wall_authoring_and_resize() {
         "coordinate coincidence must not create an implicit mixed relation");
 }
 
+void test_boundary_resize_canonical_shape_and_related_owners() {
+    const IdentifiedBoundary shape{"area", "measurement_boundary", {
+        {"ab","a","b",{{0,0},{3,0},0}}, {"bc","b","c",{{3,0},{3,3},0}},
+        {"cd","c","d",{{3,3},{0,3},0}}, {"da","d","a",{{0,3},{0,0},0}}}};
+    const auto owner = encode_identified_boundary_entity(shape);
+    for (const auto anchor : {BoundaryFixedEndpoint::start, BoundaryFixedEndpoint::end}) {
+        for (const auto local_chain : {false, true}) {
+            const BoundaryGeometryEdit edit{"area", BoundaryGeometryEditKind::resize_segment,
+                "ab", {}, 4, anchor, local_chain};
+            const WallEndpointBinding moving{"area", anchor == BoundaryFixedEndpoint::start
+                ? WallEndpointRole::end : WallEndpointRole::start, "ab",
+                anchor == BoundaryFixedEndpoint::start ? "b" : "a"};
+            const auto start = anchor == BoundaryFixedEndpoint::start ? Vec2{3,0} : Vec2{0,0};
+            auto neighbor = shape;
+            neighbor.id = "neighbor";
+            for (auto& edge : neighbor.segments) {
+                edge.segment.start.x += start.x;
+                edge.segment.start.y -= 3;
+                edge.segment.end.x += start.x;
+                edge.segment.end.y -= 3;
+            }
+            const WallEndpointBinding neighbor_corner{"neighbor",WallEndpointRole::start,"da","d"};
+            const auto join = encode_constraint_entity(relation("join",ConstraintRelationKind::coincident,
+                {moving,endpoint("wall",WallEndpointRole::start)}));
+            const auto neighbor_join = encode_constraint_entity(relation("neighbor-join",ConstraintRelationKind::coincident,
+                {moving,neighbor_corner}));
+            auto document = Document::create({owner,wall("wall",start,{start.x+2,start.y}),
+                encode_identified_boundary_entity(neighbor),join,neighbor_join});
+            const auto before = document.snapshot();
+            ConstraintAuthoringIntent intent;
+            intent.boundary_resize = BoundaryResizeIntent{edit,true};
+            const auto preview = preview_constraint_authoring(before,intent);
+            require_accepted(preview,"boundary resize must propagate to explicitly related owners");
+            const auto canonical = edited_boundary_entities(before.entities(),edit);
+            require(preview.candidate_entities().at("area") == canonical.at("area"),
+                "solver changed the canonical selected boundary resize shape");
+            const auto after = decode_identified_boundary_entity(canonical.at("area"));
+            const auto destination = anchor == BoundaryFixedEndpoint::start
+                ? after.segments[0].segment.end : after.segments[0].segment.start;
+            require_near(baseline(preview.candidate_entities().at("wall")).start.x,destination.x,1e-7,
+                "boundary resize did not propagate to the wall endpoint");
+            require_near(decode_identified_boundary_entity(preview.candidate_entities().at("neighbor"))
+                .segments[3].segment.start.x,destination.x,1e-7,
+                "boundary resize did not propagate to another boundary");
+            require(!preview.boundary_edits().empty() && preview.boundary_edits().front() == edit,
+                "selected resize must lead the typed geometry proofs");
+            require(std::count_if(preview.boundary_edits().begin(),preview.boundary_edits().end(),
+                [](const auto& proof) { return proof.boundary_id == "area"; }) == 1,
+                "selected canonical resize must not also emit vertex edits");
+            intent.boundary_resize->move_related_objects = false;
+            const auto frozen = preview_constraint_authoring(before,intent);
+            require(!frozen.accepted(),"frozen related owners must reject conflicting boundary resize");
+            require_rejected_unchanged(document,frozen,"frozen boundary resize applied");
+            (void)apply_constraint_authoring(document,preview);
+            const auto committed = document.snapshot();
+            require(committed.entities() == preview.candidate_entities() && committed.revision() == before.revision()+1,
+                "boundary resize did not commit the shown result atomically");
+            require(committed.history().back().boundary_constraint_changes.has_value(),
+                "boundary resize omitted typed transaction proof");
+            const auto proof = command_to_json(*committed.history().back().boundary_constraint_changes);
+            require(command_to_json(command_from_json(proof)) == proof,"boundary resize proof codec changed evidence");
+            require_rejected_unchanged(document,preview,"stale boundary resize preview applied");
+            const auto path = std::filesystem::temp_directory_path() / ("boundary-resize-"+make_stable_id()+".bldproj");
+            (void)ProjectStore::save(path,committed);
+            auto reopened = ProjectStore::load(path);
+            std::filesystem::remove(path);
+            require(reopened.document.snapshot().entities() == committed.entities(),"boundary resize reopen differs");
+            reopened.document.undo(reopened.document.revision());
+            require(reopened.document.snapshot().entities() == before.entities(),"boundary resize undo split transaction");
+            reopened.document.redo(reopened.document.revision());
+            require(reopened.document.snapshot().entities() == committed.entities(),"boundary resize redo differs");
+        }
+    }
+
+    BoundaryGeometryEdit edit{"area",BoundaryGeometryEditKind::resize_segment,"ab",{},4};
+    ConstraintAuthoringIntent intent;
+    intent.boundary_resize = BoundaryResizeIntent{edit,true};
+    auto detached = Document::create({owner,wall("wall",{3,0},{5,0}),wall("curve",{8,8},{9,8},0.2)});
+    const auto detached_before = detached.snapshot();
+    const auto preview = preview_constraint_authoring(detached_before,intent);
+    require_accepted(preview,"unrelated curved owner must not block boundary resize");
+    require(preview.changed_walls().empty() && preview.candidate_entities().at("wall") == detached_before.entities().at("wall"),
+        "coordinate coincidence must not imply boundary resize propagation");
+    intent.boundary_resize->edit.target_length_metres = 3;
+    const auto noop = preview_constraint_authoring(detached_before,intent);
+    require(!noop.accepted() && has_diagnostic(noop,"no document change"),"unchanged boundary length must reject as no-op");
+    require_rejected_unchanged(detached,noop,"no-op boundary resize applied");
+    intent.boundary_resize->edit.target_length_metres = 4;
+    auto locked_length = relation("length",ConstraintRelationKind::fixed_length,
+        {{"area",WallEndpointRole::start,"ab","a"},{"area",WallEndpointRole::end,"ab","b"}});
+    locked_length.length = parse_quantity("3 m");
+    auto locked = Document::create({owner,encode_constraint_entity(locked_length)});
+    const auto conflict = preview_constraint_authoring(locked.snapshot(),intent);
+    require(!conflict.accepted(),"canonical resize must reject a conflicting selected internal relation");
+    require_rejected_unchanged(locked,conflict,"locked boundary resize applied");
+    auto curved_shape = shape;
+    curved_shape.segments[1].segment.sweep_radians = 0.1;
+    auto curved = Document::create({encode_identified_boundary_entity(curved_shape)});
+    require(!preview_constraint_authoring(curved.snapshot(),intent).accepted(),"boundary resize must refuse any curved selected edge owner");
+    intent.wall_resize = WallResizeIntent{"wall",parse_quantity("3 m")};
+    require(!preview_constraint_authoring(detached_before,intent).accepted(),"concurrent wall and boundary resize must reject");
+    intent.wall_resize.reset();
+    intent.boundary_resize->edit.kind = BoundaryGeometryEditKind::move_vertex;
+    require(!preview_constraint_authoring(detached_before,intent).accepted(),"boundary resize must reject nonresize edit kinds");
+    intent.boundary_resize->edit = edit;
+    intent.boundary_resize->edit.fixed_endpoint = static_cast<BoundaryFixedEndpoint>(99);
+    require(!preview_constraint_authoring(detached_before,intent).accepted(),"boundary resize must reject invalid anchors");
+    intent.boundary_resize->edit = edit;
+    intent.boundary_resize->edit.target_length_metres = std::numeric_limits<double>::infinity();
+    require(!preview_constraint_authoring(detached_before,intent).accepted(),"boundary resize must reject nonfinite lengths");
+    intent.boundary_resize->edit = edit;
+    intent.boundary_resize->edit.target_id = "absent";
+    require(!preview_constraint_authoring(detached_before,intent).accepted(),"boundary resize must reject unresolved edge IDs");
+    intent.boundary_resize->edit = edit;
+    const auto join = encode_constraint_entity(relation("join",ConstraintRelationKind::coincident,
+        {{"area",WallEndpointRole::end,"ab","b"},endpoint("wall",WallEndpointRole::start)}));
+    auto hosted = Document::create({owner,wall("wall",{3,0},{5,0}),join,opening("door","wall",1.6,0.3)});
+    const auto stranded = preview_constraint_authoring(hosted.snapshot(),intent);
+    require(!stranded.accepted(),"boundary propagation must not strand a hosted wall opening");
+    require_rejected_unchanged(hosted,stranded,"boundary resize with stranded opening applied");
+    auto misplaced = owner;
+    misplaced.properties["floor_id"] = "floor";
+    auto unresolved = Document::create({misplaced,
+        {"property","property",{{"name","Property"}}},
+        {"building","building",{{"name","Building"},{"property_id","property"}}},
+        {"floor","floor",{{"name","Floor"},{"building_id","building"}}}});
+    require(!preview_constraint_authoring(unresolved.snapshot(),intent).accepted(),
+        "boundary resize must refuse unresolved explicit drawing context");
+}
+
 int main() {
     sketch::testing::noninteractive_errors();
     try {
+        test_boundary_resize_canonical_shape_and_related_owners();
         test_mixed_boundary_wall_authoring_and_resize();
         test_persisted_component_analysis_excludes_edit_pins();
         test_boundary_horizontal_authoring();

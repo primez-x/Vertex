@@ -98,6 +98,16 @@ attached dimensions, analytical area, and perimeter. Apply retains the exact
 typed candidate and rechecks it against the unchanged captured source; Cancel
 does not publish a command. Invalid input, locked constraints, or changed
 document/selection/layer/workspace/units clear the candidate and disable Apply.
+For a straight selected boundary, an independent related-object option routes
+the resize through the shared endpoint solver. The canonical selected resize
+pins every selected boundary vertex; explicit relationships may move other
+straight walls and boundaries, or reject when those owners are frozen. The
+saved transaction retains the selected `resize_segment` proof followed by
+related boundary vertex edits and surgical wall edits. Original construction
+receipts remain archived; the new target length uses the existing analytical
+metre value in the resize proof. Pure vertex groups may replay atomically when
+sequential intermediate geometry would be invalid, while nonvertex edit groups
+retain their ordered semantic replay.
 Stale revisions, invalid topology, degenerate edges, and
 self-intersections reject atomically. Handles are interaction overlays and are
 excluded from print/export rendering.

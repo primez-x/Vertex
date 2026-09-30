@@ -591,6 +591,15 @@ vertex moves. With it on, the remaining boundary chain translates together.
 This option does not infer connections to another object from overlapping
 coordinates.
 
+For entirely straight boundaries, **Move related objects** separately controls
+walls and other areas joined by saved endpoint constraints. With it enabled,
+the selected boundary keeps the requested resize shape and the solver moves
+its explicitly related objects. With it disabled, those objects stay fixed;
+an incompatible joined edit reports a conflict and cannot apply. The preview
+overlays their original and proposed geometry and lists moved wall endpoints
+and area vertices. Curved boundary resizing keeps its analytical curve behavior;
+related-object solving for curves remains unavailable.
+
 Before Apply, the editor overlays the original and proposed outlines, marks
 the fixed point, and lists changed vertices and attached dimensions. The length,
 analytical boundary area, and perimeter show their before/after values. These
@@ -602,7 +611,7 @@ Invalid geometry or a locked measurement clears the proposed outline and
 disables Apply. A change to the document, selection, layer, workspace, or units
 while the dialog is open invalidates it; reopen the editor in the current
 context. Apply rechecks the exact source and proposed geometry before publishing
-one undoable operation.
+one undoable operation, including any related geometry and recalculated areas.
 
 Both paths use the typed revision-checked document command. They preserve stable
 boundary, segment, and vertex IDs, so existing length and angle dimensions keep
