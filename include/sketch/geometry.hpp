@@ -99,6 +99,16 @@ struct BoundaryDiagnostic {
                                             double arc_length_metres, double sweep_radians);
 
 [[nodiscard]] double segment_length(const Segment& segment);
+enum class SegmentIntersectionKind { none, touch, proper, overlap, indeterminate };
+struct SegmentIntersection {
+    SegmentIntersectionKind kind{SegmentIntersectionKind::none};
+    std::vector<Vec2> points;
+};
+// Analytical line/arc contacts, with no tessellation. Proper means an
+// intersection in both segment interiors; unresolved numerics fail closed.
+[[nodiscard]] SegmentIntersection segment_intersection(
+    const Segment& first, const Segment& second,
+    double tolerance_metres = default_geometry_tolerance_metres);
 [[nodiscard]] double perimeter(const Boundary& boundary);
 // For a boundary connected and closed within the default local tolerance, a
 // local origin avoids translation cancellation. Open or disconnected inputs

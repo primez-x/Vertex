@@ -4,6 +4,8 @@
 #include "sketch/boundary_translation.hpp"
 #include "sketch/boundary_transform.hpp"
 #include "sketch/boundary_edit.hpp"
+#include "sketch/constraint_entity.hpp"
+#include "sketch/constraint_wall_edit.hpp"
 #include "support/noninteractive_errors.hpp"
 #include <fstream>
 #include <iostream>
@@ -127,6 +129,107 @@ void test_translation_export(const std::filesystem::path& root) {
         batch_json.at("revisions")[constraint_revision].at("boundary_constraint_changes") == sketch::command_to_json(later_constraint) &&
         !batch_json.at("revisions").back().contains("boundary_translations"),
         "exchange must retain exact mixed proofs only on their command rows");
+}
+
+void test_curved_constraint_export_floor(const std::filesystem::path& root) {
+  sketch::Entity wall{"curve-wall", "wall",
+      {{"baseline", {{"start", {0, 0}}, {"end", {4, 0}}, {"sweep_radians", 0.4}}},
+       {"thickness_m", 0.14}, {"height_m", 2.4}, {"elevation_m", 0.0}}, false,
+      nlohmann::json::object()};
+  auto source = wall;
+  const auto source_baseline = sketch::arc_from_chord_arc_length({0, 0}, {4, 0}, 5.0, false);
+  source.properties["baseline"]["sweep_radians"] = source_baseline.sweep_radians;
+  const auto angle = sketch::angle_from_radians(source_baseline.sweep_radians);
+  source.extensions["curve_input"] = {{"version", 2}, {"construction", "arc_length"},
+      {"measure", "5 m"}, {"normalized_measure", "5 m"}, {"measure_value", 5.0},
+      {"clockwise", false}, {"start", {0, 0}}, {"end", {4, 0}},
+      {"sweep", angle.original_expression}, {"normalized_sweep", angle.normalized_expression},
+      {"radians", source_baseline.sweep_radians}, {"vendor", "preserve"}};
+  const auto derived = sketch::replay_constraint_wall_edit(source,
+      {source.id, {{0, 0}, {4.5, 0}, source_baseline.sweep_radians}, std::nullopt, 2});
+  const auto imported = sketch::Document::create({derived});
+  sketch::extract_project(imported.snapshot(), root / "imported-curve-derivation");
+  std::ifstream imported_input(root / "imported-curve-derivation" / "project.json");
+  const auto imported_json = nlohmann::json::parse(imported_input);
+  check(imported_json.at("exchange_version") == 7 &&
+        !imported_json.at("revisions")[0].contains("boundary_constraint_changes"),
+        "imported curve derivation must advertise exchange7 without originating command history");
+  const auto collision = sketch::Document::create({{"vendor-label", "label", {{"text", "opaque"}},
+      false, {{"curve_input_derivation", derived.extensions.at("curve_input_derivation")}}}});
+  sketch::extract_project(collision.snapshot(), root / "opaque-curve-derivation-collision");
+  std::ifstream collision_input(root / "opaque-curve-derivation-collision" / "project.json");
+  check(nlohmann::json::parse(collision_input).at("exchange_version") == 1,
+        "generic vendor curve derivation extension must retain its historical exchange floor");
+  sketch::PersistentConstraint relation;
+  relation.id = "curve-horizontal";
+  relation.relation = sketch::ConstraintRelationKind::horizontal;
+  relation.bindings = {{wall.id, sketch::WallEndpointRole::start},
+                       {wall.id, sketch::WallEndpointRole::end}};
+  auto state = sketch::Document::create({wall, sketch::encode_constraint_entity(relation)});
+  sketch::extract_project(state.snapshot(), root / "curve-state");
+  std::ifstream state_input(root / "curve-state" / "project.json");
+  const auto state_json = nlohmann::json::parse(state_input);
+  check(state_json.at("exchange_version") == 7 &&
+        !state_json.at("revisions")[0].contains("boundary_constraint_changes"),
+        "already satisfied curved relation must advertise exchange7 without a wall edit proof");
+  auto undone = sketch::Document::create({wall});
+  undone.apply(sketch::ApplyEntityChanges{0,
+      {sketch::EntityChange::upsert(sketch::encode_constraint_entity(relation))}, {}, "curve relation"});
+  undone.undo(undone.revision());
+  sketch::extract_project(undone.snapshot(), root / "curve-state-undone");
+  std::ifstream undone_input(root / "curve-state-undone" / "project.json");
+  const auto undone_json = nlohmann::json::parse(undone_input);
+  check(undone_json.at("exchange_version") == 7 && undone_json.at("revisions").size() == 3,
+        "undone curve-bound relation must retain exchange7 and all states");
+
+  auto proof = sketch::Document::create({wall});
+  sketch::ApplyBoundaryConstraintChanges command{0, {}, {}, "curved wall chord"};
+  command.wall_edits.push_back({wall.id, {{0, 0}, {5, 0}, 0.4}, std::nullopt, 2});
+  proof.apply(command);
+  sketch::extract_project(proof.snapshot(), root / "curve-proof-head");
+  std::ifstream head_input(root / "curve-proof-head" / "project.json");
+  check(nlohmann::json::parse(head_input).at("exchange_version") == 7,
+        "curved wall proof at head must advertise exchange7 without relations");
+  // Later ordinary rows and undo must not lower the proof's retained reader floor.
+  proof.apply(sketch::ApplyEntityChanges{proof.revision(),
+      {sketch::EntityChange::upsert({"label", "label", {{"text", "later"}}, false,
+                                  nlohmann::json::object()})}, {}, "later row"});
+  proof.undo(proof.revision());
+  proof.undo(proof.revision());
+  sketch::extract_project(proof.snapshot(), root / "curve-proof-undone");
+  std::ifstream proof_input(root / "curve-proof-undone" / "project.json");
+  const auto proof_json = nlohmann::json::parse(proof_input);
+  check(proof_json.at("exchange_version") == 7,
+        "retained undone curved wall proof must advertise exchange7");
+  const auto& rows = proof_json.at("revisions");
+  check(rows[1].at("boundary_constraint_changes").at("version") == 3 &&
+        rows[1].at("boundary_constraint_changes").at("wall_edits")[0].at("version") == 2 &&
+        !rows.back().contains("boundary_constraint_changes"),
+        "exchange must retain curved proof versions only on their command row");
+
+  sketch::IdentifiedBoundary boundary{"curved-boundary", "measurement_boundary", {
+      {"edge-0", "vertex-0", "vertex-1", {{0, 0}, {4, 0}, 0.2}},
+      {"edge-1", "vertex-1", "vertex-2", {{4, 0}, {4, 3}, 0}},
+      {"edge-2", "vertex-2", "vertex-3", {{4, 3}, {0, 3}, 0}},
+      {"edge-3", "vertex-3", "vertex-0", {{0, 3}, {0, 0}, 0}}}};
+  relation.relation = sketch::ConstraintRelationKind::vertical;
+  relation.bindings = {{boundary.id, sketch::WallEndpointRole::start, "edge-1", "vertex-1"},
+                       {boundary.id, sketch::WallEndpointRole::end, "edge-1", "vertex-2"}};
+  auto straight = sketch::Document::create({sketch::encode_identified_boundary_entity(boundary),
+                                           sketch::encode_constraint_entity(relation)});
+  sketch::extract_project(straight.snapshot(), root / "straight-edge-curved-owner");
+  std::ifstream straight_input(root / "straight-edge-curved-owner" / "project.json");
+  check(nlohmann::json::parse(straight_input).at("exchange_version") == 1,
+        "straight edge binding on curved boundary must retain historical exchange floor");
+  relation.relation = sketch::ConstraintRelationKind::horizontal;
+  relation.bindings = {{boundary.id, sketch::WallEndpointRole::start, "edge-0", "vertex-0"},
+                       {boundary.id, sketch::WallEndpointRole::end, "edge-0", "vertex-1"}};
+  auto curve = sketch::Document::create({sketch::encode_identified_boundary_entity(boundary),
+                                        sketch::encode_constraint_entity(relation)});
+  sketch::extract_project(curve.snapshot(), root / "curved-edge-relation");
+  std::ifstream curve_input(root / "curved-edge-relation" / "project.json");
+  check(nlohmann::json::parse(curve_input).at("exchange_version") == 7,
+        "bound curved boundary edge must advertise exchange7 without a wall edit proof");
 }
 } // namespace
 int main() {
@@ -394,6 +497,7 @@ int main() {
     std::filesystem::remove_all(residual);
     // Only this test's unique, resolved temporary tree is removed.
     test_translation_export(root);
+    test_curved_constraint_export_floor(root);
     check(std::filesystem::equivalent(
               std::filesystem::canonical(root).parent_path(),
               std::filesystem::temp_directory_path()),

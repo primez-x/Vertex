@@ -325,7 +325,7 @@ if(MSVC)
 endif()
 add_library(sketch_exchange src/core/project_exchange.cpp)
 target_include_directories(sketch_exchange PUBLIC include)
-target_link_libraries(sketch_exchange PUBLIC sketch_document)
+target_link_libraries(sketch_exchange PUBLIC sketch_document sketch_storage)
 add_executable(vertex-cli src/cli/main.cpp resources/windows/vertex-cli.rc)
 target_link_libraries(vertex-cli PRIVATE sketch_storage sketch_exchange sketch_project_resource_catalog
   sketch_annotation_catalog)

@@ -4,6 +4,7 @@
 #include "sketch/boundary_entity.hpp"
 #include "sketch/constraint_tolerances.hpp"
 #include "sketch/wall_semantics.hpp"
+#include "sketch/constraint_wall_edit.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -84,12 +85,8 @@ Wall read_wall(const std::string& owner, const Entities& entities,
         }
     }
     validate_wall_semantics(wall);
+    validate_wall_curve_input(found->second);
     return wall;
-}
-
-void require_straight_wall(const Wall& wall) {
-    if (wall.baseline.sweep_radians != 0.0)
-        invalid("Constraint v1 requires a straight wall: " + wall.id);
 }
 
 std::vector<std::string> typed_wall_ids(const Entity& entity) {
@@ -143,7 +140,6 @@ std::optional<std::string> validate_constraint_integrity(const Entities& entitie
                     found = owners.emplace(owner_id,
                         read_wall(owner_id, entities, openings_by_wall)).first;
                 }
-                if (decoded.constraint) require_straight_wall(found->second);
             }
             if (!decoded.constraint) {
                 if (entity.properties.contains("entity_ids")) {
@@ -169,8 +165,6 @@ std::optional<std::string> validate_constraint_integrity(const Entities& entitie
                     const auto edge = std::find_if(boundary.segments.begin(), boundary.segments.end(),
                         [&](const auto& value) { return value.segment_id == binding.segment_id; });
                     if (edge == boundary.segments.end()) invalid("Boundary constraint segment is missing");
-                    if (edge->segment.sweep_radians != 0.0)
-                        invalid("Boundary constraints require straight segments");
                     const bool start = binding.role == WallEndpointRole::start;
                     if ((start ? edge->start_vertex_id : edge->end_vertex_id) != binding.vertex_id)
                         invalid("Boundary constraint endpoint identity does not match its segment");
@@ -181,7 +175,6 @@ std::optional<std::string> validate_constraint_integrity(const Entities& entitie
                 if (found == owners.end())
                     found = owners.emplace(binding.owner_id,
                         read_wall(binding.owner_id, entities, openings_by_wall)).first;
-                require_straight_wall(found->second);
                 points.push_back(binding.role == WallEndpointRole::start
                     ? found->second.baseline.start : found->second.baseline.end);
             }

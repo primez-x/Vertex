@@ -15,7 +15,7 @@ namespace sketch::desktop {
 // revision and the displayed candidate before making one reversible change.
 class ConstraintDialog final : public QDialog {
 public:
-    // Supports straight walls and identified straight measurement boundaries.
+    // Supports analytical wall baselines and identified boundary endpoints.
     [[nodiscard]] static bool supportsEntity(const Entity& entity) noexcept;
     ConstraintDialog(DocumentSnapshot snapshot, QString selected_entity_id,
                      bool metric_units = false, QWidget* parent = nullptr);

@@ -1,6 +1,8 @@
 #include "sketch/constraint_wall_edit.hpp"
 #include "sketch/constraint_tolerances.hpp"
 #include "sketch/wall_semantics.hpp"
+#include "sketch/boundary_receipt.hpp"
+#include "sketch/constraint_entity.hpp"
 #include <algorithm>
 #include <cmath>
 #include <stdexcept>
@@ -221,6 +223,228 @@ void rebase_wall_length_receipt(Entity& wall, const Segment& transformed_baselin
 }
 
 namespace {
+json baseline_json(const Segment& baseline) {
+    json result=json::object(); update_baseline_json(result,baseline); return result;
+}
+bool same_baseline(const Segment& a,const Segment& b) {
+    return a.start.x==b.start.x && a.start.y==b.start.y && a.end.x==b.end.x && a.end.y==b.end.y &&
+        a.sweep_radians==b.sweep_radians;
+}
+void validate_input(const json& input,const Segment& baseline,const std::string& id) {
+    if (!input.is_object() || !input.contains("version") || !input.at("version").is_number_integer() ||
+        (input.at("version")!=1 && input.at("version")!=2) || !input.contains("start") ||
+        !input.contains("end") || !input.contains("radians") ||
+        input.at("start")!=json::array({baseline.start.x,baseline.start.y}) ||
+        input.at("end")!=json::array({baseline.end.x,baseline.end.y}) || input.at("radians")!=baseline.sweep_radians)
+        invalid("Wall has unsupported or stale curve input provenance: "+id);
+    if (input.at("version")==2) {
+        const auto construction=input.at("construction").get<std::string>();
+        const auto measure=input.at("measure").get<std::string>();
+        const auto value=finite_number(input.at("measure_value"),"Curve measure");
+        Segment reconstructed;
+        if (construction=="angle") {
+            const auto angle=parse_angle(measure);
+            if (std::abs(angle.radians-value)>constraint_angular_tolerance_radians)
+                invalid("Curve angle receipt has inconsistent measure");
+            reconstructed=arc_from_chord_angle(baseline.start,baseline.end,value);
+        } else {
+            bool matches=false;
+            for (const auto unit : {Unit::metre,Unit::foot}) {
+                try { matches=matches || parse_quantity(measure,unit).metres==value; }
+                catch (const std::exception&) {}
+            }
+            if (!matches) invalid("Curve receipt has inconsistent exact measure");
+            if (construction=="arc_length")
+                reconstructed=arc_from_chord_arc_length(baseline.start,baseline.end,std::abs(value),input.at("clockwise").get<bool>());
+            else if (construction=="arc_height") reconstructed=arc_from_chord_height(baseline.start,baseline.end,value);
+            else invalid("Wall has unsupported curve construction: "+id);
+        }
+        if (std::abs(reconstructed.sweep_radians-baseline.sweep_radians)>constraint_angular_tolerance_radians)
+            invalid("Curve construction receipt does not reproduce its baseline: "+id);
+    }
+}
+json derived_angle_input(const json& source,const Segment& baseline) {
+    auto result=source;
+    const auto angle=angle_from_radians(baseline.sweep_radians);
+    result["version"]=2; result["construction"]="angle";
+    result["measure"]=angle.original_expression; result["normalized_measure"]=angle.normalized_expression;
+    result["measure_value"]=baseline.sweep_radians; result["clockwise"]=baseline.sweep_radians<0;
+    result["sweep"]=angle.original_expression; result["normalized_sweep"]=angle.normalized_expression;
+    result["radians"]=baseline.sweep_radians;
+    result["start"]={baseline.start.x,baseline.start.y}; result["end"]={baseline.end.x,baseline.end.y};
+    return result;
+}
+}
+
+void validate_wall_curve_input(const Entity& wall) {
+    const auto input=wall.extensions.find("curve_input");
+    const auto derivation=wall.extensions.find("curve_input_derivation");
+    if (input==wall.extensions.end()) {
+        if (derivation!=wall.extensions.end()) invalid("Curve derivation requires its active input: "+wall.id);
+        return;
+    }
+    const auto current=read_baseline(wall);
+    validate_input(*input,current,wall.id);
+    if (derivation==wall.extensions.end()) return;
+    const auto& proof=*derivation;
+    if (!proof.is_object() || proof.size()!=4 || proof.at("version")!=1 ||
+        !proof.at("operations").is_array() || proof.at("operations").empty())
+        invalid("Wall has unsupported curve input derivation: "+wall.id);
+    auto source=wall; source.properties["baseline"]=proof.at("source_baseline");
+    auto baseline=read_baseline(source);
+    validate_input(proof.at("source_input"),baseline,wall.id);
+    auto expected_input=proof.at("source_input");
+    for (const auto& operation : proof.at("operations")) {
+        const bool construction=operation.contains("input");
+        if (construction && (operation.size()!=2 || !operation.contains("baseline")))
+            invalid("Curve reconstruction operation contains unexpected fields");
+        source.properties["baseline"]=construction ? operation.at("baseline") : operation;
+        const auto next=read_baseline(source);
+        if ((!construction && next.sweep_radians!=baseline.sweep_radians) || next.sweep_radians==0)
+            invalid("Curve derivation changed its signed sweep");
+        (void)arc_from_chord_angle(next.start,next.end,next.sweep_radians);
+        if (construction) { validate_input(operation.at("input"),next,wall.id); expected_input=operation.at("input"); }
+        else expected_input=derived_angle_input(expected_input,next);
+        baseline=next;
+    }
+    if (!same_baseline(baseline,current) || *input!=expected_input)
+        invalid("Curve derivation does not reproduce its active geometry/input: "+wall.id);
+}
+
+void rebase_wall_curve_input(Entity& wall,const Segment& transformed) {
+    validate_wall_curve_input(wall);
+    auto input=wall.extensions.find("curve_input");
+    if (input==wall.extensions.end()) return;
+    const auto old=read_baseline(wall);
+    if (old.sweep_radians!=transformed.sweep_radians)
+        invalid("Endpoint editing must preserve its exact signed sweep: "+wall.id);
+    (void)arc_from_chord_angle(transformed.start,transformed.end,transformed.sweep_radians);
+    const auto chord=[](const Segment& b) { return std::hypot(b.end.x-b.start.x,b.end.y-b.start.y); };
+    const bool deformed=std::abs(chord(old)-chord(transformed))>constraint_linear_tolerance_metres;
+    auto proof=wall.extensions.find("curve_input_derivation");
+    const bool measured=input->at("version")==2 && input->at("construction")!="angle";
+    if (proof!=wall.extensions.end() || (deformed && measured)) {
+        if (proof==wall.extensions.end()) {
+            wall.extensions["curve_input_derivation"]={{"version",1},{"source_input",*input},
+                {"source_baseline",wall.properties.at("baseline")},{"operations",json::array()}};
+            proof=wall.extensions.find("curve_input_derivation");
+            input=wall.extensions.find("curve_input");
+        }
+        if (!deformed && measured) {
+            auto rebased=*input; rebased["start"]={transformed.start.x,transformed.start.y};
+            rebased["end"]={transformed.end.x,transformed.end.y};
+            (*proof)["operations"].push_back({{"baseline",baseline_json(transformed)},{"input",rebased}});
+            *input=std::move(rebased);
+        } else {
+            (*proof)["operations"].push_back(baseline_json(transformed));
+            *input=derived_angle_input(*input,transformed);
+        }
+    } else {
+        (*input)["start"]={transformed.start.x,transformed.start.y};
+        (*input)["end"]={transformed.end.x,transformed.end.y};
+    }
+}
+
+void preserve_wall_curve_construction(Entity& candidate,const Entity& source) {
+    if (!source.extensions.contains("curve_input_derivation")) return;
+    validate_wall_curve_input(source);
+    if (candidate.id!=source.id || candidate.type!="wall") invalid("Curve construction owner identity changed");
+    const auto next=read_baseline(candidate);
+    validate_input(candidate.extensions.at("curve_input"),next,candidate.id);
+    candidate.extensions["curve_input_derivation"]=source.extensions.at("curve_input_derivation");
+    candidate.extensions["curve_input_derivation"]["operations"].push_back(
+        {{"baseline",candidate.properties.at("baseline")},{"input",candidate.extensions.at("curve_input")}});
+    validate_wall_curve_input(candidate);
+}
+
+void validate_constraint_wall_geometry_transition(const std::map<std::string,Entity,std::less<>>& before,
+    const std::map<std::string,Entity,std::less<>>& after,bool qualified) {
+    for (const auto& [id,source] : before) {
+        const auto found=after.find(id);
+        if (source.type!="wall" || found==after.end() || found->second.type!="wall") continue;
+        // Legacy wall markers may contain only material/dimension metadata.
+        // They have no curve provenance to rebase; do not promote them into
+        // physical wall geometry during an unrelated entity edit.
+        if (!source.properties.contains("baseline")) {
+            if (source.extensions.contains("curve_input_derivation") ||
+                found->second.extensions.contains("curve_input_derivation"))
+                invalid("Curve derivation requires its original baseline: "+id);
+            continue;
+        }
+        const auto& source_baseline=source.properties.at("baseline");
+        if (!source.extensions.contains("curve_input_derivation") &&
+            !found->second.extensions.contains("curve_input_derivation") &&
+            (!source_baseline.is_object() || !source_baseline.contains("sweep_radians") ||
+             !source_baseline.at("sweep_radians").is_number() ||
+             source_baseline.at("sweep_radians")==0.0)) continue;
+        const auto old=read_baseline(source); const auto next=read_baseline(found->second);
+        const bool derived=source.extensions.contains("curve_input_derivation");
+        if (!derived && found->second.extensions.contains("curve_input_derivation")) {
+            const auto& proof=found->second.extensions.at("curve_input_derivation");
+            if (!qualified || !source.extensions.contains("curve_input") ||
+                proof.at("source_input")!=source.extensions.at("curve_input") ||
+                proof.at("source_baseline")!=source.properties.at("baseline"))
+                invalid("New curve derivation must replay its exact source input through a typed proof: "+id);
+        }
+        if (derived && !found->second.extensions.contains("curve_input_derivation"))
+            invalid("Wall edit cannot discard original curve input derivation: "+id);
+        if (derived && source.extensions.at("curve_input_derivation").at("source_input")!=
+            found->second.extensions.at("curve_input_derivation").at("source_input"))
+            invalid("Wall edit cannot rewrite original curve construction input: "+id);
+        bool reconstruction_proof=false;
+        if (derived) {
+            const auto& previous=source.extensions.at("curve_input_derivation");
+            const auto& proof=found->second.extensions.at("curve_input_derivation");
+            if (previous.at("source_baseline")!=proof.at("source_baseline") ||
+                proof.at("operations").size()<previous.at("operations").size())
+                invalid("Wall edit cannot discard source curve derivation");
+            for (std::size_t i=0;i<previous.at("operations").size();++i)
+                if (previous.at("operations").at(i)!=proof.at("operations").at(i))
+                    invalid("Wall edit cannot rewrite prior curve derivation operations");
+            reconstruction_proof=proof.at("operations").size()==previous.at("operations").size()+1 &&
+                proof.at("operations").back().contains("input");
+            if (!qualified && reconstruction_proof) { validate_wall_curve_input(found->second); continue; }
+            if (!qualified && same_baseline(old,next) && proof!=previous)
+                invalid("Unchanged curve geometry cannot rewrite its derivation");
+        }
+        if (old.sweep_radians==0 || next.sweep_radians!=old.sweep_radians || same_baseline(old,next)) continue;
+        const bool deformed=std::abs(std::hypot(old.end.x-old.start.x,old.end.y-old.start.y)-
+            std::hypot(next.end.x-next.start.x,next.end.y-next.start.y))>constraint_linear_tolerance_metres;
+        if (deformed && !qualified && !derived && found->second.extensions.contains("curve_input_derivation"))
+            invalid("New curve endpoint derivation requires a typed wall proof: "+id);
+        bool constrained=false;
+        for (const auto& [relation_id,entity] : before) {
+            if (entity.type!="constraint" || !after.contains(relation_id) || after.at(relation_id).type!="constraint") continue;
+            const auto decoded=decode_constraint_entity(entity);
+            if (decoded.constraint && std::any_of(decoded.constraint->bindings.begin(),decoded.constraint->bindings.end(),
+                [&](const auto& binding) { return binding.owner_id==id; })) { constrained=true; break; }
+        }
+        if (deformed && !qualified && !derived) {
+            const auto input=found->second.extensions.find("curve_input");
+            if (input!=found->second.extensions.end()) validate_wall_curve_input(found->second);
+            bool reconstruction=false;
+            const auto original=source.extensions.find("curve_input");
+            if (input!=found->second.extensions.end() && original!=source.extensions.end()) {
+                for (const auto* key : {"construction","measure","measure_value"})
+                    if (input->contains(key) && original->contains(key) && input->at(key)!=original->at(key)) reconstruction=true;
+            }
+            if (constrained && !reconstruction) invalid("Constrained curved endpoint deformation requires a typed wall proof: "+id);
+            // Explicit construction of an unconstrained curve keeps the normal
+            // editor workflow. Its new input was independently reconstructed.
+            if (!constrained || reconstruction) continue;
+        }
+        if (deformed && !qualified && derived) invalid("Derived curve endpoint deformation requires a typed wall proof: "+id);
+        auto expected=source; rebase_wall_curve_input(expected,next);
+        for (const auto* key : {"curve_input","curve_input_derivation"}) {
+            const auto expected_value=expected.extensions.find(key); const auto value=found->second.extensions.find(key);
+            if ((expected_value==expected.extensions.end())!=(value==found->second.extensions.end()) ||
+                (expected_value!=expected.extensions.end() && *expected_value!=*value))
+                invalid("Wall endpoint edit did not retain its curve provenance: "+id);
+        }
+    }
+}
+
+namespace {
 bool valid_wall_identifier(const std::string& id) {
     return !id.empty() && id.size() <= 128 &&
         std::all_of(id.begin(),id.end(),[](unsigned char c) {
@@ -231,12 +455,15 @@ bool valid_wall_identifier(const std::string& id) {
 void validate_edit(const ConstraintWallGeometryEdit& edit) {
     const auto& b = edit.baseline;
     const auto baseline_length = std::hypot(b.end.x-b.start.x,b.end.y-b.start.y);
-    if (!valid_wall_identifier(edit.wall_id) || b.sweep_radians != 0.0 ||
+    if (!valid_wall_identifier(edit.wall_id) || (edit.version!=1 && edit.version!=2) ||
+        (edit.version==1 ? b.sweep_radians!=0.0 : b.sweep_radians==0.0) || !std::isfinite(b.sweep_radians) ||
         !std::isfinite(b.start.x) || !std::isfinite(b.start.y) ||
         !std::isfinite(b.end.x) || !std::isfinite(b.end.y) ||
         !std::isfinite(baseline_length) || baseline_length <= constraint_linear_tolerance_metres)
-        invalid("Wall constraint edit requires an identified finite straight nondegenerate baseline");
+        invalid("Wall constraint edit requires an identified finite versioned nondegenerate baseline");
+    if (edit.version==2) (void)arc_from_chord_angle(b.start,b.end,b.sweep_radians);
     if (edit.length_entry) {
+        if (edit.version!=1) invalid("Curved endpoint edits cannot contain straight length entries");
         const auto length = normalize_positive_quantity(*edit.length_entry);
         if (std::abs(std::hypot(b.end.x-b.start.x,b.end.y-b.start.y)-length.metres) >
             constraint_linear_tolerance_metres)
@@ -256,8 +483,9 @@ Entity replay_constraint_wall_edit(const Entity& source, const ConstraintWallGeo
     if (source.id != edit.wall_id || source.type != "wall")
         invalid("Wall constraint edit owner is not its original wall");
     const auto old = read_baseline(source);
-    if (old.sweep_radians != 0.0)
-        invalid("Wall constraint solving requires an entirely straight wall");
+    if ((edit.version==1 && old.sweep_radians!=0.0) ||
+        (edit.version==2 && (old.sweep_radians==0.0 || old.sweep_radians!=edit.baseline.sweep_radians)))
+        invalid("Wall constraint proof must preserve the source signed sweep");
     const auto near = [](Vec2 a, Vec2 b) {
         return std::hypot(a.x-b.x,a.y-b.y) <= constraint_linear_tolerance_metres;
     };
@@ -266,7 +494,9 @@ Entity replay_constraint_wall_edit(const Entity& source, const ConstraintWallGeo
     auto result = source;
     validate_or_clear_length_receipt(result, edit.length_entry.has_value(),
         edit.length_entry ? &*edit.length_entry : nullptr, edit.baseline);
+    if (edit.version==2) rebase_wall_curve_input(result,edit.baseline);
     set_baseline(result, edit.baseline);
+    if (edit.version==2) validate_wall_curve_input(result);
     return result;
 }
 
@@ -280,15 +510,22 @@ nlohmann::json encode_constraint_wall_edit(const ConstraintWallGeometryEdit& edi
         receipt = {{"original_expression",q.original_expression}, {"entered_unit",unit_name(q.entered_unit)},
             {"exact_metres",{{"numerator",q.exact_metres.numerator},{"denominator",q.exact_metres.denominator}}}};
     }
-    return {{"wall_id",edit.wall_id},{"baseline",b},{"length_entry",receipt}};
+    json result={{"wall_id",edit.wall_id},{"baseline",b},{"length_entry",receipt}};
+    if (edit.version==2) result["version"]=2;
+    return result;
 }
 
 ConstraintWallGeometryEdit decode_constraint_wall_edit(const nlohmann::json& value) {
-    exact_fields(value,{"wall_id","baseline","length_entry"});
+    if (value.contains("version")) {
+        exact_fields(value,{"version","wall_id","baseline","length_entry"});
+        if (!value.at("version").is_number_integer() || value.at("version")!=2)
+            invalid("Unsupported wall constraint proof version");
+    } else exact_fields(value,{"wall_id","baseline","length_entry"});
     exact_fields(value.at("baseline"),{"start","end","sweep_radians"});
     if (!value.at("wall_id").is_string()) invalid("Wall constraint owner ID must be a string");
     Entity temporary{value.at("wall_id").get<std::string>(),"wall",{{"baseline",value.at("baseline")}}};
     ConstraintWallGeometryEdit result{temporary.id,read_baseline(temporary),std::nullopt};
+    result.version=value.contains("version") ? 2 : 1;
     const auto& entry = value.at("length_entry");
     if (!entry.is_null()) {
         exact_fields(entry,{"original_expression","entered_unit","exact_metres"});

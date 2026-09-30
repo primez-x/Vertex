@@ -1,4 +1,5 @@
 #include "sketch/constraint_authoring.hpp"
+#include "sketch/constraint_wall_edit.hpp"
 #include "sketch/boundary_entity.hpp"
 #include "sketch/boundary_dimension.hpp"
 #include "sketch/boundary_receipt.hpp"
@@ -947,7 +948,7 @@ void test_boundary_horizontal_authoring() {
     require(!preview_constraint_authoring(before, bad_binding).accepted(), "incorrect stable vertex binding accepted");
     boundary.segments[0].segment.sweep_radians = 0.2;
     auto curved = Document::create({encode_identified_boundary_entity(boundary)});
-    require(!preview_constraint_authoring(curved.snapshot(), intent).accepted(), "curved boundary constraint accepted");
+    require_accepted(preview_constraint_authoring(curved.snapshot(), intent), "curved boundary chord constraint rejected");
 }
 
 void test_boundary_cross_relations_and_fixed_length() {
@@ -1250,13 +1251,13 @@ void test_persisted_component_analysis_excludes_edit_pins() {
     require(!analyze_persistent_constraint_component(candidate,{"measure"}).supported,
         "ambiguous endpoint roles must not produce a partial number");
     candidate = before.entities(); candidate.at("measure").properties["segments"][0]["sweep_radians"] = 0.2;
-    require(!analyze_persistent_constraint_component(candidate,{"measure"}).supported &&
+    require(analyze_persistent_constraint_component(candidate,{"measure"}).supported &&
         !analyze_persistent_constraint_component(before,{"missing"}).supported &&
         !analyze_persistent_constraint_component(before,{}).supported,
-        "curved owners and missing seeds must be explicitly unavailable");
+        "missing seeds must be explicitly unavailable");
     candidate = before.entities(); candidate.emplace("curve",wall("curve",{0,0},{1,0},0.2));
-    require(!analyze_persistent_constraint_component(candidate,{"curve"}).supported,
-        "curved wall endpoints must remain unavailable until a correct curve formulation exists");
+    require(analyze_persistent_constraint_component(candidate,{"curve"}).supported,
+        "curved wall endpoint rank must be available at fixed sweep");
     require(document.snapshot().entities() == before.entities() && document.revision() == before.revision() &&
         document.snapshot().history().size() == before.history().size() && document.snapshot().saved_revision_optional() == before.saved_revision_optional(),
         "all persistent analysis paths must leave revision, history, entities and saved state unchanged");
@@ -1375,29 +1376,24 @@ void test_mixed_boundary_wall_authoring_and_resize() {
     auto arc = decode_identified_boundary_entity(arc_owner);
     arc.segments.front().segment.sweep_radians = 0.2;
     arc_owner = encode_identified_boundary_entity(arc,&arc_owner);
-    const auto require_curved_relation_rejected = [&](const Entity& boundary_owner, const Entity& wall_owner) {
-        bool rejected = false;
-        try { (void)Document::create({boundary_owner,wall_owner,coincident}); }
-        catch (const std::exception& error) {
-            rejected = std::string(error.what()).find("straight") != std::string::npos;
-        }
-        require(rejected,"persisted mixed relations must reject curved endpoint owners at document construction");
+    const auto require_curved_relation_supported = [&](const Entity& boundary_owner, const Entity& wall_owner) {
+        auto curved_document=Document::create({boundary_owner,wall_owner,coincident});
+        require(curved_document.snapshot().entities().at("join")==coincident,
+            "persisted curved endpoint relationship changed meaning");
     };
-    require_curved_relation_rejected(arc_owner,wall("wall",{3,0},{6,0}));
-    require_curved_relation_rejected(owner,wall("wall",{3,0},{6,0},0.2));
+    require_curved_relation_supported(arc_owner,wall("wall",{3,0},{6,0}));
+    require_curved_relation_supported(owner,wall("wall",{3,0},{6,0},0.2));
     // Curved owners can exist without endpoint constraints. Attempt the mixed
     // relation through authoring so its refusal is exercised before persistence.
     auto curved_boundary = Document::create({arc_owner,wall("wall",{3,0},{6,0})});
     const auto curved_boundary_before = curved_boundary.snapshot();
     const auto curved_boundary_preview = preview_constraint_authoring(curved_boundary_before,join);
-    require(!curved_boundary_preview.accepted(),
-        "mixed component must not flatten a curved boundary");
-    require_rejected_unchanged(curved_boundary,curved_boundary_preview,"curved boundary authoring refusal applied");
+    require_accepted(curved_boundary_preview,"mixed curved boundary endpoint relation rejected");
+    require(curved_boundary_preview.candidate_entities().at("area")==arc_owner,"mixed component flattened curved boundary");
     auto curved_wall = Document::create({owner,wall("wall",{3,0},{6,0},0.2)});
     const auto curved_wall_preview = preview_constraint_authoring(curved_wall.snapshot(),join);
-    require(!curved_wall_preview.accepted(),
-        "mixed component must not flatten a curved wall");
-    require_rejected_unchanged(curved_wall,curved_wall_preview,"curved wall authoring refusal applied");
+    require_accepted(curved_wall_preview,"mixed curved wall endpoint relation rejected");
+    require(baseline(curved_wall_preview.candidate_entities().at("wall")).sweep_radians==0.2,"mixed component flattened curved wall");
     auto misplaced = owner;
     misplaced.properties["floor_id"] = "floor";
     auto unresolved = Document::create({misplaced,wall("wall",{3,0},{6,0}),coincident,
@@ -1511,7 +1507,7 @@ void test_boundary_resize_canonical_shape_and_related_owners() {
     auto curved_shape = shape;
     curved_shape.segments[1].segment.sweep_radians = 0.1;
     auto curved = Document::create({encode_identified_boundary_entity(curved_shape)});
-    require(!preview_constraint_authoring(curved.snapshot(),intent).accepted(),"boundary resize must refuse any curved selected edge owner");
+    require_accepted(preview_constraint_authoring(curved.snapshot(),intent),"boundary resize must retain unrelated owner arc");
     intent.wall_resize = WallResizeIntent{"wall",parse_quantity("3 m")};
     require(!preview_constraint_authoring(detached_before,intent).accepted(),"concurrent wall and boundary resize must reject");
     intent.wall_resize.reset();
@@ -1541,6 +1537,142 @@ void test_boundary_resize_canonical_shape_and_related_owners() {
         {"floor","floor",{{"name","Floor"},{"building_id","building"}}}});
     require(!preview_constraint_authoring(unresolved.snapshot(),intent).accepted(),
         "boundary resize must refuse unresolved explicit drawing context");
+}
+
+void test_curved_endpoint_relations_and_typed_propagation() {
+    for (const auto kind : {ConstraintRelationKind::horizontal, ConstraintRelationKind::vertical,
+            ConstraintRelationKind::coincident, ConstraintRelationKind::fixed_length,
+            ConstraintRelationKind::parallel, ConstraintRelationKind::perpendicular,
+            ConstraintRelationKind::fixed_anchor}) {
+        auto document=Document::create({wall("arc",{0,0},{4,0},0.6),
+            wall("vertical",{4,0},{4,3},-0.4),wall("parallel",{0,6},{4,6},0.3)});
+        auto value=relation("curve-lock",kind,{endpoint("arc",WallEndpointRole::start),endpoint("arc",WallEndpointRole::end)});
+        if (kind==ConstraintRelationKind::vertical)
+            value.bindings={endpoint("vertical",WallEndpointRole::start),endpoint("vertical",WallEndpointRole::end)};
+        else if (kind==ConstraintRelationKind::coincident)
+            value.bindings={endpoint("arc",WallEndpointRole::end),endpoint("vertical",WallEndpointRole::start)};
+        else if (kind==ConstraintRelationKind::fixed_length) value.length=parse_quantity("4 m");
+        else if (kind==ConstraintRelationKind::fixed_anchor) { value.bindings.resize(1); value.anchor=Vec2{0,0}; }
+        else if (kind==ConstraintRelationKind::parallel || kind==ConstraintRelationKind::perpendicular) {
+            const auto other=kind==ConstraintRelationKind::parallel ? "parallel" : "vertical";
+            value.bindings.push_back(endpoint(other,WallEndpointRole::start));
+            value.bindings.push_back(endpoint(other,WallEndpointRole::end));
+        }
+        const auto before=document.snapshot();
+        ConstraintAuthoringIntent intent;
+        intent.relation_mutations={ConstraintRelationMutation::upsert(value)};
+        const auto preview=preview_constraint_authoring(before,intent);
+        require_accepted(preview,"already-satisfied chord relation on curved endpoints rejected");
+        (void)apply_constraint_authoring(document,preview);
+        require(document.snapshot().entities().at("arc")==before.entities().at("arc"),"curved relation flattened or moved owner");
+        require(segment_length(baseline(document.snapshot().entities().at("arc")))>4,
+            "fixed endpoint distance was reinterpreted as arc length");
+        require(analyze_persistent_constraint_component(document.snapshot(),{"arc"}).supported,
+            "curved endpoint component rank must be available");
+    }
+    auto owner=encode_identified_boundary_entity(IdentifiedBoundary{"area","measurement_boundary",{
+        {"ab","a","b",{{0,0},{3,0},0.2}}, {"bc","b","c",{{3,0},{3,2},0}},
+        {"cd","c","d",{{3,2},{0,2},0}}, {"da","d","a",{{0,2},{0,0},0}}}});
+    const auto curved_baseline=arc_from_chord_height({3,0},{6,0},0.25);
+    auto arc=wall("arc",{3,0},{6,0},curved_baseline.sweep_radians);
+    const auto sweep=angle_from_radians(curved_baseline.sweep_radians);
+    arc.extensions["curve_input"]={{"version",2},{"construction","arc_height"},{"measure","0.25 m"},
+        {"normalized_measure","0.25 m"},{"measure_value",0.25},{"clockwise",false},
+        {"start",{3,0}},{"end",{6,0}},{"sweep",sweep.original_expression},{"normalized_sweep",sweep.normalized_expression},
+        {"radians",curved_baseline.sweep_radians},{"vendor",{{"retain",17}}}};
+    const auto original_input=arc.extensions.at("curve_input");
+    const auto join=encode_constraint_entity(relation("join",ConstraintRelationKind::coincident,
+        {{"area",WallEndpointRole::end,"ab","b"},endpoint("arc",WallEndpointRole::start)}));
+    auto document=Document::create({owner,arc,join,opening("door","arc",0.3,0.5)});
+    const auto before=document.snapshot();
+    ConstraintAuthoringIntent intent;
+    intent.boundary_vertex_move=BoundaryVertexMoveIntent{{"area",BoundaryGeometryEditKind::move_vertex,"b",{4,0.5}},true};
+    const auto preview=preview_constraint_authoring(before,intent);
+    require_accepted(preview,"curved mixed endpoint propagation rejected");
+    require_near(baseline(preview.candidate_entities().at("arc")).start.x,4,1e-7,"curved wall endpoint did not follow");
+    require(baseline(preview.candidate_entities().at("arc")).sweep_radians==curved_baseline.sweep_radians,
+        "connected endpoint solve changed signed sweep");
+    require(preview.candidate_entities().at("arc").extensions.at("curve_input_derivation").at("source_input")==original_input,
+        "nonrigid curved edit lost original construction receipt or opaque metadata");
+    (void)apply_constraint_authoring(document,preview);
+    require(command_to_json(Command{*document.snapshot().history().back().boundary_constraint_changes}).at("version")==3,
+        "curved typed replay requires command version three");
+    const auto after=document.snapshot();
+    document.undo(document.revision()); require(document.snapshot().entities()==before.entities(),"curved transaction undo split state");
+    document.redo(document.revision()); require(document.snapshot().entities()==after.entities(),"curved transaction redo differs");
+    auto restored=Document::fork(after); require(restored.snapshot().entities()==after.entities(),"curved proof replay differs");
+    // A subsequent explicit construction is a complete independently checked
+    // input, not an endpoint-only payload. It may follow a derived curve, but
+    // it must retain the source archive and every prior operation.
+    auto next_baseline=baseline(after.entities().at("arc"));
+    next_baseline.end.x+=0.5;
+    const auto second=replay_constraint_wall_edit(after.entities().at("arc"),
+        {"arc",next_baseline,std::nullopt,2});
+    bool endpoint_payload_rejected=false;
+    try { auto copy=Document::fork(after); copy.apply(ApplyEntityChanges{copy.revision(),
+        {EntityChange::upsert(second)}, {},"unqualified derived endpoint payload"}); }
+    catch (const DocumentError&) { endpoint_payload_rejected=true; }
+    require(endpoint_payload_rejected,"derived endpoint-only payload must require its typed proof");
+    auto construction=second;
+    auto& operation=construction.extensions["curve_input_derivation"]["operations"].back();
+    operation={{"baseline",construction.properties.at("baseline")},
+        {"input",construction.extensions.at("curve_input")}};
+    auto explicit_document=Document::fork(after);
+    explicit_document.apply(ApplyEntityChanges{explicit_document.revision(),
+        {EntityChange::upsert(construction)}, {},"explicit full curve construction"});
+    require(explicit_document.snapshot().entities().at("arc").extensions.at("curve_input_derivation").at("source_input")==original_input,
+        "explicit reconstruction must retain the original measured construction");
+    require(Document::fork(explicit_document.snapshot()).snapshot().entities()==explicit_document.snapshot().entities(),
+        "explicit reconstruction history must independently replay");
+
+    for (const auto unit : {Unit::metre,Unit::foot}) {
+        const auto quantity=parse_quantity("5",unit);
+        const auto source_baseline=arc_from_chord_arc_length({0,0},{1,0},quantity.metres,false);
+        auto measured=wall("measured",{0,0},{1,0},source_baseline.sweep_radians);
+        const auto angle=angle_from_radians(source_baseline.sweep_radians);
+        measured.extensions["curve_input"]={{"version",2},{"construction","arc_length"},{"measure","5"},
+            {"normalized_measure",format_quantity(quantity,Unit::metre)},{"measure_value",quantity.metres},
+            {"clockwise",false},{"start",{0,0}},{"end",{1,0}},{"radians",source_baseline.sweep_radians},
+            {"sweep",angle.original_expression},{"normalized_sweep",angle.normalized_expression}};
+        auto measured_document=Document::create({measured});
+        auto horizontal=relation("level",ConstraintRelationKind::horizontal,
+            {endpoint("measured",WallEndpointRole::start),endpoint("measured",WallEndpointRole::end)});
+        ConstraintAuthoringIntent add;
+        add.relation_mutations={ConstraintRelationMutation::upsert(horizontal)};
+        require_accepted(preview_constraint_authoring(measured_document.snapshot(),add),
+            "implicit metric/foot curve receipt must validate against stored SI value");
+    }
+    auto wall_document=Document::create({wall("curve",{0,0},{4,0},0.6),
+        encode_constraint_entity(relation("level",ConstraintRelationKind::horizontal,
+            {endpoint("curve",WallEndpointRole::start),endpoint("curve",WallEndpointRole::end)}))});
+    const auto wall_before=wall_document.snapshot();
+    auto distance=relation("distance",ConstraintRelationKind::fixed_length,
+        {endpoint("curve",WallEndpointRole::start),endpoint("curve",WallEndpointRole::end)});
+    distance.length=parse_quantity("5 m");
+    ConstraintAuthoringIntent resize_chord;
+    resize_chord.relation_anchor=endpoint("curve",WallEndpointRole::start);
+    resize_chord.relation_mutations={ConstraintRelationMutation::upsert(distance)};
+    const auto wall_preview=preview_constraint_authoring(wall_before,resize_chord);
+    require_accepted(wall_preview,"wall-only fixed chord solve rejected");
+    (void)apply_constraint_authoring(wall_document,wall_preview);
+    const auto wall_after=wall_document.snapshot();
+    require(wall_after.history().back().boundary_constraint_changes.has_value() &&
+        wall_after.history().back().boundary_constraint_changes->boundary_edits.empty(),
+        "wall-only curved solve must retain its typed proof without invented boundary edits");
+    auto raw_wall=wall_after.entities().at("curve");
+    bool rejected=false;
+    try { auto raw=Document::fork(wall_before); raw.apply(ApplyEntityChanges{raw.revision(),{EntityChange::upsert(raw_wall)}, {},"raw endpoint"}); }
+    catch (const DocumentError&) { rejected=true; }
+    require(rejected,"raw wall payload laundered a constrained curved endpoint solve");
+    auto missing=wall_after;
+    const_cast<std::vector<RevisionRecord>&>(missing.history()).back().boundary_constraint_changes.reset();
+    rejected=false;
+    try { (void)Document::fork(missing); } catch (const DocumentError&) { rejected=true; }
+    require(rejected,"history accepted curved endpoint deformation with missing proof");
+    const auto crossing=segment_intersection({{0,0},{4,0},1.0},{{2,-2},{2,1},0});
+    require(crossing.kind==SegmentIntersectionKind::proper,"analytical arc/line crossing was treated as its chord");
+    const auto overlap=segment_intersection({{0,0},{4,0},1.0},{{0,0},{4,0},1.0});
+    require(overlap.kind==SegmentIntersectionKind::overlap,"coincident analytical arcs were not recognized as overlap");
 }
 
 void test_boundary_vertex_move_propagates_explicit_relations() {
@@ -1627,7 +1759,7 @@ void test_boundary_vertex_move_propagates_explicit_relations() {
     auto curved_shape = shape;
     curved_shape.segments[2].segment.sweep_radians = 0.1;
     auto curved = Document::create({encode_identified_boundary_entity(curved_shape)});
-    require(!preview_constraint_authoring(curved.snapshot(),intent).accepted(),"vertex solve must refuse curved selected owner");
+    require_accepted(preview_constraint_authoring(curved.snapshot(),intent),"vertex solve must support fixed-sweep curved owner");
     intent.boundary_vertex_move->edit.target_id = "missing";
     require(!preview_constraint_authoring(detached_before,intent).accepted(),"vertex move must reject missing stable target");
     intent.boundary_vertex_move->edit = edit;
@@ -1646,6 +1778,7 @@ void test_boundary_vertex_move_propagates_explicit_relations() {
 int main() {
     sketch::testing::noninteractive_errors();
     try {
+        test_curved_endpoint_relations_and_typed_propagation();
         test_boundary_vertex_move_propagates_explicit_relations();
         test_boundary_resize_canonical_shape_and_related_owners();
         test_mixed_boundary_wall_authoring_and_resize();

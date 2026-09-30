@@ -2127,6 +2127,10 @@
     },
     {
       "category": "docs",
+      "path": "docs/superpowers/plans/2026-09-30-curved-constraint-editing.md"
+    },
+    {
+      "category": "docs",
       "path": "docs/superpowers/plans/2026-09-30-measurement-group-movement.md"
     },
     {
@@ -2152,6 +2156,10 @@
     {
       "category": "docs",
       "path": "docs/verification/cad-hosted-exchange-2026-09-29.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/verification/curved-constraint-editing-2026-09-30.md"
     },
     {
       "category": "docs",

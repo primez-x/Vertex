@@ -1,11 +1,13 @@
 #include "sketch/desktop/constraint_preview_canvas.hpp"
 
 #include <QPainter>
+#include <QPainterPath>
 #include <QPen>
 
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <numbers>
 #include <stdexcept>
 #include <utility>
 
@@ -26,8 +28,8 @@ void ConstraintPreviewCanvas::setWalls(std::vector<WallPreviewDrawing> walls) {
         for (const auto point : {wall.before.start, wall.before.end, wall.after.start, wall.after.end})
             if (!std::isfinite(point.x) || !std::isfinite(point.y))
                 throw std::invalid_argument("Wall preview coordinates must be finite");
-        if (wall.before.sweep_radians != 0.0 || wall.after.sweep_radians != 0.0)
-            throw std::invalid_argument("Wall constraint preview requires straight baselines");
+        (void)segment_bounds(wall.before);
+        (void)segment_bounds(wall.after);
     }
     m_walls = std::move(walls);
     update();
@@ -36,8 +38,9 @@ void ConstraintPreviewCanvas::setWalls(std::vector<WallPreviewDrawing> walls) {
 void ConstraintPreviewCanvas::paintEvent(QPaintEvent*) {
     QPainter painter(this);
     painter.setRenderHint(QPainter::Antialiasing);
-    painter.fillRect(rect(), QColor("#17212d"));
-    painter.setPen(QColor("#d2dbe6"));
+    const bool light = palette().color(QPalette::Base).lightness() > 128;
+    painter.fillRect(rect(), palette().color(QPalette::Base));
+    painter.setPen(palette().color(QPalette::Text));
     if (m_walls.empty()) {
         painter.drawText(rect().adjusted(16, 16, -16, -16), Qt::AlignCenter | Qt::TextWordWrap,
                          QStringLiteral("Choose an edit, then Preview to inspect wall movement."));
@@ -48,9 +51,10 @@ void ConstraintPreviewCanvas::paintEvent(QPaintEvent*) {
     double max_x = -min_x;
     double max_y = -min_x;
     for (const auto& wall : m_walls)
-        for (const auto p : {wall.before.start, wall.before.end, wall.after.start, wall.after.end}) {
-            min_x = std::min(min_x, p.x); max_x = std::max(max_x, p.x);
-            min_y = std::min(min_y, p.y); max_y = std::max(max_y, p.y);
+        for (const auto& segment : {wall.before, wall.after}) {
+            const auto bounds = segment_bounds(segment);
+            min_x = std::min(min_x, bounds.minimum.x); max_x = std::max(max_x, bounds.maximum.x);
+            min_y = std::min(min_y, bounds.minimum.y); max_y = std::max(max_y, bounds.maximum.y);
         }
     const auto span_x = max_x - min_x;
     const auto span_y = max_y - min_y;
@@ -65,23 +69,43 @@ void ConstraintPreviewCanvas::paintEvent(QPaintEvent*) {
         return QPointF(viewport.center().x() + ((p.x - min_x) - span_x * 0.5) * scale,
                        viewport.center().y() - ((p.y - min_y) - span_y * 0.5) * scale);
     };
+    const auto path = [&](const Segment& segment) {
+        QPainterPath result;
+        result.moveTo(project(segment.start));
+        if (segment.sweep_radians == 0.0) {
+            result.lineTo(project(segment.end));
+        } else {
+            const auto dx = segment.end.x - segment.start.x;
+            const auto dy = segment.end.y - segment.start.y;
+            const auto chord = std::hypot(dx, dy);
+            const auto offset = chord / (2.0 * std::tan(segment.sweep_radians / 2.0));
+            const Vec2 center{segment.start.x + dx * 0.5 - dy / chord * offset,
+                segment.start.y + dy * 0.5 + dx / chord * offset};
+            const auto radius = chord / (2.0 * std::sin(std::abs(segment.sweep_radians / 2.0))) * scale;
+            const auto screen_center = project(center);
+            const auto start = std::atan2(segment.start.y - center.y, segment.start.x - center.x);
+            result.arcTo(QRectF(screen_center.x() - radius, screen_center.y() - radius, 2 * radius, 2 * radius),
+                start * 180.0 / std::numbers::pi, segment.sweep_radians * 180.0 / std::numbers::pi);
+        }
+        return result;
+    };
     painter.drawText(QRectF(12, 7, width() - 24, 48), Qt::AlignLeft | Qt::TextWordWrap,
                      QStringLiteral("Current: dashed   Proposed: blue   Fixed endpoint: ring"));
     for (const auto& wall : m_walls) {
-        painter.setPen(QPen(QColor("#a1acb9"), 6.0, Qt::DashLine));
-        painter.drawLine(project(wall.before.start), project(wall.before.end));
+        painter.setPen(QPen(QColor(light ? "#8793a2" : "#a1acb9"), 4.0, Qt::DashLine));
+        painter.drawPath(path(wall.before));
     }
     for (const auto& wall : m_walls) {
-        painter.setPen(QPen(QColor("#69b9ff"), 2.5));
-        painter.drawLine(project(wall.after.start), project(wall.after.end));
-        painter.setBrush(QColor("#69b9ff"));
+        painter.setPen(QPen(QColor(light ? "#2563eb" : "#69b9ff"), 2.5));
+        painter.drawPath(path(wall.after));
+        painter.setBrush(QColor(light ? "#2563eb" : "#69b9ff"));
         for (const auto p : {wall.after.start, wall.after.end}) painter.drawEllipse(project(p), 3, 3);
         painter.setBrush(Qt::NoBrush);
         for (const auto& pair : {std::pair{wall.before.start, wall.after.start},
                                  std::pair{wall.before.end, wall.after.end}})
             if (pair.first.x == pair.second.x && pair.first.y == pair.second.y)
                 painter.drawEllipse(project(pair.second), 6, 6);
-        painter.setPen(QPen(QColor("#c5ced9"), 1.5));
+        painter.setPen(QPen(QColor(light ? "#526579" : "#c5ced9"), 1.5));
         for (const auto p : {wall.before.start, wall.before.end})
             painter.drawRect(QRectF(project(p) - QPointF(4, 4), QSizeF(8, 8)));
     }

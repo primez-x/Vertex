@@ -1,4 +1,5 @@
 #include "sketch/project_exchange.hpp"
+#include "sketch/project_store.hpp"
 #include "sketch/boundary_translation.hpp"
 #include "sketch/boundary_transform.hpp"
 #include "sketch/boundary_edit.hpp"
@@ -558,7 +559,7 @@ void extract_project(const DocumentSnapshot &snapshot,
                                      ? Json(*snapshot.saved_revision_optional())
                                      : Json(nullptr);
     Json result = {{"exchange_format", "vertex-json-assets"},
-                   {"exchange_version", 1},
+                   {"exchange_version", ProjectStore::required_format_version(snapshot) >= 10 ? 7 : 1},
                    {"document", std::move(document)},
                    {"revisions", Json::array()}};
     std::set<std::string> written_assets;

@@ -28,7 +28,7 @@ struct PersistentConstraintComponentAnalysis {
     std::vector<std::string> diagnostics;
 };
 
-// Local freedom of straight owner endpoint coordinates under persisted
+// Local freedom of owner endpoint coordinates at fixed signed sweeps under persisted
 // relations only. No edit anchors, frozen neighbors, implicit coincidence,
 // wall-join union, thickness or height variables participate. Multiple seeds
 // allow before/after reports to use the same owner universe after removal.
@@ -83,7 +83,8 @@ struct ConstraintRelationMutation {
 // solves. With no relation anchor, affected geometry is frozen and an upsert
 // succeeds only when the current geometry already satisfies the relation.
 // Removal-only intents always preserve geometry. Connected movement includes
-// straight identified boundary owners reached through explicit relations.
+// identified boundary owners reached through explicit relations. Orientation
+// relations use endpoint/chord directions; fixed_length is endpoint distance.
 struct ConstraintAuthoringIntent {
     std::optional<WallResizeIntent> wall_resize;
     std::vector<ConstraintRelationMutation> relation_mutations;

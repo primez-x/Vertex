@@ -1,4 +1,4 @@
-# Vertex project formats v1 through v8
+# Vertex project formats v1 through v10
 
 ## Circular column selection orientation
 
@@ -42,8 +42,9 @@ identified boundary. Both SQLite `user_version` and `metadata.format_version`
 must agree, and the logical digest includes that version. The reader accepts
 v1 legacy history, v2 identity history, v3 construction-receipt history, v5
 translation history, v6 transform history, v7 boundary-coordinate edit
-history, and v8 boundary-constraint transactions, plus v4 through v8 archives through recovery-aware APIs.
-Under-versioned semantic data and versions above 8 reject. Legacy-only history
+history, v8 boundary-constraint transactions, v9 measured group translations,
+and v10 curved endpoint constraints, plus v4 through v10 archives through recovery-aware APIs.
+Under-versioned semantic data and versions above 10 reject. Legacy-only history
 is still written as v1. Unknown boundary entity
 versions in v2 remain preserved read-only. See `boundary-entity-format.md`.
 Version 2 also recognizes `dimension` entities. Segment-length dimensions refer
@@ -434,7 +435,7 @@ unknown project `format_version` is rejected rather than opened unsafely.
 ## SQLite schema
 
 The SQLite `application_id` is `0x50535444` (`PSTD`). `user_version` and metadata
-`format_version` are equal and range from `1` through `9`, according to the
+`format_version` are equal and range from `1` through `10`, according to the
 retained semantics. The baseline application tables below are shared; later
 versions add the proof columns and recovery data documented in this file.
 
@@ -724,9 +725,9 @@ has integer `numerator` and `denominator`. Recognized units are `m`, `mm`, `cm`,
 `ft` and `in`. Re-parsing the expression must reproduce the entered unit and
 exact rational length, which must match the proposed baseline.
 
-Replay reconstructs each existing wall from its source entity, changing only
+Replay reconstructs each existing straight wall from its source entity, changing only
 its baseline and recognized length receipt. It retains other wall fields and
-hosted-opening records. Duplicate wall edits, unsupported curved geometry,
+hosted-opening records. Duplicate wall edits, curved geometry in these historical proofs,
 invalid receipts or hosted openings, and incompatible final relationships
 reject the complete transaction. Boundary geometry and its derivation proof
 are replayed together with the walls before the final relationship checks.
@@ -763,3 +764,42 @@ Undo/redo navigation records do not copy the proof. Exchange
 version 6 emits `boundary_translations`; mixed older/newer proof histories retain
 the highest required exchange version. Absent batch fields remain omitted from
 older digest representations.
+
+## Curved endpoint constraints and wall proofs (v10)
+
+Version 10 raises the minimum reader version without adding SQLite columns.
+It uses the v9 schema and the existing `boundary_constraint_changes_json`
+column. Both format markers and the logical digest advertise version 10 when
+any retained revision contains a curved wall proof or a supported constraint
+whose endpoint binding resolves to an actual curved wall baseline or identified
+boundary segment. A wall carrying `extensions.curve_input_derivation` also
+requires v10, including an imported unconstrained wall with no originating
+command in its retained history. This includes already satisfied relations that need no
+geometry edit, undone relations, and abandoned history. A straight bound edge
+on a boundary containing a different curved edge retains its historical floor.
+Opaque unknown constraint versions or relations do not acquire curve semantics.
+Generic entities may retain a vendor `curve_input_derivation` extension
+collision opaquely without changing their format floor; wall derivation
+envelopes are reserved and checked by the curve reconstruction validator.
+
+Curved wall edits carry explicit proof `version: 2` and use version 3 of the
+`apply_boundary_constraint_changes` command. Historical straight wall entries
+retain their exact unversioned representation, including when accompanied by a
+curved entry. The signed sweep is fixed while existing relations constrain
+endpoints and chord distance. Wall-only curved commands may contain an empty
+`boundary_edits` array. Replay preserves original construction evidence and
+validates analytical geometry and hosted openings before publishing the
+complete transaction. Historical command versions retain their earlier rules.
+
+Loading recomputes the required floor from all retained proof and entity states
+before accepting a file. Downgrading both markers to v9 rejects even with a
+recomputed logical digest. Older histories retain their previous minimum
+formats, digest encodings, migration behavior, and proof representations.
+Recovery-aware APIs preserve v10 documents and their ledgers together;
+document-only load or replacement cannot discard a v10 recovery ledger.
+
+JSON/assets extraction uses exchange version 7 for the same retained curved
+proofs, bound relations, and wall derivation envelopes. It writes the complete versioned command only on
+the originating revision. Later ordinary commands and undo records cannot
+lower the exchange version; curve-free histories keep exchange versions 1
+through 6 according to their existing proofs.

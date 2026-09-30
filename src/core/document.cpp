@@ -685,6 +685,10 @@ std::optional<std::string> validate_state(const std::map<std::string, Entity, st
                     const std::map<std::string, Asset, std::less<>>& assets) {
     for (const auto& [id, entity] : entities) {
         validate_entity(entity);
+        if (entity.type=="wall" && entity.extensions.contains("curve_input_derivation")) {
+            try { validate_wall_curve_input(entity); }
+            catch (const std::exception& error) { document_error(DocumentErrorCode::invalid_entity,error.what()); }
+        }
         if (id != entity.id) {
             document_error(DocumentErrorCode::invalid_entity,
                            "entity map key does not match its stable id");
@@ -1118,8 +1122,14 @@ std::optional<std::string> validate_state(const std::map<std::string, Entity, st
 }
 
 void validate_constraint_change(const std::map<std::string, Entity, std::less<>>& before,
-                                const std::map<std::string, Entity, std::less<>>& after) {
-    try { validate_constraint_transition(before, after); }
+                                const std::map<std::string, Entity, std::less<>>& after,
+                                bool qualified_curve_edits=false,
+                                bool validate_curve_provenance=true) {
+    try {
+        validate_constraint_transition(before, after);
+        if (validate_curve_provenance)
+            validate_constraint_wall_geometry_transition(before,after,qualified_curve_edits);
+    }
     catch (const std::exception& error) {
         document_error(DocumentErrorCode::constraint_violation, error.what());
     }
@@ -1325,12 +1335,14 @@ static void validate_split_dimension_lifetime(const BoundaryGeometryEdit& edit,
 std::map<std::string, Entity, std::less<>> boundary_constraint_entities(
     const std::map<std::string, Entity, std::less<>>& source,
     const ApplyBoundaryConstraintChanges& command) {
-    if (command.boundary_edits.empty())
+    const bool curved=std::any_of(command.wall_edits.begin(),command.wall_edits.end(),
+        [](const auto& edit) { return edit.version==2; });
+    if (command.boundary_edits.empty() && !curved)
         document_error(DocumentErrorCode::invalid_entity,
                        "Boundary constraint transaction requires geometry edits");
     auto result = source;
     try {
-        result = edited_boundary_entities_batch(result, command.boundary_edits);
+        if (!command.boundary_edits.empty()) result = edited_boundary_entities_batch(result, command.boundary_edits);
     } catch (const std::exception& error) {
         document_error(DocumentErrorCode::invalid_entity, error.what());
     }
@@ -1652,7 +1664,8 @@ nlohmann::json command_to_json(const Command& command) {
                 for (const auto& edit : typed.boundary_edits)
                     encoded["boundary_edits"].push_back(encode_boundary_geometry_edit(edit));
                 if (!typed.wall_edits.empty()) {
-                    encoded["version"] = 2;
+                    encoded["version"] = std::any_of(typed.wall_edits.begin(),typed.wall_edits.end(),
+                        [](const auto& edit) { return edit.version==2; }) ? 3 : 2;
                     encoded["wall_edits"] = nlohmann::json::array();
                     for (const auto& edit : typed.wall_edits)
                         encoded["wall_edits"].push_back(encode_constraint_wall_edit(edit));
@@ -1698,12 +1711,12 @@ Command command_from_json(const nlohmann::json& value) {
     try {
         if (!value.is_object() || !value.contains("version") || !value.contains("kind") ||
             !value.at("version").is_number_integer() ||
-            (value.at("version") != 1 && value.at("version") != 2) ||
+            (value.at("version") != 1 && value.at("version") != 2 && value.at("version") != 3) ||
             !value.at("kind").is_string()) {
             document_error(DocumentErrorCode::invalid_entity, "serialized command envelope is invalid");
         }
         const auto kind = value.at("kind").get<std::string>();
-        if (value.at("version") == 2 && kind != "apply_boundary_constraint_changes")
+        if (value.at("version") != 1 && kind != "apply_boundary_constraint_changes")
             document_error(DocumentErrorCode::invalid_entity,"Unsupported command envelope version");
         if (kind == "translate_boundaries") {
             command_exact_fields(value, {"version", "kind", "expected_revision", "message",
@@ -1729,14 +1742,15 @@ Command command_from_json(const nlohmann::json& value) {
             return result;
         }
         if (kind == "apply_boundary_constraint_changes") {
-            const bool mixed = value.at("version") == 2;
+            const bool mixed = value.at("version") != 1;
             if (mixed) command_exact_fields(value, {"version","kind","expected_revision","message",
                                           "entity_changes","boundary_edits","wall_edits"},
                                  DocumentErrorCode::invalid_entity,"serialized mixed constraint command");
             else command_exact_fields(value, {"version", "kind", "expected_revision", "message",
                                           "entity_changes", "boundary_edits"},
                                  DocumentErrorCode::invalid_entity, "serialized boundary constraint command");
-            if (!value.at("boundary_edits").is_array() || value.at("boundary_edits").empty())
+            if (!value.at("boundary_edits").is_array() ||
+                (value.at("boundary_edits").empty() && value.at("version")!=3))
                 document_error(DocumentErrorCode::invalid_entity, "Boundary edits must be a nonempty array");
             auto ordinary = value;
             ordinary["kind"] = "apply_entity_changes";
@@ -1755,6 +1769,10 @@ Command command_from_json(const nlohmann::json& value) {
                         document_error(DocumentErrorCode::invalid_entity,"Version 2 requires nonempty wall edits");
                     for (const auto& edit : value.at("wall_edits"))
                         result.wall_edits.push_back(decode_constraint_wall_edit(edit));
+                    const bool curved=std::any_of(result.wall_edits.begin(),result.wall_edits.end(),
+                        [](const auto& edit) { return edit.version==2; });
+                    if (curved!=(value.at("version")==3))
+                        document_error(DocumentErrorCode::invalid_entity,"Curved wall proof requires exactly command version 3");
                 }
             } catch (const std::exception& error) {
                 document_error(DocumentErrorCode::invalid_entity, error.what());
@@ -2075,7 +2093,7 @@ Revision Document::apply(const Command& command) {
                 next.boundary_constraint_changes = typed_command;
                 next.entities = boundary_constraint_entities(current.entities, typed_command);
                 next_unsupported_constraints = validate_state(next.entities, next.assets);
-                validate_constraint_change(current.entities, next.entities);
+                validate_constraint_change(current.entities, next.entities,true);
                 try {
                     validate_boundary_identity_transition(
                         boundary_identity_history_, current.entities, next.entities);
@@ -2309,7 +2327,11 @@ Document Document::restore(DocumentSnapshot snapshot) {
                            "Boundary group translation proof is not valid on history navigation or named revisions");
         // Unknown locks retain the read-only latch, but must not suppress
         // stable-endpoint checks for known relations in the same history.
-        validate_constraint_change(previous.entities, record.entities);
+        // Undo/redo restores an exact retained state and its provenance. The
+        // source-state and stack checks below validate navigation; mutation
+        // rules must not reject restoration of a shorter derivation prefix.
+        validate_constraint_change(previous.entities, record.entities,
+            record.boundary_constraint_changes.has_value(), !record.source_revision.has_value());
         if (record.parent_revision != Revision{index - 1}) {
             document_error(DocumentErrorCode::invalid_history,
                            "revision parent must be the immediately preceding event");

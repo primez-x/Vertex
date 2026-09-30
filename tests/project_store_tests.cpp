@@ -6,6 +6,7 @@
 #include "sketch/boundary_translation.hpp"
 #include "sketch/boundary_transform.hpp"
 #include "sketch/constraint_entity.hpp"
+#include "sketch/constraint_wall_edit.hpp"
 #include "support/noninteractive_errors.hpp"
 
 #include <sqlite3.h>
@@ -1116,6 +1117,175 @@ void test_boundary_constraint_proof_storage() {
                   "constraint column must reject other command kinds");
 }
 
+Entity curved_constraint_wall() {
+    return entity("curve-wall", "wall", {
+        {"baseline", {{"start", {0.0, 0.0}}, {"end", {4.0, 0.0}}, {"sweep_radians", 0.4}}},
+        {"thickness_m", 0.14}, {"height_m", 2.4}, {"elevation_m", 0.0}});
+}
+
+sketch::PersistentConstraint horizontal_curve_constraint() {
+    sketch::PersistentConstraint relation;
+    relation.id = "curve-horizontal";
+    relation.relation = sketch::ConstraintRelationKind::horizontal;
+    relation.bindings = {{"curve-wall", sketch::WallEndpointRole::start},
+                         {"curve-wall", sketch::WallEndpointRole::end}};
+    return relation;
+}
+
+void test_curved_constraint_state_requires_v10_without_geometry_proof() {
+    TempDirectory temp;
+    const auto wall = curved_constraint_wall();
+    const auto relation = sketch::encode_constraint_entity(horizontal_curve_constraint());
+    auto document = Document::create({wall, relation});
+    require(ProjectStore::required_format_version(document.snapshot()) == 10,
+            "already satisfied curved wall relation without an edit proof must require v10");
+    const auto head_file = temp.path / "curved-state.psketch";
+    (void)ProjectStore::save(head_file, document.snapshot());
+    require(ProjectStore::load(head_file).document.snapshot().entities() == document.snapshot().entities(),
+            "curved relation state must reopen exactly without a geometry proof");
+
+    auto retained = Document::create({wall});
+    retained.apply(ApplyEntityChanges{0, {EntityChange::upsert(relation)}, {}, "already satisfied curve relation"});
+    retained.undo(retained.revision());
+    require(!retained.snapshot().entities().contains(relation.id) &&
+                ProjectStore::required_format_version(retained.snapshot()) == 10,
+            "undone curved relation state must retain the v10 reader floor");
+    const auto file = temp.path / "curved-state-undone.psketch";
+    (void)ProjectStore::save(file, retained.snapshot());
+    auto loaded = ProjectStore::load(file);
+    require(loaded.document.can_redo(), "undone curved relation must preserve redo on reopen");
+    loaded.document.redo(loaded.document.revision());
+    require(loaded.document.snapshot().entities().at(relation.id) == relation,
+            "reopened already satisfied curved relation must redo exactly");
+    const auto downgraded = temp.path / "curved-state-downgraded.psketch";
+    std::filesystem::copy_file(file, downgraded);
+    execute_sql(downgraded, "PRAGMA user_version=9; UPDATE metadata SET value='9' WHERE key='format_version'");
+    rewrite_logical_digest(downgraded);
+    require_error([&] { (void)ProjectStore::load(downgraded); }, StorageErrorCode::unsupported_format,
+                  "recomputed digest cannot downgrade an undone curved relation state");
+}
+
+void test_curved_constraint_floor_uses_actual_bound_segment() {
+    TempDirectory temp;
+    auto owner = translation_fixture();
+    owner.properties.erase("boundary_authoring");
+    auto geometry = sketch::decode_identified_boundary_entity(owner);
+    geometry.segments.front().segment.sweep_radians = 0.2;
+    owner = sketch::encode_identified_boundary_entity(geometry, &owner);
+    sketch::PersistentConstraint relation;
+    relation.id = "edge-relation";
+    relation.relation = sketch::ConstraintRelationKind::vertical;
+    relation.bindings = {{owner.id, sketch::WallEndpointRole::start, "edge-1", "vertex-1"},
+                         {owner.id, sketch::WallEndpointRole::end, "edge-1", "vertex-2"}};
+    auto straight = Document::create({owner, sketch::encode_constraint_entity(relation)});
+    require(ProjectStore::required_format_version(straight.snapshot()) == 2,
+            "straight bound edge on a curved boundary must retain its historical floor");
+    const auto legacy_file = temp.path / "straight-edge-curved-owner.psketch";
+    (void)ProjectStore::save(legacy_file, straight.snapshot());
+    require(ProjectStore::load(legacy_file).document.snapshot().entities() == straight.snapshot().entities(),
+            "legacy straight edge relation on curved owner must still reopen");
+    relation.relation = sketch::ConstraintRelationKind::horizontal;
+    relation.bindings = {{owner.id, sketch::WallEndpointRole::start, "edge-0", "vertex-0"},
+                         {owner.id, sketch::WallEndpointRole::end, "edge-0", "vertex-1"}};
+    auto curved = Document::create({owner, sketch::encode_constraint_entity(relation)});
+    require(ProjectStore::required_format_version(curved.snapshot()) == 10,
+            "an already satisfied relation on the curved bound edge must require v10");
+    const auto curve_file = temp.path / "curved-edge-relation.psketch";
+    (void)ProjectStore::save(curve_file, curved.snapshot());
+    require(ProjectStore::load(curve_file).document.snapshot().entities() == curved.snapshot().entities(),
+            "curved boundary edge relation must reopen exactly");
+}
+
+void test_curved_wall_proof_storage_and_recovery_overwrite_guard() {
+    TempDirectory temp;
+    auto document = Document::create({curved_constraint_wall()});
+    const auto initial = document.snapshot().entities();
+    sketch::ApplyBoundaryConstraintChanges command{0, {}, {}, "curve chord edit"};
+    command.wall_edits.push_back({"curve-wall", {{0, 0}, {5, 0}, 0.4}, std::nullopt, 2});
+    document.apply(command);
+    const auto edited = document.snapshot().entities();
+    require(ProjectStore::required_format_version(document.snapshot()) == 10,
+            "curved wall proof at head must require v10 even without relations");
+    document.undo(document.revision());
+    require(ProjectStore::required_format_version(document.snapshot()) == 10,
+            "undone curved wall proof must retain v10");
+    const auto file = temp.path / "curve-proof.psketch";
+    (void)ProjectStore::save(file, document.snapshot());
+    auto loaded = ProjectStore::load(file);
+    const auto proof = sketch::command_to_json(*loaded.document.snapshot().history()[1].boundary_constraint_changes);
+    require(proof.at("version") == 3 && proof.at("wall_edits")[0].at("version") == 2,
+            "reopen must retain the explicit curved wall proof and command versions");
+    require(loaded.document.snapshot().entities() == initial && loaded.document.can_redo(),
+            "undone curved wall geometry must reopen with redo");
+    loaded.document.redo(loaded.document.revision());
+    require(loaded.document.snapshot().entities() == edited,
+            "reopened curved wall proof must redo exact geometry and receipts");
+    const auto downgraded = temp.path / "curve-proof-downgraded.psketch";
+    std::filesystem::copy_file(file, downgraded);
+    execute_sql(downgraded, "PRAGMA user_version=9; UPDATE metadata SET value='9' WHERE key='format_version'");
+    rewrite_logical_digest(downgraded);
+    require_error([&] { (void)ProjectStore::load(downgraded); }, StorageErrorCode::unsupported_format,
+                  "recomputed digest cannot downgrade retained curved wall proof history");
+
+    sketch::ProjectWorkspace workspace(document.snapshot());
+    const auto workspace_snapshot = workspace.capture();
+    const auto history = sketch::capture_workspace_history_record(workspace_snapshot);
+    sketch::RecoveryLedger ledger{{"history", "workspace_history",
+        sketch::encode_workspace_history_record(workspace_snapshot.document(), history, std::nullopt)}};
+    const auto archive_file = temp.path / "curve-archive.psketch";
+    const auto receipt = ProjectStore::save_archive(archive_file,
+        {workspace_snapshot.document(), ledger, sketch::ArchiveRole::ordinary});
+    require(ProjectStore::load_archive(archive_file, sketch::ArchiveRole::ordinary).supported(),
+            "v10 recovery archive must reopen through recovery-aware API");
+    require_error([&] { (void)ProjectStore::load(archive_file); }, StorageErrorCode::unsupported_format,
+                  "document-only load must preserve the v10 recovery boundary");
+    const auto before = ProjectStore::file_sha256(archive_file);
+    require_error([&] { (void)ProjectStore::save(archive_file, document.snapshot(),
+                      SaveOptions{receipt.file_sha256}); }, StorageErrorCode::unsupported_format,
+                  "document-only save with matching fingerprint must not replace a v10 recovery archive");
+    require(ProjectStore::file_sha256(archive_file) == before,
+            "rejected document-only overwrite must preserve v10 archive bytes");
+}
+
+void test_imported_curve_derivation_requires_v10_without_command_history() {
+    TempDirectory temp;
+    auto source = curved_constraint_wall();
+    const auto baseline = sketch::arc_from_chord_arc_length({0, 0}, {4, 0}, 5.0, false);
+    source.properties["baseline"]["sweep_radians"] = baseline.sweep_radians;
+    const auto angle = sketch::angle_from_radians(baseline.sweep_radians);
+    source.extensions["curve_input"] = {{"version", 2}, {"construction", "arc_length"},
+        {"measure", "5 m"}, {"normalized_measure", "5 m"}, {"measure_value", 5.0},
+        {"clockwise", false}, {"start", {0, 0}}, {"end", {4, 0}},
+        {"sweep", angle.original_expression}, {"normalized_sweep", angle.normalized_expression},
+        {"radians", baseline.sweep_radians}, {"vendor", "preserve"}};
+    const auto derived = sketch::replay_constraint_wall_edit(source,
+        {source.id, {{0, 0}, {4.5, 0}, baseline.sweep_radians}, std::nullopt, 2});
+    auto document = Document::create({derived});
+    require(document.snapshot().history().size() == 1 &&
+                !document.snapshot().history().front().boundary_constraint_changes &&
+                ProjectStore::required_format_version(document.snapshot()) == 10,
+            "imported curve derivation must require v10 without relations or originating command");
+    const auto file = temp.path / "imported-curve-derivation.psketch";
+    (void)ProjectStore::save(file, document.snapshot());
+    require(ProjectStore::load(file).document.snapshot().entities().at(derived.id) == derived,
+            "imported curve derivation must reopen with exact source input and derived geometry");
+    const auto downgraded = temp.path / "imported-curve-derivation-downgraded.psketch";
+    std::filesystem::copy_file(file, downgraded);
+    execute_sql(downgraded, "PRAGMA user_version=9; UPDATE metadata SET value='9' WHERE key='format_version'");
+    rewrite_logical_digest(downgraded);
+    require_error([&] { (void)ProjectStore::load(downgraded); }, StorageErrorCode::unsupported_format,
+                  "recomputed digest cannot downgrade a recognized imported curve derivation");
+    document.apply(ApplyEntityChanges{0, {EntityChange::erase(derived.id)}, {}, "remove derived wall"});
+    require(ProjectStore::required_format_version(document.snapshot()) == 10,
+            "retained removed curve derivation must preserve the v10 reader floor");
+
+    const auto collision = entity("vendor-label", "label", {{"text", "opaque"}}, false,
+        {{"curve_input_derivation", derived.extensions.at("curve_input_derivation")}});
+    const auto vendor = Document::create({collision});
+    require(ProjectStore::required_format_version(vendor.snapshot()) == 1,
+            "generic curve derivation extension collision must remain opaque at its old floor");
+}
+
 void test_boundary_authoring_receipt_after_v2_entity_requires_v3() {
     auto document = document_with_opaque_authoring_receipt();
     const auto snapshot = document.snapshot();
@@ -1811,6 +1981,10 @@ int main() {
         test_transform_proof_storage_and_forgery_rejection();
         test_boundary_geometry_edit_proof_storage_and_forgery_rejection();
         test_boundary_constraint_proof_storage();
+        test_curved_constraint_state_requires_v10_without_geometry_proof();
+        test_curved_constraint_floor_uses_actual_bound_segment();
+        test_curved_wall_proof_storage_and_recovery_overwrite_guard();
+        test_imported_curve_derivation_requires_v10_without_command_history();
         test_boundary_authoring_receipt_after_v2_entity_requires_v3();
         test_unqualified_authoring_property_collisions_remain_v1_and_opaque();
         test_unknown_boundary_model_collision_requires_v2();

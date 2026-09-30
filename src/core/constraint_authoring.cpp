@@ -83,10 +83,6 @@ const Entity& require_wall(const Entities& entities, const std::string& id) {
     if (found->second.type != "wall") {
         invalid("Constraint owner is not a wall: " + id);
     }
-    const auto baseline = read_baseline(found->second);
-    if (baseline.sweep_radians != 0.0) {
-        invalid("Straight-wall constraint authoring does not support curved wall: " + id);
-    }
     return found->second;
 }
 
@@ -344,11 +340,17 @@ DisjointPoints explicit_coincident_points(
     return points;
 }
 
+struct AnalyticalWallWinding {
+    std::vector<std::pair<std::string,bool>> edges;
+    double area{};
+};
+
 void append_winding_invariants(
     ConstraintSolveRequest& request,
     const std::set<std::string, std::less<>>& affected_walls,
     const std::map<std::string, Segment, std::less<>>& old_baselines,
-    const std::map<std::string, PersistentConstraint, std::less<>>& constraints) {
+    const std::map<std::string, PersistentConstraint, std::less<>>& constraints,
+    std::vector<AnalyticalWallWinding>& analytical_windings) {
     auto points = explicit_coincident_points(constraints);
     for (const auto& wall_id : affected_walls) {
         points.add(point_id({wall_id, WallEndpointRole::start}));
@@ -397,13 +399,14 @@ void append_winding_invariants(
                 queue.push_back(edge.first == vertex ? edge.second : edge.first);
             }
         }
-        if (component_vertices.size() < 3 || component_edges.size() != component_vertices.size() ||
+        if (component_vertices.size() < 2 || component_edges.size() != component_vertices.size() ||
             std::any_of(component_vertices.begin(), component_vertices.end(),
                         [&](const std::string& vertex) { return incident.at(vertex).size() != 2; })) {
             continue;
         }
 
         std::vector<std::string> loop_vertices;
+        std::vector<std::pair<std::string,bool>> loop_edges;
         std::set<std::size_t> used_edges;
         std::string current = *component_vertices.begin();
         std::string previous;
@@ -422,6 +425,7 @@ void append_winding_invariants(
             }
             used_edges.insert(*chosen);
             const auto& edge = edges[*chosen];
+            loop_edges.emplace_back(edge.wall_id,edge.first==current);
             previous = current;
             current = edge.first == current ? edge.second : edge.first;
             (void)previous;
@@ -430,6 +434,19 @@ void append_winding_invariants(
             current != loop_vertices.front()) {
             continue;
         }
+        Boundary analytical_loop;
+        bool curved=false;
+        for (const auto& [id,forward] : loop_edges) {
+            auto segment=old_baselines.at(id);
+            curved=curved || segment.sweep_radians!=0;
+            if (!forward) { std::swap(segment.start,segment.end); segment.sweep_radians=-segment.sweep_radians; }
+            analytical_loop.push_back(segment);
+        }
+        const auto area=signed_area(analytical_loop);
+        if (!std::isfinite(area) || std::abs(area)<=constraint_linear_tolerance_metres*constraint_linear_tolerance_metres)
+            invalid("Explicit wall cycle has degenerate analytical winding");
+        analytical_windings.push_back({loop_edges,area});
+        if (curved || loop_vertices.size()<3) continue;
 
         std::map<std::string, std::string, std::less<>> representative;
         std::map<std::string, Vec2, std::less<>> coordinates;
@@ -621,11 +638,23 @@ void validate_topology(
             }
             const auto old_first = read_baseline(before.at(first_id));
             const auto old_second = read_baseline(before.at(second_id));
-            if (old_first.sweep_radians != 0.0 || old_second.sweep_radians != 0.0) {
-                continue;
-            }
             const auto new_first = read_baseline(after.at(first_id));
             const auto new_second = read_baseline(after.at(second_id));
+            if (old_first.sweep_radians!=0.0 || old_second.sweep_radians!=0.0) {
+                const auto old_hit=segment_intersection(old_first,old_second,constraint_linear_tolerance_metres);
+                const auto new_hit=segment_intersection(new_first,new_second,constraint_linear_tolerance_metres);
+                using Kind=SegmentIntersectionKind;
+                if (old_hit.kind==Kind::indeterminate || new_hit.kind==Kind::indeterminate)
+                    invalid("Constraint wall topology has indeterminate analytical intersections");
+                if ((old_hit.kind==Kind::proper)!=(new_hit.kind==Kind::proper) ||
+                    (old_hit.kind==Kind::overlap)!=(new_hit.kind==Kind::overlap) ||
+                    (old_hit.kind==Kind::proper && old_hit.points.size()!=new_hit.points.size()))
+                    invalid("Constraint solve would change analytical wall crossing or overlap topology");
+                if (old_hit.kind==Kind::none && new_hit.kind==Kind::touch &&
+                    !explicitly_coincident_endpoints(first_id,new_first,second_id,new_second,coincidences))
+                    invalid("Constraint solve would create an implicit coordinate-only curved wall connection");
+                continue;
+            }
             const auto old_kind = intersection_kind(old_first, old_second);
             const auto new_kind = intersection_kind(new_first, new_second);
             if ((old_kind == IntersectionKind::proper) != (new_kind == IntersectionKind::proper) ||
@@ -951,8 +980,6 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(
                 winding.orientation = signed_area(boundary_geometry(boundary)) > 0
                     ? WindingOrientation::counter_clockwise : WindingOrientation::clockwise;
                 for (const auto& edge : boundary.segments) {
-                    if (edge.segment.sweep_radians != 0.0)
-                        invalid("Boundary constraint solving requires an entirely straight boundary");
                     WallEndpointBinding binding{wall_id, WallEndpointRole::start,
                         edge.segment_id, edge.start_vertex_id};
                     const auto id = point_id(binding);
@@ -961,7 +988,9 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(
                     request.points.push_back({id, edge.segment.start.x, edge.segment.start.y});
                     winding.loop.push_back(id);
                 }
-                request.winding_invariants.push_back(std::move(winding));
+                if (std::all_of(boundary.segments.begin(),boundary.segments.end(),
+                    [](const auto& edge) { return edge.segment.sweep_radians==0; }))
+                    request.winding_invariants.push_back(std::move(winding));
                 boundaries.emplace(wall_id, std::move(boundary));
                 continue;
             }
@@ -1005,7 +1034,8 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(
                 constraint_descriptions.emplace(id, relation_description(candidate, value));
             }
         }
-        append_winding_invariants(request, affected_walls, old_baselines, constraints);
+        std::vector<AnalyticalWallWinding> analytical_windings;
+        append_winding_invariants(request, affected_walls, old_baselines, constraints,analytical_windings);
 
         std::map<std::string, Vec2, std::less<>> fixed_points;
         const auto add_fixed = [&](const WallEndpointBinding& binding, Vec2 position) {
@@ -1024,6 +1054,7 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(
         if (intent.wall_resize.has_value()) {
             const auto& resize = *intent.wall_resize;
             const auto old = old_baselines.at(resize.wall_id);
+            if (old.sweep_radians!=0) invalid("Wall length resize requires a straight wall; endpoint/chord relations support curves");
             const long double dx = static_cast<long double>(old.end.x) - old.start.x;
             const long double dy = static_cast<long double>(old.end.y) - old.start.y;
             const long double old_length = std::hypot(dx, dy);
@@ -1064,7 +1095,7 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(
         } else if (boundary_edit) {
             const auto& owner_id = boundary_edit->boundary_id;
             if (!boundaries.contains(owner_id))
-                invalid("Boundary coordinate edit owner must be an identified straight boundary");
+                invalid("Boundary coordinate edit owner must be an identified boundary");
             // This geometry-only replay preserves receipts and deliberately
             // precedes final constraint validation: neighbors have not moved yet.
             const auto edited_entities = edited_boundary_entities(candidate, *boundary_edit);
@@ -1143,7 +1174,7 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(
             const auto old = old_baselines.at(wall_id);
             Segment proposed{
                 solved_points.at(point_id({wall_id, WallEndpointRole::start})),
-                solved_points.at(point_id({wall_id, WallEndpointRole::end})), 0.0};
+                solved_points.at(point_id({wall_id, WallEndpointRole::end})), old.sweep_radians};
             if (baseline_same(old, proposed)) {
                 proposed = old;
             }
@@ -1156,7 +1187,8 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(
             const bool resized = intent.wall_resize.has_value() &&
                 intent.wall_resize->wall_id == wall_id;
             wall_entity = replay_constraint_wall_edit(wall_entity, {wall_id, proposed,
-                resized ? std::optional<Quantity>{intent.wall_resize->exact_length} : std::nullopt});
+                resized ? std::optional<Quantity>{intent.wall_resize->exact_length} : std::nullopt,
+                old.sweep_radians==0 ? 1ULL : 2ULL});
             validate_constraint_wall_host(wall_id, candidate);
             result.changed_walls_.push_back({wall_id, old, proposed});
             changed_ids.insert(wall_id);
@@ -1177,7 +1209,23 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(
         candidate = edited_boundary_entities_batch(candidate, result.boundary_edits_);
         for (const auto& [id, before] : boundaries) {
             const auto after = decode_identified_boundary_entity(candidate.at(id));
+            const auto old_area=signed_area(boundary_geometry(before));
+            const auto new_area=signed_area(boundary_geometry(after));
+            if (!std::isfinite(new_area) || std::abs(new_area)<=constraint_linear_tolerance_metres*constraint_linear_tolerance_metres ||
+                (old_area>0)!=(new_area>0)) invalid("Constraint solve would change analytical boundary winding");
             if (after != before) result.changed_boundaries_.push_back({before, after});
+        }
+        for (const auto& winding : analytical_windings) {
+            Boundary loop;
+            for (const auto& [id,forward] : winding.edges) {
+                auto segment=read_baseline(candidate.at(id));
+                if (!forward) { std::swap(segment.start,segment.end); segment.sweep_radians=-segment.sweep_radians; }
+                loop.push_back(segment);
+            }
+            const auto area=signed_area(loop);
+            if (!validate_boundary(loop,constraint_linear_tolerance_metres).empty() ||
+                !std::isfinite(area) || std::abs(area)<=constraint_linear_tolerance_metres*constraint_linear_tolerance_metres ||
+                (area>0)!=(winding.area>0)) invalid("Constraint solve would change analytical wall-cycle winding or topology");
         }
         validate_topology(snapshot.entities(), candidate, changed_ids, constraints, organization);
         (void)validate_boundary_integrity(candidate);
@@ -1354,21 +1402,17 @@ PersistentConstraintComponentAnalysis analyze_persistent_constraint_component(
             if (entity.type == "wall") {
                 validate_constraint_wall_host(id, entities);
                 const auto baseline = read_baseline(entity);
-                if (baseline.sweep_radians != 0.0)
-                    invalid("Persistent endpoint analysis does not support curved wall: " + id);
                 walls.emplace(id, baseline);
                 for (const auto role : {WallEndpointRole::start, WallEndpointRole::end})
                     add_point({id,role}, endpoint_position(baseline,role));
             } else if (can_recognize_boundary_entity_type(entity.type)) {
                 auto boundary = decode_identified_boundary_entity(entity);
                 for (const auto& edge : boundary.segments) {
-                    if (edge.segment.sweep_radians != 0.0)
-                        invalid("Persistent endpoint analysis does not support curved boundary: " + id);
                     add_point({id,WallEndpointRole::start,edge.segment_id,edge.start_vertex_id}, edge.segment.start);
                 }
                 boundaries.emplace(id, std::move(boundary));
             } else {
-                invalid("Persistent endpoint analysis requires a straight wall or identified closed boundary: " + id);
+                invalid("Persistent endpoint analysis requires a wall or identified closed boundary: " + id);
             }
         }
         const auto resolve = [&](const WallEndpointBinding& binding) {
@@ -1472,7 +1516,9 @@ Revision apply_constraint_authoring(Document& document,
         throw DocumentError(DocumentErrorCode::invalid_entity,
                             "Constraint preview does not contain a document change");
     }
-    if (!recomputed.boundary_edits_.empty()) {
+    const bool curved_walls=std::any_of(recomputed.changed_walls_.begin(),recomputed.changed_walls_.end(),
+        [](const auto& wall) { return wall.old_baseline.sweep_radians!=0; });
+    if (!recomputed.boundary_edits_.empty() || curved_walls) {
         std::vector<EntityChange> constraint_changes;
         for (const auto& change : changes) {
             const auto id = change.kind == EntityChangeKind::upsert
@@ -1493,7 +1539,8 @@ Revision apply_constraint_authoring(Document& document,
             const auto& resize = recomputed.normalized_intent_.wall_resize;
             command.wall_edits.push_back({wall.wall_id, wall.proposed_baseline,
                 resize && resize->wall_id == wall.wall_id
-                    ? std::optional<Quantity>{resize->exact_length} : std::nullopt});
+                    ? std::optional<Quantity>{resize->exact_length} : std::nullopt,
+                wall.old_baseline.sweep_radians==0 ? 1ULL : 2ULL});
         }
         const auto verified = Document::preview_command(current, Command{command});
         if (verified.entities() != recomputed.candidate_entities_ ||

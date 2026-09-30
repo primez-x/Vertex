@@ -3,7 +3,7 @@
 Constraint entities store relationships to semantic wall endpoints. Wall
 baselines remain the geometry authority; constraint records do not contain a
 second editable point collection. This format is part of project format v1.
-Interactive constraint authoring remains under construction.
+Interactive constraint authoring uses these same stable bindings in both workspaces.
 
 ## Stable envelope
 
@@ -41,9 +41,14 @@ invalid. Unknown metadata stays separate from the recognized semantic fields.
 | `perpendicular` | Two ordered endpoint pairs | Perpendicular directions |
 | `fixed_anchor` | One point | Desired fixed position in `anchor_m: [x, y]` |
 
-Pairs may refer to separate walls. A known v1 relation cannot constrain an arc
-baseline. Curved walls themselves remain supported by the architectural engine;
-their persistent curve constraints require a later codec and solver extension.
+Pairs may refer to separate walls. The relations also apply to curved baseline
+endpoints with unchanged point semantics: horizontal/vertical compare endpoint
+coordinates, parallel/perpendicular compare ordered chords, and `fixed_length`
+measures the Euclidean distance between the two endpoints. It does not lock
+physical arc length or tangency. Solving endpoints preserves each signed sweep.
+The new curved-bound capability requires project format 10 / exchange format 7,
+including when it occurs only in undone history. A straight bound edge on an
+otherwise curved loop does not itself require this new capability floor.
 
 For a fixed length, the additional properties are:
 
@@ -103,10 +108,10 @@ removal, reversal/remapping, hosted-opening validity, save/reopen, and
 unsupported historical locks. CLI fixtures independently construct valid
 project manifests to distinguish semantic rejection from checksum failure.
 
-The preview/Apply service supports straight wall endpoints and stable identified
+The preview/Apply service supports analytical wall endpoints and stable identified
 measurement and room-boundary vertices, with explicit anchors and connected-movement
 controls. Persistent coordinate rank is diagnosed separately from temporary
-editing anchors. Curved-owner relations, complete branch/topology propagation,
+editing anchors. Physical arc-length locks, tangency, complete branch/topology propagation,
 level dependencies and interactive conflict repair still need broader
 qualification. This format and its focused tests do not certify the complete
 constraint workflow.

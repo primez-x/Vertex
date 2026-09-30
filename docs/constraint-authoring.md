@@ -4,8 +4,8 @@ This is the implementation contract for connecting the existing planar solver
 to document editing. The solver already produces independently checked point
 previews. The [versioned wall constraint codec](constraint-entity-format.md) and
 document integrity checks are implemented. A command service and interactive
-preview/Apply dialog connect them to both workspaces for straight walls and
-identified straight measurement boundaries.
+preview/Apply dialog connect them to both workspaces for analytical walls and
+identified measurement and room boundaries.
 
 ## Semantic authority
 
@@ -14,7 +14,7 @@ relationships to that geometry, never a second editable copy of its points.
 Solver requests derive coordinates from one immutable document snapshot.
 
 A point reference needs a stable owner ID and a stable semantic endpoint ID.
-Straight walls have named baseline `start` and `end` roles. Boundary segment
+Walls have named baseline `start` and `end` roles. Boundary segment
 array indexes are not stable identities, so boundary bindings name the retained
 `segment_id` and `vertex_id` plus the endpoint role. Coincident coordinates
 alone do not establish a relationship.
@@ -38,9 +38,10 @@ codec and document command validation must also cover nested endpoint bindings
 and prevent deletion of referenced geometry without an explicit compound edit.
 
 The supported relations in the existing adapter are horizontal, vertical,
-coincident, fixed length, parallel, perpendicular and fixed anchor. Arc
-constraints and the level dependency graph remain separate required engine
-work; a line constraint must never approximate or flatten a curved wall.
+coincident, endpoint distance, parallel, perpendicular and fixed anchor. Curved
+endpoints use the same point/chord meanings and retain their signed sweep.
+Physical arc-length locks, tangent relationships and the level dependency graph
+remain separate required work; point solving never flattens a curved wall.
 
 ## Preview and commit
 
@@ -118,7 +119,7 @@ semantics do not change merely because a constraint is added.
 - Create, edit and remove every supported persistent relation; preserve it and
   its stable references through save/reopen and undo/redo.
 - Reject contradictory dimensions, malformed/unknown bindings, duplicate IDs,
-  dangling owners, unsupported curves, forged candidates, stale revisions and
+  dangling owners, invalid curves, forged candidates, stale revisions and
   previews from another document. Preserve the previous valid state.
 - Demonstrate that ordinary dimension edits and referenced-entity deletion
   cannot bypass a locked relationship. An explicit relationship removal and
@@ -128,10 +129,26 @@ semantics do not change merely because a constraint is added.
 - Inspect preview, conflict and cancellation states with keyboard navigation at
   normal and 150 percent display scaling in both workspaces.
 
-The implemented desktop dialog binds named endpoints of straight walls and
-stable endpoints of identified straight measurement boundaries. Curved
-boundary relations and mixed wall/boundary components reject explicitly; they
-remain open production scope rather than being approximated as line geometry.
+The desktop dialog binds named endpoints of analytical walls and stable
+endpoints of identified measurement and room boundaries, including mixed
+components. Previews render true arcs and show physical edge lengths; the
+relationship field explicitly labels a fixed point-distance lock as Endpoint
+distance. The straight-wall resize operation is not offered for curved walls.
+
+Curved wall geometry proofs use explicit wall-edit version 2 inside command
+envelope version 3. Historical unversioned straight proofs and envelopes 1/2
+retain their old rules. Version 3 alone permits wall-only geometry transactions.
+Original curve construction input is retained as derivation evidence when its
+measured length or height no longer describes the fixed-sweep endpoint result.
+Project format 10 and exchange format 7 protect new proofs and curved-bound
+relations throughout retained history, including undone states.
+
+An explicit construction operation supplies a complete, independently validated
+input and baseline. It may follow a derived curve through an ordinary entity
+command if it appends exactly one construction operation without rewriting the
+original archive or prior operations. An endpoint-only appended operation still
+requires typed wall replay. These are different recorded operations; generic
+construction commands are not claimed to carry the solver's topology proof.
 
 ## Implemented command and receipt boundary
 

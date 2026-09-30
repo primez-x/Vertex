@@ -487,11 +487,13 @@ Start with the workspace, draw a room, close it with the mouse, drag-select it, 
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U085 — Make two lines parallel**
+  - Also test: Choose endpoints on curved walls or boundary edges. Their endpoint chords become parallel while their curved outlines remain curved.
   - Expected: They remain parallel after a supported dimension edit.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U086 — Make two lines perpendicular**
+  - Also test: Choose endpoint pairs on a curved wall and a straight wall. Their chords form a right angle; the curve retains its sweep rather than becoming a straight line.
   - Expected: The right angle is maintained.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
@@ -500,11 +502,14 @@ Start with the workspace, draw a room, close it with the mouse, drag-select it, 
   - Steps: Draw a closed area and a straight architectural wall. Open **Dimensions and constraints** from the selected area and join one of its corners to a wall endpoint. Cancel a preview once and confirm nothing changes, then reopen and Apply. Select the wall, change its length while anchoring the opposite endpoint, and preview with **Allow connected objects to move** enabled. Check that the joined area corner follows the wall endpoint. Repeat with connected movement disabled: the app should explain a conflict when preserving the area makes the requested length impossible. Undo, redo, save and reopen the joined edit.
   - Also test: Select the joined area and open **Edit boundary geometry**. Change the joined edge length with its opposite endpoint fixed. Turn **Move related objects** off and check that an incompatible edit cannot apply. Turn it on and inspect the wall's movement before Apply. Cancel once, then Apply; undo, redo, save and reopen.
   - Also test: Drag the joined corner handle. Check that the joined wall follows and length, angle and area dimensions update during the drag. Check the live area/perimeter readout in Imperial and Metric units. Press Escape once to cancel, then drag and release to commit; measurements must match the preview. Undo, redo, save and reopen; both endpoints must remain joined.
+  - Curved check: Repeat with a rounded patio or room boundary joined to a curved wall. Move the joined corner, including in a rotated saved plan view. Both curves should remain curved, move together in the preview, and stay joined after undo/redo and save/reopen.
   - Expected: The joined endpoints stay together whether the edit starts from the wall or area. Preview and cancellation leave the project unchanged; Apply records both movements together.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U088 — Lock a line's length**
+  - Steps: In **Dimensions and constraints**, choose **Endpoint distance** and enter a length. On a curved object, compare the straight distance between its endpoints with its longer curved edge measurement.
+  - Curved check: The lock controls the straight endpoint distance. Changing that distance preserves the curve's sweep; its physical arc length changes accordingly. This control does not claim to lock physical arc length.
   - Expected: Later connected edits preserve that length or explain a conflict.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________

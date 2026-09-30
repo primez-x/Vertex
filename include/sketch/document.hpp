@@ -129,6 +129,9 @@ struct ConstraintWallGeometryEdit {
     std::string wall_id;
     Segment baseline;
     std::optional<Quantity> length_entry;
+    // Version one is the historical straight edit. Version two preserves
+    // an existing signed curve sweep during endpoint-coordinate editing.
+    std::uint64_t version{1};
 };
 
 // Geometry is replayed before the relation changes are validated.
@@ -139,8 +142,8 @@ struct ApplyBoundaryConstraintChanges {
     std::vector<BoundaryGeometryEdit> boundary_edits;
     std::vector<EntityChange> entity_changes;
     std::string message;
-    // Nonempty wall edits use command envelope version 2. Version 1 boundary
-    // transactions retain their original representation.
+    // Straight wall edits use envelope version 2; any version-two curved
+    // wall proof requires envelope version 3. Boundary-only stays version 1.
     std::vector<ConstraintWallGeometryEdit> wall_edits;
 };
 

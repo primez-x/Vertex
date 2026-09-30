@@ -1,4 +1,5 @@
 #include "sketch/desktop/main_window.hpp"
+#include "sketch/constraint_wall_edit.hpp"
 
 #include "plan_canvas.hpp"
 #include "draft_image_stamp.hpp"
@@ -3266,9 +3267,12 @@ public:
         for (auto entity : graph) {
             if (entity.type == "wall") {
                 rebase_wall_length_receipt(entity, baseline);
+                const auto original_wall = entity;
+                if (!reflected && entity.extensions.contains("curve_input"))
+                    rebase_wall_curve_input(entity, baseline);
                 const auto geometry = segment_json(baseline);
                 for (const auto& [key, value] : geometry.items()) entity.properties["baseline"][key] = value;
-                if (entity.extensions.contains("curve_input") &&
+                if (reflected && entity.extensions.contains("curve_input") &&
                     entity.extensions.at("curve_input").is_object()) {
                     auto& curve_input = entity.extensions["curve_input"];
                     curve_input["start"] = point_json(baseline.start);
@@ -3276,9 +3280,16 @@ public:
                     curve_input["radians"] = baseline.sweep_radians;
                     if (reflected) {
                         const auto reflected_sweep = angle_from_radians(baseline.sweep_radians);
+                        curve_input["version"] = 2;
+                        curve_input["construction"] = "angle";
+                        curve_input["measure"] = reflected_sweep.original_expression;
+                        curve_input["normalized_measure"] = reflected_sweep.normalized_expression;
+                        curve_input["measure_value"] = baseline.sweep_radians;
+                        curve_input["clockwise"] = baseline.sweep_radians < 0.0;
                         curve_input["sweep"] = reflected_sweep.original_expression;
                         curve_input["normalized_sweep"] = reflected_sweep.normalized_expression;
                     }
+                    preserve_wall_curve_construction(entity, original_wall);
                 }
             } else if (reflected && entity.properties.contains("door_operation")) {
                 auto operation = decode_door_operation(entity.properties.at("door_operation"));
@@ -11148,7 +11159,10 @@ public:
                 }
             }
             auto candidate = *selected;
-            candidate.properties["baseline"] = segment_json(baseline);
+            auto& stored_baseline = candidate.properties["baseline"];
+            stored_baseline["start"] = point_json(baseline.start);
+            stored_baseline["end"] = point_json(baseline.end);
+            stored_baseline["sweep_radians"] = baseline.sweep_radians;
             auto curve_input = candidate.extensions.value("curve_input", json::object());
             if (!curve_input.is_object()) curve_input = json::object();
             curve_input["version"] = 2;
@@ -11165,6 +11179,7 @@ public:
             curve_input["normalized_sweep"] = derived_sweep.normalized_expression;
             curve_input["radians"] = baseline.sweep_radians;
             candidate.extensions["curve_input"] = std::move(curve_input);
+            preserve_wall_curve_construction(candidate, *selected);
 
             const auto snapshot = m_document->snapshot();
             std::vector<const Entity*> openings;
@@ -12010,18 +12025,12 @@ public:
                 !analytical_plan_context(BuildingViewKind::plan, *view_context);
             const BoundaryGeometryEdit edit{entity_id.toStdString(),BoundaryGeometryEditKind::move_vertex,
                 vertex_id.toStdString(),position};
-            const auto boundary=decode_identified_boundary_entity(source.entities().at(edit.boundary_id));
             std::map<std::string,Entity,std::less<>> candidate;
-            if (std::any_of(boundary.segments.begin(),boundary.segments.end(),
-                    [](const auto& edge) { return edge.segment.sweep_radians!=0.0; }))
-                candidate=Document::preview_command(source,EditBoundaryGeometry{source.revision(),edit}).entities();
-            else {
-                ConstraintAuthoringIntent intent;
-                intent.boundary_vertex_move=BoundaryVertexMoveIntent{edit,true};
-                const auto preview=preview_constraint_authoring(source,intent);
-                if (!preview.accepted()) return std::nullopt;
-                candidate=preview.candidate_entities();
-            }
+            ConstraintAuthoringIntent intent;
+            intent.boundary_vertex_move=BoundaryVertexMoveIntent{edit,true};
+            const auto preview=preview_constraint_authoring(source,intent);
+            if (!preview.accepted()) return std::nullopt;
+            candidate=preview.candidate_entities();
             std::map<std::string,Wall,std::less<>> changed_walls;
             for (const auto& [id,entity] : candidate) {
                 if (entity.type!="wall" || entity==source.entities().at(id)) continue;
@@ -14237,10 +14246,6 @@ public:
 
     static Command boundaryGeometryCommand(const DocumentSnapshot& source,
         const BoundaryGeometryEdit& edit, bool move_related_objects) {
-        const auto boundary=decode_identified_boundary_entity(source.entities().at(edit.boundary_id));
-        if (std::any_of(boundary.segments.begin(),boundary.segments.end(),
-                [](const auto& edge) { return edge.segment.sweep_radians != 0.0; }))
-            return EditBoundaryGeometry{source.revision(),edit};
         ConstraintAuthoringIntent intent;
         if (edit.kind==BoundaryGeometryEditKind::move_vertex)
             intent.boundary_vertex_move=BoundaryVertexMoveIntent{edit,move_related_objects};
@@ -26883,7 +26888,7 @@ public:
         if (!entity || !ConstraintDialog::supportsEntity(*entity) ||
             !m_document->is_editable()) {
             setError(QStringLiteral(
-                "Select an editable straight wall or identified straight boundary."));
+                "Select an editable wall or identified boundary."));
             return;
         }
         const auto context = captureModalContext();

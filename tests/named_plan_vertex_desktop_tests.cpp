@@ -339,6 +339,14 @@ void exercise_curve(double direction_z) {
     require(!area.isEmpty(),"curved named-plan area fixture");
     const auto source_geometry=decode_identified_boundary_entity(
         window.document().snapshot().entities().at(area.toStdString()));
+    const auto wall=window.createCurvedWall({4,0},{8,0},"45 deg");
+    require(!wall.isEmpty(),"curved named-plan connected wall fixture");
+    const PersistentConstraint relation{"curved-named-join",ConstraintRelationKind::coincident,
+        {{area.toStdString(),WallEndpointRole::end,source_geometry.segments.front().segment_id,
+            source_geometry.segments.front().end_vertex_id},
+         {wall.toStdString(),WallEndpointRole::start}}};
+    window.document().apply(ApplyEntityChanges{window.document().revision(),
+        {EntityChange::upsert(encode_constraint_entity(relation))}, {}, "join curved plan owners"});
     const auto dimension=window.createLengthDimension(area,
         QString::fromStdString(source_geometry.segments.front().segment_id),{2,.5});
     require(!dimension.isEmpty(),"curved named-plan dimension fixture");
@@ -374,6 +382,10 @@ void exercise_curve(double direction_z) {
         [&](const auto& value) { return value.id==area; });
     require(preview!=previews.end() && metrics && window.document().snapshot().entities()==source.entities(),
             "curved named preview must be analytical and detached");
+    require(std::any_of(previews.begin(),previews.end(),[&](const auto& value) {
+        return value.id==wall && std::any_of(value.segments.begin(),value.segments.end(),
+            [](const auto& segment) { return segment.sweep_radians!=0.0; });
+    }),"connected curved wall must appear as true arcs in the live named-plan preview");
     mouse(*canvas,QEvent::MouseButtonRelease,project(target,frame));
     if (!window.lastError().isEmpty()) throw std::runtime_error(window.lastError().toStdString());
     const auto after=window.document().snapshot();
@@ -383,6 +395,11 @@ void exercise_curve(double direction_z) {
                 same_path(preview->segments,project_path(boundary_geometry(changed),frame)) &&
                 close_enough(metrics->area_square_metres,std::abs(signed_area(boundary_geometry(changed)))),
             "curved named edit must preserve model arc sweep and reflect only its projected handedness");
+    const auto& moved_wall=after.entities().at(wall.toStdString()).properties.at("baseline");
+    require(close_enough(moved_wall.at("start")[0].get<double>(),target.x) &&
+        close_enough(moved_wall.at("start")[1].get<double>(),target.y) &&
+        moved_wall.at("sweep_radians")==source.entities().at(wall.toStdString()).properties.at("baseline").at("sweep_radians"),
+        "named-plan corner movement must propagate to the related wall without flattening its arc");
     require(window.undoCommand() && window.document().snapshot().entities()==source.entities() &&
                 window.redoCommand() && window.document().snapshot().entities()==after.entities(),
             "curved named edit must undo and redo exactly");

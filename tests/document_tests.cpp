@@ -3,6 +3,7 @@
 #include "sketch/boundary_receipt.hpp"
 #include "sketch/boundary_dimension.hpp"
 #include "sketch/constraint_entity.hpp"
+#include "sketch/constraint_wall_edit.hpp"
 #include "sketch/assembly_model.hpp"
 #include "sketch/model_phases.hpp"
 #include "sketch/room_relationships.hpp"
@@ -1425,6 +1426,38 @@ void test_boundary_constraint_transaction_preserves_proof_and_is_atomic() {
 
 }  // namespace
 
+void test_curved_wall_proof_codec_and_replay() {
+    using namespace sketch;
+    Entity arc{"curve","wall",{{"baseline",{{"start",{0,0}},{"end",{4,0}},{"sweep_radians",0.6}}},
+        {"thickness_m",0.1},{"height_m",3},{"elevation_m",0}}};
+    auto document=Document::create({arc});
+    ApplyBoundaryConstraintChanges command{document.revision(),{}, {},"Move curved endpoint"};
+    command.wall_edits.push_back({arc.id,{{0,0},{5,0.2},0.6},std::nullopt,2});
+    const auto wire=command_to_json(Command{command});
+    require(wire.at("version")==3 && wire.at("wall_edits")[0].at("version")==2,
+        "curved endpoint proof must carry explicit inner and outer versions");
+    require(command_to_json(command_from_json(wire))==wire,"curved wall-only proof codec round trip differs");
+    auto downgraded=wire; downgraded["version"]=2;
+    require_error([&] { (void)command_from_json(downgraded); },DocumentErrorCode::invalid_entity,"curved outer downgrade accepted");
+    downgraded=wire; downgraded["wall_edits"][0].erase("version");
+    require_error([&] { (void)command_from_json(downgraded); },DocumentErrorCode::invalid_entity,"curved proof version stripping accepted");
+    auto forged=command; forged.wall_edits[0].baseline.sweep_radians=0.7;
+    require_error([&] { (void)document.apply(Command{forged}); },DocumentErrorCode::invalid_entity,"curved proof sweep forgery accepted");
+    (void)document.apply(command_from_json(wire));
+    const auto after=document.snapshot();
+    require(Document::fork(after).snapshot().entities()==after.entities(),"curved wall-only history replay differs");
+    auto stripped=after;
+    auto& history=const_cast<std::vector<RevisionRecord>&>(stripped.history());
+    history.back().boundary_constraint_changes->wall_edits[0].version=1;
+    require_error([&] { (void)Document::fork(stripped); },DocumentErrorCode::invalid_history,"downgraded history proof accepted");
+    ConstraintWallGeometryEdit straight{"straight",{{0,0},{2,0},0},std::nullopt};
+    require(!encode_constraint_wall_edit(straight).contains("version"),"legacy straight wall proof encoding changed");
+    ApplyBoundaryConstraintChanges false_v3{0,{{"area",BoundaryGeometryEditKind::move_vertex,"a",{1,1}}}, {},"Legacy mixed"};
+    false_v3.wall_edits.push_back(straight);
+    auto legacy=command_to_json(Command{false_v3}); legacy["version"]=3;
+    require_error([&] { (void)command_from_json(legacy); },DocumentErrorCode::invalid_entity,"v3 without curved proof accepted");
+}
+
 int main() {
     sketch::testing::noninteractive_errors();
     try {
@@ -1451,6 +1484,7 @@ int main() {
         test_validated_document_fork_preserves_authority_and_isolation();
         test_session_read_only_latch_survives_navigation_and_fork();
         test_typed_command_codec_round_trips_and_rejects_tampering();
+        test_curved_wall_proof_codec_and_replay();
     } catch (const std::exception& error) {
         std::cerr << "document_tests: unexpected exception: " << error.what() << '\n';
         return 1;

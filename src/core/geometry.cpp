@@ -469,6 +469,33 @@ bool is_closed_within(const Boundary& boundary, double tolerance) {
 
 }  // namespace
 
+SegmentIntersection segment_intersection(const Segment& first, const Segment& second, double tolerance) {
+    if (!std::isfinite(tolerance) || tolerance<=0 ||
+        !finite(first.start) || !finite(first.end) || !finite(second.start) || !finite(second.end) ||
+        !std::isfinite(first.sweep_radians) || !std::isfinite(second.sweep_radians) ||
+        segment_length(first)<=tolerance || segment_length(second)<=tolerance)
+        throw std::invalid_argument("Segment intersection requires finite nondegenerate geometry");
+    // Local coordinates avoid cancellation far from the document origin.
+    auto left=first; auto right=second;
+    left.start={0,0}; left.end=first.end-first.start;
+    right.start=second.start-first.start; right.end=second.end-first.start;
+    const auto hit=intersect_segments(left,right,tolerance);
+    SegmentIntersection result;
+    if (hit.kind==IntersectionKind::overlap) result.kind=SegmentIntersectionKind::overlap;
+    else if (hit.kind==IntersectionKind::indeterminate) result.kind=SegmentIntersectionKind::indeterminate;
+    else if (hit.kind==IntersectionKind::points) {
+        result.kind=SegmentIntersectionKind::touch;
+        for (std::size_t i=0;i<hit.point_count;++i) {
+            const auto point=hit.points[i];
+            if (distance(point,left.start)>tolerance && distance(point,left.end)>tolerance &&
+                distance(point,right.start)>tolerance && distance(point,right.end)>tolerance)
+                result.kind=SegmentIntersectionKind::proper;
+            result.points.push_back(point+first.start);
+        }
+    }
+    return result;
+}
+
 Segment arc_from_chord_angle(Vec2 start, Vec2 end, double sweep_radians) {
     if (!finite(start) || !finite(end) || !std::isfinite(sweep_radians)) {
         throw std::invalid_argument("arc contains a non-finite value");

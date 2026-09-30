@@ -1,5 +1,6 @@
 #include "sketch/desktop/constraint_dialog.hpp"
 #include "sketch/desktop/main_window.hpp"
+#include "sketch/desktop/constraint_preview_canvas.hpp"
 #include "support/noninteractive_errors.hpp"
 
 #include <QApplication>
@@ -9,14 +10,17 @@
 #include <QDialogButtonBox>
 #include <QFontDatabase>
 #include <QLineEdit>
+#include <QImage>
 #include <QLabel>
 #include <QKeyEvent>
 #include <QPushButton>
 #include <QTimer>
 #include <QTableWidget>
+#include <QTemporaryDir>
 
 #include <cmath>
 #include <iostream>
+#include <numbers>
 #include <stdexcept>
 
 namespace {
@@ -35,6 +39,7 @@ Entity wall() {
 QComboBox& combo(ConstraintDialog& dialog, const char* name) {
     auto* field = dialog.findChild<QComboBox*>(name); require(field, "missing constraint choice"); return *field;
 }
+void select_relation(ConstraintDialog& dialog, ConstraintRelationKind kind);
 void capture(ConstraintDialog& dialog, const char* name) {
     const auto directory = qEnvironmentVariable("SKETCH_CONSTRAINT_CAPTURE_DIR");
     if (directory.isEmpty()) return;
@@ -131,6 +136,115 @@ void both_workspace_entrypoints() {
         require(window.undoCommand(), "workspace constraint edit cannot undo");
     }
 }
+void analytical_curve_preview() {
+    for (const bool light : {false, true}) for (const double sign : {-1.0, 1.0}) {
+        ConstraintPreviewCanvas canvas;
+        canvas.resize(420, 250);
+        auto palette = canvas.palette();
+        palette.setColor(QPalette::Base, light ? Qt::white : QColor("#17212d"));
+        palette.setColor(QPalette::Text, light ? Qt::black : Qt::white);
+        canvas.setPalette(palette);
+        const Segment arc{{0, 0}, {4, 0}, sign * std::numbers::pi};
+        canvas.setWalls({{QStringLiteral("Semicircle"), arc, arc}});
+        const auto image = canvas.grab().toImage();
+        const auto blue_near = [&](int x, int y) {
+            for (int dx = -5; dx <= 5; ++dx) for (int dy = -5; dy <= 5; ++dy) {
+                const auto color = image.pixelColor(x + dx, y + dy);
+                if (color.blue() > color.red() + 70 && color.blue() > color.green() + 25) return true;
+            }
+            return false;
+        };
+        require(blue_near(210, sign > 0 ? 220 : 62), "preview must draw the signed semicircle at its analytical extremum");
+        require(!blue_near(210, sign > 0 ? 62 : 220), "preview incorrectly draws the arc as its chord");
+    }
+}
+void curved_wall_workspace_entrypoints() {
+    for (const auto workspace : {Workspace::measurement, Workspace::architectural}) {
+        MainWindow window;
+        const auto id = window.createCurvedWallFromConstruction({0, 0}, {4, 0}, "arc_length", "5 m");
+        require(!id.isEmpty(), "curved workspace fixture failed");
+        window.setWorkspace(workspace);
+        require(window.selectEntity(id), "curved wall selection failed");
+        const auto original = window.document().snapshot();
+        const auto sweep = original.entities().at(id.toStdString()).properties.at("baseline").at("sweep_radians");
+        QTimer::singleShot(0, &window, [&] {
+            auto* dialog = dynamic_cast<ConstraintDialog*>(QApplication::activeModalWidget());
+            require(dialog, "curved constraint action did not open editor");
+            require(combo(*dialog, "constraintOperation").findData(0) == -1,
+                "curved wall must not offer the straight-wall resize operation");
+            select_relation(*dialog, ConstraintRelationKind::fixed_length);
+            require(combo(*dialog, "constraintRelation").currentText() == "Endpoint distance",
+                "curved relationship length must explain its endpoint-distance meaning");
+            dialog->setLengthExpression("4.5 m");
+            if (!dialog->previewEdit()) throw std::runtime_error(dialog->lastError().toStdString());
+            capture(*dialog, workspace == Workspace::measurement ? "curved-wall-measurement" : "curved-wall-architectural");
+            require(dialog->submit(), "curved wall constraint submission failed");
+        });
+        window.showConstraintEditor();
+        const auto edited = window.document().snapshot();
+        require(edited.revision() == original.revision() + 1, "curved wall edit must record one command");
+        const auto& baseline = edited.entities().at(id.toStdString()).properties.at("baseline");
+        require(baseline.at("sweep_radians") == sweep, "curved wall constraint lost its signed sweep");
+        require_near(std::hypot(baseline.at("end")[0].get<double>() - baseline.at("start")[0].get<double>(),
+            baseline.at("end")[1].get<double>() - baseline.at("start")[1].get<double>()), 4.5);
+        require(window.undoCommand(), "curved wall edit cannot undo");
+        require(window.document().snapshot().entities() == original.entities(), "curved wall undo failed to restore original construction evidence");
+        require(window.redoCommand() && window.document().snapshot().entities() == edited.entities(), "curved wall redo changed the result");
+        require(window.selectEntity(id), "derived curved wall selection failed");
+        const Vec2 start{baseline.at("start")[0].get<double>(), baseline.at("start")[1].get<double>()};
+        const Vec2 end{baseline.at("end")[0].get<double>(), baseline.at("end")[1].get<double>()};
+        require(window.editSelectedCurvedWallFromConstruction(start, end, "arc_height", "1 m"),
+            "explicit curve construction must remain editable after connected endpoint derivation");
+        const auto reconstructed = window.document().snapshot();
+        require(reconstructed.entities().at(id.toStdString()).extensions.at("curve_input_derivation").at("source_input").at("measure") == "5 m",
+            "later curve construction discarded the original measured input");
+        QTemporaryDir directory;
+        MainWindow reopened;
+        require(directory.isValid() && window.saveProjectAs(directory.filePath("curved-constraints.bldproj")) &&
+            reopened.openProject(directory.filePath("curved-constraints.bldproj")) &&
+            reopened.document().snapshot().entities() == reconstructed.entities(),
+            "curved endpoint derivation and subsequent construction must save and reopen exactly");
+        require(window.undoCommand() && window.document().snapshot().entities() == edited.entities(),
+            "explicit curve reconstruction must undo without losing the constraint edit");
+        require(window.saveProjectAs(directory.filePath("curved-undone-construction.bldproj")) &&
+            reopened.openProject(directory.filePath("curved-undone-construction.bldproj")) &&
+            reopened.document().snapshot().entities() == edited.entities(),
+            "save/reopen must restore a shorter construction derivation after undo");
+        require(window.undoCommand() && window.document().snapshot().entities() == original.entities() &&
+            window.saveProjectAs(directory.filePath("curved-undone-endpoint.bldproj")) &&
+            reopened.openProject(directory.filePath("curved-undone-endpoint.bldproj")) &&
+            reopened.document().snapshot().entities() == original.entities(),
+            "save/reopen must restore the original curve without derivation after undo");
+        require(window.redoCommand() && window.redoCommand(), "derived curve fixture must redo both edits");
+        std::vector<EntityChange> unlock;
+        for (const auto& [constraint_id, entity] : window.document().snapshot().entities())
+            if (entity.type == "constraint") unlock.push_back(EntityChange::erase(constraint_id));
+        window.document().apply(ApplyEntityChanges{window.document().revision(),unlock,{},"remove locks before rigid transforms"});
+        require(window.selectEntity(id), "derived curve transform selection failed");
+        const auto transform_source=window.document().snapshot();
+        require(window.transformSelectedBoundary("90",false,false,"1 m","2 m",false),
+            "derived curve must rotate and translate through the existing transform editor");
+        const auto rotated=window.document().snapshot();
+        require(window.undoCommand() && window.document().snapshot().entities()==transform_source.entities() &&
+            window.redoCommand() && window.document().snapshot().entities()==rotated.entities(),
+            "derived curve rigid transform must undo and redo exactly");
+        const auto before_flip=rotated.entities().at(id.toStdString()).properties.at("baseline").at("sweep_radians").get<double>();
+        require(window.selectEntity(id) && window.transformSelectedBoundary("0",true,false,"0","0",false),
+            "derived curve must reflect while retaining its original construction archive");
+        require(window.document().snapshot().entities().at(id.toStdString()).properties.at("baseline").at("sweep_radians").get<double>() == -before_flip,
+            "derived curve reflection must reverse the signed sweep");
+        require(window.transformSelectedBoundary("45",false,false,"2 m","0",true),
+            "transformed cloning of a derived curve must succeed");
+        const auto clone=window.selectedEntityId();
+        const auto transformed=window.document().snapshot();
+        require(clone!=id && transformed.entities().at(clone.toStdString()).extensions.at("curve_input_derivation").at("source_input").at("measure")=="5 m",
+            "derived clone must retain the exact original measured input");
+        require(window.saveProjectAs(directory.filePath("curved-transformed-clone.bldproj")) &&
+            reopened.openProject(directory.filePath("curved-transformed-clone.bldproj")) &&
+            reopened.document().snapshot().entities()==transformed.entities(),
+            "derived curve rotation, reflection and clone must independently replay after reopening");
+    }
+}
 Entity boundary(std::string id, double x = 0, double tilt = 1) {
     return encode_identified_boundary_entity(IdentifiedBoundary{std::move(id), "measurement_boundary", {
         {"ab", "a", "b", {{x, 0}, {x + 4, tilt}, 0}},
@@ -216,12 +330,22 @@ void boundary_relationship_workflows() {
     }
     auto curved = decode_identified_boundary_entity(boundary("curve"));
     curved.segments[0].segment.sweep_radians = 0.2;
-    require(!ConstraintDialog::supportsEntity(encode_identified_boundary_entity(curved)), "curved boundary offered unsupported constraints");
-    const auto unsupported = Document::create({encode_identified_boundary_entity(curved)});
-    bool explicitly_unavailable = false;
-    try { ConstraintDialog dialog(unsupported.snapshot(), "curve", true); }
-    catch (const std::invalid_argument& error) { explicitly_unavailable = std::string(error.what()).find("straight") != std::string::npos; }
-    require(explicitly_unavailable, "curved selected owner must be explicitly unavailable");
+    require(ConstraintDialog::supportsEntity(encode_identified_boundary_entity(curved)), "curved boundary must offer endpoint constraints");
+    auto curved_document = Document::create({encode_identified_boundary_entity(curved)});
+    const auto curved_original = curved_document.snapshot();
+    ConstraintDialog curve_dialog(curved_original, "curve", true);
+    select_relation(curve_dialog, ConstraintRelationKind::fixed_length);
+    curve_dialog.setLengthExpression("5 m");
+    require(curve_dialog.previewEdit() && curve_dialog.submit(), "curved boundary endpoint-distance preview failed");
+    capture(curve_dialog, "curved-boundary-endpoint-distance");
+    apply_constraint_authoring(curved_document, *curve_dialog.acceptedPreview());
+    const auto curve_after = decode_identified_boundary_entity(curved_document.snapshot().entities().at("curve"));
+    require(curve_after.segments[0].segment.sweep_radians == 0.2, "constraint flattened the boundary arc");
+    require_near(std::hypot(curve_after.segments[0].segment.end.x - curve_after.segments[0].segment.start.x,
+        curve_after.segments[0].segment.end.y - curve_after.segments[0].segment.start.y), 5);
+    require(segment_length(curve_after.segments[0].segment) > 5, "endpoint-distance relation became an arc-length lock");
+    curved_document.undo(curved_document.revision());
+    require(curved_document.snapshot().entities() == curved_original.entities(), "curved relation did not undo atomically");
 }
 int endpoint_choice(QComboBox& field, const QString& owner, const QString& endpoint) {
     for (int i = 0; i < field.count(); ++i)
@@ -373,7 +497,7 @@ void room_boundary_mixed_choices_and_reopen() {
         document.redo(document.revision()); require(document.snapshot().entities() == edited.entities(), "room mixed edit redo was incomplete");
     }
     room.segments.front().segment.sweep_radians = 0.2;
-    require(!ConstraintDialog::supportsEntity(encode_identified_boundary_entity(room)), "curved room boundary must remain unavailable");
+    require(ConstraintDialog::supportsEntity(encode_identified_boundary_entity(room)), "curved room boundary must offer endpoint constraints");
 }
 QLabel& persistent_freedom(ConstraintDialog& dialog) {
     auto* label = dialog.findChild<QLabel*>("constraintPersistentFreedom");
@@ -470,6 +594,8 @@ int main(int argc, char** argv) {
         removal_preserves_comparison_owner_universe();
         unavailable_persistent_freedom_is_explicit();
         both_workspace_entrypoints();
+        analytical_curve_preview();
+        curved_wall_workspace_entrypoints();
         std::cout << "Constraint dialog workflows passed\n";
         return 0;
     } catch (const std::exception& error) {

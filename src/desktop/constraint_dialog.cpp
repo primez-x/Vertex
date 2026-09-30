@@ -120,7 +120,7 @@ public:
         owner->setObjectName(QStringLiteral("constraintDialog"));
         const auto& selected = snapshot.entities().at(selected_id);
         if (!ConstraintDialog::supportsEntity(selected))
-            throw std::invalid_argument("Select a straight wall or an identified straight boundary");
+            throw std::invalid_argument("Select a valid wall or an identified boundary");
         boundary_mode = selected.type != "wall";
         owner->setWindowTitle(boundary_mode ? QStringLiteral("Boundary dimensions and constraints") : QStringLiteral("Wall dimensions and constraints"));
         const auto available = owner->screen()->availableGeometry();
@@ -143,7 +143,8 @@ public:
         form->setRowWrapPolicy(QFormLayout::WrapLongRows);
         mode = new QComboBox(body);
         mode->setObjectName(QStringLiteral("constraintOperation"));
-        if (!boundary_mode) mode->addItem(QStringLiteral("Change wall length"), 0);
+        if (!boundary_mode && baseline(selected).sweep_radians == 0.0)
+            mode->addItem(QStringLiteral("Change wall length"), 0);
         mode->addItem(QStringLiteral("Add constraint"), 1);
         mode->addItem(QStringLiteral("Edit constraint"), 2);
         mode->addItem(QStringLiteral("Remove constraint"), 3);
@@ -156,7 +157,7 @@ public:
         for (const auto& [id, entity] : snapshot.entities()) {
             if (entity.type == "wall") {
                 try {
-                    if (baseline(entity).sweep_radians != 0.0) continue;
+                    if (!ConstraintDialog::supportsEntity(entity)) continue;
                     const auto name = entity.properties.value("name", id);
                     for (const auto role : {WallEndpointRole::start, WallEndpointRole::end}) {
                         endpoints.push_back({id, role});
@@ -190,7 +191,9 @@ public:
         for (const auto kind : {ConstraintRelationKind::horizontal, ConstraintRelationKind::vertical,
             ConstraintRelationKind::coincident, ConstraintRelationKind::fixed_length,
             ConstraintRelationKind::parallel, ConstraintRelationKind::perpendicular, ConstraintRelationKind::fixed_anchor})
-            relation->addItem(text(constraint_relation_name(kind)).replace('_', ' '), static_cast<int>(kind));
+            relation->addItem(kind == ConstraintRelationKind::fixed_length ? QStringLiteral("Endpoint distance") :
+                text(constraint_relation_name(kind)).replace('_', ' '), static_cast<int>(kind));
+        relation->setToolTip(QStringLiteral("Direction relationships use endpoint chords. Endpoint distance is the straight distance between chosen points, including on curved objects. It does not lock arc length or tangency."));
         form->addRow(QStringLiteral("Relationship"), relation);
         for (std::size_t index = 0; index < bindings.size(); ++index) {
             bindings[index] = new QComboBox(body);
@@ -419,7 +422,8 @@ public:
                     }
                 try {
                     const auto segment = boundary_mode ? decode_identified_boundary_entity(snapshot.entities().at(selected_id)).segments.front().segment : baseline(snapshot.entities().at(selected_id));
-                    length->setText(editable_dimension(segment_length(segment), metric));
+                    length->setText(editable_dimension(wall_resize ? segment_length(segment) :
+                        std::hypot(segment.end.x - segment.start.x, segment.end.y - segment.start.y), metric));
                     anchor_x->setText(editable_dimension(segment.start.x, true));
                     anchor_y->setText(editable_dimension(segment.start.y, true));
                 } catch (const std::exception&) { length->clear(); }
@@ -427,6 +431,8 @@ public:
         }
         const auto kind = static_cast<ConstraintRelationKind>(relation->currentData().toInt());
         const bool editing_relation = operation == 1 || operation == 2;
+        if (auto* label = qobject_cast<QLabel*>(form->labelForField(length)))
+            label->setText(wall_resize ? QStringLiteral("Wall length") : QStringLiteral("Endpoint distance"));
         const auto count = kind == ConstraintRelationKind::fixed_anchor ? 1U :
             (kind == ConstraintRelationKind::parallel || kind == ConstraintRelationKind::perpendicular ? 4U : 2U);
         form->setRowVisible(existing, operation >= 2);
@@ -611,11 +617,10 @@ public:
 
 bool ConstraintDialog::supportsEntity(const Entity& entity) noexcept {
     try {
-        if (entity.type == "wall") return baseline(entity).sweep_radians == 0.0;
+        if (entity.type == "wall") return segment_length(baseline(entity)) > default_geometry_tolerance_metres;
         if (!can_recognize_boundary_entity_type(entity.type)) return false;
         const auto boundary = decode_identified_boundary_entity(entity);
-        return !boundary.segments.empty() && std::all_of(boundary.segments.begin(), boundary.segments.end(),
-            [](const auto& edge) { return edge.segment.sweep_radians == 0.0; });
+        return !boundary.segments.empty();
     } catch (...) { return false; }
 }
 

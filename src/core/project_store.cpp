@@ -3,6 +3,7 @@
 #include "sketch/boundary_translation.hpp"
 #include "sketch/boundary_transform.hpp"
 #include "sketch/boundary_edit.hpp"
+#include "sketch/constraint_entity.hpp"
 
 #include <sqlite3.h>
 
@@ -39,6 +40,37 @@ bool supported_identified_boundary_model(const Entity& entity) noexcept {
     if (model->is_number_unsigned()) return model->get<std::uint64_t>() == 1;
     return model->is_number_integer() && model->get<std::int64_t>() == 1;
 }
+
+bool constraint_binds_curved_segment(const Entity& entity,
+                                   const std::map<std::string, Entity, std::less<>>& entities) {
+    if (entity.type != "constraint") return false;
+    // Malformed data is rejected by document restoration. The format guard
+    // qualifies only understood relations and their actual bound geometry.
+    try {
+        const auto decoded = decode_constraint_entity(entity);
+        if (!decoded.constraint) return false;
+        for (const auto& binding : decoded.constraint->bindings) {
+            const auto owner = entities.find(binding.owner_id);
+            if (owner == entities.end()) continue;
+            if (owner->second.type == "wall" && binding.segment_id.empty()) {
+                const auto baseline = owner->second.properties.find("baseline");
+                if (baseline == owner->second.properties.end() || !baseline->is_object()) continue;
+                const auto sweep = baseline->find("sweep_radians");
+                if (sweep != baseline->end() && sweep->is_number() && sweep->get<double>() != 0.0)
+                    return true;
+            } else if (supported_identified_boundary_model(owner->second)) {
+                const auto boundary = decode_identified_boundary_entity(owner->second);
+                const auto segment = std::find_if(boundary.segments.begin(), boundary.segments.end(),
+                    [&](const auto& value) { return value.segment_id == binding.segment_id; });
+                if (segment != boundary.segments.end() && segment->segment.sweep_radians != 0.0)
+                    return true;
+            }
+        }
+    } catch (const std::invalid_argument&) {
+        // Preserve the existing semantic-error path and opaque payload policy.
+    }
+    return false;
+}
 }  // namespace
 
 std::uint32_t ProjectStore::required_format_version(const DocumentSnapshot& snapshot) {
@@ -47,10 +79,20 @@ std::uint32_t ProjectStore::required_format_version(const DocumentSnapshot& snap
         if (revision.boundary_translation) required = std::max(required, 5U);
         if (revision.boundary_transform) required = std::max(required, 6U);
         if (revision.boundary_geometry_edit) required = std::max(required, 7U);
-        if (revision.boundary_constraint_changes) required = std::max(required, 8U);
+        if (revision.boundary_constraint_changes) {
+            required = std::max(required, 8U);
+            for (const auto& edit : revision.boundary_constraint_changes->wall_edits)
+                if (edit.version == 2) required = 10;
+        }
         if (revision.boundary_translations) required = std::max(required, 9U);
         for (const auto& [id, entity] : revision.entities) {
             (void)id;
+            if (constraint_binds_curved_segment(entity, revision.entities)) required = 10;
+            // The reserved envelope is semantic on a wall even when it was
+            // imported without its originating command history. Generic
+            // entities can retain a vendor property collision opaquely.
+            if (entity.type == "wall" && entity.extensions.contains("curve_input_derivation"))
+                required = 10;
             const bool identified_boundary =
                 can_recognize_boundary_entity_type(entity.type) &&
                 entity.properties.contains("boundary_model_version");
@@ -1373,6 +1415,7 @@ bool verify_sqlite_schema(sqlite3* database, bool allow_recovery = false) {
          sqlite3_column_int(user_version.get(), 0) != 7 &&
          sqlite3_column_int(user_version.get(), 0) != 8 &&
          sqlite3_column_int(user_version.get(), 0) != 9 &&
+         sqlite3_column_int(user_version.get(), 0) != 10 &&
          !(allow_recovery && sqlite3_column_int(user_version.get(), 0) == 4))) {
         storage_error(StorageErrorCode::unsupported_format,
                       "unsupported SQLite project user_version");
@@ -1582,11 +1625,11 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
                                std::string* verified_digest = nullptr) {
     const auto format = required_metadata(database, "format_version");
     if (format != "1" && format != "2" && format != "3" && format != "5" &&
-        format != "6" && format != "7" && format != "8" && format != "9" && !(recovery && format == "4")) {
+        format != "6" && format != "7" && format != "8" && format != "9" && format != "10" && !(recovery && format == "4")) {
         storage_error(StorageErrorCode::unsupported_format,
                       "unsupported project format version: " + format);
     }
-    const auto format_number = format == "9" ? 9U : format == "8" ? 8U : format == "7" ? 7U : (format == "6" ? 6U :
+    const auto format_number = format == "10" ? 10U : format == "9" ? 9U : format == "8" ? 8U : format == "7" ? 7U : (format == "6" ? 6U :
         (format == "5" ? 5U : (format == "4" ? 4U : (format == "3" ? 3U :
         (format == "2" ? 2U : 1U)))));
     Statement format_marker(database, "PRAGMA user_version");
@@ -1795,7 +1838,7 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
 
     const auto required_format = ProjectStore::required_format_version(snapshot);
     if (required_format > format_number) {
-        const auto reason = required_format >= 9 ? "boundary translation group" : required_format >= 8 ? "boundary constraint changes" : required_format >= 7 ? "boundary geometry edit" :
+        const auto reason = required_format >= 10 ? "curved endpoint constraint or wall proof" : required_format >= 9 ? "boundary translation group" : required_format >= 8 ? "boundary constraint changes" : required_format >= 7 ? "boundary geometry edit" :
             required_format >= 6 ? "boundary transform" : required_format >= 5 ? "boundary translation" : required_format >= 3 ? "boundary_authoring" :
                             "identified boundary, dimension or boundary draft";
         storage_error(StorageErrorCode::unsupported_format,
@@ -2105,7 +2148,7 @@ bool refuse_recovery_destination_for_document_save(HANDLE source) {
     }
     // A v5+ file can be either a document or an archive. Its hash-verified
     // backup must be decoded before publication to distinguish them safely.
-    return version == 5 || version == 6 || version == 7;
+    return version >= 5;
 }
 
 std::string hash_handle_contents(HANDLE source) {
