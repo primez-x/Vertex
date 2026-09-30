@@ -13938,15 +13938,28 @@ public:
                 throw std::invalid_argument("The calculation profile is unavailable.");
             }
             const auto workflow = calculation_workflow_name(property->properties);
-            const auto classification = area_classification_for_workflow(
+            const bool declared_appraisal = workflow == "appraisal" &&
+                property->properties.contains("appraisal_policy");
+            const auto parent_scope = area_scope_name(entity->properties);
+            if (declared_appraisal && entity->type == "room_boundary") {
+                throw std::invalid_argument("Architectural room boundaries are independent of appraisal deductions.");
+            }
+            auto classification = area_classification_for_workflow(
                 entity->properties, workflow);
-            if (!classification.has_value() || classification->empty()) {
+            auto profile = read_calculation_profile(property->properties);
+            if (declared_appraisal) {
+                // Deduction links edit physical geometry. Qualification and
+                // category derivation remain the report's responsibility, so
+                // incomplete facts cannot prevent correcting those links.
+                classification = "physical";
+                profile = CalculationProfile{"vertex-physical-deductions", 1,
+                    AreaUnit::square_metre, 2, {{"physical", {false, false}}}};
+            } else if (!classification.has_value() || classification->empty()) {
                 throw std::invalid_argument(
                     workflow == "appraisal"
                         ? "Assign an appraisal category before editing deductions."
                         : "Assign a measurement classification before editing deductions.");
             }
-            const auto profile = read_calculation_profile(property->properties);
             const auto base = read_boundary(entity->properties);
             const auto base_diagnostics = validate_boundary(base);
             if (!base_diagnostics.empty()) {
@@ -13973,6 +13986,14 @@ public:
                 if (!candidate_floor.has_value() || *candidate_floor != *floor_id) {
                     throw std::invalid_argument("Deduction boundaries must be on the active floor.");
                 }
+                if (declared_appraisal) {
+                    if (found->second.type == "room_boundary") {
+                        throw std::invalid_argument("Architectural room boundaries cannot be appraisal deductions.");
+                    }
+                    if (parent_scope == "building" && area_scope_name(found->second.properties) == "site") {
+                        throw std::invalid_argument("Site boundaries cannot be building-area deductions.");
+                    }
+                }
                 const auto boundary = read_boundary(found->second.properties);
                 const auto diagnostics = validate_boundary(boundary);
                 if (!diagnostics.empty()) {
@@ -13985,7 +14006,8 @@ public:
                 deductions.push_back({id, boundary});
             }
             MeasurementArea area{entity->id, *building_id, *floor_id, *classification,
-                                 base, deductions, factor.rational};
+                                 base, deductions, factor.rational,
+                                 parent_scope == "site" ? AreaScope::site : AreaScope::building};
             (void)calculate_area(area, profile);
 
             auto properties = entity->properties;

@@ -285,6 +285,85 @@ void declared_appraisal_qualifies_without_manual_categories() {
             "dialog must submit declarations through the same command");
 }
 
+void declared_appraisal_deductions_edit_without_manual_categories() {
+    sketch::desktop::MainWindow window;
+    const auto outer = window.createBoundary(square(0, 0, 3.048));
+    auto* workflow = window.findChild<QComboBox*>(QStringLiteral("calculationWorkflow"));
+    workflow->setCurrentIndex(workflow->findData(QStringLiteral("appraisal")));
+    require(window.editSelectedAppraisalFacts(declarations()), "declare deduction parent");
+    const auto hole = window.createBoundary(square(1, 1, 1));
+    require(window.editSelectedAppraisalFacts(declarations("residential_declared", "dwelling", "above", "open_to_below")),
+            "declare physical void without assigning a manual category");
+    require(window.selectEntity(outer), "select deduction parent");
+    auto* qualification = window.findChild<QLabel*>(QStringLiteral("appraisalQualification"));
+    auto* total = window.findChild<QLabel*>(QStringLiteral("appraisalPropertyTotal"));
+    auto* editor = window.findChild<QPushButton*>(QStringLiteral("editDeductions"));
+    require(qualification && total && editor, "declared appraisal needs deduction controls");
+    const auto apply_deductions = [&](const QStringList& ids) {
+        bool applied = false;
+        QTimer::singleShot(0, &window, [&] {
+            auto* dialog = window.findChild<QDialog*>(QStringLiteral("calculationDeductionDialog"));
+            require(dialog, "open the actual deduction editor");
+            auto* source = dialog->findChild<QComboBox*>(QStringLiteral("calculationDeductionSource"));
+            auto* list = dialog->findChild<QListWidget*>(QStringLiteral("calculationDeductionList"));
+            auto* add = dialog->findChild<QPushButton*>(QStringLiteral("addCalculationDeduction"));
+            auto* remove = dialog->findChild<QPushButton*>(QStringLiteral("removeCalculationDeduction"));
+            auto* buttons = dialog->findChild<QDialogButtonBox*>(QStringLiteral("calculationDeductionButtons"));
+            require(source && list && add && remove && buttons, "deduction editor exposes staged editing");
+            while (list->count() > 0) {
+                list->setCurrentRow(0);
+                remove->click();
+            }
+            for (const auto& id : ids) {
+                const auto index = source->findData(id);
+                require(index >= 0, "deduction candidate is available on the parent floor");
+                source->setCurrentIndex(index);
+                add->click();
+            }
+            buttons->button(QDialogButtonBox::Apply)->click();
+            applied = dialog->result() == QDialog::Accepted;
+            if (!applied) dialog->reject();
+        });
+        editor->click();
+        return applied;
+    };
+    const auto before = window.document().revision();
+    require(apply_deductions({hole}), "declared appraisal must link a void without requiring a manual category");
+    auto stored = window.document().snapshot().entities().at(outer.toStdString());
+    require(window.document().revision() == before + 1 &&
+                stored.properties.at("deduction_ids") == std::vector<std::string>{hole.toStdString()} &&
+                !stored.properties.contains("appraisal_category") &&
+                qualification->text().startsWith("Qualified") && total->text().contains("89.24"),
+            "physical deduction must persist once and automatically qualify the net appraisal total");
+    require(window.undoCommand() && qualification->text().contains("Unqualified") &&
+                !window.document().snapshot().entities().at(outer.toStdString()).properties.contains("deduction_ids") &&
+                window.redoCommand() && qualification->text().startsWith("Qualified") && total->text().contains("89.24"),
+            "deduction editing must undo and redo both links and automatic totals");
+    require(window.editSelectedFactor(QStringLiteral("0.5")) && apply_deductions({}) &&
+                qualification->text().contains("Unqualified") && apply_deductions({hole}) &&
+                qualification->text().contains("Unqualified") && window.editSelectedFactor(QStringLiteral("1")) &&
+                qualification->text().startsWith("Qualified") && total->text().contains("89.24"),
+            "unqualified factors must not prevent correcting deductions or enable adjusted automatic totals");
+    require(window.editSelectedAppraisalFacts(declarations().replace("\"finish\":\"finished\",", "")) &&
+                apply_deductions({}) && qualification->text().contains("Unqualified") &&
+                apply_deductions({hole}) && qualification->text().contains("Unqualified") &&
+                window.editSelectedAppraisalFacts(declarations()) &&
+                qualification->text().startsWith("Qualified") && total->text().contains("89.24"),
+            "incomplete facts must permit correcting deductions while continuing to withhold automatic totals");
+
+    const auto outside = window.createBoundary(square(10, 10, 1));
+    const auto site = window.createBoundary(square(0.25, 0.25, 0.25), QStringLiteral("survey"));
+    const auto room = window.createRoomBoundary(square(0.5, 0.5, 0.25));
+    require(window.selectEntity(outer), "restore parent selection for invalid deductions");
+    const auto stable = window.document().snapshot();
+    for (const auto& candidate : {outside, site, room}) {
+        require(!apply_deductions({candidate}) && window.document().revision() == stable.revision() &&
+                    window.document().snapshot().entities().at(outer.toStdString()).properties ==
+                        stable.entities().at(outer.toStdString()).properties,
+                "outside, site and architectural room deductions must fail without changing existing links");
+    }
+}
+
 void declared_exclusions_and_commercial_totals() {
     sketch::desktop::MainWindow window;
     const auto outer = window.createBoundary(square(0, 0, 3.048));
@@ -537,6 +616,7 @@ int main(int argc, char** argv) {
         appraisal_workflow_is_automatic_and_persistent();
         appraisal_redefinition_updates_the_active_category();
         declared_appraisal_qualifies_without_manual_categories();
+        declared_appraisal_deductions_edit_without_manual_categories();
         declared_exclusions_and_commercial_totals();
         declared_appraisal_excludes_site_boundaries();
         declared_appraisal_reports_selected_building_floor_and_property();

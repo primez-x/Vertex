@@ -124,6 +124,11 @@ the application's declared-facts policy; it is not ANSI, BOMA, or lender certifi
 The visible floor and building totals follow the selected area's floor and building;
 the property total remains the unrounded aggregate across all buildings.
 
+The deduction editor validates physical geometry independently of manual
+appraisal categories when a declared policy is present. Linking or removing a
+deduction does not assign a category or qualify incomplete facts; automatic
+totals still use the declared-facts qualification checks above.
+
 `build_appraisal_document_report` projects those same declarations and authoritative
 boundary geometries for sheets and export without depending on the currently
 selected object. The report is tied to a document revision and property, retains

@@ -1481,7 +1481,9 @@ Start with the workspace, draw a room, close it with the mouse, drag-select it, 
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U271 — Apply a typed deduction without double counting**
+  - Steps: Draw and qualify a 10 ft by 10 ft dwelling area using **Edit appraisal facts**. Draw an internal 1 m by 1 m boundary and declare it **Open to below**. Select the dwelling, open **Edit deductions...**, choose the internal boundary and apply. Do this without assigning manual appraisal categories. Undo and Redo the deduction.
   - Expected: Declare an internal boundary as Open to below, Stair footprint or Other void and link it as a deduction to its enclosing area. It reduces the enclosing physical area once and has no standalone contribution. An unlinked exclusion keeps the appraisal result visibly Unqualified instead of returning a plausible total.
+  - Expected for these dimensions: Linking the void shows Qualified and 89.24 ft² above-grade finished area. Undo removes the link and shows Unqualified because the exclusion is unlinked; Redo restores 89.24 ft². A deduction extending outside its enclosing area is rejected without changing the drawing or saved links.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
