@@ -87,8 +87,12 @@ void test_redefine_recovery() {
             window.setAttribute(Qt::WA_DontShowOnScreen, true);
             window.show();
             QApplication::processEvents();
-            id = window.createBoundary({{{0,0},{4,0},0}, {{4,0},{4,4},0},
-                {{4,4},{0,4},0}, {{0,4},{0,0},0}}, "living_area");
+            auto* source_canvas = dynamic_cast<desktop::PlanCanvas*>(window.findChild<QWidget*>("measurementPlanCanvas"));
+            require(window.beginBoundaryDrawing(BoundaryAuthoringMode::draw_first, "living_area"), "begin normal redefine source");
+            for (const auto point : {QPoint{-80,-80}, QPoint{80,-80}, QPoint{80,80}, QPoint{-80,80}})
+                draft_click(source_canvas, point);
+            draft_key(source_canvas, Qt::Key_Return);
+            id = window.selectedEntityId();
             require(!id.isEmpty() && window.selectEntity(id), "select redefine target");
             original_boundary = decode_identified_boundary_entity(window.document().snapshot().entities().at(id.toStdString()));
             const auto dimension_id = window.createAngleDimension(id,

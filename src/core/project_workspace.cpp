@@ -2,6 +2,9 @@
 
 #include "sketch/document_digest.hpp"
 #include "sketch/boundary_commit.hpp"
+#include "sketch/boundary_construction.hpp"
+#include "sketch/boundary_entity.hpp"
+#include "sketch/calculations.hpp"
 
 #include <limits>
 #include <stdexcept>
@@ -309,7 +312,78 @@ PreparedWorkspaceEdit ProjectWorkspace::prepare_revise_boundary(std::string_view
     return ticket;
 }
 
+nlohmann::json boundary_redefinition_classification_properties(const DocumentSnapshot& source,
+    const Entity& target, std::string_view classification) {
+    if (classification.empty()) throw std::invalid_argument("Redraw classification must not be empty");
+    const auto context = organize_project(source).drawing_context(target.id);
+    if (!context) throw std::invalid_argument("Redraw target has no resolved drawing context");
+    const auto& property = source.entities().at(context->property_id);
+    const auto workflow = property.properties.value("calculation_workflow", std::string{"measurement"});
+    if (workflow != "measurement" && workflow != "appraisal")
+        throw std::invalid_argument("Redraw calculation workflow must be measurement or appraisal");
+    nlohmann::json result = nlohmann::json::object();
+    if (workflow == "appraisal") {
+        const auto category = parse_appraisal_category(classification);
+        if (!category || *category == AppraisalAreaCategory::none)
+            throw std::invalid_argument("Redraw requires a defined appraisal area category");
+        const auto existing = target.properties.value("classification", std::string{});
+        const auto measurement = target.properties.value("measurement_classification",
+            !existing.empty() && !parse_appraisal_category(existing) ? existing : std::string{"measurement"});
+        result["classification"] = measurement;
+        result["measurement_classification"] = measurement;
+        result["appraisal_category"] = classification;
+    } else {
+        result["classification"] = classification;
+        result["measurement_classification"] = classification;
+    }
+    if (target.type == "room_boundary") result["name"] = classification;
+    return result;
+}
+
+void validate_workspace_boundary_redefinition_input(const DocumentSnapshot& source,
+    const BoundaryActiveRecovery& input, const EditBoundaryGeometry& command,
+    const BoundaryAuthoringResourcePolicy& policy) {
+    if (inspect_boundary_recovery_source(source, input.source) != BoundaryRecoverySourceStatus::current ||
+        command.expected_revision != source.revision() ||
+        command.edit.kind != BoundaryGeometryEditKind::redefine_boundary)
+        throw std::invalid_argument("Redraw finish must use its current source revision and typed replacement");
+    const auto operation = input.extensions.find("desktop_operation");
+    if (operation == input.extensions.end() || !operation->is_object() || operation->size() != 3 ||
+        !operation->contains("version") || !operation->at("version").is_number_integer() ||
+        operation->at("version") != 1 || !operation->contains("kind") ||
+        !operation->at("kind").is_string() || operation->at("kind") != "redefine" ||
+        !operation->contains("target_id") || !operation->at("target_id").is_string() ||
+        operation->at("target_id") != command.edit.boundary_id ||
+        command.edit.target_id != command.edit.boundary_id)
+        throw std::invalid_argument("Redraw finish does not match its archived target");
+    const auto target = source.entities().find(command.edit.boundary_id);
+    if (target == source.entities().end() || !can_recognize_boundary_entity_type(target->second.type) ||
+        inspect_boundary_entity_version(target->second).format != BoundaryEntityFormat::identified_v1 ||
+        organize_project(source).drawing_context(target->first) != std::optional{input.source.context})
+        throw std::invalid_argument("Redraw target has no matching identified boundary and drawing context");
+    const auto session = BoundaryAuthoringSession::from_recovery_checkpoint(input.checkpoint, policy);
+    if (session.phase() != BoundaryAuthoringPhase::completed || session.accepted_chains().size() != 1 ||
+        !session.accepted_chains().front().classified ||
+        command.edit.replacement_authoring.dump() !=
+            boundary_construction_envelope(session.accepted_chains().front(), session.options()).dump())
+        throw std::invalid_argument("Redraw finish does not match exactly one completed classified input chain");
+    if (command.edit.replacement_properties.dump() != boundary_redefinition_classification_properties(
+            source, target->second, session.accepted_chains().front().classification).dump())
+        throw std::invalid_argument("Redraw classification changes do not match its accepted input");
+    // Document's canonical adapter verifies ordered geometry, identity mapping,
+    // provenance and affected references against this exact construction proof.
+    (void)Document::preview_command(source, command);
+}
+
 PreparedWorkspaceEdit ProjectWorkspace::prepare_finish_boundary() const {
+    return prepare_finish_boundary_impl(nullptr);
+}
+
+PreparedWorkspaceEdit ProjectWorkspace::prepare_finish_boundary(const EditBoundaryGeometry& command) const {
+    return prepare_finish_boundary_impl(&command);
+}
+
+PreparedWorkspaceEdit ProjectWorkspace::prepare_finish_boundary_impl(const EditBoundaryGeometry* replacement) const {
     if (!state_->active) throw std::invalid_argument("there is no active boundary to finish");
     const auto source = state_->document->snapshot();
     if (inspect_boundary_recovery_source(source, state_->active->source) != BoundaryRecoverySourceStatus::current)
@@ -318,16 +392,23 @@ PreparedWorkspaceEdit ProjectWorkspace::prepare_finish_boundary() const {
         state_->active->checkpoint, resource_policy_);
     if (session.phase() != BoundaryAuthoringPhase::completed || session.accepted_chains().empty())
         throw std::invalid_argument("finish requires a completed boundary checkpoint");
+    if (replacement) {
+        validate_workspace_boundary_redefinition_input(source, *state_->active, *replacement, resource_policy_);
+    } else if (state_->active->extensions.contains("desktop_operation")) {
+        throw std::invalid_argument("Redraw input requires an explicit typed replacement finish");
+    }
     auto state = prepare_state();
     auto& candidate = *state->candidate;
     const BoundaryCommitIntent intent{session.options(), session.accepted_chains(),
         candidate.active->source.context, "Finish boundary"};
-    const auto preview = preview_boundary_commit(candidate.document->snapshot(), intent);
-    if (!preview.accepted())
-        throw std::invalid_argument(preview.diagnostics().empty() ? "boundary finish was rejected" : preview.diagnostics().front());
+    const auto preview = replacement ? std::optional<BoundaryCommitPreview>{} :
+        std::optional{preview_boundary_commit(candidate.document->snapshot(), intent)};
+    if (preview && !preview->accepted())
+        throw std::invalid_argument(preview->diagnostics().empty() ? "boundary finish was rejected" : preview->diagnostics().front());
     auto event = next_event(candidate, WorkspaceLifecycleKind::boundary_finish);
     event.input = archive_input(candidate, *candidate.active, event.event_id);
-    event.after_revision = apply_boundary_commit(*candidate.document, preview);
+    event.after_revision = replacement ? candidate.document->apply(*replacement) :
+        apply_boundary_commit(*candidate.document, *preview);
     append_document_event(candidate, event, WorkspaceDocumentEventKind::edit);
     candidate.navigation = record_workspace_operation(candidate.navigation, event.event_id,
         WorkspaceOperationKind::boundary_finish);

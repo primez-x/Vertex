@@ -15,25 +15,6 @@
 
 namespace sketch {
 namespace {
-constexpr std::array category_names{
-    std::pair{AppraisalAreaCategory::none, std::string_view{"none"}},
-    std::pair{AppraisalAreaCategory::above_grade_finished, std::string_view{"above_grade_finished"}},
-    std::pair{AppraisalAreaCategory::above_grade_unfinished, std::string_view{"above_grade_unfinished"}},
-    std::pair{AppraisalAreaCategory::below_grade_finished, std::string_view{"below_grade_finished"}},
-    std::pair{AppraisalAreaCategory::below_grade_unfinished, std::string_view{"below_grade_unfinished"}},
-    std::pair{AppraisalAreaCategory::garage, std::string_view{"garage"}},
-    std::pair{AppraisalAreaCategory::carport, std::string_view{"carport"}},
-    std::pair{AppraisalAreaCategory::porch, std::string_view{"porch"}},
-    std::pair{AppraisalAreaCategory::patio, std::string_view{"patio"}},
-    std::pair{AppraisalAreaCategory::deck, std::string_view{"deck"}},
-    std::pair{AppraisalAreaCategory::other_non_living, std::string_view{"other_non_living"}},
-    std::pair{AppraisalAreaCategory::above_grade_nonstandard_finished, std::string_view{"above_grade_nonstandard_finished"}},
-    std::pair{AppraisalAreaCategory::below_grade_nonstandard_finished, std::string_view{"below_grade_nonstandard_finished"}},
-    std::pair{AppraisalAreaCategory::noncontinuous_finished, std::string_view{"noncontinuous_finished"}},
-    std::pair{AppraisalAreaCategory::commercial_occupiable, std::string_view{"commercial_occupiable"}},
-    std::pair{AppraisalAreaCategory::commercial_common, std::string_view{"commercial_common"}},
-    std::pair{AppraisalAreaCategory::commercial_service, std::string_view{"commercial_service"}}};
-
 double tolerance(double area) { return std::max(1e-6, std::abs(area) * 1e-8); }
 void profile_valid(const CalculationProfile& p) {
     if (p.id.empty() || p.version == 0 || p.decimal_places > 6)
@@ -145,17 +126,10 @@ AreaTotal total(long double value, const CalculationProfile& p) {
 } // namespace
 
 std::string_view appraisal_category_name(AppraisalAreaCategory category) {
-    for (const auto& [value, name] : category_names)
+    for (const auto& [value, name] : detail::appraisal_category_tokens)
         if (category == value)
             return name;
     throw std::invalid_argument("Unknown appraisal area category");
-}
-
-std::optional<AppraisalAreaCategory> parse_appraisal_category(std::string_view name) {
-    for (const auto& [value, token] : category_names)
-        if (name == token)
-            return value;
-    return std::nullopt;
 }
 
 std::string_view appraisal_policy_kind_name(AppraisalPolicyKind value) {
@@ -438,7 +412,7 @@ double AppraisalTotals::nonstandard_finished_square_metres() const {
 
 CalculationProfile builtin_appraisal_profile() {
     CalculationProfile profile{"vertex-appraisal", 1, AreaUnit::square_foot, 2, {}};
-    for (const auto& [category, name] : category_names) {
+    for (const auto& [category, name] : detail::appraisal_category_tokens) {
         if (category != AppraisalAreaCategory::none)
             profile.classifications.emplace(std::string(name), ClassificationRule{
                 true, category == AppraisalAreaCategory::above_grade_finished, category});
@@ -461,7 +435,7 @@ AppraisalCalculationReport calculate_appraisal_areas(const std::vector<Measureme
         }
         AppraisalTotals finish(const CalculationProfile& profile) const {
             AppraisalTotals result;
-            for (const auto& [category, name] : category_names) {
+            for (const auto& [category, name] : detail::appraisal_category_tokens) {
                 if (category == AppraisalAreaCategory::none)
                     continue;
                 const auto value = values.find(category);

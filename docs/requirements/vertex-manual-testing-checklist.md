@@ -307,7 +307,8 @@ Start with the workspace, draw a room, close it with the mouse, drag-select it, 
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U053 — Reopen an existing area for editing**
-  - Expected: You can change its boundary and complete it again.
+  - Steps: Draw and close a rectangular room. Select it and run Redefine boundary from Commands. Draw a larger replacement and finish it. Repeat with a triangle. Start another redraw, try starting a new drawing, choose Cancel, then finish the retained redraw. Undo, Redo, save and reopen.
+  - Expected: The selected area changes in place. Its measurements and area total follow the new shape. Cancelling keeps the current redraw. One Undo restores the prior shape; Redo restores the replacement. Save/reopen retains the result and history. If an attached manual dimension or locked relationship cannot follow a different number of edges, the app explains the conflict and keeps the editable redraw.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 

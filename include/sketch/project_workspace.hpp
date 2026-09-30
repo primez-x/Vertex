@@ -50,6 +50,16 @@ struct WorkspaceLifecycleEvent {
     std::optional<WorkspaceArchivedInput> input;
 };
 
+// Bind a typed redraw to its exact archived authoring input. Shared by live
+// finish preparation and persisted lifecycle validation; this grants no commit
+// authority and never changes the source snapshot.
+void validate_workspace_boundary_redefinition_input(const DocumentSnapshot&,
+    const BoundaryActiveRecovery&, const EditBoundaryGeometry&,
+    const BoundaryAuthoringResourcePolicy& = boundary_authoring_default_resource_policy);
+// Canonical classification changes shared by redraw UI and history validation.
+[[nodiscard]] nlohmann::json boundary_redefinition_classification_properties(
+    const DocumentSnapshot&, const Entity& target, std::string_view classification);
+
 // Detached owner-thread capture for background readers. Its document, draft,
 // history and counters describe the same workspace state. It grants neither
 // publication/acknowledgement authority nor filesystem ownership. Copies own
@@ -157,6 +167,7 @@ public:
     // Requires an already completed, classified current-source checkpoint.
     // Does not synthesize closure, classification, or replacement identities.
     [[nodiscard]] PreparedWorkspaceEdit prepare_finish_boundary() const;
+    [[nodiscard]] PreparedWorkspaceEdit prepare_finish_boundary(const EditBoundaryGeometry&) const;
     // Explicitly starts fresh input from a retained retired view, bound to the
     // current document and original context. The retired view stays available.
     [[nodiscard]] PreparedWorkspaceEdit prepare_revise_boundary(std::string_view identity_namespace) const;
@@ -182,6 +193,7 @@ private:
         std::uint64_t checkpoint_generation);
     [[nodiscard]] std::unique_ptr<PreparedWorkspaceEdit::State> prepare_state() const;
     [[nodiscard]] PreparedWorkspaceEdit prepare_document_edit(const Command&) const;
+    [[nodiscard]] PreparedWorkspaceEdit prepare_finish_boundary_impl(const EditBoundaryGeometry*) const;
     [[nodiscard]] PreparedWorkspaceEdit prepare_navigation(bool redo) const;
 
     std::unique_ptr<detail::WorkspaceDocumentState> state_;

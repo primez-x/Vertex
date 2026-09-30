@@ -737,6 +737,18 @@ instead of a fake projection. The native export method therefore reports an
 unavailable viewer on those platforms. Broader production 3D coverage remains
 outside this checkpoint.
 
+## Redrawing areas
+
+Select a closed area and run **Redefine boundary** from Commands to redraw it
+in place. Normal Draw First areas and areas edited afterward retain their exact
+original inputs and new construction evidence. A different number of edges
+creates fresh edge identities and automatic dimensions. Manual edge references
+and endpoint constraints that cannot be mapped safely produce a diagnostic and
+retain the redraw for correction. Finishing updates the shape and retires the
+draft in one history operation; Undo restores the previous shape and retains
+the redraw input for recovery. The selected layer is activated before redraw,
+and appraisal categories remain separate from measurement classifications.
+
 ## Declared appraisal facts
 
 In Measurement workspace, select a closed boundary, choose the Appraisal workflow,

@@ -1642,7 +1642,7 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
         }
         if (format_number >= 7 && sqlite3_column_type(revisions.get(), 9) != SQLITE_NULL) {
             const auto proof = parse_budgeted_json(
-                column_text(revisions.get(), 9, 2048, "boundary_edit_json"), true,
+                column_text(revisions.get(), 9, kMaximumJsonBytes, "boundary_edit_json"), true,
                 "boundary_edit_json", decode_budget);
             try { record.boundary_geometry_edit = decode_boundary_geometry_edit(proof); }
             catch (const std::exception& error) {

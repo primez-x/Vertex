@@ -822,10 +822,109 @@ void test_typed_vertex_split_preserves_identity_and_rejects_forgery() {
 
 } // namespace
 
+void test_boundary_redefinition_proofs_and_reference_policy() {
+    using namespace sketch;
+    const auto accepted_rectangle = [](Vec2 anchor, const char* width, const char* height,
+                                        const char* negative_width, const char* negative_height) {
+        BoundaryAuthoringOptions options;
+        options.automatic_dimension_placement = true;
+        BoundaryAuthoringSession session(BoundaryAuthoringMode::draw_first, options);
+        (void)session.anchor(anchor);
+        (void)session.add_line_rise_run(parse_quantity("0 m"), parse_quantity(width));
+        (void)session.add_line_rise_run(parse_quantity(height), parse_quantity("0 m"));
+        (void)session.add_line_rise_run(parse_quantity("0 m"), parse_quantity(negative_width));
+        (void)session.add_line_rise_run(parse_quantity(negative_height), parse_quantity("0 m"));
+        session.classify_current_chain("living");
+        return std::pair{session.close_chain(), options};
+    };
+    const auto [accepted, options] = accepted_rectangle({0,0}, "4 m", "3 m", "-4 m", "-3 m");
+    const auto [new_chain, new_options] = accepted_rectangle({1,1}, "5 m", "4 m", "-5 m", "-4 m");
+    auto owner = encode_identified_boundary_entity(accepted.boundary);
+    owner.properties["boundary_authoring"] = boundary_construction_envelope(accepted, options);
+    owner.properties["factor"] = 0.5;
+    owner.extensions["vendor_note"] = "preserve";
+    auto replacement = accepted.boundary;
+    for (std::size_t i = 0; i < replacement.segments.size(); ++i) replacement.segments[i].segment = new_chain.boundary.segments[i].segment;
+    BoundaryGeometryEdit redefine;
+    redefine.kind = BoundaryGeometryEditKind::redefine_boundary;
+    redefine.boundary_id = redefine.target_id = owner.id;
+    redefine.replacement_segments = encode_identified_boundary_entity(replacement).properties.at("segments");
+    redefine.replacement_authoring = boundary_construction_envelope(new_chain, new_options);
+    redefine.replacement_properties = {{"classification", "living"}};
+    require(encode_boundary_geometry_edit(redefine).dump().size() > 2048,
+        "replacement receipt fixture must exercise the former storage read limit");
+    require(decode_boundary_geometry_edit(encode_boundary_geometry_edit(redefine)) == redefine, "redefine proof must round trip");
+    std::vector<Entity> entities{owner};
+    for (const auto& dimension : accepted.dimensions) entities.push_back(encode_boundary_dimension_entity(dimension));
+    BoundaryDimension angle{"retained-angle", owner.id, accepted.boundary.segments[0].segment_id, {2,1}};
+    angle.kind = BoundaryDimensionKind::angle;
+    angle.secondary_segment_id = accepted.boundary.segments[1].segment_id;
+    angle.vertex_id = accepted.boundary.segments[0].end_vertex_id;
+    entities.push_back(encode_boundary_dimension_entity(angle));
+    {
+        PersistentConstraint lock;
+        lock.id = "redraw-fixed-length";
+        lock.relation = ConstraintRelationKind::fixed_length;
+        const auto& edge = accepted.boundary.segments.front();
+        lock.bindings = {{owner.id, WallEndpointRole::start, edge.segment_id, edge.start_vertex_id},
+                         {owner.id, WallEndpointRole::end, edge.segment_id, edge.end_vertex_id}};
+        lock.length = parse_quantity("4 m");
+        auto constrained_entities = entities;
+        constrained_entities.push_back(encode_constraint_entity(lock));
+        auto constrained = Document::create(constrained_entities);
+        const auto before_constraint = constrained.snapshot();
+        bool rejected_constraint = false;
+        try { constrained.apply(EditBoundaryGeometry{constrained.revision(), redefine}); }
+        catch (const DocumentError&) { rejected_constraint = true; }
+        require(rejected_constraint && constrained.snapshot().entities() == before_constraint.entities(),
+            "same-count redraw cannot silently violate a retained fixed length");
+    }
+    auto document = Document::create(entities);
+    const auto before = document.snapshot();
+    document.apply(EditBoundaryGeometry{document.revision(), redefine});
+    const auto after = document.snapshot();
+    const auto& updated = after.entities().at(owner.id);
+    require(updated.properties.at("factor") == 0.5 && updated.extensions.at("vendor_note") == "preserve" &&
+        updated.extensions.at("boundary_geometry_derivation").at("source_boundary_authoring") == owner.properties.at("boundary_authoring") &&
+        updated.extensions.at("boundary_geometry_derivation").at("operations")[0].at("value").at("replacement_authoring") == redefine.replacement_authoring,
+        "redefinition must preserve old metadata and exact old/new input evidence");
+    require(after.entities().at(angle.id) == before.entities().at(angle.id) &&
+        std::isfinite(angle.resolve(updated).angle()), "manual angle identity, metadata and resolution must survive same-count redraw");
+    auto reopened = reopen(after, 7);
+    require(reopened.snapshot().entities() == after.entities(), "large redefinition proof must reopen exactly");
+    auto forged = after;
+    const_cast<std::vector<RevisionRecord>&>(forged.history()).back().boundary_geometry_edit->replacement_segments[0]["end"][0] = 99;
+    require_invalid_snapshot_not_published(forged);
+    document.undo(document.revision());
+    require(document.snapshot().entities() == before.entities(), "redefinition undo must restore exact source input");
+    document.redo(document.revision());
+    require(document.snapshot().entities() == after.entities(), "redefinition redo must restore exact replacement input");
+    IdentifiedBoundary triangle{owner.id, owner.type, {{"new-e0","new-v0","new-v1",{{0,0},{4,0},0}},
+        {"new-e1","new-v1","new-v2",{{4,0},{2,3},0}}, {"new-e2","new-v2","new-v0",{{2,3},{0,0},0}}}};
+    auto topology = redefine;
+    topology.replacement_segments = encode_identified_boundary_entity(triangle).properties.at("segments");
+    topology.replacement_authoring = nullptr;
+    topology.replacement_dimension_ids = {"new-d0", "new-d1", "new-d2"};
+    bool rejected = false;
+    try { document.apply(EditBoundaryGeometry{document.revision(), topology}); }
+    catch (const DocumentError&) { rejected = true; }
+    require(rejected && document.snapshot().entities() == after.entities(), "changed-count redraw must reject ambiguous manual edge references atomically");
+    document.apply(ApplyEntityChanges{document.revision(), {EntityChange::erase(angle.id)}, {}, "remove manual target"});
+    document.apply(EditBoundaryGeometry{document.revision(), topology});
+    const auto changed = document.snapshot();
+    require(decode_identified_boundary_entity(changed.entities().at(owner.id)) == triangle,
+        "changed-count explicit geometry intent must retain the owner and replace topology");
+    for (const auto& id : topology.replacement_dimension_ids)
+        require(decode_boundary_dimension_entity(changed.entities().at(id)).dimension->resolve(changed.entities().at(owner.id)).segment_length() > 0,
+            "regenerated automatic dimensions must resolve against fresh topology");
+    require(reopen(changed, 7).snapshot().entities() == changed.entities(), "count-changing explicit geometry proof must reopen");
+}
+
 int main() {
     try {
         test_raw_commands_cannot_bypass_identity_validation();
         test_typed_vertex_split_preserves_identity_and_rejects_forgery();
+        test_boundary_redefinition_proofs_and_reference_policy();
         test_downgrade_is_rejected_but_upgrade_undo_is_valid();
         test_future_boundary_version_is_preserved_read_only();
         test_dimension_references_are_atomic_and_survive_history();

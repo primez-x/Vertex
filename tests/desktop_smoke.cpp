@@ -48,6 +48,7 @@
 #include <QLineEdit>
 #include <QListWidget>
 #include <QMenu>
+#include <QMessageBox>
 #include <QPainter>
 #include <QPageSize>
 #include <QPdfWriter>
@@ -1986,6 +1987,110 @@ void test_direct_boundary_geometry_edit_workflow() {
         [](const RevisionRecord& record) { return record.boundary_transform.has_value(); });
     require(persisted_edits == 4 && persisted_transforms == 1,
             "typed edit and transform proofs must survive save and reopen");
+}
+
+void test_normal_receipt_boundary_redefinition_workflow() {
+    const ScenarioTiming scenario_timing(__func__);
+    using namespace sketch;
+    for (const bool derived : {false, true}) {
+        desktop::MainWindow window;
+        window.setAttribute(Qt::WA_DontShowOnScreen, true);
+        window.resize(1200, 800);
+        window.show();
+        QApplication::processEvents();
+        auto* canvas = dynamic_cast<desktop::PlanCanvas*>(window.findChild<QWidget*>("measurementPlanCanvas"));
+        require(canvas && window.beginBoundaryDrawing(BoundaryAuthoringMode::draw_first, "living_area"),
+            "normal redefine fixture must enter Draw First");
+        const auto click = [&](QPoint offset) {
+            const QPointF point(canvas->rect().center() + offset);
+            QMouseEvent press(QEvent::MouseButtonPress, point, point, Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+            QMouseEvent release(QEvent::MouseButtonRelease, point, point, Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+            QApplication::sendEvent(canvas, &press);
+            QApplication::sendEvent(canvas, &release);
+        };
+        const auto key = [&](int value) {
+            QKeyEvent event(QEvent::KeyPress, value, Qt::NoModifier);
+            QApplication::sendEvent(canvas, &event);
+        };
+        for (const auto point : {QPoint{-80,-80}, QPoint{80,-80}, QPoint{80,80}, QPoint{-80,80}}) click(point);
+        key(Qt::Key_Return);
+        const auto id = window.selectedEntityId();
+        require(!id.isEmpty(), "normal source rectangle must close");
+        const auto original_receipt = window.document().snapshot().entities().at(id.toStdString()).properties.at("boundary_authoring");
+        auto geometry = decode_identified_boundary_entity(window.document().snapshot().entities().at(id.toStdString()));
+        if (derived) {
+            auto point = geometry.segments[0].segment.end;
+            point.x += 0.1;
+            require(window.moveSelectedBoundaryVertex(QString::fromStdString(geometry.segments[0].end_vertex_id), point),
+                "derived redefine fixture must retain a prior edit");
+        }
+        const auto before = window.document().snapshot();
+        window.showBoundaryRedefinition();
+        require(canvas->boundaryDraftPreview().has_value(),
+            "normal receipt-backed area must open its redraw editor");
+        click({-120,-100});
+        key(Qt::Key_Escape);
+        require(window.document().snapshot().entities() == before.entities(), "cancel redraw must preserve the source exactly");
+        require(window.selectEntity(id), "cancelled redraw target must remain selectable");
+        window.showBoundaryRedefinition();
+        click({-120,-100});
+        const auto redraw_input = canvas->boundaryDraftPreview();
+        bool prompted = false;
+        QTimer::singleShot(0, &window, [&] {
+            auto* prompt = qobject_cast<QMessageBox*>(QApplication::activeModalWidget());
+            require(prompt && prompt->windowTitle() == "Unfinished boundary", "replace redraw must show discard confirmation");
+            prompted = true; prompt->done(QMessageBox::Cancel);
+        });
+        require(!window.beginBoundaryDrawing(BoundaryAuthoringMode::draw_first, "garage") && prompted &&
+            canvas->boundaryDraftPreview().has_value() && redraw_input.has_value() &&
+            window.document().snapshot().entities() == before.entities(),
+            "cancelling a new drawing must retain the redraw target and current input");
+        for (const auto point : {QPoint{120,-100}, QPoint{120,100}, QPoint{-120,100}}) click(point);
+        key(Qt::Key_Return);
+        const auto after = window.document().snapshot();
+        require(!canvas->boundaryDraftPreview() && after.entities().contains(id.toStdString()) &&
+            after.entities().size() == before.entities().size(), "normal redraw must replace the source in place");
+        const auto& entity = after.entities().at(id.toStdString());
+        const auto redefined = decode_identified_boundary_entity(entity);
+        require(redefined != decode_identified_boundary_entity(before.entities().at(id.toStdString())) &&
+            redefined.segments[0].segment_id == geometry.segments[0].segment_id &&
+            entity.extensions.at("boundary_geometry_derivation").at("source_boundary_authoring") == original_receipt,
+            "redraw must preserve owner/topology/history while using the new input receipts");
+        for (const auto& [dimension_id, dimension] : after.entities()) {
+            (void)dimension_id;
+            if (dimension.type == "dimension") (void)decode_boundary_dimension_entity(dimension).dimension->resolve(entity);
+        }
+        require(window.undoCommand() && window.document().snapshot().entities() == before.entities() &&
+            window.redoCommand() && window.document().snapshot().entities() == after.entities(), "redraw must navigate exactly");
+        if (!derived) {
+            require(window.selectEntity(id), "count-changing redraw must retain the source selection");
+            window.showBoundaryRedefinition();
+            for (const auto point : {QPoint{-100,-100}, QPoint{100,-100}, QPoint{0,100}}) click(point);
+            key(Qt::Key_Return);
+            const auto changed = window.document().snapshot();
+            const auto triangle = decode_identified_boundary_entity(changed.entities().at(id.toStdString()));
+            require(!canvas->boundaryDraftPreview() && triangle.segments.size() == 3 &&
+                triangle.segments[0].segment_id != redefined.segments[0].segment_id &&
+                changed.entities().size() + 1 == after.entities().size(),
+                "normal redraw may change edge count by retiring topology and regenerating automatic dimensions");
+        }
+        const auto final_source = window.document().snapshot().entities().at(id.toStdString());
+        const auto capture_directory = qEnvironmentVariable("VERTEX_TEST_CAPTURE_DIR");
+        if (!derived && !capture_directory.isEmpty()) {
+            require(QDir().mkpath(capture_directory) && canvas->grab().save(
+                QDir(capture_directory).filePath("boundary-redefinition.png")), "redraw canvas capture must save");
+        }
+        require(window.selectEntity(id) && window.transformSelectedBoundary("0", false, false, "2 m", "1 m", true),
+            "redrawn construction evidence must clone");
+        const auto cloned = window.document().snapshot().entities().at(window.selectedEntityId().toStdString());
+        QTemporaryDir directory;
+        const auto path = directory.filePath("normal-redraw.bldproj");
+        require(directory.isValid() && window.saveProjectAs(path), "normal redraw history must save");
+        desktop::MainWindow reopened;
+        require(reopened.openProject(path) && reopened.document().snapshot().entities().at(id.toStdString()) == final_source &&
+            reopened.document().snapshot().entities().at(cloned.id) == cloned, "normal and derived redraws must reopen exactly");
+        window.hide();
+    }
 }
 
 void test_boundary_redefinition_workflow() {
@@ -5748,6 +5853,12 @@ int main(int argc, char** argv) {
         std::cout << "Boundary insertion workflow tests passed\n";
         return 0;
     }
+    if (argc == 2 && std::string_view(argv[1]) == "--boundary-redefinition-only") {
+        test_normal_receipt_boundary_redefinition_workflow();
+        test_boundary_redefinition_workflow();
+        std::cout << "Boundary redefinition workflow tests passed\n";
+        return 0;
+    }
     if (argc == 2 && std::string_view(argv[1]) == "--section-overlays-only") {
         test_section_overlay_workflow();
         std::cout << "Section overlay workflow tests passed\n";
@@ -5824,6 +5935,7 @@ int main(int argc, char** argv) {
     test_boundary_vertex_insertion_workflow();
     test_direct_boundary_geometry_edit_workflow();
     test_interactive_receipt_boundary_insertion_workflow();
+    test_normal_receipt_boundary_redefinition_workflow();
     test_boundary_redefinition_workflow();
     test_automatic_room_boundary_detection_workflow();
     test_explicit_boundary_geometry_operations();

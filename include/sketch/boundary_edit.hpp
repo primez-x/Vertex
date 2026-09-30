@@ -8,14 +8,16 @@
 #include <stdexcept>
 #include <set>
 #include <string>
+#include <vector>
 
 namespace sketch {
 
-enum class BoundaryGeometryEditKind { move_vertex, resize_segment, insert_vertex };
+enum class BoundaryGeometryEditKind { move_vertex, resize_segment, insert_vertex, redefine_boundary };
 enum class BoundaryFixedEndpoint { start, end };
 
-// Replayable semantic intent for a coordinate edit that retains boundary,
-// segment and vertex identities. A receipt-backed boundary archives its exact
+// Replayable semantic intent that retains the boundary identity. Coordinate
+// edits retain existing children; changed-count redraws explicitly retire them.
+// A receipt-backed boundary archives its exact
 // construction receipt and appends these intents as deterministic derivation
 // evidence; historical input is never rewritten to impersonate the new shape.
 struct BoundaryGeometryEdit {
@@ -30,6 +32,10 @@ struct BoundaryGeometryEdit {
     std::string new_vertex_id;
     std::string new_segment_id;
     std::string new_dimension_id;
+    nlohmann::json replacement_segments = nullptr;
+    nlohmann::json replacement_authoring = nullptr;
+    nlohmann::json replacement_properties = nlohmann::json::object();
+    std::vector<std::string> replacement_dimension_ids;
 
     bool operator==(const BoundaryGeometryEdit& other) const {
         return boundary_id == other.boundary_id && kind == other.kind &&
@@ -39,7 +45,9 @@ struct BoundaryGeometryEdit {
             target_length_metres == other.target_length_metres &&
             fixed_endpoint == other.fixed_endpoint && move_connected == other.move_connected &&
             fraction == other.fraction && new_vertex_id == other.new_vertex_id &&
-            new_segment_id == other.new_segment_id && new_dimension_id == other.new_dimension_id;
+            new_segment_id == other.new_segment_id && new_dimension_id == other.new_dimension_id &&
+            replacement_segments == other.replacement_segments && replacement_authoring == other.replacement_authoring &&
+            replacement_properties == other.replacement_properties && replacement_dimension_ids == other.replacement_dimension_ids;
     }
 };
 
@@ -55,6 +63,10 @@ inline void validate_boundary_geometry_edit(const BoundaryGeometryEdit& edit) {
     };
     if (!valid_id(edit.boundary_id) || !valid_id(edit.target_id))
         throw std::invalid_argument("Boundary geometry edit identifiers are invalid");
+    if (edit.kind != BoundaryGeometryEditKind::redefine_boundary &&
+        (!edit.replacement_segments.is_null() || !edit.replacement_authoring.is_null() ||
+         !edit.replacement_properties.empty() || !edit.replacement_dimension_ids.empty()))
+        throw std::invalid_argument("Boundary coordinate edit contains redefinition fields");
     if (edit.kind != BoundaryGeometryEditKind::insert_vertex &&
         (edit.fraction != 0.0 || !edit.new_vertex_id.empty() || !edit.new_segment_id.empty() ||
          !edit.new_dimension_id.empty()))
@@ -80,6 +92,28 @@ inline void validate_boundary_geometry_edit(const BoundaryGeometryEdit& edit) {
             edit.target_position.y != 0.0 || edit.target_length_metres != 0.0 ||
             edit.move_connected || edit.fixed_endpoint != BoundaryFixedEndpoint::start)
             throw std::invalid_argument("Boundary insertion edit contains incompatible fields");
+    } else if (edit.kind == BoundaryGeometryEditKind::redefine_boundary) {
+        if (edit.target_id != edit.boundary_id || !edit.replacement_segments.is_array() ||
+            edit.replacement_segments.empty() ||
+            (!edit.replacement_authoring.is_null() && !edit.replacement_authoring.is_object()) ||
+            !edit.replacement_properties.is_object() || edit.target_position.x != 0 ||
+            edit.target_position.y != 0 || edit.target_length_metres != 0 || edit.move_connected ||
+            edit.fixed_endpoint != BoundaryFixedEndpoint::start)
+            throw std::invalid_argument("Boundary redefinition fields are invalid");
+        for (const auto& [key, value] : edit.replacement_properties.items()) {
+            if ((key != "classification" && key != "measurement_classification" &&
+                 key != "appraisal_category" && key != "name") || !value.is_string() ||
+                value.get_ref<const std::string&>().empty() || value.get_ref<const std::string&>().size() > 4096)
+                throw std::invalid_argument("Boundary redefinition metadata fields are invalid");
+        }
+        std::set<std::string> dimensions;
+        for (const auto& id : edit.replacement_dimension_ids)
+            if (!valid_id(id) || !dimensions.insert(id).second)
+                throw std::invalid_argument("Boundary redefinition dimension IDs are invalid");
+        if (edit.replacement_segments.dump().size() + edit.replacement_authoring.dump().size() +
+            edit.replacement_properties.dump().size() + nlohmann::json(edit.replacement_dimension_ids).dump().size() >
+            1024 * 1024 - 4096)
+            throw std::invalid_argument("Boundary redefinition exceeds the persisted proof budget");
     } else {
         throw std::invalid_argument("Boundary geometry edit kind is unsupported");
     }
@@ -97,6 +131,11 @@ inline nlohmann::json encode_boundary_geometry_edit(const BoundaryGeometryEdit& 
                 {"segment_id", edit.target_id}, {"fraction", edit.fraction},
                 {"new_vertex_id", edit.new_vertex_id}, {"new_segment_id", edit.new_segment_id},
                 {"new_dimension_id", edit.new_dimension_id}};
+    }
+    if (edit.kind == BoundaryGeometryEditKind::redefine_boundary) {
+        return {{"version", 1}, {"kind", "redefine_boundary"}, {"boundary_id", edit.boundary_id},
+            {"replacement_segments", edit.replacement_segments}, {"replacement_authoring", edit.replacement_authoring},
+            {"replacement_properties", edit.replacement_properties}, {"replacement_dimension_ids", edit.replacement_dimension_ids}};
     }
     return {{"version", 1}, {"kind", "resize_segment"},
             {"boundary_id", edit.boundary_id}, {"segment_id", edit.target_id},
@@ -162,6 +201,19 @@ inline BoundaryGeometryEdit decode_boundary_geometry_edit(const nlohmann::json& 
         result.new_vertex_id = value.at("new_vertex_id").get<std::string>();
         result.new_segment_id = value.at("new_segment_id").get<std::string>();
         result.new_dimension_id = value.at("new_dimension_id").get<std::string>();
+    } else if (kind == "redefine_boundary") {
+        const std::set<std::string> expected{"version", "kind", "boundary_id", "replacement_segments",
+            "replacement_authoring", "replacement_properties", "replacement_dimension_ids"};
+        std::set<std::string> actual;
+        for (const auto& [key, ignored] : value.items()) { (void)ignored; actual.insert(key); }
+        if (actual != expected || !value.at("replacement_dimension_ids").is_array())
+            throw std::invalid_argument("Boundary redefinition fields are invalid");
+        result.kind = BoundaryGeometryEditKind::redefine_boundary;
+        result.target_id = result.boundary_id;
+        result.replacement_segments = value.at("replacement_segments");
+        result.replacement_authoring = value.at("replacement_authoring");
+        result.replacement_properties = value.at("replacement_properties");
+        result.replacement_dimension_ids = value.at("replacement_dimension_ids").get<std::vector<std::string>>();
     } else {
         throw std::invalid_argument("Boundary geometry edit kind is unsupported");
     }

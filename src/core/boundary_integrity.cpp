@@ -114,6 +114,45 @@ IdentifiedBoundary apply_geometry_edit(const IdentifiedBoundary& source,
     if (edit.kind == BoundaryGeometryEditKind::insert_vertex)
         return insert_boundary_vertex(source, edit.target_id, edit.fraction,
                                       edit.new_vertex_id, edit.new_segment_id);
+    if (edit.kind == BoundaryGeometryEditKind::redefine_boundary) {
+        const std::set<std::string> fields{"segment_id", "start_vertex_id", "end_vertex_id", "start", "end", "sweep_radians"};
+        for (const auto& edge : edit.replacement_segments) {
+            if (!edge.is_object()) throw std::invalid_argument("Redefinition edge must be an object");
+            std::set<std::string> actual;
+            for (const auto& [key, ignored] : edge.items()) { (void)ignored; actual.insert(key); }
+            if (actual != fields) throw std::invalid_argument("Redefinition edge contains unsupported fields");
+        }
+        const auto replacement = decode_identified_boundary_entity(Entity{source.id, source.type,
+            {{"boundary_model_version", 1}, {"segments", edit.replacement_segments}}, false, nlohmann::json::object()});
+        if (replacement.segments.size() == source.segments.size()) {
+            for (std::size_t i = 0; i < source.segments.size(); ++i)
+                if (replacement.segments[i].segment_id != source.segments[i].segment_id ||
+                    replacement.segments[i].start_vertex_id != source.segments[i].start_vertex_id ||
+                    replacement.segments[i].end_vertex_id != source.segments[i].end_vertex_id)
+                    throw std::invalid_argument("Same-count redefinition must retain ordered child identities");
+        } else {
+            std::set<std::string> retired;
+            for (const auto& edge : source.segments) {
+                retired.insert(edge.segment_id); retired.insert(edge.start_vertex_id); retired.insert(edge.end_vertex_id);
+            }
+            for (const auto& edge : replacement.segments)
+                if (retired.contains(edge.segment_id) || retired.contains(edge.start_vertex_id) || retired.contains(edge.end_vertex_id))
+                    throw std::invalid_argument("Changed-count redefinition requires fresh child identities");
+        }
+        if (!edit.replacement_authoring.is_null()) {
+            const auto decoded = decode_boundary_receipt_envelope(edit.replacement_authoring);
+            if (!decoded.supported()) throw std::invalid_argument(decoded.diagnostic);
+            const auto replay = replay_boundary_construction(*decoded.record);
+            if (replay.edges.size() != replacement.segments.size())
+                throw std::invalid_argument("Redefinition construction topology does not match");
+            for (std::size_t i = 0; i < replay.edges.size(); ++i)
+                if (!(IdentifiedSegment{replacement.segments[i].segment_id,
+                    replacement.segments[i].start_vertex_id, replacement.segments[i].end_vertex_id,
+                    replay.edges[i].segment} == replacement.segments[i]))
+                    throw std::invalid_argument("Redefinition geometry differs from new construction replay");
+        }
+        return replacement;
+    }
     return set_boundary_segment_length(source, edit.target_id, edit.target_length_metres,
                                        edit.fixed_endpoint, edit.move_connected);
 }
@@ -496,9 +535,12 @@ static std::map<std::string, Entity, std::less<>> edited_boundary_entities_impl(
         throw std::invalid_argument(*unsupported);
     const auto edited = batch ? apply_vertex_batch(decode_identified_boundary_entity(original), *batch)
                               : apply_geometry_edit(decode_identified_boundary_entity(original), edit);
-    if (edited == decode_identified_boundary_entity(original)) return source;
+    if (edit.kind != BoundaryGeometryEditKind::redefine_boundary &&
+        edited == decode_identified_boundary_entity(original)) return source;
 
     auto metadata = original;
+    if (edit.kind == BoundaryGeometryEditKind::redefine_boundary)
+        for (const auto& [key, value] : edit.replacement_properties.items()) metadata.properties[key] = value;
     const bool had_derivation = metadata.extensions.contains("boundary_geometry_derivation");
     if (metadata.properties.contains("boundary_authoring")) {
         if (had_derivation)
@@ -525,6 +567,19 @@ static std::map<std::string, Entity, std::less<>> edited_boundary_entities_impl(
         }
     }
     auto encoded = encode_identified_boundary_entity(edited, &metadata);
+    if (edit.kind == BoundaryGeometryEditKind::redefine_boundary &&
+        !edit.replacement_authoring.is_null() &&
+        !metadata.extensions.contains("boundary_geometry_derivation")) {
+        auto record = *decode_boundary_receipt_envelope(edit.replacement_authoring).record;
+        record.boundary_id = edited.id;
+        for (std::size_t i = 0; i < record.edges.size(); ++i) {
+            record.edges[i].segment_id = edited.segments[i].segment_id;
+            record.edges[i].start_vertex_id = edited.segments[i].start_vertex_id;
+            record.edges[i].end_vertex_id = edited.segments[i].end_vertex_id;
+            record.edges[i].receipt.segment_id = edited.segments[i].segment_id;
+        }
+        encoded.properties["boundary_authoring"] = encode_boundary_receipt_envelope(record);
+    }
     if (encoded.properties.contains("boundary")) {
         auto geometry = nlohmann::json::array();
         for (const auto& edge : edited.segments) {
@@ -536,6 +591,61 @@ static std::map<std::string, Entity, std::less<>> edited_boundary_entities_impl(
     }
     auto result = source;
     result.at(edit.boundary_id) = std::move(encoded);
+    if (!batch && edit.kind == BoundaryGeometryEditKind::redefine_boundary) {
+        const auto topology_changed = edited.segments.size() != decode_identified_boundary_entity(original).segments.size();
+        const Entity* automatic_template = nullptr;
+        std::vector<std::string> retired_dimensions;
+        for (auto& [id, entity] : result) {
+            if (topology_changed && entity.type == "constraint") {
+                const auto decoded = decode_constraint_entity(entity);
+                if (!decoded.supported()) throw std::invalid_argument(decoded.unsupported_reason);
+                for (const auto& binding : decoded.constraint->bindings)
+                    if (binding.owner_id == edit.boundary_id)
+                        throw std::invalid_argument("Redraw with a different edge count cannot retarget endpoint constraints");
+            }
+            if (entity.type != "dimension") continue;
+            const auto decoded = decode_boundary_dimension_entity(entity);
+            if (!decoded.supported()) throw std::invalid_argument(decoded.unsupported_reason);
+            auto dimension = *decoded.dimension;
+            if (dimension.boundary_id != edit.boundary_id) continue;
+            if (dimension.kind == BoundaryDimensionKind::area) continue;
+            if (topology_changed) {
+                if (dimension.kind != BoundaryDimensionKind::segment_length ||
+                    dimension.placement != BoundaryDimensionPlacement::automatic)
+                    throw std::invalid_argument("Redraw with a different edge count cannot retarget manual edge or angle dimensions");
+                if (!automatic_template) automatic_template = &source.at(id);
+                retired_dimensions.push_back(id);
+            } else {
+                (void)dimension.resolve(result.at(edit.boundary_id));
+                if (dimension.kind == BoundaryDimensionKind::segment_length &&
+                    dimension.placement == BoundaryDimensionPlacement::automatic) {
+                    const auto edge = std::find_if(edited.segments.begin(), edited.segments.end(),
+                        [&](const auto& item) { return item.segment_id == dimension.segment_id; });
+                    const auto side = dimension.automatic_placement_version.value_or(1) == 1 ? 1.0 :
+                        (signed_area(boundary_geometry(edited)) > 0 ? -1.0 : 1.0);
+                    dimension.text_position = split_dimension_position(edge->segment, side);
+                    entity = encode_boundary_dimension_entity(dimension, &entity);
+                }
+            }
+        }
+        const auto expected_count = automatic_template ? edited.segments.size() : 0;
+        if (edit.replacement_dimension_ids.size() != expected_count)
+            throw std::invalid_argument("Redefinition dimension IDs do not match its automatic placement policy");
+        for (const auto& id : retired_dimensions) result.erase(id);
+        for (std::size_t i = 0; i < expected_count; ++i) {
+            auto dimension = *decode_boundary_dimension_entity(*automatic_template).dimension;
+            dimension.id = edit.replacement_dimension_ids[i];
+            if (source.contains(dimension.id)) throw std::invalid_argument("Redefinition dimension ID is not fresh");
+            dimension.segment_id = edited.segments[i].segment_id;
+            const auto side = dimension.automatic_placement_version.value_or(1) == 1 ? 1.0 :
+                (signed_area(boundary_geometry(edited)) > 0 ? -1.0 : 1.0);
+            dimension.text_position = split_dimension_position(edited.segments[i].segment, side);
+            auto entity = encode_boundary_dimension_entity(dimension);
+            for (const auto* key : {"property_id", "building_id", "floor_id", "layer_id"})
+                if (automatic_template->properties.contains(key)) entity.properties[key] = automatic_template->properties.at(key);
+            result.emplace(entity.id, std::move(entity));
+        }
+    }
     if (!batch && edit.kind == BoundaryGeometryEditKind::insert_vertex) {
         const auto old_boundary = decode_identified_boundary_entity(original);
         const auto old_edge = std::find_if(old_boundary.segments.begin(), old_boundary.segments.end(),

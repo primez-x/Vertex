@@ -1311,11 +1311,13 @@ Asset Asset::create(std::string media_type, std::vector<std::byte> bytes,
 static void validate_split_dimension_lifetime(const BoundaryGeometryEdit& edit,
                                        const std::vector<RevisionRecord>& history,
                                        std::size_t preceding_records) {
-    if (edit.kind != BoundaryGeometryEditKind::insert_vertex || edit.new_dimension_id.empty()) return;
-    for (std::size_t i = 0; i < preceding_records; ++i) {
-        if (history[i].entities.contains(edit.new_dimension_id))
-            throw std::invalid_argument("Boundary split dimension ID was already used in retained history");
-    }
+    auto ids = edit.replacement_dimension_ids;
+    if (edit.kind == BoundaryGeometryEditKind::insert_vertex && !edit.new_dimension_id.empty())
+        ids.push_back(edit.new_dimension_id);
+    for (const auto& id : ids)
+        for (std::size_t i = 0; i < preceding_records; ++i)
+            if (history[i].entities.contains(id))
+                throw std::invalid_argument("Boundary edit dimension ID was already used in retained history");
 }
 
 std::map<std::string, Entity, std::less<>> boundary_constraint_entities(

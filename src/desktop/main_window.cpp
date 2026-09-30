@@ -23,6 +23,7 @@
 #include "sketch/desktop/boundary_input_dialog.hpp"
 #include "sketch/desktop/sheet_layout_dialog.hpp"
 #include "sketch/boundary_commit.hpp"
+#include "sketch/boundary_construction.hpp"
 #include "sketch/boundary_dimension.hpp"
 #include "sketch/boundary_receipt.hpp"
 #include "sketch/boundary_transform.hpp"
@@ -3279,6 +3280,43 @@ public:
                 const auto decoded = decode_boundary_receipt_envelope(
                     value.at("source_boundary_authoring"));
                 if (!decoded.supported()) throw std::invalid_argument(decoded.diagnostic);
+                const auto add_record_identities = [&](const json& envelope_value) {
+                    const auto record = decode_boundary_receipt_envelope(envelope_value);
+                    if (!record.supported()) throw std::invalid_argument(record.diagnostic);
+                    identities.try_emplace(record.record->boundary_id, clone_id);
+                    for (const auto& edge : record.record->edges) {
+                        identities.try_emplace(edge.segment_id, new_id("segment"));
+                        identities.try_emplace(edge.start_vertex_id, new_id("vertex"));
+                        identities.try_emplace(edge.end_vertex_id, new_id("vertex"));
+                    }
+                };
+                add_record_identities(value.at("source_boundary_authoring"));
+                // Retired topology still participates in historical replay.
+                for (const auto& operation : value.at("operations")) {
+                    if (operation.at("kind") == "geometry_edit") {
+                        const auto edit = decode_boundary_geometry_edit(operation.at("value"));
+                        identities.try_emplace(edit.target_id, new_id(
+                            edit.kind == BoundaryGeometryEditKind::move_vertex ? "vertex" : "segment"));
+                        if (edit.kind == BoundaryGeometryEditKind::insert_vertex) {
+                            identities.try_emplace(edit.new_vertex_id, new_id("vertex"));
+                            identities.try_emplace(edit.new_segment_id, new_id("segment"));
+                            if (!edit.new_dimension_id.empty()) identities.try_emplace(edit.new_dimension_id, new_id("dimension"));
+                        } else if (edit.kind == BoundaryGeometryEditKind::redefine_boundary) {
+                            for (const auto& edge : edit.replacement_segments) {
+                                identities.try_emplace(edge.at("segment_id").get<std::string>(), new_id("segment"));
+                                identities.try_emplace(edge.at("start_vertex_id").get<std::string>(), new_id("vertex"));
+                                identities.try_emplace(edge.at("end_vertex_id").get<std::string>(), new_id("vertex"));
+                            }
+                            if (!edit.replacement_authoring.is_null()) add_record_identities(edit.replacement_authoring);
+                            for (const auto& id : edit.replacement_dimension_ids) identities.try_emplace(id, new_id("dimension"));
+                        }
+                    } else if (operation.at("kind") == "vertex_batch") {
+                        for (const auto& item : operation.at("value")) {
+                            const auto edit = decode_boundary_geometry_edit(item);
+                            identities.try_emplace(edit.target_id, new_id("vertex"));
+                        }
+                    }
+                }
                 const auto remapped_construction = transformed_boundary_construction(
                     *decoded.record, {}, identities);
                 auto operations = json::array();
@@ -3313,6 +3351,16 @@ public:
                                 (void)inserted;
                                 edit.new_dimension_id = dimension->second;
                             }
+                        } else if (edit.kind == BoundaryGeometryEditKind::redefine_boundary) {
+                            for (auto& edge : edit.replacement_segments)
+                                for (const auto* key : {"segment_id", "start_vertex_id", "end_vertex_id"})
+                                    edge[key] = identities.at(edge.at(key).get<std::string>());
+                            if (!edit.replacement_authoring.is_null()) {
+                                const auto record = decode_boundary_receipt_envelope(edit.replacement_authoring);
+                                edit.replacement_authoring = encode_boundary_receipt_envelope(
+                                    transformed_boundary_construction(*record.record, {}, identities));
+                            }
+                            for (auto& id : edit.replacement_dimension_ids) id = identities.at(id);
                         }
                         operations.push_back({{"kind", "geometry_edit"},
                             {"value", encode_boundary_geometry_edit(edit)}});
@@ -3329,11 +3377,7 @@ public:
                                 !targets.insert(edit.target_id).second)
                                 throw std::invalid_argument(
                                     "Boundary vertex batch has invalid owner, kind or duplicate target");
-                            const auto vertex = std::find_if(transformed.segments.begin(),
-                                transformed.segments.end(), [&](const auto& edge) {
-                                    return edge.start_vertex_id == edit.target_id;
-                                });
-                            if (vertex == transformed.segments.end())
+                            if (!identities.contains(edit.target_id))
                                 throw std::invalid_argument("Unknown batch vertex ID");
                             edit.boundary_id = clone_id;
                             edit.target_id = identities.at(edit.target_id);
@@ -5495,18 +5539,23 @@ public:
                 throw std::invalid_argument(
                     "This legacy boundary needs an explicit identity upgrade before redefinition.");
             }
-            if (selected->properties.contains("boundary_authoring")) {
-                throw std::invalid_argument(
-                    "Receipt-bound boundaries require an explicit derivation policy before redefinition.");
-            }
             const auto source_id = m_selected_id;
-            const auto classification = QString::fromStdString(
-                read_string(selected->properties, "classification").value_or(""));
+            const auto target_context = organize_project(authoringSnapshot()).drawing_context(selected->id);
+            if (!target_context)
+                throw std::invalid_argument("The selected boundary has no resolved drawing context.");
+            if (!setActiveLayer(id_from(target_context->layer_id))) return;
+            m_selected_id = source_id;
+            const auto property = authoringSnapshot().entities().at(target_context->property_id);
+            const auto appraisal = calculation_workflow_name(property.properties) == "appraisal";
+            const auto classification = QString::fromStdString(appraisal
+                ? read_string(selected->properties, "appraisal_category").value_or(
+                    read_string(selected->properties, "classification").value_or(""))
+                : read_string(selected->properties, "classification").value_or(""));
             if (!beginBoundaryDrawing(BoundaryAuthoringMode::draw_first, classification)) return;
             m_redefine_boundary_id = source_id;
             boundaryDraftChanged();
             owner->statusBar()->showMessage(
-                QStringLiteral("Redefining boundary  •  draw the replacement with the same number of edges"),
+                QStringLiteral("Redefining boundary  •  draw the replacement; edge references are validated on finish"),
                 6000);
         } catch (const std::exception& error) {
             setError(QStringLiteral("Redefine boundary: %1").arg(QString::fromUtf8(error.what())));
@@ -9559,10 +9608,8 @@ public:
             setError(QStringLiteral("A retained boundary has an outdated source and cannot be replaced by a new drawing."));
             return false;
         }
-        // Starting a fresh authoring session clears any pending redraw target;
-        // the explicit redefinition command reinstates it after this setup
-        // succeeds.
-        m_redefine_boundary_id.reset();
+        // Preserve the current redraw target through cancelled setup. The
+        // successful clearPreview below retires it with the old draft.
         const auto context = requireDrawingContext();
         if (!context || !confirmDiscardBoundaryDraft()) return false;
         const auto modal_context = captureModalContext();
@@ -13431,6 +13478,57 @@ public:
         }
     }
 
+
+    EditBoundaryGeometry boundaryRedefinitionCommand(
+        const DocumentSnapshot& source, const Boundary& boundary, const QString& classification,
+        const json& replacement_authoring = nullptr) {
+        const auto found = source.entities().find(m_selected_id.toStdString());
+        if (found == source.entities().end() || !is_closed_boundary_entity(found->second.type))
+            throw std::invalid_argument("Select an identified closed boundary first.");
+        const auto original = decode_identified_boundary_entity(found->second);
+        const auto diagnostics = validate_boundary(boundary);
+        if (!diagnostics.empty()) throw std::invalid_argument(diagnostics.front().message);
+        auto replacement = original;
+        const bool topology_changed = original.segments.size() != boundary.size();
+        if (topology_changed) {
+            replacement.segments.clear();
+            std::vector<std::string> vertices;
+            for (std::size_t i = 0; i < boundary.size(); ++i) vertices.push_back(new_id("vertex"));
+            for (std::size_t i = 0; i < boundary.size(); ++i)
+                replacement.segments.push_back({new_id("segment"), vertices[i],
+                    vertices[(i + 1) % vertices.size()], boundary[i]});
+        } else {
+            for (std::size_t i = 0; i < boundary.size(); ++i) replacement.segments[i].segment = boundary[i];
+        }
+        BoundaryGeometryEdit edit;
+        edit.boundary_id = original.id;
+        edit.target_id = original.id;
+        edit.kind = BoundaryGeometryEditKind::redefine_boundary;
+        edit.replacement_segments = encode_identified_boundary_entity(replacement).properties.at("segments");
+        edit.replacement_authoring = replacement_authoring;
+        const auto name = classification.trimmed();
+        if (!name.isEmpty()) {
+            edit.replacement_properties = boundary_redefinition_classification_properties(
+                source, found->second, name.toStdString());
+        }
+        if (topology_changed) {
+            for (const auto& [id, entity] : source.entities()) {
+                (void)id;
+                if (entity.type != "dimension") continue;
+                const auto decoded = decode_boundary_dimension_entity(entity);
+                if (!decoded.supported()) throw std::invalid_argument(decoded.unsupported_reason);
+                const auto& dimension = *decoded.dimension;
+                if (dimension.boundary_id == original.id && dimension.kind == BoundaryDimensionKind::segment_length &&
+                    dimension.placement == BoundaryDimensionPlacement::automatic) {
+                    for (std::size_t i = 0; i < boundary.size(); ++i)
+                        edit.replacement_dimension_ids.push_back(new_id("dimension"));
+                    break;
+                }
+            }
+        }
+        return {source.revision(), std::move(edit)};
+    }
+
     bool redefineSelectedBoundary(const Boundary& boundary, const QString& classification) {
         if (!m_document->is_editable()) {
             setError(QStringLiteral("This document is read-only."));
@@ -13438,76 +13536,7 @@ public:
         }
         try {
             const auto source = authoringSnapshot();
-            const auto found = source.entities().find(m_selected_id.toStdString());
-            if (found == source.entities().end() || !is_closed_boundary_entity(found->second.type)) {
-                throw std::invalid_argument("Select an identified closed boundary first.");
-            }
-            const auto version = inspect_boundary_entity_version(found->second);
-            if (version.format == BoundaryEntityFormat::unsupported_version) {
-                throw std::invalid_argument("This boundary uses an unsupported model version.");
-            }
-            if (version.format == BoundaryEntityFormat::anonymous_legacy) {
-                throw std::invalid_argument(
-                    "This legacy boundary needs an explicit identity upgrade before redefinition.");
-            }
-            if (found->second.properties.contains("boundary_authoring")) {
-                throw std::invalid_argument(
-                    "Receipt-bound boundaries require an explicit derivation policy before redefinition.");
-            }
-            const auto diagnostics = validate_boundary(boundary);
-            if (!diagnostics.empty()) {
-                throw std::invalid_argument(diagnostics.front().message);
-            }
-            const auto original = decode_identified_boundary_entity(found->second);
-            if (original.segments.size() != boundary.size()) {
-                throw std::invalid_argument(
-                    "Redefinition must preserve the boundary edge count so existing references remain valid.");
-            }
-            auto replacement = original;
-            for (std::size_t index = 0; index < replacement.segments.size(); ++index) {
-                replacement.segments[index].segment = boundary[index];
-            }
-            auto updated = encode_identified_boundary_entity(replacement, &found->second);
-            const auto name = classification.trimmed();
-            if (!name.isEmpty()) {
-                const auto property = propertyEntity();
-                const auto appraisal = property.has_value() &&
-                    calculation_workflow_name(property->properties) == "appraisal";
-                if (appraisal) {
-                    const auto category = parse_appraisal_category(name.toStdString());
-                    if (!category.has_value() || *category == AppraisalAreaCategory::none) {
-                        throw std::invalid_argument(
-                            "Redefinition requires a defined appraisal area category.");
-                    }
-                    if (!read_string(updated.properties,
-                                     "measurement_classification").has_value()) {
-                        const auto existing = read_string(updated.properties,
-                                                          "classification");
-                        updated.properties["measurement_classification"] =
-                            existing.has_value() &&
-                                    !parse_appraisal_category(*existing).has_value()
-                                ? *existing
-                                : "measurement";
-                    }
-                    updated.properties["appraisal_category"] = name.toStdString();
-                    updated.properties["classification"] =
-                        read_string(updated.properties, "measurement_classification")
-                            .value_or("measurement");
-                } else {
-                    updated.properties["classification"] = name.toStdString();
-                    updated.properties["measurement_classification"] =
-                        name.toStdString();
-                }
-                if (updated.type == "room_boundary") updated.properties["name"] = name.toStdString();
-            }
-            if (updated.properties.contains("boundary")) {
-                updated.properties["boundary"] = boundary_json(boundary);
-            }
-            const ApplyEntityChanges command{
-                source.revision(),
-                {EntityChange::upsert(std::move(updated))},
-                {},
-                "Redefine boundary"};
+            const auto command = boundaryRedefinitionCommand(source, boundary, classification);
             (void)Document::preview_command(source, command);
             applyDocumentCommand(command);
             clearError();
@@ -25006,8 +25035,7 @@ private:
         const auto target = snapshot.entities().find(id);
         if (id.empty() || id.size() > 128 || target == snapshot.entities().end() ||
             !is_closed_boundary_entity(target->second.type) ||
-            inspect_boundary_entity_version(target->second).format != BoundaryEntityFormat::identified_v1 ||
-            target->second.properties.contains("boundary_authoring"))
+            inspect_boundary_entity_version(target->second).format != BoundaryEntityFormat::identified_v1)
             throw std::invalid_argument("The recovered redefinition target is unavailable or unsupported.");
         return QString::fromStdString(id);
     }
@@ -25338,6 +25366,8 @@ private:
                 ? "boundary commit was rejected" : preview.diagnostics().front());
             QString committed_id;
             if (m_redefine_boundary_id.has_value()) {
+                if (m_boundary_session->accepted_chains().size() != 1)
+                    throw std::invalid_argument("Redefinition requires exactly one replacement area.");
                 const auto created_id = preview.created_boundary_ids().front();
                 const auto created = preview.candidate_entities().find(created_id);
                 if (created == preview.candidate_entities().end()) {
@@ -25348,8 +25378,17 @@ private:
                 m_selected_id = source_id;
                 const auto classification = QString::fromStdString(
                     read_string(created->second.properties, "classification").value_or(""));
-                if (!redefineSelectedBoundary(boundary_geometry(replacement), classification)) {
-                    throw std::invalid_argument(lastError().toStdString());
+                const auto command = boundaryRedefinitionCommand(authoringSnapshot(),
+                    boundary_geometry(replacement), classification,
+                    boundary_construction_envelope(m_boundary_session->accepted_chains().front(),
+                                                   m_boundary_session->options()));
+                (void)Document::preview_command(authoringSnapshot(), command);
+                if (m_recovery_ledger.empty()) applyDocumentCommand(command);
+                else {
+                    requireWorkspaceDocument();
+                    checkpointBoundaryDraft();
+                    auto edit = m_project_workspace->prepare_finish_boundary(command);
+                    commitWorkspaceEdit(edit);
                 }
                 // Redefinition updates the existing entity in place. Keep the
                 // source selection instead of selecting the temporary preview
@@ -25368,7 +25407,7 @@ private:
                 committed_id = QString::fromStdString(preview.created_boundary_ids().front());
             }
             m_selected_id = committed_id;
-            clearPreview();
+            clearPreview(false);
             m_tool = CanvasTool::select;
             syncToolControls();
             clearError();

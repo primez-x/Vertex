@@ -36,7 +36,30 @@ enum class AppraisalAreaCategory {
 
 // Stable persistence tokens; unknown strings return nullopt, invalid enums throw.
 [[nodiscard]] std::string_view appraisal_category_name(AppraisalAreaCategory category);
-[[nodiscard]] std::optional<AppraisalAreaCategory> parse_appraisal_category(std::string_view name);
+namespace detail {
+inline constexpr std::pair<AppraisalAreaCategory, std::string_view> appraisal_category_tokens[]{
+    {AppraisalAreaCategory::none, "none"},
+    {AppraisalAreaCategory::above_grade_finished, "above_grade_finished"},
+    {AppraisalAreaCategory::above_grade_unfinished, "above_grade_unfinished"},
+    {AppraisalAreaCategory::below_grade_finished, "below_grade_finished"},
+    {AppraisalAreaCategory::below_grade_unfinished, "below_grade_unfinished"},
+    {AppraisalAreaCategory::garage, "garage"}, {AppraisalAreaCategory::carport, "carport"},
+    {AppraisalAreaCategory::porch, "porch"}, {AppraisalAreaCategory::patio, "patio"},
+    {AppraisalAreaCategory::deck, "deck"}, {AppraisalAreaCategory::other_non_living, "other_non_living"},
+    {AppraisalAreaCategory::above_grade_nonstandard_finished, "above_grade_nonstandard_finished"},
+    {AppraisalAreaCategory::below_grade_nonstandard_finished, "below_grade_nonstandard_finished"},
+    {AppraisalAreaCategory::noncontinuous_finished, "noncontinuous_finished"},
+    {AppraisalAreaCategory::commercial_occupiable, "commercial_occupiable"},
+    {AppraisalAreaCategory::commercial_common, "commercial_common"},
+    {AppraisalAreaCategory::commercial_service, "commercial_service"}};
+}
+// Token parsing is also needed by offline document/history validation, which
+// must not depend on the architectural solid calculation engine.
+[[nodiscard]] inline std::optional<AppraisalAreaCategory> parse_appraisal_category(std::string_view name) {
+    for (const auto& [value, token] : detail::appraisal_category_tokens)
+        if (name == token) return value;
+    return std::nullopt;
+}
 
 enum class AppraisalPolicyKind { residential_declared, light_commercial_declared };
 enum class PropertyKind { detached_single_family, attached_single_family, manufactured_home,

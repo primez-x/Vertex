@@ -1,6 +1,9 @@
 #include "sketch/project_workspace.hpp"
 #include "sketch/workspace_slot_validation.hpp"
 #include "sketch/document_digest.hpp"
+#include "sketch/boundary_construction.hpp"
+#include "sketch/boundary_entity.hpp"
+#include "sketch/workspace_lifecycle_validation.hpp"
 #include "support/noninteractive_errors.hpp"
 
 #include <iostream>
@@ -224,11 +227,129 @@ void check_invalid_inputs_and_tickets() {
     (void)workspace.commit(edit);
     unchanged_rejection(workspace, [&] { (void)workspace.prepare_finish_boundary(); });
 }
+
+void check_atomic_redefinition_finish() {
+    auto document = fixture(); ProjectWorkspace workspace(document.snapshot());
+    activate(workspace, input(workspace.snapshot(), BoundaryAuthoringMode::draw_first));
+    auto creation = workspace.prepare_finish_boundary(); (void)workspace.commit(creation);
+    const auto original = workspace.snapshot();
+    const auto target = std::find_if(original.entities().begin(), original.entities().end(),
+        [](const auto& entry) { return can_recognize_boundary_entity_type(entry.second.type); });
+    require(target != original.entities().end(), "redraw fixture has no created boundary");
+    const auto make_redraw = [&](double width) {
+        BoundaryAuthoringOptions options; options.automatic_dimension_placement = true;
+        BoundaryAuthoringSession session(BoundaryAuthoringMode::draw_first, options);
+        session.set_classification("living_area");
+        (void)session.anchor({0, 0}); (void)session.add_line_to({width, 0});
+        (void)session.add_line_to({width, 2}); (void)session.add_line_to({0, 2});
+        (void)session.add_closing_segment(); (void)session.close_chain();
+        return BoundaryActiveRecovery{capture_boundary_recovery_source(original, {"p", "b", "f", "l"}),
+            session.recovery_checkpoint(), {{"desktop_operation", {{"version", 1},
+                {"kind", "redefine"}, {"target_id", target->first}}}}};
+    };
+    const auto active = make_redraw(6);
+    const auto session = BoundaryAuthoringSession::from_recovery_checkpoint(active.checkpoint);
+    auto replacement = decode_identified_boundary_entity(target->second);
+    const auto raw = session.accepted_chains().front();
+    for (std::size_t i = 0; i < replacement.segments.size(); ++i)
+        replacement.segments[i].segment = raw.boundary.segments[i].segment;
+    BoundaryGeometryEdit edit;
+    edit.boundary_id = edit.target_id = target->first;
+    edit.kind = BoundaryGeometryEditKind::redefine_boundary;
+    edit.replacement_segments = encode_identified_boundary_entity(replacement).properties.at("segments");
+    edit.replacement_authoring = boundary_construction_envelope(raw, session.options());
+    edit.replacement_properties = boundary_redefinition_classification_properties(original, target->second, "living_area");
+    const EditBoundaryGeometry command{original.revision(), edit};
+    require(encode_boundary_geometry_edit(edit).dump().size() > 2048,
+        "redraw fixture must exercise the former small proof limit");
+    activate(workspace, active); const auto before = workspace.capture();
+    unchanged_rejection(workspace, [&] { (void)workspace.prepare_finish_boundary(); });
+    auto wrong_target = command; wrong_target.edit.boundary_id = wrong_target.edit.target_id = "label";
+    unchanged_rejection(workspace, [&] { (void)workspace.prepare_finish_boundary(wrong_target); });
+    auto no_receipt = command; no_receipt.edit.replacement_authoring = nullptr;
+    unchanged_rejection(workspace, [&] { (void)workspace.prepare_finish_boundary(no_receipt); });
+    auto stale = command; ++stale.expected_revision;
+    unchanged_rejection(workspace, [&] { (void)workspace.prepare_finish_boundary(stale); });
+    for (const auto* key : {"classification", "measurement_classification", "appraisal_category", "name"}) {
+        auto forged_metadata = command; forged_metadata.edit.replacement_properties[key] = "garage";
+        unchanged_rejection(workspace, [&] { (void)workspace.prepare_finish_boundary(forged_metadata); });
+    }
+    auto foreign_receipt = command;
+    const auto foreign_input = make_redraw(8);
+    const auto foreign_session = BoundaryAuthoringSession::from_recovery_checkpoint(foreign_input.checkpoint);
+    foreign_receipt.edit.replacement_authoring = boundary_construction_envelope(
+        foreign_session.accepted_chains().front(), foreign_session.options());
+    unchanged_rejection(workspace, [&] { (void)workspace.prepare_finish_boundary(foreign_receipt); });
+    auto finish = workspace.prepare_finish_boundary(command);
+    require(workspace.active_boundary() == std::optional{active} &&
+        workspace.snapshot().entities() == original.entities(), "redraw preparation must remain isolated");
+    (void)workspace.commit(finish); const auto finished = workspace.capture();
+    require(!finished.active_boundary() && finished.document().revision() == original.revision() + 1 &&
+        finished.epoch() == before.epoch() + 1 &&
+        finished.edited_generation() == before.edited_generation() + 1 &&
+        finished.checkpoint_generation() == before.checkpoint_generation() + 1 &&
+        finished.document().entities().size() == original.entities().size(),
+        "redraw must replace geometry and retire input in one publication");
+    validate_workspace_finish_deltas(finished.document(), finished.lifecycle_history(), finished.resource_policy());
+    auto forged = finished.lifecycle_history();
+    forged.back().input->value = std::make_shared<const BoundaryActiveRecovery>(foreign_input);
+    bool rejected = false;
+    try { validate_workspace_finish_deltas(finished.document(), forged, finished.resource_policy()); }
+    catch (const std::invalid_argument&) { rejected = true; }
+    require(rejected, "persisted redraw must reject valid geometry bound to unrelated archived input");
+    auto forged_classification = finished.document();
+    auto& forged_record = const_cast<std::vector<RevisionRecord>&>(forged_classification.history()).back();
+    auto forged_properties = command.edit.replacement_properties;
+    forged_properties["classification"] = forged_properties["measurement_classification"] = "garage";
+    forged_record.boundary_geometry_edit->replacement_properties = forged_properties;
+    auto& forged_owner = forged_record.entities.at(target->first);
+    forged_owner.properties["classification"] = forged_owner.properties["measurement_classification"] = "garage";
+    forged_owner.extensions["boundary_geometry_derivation"]["operations"].back()["value"]["replacement_properties"] = forged_properties;
+    // It is a valid typed document edit; the workspace must independently bind
+    // it to the archived classification, which is still living_area.
+    (void)Document::fork(forged_classification);
+    rejected = false;
+    try { validate_workspace_finish_deltas(forged_classification, finished.lifecycle_history(), finished.resource_policy()); }
+    catch (const std::invalid_argument&) { rejected = true; }
+    require(rejected, "persisted redraw must reject canonical geometry with a forged area classification");
+    const auto ns = active.checkpoint.identity_namespace;
+    undo(workspace);
+    require(workspace.snapshot().entities() == original.entities() && !workspace.active_boundary() &&
+        workspace.retired_boundary(ns) == std::optional{active},
+        "one redraw Undo must restore the original geometry and recoverable redraw input");
+    redo(workspace);
+    require(workspace.snapshot().entities() == finished.document().entities() &&
+        !workspace.active_boundary() && !workspace.retired_boundary(ns),
+        "one redraw Redo must restore exact replacement identities and retire input again");
+}
+
+void check_appraisal_redefinition_classification() {
+    auto document = fixture(); ProjectWorkspace workspace(document.snapshot());
+    activate(workspace, input(workspace.snapshot(), BoundaryAuthoringMode::draw_first));
+    auto creation = workspace.prepare_finish_boundary(); (void)workspace.commit(creation);
+    auto source = workspace.snapshot();
+    auto property = source.entities().at("p"); property.properties["calculation_workflow"] = "appraisal";
+    const auto found = std::find_if(source.entities().begin(), source.entities().end(),
+        [](const auto& entry) { return can_recognize_boundary_entity_type(entry.second.type); });
+    auto target = found->second;
+    target.properties["classification"] = target.properties["measurement_classification"] = "measurement";
+    target.properties["appraisal_category"] = "above_grade_finished";
+    auto normalized = workspace.prepare(ApplyEntityChanges{source.revision(),
+        {EntityChange::upsert(property), EntityChange::upsert(target)}, {}, "Appraisal fixture"});
+    (void)workspace.commit(normalized); source = workspace.snapshot();
+    const auto changes = boundary_redefinition_classification_properties(source, target, "garage");
+    require(changes == Json{{"classification", "measurement"}, {"measurement_classification", "measurement"},
+        {"appraisal_category", "garage"}}, "redraw must preserve measurement labels independently of appraisal categories");
+    bool rejected = false;
+    try { (void)boundary_redefinition_classification_properties(source, target, "living_area"); }
+    catch (const std::invalid_argument&) { rejected = true; }
+    require(rejected, "appraisal redraw must reject an undefined area category");
+}
 } // namespace
 
 int main() {
     sketch::testing::noninteractive_errors();
-    try { check_finish_round_trip(); check_multiple_retired_inputs(); check_mixed_document_navigation(); check_revise_input(); check_invalid_inputs_and_tickets(); }
+    try { check_finish_round_trip(); check_multiple_retired_inputs(); check_mixed_document_navigation(); check_revise_input(); check_invalid_inputs_and_tickets(); check_atomic_redefinition_finish(); check_appraisal_redefinition_classification(); }
     catch (const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }
     return 0;
 }

@@ -523,7 +523,7 @@ and emits `boundary_transform` on its command revision. Translation-only and
 proof-free histories retain exchange versions 2 and 1, respectively.
 
 Version 7 adds nullable `revisions.boundary_edit_json`. A present value is a
-strict version-1 `move_vertex`, `resize_segment`, or `insert_vertex` intent. Vertex moves store the
+strict version-1 `move_vertex`, `resize_segment`, `insert_vertex`, or `redefine_boundary` intent. Vertex moves store the
 boundary ID, stable vertex ID, and absolute finite position. Segment resize
 intents store the boundary ID, stable segment ID, positive analytical length in
 metres, fixed endpoint (`start` or `end`), and the explicit connected-chain
@@ -538,6 +538,27 @@ raw entity replacement cannot rebind that ID. New IDs must not collide with
 current or retired topology IDs in that boundary; the new dimension ID must
 also be unused in retained entity history. Readers predating insertion support
 reject its unknown intent rather than silently discarding it.
+
+Redefinition stores ordered identified `replacement_segments`, optional exact
+raw `replacement_authoring`, restricted `replacement_properties`, and explicit
+`replacement_dimension_ids`. Equal edge counts retain every ordered child ID;
+changed counts allocate fresh children and regenerate automatic edge dimensions.
+Owner-only area references remain attached. Ambiguous manual child dimensions
+or endpoint constraints reject changed-count redraws without changing the source.
+Non-null construction inputs must replay to the exact replacement geometry before
+their temporary child IDs are mapped by order. Raw API geometry uses null
+construction evidence. Receipt-free drawn replacements acquire verified new
+construction evidence; existing receipts and derivation prefixes remain exact.
+The proof field has a 1 MiB read budget with aggregate JSON resource accounting;
+replacement payload validation reserves encoding overhead within that limit.
+
+A workspace redraw is one `boundary_finish` operation: the typed replacement,
+input archival and draft retirement publish together. The archived strict
+`desktop_operation` identifies the target. Restoration checks source revision,
+resolved drawing context, exactly one accepted classified chain, exact new
+construction input, canonical classification/category updates and the complete
+replayed entity map. One Undo restores prior geometry and retains the redraw
+input as a retired recoverable view; Redo restores the exact replacement.
 
 The first direct edit of a receipt-backed boundary moves the exact original
 `boundary_authoring` envelope into

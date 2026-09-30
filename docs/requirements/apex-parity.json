@@ -1216,7 +1216,7 @@
       "requirement": "Support reopening, redefining, and deleting areas and supported objects while retaining explicit history and relationships.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "verified",
+      "implementation_status": "in_progress",
       "acceptance": "Lifecycle fixtures cover reopen, redefine, delete, cancel, and restore with calculations and links matching the committed revision.",
       "package": 4,
       "blocker": null,
@@ -1232,7 +1232,7 @@
         "scripts/generate_workflow_acceptance_evidence.py",
         "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "Guarded delete now removes selected walls with owned openings and closed boundaries with dimensions in one undoable command; identified receipt-free boundaries also support same-edge-count redraw redefinition in place with stable reference identities and exact undo/redo. Architectural wall deletion removes only its hosted openings atomically, preserving unrelated objects, and wall duplication creates deterministic fresh opening identities with remapped wall links. Document validation blocks surviving references and annotation children use the typed annotation delete path. Broader reopen/restore fixtures, receipt-bound derivation, object policies, visible architectural binding, and production qualification remain open. Deterministic Debug/Release workflow evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
+      "implementation_note": "Normal drawn and already-derived areas now support typed redraw in place, preserving exact old and new construction evidence. Same-count replacements retain ordered child IDs; changed-count replacements allocate fresh topology and regenerate automatic dimensions. Atomic workspace finish binds the target, current source, exact accepted chain and classification, retires the draft with the geometry update, and validates persisted history. Focused Release regressions passed for normal/derived pointer redraw, cancellation, cloning, save/reopen, fixed-length conflict rejection, large proofs, and single-step history navigation. Existing guarded delete and wall/opening clone paths remain implemented. Changed-count redraws with ambiguous manual child references or endpoint constraints currently reject and retain input; explicit resolution remains a final-scope gap. Broader object lifecycle policies, compatibility fixtures, output comparisons and production qualification remain open. Historical acceptance artifacts do not certify these new changes."
     },
     {
       "id": "APX-EDIT-005",

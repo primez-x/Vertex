@@ -38,12 +38,24 @@ void validate_workspace_finish_deltas(const DocumentSnapshot& snapshot,
             throw std::invalid_argument("Finish delta input is incomplete");
         const auto& before = snapshot.history()[static_cast<std::size_t>(event.before_revision)];
         const auto& after = snapshot.history()[static_cast<std::size_t>(event.after_revision)];
-        if (after.source_revision || after.name || after.action != "Finish boundary" || before.assets != after.assets)
+        const bool redraw = input.extensions.contains("desktop_operation");
+        if (after.source_revision || after.name ||
+            after.action != (redraw ? "Edit boundary geometry" : "Finish boundary") || before.assets != after.assets)
             throw std::invalid_argument("Finish delta changes unrelated document state");
         for (const auto& [id, asset] : before.assets)
             if (asset.metadata.dump() != after.assets.at(id).metadata.dump())
                 throw std::invalid_argument("Finish delta changes asset metadata representation");
         const auto prefix = Document::fork_at_revision(snapshot, event.before_revision);
+        if (redraw) {
+            if (!after.boundary_geometry_edit)
+                throw std::invalid_argument("Redraw finish has no typed replacement proof");
+            const EditBoundaryGeometry command{event.before_revision, *after.boundary_geometry_edit};
+            validate_workspace_boundary_redefinition_input(prefix.snapshot(), input, command, policy);
+            const auto candidate = Document::preview_command(prefix.snapshot(), command);
+            if (entity_map_digest(candidate.entities()) != entity_map_digest(after.entities))
+                throw std::invalid_argument("Redraw geometry does not match its archived input");
+            continue;
+        }
         const auto preview = preview_boundary_commit(prefix.snapshot(),
             {session.options(), session.accepted_chains(), input.source.context, "Finish boundary"});
         if (!preview.accepted() || preview.candidate_digest() != entity_map_digest(after.entities))
