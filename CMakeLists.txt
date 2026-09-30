@@ -818,6 +818,7 @@ if(BUILD_TESTING)
   add_executable(error_policy_probe tests/error_policy_probe.cpp)
   add_test(NAME noninteractive_test_errors COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tests/test_error_policy.py" "$<TARGET_FILE:error_policy_probe>")
   add_test(NAME dependency_integrity COMMAND "${Python3_EXECUTABLE}" -m unittest discover -s "${CMAKE_SOURCE_DIR}/tests" -p test_bootstrap.py)
+  add_test(NAME cad_runtime_bootstrap COMMAND "${Python3_EXECUTABLE}" -m unittest discover -s "${CMAKE_SOURCE_DIR}/tests" -p test_bootstrap_cad_runtime.py)
   # These validate report parsing and threshold summaries, not production
   # performance qualification. Run them in both build configurations.
   foreach(performance_test IN ITEMS benchmark report qualification)

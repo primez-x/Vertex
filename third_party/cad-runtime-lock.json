@@ -1,0 +1,266 @@
+{
+  "schema_version": 1,
+  "platform": "win_amd64",
+  "python_version": "3.13.15",
+  "python_abi": "cp313",
+  "library_versions": {
+    "ifcopenshell": "0.8.3.post2",
+    "ezdxf": "1.4.3",
+    "numpy": "2.5.3",
+    "shapely": "2.1.2",
+    "isodate": "0.7.2",
+    "lark": "1.3.1",
+    "fonttools": "4.66.1",
+    "typing_extensions": "4.16.0",
+    "pyparsing": "3.3.3",
+    "python-dateutil": "2.9.0.post0",
+    "six": "1.17.0"
+  },
+  "qualification": "incomplete",
+  "source_qualification": "IfcOpenShell wheel-to-source revision and complete bundled native source closure pending",
+  "assets": [
+    {
+      "name": "CPython",
+      "version": "3.13.15",
+      "kind": "interpreter",
+      "filename": "python-3.13.15-embed-amd64.zip",
+      "url": "https://www.python.org/ftp/python/3.13.15/python-3.13.15-embed-amd64.zip",
+      "sha256": "d1f04d990aee1253d8569e8e5104e30fa9f5fa830899f14843448872d936a2cf",
+      "license": "PSF-2.0"
+    },
+    {
+      "name": "CPython source",
+      "version": "3.13.15",
+      "kind": "headers",
+      "filename": "Python-3.13.15.tar.xz",
+      "url": "https://www.python.org/ftp/python/3.13.15/Python-3.13.15.tar.xz",
+      "sha256": "1e66a7945a48390ee4c2a4268a0e4185884059a13c4aab6d148aa208deea4a76",
+      "license": "PSF-2.0"
+    },
+    {
+      "name": "CPython Windows development headers",
+      "version": "3.13.15",
+      "kind": "development",
+      "filename": "python.3.13.15.nupkg",
+      "url": "https://api.nuget.org/v3-flatcontainer/python/3.13.15/python.3.13.15.nupkg",
+      "sha256": "05357887df50d3153efc681bdf432c321d3e2f9ce5788f99f4515b27e8fda0ac",
+      "license": "PSF-2.0"
+    },
+    {
+      "name": "ifcopenshell",
+      "version": "0.8.3.post2",
+      "kind": "wheel",
+      "filename": "ifcopenshell-0.8.3.post2-py313-none-win_amd64.whl",
+      "url": "https://files.pythonhosted.org/packages/2d/ba/30184ed671e7e73e5777cd7ad24d5b37ea8e5c962b0c70134d45447038c1/ifcopenshell-0.8.3.post2-py313-none-win_amd64.whl",
+      "sha256": "6075b06302fd9c67adea16854cd626b45ecd2ad53199b55ce0bfee135c92a91a",
+      "license": "LGPL-3.0-or-later",
+      "requires": [
+        "shapely",
+        "numpy",
+        "isodate",
+        "python-dateutil",
+        "lark",
+        "typing-extensions",
+        "networkx; extra == \"advanced\"",
+        "pytest; extra == \"dev\"",
+        "tabulate; extra == \"dev\""
+      ]
+    },
+    {
+      "name": "ezdxf",
+      "version": "1.4.3",
+      "kind": "wheel",
+      "filename": "ezdxf-1.4.3-cp313-cp313-win_amd64.whl",
+      "url": "https://files.pythonhosted.org/packages/1f/09/896ab8e30095007a99682b41d4367503e512178331539827c495844a84e0/ezdxf-1.4.3-cp313-cp313-win_amd64.whl",
+      "sha256": "d95cd8dcc6e6051ff9adf6eaed0d055ac464abea23c2a71aaba701dcfe7f49de",
+      "license": "See package notices",
+      "requires": [
+        "pyparsing>=2.0.1",
+        "typing_extensions>=4.6.0",
+        "numpy",
+        "fonttools",
+        "PySide6; extra == \"draw\"",
+        "matplotlib; extra == \"draw\"",
+        "PyMuPDF>=1.20.0; extra == \"draw\"",
+        "Pillow; extra == \"draw\"",
+        "PyQt5; extra == \"draw5\"",
+        "matplotlib; extra == \"draw5\"",
+        "PyMuPDF>=1.20.0; extra == \"draw5\"",
+        "Pillow; extra == \"draw5\"",
+        "PySide6; extra == \"dev\"",
+        "setuptools; extra == \"dev\"",
+        "wheel; extra == \"dev\"",
+        "Cython; extra == \"dev\"",
+        "pytest; extra == \"dev\"",
+        "Pillow; extra == \"dev\"",
+        "matplotlib; extra == \"dev\"",
+        "PyMuPDF>=1.20.0; extra == \"dev\"",
+        "PyQt5; extra == \"dev5\"",
+        "setuptools; extra == \"dev5\"",
+        "wheel; extra == \"dev5\"",
+        "Cython; extra == \"dev5\"",
+        "pytest; extra == \"dev5\"",
+        "Pillow; extra == \"dev5\"",
+        "matplotlib; extra == \"dev5\"",
+        "PyMuPDF>=1.20.0; extra == \"dev5\""
+      ]
+    },
+    {
+      "name": "numpy",
+      "version": "2.5.3",
+      "kind": "wheel",
+      "filename": "numpy-2.5.3-cp313-cp313-win_amd64.whl",
+      "url": "https://files.pythonhosted.org/packages/f3/ec/100f2b1794ede74a9b3d7ec6b9736927f56713414c1dfe19ab6c383494bf/numpy-2.5.3-cp313-cp313-win_amd64.whl",
+      "sha256": "71cad2b2a7451ab79d8f5e71b453485b6775963d5cf794179144a7463fe6e8ec",
+      "license": "BSD-3-Clause AND 0BSD AND MIT AND Zlib AND CC0-1.0",
+      "requires": []
+    },
+    {
+      "name": "shapely",
+      "version": "2.1.2",
+      "kind": "wheel",
+      "filename": "shapely-2.1.2-cp313-cp313-win_amd64.whl",
+      "url": "https://files.pythonhosted.org/packages/41/47/3647fe7ad990af60ad98b889657a976042c9988c2807cf322a9d6685f462/shapely-2.1.2-cp313-cp313-win_amd64.whl",
+      "sha256": "ca2591bff6645c216695bdf1614fca9c82ea1144d4a7591a466fef64f28f0715",
+      "license": "BSD 3-Clause",
+      "requires": [
+        "numpy>=1.21",
+        "pytest; extra == \"test\"",
+        "pytest-cov; extra == \"test\"",
+        "scipy-doctest; extra == \"test\"",
+        "numpydoc==1.1.*; extra == \"docs\"",
+        "matplotlib; extra == \"docs\"",
+        "sphinx; extra == \"docs\"",
+        "sphinx-book-theme; extra == \"docs\"",
+        "sphinx-remove-toctrees; extra == \"docs\""
+      ]
+    },
+    {
+      "name": "isodate",
+      "version": "0.7.2",
+      "kind": "wheel",
+      "filename": "isodate-0.7.2-py3-none-any.whl",
+      "url": "https://files.pythonhosted.org/packages/15/aa/0aca39a37d3c7eb941ba736ede56d689e7be91cab5d9ca846bde3999eba6/isodate-0.7.2-py3-none-any.whl",
+      "sha256": "28009937d8031054830160fce6d409ed342816b543597cece116d966c6d99e15",
+      "license": "Copyright (c) 2021, Hugo van Kemenade and contributors Copyright (c) 2009-2018, Gerhard Weis and contributors Copyright (c) 2009, Gerhard Weis All rights reserved.  Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions are met: * Redistributions of source code must retain the above copyright notice, this list of conditions and the following disclaimer. * Redistributions in binary form must reproduce the above copyright notice, this list of conditions and the following disclaimer in the documentation and/or other materials provided with the distribution. * Neither the name of the <organization> nor the names of its contributors may be used to endorse or promote products derived from this software without specific prior written permission.  THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS \"AS IS\" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL <COPYRIGHT HOLDER> BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE. ",
+      "requires": []
+    },
+    {
+      "name": "lark",
+      "version": "1.3.1",
+      "kind": "wheel",
+      "filename": "lark-1.3.1-py3-none-any.whl",
+      "url": "https://files.pythonhosted.org/packages/82/3d/14ce75ef66813643812f3093ab17e46d3a206942ce7376d31ec2d36229e7/lark-1.3.1-py3-none-any.whl",
+      "sha256": "c629b661023a014c37da873b4ff58a817398d12635d3bbb2c5a03be7fe5d1e12",
+      "license": "MIT",
+      "requires": [
+        "regex; extra == \"regex\"",
+        "js2py; extra == \"nearley\"",
+        "atomicwrites; extra == \"atomic-cache\"",
+        "interegular<0.4.0,>=0.3.1; extra == \"interegular\""
+      ]
+    },
+    {
+      "name": "fonttools",
+      "version": "4.66.1",
+      "kind": "wheel",
+      "filename": "fonttools-4.66.1-cp313-cp313-win_amd64.whl",
+      "url": "https://files.pythonhosted.org/packages/d1/86/68bc2be04b83535607fbb70ebb2ba02380bf4286d79597c4515b7d247187/fonttools-4.66.1-cp313-cp313-win_amd64.whl",
+      "sha256": "43d1284c1964666ee833f2badd3017dc138f53d4889043ffca66c5ce4188f188",
+      "license": "MIT",
+      "requires": [
+        "lxml>=4.0; extra == \"lxml\"",
+        "brotli>=1.0.1; platform_python_implementation == \"CPython\" and extra == \"woff\"",
+        "brotlicffi>=0.8.0; platform_python_implementation != \"CPython\" and extra == \"woff\"",
+        "zopfli>=0.1.4; extra == \"woff\"",
+        "unicodedata2>=18.0.0; python_version <= \"3.15\" and extra == \"unicode\"",
+        "lz4>=1.7.4.2; extra == \"graphite\"",
+        "scipy; platform_python_implementation != \"PyPy\" and extra == \"interpolatable\"",
+        "munkres; platform_python_implementation == \"PyPy\" and extra == \"interpolatable\"",
+        "pycairo; extra == \"interpolatable\"",
+        "matplotlib; extra == \"plot\"",
+        "sympy; extra == \"symfont\"",
+        "xattr; sys_platform == \"darwin\" and extra == \"type1\"",
+        "skia-pathops>=0.5.0; extra == \"pathops\"",
+        "uharfbuzz>=0.45.0; extra == \"repacker\"",
+        "lxml>=4.0; extra == \"all\"",
+        "brotli>=1.0.1; platform_python_implementation == \"CPython\" and extra == \"all\"",
+        "brotlicffi>=0.8.0; platform_python_implementation != \"CPython\" and extra == \"all\"",
+        "zopfli>=0.1.4; extra == \"all\"",
+        "unicodedata2>=18.0.0; python_version <= \"3.15\" and extra == \"all\"",
+        "lz4>=1.7.4.2; extra == \"all\"",
+        "scipy; platform_python_implementation != \"PyPy\" and extra == \"all\"",
+        "munkres; platform_python_implementation == \"PyPy\" and extra == \"all\"",
+        "pycairo; extra == \"all\"",
+        "matplotlib; extra == \"all\"",
+        "sympy; extra == \"all\"",
+        "xattr; sys_platform == \"darwin\" and extra == \"all\"",
+        "skia-pathops>=0.5.0; extra == \"all\"",
+        "uharfbuzz>=0.45.0; extra == \"all\""
+      ]
+    },
+    {
+      "name": "typing_extensions",
+      "version": "4.16.0",
+      "kind": "wheel",
+      "filename": "typing_extensions-4.16.0-py3-none-any.whl",
+      "url": "https://files.pythonhosted.org/packages/49/d3/b8441a820a491ddfc024b0b0cf0393375b75ea13866d9c66727e54c2fc80/typing_extensions-4.16.0-py3-none-any.whl",
+      "sha256": "481caa481374e813c1b176ada14e97f1f67a4539ce9cfeb3f350d78d6370c2e8",
+      "license": "PSF-2.0",
+      "requires": []
+    },
+    {
+      "name": "pyparsing",
+      "version": "3.3.3",
+      "kind": "wheel",
+      "filename": "pyparsing-3.3.3-py3-none-any.whl",
+      "url": "https://files.pythonhosted.org/packages/38/bb/d215ee7c73b61497b28a5503f9f53523f294fcc936762b7caf90e0c1c2b5/pyparsing-3.3.3-py3-none-any.whl",
+      "sha256": "ece8c00a69cf01b45d0b1dedabb469c90d8caf996d4fda40f147627a122849a4",
+      "license": "MIT",
+      "requires": [
+        "railroad-diagrams ; extra == \"diagrams\"",
+        "jinja2 ; extra == \"diagrams\""
+      ]
+    },
+    {
+      "name": "python-dateutil",
+      "version": "2.9.0.post0",
+      "kind": "wheel",
+      "filename": "python_dateutil-2.9.0.post0-py2.py3-none-any.whl",
+      "url": "https://files.pythonhosted.org/packages/ec/57/56b9bcc3c9c6a792fcbaf139543cee77261f3651ca9da0c93f5c1221264b/python_dateutil-2.9.0.post0-py2.py3-none-any.whl",
+      "sha256": "a8b2bc7bffae282281c8140a97d3aa9c14da0b136dfe83f850eea9a5f7470427",
+      "license": "Dual License",
+      "requires": [
+        "six >=1.5"
+      ]
+    },
+    {
+      "name": "six",
+      "version": "1.17.0",
+      "kind": "wheel",
+      "filename": "six-1.17.0-py2.py3-none-any.whl",
+      "url": "https://files.pythonhosted.org/packages/b7/ce/149a00dd41f10bc29e5921b496af8b574d8413afcd5e30dfa0ed46c2cc5e/six-1.17.0-py2.py3-none-any.whl",
+      "sha256": "4721f391ed90541fddacab5acf947aa0d3dc7d27b2e1e8eda2be8970586c3274",
+      "license": "MIT",
+      "requires": []
+    },
+    {
+      "name": "LGPL-3.0.txt",
+      "version": "3",
+      "kind": "notice",
+      "filename": "LGPL-3.0.txt",
+      "url": "https://www.gnu.org/licenses/lgpl-3.0.txt",
+      "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
+      "license": "LGPL-3.0-or-later"
+    },
+    {
+      "name": "GPL-3.0.txt",
+      "version": "3",
+      "kind": "notice",
+      "filename": "GPL-3.0.txt",
+      "url": "https://www.gnu.org/licenses/gpl-3.0.txt",
+      "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+      "license": "GPL-3.0-or-later"
+    }
+  ]
+}

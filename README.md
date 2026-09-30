@@ -34,6 +34,10 @@ configuration, compilation, tests, and application use run locally. The core
 bootstrap accepts `--offline` with a populated cache. A complete redistributable
 offline build kit/installer remains part of the active production work.
 
+The selected CAD libraries now have a separate hash-pinned offline runtime
+bootstrap; see [CAD runtime preparation](docs/dependencies/cad-runtime.md).
+Connecting that runtime to the application import worker remains in progress.
+
 `build.ps1` discovers the installed compiler and runs CTest. Without `-Desktop`,
 it builds only the precision/document/storage core and CLI. CAD dependencies
 use a short dedicated build cache because some upstream generated paths exceed
