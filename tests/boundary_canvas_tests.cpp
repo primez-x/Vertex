@@ -34,6 +34,7 @@ using sketch::Boundary;
 using sketch::Segment;
 using sketch::Vec2;
 using sketch::desktop::CanvasLabel;
+using sketch::desktop::CanvasBoundaryPreviewMetrics;
 using sketch::desktop::BoundaryDraftLabel;
 using sketch::desktop::BoundaryDraftPreview;
 using sketch::desktop::CanvasEntity;
@@ -1817,6 +1818,136 @@ void test_boundary_vertex_exact_preview_protocol() {
             "synchronous exact vertex preview must share the deferred release contract");
 }
 
+void test_boundary_vertex_annotation_preview() {
+    VertexPreviewFixture f;
+    const CanvasLabel source{QStringLiteral("boundary-area"), {-2,-1.8},
+                             QStringLiteral("4.00 m²")};
+    f.canvas.setLabels({source});
+    const auto initial = render(f.canvas,false);
+    const auto output = render(f.canvas,true);
+    const auto fixed_output = f.output();
+    auto projected = source;
+    projected.position = {-1,-1.8};
+    projected.text = QStringLiteral("4.30 m² · revised");
+    projected.selected = true; // Exact projection cannot change selection.
+    projected.color = QColor(235,80,210);
+    projected.bold = true;
+    projected.paper_height_mm = 4;
+    projected.fill_color = QColor(60,30,90);
+    projected.fill_pattern = QStringLiteral("solid");
+    auto hidden = projected;
+    hidden.id = QStringLiteral("hidden-area");
+    hidden.position = {-2,2};
+    f.begin();
+    require(f.canvas.completeBoundaryVertexPreview(f.serial,f.exact(),{projected,hidden},
+                CanvasBoundaryPreviewMetrics{4.3,8.4}),
+            "exact vertex result must admit its matching annotations and analytical metrics");
+    require(f.canvas.boundaryVertexPreviewLabels().size() == 1 &&
+            !f.canvas.boundaryVertexPreviewLabels()[0].selected &&
+            f.canvas.boundaryVertexPreviewMetrics() &&
+            f.canvas.boundaryVertexPreviewMetrics()->area_square_metres == 4.3 &&
+            f.canvas.boundaryVertexPreviewMetrics()->perimeter_metres == 8.4,
+            "preview must retain only source-visible annotation identities and source selection");
+    const auto preview = render(f.canvas,false);
+    VertexPreviewFixture expected;
+    projected.selected = false;
+    expected.canvas.setLabels({projected});
+    require(differing_pixels(initial,preview,QRect(75,360,290,50)) > 0 &&
+            differing_pixels(preview,render(expected.canvas,false),QRect(75,360,290,50)) == 0,
+            "preview must paint projected text, position, font, color, and fill together");
+    require(differing_pixels(initial,preview,QRect(110,60,100,55)) == 0,
+            "projection must not resurrect an annotation absent from retained labels");
+    require(f.canvas.labels()[0].text == source.text &&
+            f.canvas.labels()[0].position.x == -2 &&
+            images_equal(output,render(f.canvas,true)) && images_equal(fixed_output,f.output()),
+            "vertex annotation and metric overlays must preserve source and both output modes");
+    VertexPreviewFixture geometry_only;
+    geometry_only.canvas.setLabels({source});
+    geometry_only.begin();
+    require(geometry_only.canvas.completeBoundaryVertexPreview(geometry_only.serial,
+                geometry_only.exact(),{projected}), "geometry-only comparison must complete");
+    require(differing_pixels(preview,render(geometry_only.canvas,false),QRect(140,160,495,75)) > 0,
+            "exact analytical metrics must appear in the vertex target readout");
+    f.cancel();
+    require(f.canvas.boundaryVertexPreviewLabels().empty() &&
+            !f.canvas.boundaryVertexPreviewMetrics() && images_equal(initial,render(f.canvas,false)),
+            "cancel must remove all vertex annotations, metrics, and geometry");
+
+    VertexPreviewFixture sync;
+    sync.canvas.setLabels({source});
+    sync.canvas.setBoundaryVertexPreviewRequested([&](QString,QString,Vec2 target,std::uint64_t)
+        -> std::optional<std::vector<CanvasEntity>> { return sync.exact(target); });
+    sync.begin();
+    require(sync.canvas.boundaryVertexPreviewLabels().empty() &&
+            !sync.canvas.boundaryVertexPreviewMetrics(),
+            "legacy synchronous geometry callback must retain no annotations or metrics");
+}
+
+void test_boundary_vertex_annotation_invalidation() {
+    const CanvasLabel source{QStringLiteral("boundary-area"), {-2,-1.8},QStringLiteral("4 m²")};
+    auto projected = source;
+    projected.text = QStringLiteral("4.3 m²");
+    const CanvasBoundaryPreviewMetrics metrics{4.3,8.4};
+    VertexPreviewFixture f;
+    f.canvas.setLabels({source});
+    f.begin();
+    const auto old = f.serial;
+    require(f.canvas.completeBoundaryVertexPreview(old,f.exact(),{projected},metrics),
+            "first annotation candidate must complete");
+    f.mouse(QEvent::MouseMove,{1.75,.5});
+    require(f.canvas.boundaryVertexPreviewLabels().empty() &&
+            !f.canvas.boundaryVertexPreviewMetrics() &&
+            !f.canvas.completeBoundaryVertexPreview(old,f.exact(),{projected},metrics),
+            "new proposal must clear annotations and reject earlier exact metrics");
+    require(f.canvas.completeBoundaryVertexPreview(f.serial,f.exact({1.75,.5}),{projected},metrics),
+            "latest candidate must complete");
+    const auto replaced = f.serial;
+    auto changed_source = source;
+    changed_source.text = QStringLiteral("replacement source");
+    f.canvas.setLabels({changed_source});
+    f.release({1.75,.5});
+    require(f.commits == 0 && f.canvas.boundaryVertexPreviewLabels().empty() &&
+            !f.canvas.boundaryVertexPreviewMetrics() &&
+            !f.canvas.completeBoundaryVertexPreview(replaced,f.exact(),{projected},metrics) &&
+            f.canvas.labels()[0].text == changed_source.text,
+            "same-ID source-label replacement must cancel captured vertex projection");
+
+    VertexPreviewFixture scene;
+    scene.canvas.setLabels({source});
+    scene.begin();
+    require(scene.canvas.completeBoundaryVertexPreview(scene.serial,scene.exact(),{projected},metrics),
+            "scene replacement candidate must complete");
+    scene.canvas.setEntities({scene.boundary,scene.neighbor});
+    require(scene.canvas.boundaryVertexPreviewLabels().empty() &&
+            !scene.canvas.boundaryVertexPreviewMetrics(),
+            "scene replacement must remove vertex annotations and metrics");
+
+    for (const auto invalid_metrics : {
+             CanvasBoundaryPreviewMetrics{-1,8}, CanvasBoundaryPreviewMetrics{4,-1},
+             CanvasBoundaryPreviewMetrics{std::numeric_limits<double>::infinity(),8},
+             CanvasBoundaryPreviewMetrics{4,std::numeric_limits<double>::quiet_NaN()}}) {
+        VertexPreviewFixture invalid;
+        invalid.canvas.setLabels({source});
+        invalid.begin();
+        require(invalid.canvas.completeBoundaryVertexPreview(invalid.serial,invalid.exact(),
+                    {projected},invalid_metrics) &&
+                invalid.canvas.boundaryVertexPreviewEntities().empty() &&
+                invalid.canvas.boundaryVertexPreviewLabels().empty() &&
+                !invalid.canvas.boundaryVertexPreviewMetrics(),
+                "invalid metrics must consume and reject the complete exact preview cleanly");
+        invalid.release();
+        require(invalid.commits == 0, "invalid metrics must prevent vertex admission");
+    }
+    VertexPreviewFixture missing;
+    missing.canvas.setLabels({source});
+    missing.begin();
+    require(missing.canvas.completeBoundaryVertexPreview(missing.serial,
+                std::vector<CanvasEntity>{missing.neighbor},{projected},metrics) &&
+            missing.canvas.boundaryVertexPreviewLabels().empty() &&
+            !missing.canvas.boundaryVertexPreviewMetrics(),
+            "missing captured owner must reject its annotations and metrics too");
+}
+
 void test_boundary_vertex_invalid_and_final_pointer() {
     VertexPreviewFixture invalid;
     invalid.begin();
@@ -2200,6 +2331,8 @@ int main(int argc, char** argv) {
         test_single_selection_transform_handles();
         test_boundary_vertex_handles_preview_and_commit_once();
         test_boundary_vertex_exact_preview_protocol();
+        test_boundary_vertex_annotation_preview();
+        test_boundary_vertex_annotation_invalidation();
         test_boundary_vertex_invalid_and_final_pointer();
         test_boundary_vertex_stale_and_canceled_previews();
         test_mouse_gesture_contract();

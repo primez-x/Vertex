@@ -585,8 +585,12 @@ view's crop and visible objects. Release recomputes the final pointer position
 and commits one revision, including related geometry. Escape cancels the preview. The
 press captures the document revision, boundary ID, and vertex ID; a stale
 release cannot modify a newer document state.
-Preview geometry does not change saved or exported content. Dimension annotations
-and area readouts refresh after the committed edit. Curved boundary handles retain
+Preview geometry does not change saved or exported content. Dependent length,
+angle and area dimensions preview their candidate values and positions in the
+current units. The corner readout includes analytical area and perimeter from the
+whole candidate boundary, even when the view is cropped. Room/area names use the
+same interior placement and furniture avoidance as committed rendering. These
+preview totals do not represent qualified appraisal deductions or GLA. Curved boundary handles retain
 their analytical local editing behavior; joined-object solving for curves remains
 unavailable.
 

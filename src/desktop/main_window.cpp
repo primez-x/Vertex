@@ -1050,6 +1050,140 @@ std::optional<Boundary> angle_dimension_overlay(const IdentifiedBoundary& source
                     Segment{end, vertex, 0.0}};
 }
 
+QSizeF plan_area_label_footprint(const CanvasLabel& label,QFont base_font,const QPaintDevice* device) {
+    // Match the canvas font and padded label layout at its standard
+    // model scale. Character counts are not a text footprint (notably
+    // for wide glyphs, fallback fonts, and non-ASCII room names).
+    constexpr double layout_scale = 80.0;
+    auto font = base_font;
+    font.setPixelSize(static_cast<int>(std::lround(std::clamp(
+        label.text_height_metres * label.scale * layout_scale, 8.0, 96.0))));
+    if (label.bold) font.setBold(true);
+    if (label.italic) font.setItalic(true);
+    auto footprint = QFontMetricsF(font, device).boundingRect(label.text);
+    footprint.adjust(-5.0, -3.0, 5.0, 3.0);
+    return footprint.size()/layout_scale;
+}
+
+CanvasLabel place_plan_area_label(CanvasLabel label,const Boundary& boundary,
+    const std::vector<Bounds2>& component_bounds,QSizeF footprint) {
+    const auto overlaps = [](const Bounds2& left, const Bounds2& right) {
+        return left.minimum.x <= right.maximum.x && left.maximum.x >= right.minimum.x &&
+               left.minimum.y <= right.maximum.y && left.maximum.y >= right.minimum.y;
+    };
+    Bounds2 room_bounds;
+    try {
+        room_bounds = boundary_bounds(boundary);
+    } catch (const std::exception&) {
+        return label;
+    }
+    const auto width = footprint.width();
+    const auto height = footprint.height();
+    const auto room_width = room_bounds.maximum.x - room_bounds.minimum.x;
+    const auto room_height = room_bounds.maximum.y - room_bounds.minimum.y;
+    const auto center = plan_label_anchor(boundary);
+    std::vector<Vec2> candidates{
+        center,
+        Vec2{room_bounds.maximum.x - room_width * 0.18, center.y},
+        Vec2{room_bounds.minimum.x + room_width * 0.18, center.y},
+        Vec2{center.x, room_bounds.maximum.y - room_height * 0.18},
+        Vec2{center.x, room_bounds.minimum.y + room_height * 0.18},
+        Vec2{room_bounds.maximum.x - room_width * 0.22,
+             room_bounds.maximum.y - room_height * 0.22},
+        Vec2{room_bounds.minimum.x + room_width * 0.22,
+             room_bounds.maximum.y - room_height * 0.22},
+        Vec2{room_bounds.maximum.x - room_width * 0.22,
+             room_bounds.minimum.y + room_height * 0.22},
+        Vec2{room_bounds.minimum.x + room_width * 0.22,
+             room_bounds.minimum.y + room_height * 0.22},
+    };
+    // A concave room's centroid and all nine preferred positions can
+    // be outside. Search the remaining interior before omitting a name.
+    for (int row = 1; row < 20; ++row) {
+        for (int column = 1; column < 20; ++column) {
+            candidates.push_back({room_bounds.minimum.x + room_width * column / 20.0,
+                                  room_bounds.minimum.y + room_height * row / 20.0});
+        }
+    }
+    bool placed = false;
+    for (const auto candidate : candidates) {
+        const Bounds2 label_bounds{{candidate.x - width * 0.5,
+                                    candidate.y - height * 0.5},
+                                   {candidate.x + width * 0.5,
+                                    candidate.y + height * 0.5}};
+        if (label_bounds.minimum.x < room_bounds.minimum.x + 0.08 ||
+            label_bounds.maximum.x > room_bounds.maximum.x - 0.08 ||
+            label_bounds.minimum.y < room_bounds.minimum.y + 0.08 ||
+            label_bounds.maximum.y > room_bounds.maximum.y - 0.08) {
+            continue;
+        }
+        // Treat the footprint as a hole for the geometry kernel's
+        // strict analytical containment test. This checks every edge
+        // against lines and arcs, including notches between corners.
+        const Vec2 bottom_left = label_bounds.minimum;
+        const Vec2 top_right = label_bounds.maximum;
+        const Vec2 bottom_right{top_right.x, bottom_left.y};
+        const Vec2 top_left{bottom_left.x, top_right.y};
+        const Boundary rectangle{{bottom_left, bottom_right, 0.0},
+                                 {bottom_right, top_right, 0.0},
+                                 {top_right, top_left, 0.0},
+                                 {top_left, bottom_left, 0.0}};
+        if (validate_boundary_holes(boundary, {rectangle})) {
+            continue;
+        }
+        const auto blocked = std::any_of(component_bounds.begin(), component_bounds.end(),
+            [&](auto component) {
+                component.minimum.x -= 0.10;
+                component.minimum.y -= 0.10;
+                component.maximum.x += 0.10;
+                component.maximum.y += 0.10;
+                return overlaps(label_bounds, component);
+            });
+        if (!blocked) {
+            label.position = candidate;
+            placed = true;
+            break;
+        }
+    }
+    if (!placed) label.text.clear();
+    return label;
+}
+
+QString format_length(double metres, bool metric);
+
+struct DimensionCanvasProjection {
+    CanvasLabel label;
+    std::optional<CanvasEntity> line;
+};
+
+DimensionCanvasProjection project_boundary_dimension(const BoundaryDimension& dimension,
+    const Entity& boundary, bool metric, bool selected) {
+    const auto resolved=dimension.resolve(boundary);
+    QString text;
+    std::optional<Boundary> overlay;
+    if (resolved.kind==BoundaryDimensionKind::segment_length) {
+        text=format_length(resolved.segment_length_metres,metric);
+        overlay=dimension_overlay(resolved.segment,dimension.text_position);
+    } else if (resolved.kind==BoundaryDimensionKind::angle) {
+        text=format_dimension_angle(resolved.angle_radians);
+        overlay=angle_dimension_overlay(decode_identified_boundary_entity(boundary),dimension);
+    } else text=format_dimension_area(resolved.area_square_metres,metric);
+    DimensionCanvasProjection result{{id_from(dimension.id),dimension.text_position,std::move(text),selected},{}};
+    if (dimension.presentation) {
+        const auto& presentation=*dimension.presentation;
+        result.label.paper_height_mm=presentation.text_height_mm;
+        result.label.color=QColor(QString::fromStdString(presentation.color));
+        result.label.bold=presentation.bold;
+        result.label.italic=presentation.italic;
+        result.label.rotation_radians=presentation.rotation_radians;
+    }
+    if (overlay) {
+        result.line=CanvasEntity{id_from(dimension.id),QStringLiteral("dimension_line"),*overlay,0.0,selected};
+        result.line->dimension_end_ticks=resolved.kind==BoundaryDimensionKind::segment_length;
+    }
+    return result;
+}
+
 Vec2 assembly_placement_point(Vec2 point, const AssemblyPlacement& placement) {
     const auto scaled_x = point.x * placement.scale;
     const auto scaled_y = point.y * placement.scale;
@@ -2638,17 +2772,26 @@ class MainWindow::Impl {
         std::vector<CanvasEntity> retained;
         std::shared_ptr<std::optional<std::vector<CanvasEntity>>> result;
     };
+    struct VertexPreviewProjection {
+        std::vector<CanvasEntity> entities;
+        std::vector<CanvasLabel> labels;
+        std::optional<CanvasBoundaryPreviewMetrics> metrics;
+    };
     struct PendingVertexPreview {
         QPointer<PlanCanvas> canvas;
         std::uint64_t serial{};
         std::shared_ptr<Document> document;
         std::shared_ptr<const DocumentSnapshot> source;
         std::shared_ptr<const std::vector<CanvasEntity>> retained;
+        std::shared_ptr<const std::vector<CanvasLabel>> labels;
+        std::shared_ptr<const std::map<QString,QSizeF>> label_footprints;
+        std::shared_ptr<const std::vector<Bounds2>> component_bounds;
+        bool metric_units{};
         QString entity_id;
         QString vertex_id;
         Vec2 position;
         std::optional<Bounds2> crop;
-        std::shared_ptr<std::optional<std::vector<CanvasEntity>>> result;
+        std::shared_ptr<std::optional<VertexPreviewProjection>> result;
     };
 
 public:
@@ -11672,8 +11815,10 @@ public:
         }
     }
 
-    static std::optional<std::vector<CanvasEntity>> computeBoundaryVertexPreview(
+    static std::optional<VertexPreviewProjection> computeBoundaryVertexPreview(
         const DocumentSnapshot& source,const std::vector<CanvasEntity>& retained,
+        const std::vector<CanvasLabel>& labels,bool metric_units,
+        const std::map<QString,QSizeF>& label_footprints,const std::vector<Bounds2>& component_bounds,
         const QString& entity_id,const QString& vertex_id,Vec2 position,std::optional<Bounds2> crop) {
         try {
             const BoundaryGeometryEdit edit{entity_id.toStdString(),BoundaryGeometryEditKind::move_vertex,
@@ -11705,13 +11850,23 @@ public:
                     return std::nullopt;
                 changed_walls.emplace(id,std::move(wall));
             }
-            std::vector<CanvasEntity> result;
+            VertexPreviewProjection result;
             for (const auto& item : retained) {
                 const auto found=candidate.find(item.id.toStdString());
                 if (found==candidate.end()) continue;
                 const auto& entity=found->second;
                 auto proposed=item;
-                if (can_recognize_boundary_entity_type(entity.type) && entity!=source.entities().at(entity.id)) {
+                if (can_recognize_boundary_dimension_entity_type(entity.type)) {
+                    const auto decoded=decode_boundary_dimension_entity(entity);
+                    if (!decoded.supported()) return std::nullopt;
+                    const auto& dimension=*decoded.dimension;
+                    if (candidate.at(dimension.boundary_id)==source.entities().at(dimension.boundary_id)) continue;
+                    const auto projection=project_boundary_dimension(dimension,
+                        candidate.at(dimension.boundary_id),metric_units,item.selected);
+                    if (!projection.line) continue;
+                    proposed.segments=projection.line->segments;
+                    proposed.dimension_end_ticks=projection.line->dimension_end_ticks;
+                } else if (can_recognize_boundary_entity_type(entity.type) && entity!=source.entities().at(entity.id)) {
                     const auto after=decode_identified_boundary_entity(entity);
                     proposed.segments=boundary_geometry(after);
                     proposed.resize_frame.reset();
@@ -11746,7 +11901,7 @@ public:
                         proposed.segments={outline.at(1),outline.at(3),span};
                     }
                 } else continue;
-                if (crop) {
+                if (crop && proposed.type!=QStringLiteral("dimension_line")) {
                     const auto clip_path=[&](const Boundary& path) {
                         if (path.empty()) return path;
                         const auto extent=boundary_bounds(path);
@@ -11760,8 +11915,37 @@ public:
                     for (auto& hole : proposed.holes) hole=clip_path(hole);
                     std::erase_if(proposed.holes,[](const auto& hole) { return hole.empty(); });
                 }
-                result.push_back(std::move(proposed));
+                result.entities.push_back(std::move(proposed));
             }
+            for (const auto& label : labels) {
+                const auto found=candidate.find(label.id.toStdString());
+                if (found==candidate.end()) continue;
+                const auto& entity=found->second;
+                if (can_recognize_boundary_dimension_entity_type(entity.type)) {
+                    const auto decoded=decode_boundary_dimension_entity(entity);
+                    if (!decoded.supported()) return std::nullopt;
+                    const auto& dimension=*decoded.dimension;
+                    if (candidate.at(dimension.boundary_id)==source.entities().at(dimension.boundary_id)) continue;
+                    auto projected=project_boundary_dimension(dimension,
+                        candidate.at(dimension.boundary_id),metric_units,label.selected).label;
+                    // Keep visibility and view-specific typography from the retained scene.
+                    auto proposed=label;
+                    proposed.position=projected.position;
+                    proposed.text=std::move(projected.text);
+                    result.labels.push_back(std::move(proposed));
+                } else if (can_recognize_boundary_entity_type(entity.type) && entity!=source.entities().at(entity.id)) {
+                    auto proposed=label;
+                    if (label.avoid_components) {
+                        const auto footprint=label_footprints.find(label.id);
+                        if (footprint==label_footprints.end()) return std::nullopt;
+                        proposed=place_plan_area_label(label,boundary_geometry(decode_identified_boundary_entity(entity)),
+                            component_bounds,footprint->second);
+                    }
+                    result.labels.push_back(std::move(proposed));
+                }
+            }
+            const auto selected_geometry=boundary_geometry(decode_identified_boundary_entity(candidate.at(edit.boundary_id)));
+            result.metrics=CanvasBoundaryPreviewMetrics{std::abs(signed_area(selected_geometry)),perimeter(selected_geometry)};
             return result;
         } catch (const std::exception&) { return std::nullopt; }
     }
@@ -11769,15 +11953,21 @@ public:
     void startVertexPreviewJob(PendingVertexPreview request) {
         const auto source=request.source;
         const auto retained=request.retained;
+        const auto labels=request.labels;
+        const auto metric_units=request.metric_units;
+        const auto label_footprints=request.label_footprints;
+        const auto component_bounds=request.component_bounds;
         const auto result=request.result;
         const auto id=request.entity_id;
         const auto vertex=request.vertex_id;
         const auto position=request.position;
         const auto crop=request.crop;
         m_vertex_preview_sequence=m_vertex_preview_queue.enqueue(
-            [source,retained,result,id,vertex,position,crop](const RegenerationCancellationToken& cancellation) {
+            [source,retained,labels,metric_units,label_footprints,component_bounds,result,id,vertex,position,crop]
+            (const RegenerationCancellationToken& cancellation) {
                 if (!cancellation.is_cancelled())
-                    *result=computeBoundaryVertexPreview(*source,*retained,id,vertex,position,crop);
+                    *result=computeBoundaryVertexPreview(*source,*retained,*labels,metric_units,
+                        *label_footprints,*component_bounds,id,vertex,position,crop);
                 return RegenerationReceipt{source->revision(),{}};
             });
         m_running_vertex_preview=std::move(request);
@@ -11796,6 +11986,17 @@ public:
             m_vertex_preview_document=m_document;
             m_vertex_preview_canvas=canvas;
             m_vertex_preview_scene=std::make_shared<std::vector<CanvasEntity>>(canvas->entities());
+            m_vertex_preview_labels=std::make_shared<std::vector<CanvasLabel>>(canvas->labels());
+            auto footprints=std::make_shared<std::map<QString,QSizeF>>();
+            for (const auto& label : canvas->labels()) if (label.avoid_components)
+                footprints->emplace(label.id,plan_area_label_footprint(label,m_measurementCanvas->font(),m_measurementCanvas));
+            m_vertex_preview_label_footprints=std::move(footprints);
+            auto obstacles=std::make_shared<std::vector<Bounds2>>();
+            for (const auto& item : m_measurementCanvas->entities()) {
+                if ((item.type==QStringLiteral("symbol") || item.type==QStringLiteral("assembly_instance")) &&
+                    !item.segments.empty()) obstacles->push_back(boundary_bounds(item.segments));
+            }
+            m_vertex_preview_component_bounds=std::move(obstacles);
         }
         const auto serial=canvas->boundaryVertexPreviewSerial();
         if (!canvas->markBoundaryVertexPreviewPending(serial)) return std::nullopt;
@@ -11817,7 +12018,9 @@ public:
             }
         }
         PendingVertexPreview request{canvas,serial,m_document,m_vertex_preview_source,m_vertex_preview_scene,
-            id,vertex,position,crop,std::make_shared<std::optional<std::vector<CanvasEntity>>>()};
+            m_vertex_preview_labels,m_vertex_preview_label_footprints,m_vertex_preview_component_bounds,
+            m_metric_units,id,vertex,position,crop,
+            std::make_shared<std::optional<VertexPreviewProjection>>()};
         if (m_running_vertex_preview) {
             (void)m_vertex_preview_queue.cancel(m_vertex_preview_sequence);
             m_pending_vertex_preview=std::move(request);
@@ -11830,9 +12033,13 @@ public:
             if (!m_running_vertex_preview || completion.sequence!=m_vertex_preview_sequence) continue;
             auto request=std::move(*m_running_vertex_preview);
             m_running_vertex_preview.reset();
-            if (request.canvas && request.document==m_document && request.source->revision()==m_document->revision())
-                (void)request.canvas->completeBoundaryVertexPreview(request.serial,
-                    completion.succeeded() ? std::move(*request.result) : std::nullopt);
+            if (request.canvas && request.document==m_document && request.source->revision()==m_document->revision()) {
+                if (completion.succeeded() && *request.result) {
+                    auto& projection=**request.result;
+                    (void)request.canvas->completeBoundaryVertexPreview(request.serial,
+                        std::move(projection.entities),std::move(projection.labels),projection.metrics);
+                } else (void)request.canvas->completeBoundaryVertexPreview(request.serial,std::nullopt);
+            }
         }
         if (!m_running_vertex_preview && m_pending_vertex_preview) {
             auto request=std::move(*m_pending_vertex_preview);
@@ -22137,6 +22344,9 @@ private:
             (void)m_opening_preview_queue.cancel(m_opening_preview_sequence);
         m_vertex_preview_source.reset();
         m_vertex_preview_scene.reset();
+        m_vertex_preview_labels.reset();
+        m_vertex_preview_label_footprints.reset();
+        m_vertex_preview_component_bounds.reset();
         m_vertex_preview_canvas.clear();
         m_vertex_preview_document.reset();
         m_pending_vertex_preview.reset();
@@ -22380,39 +22590,11 @@ private:
                     const auto source = snapshot.entities().find(dimension.boundary_id);
                     if (source == snapshot.entities().end())
                         throw std::invalid_argument("source boundary is missing");
-                    const auto resolved = dimension.resolve(source->second);
+                    auto projection=project_boundary_dimension(dimension,source->second,
+                        m_metric_units,id_from(id)==m_selected_id);
                     if (dimension.presentation && !dimension.presentation->visible) continue;
-                    QString label_text;
-                    std::optional<Boundary> overlay;
-                    if (resolved.kind == BoundaryDimensionKind::segment_length) {
-                        label_text = format_length(resolved.segment_length_metres, m_metric_units);
-                        overlay = dimension_overlay(resolved.segment, dimension.text_position);
-                    } else if (resolved.kind == BoundaryDimensionKind::angle) {
-                        label_text = format_dimension_angle(resolved.angle_radians);
-                        const auto identified = decode_identified_boundary_entity(source->second);
-                        overlay = angle_dimension_overlay(identified, dimension);
-                    } else {
-                        label_text = format_dimension_area(resolved.area_square_metres, m_metric_units);
-                    }
-                    CanvasLabel label{id_from(id), dimension.text_position, std::move(label_text),
-                                      id_from(id) == m_selected_id};
-                    if (dimension.presentation) {
-                        const auto& presentation = *dimension.presentation;
-                        label.paper_height_mm = presentation.text_height_mm;
-                        label.color = QColor(QString::fromStdString(presentation.color));
-                        label.bold = presentation.bold;
-                        label.italic = presentation.italic;
-                        label.rotation_radians = presentation.rotation_radians;
-                    }
-                    if (overlay) {
-                        CanvasEntity dimension_line{
-                            id_from(id), QStringLiteral("dimension_line"), *overlay, 0.0,
-                            id_from(id) == m_selected_id};
-                        dimension_line.dimension_end_ticks =
-                            resolved.kind == BoundaryDimensionKind::segment_length;
-                        all_geometry.push_back(std::move(dimension_line));
-                    }
-                    all_labels.push_back(std::move(label));
+                    if (projection.line) all_geometry.push_back(std::move(*projection.line));
+                    all_labels.push_back(std::move(projection.label));
                 } catch (const std::exception& error) {
                     append_geometry_error(QStringLiteral("Dimension %1: %2")
                         .arg(id_from(id), QString::fromUtf8(error.what())));
@@ -22841,102 +23023,14 @@ private:
                 // Malformed component geometry is reported by its owner.
             }
         }
-        const auto overlaps = [](const Bounds2& left, const Bounds2& right) {
-            return left.minimum.x <= right.maximum.x && left.maximum.x >= right.minimum.x &&
-                   left.minimum.y <= right.maximum.y && left.maximum.y >= right.minimum.y;
-        };
         for (auto& label : all_labels) {
             if (!label.avoid_components || !visible_ids.contains(label.id.toStdString()) ||
                 presentation_hidden_ids.contains(label.id.toStdString())) continue;
             const auto label_owner = std::find_if(all_geometry.begin(), all_geometry.end(),
                 [&](const auto& candidate) { return candidate.id == label.id; });
             if (label_owner == all_geometry.end() || label_owner->segments.empty()) continue;
-            Bounds2 room_bounds;
-            try {
-                room_bounds = boundary_bounds(label_owner->segments);
-            } catch (const std::exception&) {
-                continue;
-            }
-            // Match the canvas font and padded label layout at its standard
-            // model scale. Character counts are not a text footprint (notably
-            // for wide glyphs, fallback fonts, and non-ASCII room names).
-            constexpr double layout_scale = 80.0;
-            auto font = m_measurementCanvas->font();
-            font.setPixelSize(static_cast<int>(std::lround(std::clamp(
-                label.text_height_metres * label.scale * layout_scale, 8.0, 96.0))));
-            if (label.bold) font.setBold(true);
-            if (label.italic) font.setItalic(true);
-            auto footprint = QFontMetricsF(font, m_measurementCanvas).boundingRect(label.text);
-            footprint.adjust(-5.0, -3.0, 5.0, 3.0);
-            const auto width = footprint.width() / layout_scale;
-            const auto height = footprint.height() / layout_scale;
-            const auto room_width = room_bounds.maximum.x - room_bounds.minimum.x;
-            const auto room_height = room_bounds.maximum.y - room_bounds.minimum.y;
-            const auto center = plan_label_anchor(label_owner->segments);
-            std::vector<Vec2> candidates{
-                center,
-                Vec2{room_bounds.maximum.x - room_width * 0.18, center.y},
-                Vec2{room_bounds.minimum.x + room_width * 0.18, center.y},
-                Vec2{center.x, room_bounds.maximum.y - room_height * 0.18},
-                Vec2{center.x, room_bounds.minimum.y + room_height * 0.18},
-                Vec2{room_bounds.maximum.x - room_width * 0.22,
-                     room_bounds.maximum.y - room_height * 0.22},
-                Vec2{room_bounds.minimum.x + room_width * 0.22,
-                     room_bounds.maximum.y - room_height * 0.22},
-                Vec2{room_bounds.maximum.x - room_width * 0.22,
-                     room_bounds.minimum.y + room_height * 0.22},
-                Vec2{room_bounds.minimum.x + room_width * 0.22,
-                     room_bounds.minimum.y + room_height * 0.22},
-            };
-            // A concave room's centroid and all nine preferred positions can
-            // be outside. Search the remaining interior before omitting a name.
-            for (int row = 1; row < 20; ++row) {
-                for (int column = 1; column < 20; ++column) {
-                    candidates.push_back({room_bounds.minimum.x + room_width * column / 20.0,
-                                          room_bounds.minimum.y + room_height * row / 20.0});
-                }
-            }
-            bool placed = false;
-            for (const auto candidate : candidates) {
-                const Bounds2 label_bounds{{candidate.x - width * 0.5,
-                                            candidate.y - height * 0.5},
-                                           {candidate.x + width * 0.5,
-                                            candidate.y + height * 0.5}};
-                if (label_bounds.minimum.x < room_bounds.minimum.x + 0.08 ||
-                    label_bounds.maximum.x > room_bounds.maximum.x - 0.08 ||
-                    label_bounds.minimum.y < room_bounds.minimum.y + 0.08 ||
-                    label_bounds.maximum.y > room_bounds.maximum.y - 0.08) {
-                    continue;
-                }
-                // Treat the footprint as a hole for the geometry kernel's
-                // strict analytical containment test. This checks every edge
-                // against lines and arcs, including notches between corners.
-                const Vec2 bottom_left = label_bounds.minimum;
-                const Vec2 top_right = label_bounds.maximum;
-                const Vec2 bottom_right{top_right.x, bottom_left.y};
-                const Vec2 top_left{bottom_left.x, top_right.y};
-                const Boundary rectangle{{bottom_left, bottom_right, 0.0},
-                                         {bottom_right, top_right, 0.0},
-                                         {top_right, top_left, 0.0},
-                                         {top_left, bottom_left, 0.0}};
-                if (validate_boundary_holes(label_owner->segments, {rectangle})) {
-                    continue;
-                }
-                const auto blocked = std::any_of(component_bounds.begin(), component_bounds.end(),
-                    [&](auto component) {
-                        component.minimum.x -= 0.10;
-                        component.minimum.y -= 0.10;
-                        component.maximum.x += 0.10;
-                        component.maximum.y += 0.10;
-                        return overlaps(label_bounds, component);
-                    });
-                if (!blocked) {
-                    label.position = candidate;
-                    placed = true;
-                    break;
-                }
-            }
-            if (!placed) label.text.clear();
+            const auto footprint=plan_area_label_footprint(label,m_measurementCanvas->font(),m_measurementCanvas);
+            label=place_plan_area_label(label,label_owner->segments,component_bounds,footprint);
         }
         std::erase_if(all_labels, [](const auto& label) {
             return label.avoid_components && label.text.isEmpty();
@@ -27471,6 +27565,9 @@ private:
     std::optional<PendingVertexPreview> m_pending_vertex_preview;
     std::shared_ptr<const DocumentSnapshot> m_vertex_preview_source;
     std::shared_ptr<const std::vector<CanvasEntity>> m_vertex_preview_scene;
+    std::shared_ptr<const std::vector<CanvasLabel>> m_vertex_preview_labels;
+    std::shared_ptr<const std::map<QString,QSizeF>> m_vertex_preview_label_footprints;
+    std::shared_ptr<const std::vector<Bounds2>> m_vertex_preview_component_bounds;
     std::shared_ptr<Document> m_vertex_preview_document;
     QPointer<PlanCanvas> m_vertex_preview_canvas;
     PerformanceTelemetry m_performance_telemetry;

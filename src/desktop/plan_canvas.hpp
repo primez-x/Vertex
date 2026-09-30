@@ -158,6 +158,12 @@ struct CanvasLabel {
     bool plan_only{false};
 };
 
+// Exact geometric totals from the candidate document, used only while editing.
+struct CanvasBoundaryPreviewMetrics {
+    double area_square_metres{};
+    double perimeter_metres{};
+};
+
 // A raster underlay is a retained presentation value sourced from a
 // Document Asset. Source pixels never become measurement truth; the explicit
 // metres-per-source-unit calibration controls its model-space footprint.
@@ -322,10 +328,19 @@ public:
     }
     bool markBoundaryVertexPreviewPending(std::uint64_t serial);
     bool completeBoundaryVertexPreview(std::uint64_t serial,
-        std::optional<std::vector<CanvasEntity>> result);
+        std::optional<std::vector<CanvasEntity>> result,
+        std::vector<CanvasLabel> labels = {},
+        std::optional<CanvasBoundaryPreviewMetrics> metrics = std::nullopt);
     // Read-only exact interactive overrides; committed/exported entities stay separate.
     [[nodiscard]] const std::vector<CanvasEntity>& boundaryVertexPreviewEntities() const noexcept {
         return m_boundary_vertex_entities_preview;
+    }
+    [[nodiscard]] const std::vector<CanvasLabel>& boundaryVertexPreviewLabels() const noexcept {
+        return m_boundary_vertex_labels_preview;
+    }
+    [[nodiscard]] const std::optional<CanvasBoundaryPreviewMetrics>&
+    boundaryVertexPreviewMetrics() const noexcept {
+        return m_boundary_vertex_metrics_preview;
     }
     // Commits one selected boundary vertex at an absolute model-space point.
     // Final document admission recomputes pending previews from this point.
@@ -394,7 +409,9 @@ private:
         QPointF point, const QRectF& viewport) const;
     void updateBoundaryVertexPreview(QPointF point);
     bool applyBoundaryVertexPreview(std::uint64_t serial,
-        std::optional<std::vector<CanvasEntity>> result);
+        std::optional<std::vector<CanvasEntity>> result,
+        std::vector<CanvasLabel> labels = {},
+        std::optional<CanvasBoundaryPreviewMetrics> metrics = std::nullopt);
     void drawVertexHandles(QPainter& painter, const QRectF& viewport) const;
     struct OpeningWidthHandleHit {
         QString entity_id;
@@ -497,6 +514,8 @@ private:
     std::optional<VertexHandleHit> m_vertex_move_handle;
     std::optional<Vec2> m_vertex_move_preview;
     std::vector<CanvasEntity> m_boundary_vertex_entities_preview;
+    std::vector<CanvasLabel> m_boundary_vertex_labels_preview;
+    std::optional<CanvasBoundaryPreviewMetrics> m_boundary_vertex_metrics_preview;
     bool m_boundary_vertex_preview_valid{};
     bool m_boundary_vertex_preview_pending{};
     bool m_boundary_vertex_preview_request_in_progress{};

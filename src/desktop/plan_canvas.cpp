@@ -465,6 +465,9 @@ void PlanCanvas::setSelectionAxisResizeEnabled(bool enabled) {
 }
 
 void PlanCanvas::setLabels(std::vector<CanvasLabel> labels) {
+    // A captured projection depends on the source annotations as well as the
+    // geometry, even when a replacement retains every annotation identity.
+    if (m_vertex_move_handle) resetGesture();
     m_labels = std::move(labels);
     if (m_last_mouse_position) updatePointerCursor(*m_last_mouse_position);
     update();
@@ -1608,6 +1611,8 @@ void PlanCanvas::resetGesture() {
     m_vertex_move_handle.reset();
     m_vertex_move_preview.reset();
     m_boundary_vertex_entities_preview.clear();
+    m_boundary_vertex_labels_preview.clear();
+    m_boundary_vertex_metrics_preview.reset();
     m_boundary_vertex_preview_valid = false;
     m_boundary_vertex_preview_pending = false;
     m_boundary_vertex_preview_request_in_progress = false;
@@ -1692,7 +1697,8 @@ std::optional<QRectF> PlanCanvas::selectionBounds(const QRectF& viewport) const 
                         .normalized().adjusted(-padding, -padding, padding, padding));
         }
     }
-    for (const auto& label : m_labels) {
+    for (const auto& retained_label : m_labels) {
+        const auto label = presentedLabel(retained_label,false);
         if (!label.selected || !drawable_label(label)) continue;
         const auto layout = label_layout(label, font(), this, m_scale, logicalDpiY());
         auto position = label.position;
@@ -1784,9 +1790,10 @@ std::optional<CanvasSelectionFrame> PlanCanvas::selectionAxes() const {
         return CanvasSelectionFrame{reference.position, reference.rotation_degrees*pi/180,
             reference.image.width()*unit, reference.image.height()*unit};
     }
-    for (const auto& label : m_labels) {
+    for (const auto& retained_label : m_labels) {
+        const auto label = presentedLabel(retained_label,false);
         if (!label.selected || !drawable_label(label) || !std::isfinite(label.rotation_radians)) continue;
-        const auto layout = label_layout(presentedLabel(label,false),font(),this,m_scale,logicalDpiY());
+        const auto layout = label_layout(label,font(),this,m_scale,logicalDpiY());
         return CanvasSelectionFrame{label.position,label.rotation_radians,
             layout.bounds.width()/m_scale,layout.bounds.height()/m_scale};
     }
@@ -1795,6 +1802,12 @@ std::optional<CanvasSelectionFrame> PlanCanvas::selectionAxes() const {
 
 CanvasLabel PlanCanvas::presentedLabel(const CanvasLabel& label, bool output) const {
     auto presented = label;
+    if (!output && m_boundary_vertex_preview_valid) {
+        const auto preview_label = std::find_if(m_boundary_vertex_labels_preview.begin(),
+            m_boundary_vertex_labels_preview.end(),
+            [&](const CanvasLabel& item) { return item.id == label.id; });
+        if (preview_label != m_boundary_vertex_labels_preview.end()) presented = *preview_label;
+    }
     if (!output && label.selected && m_transform_frame_start && m_move_ids.contains(label.id) &&
         (m_left_gesture == LeftGesture::selection_resize || m_left_gesture == LeftGesture::selection_rotate)) {
         presented.rotation_radians += m_transform_rotation_preview;
@@ -1836,7 +1849,10 @@ QTransform PlanCanvas::selectionControlTransform(const QRectF& viewport) const {
             const auto y = (-dx*s+dy*c)*m_axis_scale_y_preview;
             axes->center = {m_axis_anchor.x+x*c-y*s, m_axis_anchor.y+x*s+y*c};
         } else if (m_transform_frame_start && m_left_gesture == LeftGesture::selection_rotate) {
-            axes->rotation_radians += m_transform_rotation_preview;
+            // Label axes already include their presented rotation.
+            const bool label_selection = std::any_of(m_labels.begin(),m_labels.end(),
+                [](const CanvasLabel& label) { return label.selected; });
+            if (!label_selection) axes->rotation_radians += m_transform_rotation_preview;
         }
         if (m_move_preview_delta && m_move_ids.contains(selectedIds().front())) {
             axes->center.x += m_move_preview_delta->x;
@@ -2107,6 +2123,8 @@ void PlanCanvas::updateBoundaryVertexPreview(QPointF point) {
     m_boundary_vertex_preview_pending = false;
     m_boundary_vertex_preview_request_in_progress = false;
     m_boundary_vertex_entities_preview.clear();
+    m_boundary_vertex_labels_preview.clear();
+    m_boundary_vertex_metrics_preview.reset();
     const auto target = *m_vertex_move_preview;
     if (!std::isfinite(target.x) || !std::isfinite(target.y) ||
         !m_boundary_vertex_preview_requested) return;
@@ -2121,6 +2139,8 @@ void PlanCanvas::updateBoundaryVertexPreview(QPointF point) {
             m_boundary_vertex_preview_pending = false;
             m_boundary_vertex_preview_valid = false;
             m_boundary_vertex_entities_preview.clear();
+            m_boundary_vertex_labels_preview.clear();
+            m_boundary_vertex_metrics_preview.reset();
         }
         return;
     }
@@ -2145,22 +2165,29 @@ bool PlanCanvas::markBoundaryVertexPreviewPending(std::uint64_t serial) {
 }
 
 bool PlanCanvas::completeBoundaryVertexPreview(std::uint64_t serial,
-    std::optional<std::vector<CanvasEntity>> result) {
+    std::optional<std::vector<CanvasEntity>> result, std::vector<CanvasLabel> labels,
+    std::optional<CanvasBoundaryPreviewMetrics> metrics) {
     if (!m_boundary_vertex_preview_pending) return false;
-    return applyBoundaryVertexPreview(serial, std::move(result));
+    return applyBoundaryVertexPreview(serial, std::move(result), std::move(labels), metrics);
 }
 
 bool PlanCanvas::applyBoundaryVertexPreview(std::uint64_t serial,
-    std::optional<std::vector<CanvasEntity>> result) {
+    std::optional<std::vector<CanvasEntity>> result, std::vector<CanvasLabel> labels,
+    std::optional<CanvasBoundaryPreviewMetrics> metrics) {
     if (serial != m_boundary_vertex_preview_serial || !m_vertex_move_handle ||
         m_left_gesture != LeftGesture::vertex_move) return false;
     m_boundary_vertex_preview_request_in_progress = false;
     m_boundary_vertex_preview_pending = false;
     m_boundary_vertex_preview_valid = false;
     m_boundary_vertex_entities_preview.clear();
+    m_boundary_vertex_labels_preview.clear();
+    m_boundary_vertex_metrics_preview.reset();
     // Native projection owns geometric validation. An absent captured owner
     // cannot be a preview of this edit and is treated as a known invalid result.
-    if (!result || std::none_of(result->begin(), result->end(),
+    const bool invalid_metrics = metrics &&
+        (!std::isfinite(metrics->area_square_metres) || metrics->area_square_metres < 0 ||
+         !std::isfinite(metrics->perimeter_metres) || metrics->perimeter_metres < 0);
+    if (invalid_metrics || !result || std::none_of(result->begin(), result->end(),
         [&](const CanvasEntity& entity) { return entity.id == m_vertex_move_handle->entity_id; })) {
         update();
         return true;
@@ -2170,7 +2197,15 @@ bool PlanCanvas::applyBoundaryVertexPreview(std::uint64_t serial,
             [&](const CanvasEntity& item) { return item.id == entity.id; });
         if (original != m_entities.end()) entity.selected = original->selected;
     }
+    for (auto& label : labels) {
+        const auto original = std::find_if(m_labels.begin(), m_labels.end(),
+            [&](const CanvasLabel& item) { return item.id == label.id; });
+        if (original == m_labels.end()) continue;
+        label.selected = original->selected;
+        m_boundary_vertex_labels_preview.push_back(std::move(label));
+    }
     m_boundary_vertex_entities_preview = std::move(*result);
+    m_boundary_vertex_metrics_preview = metrics;
     m_boundary_vertex_preview_valid = true;
     update();
     return true;
@@ -2241,8 +2276,19 @@ void PlanCanvas::drawVertexHandles(QPainter& painter, const QRectF& viewport) co
                  display_cursor_length(m_vertex_move_preview->y,m_metric_units));
         if (pending) text += QStringLiteral("  ·  Checking");
         else if (invalid) text += QStringLiteral("  ·  Invalid");
+        else if (m_boundary_vertex_preview_valid && m_boundary_vertex_metrics_preview) {
+            const auto& totals = *m_boundary_vertex_metrics_preview;
+            constexpr double metres_per_foot = .3048;
+            const auto area = m_metric_units
+                ? QStringLiteral("%1 m²").arg(totals.area_square_metres,0,'f',2)
+                : QStringLiteral("%1 ft²").arg(totals.area_square_metres /
+                    (metres_per_foot*metres_per_foot),0,'f',2);
+            text += QStringLiteral("\nArea %1  ·  Perimeter %2")
+                .arg(area,display_cursor_length(totals.perimeter_metres,m_metric_units));
+        }
         const QFontMetricsF metrics(readout_font,painter.device());
-        auto panel = metrics.boundingRect(text).adjusted(-7,-4,7,4);
+        auto panel = metrics.boundingRect(QRectF(0,0,1000,1000),Qt::AlignCenter,text)
+            .adjusted(-7,-4,7,4);
         panel.moveCenter(toScreen(*m_vertex_move_preview,viewport) + QPointF(0,25));
         panel.moveLeft(std::clamp(panel.left(),viewport.left()+4,
             std::max(viewport.left()+4,viewport.right()-panel.width()-4)));
@@ -2311,6 +2357,9 @@ void PlanCanvas::drawSelectionFrame(QPainter& painter, const QRectF& viewport) c
 }
 
 void PlanCanvas::drawSelectionDimensions(QPainter& painter, const QRectF& viewport) const {
+    // The vertex readout supplies live coordinates, area, and perimeter. Avoid
+    // obscuring it with a second bounding-box readout during the same gesture.
+    if (m_left_gesture == LeftGesture::vertex_move && m_left_dragging) return;
     painter.save();
     painter.setClipRect(viewport, Qt::IntersectClip);
     painter.setRenderHint(QPainter::TextAntialiasing, true);
@@ -2343,8 +2392,8 @@ void PlanCanvas::drawSelectionDimensions(QPainter& painter, const QRectF& viewpo
                 if (!sizes_presented) {
                     width *= m_transform_scale_preview;
                     depth *= m_transform_scale_preview;
+                    axes.rotation_radians += m_transform_rotation_preview;
                 }
-                axes.rotation_radians += m_transform_rotation_preview;
             }
         }
         if (m_move_preview_delta && m_move_ids.contains(id)) {
@@ -2405,9 +2454,10 @@ void PlanCanvas::drawSelectionDimensions(QPainter& painter, const QRectF& viewpo
         draw({reference.position, reference.rotation_degrees*pi/180,
               reference.image.width()*unit, reference.image.height()*unit},reference.id);
     }
-    for (const auto& label : m_labels) {
+    for (const auto& retained_label : m_labels) {
+        const auto label = presentedLabel(retained_label,false);
         if (!label.selected || !drawable_label(label)) continue;
-        const auto layout = label_layout(presentedLabel(label,false),font(),this,m_scale,logicalDpiY());
+        const auto layout = label_layout(label,font(),this,m_scale,logicalDpiY());
         draw({label.position,label.rotation_radians,layout.bounds.width()/m_scale,
               layout.bounds.height()/m_scale},label.id,true);
     }
@@ -2656,7 +2706,8 @@ QStringList PlanCanvas::rectangleHits(const QRectF& rectangle, bool crossing) co
         }
         if (matches(screen_path)) add(entity.id);
     }
-    for (const auto& label : m_labels) {
+    for (const auto& retained_label : m_labels) {
+        const auto label = presentedLabel(retained_label,false);
         if (!drawable_label(label)) continue;
         QPainterPath path;
         path.addRect(label_layout(label, font(), this, m_scale, logicalDpiY()).bounds);
@@ -2744,7 +2795,8 @@ QString PlanCanvas::hitTest(QPointF point) const {
     }
     // Measure the same font and padded rotated rectangle as interactive paint.
     // Retain the geometry selection tolerance outside that painted rectangle.
-    for (const auto& label : m_labels) {
+    for (const auto& retained_label : m_labels) {
+        const auto label = presentedLabel(retained_label,false);
         if (!drawable_label(label)) continue;
         const auto screen = toScreen(label.position, rect());
         const auto layout = label_layout(label, font(), this, m_scale, logicalDpiY());
@@ -3297,11 +3349,11 @@ void PlanCanvas::drawLabels(QPainter& painter, const QRectF& viewport, double sc
         // differ from device DPI. Model scale remains independent of this.
         dpi = *paper_pixels_per_mm * 25.4;
     }
-    for (const auto& label : m_labels) {
+    for (const auto& retained_label : m_labels) {
+        const auto label = presentedLabel(retained_label,output);
         if (!drawable_label(label)) continue;
-        const auto presented_label = presentedLabel(label,output);
         const auto paper = std::isfinite(label.paper_height_mm) && label.paper_height_mm > 0.0;
-        const auto layout = label_layout(presented_label, paper ? font() : legacy_font,
+        const auto layout = label_layout(label, paper ? font() : legacy_font,
                                           metrics_device, scale, dpi);
         painter.setFont(layout.font);
         const auto& bounds = layout.bounds;
@@ -3312,7 +3364,7 @@ void PlanCanvas::drawLabels(QPainter& painter, const QRectF& viewport, double sc
         }
         const auto center = to_screen(position);
         painter.save();
-        painter.setTransform(label_transform(presented_label, center), true);
+        painter.setTransform(label_transform(label, center), true);
         if (!output && label.selected) {
             painter.setPen(QPen(QColor(37, 99, 235), 1.0));
         } else {

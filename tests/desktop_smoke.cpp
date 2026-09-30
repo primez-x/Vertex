@@ -1834,6 +1834,14 @@ void test_mixed_constraint_workspace_workflow() {
     require(window.saveProjectAs(path) && reopened_vertex.openProject(path) &&
         reopened_vertex.document().snapshot().entities()==vertex_moved.entities(),
         "joined vertex move and its typed proof must survive workspace save/reopen");
+    const auto angle_dimension_id=window.createAngleDimension(boundary_id,
+        QString::fromStdString(resized_area.segments[0].segment_id),
+        QString::fromStdString(resized_area.segments[1].segment_id),
+        QString::fromStdString(resized_area.segments[0].end_vertex_id),{4.2,0.4});
+    const auto area_dimension_id=window.createAreaDimension(boundary_id,{1.3,1.5});
+    require(!angle_dimension_id.isEmpty() && !area_dimension_id.isEmpty(),
+        "live annotation fixture must include persisted angle and area dimensions");
+    const auto live_source=window.document().snapshot();
     require(window.selectEntity(boundary_id),"live vertex gesture must select its source");
     canvas->setSnapEnabled(false);
     const auto to_screen=[&](Vec2 point) {
@@ -1850,6 +1858,7 @@ void test_mixed_constraint_workspace_workflow() {
         QApplication::sendEvent(canvas,&event);
     };
     const auto drag_start_revision=window.document().revision();
+    const auto committed_labels=canvas->labels();
     mouse(QEvent::MouseButtonPress,{4.5,0});
     mouse(QEvent::MouseMove,{5,0});
     auto* poll=window.findChild<QTimer*>("boundaryVertexPreviewPoll");
@@ -1865,8 +1874,50 @@ void test_mixed_constraint_workspace_workflow() {
         require(!poll->isActive(),"deferred joined vertex preview must finish before inspection");
     };
     wait_for_preview();
-    require(!poll->isActive() && window.document().snapshot().entities()==vertex_moved.entities(),
+    require(!poll->isActive() && window.document().snapshot().entities()==live_source.entities(),
         "live related preview must complete without mutating the document");
+    const auto preview_labels=canvas->boundaryVertexPreviewLabels();
+    const auto preview_metrics=canvas->boundaryVertexPreviewMetrics();
+    require(preview_metrics && std::abs(preview_metrics->area_square_metres-12)<1e-7 &&
+        std::abs(preview_metrics->perimeter_metres-(11+std::sqrt(13.0)))<1e-7,
+        "live corner readout must use analytical candidate area and perimeter");
+    bool changed_dimension_text=false;
+    bool changed_dimension_line=false;
+    for (const auto& label : preview_labels) {
+        const auto found=std::find_if(committed_labels.begin(),committed_labels.end(),
+            [&](const auto& source) { return source.id==label.id; });
+        require(found!=committed_labels.end(),"preview must not resurrect absent annotations");
+        changed_dimension_text=changed_dimension_text || found->text!=label.text;
+        const auto retained=std::find_if(canvas->labels().begin(),canvas->labels().end(),
+            [&](const auto& source) { return source.id==label.id; });
+        require(retained!=canvas->labels().end() && retained->text==found->text &&
+            retained->position.x==found->position.x && retained->position.y==found->position.y,
+            "interactive dimension text and placement must not change committed labels");
+    }
+    for (const auto& entity : canvas->boundaryVertexPreviewEntities()) {
+        if (entity.type!=QStringLiteral("dimension_line")) continue;
+        const auto retained=std::find_if(canvas->entities().begin(),canvas->entities().end(),
+            [&](const auto& source) { return source.id==entity.id; });
+        require(retained!=canvas->entities().end(),"preview dimension line must retain its source identity");
+        const auto same=std::equal(retained->segments.begin(),retained->segments.end(),
+            entity.segments.begin(),entity.segments.end(),[](const auto& first,const auto& second) {
+                return first.start.x==second.start.x && first.start.y==second.start.y &&
+                    first.end.x==second.end.x && first.end.y==second.end.y &&
+                    first.sweep_radians==second.sweep_radians;
+            });
+        changed_dimension_line=changed_dimension_line || !same;
+    }
+    require(changed_dimension_text && changed_dimension_line,
+        "live corner preview must recalculate dependent dimension text and strokes");
+    for (const auto& id : {angle_dimension_id,area_dimension_id}) {
+        const auto projected=std::find_if(preview_labels.begin(),preview_labels.end(),
+            [&](const auto& label) { return label.id==id; });
+        const auto committed=std::find_if(committed_labels.begin(),committed_labels.end(),
+            [&](const auto& label) { return label.id==id; });
+        require(projected!=preview_labels.end() && committed!=committed_labels.end() &&
+            projected->text!=committed->text,
+            "persisted angle and area annotations must recalculate during a live corner drag");
+    }
     const auto capture_directory=qEnvironmentVariable("VERTEX_TEST_CAPTURE_DIR");
     if (!capture_directory.isEmpty()) require(QDir().mkpath(capture_directory) &&
         canvas->grab().save(QDir(capture_directory).filePath("joined-vertex-live-preview.png")),
@@ -1876,7 +1927,15 @@ void test_mixed_constraint_workspace_workflow() {
     require(dragged.revision()==drag_start_revision+1 &&
         std::abs(dragged.entities().at(wall_id.toStdString()).properties.at("baseline").at("start")[0].get<double>()-5)<1e-7,
         "canvas release must commit its final joined corner and wall movement once");
-    require(window.undoCommand() && window.document().snapshot().entities()==vertex_moved.entities(),
+    for (const auto& label : preview_labels) {
+        const auto committed=std::find_if(canvas->labels().begin(),canvas->labels().end(),
+            [&](const auto& value) { return value.id==label.id; });
+        require(committed!=canvas->labels().end() && committed->text==label.text &&
+            std::abs(committed->position.x-label.position.x)<1e-7 &&
+            std::abs(committed->position.y-label.position.y)<1e-7,
+            "live annotations must match normal production projection after release");
+    }
+    require(window.undoCommand() && window.document().snapshot().entities()==live_source.entities(),
         "live joined drag must undo exactly");
 
     auto* workspace_tabs=window.findChild<QTabWidget*>("workspaceTabs");
@@ -1923,6 +1982,7 @@ void test_mixed_constraint_workspace_workflow() {
         QKeyEvent escape(QEvent::KeyPress,Qt::Key_Escape,Qt::NoModifier);
         QApplication::sendEvent(canvas,&escape);
         require(canvas->boundaryVertexPreviewEntities().empty() &&
+            canvas->boundaryVertexPreviewLabels().empty() && !canvas->boundaryVertexPreviewMetrics() &&
             window.document().revision()==source.revision() &&
             window.document().snapshot().entities()==source.entities(),
             "Escape must clear joined vertex overrides and preserve the exact source revision and entities");
@@ -1963,6 +2023,9 @@ void test_mixed_constraint_workspace_workflow() {
     const auto* cropped_wall=find_preview(wall_id);
     require(cropped_boundary && cropped_wall && cropped_wall->segments.empty() && cropped_wall->holes.empty(),
         "a related wall moved wholly outside the crop must retain an empty override to suppress its source strokes");
+    require(canvas->boundaryVertexPreviewMetrics() &&
+        std::abs(canvas->boundaryVertexPreviewMetrics()->area_square_metres-12)<1e-7,
+        "cropping must not change the analytical model area shown during preview");
     const Boundary expected_crop{{{0,0},{4.8,0},0},{{4.8,0.3},{3,3},0},
         {{3,3},{0,3},0},{{0,3},{0,0},0}};
     require(cropped_boundary->segments.size()==expected_crop.size() && !cropped_boundary->filled &&
@@ -2010,6 +2073,99 @@ void test_mixed_constraint_workspace_workflow() {
         std::abs(boundary_bounds(measurement_wall->segments).minimum.x-5)<1e-7,
         "Measurement must preview both joined objects at the proposed corner without reusing the restricted architectural scene cache");
     cancel_preview(restricted_source);
+    window.setMetricUnits(true);
+    require(window.selectEntity(boundary_id),"metric preview must retain selected corner");
+    canvas->setSnapEnabled(false);
+    mouse(QEvent::MouseButtonPress,{4.5,0});
+    mouse(QEvent::MouseMove,{5,0});
+    wait_for_preview();
+    const auto metric_labels=canvas->boundaryVertexPreviewLabels();
+    require(!metric_labels.empty(),"metric corner preview must retain dependent dimension labels");
+    require(std::any_of(metric_labels.begin(),metric_labels.end(),[](const auto& label) {
+        return label.text.contains(QStringLiteral("m"));
+    }),"preview length labels must use the current metric presentation");
+    mouse(QEvent::MouseButtonRelease,{5,0});
+    for (const auto& label : metric_labels) {
+        const auto committed=std::find_if(canvas->labels().begin(),canvas->labels().end(),
+            [&](const auto& value) { return value.id==label.id; });
+        require(committed!=canvas->labels().end() && committed->text==label.text,
+            "metric preview must match the committed dimension formatting");
+    }
+    require(window.undoCommand() && window.document().snapshot().entities()==restricted_source.entities(),
+        "metric corner edit must undo without changing saved source annotations");
+}
+
+void test_vertex_preview_area_name_placement() {
+    using namespace sketch;
+    for (const bool furnished : {true,false}) {
+        desktop::MainWindow window;
+        window.setAttribute(Qt::WA_DontShowOnScreen,true);
+        window.resize(1200,800);
+        window.show();
+        QApplication::processEvents();
+        const Boundary shape=furnished ? Boundary{{{0,0},{4,0},0},{{4,0},{4,3},0},
+            {{4,3},{0,3},0},{{0,3},{0,0},0}} :
+            Boundary{{{0,0},{4,0},0},{{4,0},{4,4},0},{{4,4},{3,4},0},
+                {{3,4},{3,1},0},{{3,1},{1,1},0},{{1,1},{1,4},0},
+                {{1,4},{0,4},0},{{0,4},{0,0},0}};
+        const auto id=window.createBoundary(shape,"bedroom");
+        require(!id.isEmpty(),"name-placement fixture must create its named boundary");
+        if (furnished) require(!window.createAnnotationSymbol("svg-v2-04_living-sectional-left",{2.25,1.5}).isEmpty(),
+            "name-placement fixture must include real furniture artwork");
+        require(window.selectEntity(id),"name-placement fixture must select its boundary");
+        window.fitView();
+        auto* canvas=dynamic_cast<desktop::PlanCanvas*>(window.findChild<QWidget*>("measurementPlanCanvas"));
+        require(canvas,"name-placement fixture must use the real measurement canvas");
+        canvas->setSnapEnabled(false);
+        canvas->setOverviewMapEnabled(false);
+        const auto owner=std::find_if(canvas->entities().begin(),canvas->entities().end(),
+            [&](const auto& entity) { return entity.id==id; });
+        require(owner!=canvas->entities().end() && !owner->vertex_handles.empty(),
+            "named boundary must expose its editable stable corner handles");
+        const auto source=window.document().snapshot();
+        const auto mouse=[&](QEvent::Type type,Vec2 point) {
+            const auto center=QRectF(canvas->rect()).center();
+            const auto view=canvas->viewCenter();
+            const QPointF screen(center.x()+(point.x-view.x)*canvas->viewScale(),
+                center.y()-(point.y-view.y)*canvas->viewScale());
+            QMouseEvent event(type,screen,canvas->mapToGlobal(screen.toPoint()),
+                type==QEvent::MouseMove ? Qt::NoButton : Qt::LeftButton,
+                type==QEvent::MouseButtonRelease ? Qt::NoButton : Qt::LeftButton,Qt::NoModifier);
+            QApplication::sendEvent(canvas,&event);
+        };
+        mouse(QEvent::MouseButtonPress,{4,0});
+        mouse(QEvent::MouseMove,{5,0});
+        auto* poll=window.findChild<QTimer*>("boundaryVertexPreviewPoll");
+        require(poll && poll->isActive(),"name-placement drag must start exact deferred preview");
+        QEventLoop loop;
+        QTimer observe;
+        observe.setInterval(5);
+        QObject::connect(&observe,&QTimer::timeout,&loop,[&] { if (!poll->isActive()) loop.quit(); });
+        QTimer::singleShot(3000,&loop,&QEventLoop::quit);
+        observe.start();
+        loop.exec();
+        require(!poll->isActive() && window.document().snapshot().entities()==source.entities(),
+            "name placement must preview without changing source");
+        const auto& labels=canvas->boundaryVertexPreviewLabels();
+        const auto name=std::find_if(labels.begin(),labels.end(),[&](const auto& label) { return label.id==id; });
+        require(name!=labels.end(),"named area must receive an exact placement override");
+        const auto projected=*name;
+        const auto capture=qEnvironmentVariable("VERTEX_TEST_CAPTURE_DIR");
+        if (!capture.isEmpty()) require(canvas->grab().save(QDir(capture).filePath(
+            furnished ? "vertex-name-furniture-preview.png" : "vertex-name-concave-preview.png")),
+            "name-placement preview screenshot must save");
+        mouse(QEvent::MouseButtonRelease,{5,0});
+        const auto committed=std::find_if(canvas->labels().begin(),canvas->labels().end(),
+            [&](const auto& label) { return label.id==id; });
+        if (projected.text.isEmpty()) require(committed==canvas->labels().end(),
+            "an unplaceable preview name must stay omitted after commit");
+        else require(committed!=canvas->labels().end() && committed->text==projected.text &&
+            std::abs(committed->position.x-projected.position.x)<1e-7 &&
+            std::abs(committed->position.y-projected.position.y)<1e-7,
+            "furniture and concave-area preview placement must match normal production layout after release");
+        require(window.undoCommand() && window.document().snapshot().entities()==source.entities(),
+            "name-placement edit must undo exactly");
+    }
 }
 
 void test_boundary_insertion_preview_freedom_workflow() {
@@ -6595,6 +6751,7 @@ int main(int argc, char** argv) {
     }
     if (argc == 2 && std::string_view(argv[1]) == "--mixed-constraint-workspace-only") {
         test_mixed_constraint_workspace_workflow();
+        test_vertex_preview_area_name_placement();
         return 0;
     }
     if (argc == 2 && std::string_view(argv[1]) == "--boundary-transform-preview-only") {

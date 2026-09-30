@@ -115,6 +115,11 @@ detached snapshots asynchronously. Serial, source revision, and requesting-canva
 checks discard canceled or obsolete results; active plan crop clipping also applies
 to proposed strokes. The final command recomputes admission rather than trusting
 screen overrides. Local analytical curve edits keep their existing command path.
+Deferred completions also carry dependent dimension labels/strokes and full-model
+area/perimeter values. Font footprints are captured on the UI thread; area-name
+placement uses the same pure containment and component-avoidance helper as normal
+rendering. Annotation overrides and metrics expire with their geometry serial and
+never enter retained document labels or output scenes.
 Stale revisions, invalid topology, degenerate edges, and
 self-intersections reject atomically. Handles are interaction overlays and are
 excluded from print/export rendering.
