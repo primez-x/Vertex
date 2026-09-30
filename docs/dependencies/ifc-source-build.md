@@ -164,6 +164,32 @@ candidate inputs, not a completed source-build
 qualification. Earlier failed preflight/configure attempts are retained in
 their separate candidate directories; they are not successful build evidence.
 
+The wrapper failure was reproduced independently with SWIG 4.3.1 and the
+candidate's MSVC C++17/Python 3.13 headers. The default output allocation
+passes a `SwigValueWrapper` directly to `OpaqueCoordinate`'s unrestricted
+variadic constructor, selecting an inaccessible wrapper copy. A scoped output
+typemap using SWIG's `%new_copy` casts to the coordinate's const reference and
+selects its public deep-copy constructor:
+
+```swig
+%typemap(out, noblock=1)
+IfcGeom::OpaqueCoordinate<3>,
+IfcGeom::OpaqueCoordinate<4> {
+  $result = SWIG_NewPointerObj(
+      %new_copy($1, $1_ltype), $&descriptor,
+      SWIG_POINTER_OWN | %newpointer_flags);
+}
+```
+
+The small generated wrapper reproduced the same three C2248 errors without
+this typemap and compiled with it. Separate executable probes passed deep-copy
+and destruction checks for both dimensions, with and without
+`/Zc:__cplusplus`. Local probe sources/logs are under
+`artifacts/ifc-wrapper-probe`. This is causal compiler evidence, not a full
+IFC build, link, import, or geometry qualification. The correction still needs
+to enter a hash-bound derived source input before the next full candidate;
+the pristine locked checkout and both failed builds remain unchanged.
+
 After both SDK installs finish, run the actual candidate recipe from the
 repository root with PowerShell 7:
 
