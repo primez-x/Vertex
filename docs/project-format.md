@@ -711,3 +711,23 @@ minimum storage version when saved. No source file is modified by loading or
 migration; a new save containing the command writes both format markers as 8
 and the v8 schema. Absent proofs remain omitted from digest manifests, preserving
 legacy digest vectors.
+
+Mixed straight-wall/boundary transactions use version 2 of the same command
+envelope when wall geometry also changes. Version 2 adds a nonempty ordered
+`wall_edits` array. Each entry has exactly `wall_id`, `baseline` and
+`length_entry`. `baseline` has finite `start` and `end` coordinate pairs and
+`sweep_radians: 0`. `length_entry` is null for a connected wall movement or an
+object with `original_expression`, `entered_unit` and `exact_metres`; the latter
+has integer `numerator` and `denominator`. Recognized units are `m`, `mm`, `cm`,
+`ft` and `in`. Re-parsing the expression must reproduce the entered unit and
+exact rational length, which must match the proposed baseline.
+
+Replay reconstructs each existing wall from its source entity, changing only
+its baseline and recognized length receipt. It retains other wall fields and
+hosted-opening records. Duplicate wall edits, unsupported curved geometry,
+invalid receipts or hosted openings, and incompatible final relationships
+reject the complete transaction. Boundary geometry and its derivation proof
+are replayed together with the walls before the final relationship checks.
+Version 1 remains unchanged for transactions without wall edits. These nested
+command versions continue using the v8 storage column and all its digest and
+history admission checks.

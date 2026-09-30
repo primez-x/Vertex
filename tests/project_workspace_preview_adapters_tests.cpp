@@ -2,9 +2,11 @@
 #include "sketch/boundary_commit.hpp"
 #include "sketch/constraint_authoring.hpp"
 #include "sketch/document_digest.hpp"
+#include "sketch/project_store.hpp"
 #include "support/noninteractive_errors.hpp"
 
 #include <iostream>
+#include <filesystem>
 #include <stdexcept>
 
 using namespace sketch;
@@ -118,6 +120,48 @@ int main() {
         exercise(boundaries, boundary, [](ProjectWorkspace& w, const auto& p) {
             return w.prepare_boundary_commit(p);
         }, apply_boundary_commit);
+
+        // The adapter must retain typed geometry evidence when both a drawn
+        // boundary and its architectural neighbor move in the same solve.
+        auto mixed_document = fixture();
+        auto mixed_wall = mixed_document.snapshot().entities().at("wall");
+        mixed_wall.properties["baseline"]["start"] = {4.,0.};
+        mixed_wall.properties["baseline"]["end"] = {6.,0.};
+        mixed_document.apply(ApplyEntityChanges{mixed_document.revision(),
+            {EntityChange::upsert(mixed_wall)}, {}, "Position wall"});
+        const auto drawn = preview_boundary_commit(mixed_document.snapshot(),boundary_intent());
+        require(drawn.accepted(),"mixed receipt fixture rejected");
+        apply_boundary_commit(mixed_document,drawn);
+        const auto boundary_id = drawn.created_boundary_ids().front();
+        const auto geometry = decode_identified_boundary_entity(mixed_document.snapshot().entities().at(boundary_id));
+        const auto edge = geometry.segments.front();
+        PersistentConstraint joined;
+        joined.id = "mixed-join";
+        joined.relation = ConstraintRelationKind::coincident;
+        joined.bindings = {{boundary_id,WallEndpointRole::end,edge.segment_id,edge.end_vertex_id},
+            {"wall",WallEndpointRole::start}};
+        ConstraintAuthoringIntent add_join;
+        add_join.relation_mutations = {ConstraintRelationMutation::upsert(joined)};
+        apply_constraint_authoring(mixed_document,preview_constraint_authoring(mixed_document.snapshot(),add_join));
+        const auto receipt = mixed_document.snapshot().entities().at(boundary_id).properties.at("boundary_authoring");
+        ProjectWorkspace mixed(mixed_document.snapshot());
+        ConstraintAuthoringIntent mixed_resize;
+        mixed_resize.wall_resize = WallResizeIntent{"wall",parse_quantity("3 m"),WallResizeAnchor::end,true};
+        const auto mixed_preview = preview_constraint_authoring(mixed.snapshot(),mixed_resize);
+        require(mixed_preview.accepted() && mixed_preview.changed_boundaries().size() == 1 &&
+            mixed_preview.changed_walls().size() == 1,"mixed workspace preview omitted movement");
+        exercise(mixed,mixed_preview,prepare_constraint,apply_constraint_authoring);
+        require(mixed.snapshot().history().back().source_revision.has_value(),"workspace redo proof fixture missing");
+        require(mixed.snapshot().entities().at(boundary_id).extensions.at("boundary_geometry_derivation")
+            .at("source_boundary_authoring") == receipt,"workspace discarded exact construction inputs");
+        const auto path = std::filesystem::temp_directory_path() / ("mixed-adapter-"+make_stable_id()+".bldproj");
+        (void)ProjectStore::save(path,mixed.snapshot());
+        auto reopened = ProjectStore::load(path);
+        std::filesystem::remove(path);
+        auto saved = Document::fork(mixed.snapshot());
+        saved.mark_saved(saved.revision());
+        require(document_snapshot_digest(reopened.document.snapshot()) == document_snapshot_digest(saved.snapshot()),
+            "mixed workspace save/reopen lost typed history evidence");
         std::cout << "project_workspace_preview_adapters_tests passed\n";
         return 0;
     } catch (const std::exception& error) {

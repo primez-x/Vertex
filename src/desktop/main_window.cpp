@@ -26184,12 +26184,13 @@ public:
         if (!entity || !ConstraintDialog::supportsEntity(*entity) ||
             !m_document->is_editable()) {
             setError(QStringLiteral(
-                "Select an editable straight wall or identified straight measurement boundary."));
+                "Select an editable straight wall or identified straight boundary."));
             return;
         }
         const auto context = captureModalContext();
         try {
             ConstraintDialog dialog(authoringSnapshot(), m_selected_id, m_metric_units, owner);
+            styleDialog(dialog);
             if (!initial_length.isEmpty()) dialog.setLengthExpression(initial_length);
             if (dialog.exec() != QDialog::Accepted) { refreshInspector(); return; }
             if (!modalContextUnchanged(context)) return;

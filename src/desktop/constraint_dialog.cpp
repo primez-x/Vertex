@@ -1,6 +1,7 @@
 #include "sketch/desktop/constraint_dialog.hpp"
 #include "sketch/desktop/constraint_preview_canvas.hpp"
 #include "sketch/architecture.hpp"
+#include "sketch/boundary_entity.hpp"
 
 #include <QCheckBox>
 #include <QComboBox>
@@ -119,7 +120,7 @@ public:
         owner->setObjectName(QStringLiteral("constraintDialog"));
         const auto& selected = snapshot.entities().at(selected_id);
         if (!ConstraintDialog::supportsEntity(selected))
-            throw std::invalid_argument("Select a straight wall or an identified straight measurement boundary");
+            throw std::invalid_argument("Select a straight wall or an identified straight boundary");
         boundary_mode = selected.type != "wall";
         owner->setWindowTitle(boundary_mode ? QStringLiteral("Boundary dimensions and constraints") : QStringLiteral("Wall dimensions and constraints"));
         const auto available = owner->screen()->availableGeometry();
@@ -153,16 +154,16 @@ public:
         existing->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
         existing->setMinimumContentsLength(12);
         for (const auto& [id, entity] : snapshot.entities()) {
-            if (!boundary_mode && entity.type == "wall") {
+            if (entity.type == "wall") {
                 try {
                     if (baseline(entity).sweep_radians != 0.0) continue;
                     const auto name = entity.properties.value("name", id);
                     for (const auto role : {WallEndpointRole::start, WallEndpointRole::end}) {
                         endpoints.push_back({id, role});
-                        endpoint_labels.push_back(text(name) + QStringLiteral(" · ") + text(wall_endpoint_role_name(role)));
+                        endpoint_labels.push_back(QStringLiteral("Wall · ") + text(name) + QStringLiteral(" · ") + text(wall_endpoint_role_name(role)));
                     }
                 } catch (const std::exception&) { /* Invalid walls are not available as endpoints. */ }
-            } else if (boundary_mode && entity.type == "measurement_boundary" && ConstraintDialog::supportsEntity(entity)) {
+            } else if (can_recognize_boundary_entity_type(entity.type) && ConstraintDialog::supportsEntity(entity)) {
                 const auto boundary = decode_identified_boundary_entity(entity);
                 const auto name = text(entity.properties.value("name", id));
                 for (std::size_t i = 0; i < boundary.segments.size(); ++i) {
@@ -170,7 +171,8 @@ public:
                     for (const auto role : {WallEndpointRole::start, WallEndpointRole::end}) {
                         const auto& vertex = role == WallEndpointRole::start ? edge.start_vertex_id : edge.end_vertex_id;
                         endpoints.push_back({id, role, edge.segment_id, vertex});
-                        endpoint_labels.push_back(name + QStringLiteral(" · Edge %1 · ").arg(i + 1) + text(wall_endpoint_role_name(role)));
+                        endpoint_labels.push_back((entity.type == "room_boundary" ? QStringLiteral("Room boundary · ") : QStringLiteral("Boundary · ")) +
+                            name + QStringLiteral(" · Edge %1 · ").arg(i + 1) + text(wall_endpoint_role_name(role)));
                     }
                 }
             } else if (entity.type == "constraint") {
@@ -205,13 +207,8 @@ public:
         form->addRow(QStringLiteral("Length"), length);
         anchor = new QComboBox(body);
         anchor->setObjectName(QStringLiteral("constraintAnchor"));
-        if (boundary_mode) {
-            for (std::size_t i = 0; i < endpoints.size(); ++i)
-                if (endpoints[i].owner_id == selected_id)
-                    anchor->addItem(QStringLiteral("Keep ") + endpoint_labels[static_cast<int>(i)] + QStringLiteral(" fixed"), static_cast<int>(i));
-        } else anchor->addItems({QStringLiteral("Keep selected wall start fixed"), QStringLiteral("Keep selected wall end fixed")});
         form->addRow(QStringLiteral("Anchor"), anchor);
-        connected = new QCheckBox(boundary_mode ? QStringLiteral("Allow connected boundaries to move") : QStringLiteral("Allow connected walls to move"), body);
+        connected = new QCheckBox(QStringLiteral("Allow connected objects to move"), body);
         connected->setObjectName(QStringLiteral("constraintMoveConnected"));
         connected->setChecked(true);
         connected->setToolTip(QStringLiteral("Moves objects linked by explicit constraints. When disabled, other objects stay fixed and incompatible edits are rejected."));
@@ -223,10 +220,8 @@ public:
         form->addRow(QStringLiteral("Fixed point Y"), anchor_y);
         body_layout->addLayout(form);
         canvas = new ConstraintPreviewCanvas(body);
-        if (boundary_mode) {
-            canvas->setAccessibleName(QStringLiteral("Boundary movement preview"));
-            canvas->setAccessibleDescription(QStringLiteral("Dashed gray edges show the current boundary. Blue edges show the proposed boundary."));
-        }
+        canvas->setAccessibleName(QStringLiteral("Object movement preview"));
+        canvas->setAccessibleDescription(QStringLiteral("Dashed gray lines show current walls and boundary edges. Blue lines show proposed geometry. Unchanged relationship partners provide context."));
         body_layout->addWidget(canvas, 1);
         changes = new QTableWidget(0, 4, body);
         changes->setObjectName(QStringLiteral("constraintChanges"));
@@ -344,14 +339,34 @@ public:
         persistent_freedom->setToolTip(details.join('\n'));
     }
 
+    QString owner_label(const std::string& id) const {
+        const auto& entity = snapshot.entities().at(id);
+        return (entity.type == "wall" ? QStringLiteral("Wall · ") :
+            entity.type == "room_boundary" ? QStringLiteral("Room boundary · ") : QStringLiteral("Boundary · ")) +
+            text(entity.properties.value("name", id));
+    }
+
+    void appendCurrentGeometry(std::vector<WallPreviewDrawing>& drawing, const std::string& id) const {
+        const auto& entity = snapshot.entities().at(id);
+        if (!ConstraintDialog::supportsEntity(entity)) return;
+        if (entity.type == "wall") {
+            const auto line = baseline(entity);
+            drawing.push_back({owner_label(id), line, line});
+        } else {
+            const auto boundary = decode_identified_boundary_entity(entity);
+            for (std::size_t i = 0; i < boundary.segments.size(); ++i) {
+                const auto& edge = boundary.segments[i].segment;
+                drawing.push_back({owner_label(id) + QStringLiteral(" · Edge %1").arg(i + 1), edge, edge});
+            }
+        }
+    }
+
     void invalidate() {
         if (loading) return;
         preview.reset(); accepted.reset(); apply_button->setEnabled(false);
         showPersistentFreedom();
         std::vector<WallPreviewDrawing> current;
-        if (boundary_mode)
-            for (const auto& edge : decode_identified_boundary_entity(snapshot.entities().at(selected_id)).segments)
-                current.push_back({text(edge.segment_id), edge.segment, edge.segment});
+        appendCurrentGeometry(current, selected_id);
         canvas->setWalls(std::move(current)); changes->setRowCount(0);
         error.clear(); status->setStyleSheet({});
         status->setPlainText(QStringLiteral("Preview required before Apply."));
@@ -366,6 +381,19 @@ public:
     void configure(bool load_values) {
         loading = true;
         const auto operation = mode->currentData().toInt();
+        const bool wall_resize = operation == 0;
+        if (anchor->count() == 0 || anchor_for_wall_resize != wall_resize) {
+            anchor->clear();
+            if (wall_resize) {
+                anchor->addItems({QStringLiteral("Keep selected wall start fixed"), QStringLiteral("Keep selected wall end fixed")});
+            } else {
+                for (std::size_t i = 0; i < endpoints.size(); ++i)
+                    anchor->addItem(QStringLiteral("Keep ") + endpoint_labels[static_cast<int>(i)] + QStringLiteral(" fixed"), static_cast<int>(i));
+                for (std::size_t i = 0; i < endpoints.size(); ++i)
+                    if (endpoints[i].owner_id == selected_id) { anchor->setCurrentIndex(static_cast<int>(i)); break; }
+            }
+            anchor_for_wall_resize = wall_resize;
+        }
         if (load_values) {
             selected_constraint.reset();
             if (operation >= 2 && existing->currentIndex() >= 0) {
@@ -423,7 +451,10 @@ public:
                 role == WallEndpointRole::start ? WallResizeAnchor::start : WallResizeAnchor::end, connected->isChecked()};
             result.message = "change wall length with preview";
         } else {
-            result.relation_anchor = boundary_mode ? endpoints.at(static_cast<std::size_t>(anchor->currentData().toInt())) : WallEndpointBinding{selected_id, role};
+            const auto anchor_index = anchor->currentData().toInt();
+            if (anchor->currentIndex() < 0 || anchor_index < 0 || static_cast<std::size_t>(anchor_index) >= endpoints.size())
+                throw std::invalid_argument("Select an endpoint to keep fixed");
+            result.relation_anchor = endpoints[static_cast<std::size_t>(anchor_index)];
             result.relation_move_connected_walls = connected->isChecked();
             if (operation == 3) {
                 if (!selected_constraint) throw std::invalid_argument("Select an existing constraint to remove");
@@ -457,7 +488,8 @@ public:
     bool previewEdit() {
         invalidate();
         try {
-            auto candidate = preview_constraint_authoring(snapshot, intent());
+            const auto command = intent();
+            auto candidate = preview_constraint_authoring(snapshot, command);
             if (!candidate.accepted()) {
                 QStringList reasons;
                 for (const auto& diagnostic : candidate.diagnostics()) reasons.push_back(text(diagnostic));
@@ -465,11 +497,13 @@ public:
             }
             validate_solids(candidate);
             std::vector<WallPreviewDrawing> drawing;
+            std::set<std::string> drawn_owners;
             QStringList summary;
             changes->setRowCount(static_cast<int>(candidate.changed_walls().size()));
             int row = 0;
             for (const auto& wall : candidate.changed_walls()) {
-                drawing.push_back({text(wall.wall_id), wall.old_baseline, wall.proposed_baseline});
+                drawn_owners.insert(wall.wall_id);
+                drawing.push_back({owner_label(wall.wall_id), wall.old_baseline, wall.proposed_baseline});
                 const auto displacement = std::max(
                     std::hypot(wall.old_baseline.start.x - wall.proposed_baseline.start.x, wall.old_baseline.start.y - wall.proposed_baseline.start.y),
                     std::hypot(wall.old_baseline.end.x - wall.proposed_baseline.end.x, wall.old_baseline.end.y - wall.proposed_baseline.end.y));
@@ -491,10 +525,11 @@ public:
                 ++row;
             }
             for (const auto& boundary : candidate.changed_boundaries()) {
+                drawn_owners.insert(boundary.before.id);
                 for (std::size_t i = 0; i < boundary.before.segments.size(); ++i) {
                     const auto& before = boundary.before.segments[i].segment;
                     const auto& after = boundary.after.segments[i].segment;
-                    const auto label = text(boundary.before.id) + QStringLiteral(" · Edge %1").arg(i + 1);
+                    const auto label = owner_label(boundary.before.id) + QStringLiteral(" · Edge %1").arg(i + 1);
                     drawing.push_back({label, before, after});
                     const auto displacement = std::max(std::hypot(before.start.x - after.start.x, before.start.y - after.start.y), std::hypot(before.end.x - after.end.x, before.end.y - after.end.y));
                     changes->insertRow(row);
@@ -504,13 +539,17 @@ public:
                 }
                 summary.push_back(QStringLiteral("%1: boundary movement shown in preview.").arg(text(boundary.before.id)));
             }
-            if (drawing.empty() && boundary_mode) {
-                for (const auto& edge : decode_identified_boundary_entity(snapshot.entities().at(selected_id)).segments)
-                    drawing.push_back({text(edge.segment_id), edge.segment, edge.segment});
-            } else if (drawing.empty()) {
-                const auto line = baseline(snapshot.entities().at(selected_id));
-                drawing.push_back({text(selected_id), line, line});
-            }
+            std::set<std::string> context_owners{selected_id};
+            if (command.relation_anchor) context_owners.insert(command.relation_anchor->owner_id);
+            if (selected_constraint)
+                for (const auto& binding : selected_constraint->bindings) context_owners.insert(binding.owner_id);
+            // Include partners of the relation being previewed, without adding
+            // every unchanged object in the connected component to the view.
+            for (const auto& mutation : command.relation_mutations)
+                if (mutation.kind == ConstraintRelationMutationKind::upsert)
+                    for (const auto& binding : mutation.constraint.bindings) context_owners.insert(binding.owner_id);
+            for (const auto& id : context_owners)
+                if (!drawn_owners.contains(id)) appendCurrentGeometry(drawing, id);
             canvas->setWalls(std::move(drawing));
             preview = std::move(candidate);
             showPersistentFreedom(&*preview);
@@ -550,6 +589,7 @@ public:
     bool metric{};
     bool boundary_mode{};
     bool loading{};
+    bool anchor_for_wall_resize{};
     std::string new_constraint_id = make_stable_id();
     std::vector<WallEndpointBinding> endpoints;
     QStringList endpoint_labels;
@@ -572,7 +612,7 @@ public:
 bool ConstraintDialog::supportsEntity(const Entity& entity) noexcept {
     try {
         if (entity.type == "wall") return baseline(entity).sweep_radians == 0.0;
-        if (entity.type != "measurement_boundary") return false;
+        if (!can_recognize_boundary_entity_type(entity.type)) return false;
         const auto boundary = decode_identified_boundary_entity(entity);
         return !boundary.segments.empty() && std::all_of(boundary.segments.begin(), boundary.segments.end(),
             [](const auto& edge) { return edge.segment.sweep_radians == 0.0; });

@@ -11,6 +11,7 @@
 #include "sketch/annotation_entity_codec.hpp"
 #include "sketch/georeferencing_entity_codec.hpp"
 #include "sketch/constraint_integrity.hpp"
+#include "sketch/constraint_wall_edit.hpp"
 #include "sketch/boundary_integrity.hpp"
 #include "sketch/wall_semantics.hpp"
 #include "sketch/roof_join_semantics.hpp"
@@ -1333,6 +1334,15 @@ std::map<std::string, Entity, std::less<>> boundary_constraint_entities(
         document_error(DocumentErrorCode::invalid_entity, error.what());
     }
     std::unordered_set<std::string> touched;
+    for (const auto& edit : command.wall_edits) {
+        if (!touched.insert(edit.wall_id).second)
+            document_error(DocumentErrorCode::duplicate_change,"Wall is changed more than once: " + edit.wall_id);
+        const auto previous = source.find(edit.wall_id);
+        if (previous == source.end())
+            document_error(DocumentErrorCode::invalid_entity,"Wall constraint edit owner does not exist");
+        try { result.at(edit.wall_id) = replay_constraint_wall_edit(previous->second, edit); }
+        catch (const std::exception& error) { document_error(DocumentErrorCode::invalid_entity,error.what()); }
+    }
     for (const auto& change : command.entity_changes) {
         if (change.kind != EntityChangeKind::upsert && change.kind != EntityChangeKind::erase)
             document_error(DocumentErrorCode::invalid_entity, "Invalid constraint change kind");
@@ -1357,6 +1367,10 @@ std::map<std::string, Entity, std::less<>> boundary_constraint_entities(
                 document_error(DocumentErrorCode::invalid_entity, "Removed constraint does not exist");
             result.erase(id);
         }
+    }
+    for (const auto& edit : command.wall_edits) {
+        try { validate_constraint_wall_host(edit.wall_id, result); }
+        catch (const std::exception& error) { document_error(DocumentErrorCode::invalid_entity,error.what()); }
     }
     return result;
 }
@@ -1563,6 +1577,12 @@ nlohmann::json command_to_json(const Command& command) {
             try {
                 for (const auto& edit : typed.boundary_edits)
                     encoded["boundary_edits"].push_back(encode_boundary_geometry_edit(edit));
+                if (!typed.wall_edits.empty()) {
+                    encoded["version"] = 2;
+                    encoded["wall_edits"] = nlohmann::json::array();
+                    for (const auto& edit : typed.wall_edits)
+                        encoded["wall_edits"].push_back(encode_constraint_wall_edit(edit));
+                }
             } catch (const std::exception& error) {
                 document_error(DocumentErrorCode::invalid_entity, error.what());
             }
@@ -1603,19 +1623,28 @@ nlohmann::json command_to_json(const Command& command) {
 Command command_from_json(const nlohmann::json& value) {
     try {
         if (!value.is_object() || !value.contains("version") || !value.contains("kind") ||
-            !value.at("version").is_number_integer() || value.at("version") != 1 ||
+            !value.at("version").is_number_integer() ||
+            (value.at("version") != 1 && value.at("version") != 2) ||
             !value.at("kind").is_string()) {
             document_error(DocumentErrorCode::invalid_entity, "serialized command envelope is invalid");
         }
         const auto kind = value.at("kind").get<std::string>();
+        if (value.at("version") == 2 && kind != "apply_boundary_constraint_changes")
+            document_error(DocumentErrorCode::invalid_entity,"Unsupported command envelope version");
         if (kind == "apply_boundary_constraint_changes") {
-            command_exact_fields(value, {"version", "kind", "expected_revision", "message",
+            const bool mixed = value.at("version") == 2;
+            if (mixed) command_exact_fields(value, {"version","kind","expected_revision","message",
+                                          "entity_changes","boundary_edits","wall_edits"},
+                                 DocumentErrorCode::invalid_entity,"serialized mixed constraint command");
+            else command_exact_fields(value, {"version", "kind", "expected_revision", "message",
                                           "entity_changes", "boundary_edits"},
                                  DocumentErrorCode::invalid_entity, "serialized boundary constraint command");
             if (!value.at("boundary_edits").is_array() || value.at("boundary_edits").empty())
                 document_error(DocumentErrorCode::invalid_entity, "Boundary edits must be a nonempty array");
             auto ordinary = value;
             ordinary["kind"] = "apply_entity_changes";
+            ordinary["version"] = 1;
+            ordinary.erase("wall_edits");
             ordinary.erase("boundary_edits");
             ordinary["asset_changes"] = nlohmann::json::array();
             const auto changes = std::get<ApplyEntityChanges>(command_from_json(ordinary));
@@ -1624,6 +1653,12 @@ Command command_from_json(const nlohmann::json& value) {
             try {
                 for (const auto& edit : value.at("boundary_edits"))
                     result.boundary_edits.push_back(decode_boundary_geometry_edit(edit));
+                if (mixed) {
+                    if (!value.at("wall_edits").is_array() || value.at("wall_edits").empty())
+                        document_error(DocumentErrorCode::invalid_entity,"Version 2 requires nonempty wall edits");
+                    for (const auto& edit : value.at("wall_edits"))
+                        result.wall_edits.push_back(decode_constraint_wall_edit(edit));
+                }
             } catch (const std::exception& error) {
                 document_error(DocumentErrorCode::invalid_entity, error.what());
             }

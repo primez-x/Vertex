@@ -493,6 +493,7 @@ Start with the workspace, draw a room, close it with the mouse, drag-select it, 
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U087 — Join two endpoints with a coincident relationship**
+  - Steps: Draw a closed area and a straight architectural wall. Open **Dimensions and constraints** from the selected area and join one of its corners to a wall endpoint. Cancel a preview once and confirm nothing changes, then reopen and Apply. Select the wall, change its length while anchoring the opposite endpoint, and preview with **Allow connected objects to move** enabled. Check that the joined area corner follows the wall endpoint. Repeat with connected movement disabled: the app should explain a conflict when preserving the area makes the requested length impossible. Undo, redo, save and reopen the joined edit.
   - Expected: They remain joined after a supported edit.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________

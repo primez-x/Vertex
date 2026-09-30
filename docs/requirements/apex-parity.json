@@ -799,6 +799,12 @@
         "src/core/constraint_integrity.cpp",
         "tests/constraint_entity_tests.cpp",
         "tests/constraint_integrity_tests.cpp",
+        "include/sketch/constraint_wall_edit.hpp",
+        "src/core/constraint_wall_edit.cpp",
+        "include/sketch/document.hpp",
+        "src/core/document.cpp",
+        "src/core/project_workspace_preview_adapters.cpp",
+        "tests/project_workspace_preview_adapters_tests.cpp",
         "include/sketch/constraints.hpp",
         "src/core/constraints.cpp",
         "tests/constraints_tests.cpp",
@@ -810,7 +816,7 @@
         "scripts/generate_workflow_acceptance_evidence.py",
         "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "The constraint editor supports seven persisted endpoint relationships for straight architectural walls and identified measurement boundaries, with source-bound previews and atomic Apply. A separate immutable PlaneGCS diagnosis reports saved coordinate freedom without temporary editing anchors; before/after scope includes both component closures. Unsupported semantics report unavailable. Release regressions cover coordinate rank, redundancy, conflicts, mixed-component diagnosis, source immutability and dialog invalidation. Curved-owner relations, mixed wall/boundary authoring, level dependency propagation and production qualification remain open. Historical acceptance artifacts do not certify these changes."
+      "implementation_note": "The constraint editor supports seven persisted endpoint relationships for straight architectural walls and identified measurement boundaries, including mixed components and wall-only resize seeds that reach boundary neighbors. Dialog endpoints and relation anchors include both owner types; previews show their combined movement. Typed version-2 boundary-constraint commands retain wall geometry and exact entry receipts, and the workspace preserves that command rather than flattening it. A separate immutable PlaneGCS diagnosis reports saved coordinate freedom without temporary editing anchors over a common before/after owner scope. Curved-owner relations, level dependency propagation and full production qualification remain open. Historical acceptance artifacts do not certify these changes."
     },
     {
       "id": "GEO-CON-002",

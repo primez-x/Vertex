@@ -1675,6 +1675,99 @@ void test_boundary_vertex_insertion_workflow() {
         "insertion must reject an unhandled edge receipt without discarding it or changing the document");
 }
 
+void test_mixed_constraint_workspace_workflow() {
+    const ScenarioTiming scenario_timing(__func__);
+    using namespace sketch;
+    desktop::MainWindow window;
+    window.setAttribute(Qt::WA_DontShowOnScreen, true);
+    window.resize(1200, 800);
+    window.show();
+    QApplication::processEvents();
+    window.fitView();
+    auto* canvas = dynamic_cast<desktop::PlanCanvas*>(window.findChild<QWidget*>("measurementPlanCanvas"));
+    require(canvas && window.beginBoundaryDrawing(BoundaryAuthoringMode::draw_first, "living"),
+        "mixed workspace fixture must use normal drawing");
+    for (const auto point : {Vec2{0,0}, Vec2{3,0}, Vec2{3,3}, Vec2{0,3}}) {
+        const auto center = QRectF(canvas->rect()).center();
+        const QPointF position(center.x()+point.x*80, center.y()-point.y*80);
+        QMouseEvent press(QEvent::MouseButtonPress,position,position,Qt::LeftButton,Qt::LeftButton,Qt::NoModifier);
+        QMouseEvent release(QEvent::MouseButtonRelease,position,position,Qt::LeftButton,Qt::NoButton,Qt::NoModifier);
+        QApplication::sendEvent(canvas,&press);
+        QApplication::sendEvent(canvas,&release);
+    }
+    QKeyEvent close(QEvent::KeyPress,Qt::Key_Return,Qt::NoModifier);
+    QApplication::sendEvent(canvas,&close);
+    const auto boundary_id = window.selectedEntityId();
+    const auto wall_id = window.createStraightWall({3,0},{6,0});
+    require(!boundary_id.isEmpty() && !wall_id.isEmpty() && window.selectEntity(boundary_id),
+        "mixed workspace must retain drawn boundary and straight wall");
+    const auto before = window.document().snapshot();
+    const auto boundary_name = QString::fromStdString(before.entities().at(boundary_id.toStdString()).properties.value("name",boundary_id.toStdString()));
+    const auto wall_name = QString::fromStdString(before.entities().at(wall_id.toStdString()).properties.value("name",wall_id.toStdString()));
+    bool choices_found = false;
+    const auto relationship = [&](bool apply) {
+        QTimer::singleShot(0,&window,[&,apply] {
+            auto* dialog = window.findChild<QDialog*>("constraintDialog");
+            require(dialog,"mixed relationship dialog must open");
+            auto* operation = dialog->findChild<QComboBox*>("constraintOperation");
+            operation->setCurrentIndex(operation->findData(1));
+            auto* relation = dialog->findChild<QComboBox*>("constraintRelation");
+            relation->setCurrentIndex(relation->findData(static_cast<int>(ConstraintRelationKind::coincident)));
+            const auto choose = [&](QComboBox* combo,const QString& name,const QString& suffix) {
+                for(int i=0;i<combo->count();++i) if(combo->itemText(i).contains(name) && combo->itemText(i).endsWith(suffix)) {
+                    combo->setCurrentIndex(i); return true;
+                }
+                return false;
+            };
+            choices_found = choose(dialog->findChild<QComboBox*>("constraintBinding0"),boundary_name,"Edge 1 · end") &&
+                choose(dialog->findChild<QComboBox*>("constraintBinding1"),wall_name,"start");
+            if(!choices_found) { dialog->reject(); return; }
+            dialog->findChild<QPushButton*>("constraintPreviewButton")->click();
+            auto* submit = dialog->findChild<QPushButton*>("constraintApplyButton");
+            require(submit->isEnabled(),"mixed coincident relationship must preview");
+            require(window.document().snapshot().entities()==before.entities(),"mixed preview must remain detached");
+            if(apply) submit->click(); else dialog->reject();
+        });
+        window.showConstraintEditor();
+    };
+    relationship(false);
+    require(choices_found && window.document().snapshot().entities()==before.entities(),
+        "mixed endpoint choices must be available and Cancel must preserve the drawing");
+    relationship(true);
+    const auto linked=window.document().snapshot();
+    require(linked.revision()==before.revision()+1 && window.selectEntity(wall_id),
+        "mixed relation must commit one workspace edit");
+    QTimer::singleShot(0,&window,[&] {
+        auto* dialog=window.findChild<QDialog*>("constraintDialog");
+        require(dialog,"mixed wall resize dialog must open");
+        dialog->findChild<QLineEdit*>("constraintLength")->setText("4 m");
+        dialog->findChild<QComboBox*>("constraintAnchor")->setCurrentIndex(1);
+        dialog->findChild<QPushButton*>("constraintPreviewButton")->click();
+        auto* submit=dialog->findChild<QPushButton*>("constraintApplyButton");
+        require(submit->isEnabled(),"wall resize must propagate through the saved boundary relationship");
+        const auto capture_directory=qEnvironmentVariable("VERTEX_TEST_CAPTURE_DIR");
+        if (!capture_directory.isEmpty()) require(QDir().mkpath(capture_directory) &&
+            dialog->grab().save(QDir(capture_directory).filePath("mixed-wall-boundary-resize.png")),
+            "mixed constraint preview screenshot must save");
+        submit->click();
+    });
+    window.showConstraintEditor();
+    const auto after=window.document().snapshot();
+    const auto moved=decode_identified_boundary_entity(after.entities().at(boundary_id.toStdString()));
+    require(after.revision()==linked.revision()+1 && std::abs(moved.segments[0].segment.end.x-2)<1e-7 &&
+        std::abs(std::abs(signed_area(boundary_geometry(moved)))-7.5)<1e-7 &&
+        after.entities().at(boundary_id.toStdString()).extensions.contains("boundary_geometry_derivation"),
+        "wall resize must move the joined boundary vertex, recalculate its area and archive its receipt in one command");
+    require(window.undoCommand() && window.document().snapshot().entities()==linked.entities() &&
+        window.redoCommand() && window.document().snapshot().entities()==after.entities(),
+        "mixed workspace command must undo/redo exactly");
+    QTemporaryDir directory;
+    const auto path=directory.filePath("mixed-constraint-workspace.bldproj");
+    desktop::MainWindow reopened;
+    require(window.saveProjectAs(path) && reopened.openProject(path) && reopened.document().snapshot().entities()==after.entities(),
+        "mixed relationship and receipt-backed movement must replay after reopen");
+}
+
 void test_boundary_insertion_preview_freedom_workflow() {
     const ScenarioTiming scenario_timing(__func__);
     using namespace sketch;
@@ -6229,6 +6322,10 @@ int main(int argc, char** argv) {
         test_boundary_insertion_preview_freedom_workflow();
         return 0;
     }
+    if (argc == 2 && std::string_view(argv[1]) == "--mixed-constraint-workspace-only") {
+        test_mixed_constraint_workspace_workflow();
+        return 0;
+    }
     if (argc == 2 && std::string_view(argv[1]) == "--boundary-transform-preview-only") {
         test_boundary_transform_workflow(qEnvironmentVariable("VERTEX_TEST_CAPTURE_DIR"));
         return 0;
@@ -6330,6 +6427,7 @@ int main(int argc, char** argv) {
     test_delete_selection_workflow();
     test_boundary_vertex_insertion_workflow();
     test_direct_boundary_geometry_edit_workflow();
+    test_mixed_constraint_workspace_workflow();
     test_boundary_insertion_preview_freedom_workflow();
     test_interactive_receipt_boundary_insertion_workflow();
     test_boundary_reference_review_workflow();

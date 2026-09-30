@@ -41,7 +41,10 @@ PreparedWorkspaceEdit ProjectWorkspace::prepare_constraint_authoring(
     const auto source = snapshot();
     auto candidate = Document::fork(source);
     apply_constraint_authoring(candidate, preview);
-    return prepare(entity_diff(source, candidate.snapshot()));
+    const auto validated = candidate.snapshot();
+    if (const auto& proof = validated.history().back().boundary_constraint_changes; proof)
+        return prepare(Command{*proof});
+    return prepare(entity_diff(source, validated));
 }
 
 PreparedWorkspaceEdit ProjectWorkspace::prepare_boundary_commit(

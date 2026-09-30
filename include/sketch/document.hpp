@@ -2,6 +2,7 @@
 #include "sketch/boundary_edit.hpp"
 #include "sketch/boundary_identity_history.hpp"
 #include "sketch/geometry.hpp"
+#include "sketch/quantity.hpp"
 
 #include <nlohmann/json.hpp>
 
@@ -115,7 +116,13 @@ struct EditBoundaryGeometry {
     BoundaryGeometryEdit edit;
 };
 
-// Boundary geometry is replayed before the relation changes are validated.
+struct ConstraintWallGeometryEdit {
+    std::string wall_id;
+    Segment baseline;
+    std::optional<Quantity> length_entry;
+};
+
+// Geometry is replayed before the relation changes are validated.
 // Entity changes may contain only constraints; boundary payloads are never
 // accepted as substitutes for their typed, receipt-preserving edits.
 struct ApplyBoundaryConstraintChanges {
@@ -123,6 +130,9 @@ struct ApplyBoundaryConstraintChanges {
     std::vector<BoundaryGeometryEdit> boundary_edits;
     std::vector<EntityChange> entity_changes;
     std::string message;
+    // Nonempty wall edits use command envelope version 2. Version 1 boundary
+    // transactions retain their original representation.
+    std::vector<ConstraintWallGeometryEdit> wall_edits;
 };
 
 using Command = std::variant<ApplyEntityChanges, NameRevision, TranslateBoundary,

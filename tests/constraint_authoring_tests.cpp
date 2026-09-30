@@ -563,6 +563,68 @@ void test_explicit_wall_cycle_preserves_winding_branch() {
     const auto preview = preview_constraint_authoring(document.snapshot(), intent);
     require(!preview.accepted() && has_diagnostic(preview, "winding"),
             "explicitly connected wall cycle changed winding branch");
+
+    const auto boundary = encode_identified_boundary_entity(IdentifiedBoundary{"area","measurement_boundary",{
+        {"ab","a","b",{{0,0},{-2,0},0}}, {"bc","b","c",{{-2,0},{-2,-2},0}},
+        {"cd","c","d",{{-2,-2},{0,-2},0}}, {"da","d","a",{{0,-2},{0,0},0}}}});
+    const WallEndpointBinding shared{"area",WallEndpointRole::start,"ab","a"};
+    for (const bool boundary_first : {true,false}) {
+        auto join_boundary_a = relation("join-boundary-a",ConstraintRelationKind::coincident,
+            {shared,endpoint("wall-a",WallEndpointRole::start)});
+        auto join_boundary_c = relation("join-boundary-c",ConstraintRelationKind::coincident,
+            {shared,endpoint("wall-c",WallEndpointRole::end)});
+        if (!boundary_first) {
+            std::reverse(join_boundary_a.bindings.begin(),join_boundary_a.bindings.end());
+            std::reverse(join_boundary_c.bindings.begin(),join_boundary_c.bindings.end());
+        }
+        auto mixed = Document::create({boundary,
+            wall("wall-a",{0,0},{4,0}),wall("wall-b",{4,0},{0,3}),wall("wall-c",{0,3},{0,0}),
+            encode_constraint_entity(join_ab),encode_constraint_entity(join_bc),
+            encode_constraint_entity(join_boundary_a),encode_constraint_entity(join_boundary_c)});
+        const auto source = mixed.snapshot();
+        const auto proposed = preview_constraint_authoring(source,intent);
+        require(!proposed.accepted() && has_diagnostic(proposed,"winding"),
+            "a wall cycle closed through a boundary vertex must protect winding in either binding order");
+        require_rejected_unchanged(mixed,proposed,"mixed winding failure committed");
+        require(mixed.snapshot().entities() == source.entities(),"mixed winding refusal moved geometry");
+    }
+
+    for (const bool boundary_first : {true,false}) {
+        auto first = relation("join-first",ConstraintRelationKind::coincident,
+            {shared,endpoint("wall-a",WallEndpointRole::end)});
+        auto second = relation("join-second",ConstraintRelationKind::coincident,
+            {shared,endpoint("wall-b",WallEndpointRole::start)});
+        if (!boundary_first) {
+            std::reverse(first.bindings.begin(),first.bindings.end());
+            std::reverse(second.bindings.begin(),second.bindings.end());
+        }
+        auto separated = Document::create({boundary,wall("wall-a",{-2,0},{-1,0}),
+            wall("wall-b",{1,0},{2,0})});
+        ConstraintAuthoringIntent unite;
+        unite.relation_anchor = shared;
+        unite.relation_mutations = {ConstraintRelationMutation::upsert(first),ConstraintRelationMutation::upsert(second)};
+        const auto connected = preview_constraint_authoring(separated.snapshot(),unite);
+        require_accepted(connected,"transitive declared coincidence through a boundary vertex must permit wall contact");
+        require_near(baseline(connected.candidate_entities().at("wall-a")).end.x,0,1e-7,"first transitive endpoint");
+        require_near(baseline(connected.candidate_entities().at("wall-b")).start.x,0,1e-7,"second transitive endpoint");
+        (void)apply_constraint_authoring(separated,connected);
+
+        // The same coordinates without the second point-equivalence are an
+        // implicit wall connection and must still fail the topology guard.
+        auto incidental = Document::create({boundary,wall("wall-a",{-2,0},{-1,0}),
+            wall("wall-b",{1,0},{2,0})});
+        auto pin = relation("pin-second",ConstraintRelationKind::fixed_anchor,
+            {endpoint("wall-b",WallEndpointRole::start)});
+        pin.anchor = Vec2{0,0};
+        auto level = relation("level-second",ConstraintRelationKind::horizontal,
+            {shared,endpoint("wall-b",WallEndpointRole::start)});
+        unite.relation_mutations = {ConstraintRelationMutation::upsert(first),
+            ConstraintRelationMutation::upsert(pin),ConstraintRelationMutation::upsert(level)};
+        const auto rejected = preview_constraint_authoring(incidental.snapshot(),unite);
+        require(!rejected.accepted() && has_diagnostic(rejected,"implicit"),
+            "incidental wall contact must not become a declared transitive join");
+        require_rejected_unchanged(incidental,rejected,"incidental mixed contact applied");
+    }
 }
 
 void test_all_seven_relations_add_edit_remove_and_relation_solves_move_geometry() {
@@ -1144,9 +1206,161 @@ void test_persisted_component_analysis_excludes_edit_pins() {
         "all persistent analysis paths must leave revision, history, entities and saved state unchanged");
 }
 
+void test_mixed_boundary_wall_authoring_and_resize() {
+    const auto owner = encode_identified_boundary_entity(IdentifiedBoundary{"area", "measurement_boundary", {
+        {"ab","a","b",{{0,0},{3,0},0}}, {"bc","b","c",{{3,0},{3,3},0}},
+        {"cd","c","d",{{3,3},{0,3},0}}, {"da","d","a",{{0,3},{0,0},0}}}});
+    const WallEndpointBinding corner{"area",WallEndpointRole::end,"ab","b"};
+    auto architectural_wall = wall("wall",{4,0},{6,0});
+    architectural_wall.properties["baseline"]["future_geometry_metadata"] = {{"retain",17}};
+    auto document = Document::create({owner, architectural_wall});
+    const auto initial = document.snapshot();
+    ConstraintAuthoringIntent join;
+    join.relation_anchor = corner;
+    join.relation_mutations.push_back(ConstraintRelationMutation::upsert(relation(
+        "join",ConstraintRelationKind::coincident,{corner,endpoint("wall",WallEndpointRole::start)})));
+    const auto joined = preview_constraint_authoring(initial,join);
+    require_accepted(joined,"mixed boundary-anchored relation must move a connected wall");
+    require_near(baseline(joined.candidate_entities().at("wall")).start.x,3,1e-7,
+        "mixed relation did not move wall to the anchored boundary vertex");
+    require(joined.candidate_entities().at("area") == owner,"mixed anchor moved its boundary");
+    (void)apply_constraint_authoring(document,joined);
+    const auto connected = document.snapshot();
+    ConstraintAuthoringIntent resize;
+    resize.wall_resize = WallResizeIntent{"wall",parse_quantity("4 m"),WallResizeAnchor::end,true};
+    const auto preview = preview_constraint_authoring(connected,resize);
+    require_accepted(preview,"wall-only resize seed must discover its boundary relation component");
+    require(preview.changed_walls().size() == 1 && preview.changed_boundaries().size() == 1,
+        "mixed resize preview must expose both owner types");
+    require_near(decode_identified_boundary_entity(preview.candidate_entities().at("area")).segments[0].segment.end.x,
+        2,1e-7,"mixed resize did not move the joined boundary vertex");
+    require(document.snapshot().entities() == connected.entities(),"mixed preview mutated source");
+    resize.wall_resize->move_connected_walls = false;
+    const auto frozen = preview_constraint_authoring(connected,resize);
+    require(!frozen.accepted(),"frozen mixed neighbor must reject a conflicting resize");
+    require_rejected_unchanged(document,frozen,"rejected mixed resize applied");
+    (void)apply_constraint_authoring(document,preview);
+    const auto committed = document.snapshot();
+    require(committed.entities() == preview.candidate_entities() && committed.revision() == connected.revision()+1,
+        "mixed resize must commit exactly the shown state in one revision");
+    require(committed.history().back().boundary_constraint_changes.has_value(),
+        "mixed boundary and wall movement must carry typed replay evidence");
+    const auto encoded = command_to_json(*committed.history().back().boundary_constraint_changes);
+    require(encoded.at("version") == 2 && encoded.contains("wall_edits"),
+        "mixed typed command requires versioned wall geometry replay");
+    require(command_to_json(command_from_json(encoded)) == encoded,"mixed command codec lost evidence");
+    const auto rejects_command = [&](json malformed) {
+        bool rejected = false;
+        try { auto fork = Document::fork(connected); (void)fork.apply(command_from_json(malformed)); }
+        catch (const std::exception&) { rejected = true; }
+        require(rejected,"tampered mixed command must reject atomically");
+        require(document.snapshot().entities() == committed.entities(),"tampered replay changed live source");
+    };
+    auto malformed = encoded;
+    malformed["wall_edits"][0]["extra"] = true;
+    rejects_command(malformed);
+    malformed = encoded;
+    malformed["wall_edits"][0]["wall_id"] = "area";
+    rejects_command(malformed);
+    malformed = encoded;
+    malformed["wall_edits"].push_back(malformed["wall_edits"][0]);
+    rejects_command(malformed);
+    malformed = encoded;
+    malformed["wall_edits"][0]["length_entry"]["exact_metres"]["numerator"] = 5;
+    rejects_command(malformed);
+    malformed = encoded;
+    malformed["wall_edits"][0]["baseline"]["start"] = {1,0};
+    malformed["wall_edits"][0]["length_entry"] = nullptr;
+    rejects_command(malformed); // final coincidence must check both moved owners
+    auto tampered = preview;
+    auto& entities = const_cast<std::map<std::string,Entity,std::less<>>&>(tampered.candidate_entities());
+    entities.at("wall").properties["classification"] = "tampered";
+    auto untampered_source = Document::fork(connected);
+    require_rejected_unchanged(untampered_source,tampered,"tampered mixed preview applied");
+    const auto path = std::filesystem::temp_directory_path() / ("constraint-mixed-"+make_stable_id()+".bldproj");
+    (void)ProjectStore::save(path,committed);
+    auto reopened = ProjectStore::load(path);
+    std::filesystem::remove(path);
+    require(reopened.document.snapshot().entities() == committed.entities(),"mixed reopen differs");
+    reopened.document.undo(reopened.document.revision());
+    require(reopened.document.snapshot().entities() == connected.entities(),"mixed undo split the transaction");
+    reopened.document.redo(reopened.document.revision());
+    require(reopened.document.snapshot().entities() == committed.entities(),"mixed redo differs");
+    require_rejected_unchanged(document,preview,"stale mixed candidate applied");
+    ConstraintAuthoringIntent removal;
+    removal.relation_mutations = {ConstraintRelationMutation::remove("join")};
+    const auto removed = preview_constraint_authoring(document.snapshot(),removal);
+    require_accepted(removed,"mixed relation removal must preserve all geometry");
+    require(removed.changed_walls().empty() && removed.changed_boundaries().empty(),
+        "mixed relation removal moved endpoint geometry");
+    (void)apply_constraint_authoring(document,removed);
+    require(document.snapshot().entities().at("area") == committed.entities().at("area") &&
+        document.snapshot().entities().at("wall") == committed.entities().at("wall"),
+        "mixed relation removal lost geometry or exact receipts");
+    require(committed.entities().at("wall").properties.at("baseline").at("future_geometry_metadata") ==
+        architectural_wall.properties.at("baseline").at("future_geometry_metadata"),
+        "mixed surgical wall edit lost opaque baseline metadata");
+
+    const auto coincident = encode_constraint_entity(relation("join",ConstraintRelationKind::coincident,
+        {corner,endpoint("wall",WallEndpointRole::start)}));
+    auto pin = relation("corner-pin",ConstraintRelationKind::fixed_anchor,{corner});
+    pin.anchor = Vec2{3,0};
+    auto locked = Document::create({owner,wall("wall",{3,0},{6,0}),coincident,encode_constraint_entity(pin)});
+    resize.wall_resize->move_connected_walls = true;
+    require(!preview_constraint_authoring(locked.snapshot(),resize).accepted(),
+        "mixed resize must respect a persistent boundary anchor");
+    auto hosted = Document::create({owner,wall("wall",{3,0},{6,0}),coincident,
+        opening("door","wall",2.6,0.3)});
+    auto shrink = resize;
+    shrink.wall_resize->exact_length = parse_quantity("2 m");
+    require(!preview_constraint_authoring(hosted.snapshot(),shrink).accepted(),
+        "mixed solve must reject stranding a hosted opening");
+    auto arc_owner = owner;
+    auto arc = decode_identified_boundary_entity(arc_owner);
+    arc.segments.front().segment.sweep_radians = 0.2;
+    arc_owner = encode_identified_boundary_entity(arc,&arc_owner);
+    const auto require_curved_relation_rejected = [&](const Entity& boundary_owner, const Entity& wall_owner) {
+        bool rejected = false;
+        try { (void)Document::create({boundary_owner,wall_owner,coincident}); }
+        catch (const std::exception& error) {
+            rejected = std::string(error.what()).find("straight") != std::string::npos;
+        }
+        require(rejected,"persisted mixed relations must reject curved endpoint owners at document construction");
+    };
+    require_curved_relation_rejected(arc_owner,wall("wall",{3,0},{6,0}));
+    require_curved_relation_rejected(owner,wall("wall",{3,0},{6,0},0.2));
+    // Curved owners can exist without endpoint constraints. Attempt the mixed
+    // relation through authoring so its refusal is exercised before persistence.
+    auto curved_boundary = Document::create({arc_owner,wall("wall",{3,0},{6,0})});
+    const auto curved_boundary_before = curved_boundary.snapshot();
+    const auto curved_boundary_preview = preview_constraint_authoring(curved_boundary_before,join);
+    require(!curved_boundary_preview.accepted(),
+        "mixed component must not flatten a curved boundary");
+    require_rejected_unchanged(curved_boundary,curved_boundary_preview,"curved boundary authoring refusal applied");
+    auto curved_wall = Document::create({owner,wall("wall",{3,0},{6,0},0.2)});
+    const auto curved_wall_preview = preview_constraint_authoring(curved_wall.snapshot(),join);
+    require(!curved_wall_preview.accepted(),
+        "mixed component must not flatten a curved wall");
+    require_rejected_unchanged(curved_wall,curved_wall_preview,"curved wall authoring refusal applied");
+    auto misplaced = owner;
+    misplaced.properties["floor_id"] = "floor";
+    auto unresolved = Document::create({misplaced,wall("wall",{3,0},{6,0}),coincident,
+        {"property","property",{{"name","Property"}}},
+        {"building","building",{{"name","Building"},{"property_id","property"}}},
+        {"floor","floor",{{"name","Floor"},{"building_id","building"}}}});
+    require(!preview_constraint_authoring(unresolved.snapshot(),resize).accepted(),
+        "mixed boundary neighbor must have a resolved explicit drawing context");
+    auto unrelated = Document::create({owner,wall("wall",{3,0},{6,0}),wall("curve",{9,9},{11,9},0.2)});
+    const auto detached = preview_constraint_authoring(unrelated.snapshot(),resize);
+    require_accepted(detached,"unrelated curved owner must not block a known straight component");
+    require(detached.changed_boundaries().empty() && detached.candidate_entities().at("area") == owner,
+        "coordinate coincidence must not create an implicit mixed relation");
+}
+
 int main() {
     sketch::testing::noninteractive_errors();
     try {
+        test_mixed_boundary_wall_authoring_and_resize();
         test_persisted_component_analysis_excludes_edit_pins();
         test_boundary_horizontal_authoring();
         test_boundary_cross_relations_and_fixed_length();

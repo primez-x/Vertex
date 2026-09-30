@@ -6,12 +6,14 @@
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDir>
+#include <QDialogButtonBox>
 #include <QFontDatabase>
 #include <QLineEdit>
 #include <QLabel>
 #include <QKeyEvent>
 #include <QPushButton>
 #include <QTimer>
+#include <QTableWidget>
 
 #include <cmath>
 #include <iostream>
@@ -147,7 +149,7 @@ void boundary_relationship_workflows() {
     require(ConstraintDialog::supportsEntity(original.entities().at("first")), "straight boundary unavailable");
     require(combo(add, "constraintOperation").count() == 3 && combo(add, "constraintOperation").currentData().toInt() == 1,
         "boundary must default to Add and omit wall resize");
-    require(combo(add, "constraintBinding0").count() == 16, "boundary endpoints include walls or miss stable edges");
+    require(combo(add, "constraintBinding0").count() == 18, "boundary editor must include wall and stable boundary endpoints");
     require(add.previewEdit() && add.submit(), "boundary horizontal preview failed");
     const auto preview = *add.acceptedPreview();
     require(preview.changed_boundaries().size() == 1 && document.snapshot().entities() == original.entities(), "boundary preview mutated state or omitted geometry");
@@ -215,6 +217,163 @@ void boundary_relationship_workflows() {
     auto curved = decode_identified_boundary_entity(boundary("curve"));
     curved.segments[0].segment.sweep_radians = 0.2;
     require(!ConstraintDialog::supportsEntity(encode_identified_boundary_entity(curved)), "curved boundary offered unsupported constraints");
+    const auto unsupported = Document::create({encode_identified_boundary_entity(curved)});
+    bool explicitly_unavailable = false;
+    try { ConstraintDialog dialog(unsupported.snapshot(), "curve", true); }
+    catch (const std::invalid_argument& error) { explicitly_unavailable = std::string(error.what()).find("straight") != std::string::npos; }
+    require(explicitly_unavailable, "curved selected owner must be explicitly unavailable");
+}
+int endpoint_choice(QComboBox& field, const QString& owner, const QString& endpoint) {
+    for (int i = 0; i < field.count(); ++i)
+        if (field.itemText(i).contains(owner) && field.itemText(i).endsWith(endpoint)) return i;
+    throw std::runtime_error("missing mixed owner endpoint choice");
+}
+void choose_endpoint(ConstraintDialog& dialog, const char* field, const QString& owner, const QString& endpoint) {
+    auto& choice = combo(dialog, field);
+    choice.setCurrentIndex(endpoint_choice(choice, owner, endpoint));
+}
+Document mixed_fixture() {
+    auto line = wall(); line.properties["name"] = "Shared wall";
+    auto region = boundary("region", 3.6576, 0); region.properties["name"] = "Shared boundary";
+    return Document::create({line, region});
+}
+void mixed_owner_choices_and_relation_editing() {
+    for (const auto& selected : {QStringLiteral("wall-a"), QStringLiteral("region")}) {
+        auto document = mixed_fixture();
+        const auto original = document.snapshot();
+        ConstraintDialog add(original, selected, true);
+        auto& operations = combo(add, "constraintOperation");
+        require((operations.findData(0) >= 0) == (selected == "wall-a"), "only walls may offer length resize");
+        operations.setCurrentIndex(operations.findData(1));
+        auto& endpoints = combo(add, "constraintBinding0");
+        require(endpoints.count() == 10, "both selected owner types must expose the same mixed endpoint universe");
+        require(endpoints.itemText(endpoint_choice(endpoints, "Shared wall", "end")).contains("Wall") &&
+            endpoints.itemText(endpoint_choice(endpoints, "Shared boundary", "Edge 1 · start")).contains("Boundary"),
+            "endpoint labels must distinguish named wall and numbered boundary edge");
+        auto* connected = add.findChild<QCheckBox*>("constraintMoveConnected");
+        require(connected && connected->text() == "Allow connected objects to move", "mixed relation movement wording is wall/boundary specific");
+        require(combo(add, "constraintAnchor").count() == 10 &&
+            endpoint_choice(combo(add, "constraintAnchor"), "Shared wall", "start fixed") >= 0 &&
+            endpoint_choice(combo(add, "constraintAnchor"), "Shared boundary", "Edge 1 · end fixed") >= 0,
+            "relation anchors must expose either supported owner type");
+        select_relation(add, ConstraintRelationKind::coincident);
+        choose_endpoint(add, "constraintBinding0", "Shared wall", "end");
+        choose_endpoint(add, "constraintBinding1", "Shared boundary", "Edge 1 · start");
+        require(add.previewEdit() && add.submit(), "mixed coincidence must preview and save from either selected owner");
+        require(document.snapshot().entities() == original.entities(), "mixed relation preview mutated document");
+        apply_constraint_authoring(document, *add.acceptedPreview());
+        const auto joined = document.snapshot();
+        std::string relation_id;
+        for (const auto& [id, entity] : joined.entities()) if (entity.type == "constraint") {
+            const auto saved = *decode_constraint_entity(entity).constraint;
+            require(saved.bindings == std::vector<WallEndpointBinding>{{"wall-a", WallEndpointRole::end},
+                {"region", WallEndpointRole::start, "ab", "a"}}, "mixed dialog dropped stable owner/edge/vertex bindings");
+            relation_id = id;
+        }
+        require(!relation_id.empty(), "mixed relation entity was not saved");
+        // A reopened editor must load and effectively edit the same mixed relation.
+        ConstraintDialog edit(joined, selected, true);
+        auto& edit_mode = combo(edit, "constraintOperation"); edit_mode.setCurrentIndex(edit_mode.findData(2));
+        require(combo(edit, "existingConstraint").currentData().toString().toStdString() == relation_id,
+            "reopened mixed owner editor did not find its persisted relation");
+        require(combo(edit, "constraintBinding0").currentText().contains("Shared wall") &&
+            combo(edit, "constraintBinding1").currentText().contains("Shared boundary"), "reopened mixed bindings not restored");
+        choose_endpoint(edit, "constraintBinding1", "Shared boundary", "Edge 1 · end");
+        choose_endpoint(edit, "constraintAnchor", "Shared boundary", "Edge 1 · end fixed");
+        require(edit.previewEdit() && edit.submit(), "mixed relation edit with boundary anchor must succeed");
+        require(!edit.acceptedPreview()->changed_walls().empty(), "mixed relation edit must actually move the wall");
+        capture(edit, selected == "wall-a" ? "mixed-wall-editor" : "mixed-boundary-editor");
+        apply_constraint_authoring(document, *edit.acceptedPreview());
+        const auto edited = document.snapshot();
+        const auto saved = *decode_constraint_entity(edited.entities().at(relation_id)).constraint;
+        require(saved.bindings[1].segment_id == "ab" && saved.bindings[1].vertex_id == "b", "mixed relation edit did not save new stable endpoint");
+        require_near(edited.entities().at("wall-a").properties.at("baseline").at("end")[0].get<double>(), 7.6576);
+        document.undo(document.revision()); require(document.snapshot().entities() == joined.entities(), "mixed edit undo was incomplete");
+        document.redo(document.revision()); require(document.snapshot().entities() == edited.entities(), "mixed edit redo was incomplete");
+        ConstraintDialog cancel(edited, selected, true);
+        auto& cancel_mode = combo(cancel, "constraintOperation"); cancel_mode.setCurrentIndex(cancel_mode.findData(3));
+        require(cancel.previewEdit(), "mixed removal must preview");
+        cancel.findChild<QDialogButtonBox*>()->button(QDialogButtonBox::Cancel)->click();
+        require(!cancel.acceptedPreview() && document.snapshot().entities() == edited.entities(), "Cancel applied a mixed preview");
+    }
+}
+void mixed_connected_movement_and_frozen_conflict() {
+    auto document = mixed_fixture();
+    ConstraintDialog join(document.snapshot(), "region", true);
+    select_relation(join, ConstraintRelationKind::coincident);
+    choose_endpoint(join, "constraintBinding0", "Shared wall", "end");
+    choose_endpoint(join, "constraintBinding1", "Shared boundary", "Edge 1 · start");
+    require(join.previewEdit() && join.submit(), "mixed movement fixture relation failed");
+    apply_constraint_authoring(document, *join.acceptedPreview());
+    const auto before = document.snapshot();
+    ConstraintDialog frozen(before, "wall-a", true);
+    frozen.setLengthExpression("4.2672 m");
+    frozen.findChild<QCheckBox*>("constraintMoveConnected")->setChecked(false);
+    require(!frozen.previewEdit() && !frozen.submit() && !frozen.lastError().isEmpty(), "freezing mixed partner must reject incompatible resize");
+    require(document.snapshot().entities() == before.entities(), "frozen conflict mutated mixed geometry");
+    ConstraintDialog move(before, "wall-a", true); move.setLengthExpression("4.2672 m");
+    require(move.previewEdit() && move.submit(), "connected mixed partner must move with resized wall");
+    const auto preview = *move.acceptedPreview();
+    require(preview.changed_walls().size() == 1 && preview.changed_boundaries().size() == 1, "mixed preview omitted changed wall or boundary");
+    auto* table = move.findChild<QTableWidget*>("constraintChanges");
+    require(table && table->rowCount() == 5, "mixed preview table must show wall and all boundary edges");
+    require(table->item(0, 0)->text().contains("Shared wall") && table->item(1, 0)->text().contains("Shared boundary"),
+        "mixed preview table must identify both named owners");
+    capture(move, "mixed-connected-movement");
+    apply_constraint_authoring(document, preview);
+    const auto committed = document.snapshot();
+    require_near(decode_identified_boundary_entity(committed.entities().at("region")).segments.front().segment.start.x, 4.2672);
+    document.undo(document.revision()); require(document.snapshot().entities() == before.entities(), "mixed movement undo was incomplete");
+    document.redo(document.revision()); require(document.snapshot().entities() == committed.entities(), "mixed movement redo was incomplete");
+}
+void room_boundary_mixed_choices_and_reopen() {
+    auto room = decode_identified_boundary_entity(boundary("room", 3.6576, 0));
+    room.type = "room_boundary";
+    auto region = encode_identified_boundary_entity(room); region.properties["name"] = "Shared room";
+    auto line = wall(); line.properties["name"] = "Shared wall";
+    require(ConstraintDialog::supportsEntity(region), "straight identified room boundary must be supported");
+    for (const auto& selected : {QStringLiteral("wall-a"), QStringLiteral("room")}) {
+        auto document = Document::create({line, region});
+        const auto before = document.snapshot();
+        ConstraintDialog dialog(before, selected, true);
+        auto& operation = combo(dialog, "constraintOperation"); operation.setCurrentIndex(operation.findData(1));
+        require((operation.findData(0) >= 0) == (selected == "wall-a"), "room boundary must not offer wall resize");
+        auto& choices = combo(dialog, "constraintBinding0");
+        require(choices.count() == 10 &&
+            choices.itemText(endpoint_choice(choices, "Shared room", "Edge 1 · start")).startsWith("Room boundary"),
+            "wall and room editors must expose type-aware room edge choices");
+        select_relation(dialog, ConstraintRelationKind::coincident);
+        choose_endpoint(dialog, "constraintBinding0", "Shared wall", "end");
+        choose_endpoint(dialog, "constraintBinding1", "Shared room", "Edge 1 · start");
+        require(dialog.previewEdit() && dialog.submit(), "wall/room mixed relation must preview from either owner");
+        require(document.snapshot().entities() == before.entities(), "room mixed preview mutated source");
+        apply_constraint_authoring(document, *dialog.acceptedPreview());
+        const auto joined = document.snapshot();
+        ConstraintDialog reopened(joined, selected, true);
+        auto& reopen_mode = combo(reopened, "constraintOperation"); reopen_mode.setCurrentIndex(reopen_mode.findData(2));
+        require(combo(reopened, "existingConstraint").count() == 1 &&
+            combo(reopened, "constraintBinding0").currentText().contains("Shared wall") &&
+            combo(reopened, "constraintBinding1").currentText().contains("Shared room"),
+            "reopened wall/room editor must restore the mixed relation bindings");
+        require(!reopened.previewEdit() && reopened.lastError().contains("makes no document change"),
+            "unchanged reopened relation must preserve the no-op rejection contract");
+        choose_endpoint(reopened, "constraintBinding1", "Shared room", "Edge 1 · end");
+        choose_endpoint(reopened, "constraintAnchor", "Shared room", "Edge 1 · end fixed");
+        require(reopened.previewEdit() && reopened.submit(), "reopened room mixed relation must remain editable");
+        require(document.snapshot().entities() == joined.entities(), "room mixed edit preview mutated source");
+        require(!reopened.acceptedPreview()->changed_walls().empty(), "room mixed endpoint edit must move the wall");
+        apply_constraint_authoring(document, *reopened.acceptedPreview());
+        const auto edited = document.snapshot();
+        const auto relation_id = combo(reopened, "existingConstraint").currentData().toString().toStdString();
+        const auto saved = *decode_constraint_entity(edited.entities().at(relation_id)).constraint;
+        require(saved.bindings[1] == WallEndpointBinding{"room", WallEndpointRole::end, "ab", "b"},
+            "room mixed edit must persist the new stable endpoint binding");
+        require_near(edited.entities().at("wall-a").properties.at("baseline").at("end")[0].get<double>(), 7.6576);
+        document.undo(document.revision()); require(document.snapshot().entities() == joined.entities(), "room mixed edit undo was incomplete");
+        document.redo(document.revision()); require(document.snapshot().entities() == edited.entities(), "room mixed edit redo was incomplete");
+    }
+    room.segments.front().segment.sweep_radians = 0.2;
+    require(!ConstraintDialog::supportsEntity(encode_identified_boundary_entity(room)), "curved room boundary must remain unavailable");
 }
 QLabel& persistent_freedom(ConstraintDialog& dialog) {
     auto* label = dialog.findChild<QLabel*>("constraintPersistentFreedom");
@@ -303,6 +462,9 @@ int main(int argc, char** argv) {
     try {
         resize_preview_anchor_and_invalidation();
         relationship_create_edit_conflict_remove();
+        mixed_owner_choices_and_relation_editing();
+        mixed_connected_movement_and_frozen_conflict();
+        room_boundary_mixed_choices_and_reopen();
         boundary_relationship_workflows();
         persisted_coordinate_freedom_before_after();
         removal_preserves_comparison_owner_universe();

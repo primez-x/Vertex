@@ -435,7 +435,7 @@ comparison reports still need production fixtures and end-to-end qualification.
 
 ## Wall dimensions and constraints
 
-In either workspace, select a straight wall and choose **Dimensions and
+In either workspace, select a straight wall or identified straight boundary and choose **Dimensions and
 constraints** in the inspector or command palette. Editing the inspector's wall
 length opens the same preview dialog. Choose the endpoint to keep fixed and
 whether walls connected by explicit constraints may move, then choose Preview.
@@ -454,7 +454,15 @@ Opening, slab, building-object and organization dialogs retain document identity
 revision, selection, active layer and units across their prompts. A changed
 context rejects the old intent rather than directing it to a different source.
 
-The editor also supports straight identified measurement-boundary vertices.
+The editor also supports straight identified measurement and room-boundary vertices.
+Endpoint choices distinguish walls from numbered boundary edges regardless of
+which object opened the tool. Relation operations can anchor an endpoint of
+either type. Wall length editing keeps its selected-wall start/end anchors.
+Explicit relationships can connect a wall endpoint to an area corner: resizing
+the wall with connected movement enabled previews the wall and area change
+together. Disabling connected movement preserves the other object and rejects
+an incompatible edit. Cancel preserves both; Apply records one undoable change
+with typed geometry and receipt evidence that survives save/reopen.
 Its stored coordinate freedom label describes the saved endpoint relationships
 across the connected objects; the separate edit-preview diagnostics include
 temporary anchors used for the proposed movement. Accepted previews show the
@@ -463,7 +471,7 @@ retains both objects in the comparison. Invalidating the preview restores the
 source value. Unsupported analysis explicitly reports unavailable.
 
 The constraint integration remains under qualification. Curved-owner relations,
-mixed wall/boundary authoring, level dependency propagation and the complete
+level dependency propagation and the complete
 production constraint workflow are still required.
 
 ## Selection transforms

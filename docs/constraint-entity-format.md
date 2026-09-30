@@ -103,7 +103,10 @@ removal, reversal/remapping, hosted-opening validity, save/reopen, and
 unsupported historical locks. CLI fixtures independently construct valid
 project manifests to distinguish semantic rejection from checksum failure.
 
-The preview/Apply service, anchor and connected-movement controls, boundary
-vertex identities, curve constraints, branch/topology propagation, level
-dependencies, and interactive conflict repair remain required. This format
-and its focused tests do not certify the complete constraint workflow.
+The preview/Apply service supports straight wall endpoints and stable identified
+measurement and room-boundary vertices, with explicit anchors and connected-movement
+controls. Persistent coordinate rank is diagnosed separately from temporary
+editing anchors. Curved-owner relations, complete branch/topology propagation,
+level dependencies and interactive conflict repair still need broader
+qualification. This format and its focused tests do not certify the complete
+constraint workflow.

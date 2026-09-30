@@ -68,7 +68,8 @@ struct ConstraintRelationMutation {
 // relation_anchor and relation_move_connected_walls apply to relation-only
 // solves. With no relation anchor, affected geometry is frozen and an upsert
 // succeeds only when the current geometry already satisfies the relation.
-// Removal-only intents always preserve geometry.
+// Removal-only intents always preserve geometry. Connected movement includes
+// straight identified boundary owners reached through explicit relations.
 struct ConstraintAuthoringIntent {
     std::optional<WallResizeIntent> wall_resize;
     std::vector<ConstraintRelationMutation> relation_mutations;
