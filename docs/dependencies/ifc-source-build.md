@@ -304,11 +304,32 @@ than accepting unbound cached bytecode. The staged provenance includes the
 derivation manifest, reviewed patch and verifier. The actual
 failed candidate 784 is rejected without creating an output, and its bound
 cache/CMake/Python coherence checks pass independently; neither result proves a
-successful native package. No actual successful candidate has been staged yet.
+successful native package.
 
-Remaining evidence is a recorded successful Release wrapper/geometry build,
-reviewed package contents and notices, source/dependency/license closure,
+Candidate 787 completed the full Release wrapper build and linked
+`_ifcopenshell_wrapper.cp313-win_amd64.pyd`. Its final evidence has
+`state: "built-unqualified"`, successful exit codes, and the bound original and
+derived source inventories. The staging command produced a separate 563-file
+package, with the extension, Python sources, notices, and derivation provenance.
+The locked interpreter imported that package, created an IFC4 wall entity, and
+passed all 25 existing CAD adapter regressions with the candidate placed first
+on the isolated import path. This checks actual candidate parsing/geometry and
+the adapter directly; it does not exercise the installed AppContainer worker.
+All eight explicit schema identifiers also parsed and round-tripped a project
+entity without changing the header: IFC2X3, IFC4, IFC4X1, IFC4X2, IFC4X3,
+IFC4X3_TC1, IFC4X3_ADD1, and IFC4X3_ADD2. The Python constructor's general
+`IFC4X3` alias intentionally creates ADD2; the explicit-header checks preserve
+the individual schema identities. These small schema probes do not establish
+external interchange conformance.
+
+The unmodified upstream Python initializer reports `0.0.0`, and its C++ source
+uses the upstream `0.8.0` fallback. The pinned source revision and binary hashes,
+rather than a guessed package version, identify this candidate. Production
+runtime metadata must reflect its actual identity before replacement.
+
+Remaining evidence is complete package/notices review, source/dependency/license closure,
 binary-to-source binding for the replacement, and existing IFC behavior checks
 under the actual independent sandbox worker. Candidate outputs must stay
 separate from `.deps/cad-runtime/3.13.15` and the installed application until
-those checks justify replacement. No successful source build is claimed here.
+those checks justify replacement. A successful source build and direct adapter
+checks do not qualify the product runtime or the unified production release.

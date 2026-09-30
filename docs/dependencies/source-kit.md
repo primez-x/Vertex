@@ -78,3 +78,43 @@ available for a reproducible public-source build and are not silently presented 
 clean-checkout rebuild. Bundle-level and installed-runtime verification use
 the self-contained `verify-offline-bundle.ps1` script and retain the same
 incomplete qualification status.
+
+## Historical IFC SDK sources
+
+The IFC candidate uses a separate static OCCT 7.8.1 SDK and Boost 1.86/Eigen
+3.3.9 SDK. Their historical vcpkg recipes differ from the manager checkout's
+current ports. `scripts/stage_ifc_sdk_sources.py` stages the exact installed
+recipe and source inputs rather than copying current ports or binary caches:
+
+```powershell
+.deps/cad-runtime/3.13.15/python.exe -I -B scripts/stage_ifc_sdk_sources.py `
+  --workspace . --output C:/Build/Vertex/ifc-sdk-sources
+.deps/cad-runtime/3.13.15/python.exe -I -B tests/test_stage_ifc_sdk_sources.py
+```
+
+Use a fresh external destination with an existing parent. The command reads the
+two explicit SDK statuses and their SPDX/ABI/resource receipts, recovers regular
+Git blobs from each recorded recipe tree, and verifies the exact recipe file set
+and hashes. It matches source archives by SHA-512 in the explicit local downloads
+cache. No archive is extracted, source executed, dependency downloaded, or
+existing output overwritten. Notices, original receipts, manifests, triplet,
+helper, recipes, and source archives travel with a relative-path manifest.
+
+The actual source handoff for candidate 787 contains 91 package instances,
+91 historical recipe trees, 85 source archives, and 682 payload files. The two
+staged SDK status hashes match that successful IFC build's recorded inputs.
+The final stager passed 12 regression methods, including forbidden workspace
+Git execution, reserved Windows names, metadata-only tampering, and incomplete
+helper-payload rejection. The recipe-only Boost.Uninstall helper uses the exact
+pinned manager's MIT notice with an explicit origin, rather than a fabricated
+installed copyright file.
+
+All inputs are validated before reserving the destination. Changes during copy
+reject the result and retain the partial output. The manifest is published last;
+`verify(output)` checks its portable inventory and internal bindings. It is not a
+signature or independent licensing conclusion. The vcpkg manager is identified
+but its full source is not included in this SDK payload; compiler/Windows SDK
+redistribution and a clean offline dependency rebuild remain separate work.
+The complete application's corresponding-source and production qualification
+flags therefore remain false. Compose the final offline source handoff only
+after adding those remaining inputs and recording a clean rebuild.

@@ -2855,6 +2855,10 @@
     },
     {
       "category": "source",
+      "path": "scripts/stage_ifc_sdk_sources.py"
+    },
+    {
+      "category": "source",
       "path": "scripts/stage_offline_bundle.py"
     },
     {
@@ -4120,6 +4124,10 @@
     {
       "category": "source",
       "path": "tests/test_source_provenance_audit.py"
+    },
+    {
+      "category": "source",
+      "path": "tests/test_stage_ifc_sdk_sources.py"
     },
     {
       "category": "source",
