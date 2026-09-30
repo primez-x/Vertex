@@ -180,7 +180,16 @@ Windows directories on the child PATH, and developer Qt/QML settings removed.
 Each workspace runs twice: the first process saves a source `.bldproj`, and the
 second opens that file and saves a reopened copy. The evidence directory
 therefore contains both project artifacts alongside the workspace captures and
-native 3D view. The harness samples loaded module paths and checks observed
+native 3D view. Each source process also generates an encoded PNG and imports it
+through the application's normal isolated reference decoder before saving. The
+second process reopens the saved reference resources without importing another
+source image. Per-run `reference_import` evidence records whether decoding was
+requested and passed; each project pair separately records source decoder
+acceptance and persisted reopen with matching stable project hashes. A decoder
+failure, failed reopen, or changed stable project output fails the smoke check.
+This generated PNG check does not cover PDF or arbitrary raster compatibility,
+independently attest worker controls, or qualify production isolation.
+The harness samples loaded module paths and checks observed
 packaged modules against the installed manifest and hashes.
 The five CRT DLLs and Qt Windows platform plugin must be observed inside the
 installation. Each run writes a new evidence directory, including failure

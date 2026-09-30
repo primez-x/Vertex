@@ -2147,6 +2147,26 @@
     },
     {
       "category": "docs",
+      "path": "docs/verification/grouped-plan-movement-2026-09-30.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/verification/joined-boundary-vertex-editing-2026-09-30.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/verification/live-boundary-preview-dimensions-2026-09-30.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/verification/selection-rotation-2026-09-30.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/verification/touch-navigation-and-legacy-upgrade-2026-09-30.md"
+    },
+    {
+      "category": "docs",
       "path": "docs/vertical-levels.md"
     },
     {
@@ -2316,6 +2336,10 @@
     {
       "category": "source",
       "path": "include/sketch/constraint_tolerances.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/constraint_wall_edit.hpp"
     },
     {
       "category": "source",
@@ -3072,6 +3096,10 @@
     {
       "category": "source",
       "path": "src/core/constraint_integrity.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/constraint_wall_edit.cpp"
     },
     {
       "category": "source",

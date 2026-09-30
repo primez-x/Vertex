@@ -291,6 +291,9 @@ class InstalledRuntimeTests(unittest.TestCase):
         self.assertIn("--smoke-market", launch.call_args.args[0])
         self.assertIn("light-commercial", launch.call_args.args[0])
         self.assertTrue(result["assistance_disabled_requested"])
+        self.assertNotIn("--smoke-reference", launch.call_args.args[0])
+        self.assertFalse(result["reference_import"]["requested"])
+        self.assertIsNone(result["reference_import"]["passed"])
         monitor.assert_called_once_with(12345)
         monitor.return_value.close.assert_called_once()
         child.kill.assert_not_called()
@@ -307,8 +310,10 @@ class InstalledRuntimeTests(unittest.TestCase):
              mock.patch.object(runtime.time, "monotonic", side_effect=[0.0, 16.0, 16.0]), \
              mock.patch.object(runtime, "png_evidence", side_effect=FileNotFoundError("missing output")):
             result = runtime.run_workspace(Path("installed/bin/vertex.exe"), "measurement",
-                                           Path("evidence"), {}, self.declarations(), {})
+                                           Path("evidence"), {}, self.declarations(), {},
+                                           import_reference=True)
         self.assertFalse(result["passed"])
+        self.assertFalse(result["reference_import"]["passed"])
         self.assertTrue(result["timed_out"])
         child.kill.assert_called_once()
         child.wait.assert_called_once_with(timeout=2.0)
@@ -340,13 +345,59 @@ class InstalledRuntimeTests(unittest.TestCase):
             result = runtime.run_workspace(
                 Path("installed/bin/vertex.exe"), "architectural",
                 Path("evidence"), {"PATH": "Windows"}, declared, records,
-                market="residential", capture_label="source")
+                market="residential", capture_label="source", import_reference=True)
         self.assertTrue(result["passed"], result["errors"])
         self.assertTrue(any(arg.endswith("architectural-residential-source.png") for arg in
                             result["arguments"]))
         self.assertTrue(any(arg.endswith("architectural-residential-source-model.png") for arg in
                             result["arguments"]))
         self.assertEqual(len(result["native_3d"]), 1)
+        self.assertIn("--smoke-reference", result["arguments"])
+        self.assertTrue(result["reference_import"]["requested"])
+        self.assertTrue(result["reference_import"]["passed"])
+        self.assertEqual(result["reference_import"]["format"], "png")
+
+    def test_reference_decode_cannot_be_requested_during_reopen(self):
+        with mock.patch.object(runtime.subprocess, "Popen") as launch:
+            with self.assertRaisesRegex(ValueError, "reference.*reopen"):
+                runtime.run_workspace(Path("installed/bin/vertex.exe"), "measurement", Path("evidence"),
+                    {}, self.declarations(), {}, import_reference=True,
+                    project_input=Path("evidence/source.bldproj"))
+        launch.assert_not_called()
+
+    def test_save_reopen_pair_decodes_once_and_binds_persisted_reference_evidence(self):
+        source = {"passed": True, "exit_code": 0, "project": {"sha256": "p"},
+                  "reference_import": {"requested": True, "passed": True}}
+        reopened = {"passed": True, "exit_code": 0, "project": {"sha256": "p"},
+                    "reference_import": {"requested": False, "passed": None}}
+        with mock.patch.object(runtime, "run_workspace", side_effect=[source, reopened]) as run:
+            original, restored, pair = runtime.run_workspace_pair(Path("installed/bin/vertex.exe"),
+                "measurement", Path("evidence"), {}, {}, {}, market="residential")
+        self.assertIs(original, source)
+        self.assertIs(restored, reopened)
+        first, second = run.call_args_list
+        self.assertTrue(first.kwargs["import_reference"])
+        self.assertNotIn("project_input", first.kwargs)
+        self.assertFalse(second.kwargs["import_reference"])
+        self.assertEqual(second.kwargs["project_input"], first.kwargs["project_output"])
+        self.assertNotEqual(second.kwargs["project_output"], first.kwargs["project_output"])
+        self.assertTrue(pair["reference_import"]["source_decode_passed"])
+        self.assertTrue(pair["reference_import"]["persisted_reopen_passed"])
+
+    def test_reference_pair_cannot_hide_failed_decoder_or_changed_project(self):
+        for source_passed, source_decoded, reopened_passed, reopened_hash in (
+                (False, False, True, "p"), (True, False, True, "p"),
+                (True, True, False, "p"), (True, True, True, "changed")):
+            source = {"passed": source_passed, "project": {"sha256": "p"},
+                      "reference_import": {"requested": True, "passed": source_decoded}}
+            reopened = {"passed": reopened_passed, "project": {"sha256": reopened_hash},
+                        "reference_import": {"requested": False, "passed": None}}
+            with self.subTest(source_passed=source_passed, source_decoded=source_decoded,
+                              reopened_passed=reopened_passed, reopened_hash=reopened_hash), \
+                 mock.patch.object(runtime, "run_workspace", side_effect=[source, reopened]):
+                _, _, pair = runtime.run_workspace_pair(Path("installed/bin/vertex.exe"),
+                    "measurement", Path("evidence"), {}, {}, {})
+            self.assertFalse(pair["reference_import"]["persisted_reopen_passed"])
 
     def test_compare_output_evidence_reports_per_artifact_hashes(self):
         source = {

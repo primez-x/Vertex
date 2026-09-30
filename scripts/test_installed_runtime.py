@@ -6,6 +6,10 @@ isolation, registry-isolation, or production qualification test. No SDK paths
 are added and no app is launched merely by importing this module. Each
 workspace is exercised through a save/reopen pair so the evidence directory
 contains the source and reopened .bldproj artifacts as well as screenshots.
+Each source run imports a generated PNG through the application's normal
+isolated decoder; the reopened run retains that saved reference without
+importing it again. Decoder acceptance and persisted reopen are reported
+separately, without claiming independent sandbox-control qualification.
 The architectural workspace is captured once for each supported market profile
 (residential and light-commercial); the measurement workspace uses the
 residential profile.
@@ -289,9 +293,12 @@ def run_workspace(executable: Path, workspace: str, run_root: Path, env: dict,
                   market: str = "residential",
                   project_output: Path | None = None,
                   project_input: Path | None = None,
-                  capture_label: str | None = None) -> dict:
+                  capture_label: str | None = None,
+                  import_reference: bool = False) -> dict:
     if market not in {"residential", "light-commercial"}:
         raise ValueError(f"unsupported smoke market: {market}")
+    if import_reference and project_input is not None:
+        raise ValueError("A reference decoder fixture cannot be added during project reopen")
     suffix = _capture_suffix(capture_label)
     image = run_root / f"{workspace}-{market}{suffix}.png"
     performance_path = run_root / f"{workspace}-{market}{suffix}-performance.json"
@@ -299,6 +306,8 @@ def run_workspace(executable: Path, workspace: str, run_root: Path, env: dict,
     args = [str(executable), "--smoke", "--smoke-assistance-disabled", "--smoke-market", market,
             "--smoke-workspace", workspace, "--smoke-output", str(image),
             "--smoke-performance-output", str(performance_path)]
+    if import_reference:
+        args.append("--smoke-reference")
     if workspace == "architectural":
         model = run_root / f"{workspace}-{market}{suffix}-model.png"
         outputs.append(model)
@@ -313,7 +322,15 @@ def run_workspace(executable: Path, workspace: str, run_root: Path, env: dict,
               "module_poll_interval_seconds": 0.02, "errors": [], "screenshots": [],
               "native_3d": [],
               "timed_out": False, "module_samples": 0, "module_sample_errors": [],
-              "assistance_disabled_requested": True}
+              "assistance_disabled_requested": True,
+              "reference_import": {
+                  "requested": import_reference,
+                  "format": "png" if import_reference else None,
+                  "passed": None,
+                  "boundary": "Application-generated encoded PNG imported through the normal broker; application success is not an independent sandbox-control audit."
+                      if import_reference else "No source decoder requested; project reopen uses saved resources."
+                      if project_input is not None else "No source decoder requested.",
+              }}
     process = None
     monitor = None
     captures = []
@@ -394,7 +411,43 @@ def run_workspace(executable: Path, workspace: str, run_root: Path, env: dict,
     except (OSError, ValueError) as error:
         result["errors"].append(str(error))
     result["passed"] = not result["errors"]
+    if import_reference:
+        result["reference_import"]["passed"] = result["passed"]
     return result
+
+
+def run_workspace_pair(executable: Path, workspace: str, run_root: Path, env: dict,
+                       declared: dict[str, set[str]], records: dict[str, dict], *,
+                       market: str = "residential") -> tuple[dict, dict, dict]:
+    """Decode a PNG once, then reopen the saved project without another import."""
+    stem = f"{workspace}-{market}"
+    source_project = run_root / f"{stem}-source.bldproj"
+    reopened_project = run_root / f"{stem}-reopened.bldproj"
+    source_run = run_workspace(executable, workspace, run_root, env, declared, records,
+                               market=market, project_output=source_project,
+                               capture_label="source", import_reference=True)
+    reopened_run = run_workspace(executable, workspace, run_root, env, declared, records,
+                                 market=market, project_input=source_project,
+                                 project_output=reopened_project,
+                                 capture_label="reopened", import_reference=False)
+    comparison = compare_output_evidence(source_run, reopened_run)
+    source_reference = source_run.get("reference_import") or {}
+    reopened_reference = reopened_run.get("reference_import") or {}
+    decoded = bool(source_run.get("passed") and source_reference.get("requested") and
+                   source_reference.get("passed"))
+    persisted = bool(decoded and reopened_run.get("passed") and
+                     reopened_reference.get("requested") is False and comparison["stable_hashes_match"])
+    return source_run, reopened_run, {
+        "workspace": workspace, "market": market,
+        "source": source_run.get("project"), "reopened": reopened_run.get("project"),
+        "reopen_process_exit_code": reopened_run.get("exit_code"),
+        "output_comparison": comparison,
+        "reference_import": {
+            "format": "png", "source_decode_passed": decoded,
+            "persisted_reopen_passed": persisted,
+            "boundary": "Source application imports an encoded PNG through the normal broker; the second process opens saved resources without requesting another source decode. Stable project hashes bind persistence, not visual fidelity or production qualification.",
+        },
+    }
 
 
 def windows_directory() -> Path:
@@ -444,30 +497,17 @@ def main(argv: list[str] | None = None) -> int:
         for workspace in ("measurement", "architectural"):
             markets = ("residential", "light-commercial") if workspace == "architectural" else ("residential",)
             for market in markets:
-                stem = f"{workspace}-{market}"
-                source_project = run_root / f"{stem}-source.bldproj"
-                reopened_project = run_root / f"{stem}-reopened.bldproj"
-                source_run = run_workspace(executable, workspace, run_root, env, declared, records,
-                                           market=market, project_output=source_project,
-                                           capture_label="source")
+                source_run, reopened_run, pair = run_workspace_pair(
+                    executable, workspace, run_root, env, declared, records, market=market)
                 report["runs"].append(source_run)
-                reopened_run = run_workspace(executable, workspace, run_root, env, declared, records,
-                                             market=market, project_input=source_project,
-                                             project_output=reopened_project,
-                                             capture_label="reopened")
                 report["runs"].append(reopened_run)
-                comparison = compare_output_evidence(source_run, reopened_run)
-                report.setdefault("projects", []).append({
-                    "workspace": workspace,
-                    "market": market,
-                    "source": source_run.get("project"),
-                    "reopened": reopened_run.get("project"),
-                    "reopen_process_exit_code": reopened_run.get("exit_code"),
-                    "output_comparison": comparison,
-                })
-                if not comparison["stable_hashes_match"]:
+                report.setdefault("projects", []).append(pair)
+                if not pair["output_comparison"]["stable_hashes_match"]:
                     report["errors"].append(
                         f"{workspace}/{market} source and reopened stable output hashes differ")
+                if not pair["reference_import"]["persisted_reopen_passed"]:
+                    report["errors"].append(
+                        f"{workspace}/{market} reference PNG decode/save/reopen check failed")
         report["passed"] = all(run["passed"] for run in report["runs"])
         report["passed"] = report["passed"] and not report["errors"]
     except Exception as error:
