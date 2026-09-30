@@ -18,6 +18,6 @@ Outcome: enable existing endpoint constraints and connected geometry edits for a
 - [x] Command codecs and saved/undone history enforce the new reader floor.
 - [x] Native dialog and canvas workflows display actual arcs and commit connected edits; undo/redo and save/reopen agree.
 - [x] Focused runtime checks and independent source review pass.
-- [ ] Diff check, runnable offline checkpoint, scoped commit, push and remote-ref verification.
+- [x] Diff check, runnable offline checkpoint, scoped commit, push and remote-ref verification. Source checkpoint `bf572455da1ed15379d484fea2accfb9a5ab546d`; installed-runtime evidence is linked in the verification record.
 
 Remaining production gaps, including a separately defined physical arc-length constraint, tangent relationships, exact Apex compatibility, and clean-machine qualification, stay visible in the production ledger.

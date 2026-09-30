@@ -50,6 +50,19 @@ original representations and reader floors.
 
 ## Qualification boundary
 
+The offline bundle contains 3,758 declared files, including 1,106 source-kit
+files. Installation verified 2,645 runtime files at
+`artifacts/installed/vertex-20260930-curved-editing/`. The installed executable
+matches the tested Release build: SHA-256
+`e05b0bb3ab3f2ceb6256b684be91dc9e1df1ce2e15ac55a3adb4b0e328d72fdc`.
+Six sampled installed launches passed the create/save/reopen pairs for
+measurement, residential architecture and light commercial architecture.
+Evidence is in
+`artifacts/installed-runtime-20260930-curved-editing/run-20260930-172314-af446728/report.json`.
+Source checkpoint `bf572455da1ed15379d484fea2accfb9a5ab546d` was committed,
+pushed and verified against `origin/main`. This subsequent evidence update
+does not change the executable or packaged source checkpoint.
+
 Full independently validated curve construction is permitted as a distinct
 recorded operation; it is not claimed to carry the solver topology proof.
 Authoring validates analytical winding, crossings, overlap, reversal, collapse,
