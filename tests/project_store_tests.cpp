@@ -1188,6 +1188,22 @@ void test_physical_arc_length_history_requires_v12() {
     require(ProjectStore::load(deleted_file).document.snapshot().entities() == loaded.document.snapshot().entities(),
             "retained physical curve history must remain readable after deleting its owner");
     const auto source_hash = ProjectStore::file_sha256(file);
+    sketch::ProjectWorkspace workspace(document.snapshot());
+    const auto workspace_snapshot = workspace.capture();
+    const auto history = sketch::capture_workspace_history_record(workspace_snapshot);
+    sketch::RecoveryLedger ledger{{"history", "workspace_history",
+        sketch::encode_workspace_history_record(workspace_snapshot.document(), history, std::nullopt)}};
+    const auto archive_file = temp.path / "physical-curve-workspace-archive.bldproj";
+    (void)ProjectStore::save_archive(archive_file,
+        {workspace_snapshot.document(), ledger, sketch::ArchiveRole::ordinary});
+    const auto archive = ProjectStore::load_archive(archive_file, sketch::ArchiveRole::ordinary);
+    require(archive.supported() && archive.archive->document().entities() == initial &&
+        ProjectStore::required_format_version(archive.archive->document()) == 12,
+        "workspace archive must preserve physical curve state, reader floor and recovery data");
+    require_error([&] { (void)ProjectStore::load(archive_file); }, StorageErrorCode::unsupported_format,
+        "document-only load must not discard v12 workspace recovery data");
+    if (const auto* capture = std::getenv("VERTEX_PHYSICAL_CURVE_CAPTURE"))
+        std::filesystem::copy_file(archive_file, std::filesystem::path(capture));
     const auto downgraded = temp.path / "downgraded-physical-curve-length.bldproj";
     std::filesystem::copy_file(file, downgraded);
     execute_sql(downgraded, "PRAGMA user_version=11; UPDATE metadata SET value='11' WHERE key='format_version'");
