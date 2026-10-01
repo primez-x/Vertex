@@ -118,6 +118,45 @@ Quantity normalize_positive_quantity(const Quantity& value) {
     return parsed;
 }
 
+std::optional<Quantity> known_wall_length_entry(const Entity& wall) {
+    validate_wall_length_input(wall);
+    const auto section = wall.extensions.find("constraint_authoring");
+    if (section == wall.extensions.end() || !section->is_object() ||
+        !section->contains("version") || !section->at("version").is_number_integer() ||
+        section->at("version") != 1 || !section->contains("last_length_entry")) {
+        return std::nullopt;
+    }
+    const auto& receipt = section->at("last_length_entry");
+    if (!receipt.is_object() || !receipt.contains("version") ||
+        !receipt.at("version").is_number_integer() ||
+        (receipt.at("version") != 1 && receipt.at("version") != 2)) {
+        return std::nullopt;
+    }
+    std::optional<Unit> unit;
+    for (const auto candidate : {Unit::metre, Unit::millimetre, Unit::centimetre,
+                                 Unit::foot, Unit::inch}) {
+        if (receipt.at("entered_unit") == unit_name(candidate)) {
+            unit = candidate;
+            break;
+        }
+    }
+    if (!unit) {
+        return std::nullopt;
+    }
+    return normalize_positive_quantity(
+        parse_quantity(receipt.at("original_expression").get<std::string>(), *unit));
+}
+
+std::optional<Quantity> unchanged_wall_length_entry(const Entity& wall,
+                                                     const Segment& old_baseline,
+                                                     const Segment& proposed_baseline) {
+    if (std::abs(segment_length(old_baseline) - segment_length(proposed_baseline)) >
+        constraint_linear_tolerance_metres) {
+        return std::nullopt;
+    }
+    return known_wall_length_entry(wall);
+}
+
 std::string digest_json(const ordered_json& value) {
     const auto encoded = value.dump();
     return sha256_hex(std::as_bytes(std::span(encoded.data(), encoded.size())));
@@ -180,6 +219,7 @@ void validate_binding(const WallEndpointBinding& binding) {
 ConstraintAuthoringIntent normalize_intent(const ConstraintAuthoringIntent& input) {
     ConstraintAuthoringIntent result = input;
     const auto coordinate_intents = static_cast<unsigned>(result.wall_resize.has_value()) +
+        static_cast<unsigned>(result.wall_geometry_move.has_value()) +
         static_cast<unsigned>(result.boundary_resize.has_value()) +
         static_cast<unsigned>(result.boundary_vertex_move.has_value());
     if (coordinate_intents > 1)
@@ -210,6 +250,31 @@ ConstraintAuthoringIntent normalize_intent(const ConstraintAuthoringIntent& inpu
             invalid("Wall resize anchor is invalid");
         }
     }
+    if (result.wall_geometry_move.has_value()) {
+        auto& move = *result.wall_geometry_move;
+        if (move.targets.empty()) {
+            invalid("Wall geometry move requires at least one selected wall");
+        }
+        std::set<std::string, std::less<>> target_ids;
+        for (const auto& target : move.targets) {
+            if (target.wall_id.empty()) {
+                invalid("Wall geometry move id cannot be empty");
+            }
+            if (!target_ids.insert(target.wall_id).second) {
+                invalid("Wall geometry move ids must be unique");
+            }
+            const auto target_length = std::hypot(target.proposed_end.x - target.proposed_start.x,
+                                                  target.proposed_end.y - target.proposed_start.y);
+            if (!std::isfinite(target.proposed_start.x) || !std::isfinite(target.proposed_start.y) ||
+                !std::isfinite(target.proposed_end.x) || !std::isfinite(target.proposed_end.y) ||
+                !std::isfinite(target_length)) {
+                invalid("Wall geometry move targets must be finite");
+            }
+            if (target_length <= default_geometry_tolerance_metres) {
+                invalid("Wall geometry move target baseline is degenerate");
+            }
+        }
+    }
     if (result.relation_anchor.has_value()) {
         validate_binding(*result.relation_anchor);
     }
@@ -232,7 +297,8 @@ ConstraintAuthoringIntent normalize_intent(const ConstraintAuthoringIntent& inpu
             invalid("Constraint relation mutation ids must be unique");
         }
     }
-    if (!result.wall_resize.has_value() && !result.boundary_resize.has_value() &&
+    if (!result.wall_resize.has_value() && !result.wall_geometry_move.has_value() &&
+        !result.boundary_resize.has_value() &&
         !result.boundary_vertex_move.has_value() &&
         result.relation_mutations.empty()) {
         invalid("Constraint authoring intent has no changes");
@@ -552,6 +618,12 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(
         if (intent.wall_resize.has_value()) {
             seeds.insert(intent.wall_resize->wall_id);
         }
+        if (intent.wall_geometry_move.has_value()) {
+            for (const auto& target : intent.wall_geometry_move->targets) {
+                (void)require_wall(candidate, target.wall_id);
+                seeds.insert(target.wall_id);
+            }
+        }
         if (boundary_edit) {
             seeds.insert(boundary_edit->boundary_id);
         }
@@ -705,7 +777,55 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(
             fixed_points[id] = position;
         };
 
-        if (intent.wall_resize.has_value()) {
+        if (intent.wall_geometry_move.has_value()) {
+            const auto& move = *intent.wall_geometry_move;
+            std::set<std::string, std::less<>> selected_walls;
+            std::set<std::string, std::less<>> movable_component;
+            for (const auto& target : move.targets) {
+                const auto old = old_baselines.at(target.wall_id);
+                const auto old_length = segment_length(old);
+                if (!std::isfinite(old_length) ||
+                    old_length <= default_geometry_tolerance_metres) {
+                    invalid("Selected wall has a degenerate or unrepresentable baseline: " +
+                            target.wall_id);
+                }
+                const Segment proposed{target.proposed_start, target.proposed_end,
+                                       old.sweep_radians};
+                const auto proposed_length = segment_length(proposed);
+                if (!std::isfinite(proposed_length) ||
+                    proposed_length <= default_geometry_tolerance_metres) {
+                    invalid("Wall geometry move target baseline is degenerate: " + target.wall_id);
+                }
+                if (std::abs(proposed_length - old_length) >
+                    constraint_linear_tolerance_metres) {
+                    invalid("Wall geometry move must preserve physical wall length: " +
+                            target.wall_id);
+                }
+                if (old.sweep_radians != 0.0) {
+                    (void)arc_from_chord_angle(proposed.start, proposed.end,
+                                               proposed.sweep_radians);
+                }
+                selected_walls.insert(target.wall_id);
+                add_fixed({target.wall_id, WallEndpointRole::start}, proposed.start);
+                add_fixed({target.wall_id, WallEndpointRole::end}, proposed.end);
+                const auto component = connected_from(target.wall_id);
+                movable_component.insert(component.begin(), component.end());
+            }
+            if (has_upsert && intent.relation_anchor.has_value() &&
+                !movable_component.contains(intent.relation_anchor->owner_id)) {
+                invalid("Relation anchor is outside the moved wall component");
+            }
+            for (const auto& [id, position] : positions) {
+                const auto& binding = point_bindings.at(id);
+                if (selected_walls.contains(binding.owner_id)) {
+                    continue;
+                }
+                if (!move.move_connected_walls ||
+                    !movable_component.contains(binding.owner_id)) {
+                    add_fixed(binding, position);
+                }
+            }
+        } else if (intent.wall_resize.has_value()) {
             const auto& resize = *intent.wall_resize;
             const auto old = old_baselines.at(resize.wall_id);
             const long double dx = static_cast<long double>(old.end.x) - old.start.x;
@@ -795,7 +915,8 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(
             }
         }
         if (has_upsert && intent.relation_anchor.has_value() &&
-            (intent.wall_resize.has_value() || boundary_edit)) {
+            (intent.wall_resize.has_value() || intent.wall_geometry_move.has_value() ||
+             boundary_edit)) {
             const auto& anchor = *intent.relation_anchor;
             add_fixed(anchor, positions.at(resolve(anchor)));
         }
@@ -848,9 +969,13 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(
             auto& wall_entity = candidate.at(wall_id);
             const bool resized = intent.wall_resize.has_value() &&
                 intent.wall_resize->wall_id == wall_id;
-            wall_entity = replay_constraint_wall_edit(wall_entity, {wall_id, proposed,
-                resized ? std::optional<Quantity>{intent.wall_resize->exact_length} : std::nullopt,
-                old.sweep_radians==0 ? 1ULL : resized ? 3ULL : 2ULL});
+            const auto length_entry = resized
+                ? std::optional<Quantity>{intent.wall_resize->exact_length}
+                : unchanged_wall_length_entry(wall_entity, old, proposed);
+            const auto proof_version = old.sweep_radians == 0.0
+                ? 1ULL : length_entry.has_value() ? 3ULL : 2ULL;
+            wall_entity = replay_constraint_wall_edit(
+                wall_entity, {wall_id, proposed, length_entry, proof_version});
             validate_constraint_wall_host(wall_id, candidate);
             result.changed_walls_.push_back({wall_id, old, proposed});
         }
@@ -1180,11 +1305,15 @@ Revision apply_constraint_authoring(Document& document,
             std::move(constraint_changes), recomputed.normalized_intent_.message};
         for (const auto& wall : recomputed.changed_walls_) {
             const auto& resize = recomputed.normalized_intent_.wall_resize;
+            const bool resized = resize && resize->wall_id == wall.wall_id;
+            const auto length_entry = resized
+                ? std::optional<Quantity>{resize->exact_length}
+                : unchanged_wall_length_entry(current.entities().at(wall.wall_id),
+                    wall.old_baseline, wall.proposed_baseline);
+            const auto proof_version = wall.old_baseline.sweep_radians == 0.0
+                ? 1ULL : length_entry.has_value() ? 3ULL : 2ULL;
             command.wall_edits.push_back({wall.wall_id, wall.proposed_baseline,
-                resize && resize->wall_id == wall.wall_id
-                    ? std::optional<Quantity>{resize->exact_length} : std::nullopt,
-                wall.old_baseline.sweep_radians==0 ? 1ULL :
-                    resize && resize->wall_id==wall.wall_id ? 3ULL : 2ULL});
+                length_entry, proof_version});
         }
         const auto verified = Document::preview_command(current, Command{command});
         if (verified.entities() != recomputed.candidate_entities_ ||

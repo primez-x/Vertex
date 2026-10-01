@@ -730,6 +730,10 @@ if(SKETCH_BUILD_DESKTOP)
     target_link_libraries(wall_chain_connection_tests PRIVATE sketch_desktop)
     qt_add_resources(wall_chain_connection_tests wall_chain_connection_fonts
       PREFIX "/fonts" BASE assets/fonts FILES assets/fonts/Inter.ttf)
+    add_executable(connected_wall_canvas_tests tests/connected_wall_canvas_tests.cpp)
+    target_link_libraries(connected_wall_canvas_tests PRIVATE sketch_desktop)
+    qt_add_resources(connected_wall_canvas_tests connected_wall_canvas_fonts
+      PREFIX "/fonts" BASE assets/fonts FILES assets/fonts/Inter.ttf)
     add_executable(wall_measurement_desktop_tests tests/wall_measurement_desktop_tests.cpp)
     target_link_libraries(wall_measurement_desktop_tests PRIVATE sketch_desktop)
     qt_add_resources(wall_measurement_desktop_tests wall_measurement_fonts
@@ -801,6 +805,7 @@ if(SKETCH_BUILD_DESKTOP)
       target_compile_options(batch_boundary_clone_desktop_tests PRIVATE /W4 /permissive- /utf-8)
       target_compile_options(wall_opening_palette_tests PRIVATE /W4 /permissive- /utf-8)
       target_compile_options(wall_chain_connection_tests PRIVATE /W4 /permissive- /utf-8)
+      target_compile_options(connected_wall_canvas_tests PRIVATE /W4 /permissive- /utf-8)
       target_compile_options(multipage_user_workflow_tests PRIVATE /W4 /permissive- /utf-8)
       target_compile_options(associative_section_desktop_tests PRIVATE /W4 /permissive- /utf-8)
       target_compile_options(desktop_performance_tests PRIVATE /W4 /permissive- /utf-8)
@@ -834,6 +839,7 @@ if(SKETCH_BUILD_DESKTOP)
     add_test(NAME batch_boundary_clone_desktop COMMAND batch_boundary_clone_desktop_tests)
     add_test(NAME wall_opening_palette COMMAND wall_opening_palette_tests)
     add_test(NAME wall_chain_connection COMMAND wall_chain_connection_tests)
+    add_test(NAME connected_wall_canvas COMMAND connected_wall_canvas_tests)
     add_test(NAME wall_measurement_desktop COMMAND wall_measurement_desktop_tests)
     add_test(NAME desktop_performance COMMAND desktop_performance_tests)
     add_test(NAME desktop_workspace_recovery COMMAND desktop_workspace_recovery_tests)
@@ -854,7 +860,7 @@ if(SKETCH_BUILD_DESKTOP)
     get_target_property(SKETCH_QMAKE_EXECUTABLE Qt6::qmake IMPORTED_LOCATION)
     get_filename_component(SKETCH_QT_BIN "${SKETCH_QMAKE_EXECUTABLE}" DIRECTORY)
     get_filename_component(SKETCH_QT_PREFIX "${SKETCH_QT_BIN}" DIRECTORY)
-    set_tests_properties(wall_measurement_desktop wall_chain_connection PROPERTIES
+    set_tests_properties(wall_measurement_desktop wall_chain_connection connected_wall_canvas PROPERTIES
       ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_PLUGIN_PATH=${SKETCH_QT_PREFIX}/plugins"
       ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${SKETCH_QT_BIN};PATH=path_list_prepend:${CMAKE_SOURCE_DIR}/.deps/native/x64-windows/$<IF:$<CONFIG:Debug>,debug/bin,bin>")
     set_tests_properties(symbol_transform_desktop named_plan_vertex_desktop axis_canvas_controls deferred_opening_preview PROPERTIES

@@ -54,6 +54,20 @@ struct WallResizeIntent {
     bool move_connected_walls{true};
 };
 
+struct WallGeometryMoveTarget {
+    std::string wall_id;
+    Vec2 proposed_start;
+    Vec2 proposed_end;
+};
+
+// Explicit endpoint targets for selected walls. Targets are independent of
+// vector order; each selected wall retains its physical length and source
+// signed sweep. Explicit relations may move connected owners.
+struct WallGeometryMoveIntent {
+    std::vector<WallGeometryMoveTarget> targets;
+    bool move_connected_walls{true};
+};
+
 // Keep the selected boundary's existing anchored/local-chain resize semantics;
 // solve only other owners reached through explicit persisted relations.
 struct BoundaryResizeIntent {
@@ -88,6 +102,7 @@ struct ConstraintRelationMutation {
 // fixed_arc_length measures one curved segment at its unchanged signed sweep.
 struct ConstraintAuthoringIntent {
     std::optional<WallResizeIntent> wall_resize;
+    std::optional<WallGeometryMoveIntent> wall_geometry_move;
     std::vector<ConstraintRelationMutation> relation_mutations;
     std::optional<WallEndpointBinding> relation_anchor;
     bool relation_move_connected_walls{true};

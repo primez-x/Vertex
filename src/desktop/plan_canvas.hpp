@@ -329,6 +329,20 @@ public:
     // Commits one model-space translation after the interactive preview ends.
     // Returning false rejects the preview without leaving canvas-only geometry.
     void setEntitiesMoveRequested(std::function<bool(QStringList, Vec2)> callback);
+    // Capture document authority when a selected frame takes the press.
+    void setEntitiesMoveStarted(std::function<void(QStringList)> callback);
+    void setEntitiesMoveRejected(std::function<void(QStringList, Vec2)> callback);
+    // Optional exact proposal for a group move. A disengaged result uses the
+    // ordinary translation preview; an engaged empty result rejects it. The
+    // host may mark this serial pending and complete it asynchronously.
+    void setEntitiesMovePreviewRequested(std::function<std::optional<std::vector<CanvasEntity>>(
+        QStringList, Vec2, std::uint64_t)> callback);
+    [[nodiscard]] std::uint64_t entitiesMovePreviewSerial() const noexcept { return m_move_preview_serial; }
+    [[nodiscard]] bool entitiesMovePreviewPending() const noexcept { return m_move_preview_pending || m_move_release_pending; }
+    [[nodiscard]] std::vector<CanvasEntity> entitiesMovePreview() const { return m_move_entities_preview; }
+    bool markEntitiesMovePreviewPending(std::uint64_t serial);
+    bool completeEntitiesMovePreview(std::uint64_t serial,
+        std::optional<std::vector<CanvasEntity>> result, std::vector<CanvasLabel> labels = {});
     // Commits a single-selection transform after the interactive preview.
     // Scale is relative and uniform; rotation is a relative radian delta.
     void setEntityTransformRequested(std::function<bool(QString, double, double)> callback);
@@ -548,6 +562,13 @@ private:
     CanvasSelectionFilter m_selection_filter{CanvasSelectionFilter::all};
     QStringList m_move_ids;
     std::optional<Vec2> m_move_preview_delta;
+    std::vector<CanvasEntity> m_move_entities_preview;
+    std::vector<CanvasLabel> m_move_labels_preview;
+    std::uint64_t m_move_preview_serial{};
+    bool m_move_preview_exact{};
+    bool m_move_preview_pending{};
+    bool m_move_preview_request_in_progress{};
+    bool m_move_release_pending{};
     bool m_selection_resize_enabled{};
     bool m_selection_rotate_enabled{};
     bool m_selection_axis_resize_enabled{};
@@ -613,6 +634,10 @@ private:
     std::function<void(QString, bool)> m_entity_selection_clicked;
     std::function<void(QStringList, bool)> m_entities_selected;
     std::function<bool(QStringList, Vec2)> m_entities_move_requested;
+    std::function<void(QStringList)> m_entities_move_started;
+    std::function<void(QStringList, Vec2)> m_entities_move_rejected;
+    std::function<std::optional<std::vector<CanvasEntity>>(
+        QStringList, Vec2, std::uint64_t)> m_entities_move_preview_requested;
     std::function<bool(QString, double, double)> m_entity_transform_requested;
     std::function<bool(QString, double, double, Vec2)> m_entity_axis_resize_requested;
     std::function<std::optional<std::vector<CanvasEntity>>(

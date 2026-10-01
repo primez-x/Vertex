@@ -6,6 +6,8 @@
 #include "../src/desktop/plan_canvas.hpp"
 #include "support/noninteractive_errors.hpp"
 #include <QApplication>
+#include <QElapsedTimer>
+#include <QThread>
 #include <QComboBox>
 #include <QDragEnterEvent>
 #include <QDir>
@@ -507,6 +509,13 @@ int main(int argc, char** argv) {
         mouse(QEvent::MouseButtonPress, move_start, Qt::LeftButton, Qt::LeftButton);
         mouse(QEvent::MouseMove, move_end, Qt::NoButton, Qt::LeftButton);
         mouse(QEvent::MouseButtonRelease, move_end, Qt::LeftButton, Qt::NoButton);
+        QElapsedTimer move_completion;
+        move_completion.start();
+        while (canvas->entitiesMovePreviewPending() && move_completion.elapsed()<2500) {
+            QApplication::processEvents();
+            QThread::msleep(1);
+        }
+        require(!canvas->entitiesMovePreviewPending(), "wall drag finishes its exact release proposal");
         hosted_wall = read_wall(window.document().snapshot().entities().at(wall_id));
         require(!same_point(hosted_wall.baseline.start, wall_before_move.baseline.start) &&
                     std::abs(sketch::segment_length(hosted_wall.baseline) -

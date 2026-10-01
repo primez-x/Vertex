@@ -1,6 +1,6 @@
 # Vertex user testing checklist
 
-284 practical tasks, grouped by how you use the app. This replaces the earlier engineering-oriented checklist. The old 130-item list is preserved separately as engineering-requirements-checklist.md.
+292 practical tasks, grouped by how you use the app. This replaces the earlier engineering-oriented checklist. The old 130-item list is preserved separately as engineering-requirements-checklist.md.
 
 This is a user acceptance list for the intended app, not a claim that every listed action is implemented or working in the current preview. If you cannot find a control, or a feature is absent, mark **Blocked / missing** and describe it. Specialized sections can be skipped if you do not use them or lack the device or sample files.
 
@@ -1624,6 +1624,27 @@ drawing; switching modes does not change existing geometry.
 - [ ] **U288 — Place a library window into a physical wall**
   - Steps: Draw a long wall. In Library, search for a window, double-click it, then click the wall away from its corners. Try the Window quick-insertion button on another part of the wall. Try placing a window outside any wall and too close to a corner.
   - Expected: Both paths create wall-hosted windows with a real wall cut and editable opening dimensions. A library item supplies the selected variant. An invalid location explains how to place the opening; it creates neither a detached decorative window nor a partial wall edit.
+  - Result: Not tested
+  - Notes / steps to reproduce: ____________________
+
+## Moving walls
+
+- [ ] **U289 — Drag a wall without separating its connected corner**
+  - Steps: Draw two connected walls and place a window in the first. Select the first wall, then drag inside its blue selection frame. Watch the adjoining wall and window before releasing. Undo, redo, save and reopen.
+  - Expected: Both endpoints of the selected wall move together. The adjoining shared corner follows; its other endpoint stays in place unless another declared relationship requires movement. Its length updates in the preview. The window stays in its host at the same offset and width. One undo restores the whole edit; reopening preserves the result.
+  - Also try: Move to one location, then release at a slightly different one. The released position determines the completed move. Press Escape during a drag; no preview geometry is saved.
+  - Result: Not tested
+  - Notes / steps to reproduce: ____________________
+
+- [ ] **U290 — Move several walls as one selection**
+  - Steps: Ctrl-click two or more walls, then drag inside their selection frame. Try connected and separate walls. Undo and redo.
+  - Expected: Every selected wall moves by the same distance. Their lengths remain unchanged, shared corners remain connected, and hosted openings move with their walls. The selection stays active after the move. Undo restores all moved geometry in one step.
+  - Result: Not tested
+  - Notes / steps to reproduce: ____________________
+
+- [ ] **U291 — Keep a locked wall from moving**
+  - Steps: Lock a wall endpoint with a fixed-anchor relationship in its constraint editor. Select the wall and drag away from that point.
+  - Expected: The move is refused with an explanation. Neither the selected wall, its neighbors nor its openings change. Canceling the failed drag leaves the drawing usable.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 

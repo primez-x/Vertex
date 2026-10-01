@@ -2334,9 +2334,282 @@ void test_boundary_vertex_move_propagates_explicit_relations() {
     require(!preview_constraint_authoring(detached_before,intent).accepted(),"wall resize plus boundary vertex move must reject");
 }
 
+void test_wall_geometry_move_propagates_explicit_connections_only() {
+    auto document = Document::create({wall("wall-a", {0,0}, {2,0}),
+        wall("wall-b", {2,0}, {2,3}), wall("wall-c", {2,0}, {3,0})});
+    ConstraintAuthoringIntent establish_receipt;
+    establish_receipt.wall_resize = WallResizeIntent{"wall-b", parse_quantity("2 m"),
+        WallResizeAnchor::start, false};
+    const auto receipt_preview = preview_constraint_authoring(document.snapshot(), establish_receipt);
+    require_accepted(receipt_preview, "connected neighbor exact-length fixture resize rejected");
+    (void)apply_constraint_authoring(document, receipt_preview);
+
+    auto joined = relation("join", ConstraintRelationKind::coincident,
+        {endpoint("wall-a", WallEndpointRole::end), endpoint("wall-b", WallEndpointRole::start)});
+    auto pin = relation("wall-b-end", ConstraintRelationKind::fixed_anchor,
+        {endpoint("wall-b", WallEndpointRole::end)});
+    pin.anchor = Vec2{2,2};
+    ConstraintAuthoringIntent connect;
+    connect.relation_mutations = {ConstraintRelationMutation::upsert(joined),
+        ConstraintRelationMutation::upsert(pin)};
+    const auto connected = preview_constraint_authoring(document.snapshot(), connect);
+    require_accepted(connected, "coincident relation and neighbor endpoint lock fixture rejected");
+    (void)apply_constraint_authoring(document, connected);
+    const auto before = document.snapshot();
+    ConstraintAuthoringIntent intent;
+    intent.wall_geometry_move = WallGeometryMoveIntent{{
+        {"wall-a", {10,5}, {12,5}}}, true};
+
+    const auto preview = preview_constraint_authoring(before, intent);
+    require_accepted(preview, "explicit wall move must solve its persisted connected component");
+    const auto moved_a = baseline(preview.candidate_entities().at("wall-a"));
+    const auto moved_b = baseline(preview.candidate_entities().at("wall-b"));
+    require_near(moved_a.start.x, 10, 1e-9, "selected wall start x");
+    require_near(moved_a.start.y, 5, 1e-9, "selected wall start y");
+    require_near(moved_a.end.x, 12, 1e-9, "selected wall end x");
+    require_near(moved_a.end.y, 5, 1e-9, "selected wall end y");
+    require_near(moved_b.start.x, moved_a.end.x, 1e-7,
+        "persisted coincident neighbor did not follow the moved endpoint");
+    require_near(moved_b.start.y, moved_a.end.y, 1e-7,
+        "persisted coincident neighbor did not follow the moved endpoint");
+    require_near(moved_b.end.x, 2, 1e-9, "persisted neighbor endpoint lock moved");
+    require_near(moved_b.end.y, 2, 1e-9, "persisted neighbor endpoint lock moved");
+    require(std::abs(length(moved_b) - length(baseline(before.entities().at("wall-b")))) > 1,
+        "connected neighbor fixture did not exercise a length-changing replay");
+    require(!preview.candidate_entities().at("wall-b").extensions.at("constraint_authoring")
+        .contains("last_length_entry"),
+        "length-changing connected neighbor edit retained a stale exact-length receipt");
+    require(preview.candidate_entities().at("wall-c") == before.entities().at("wall-c"),
+        "coordinate-only coincidence moved an unrelated wall");
+    require(document.snapshot().entities() == before.entities(),
+        "wall move preview mutated the source document");
+
+    (void)apply_constraint_authoring(document, preview);
+    const auto committed = document.snapshot();
+    require(committed.entities() == preview.candidate_entities() &&
+        committed.revision() == before.revision() + 1,
+        "wall move did not atomically commit the shown candidate");
+    require(committed.history().back().boundary_constraint_changes.has_value(),
+        "wall move did not use the typed constraint replay command");
+    const auto encoded = command_to_json(Command{
+        *committed.history().back().boundary_constraint_changes});
+    require(encoded.contains("wall_edits") && encoded.at("wall_edits").size() == 2,
+        "wall move proof omitted selected and connected geometry edits");
+    const auto neighbor_proof = std::find_if(encoded.at("wall_edits").begin(),
+        encoded.at("wall_edits").end(), [](const json& edit) { return edit.at("wall_id") == "wall-b"; });
+    require(neighbor_proof != encoded.at("wall_edits").end() &&
+        neighbor_proof->at("length_entry").is_null(),
+        "length-changing connected neighbor proof must use typed receipt invalidation");
+    for (const auto& [id, entity] : committed.entities()) {
+        (void)entity;
+        require(id.find("__constraint_authoring_") == std::string::npos,
+            "temporary solve anchors were persisted as entities");
+    }
+    require(Document::fork(committed).snapshot().entities() == committed.entities(),
+        "wall move typed proof did not independently replay");
+
+    const auto path = std::filesystem::temp_directory_path() /
+        ("wall-geometry-move-" + make_stable_id() + ".bldproj");
+    struct Cleanup {
+        std::filesystem::path path;
+        ~Cleanup() { std::error_code ignored; std::filesystem::remove(path, ignored); }
+    } cleanup{path};
+    (void)ProjectStore::save(path, committed);
+    auto reopened = ProjectStore::load(path);
+    require(reopened.document.snapshot().entities() == committed.entities(),
+        "saved wall move proof reopened with different geometry");
+    reopened.document.undo(reopened.document.revision());
+    require(reopened.document.snapshot().entities() == before.entities(),
+        "wall move undo did not restore the complete original state");
+    reopened.document.redo(reopened.document.revision());
+    require(reopened.document.snapshot().entities() == committed.entities(),
+        "wall move redo did not restore the typed candidate");
+    require_rejected_unchanged(document, preview, "stale wall move preview applied twice");
+}
+
+void test_wall_geometry_move_multiselection_validation_and_hosting() {
+    auto document = Document::create({wall("alpha", {0,0}, {2,0}),
+        wall("beta", {10,0}, {10,3})});
+    ConstraintAuthoringIntent intent;
+    // Both targets describe the same quarter-turn and translation. Reversing
+    // the array order must not change which geometry belongs to either ID.
+    intent.wall_geometry_move = WallGeometryMoveIntent{{
+        {"beta", {4,15}, {1,15}}, {"alpha", {4,5}, {4,7}}}, false};
+    const auto before = document.snapshot();
+    const auto preview = preview_constraint_authoring(before, intent);
+    require_accepted(preview, "explicit multi-wall move rejected valid per-wall targets");
+    const auto moved_alpha = baseline(preview.candidate_entities().at("alpha"));
+    const auto moved_beta = baseline(preview.candidate_entities().at("beta"));
+    require_near(moved_alpha.start.x, 4, 1e-9, "multi-selection alpha start x");
+    require_near(moved_alpha.start.y, 5, 1e-9, "multi-selection alpha start y");
+    require_near(moved_alpha.end.x, 4, 1e-9, "multi-selection alpha end x");
+    require_near(moved_alpha.end.y, 7, 1e-9, "multi-selection alpha end y");
+    require_near(moved_beta.start.x, 4, 1e-9, "multi-selection beta start x");
+    require_near(moved_beta.start.y, 15, 1e-9, "multi-selection beta start y");
+    require_near(moved_beta.end.x, 1, 1e-9, "multi-selection beta end x");
+    require_near(moved_beta.end.y, 15, 1e-9, "multi-selection beta end y");
+
+    auto reject = [&](ConstraintAuthoringIntent invalid_intent, std::string_view message) {
+        require(!preview_constraint_authoring(before, invalid_intent).accepted(), message);
+    };
+    auto invalid = intent;
+    invalid.wall_geometry_move->targets.push_back(invalid.wall_geometry_move->targets.front());
+    reject(invalid, "duplicate selected wall IDs must be rejected");
+    invalid = intent;
+    invalid.wall_geometry_move->targets = {{"missing", {0,0}, {2,0}}};
+    reject(invalid, "unknown selected wall ID must be rejected");
+    invalid = intent;
+    invalid.wall_geometry_move->targets = {{"alpha", {0,0}, {0,0}}};
+    reject(invalid, "degenerate target wall must be rejected");
+    invalid = intent;
+    invalid.wall_geometry_move->targets = {{"alpha", {0,0}, {3,0}}};
+    reject(invalid, "length-changing selected wall target must be rejected");
+    invalid = intent;
+    invalid.wall_geometry_move->targets = {{"alpha",
+        {std::numeric_limits<double>::infinity(), 0}, {2,0}}};
+    reject(invalid, "non-finite wall target must be rejected");
+    invalid = intent;
+    invalid.wall_geometry_move->targets.clear();
+    reject(invalid, "empty selected wall set must be rejected");
+    invalid = intent;
+    invalid.wall_geometry_move->targets = {{"alpha", {0,0}, {2,0}}};
+    reject(invalid, "wall move with no document change must be rejected");
+
+    const auto lock = encode_constraint_entity([&] {
+        auto value = relation("pin", ConstraintRelationKind::fixed_anchor,
+            {endpoint("alpha", WallEndpointRole::start)});
+        value.anchor = Vec2{0,0};
+        return value;
+    }());
+    auto locked = Document::create({wall("alpha", {0,0}, {2,0}),
+        wall("beta", {10,0}, {10,3}), lock});
+    const auto conflict = preview_constraint_authoring(locked.snapshot(), intent);
+    require(!conflict.accepted(), "wall move must reject a conflicting persisted endpoint lock");
+    require_rejected_unchanged(locked, conflict, "locked wall move applied");
+
+    auto frozen = intent;
+    frozen.wall_geometry_move->move_connected_walls = false;
+    const auto join = encode_constraint_entity(relation("join", ConstraintRelationKind::coincident,
+        {endpoint("alpha", WallEndpointRole::end), endpoint("neighbor", WallEndpointRole::start)}));
+    auto connected = Document::create({wall("alpha", {0,0}, {2,0}),
+        wall("beta", {10,0}, {10,3}), wall("neighbor", {2,0}, {2,2}), join});
+    require(!preview_constraint_authoring(connected.snapshot(), frozen).accepted(),
+        "disabled connected movement must freeze the related wall and reject conflict");
+
+    auto read_only = Document::create({wall("alpha", {0,0}, {2,0}), wall("beta", {10,0}, {10,3})});
+    read_only.mark_read_only("wall move read-only fixture");
+    require(!preview_constraint_authoring(read_only.snapshot(), intent).accepted(),
+        "wall move must reject read-only sources");
+
+    auto foreign = Document::create({wall("alpha", {0,0}, {2,0}), wall("beta", {10,0}, {10,3})});
+    require_rejected_unchanged(foreign, preview, "foreign document accepted a wall move preview");
+    auto stale = Document::create({wall("alpha", {0,0}, {2,0}), wall("beta", {10,0}, {10,3})});
+    const auto stale_preview = preview_constraint_authoring(stale.snapshot(), intent);
+    auto renamed = stale.snapshot().entities().at("alpha");
+    renamed.properties["classification"] = "new head";
+    stale.apply(ApplyEntityChanges{stale.revision(), {EntityChange::upsert(renamed)}, {}, "advance"});
+    require_rejected_unchanged(stale, stale_preview, "stale wall move preview applied");
+
+    const auto host_join = encode_constraint_entity(relation("host-join",
+        ConstraintRelationKind::coincident,
+        {endpoint("host-selected", WallEndpointRole::end), endpoint("host-wall", WallEndpointRole::start)}));
+    auto hosted = Document::create({wall("host-selected", {0,0}, {2,0}),
+        wall("host-wall", {2,0}, {2,2}), host_join, opening("door", "host-wall", 1.7, 0.25)});
+    ConstraintAuthoringIntent host_move;
+    host_move.wall_geometry_move = WallGeometryMoveIntent{{
+        {"host-selected", {0,1.95}, {2,1.95}}}, true};
+    const auto stranded = preview_constraint_authoring(hosted.snapshot(), host_move);
+    require(!stranded.accepted(), "wall move must reject a solve that strands a hosted opening");
+    require_rejected_unchanged(hosted, stranded, "stranded hosted opening wall move applied");
+}
+
+void test_wall_geometry_move_preserves_arc_provenance_and_exact_length_receipt() {
+    const auto original_length = parse_quantity("7 m");
+    const auto source_baseline = arc_from_chord_arc_length({0,0}, {4,0},
+        original_length.metres, true);
+    const auto angle = angle_from_radians(source_baseline.sweep_radians);
+    auto source = wall("measured-arc", source_baseline.start, source_baseline.end,
+        source_baseline.sweep_radians);
+    source.extensions["curve_input"] = {{"version",2}, {"construction","arc_length"},
+        {"measure",original_length.original_expression},
+        {"normalized_measure",format_quantity(original_length, Unit::metre)},
+        {"measure_value",original_length.metres}, {"clockwise",true},
+        {"start",{source_baseline.start.x,source_baseline.start.y}},
+        {"end",{source_baseline.end.x,source_baseline.end.y}},
+        {"radians",source_baseline.sweep_radians}, {"sweep",angle.original_expression},
+        {"normalized_sweep",angle.normalized_expression}, {"vendor",{{"retain",17}}}};
+    const auto original_input = source.extensions.at("curve_input");
+    auto document = Document::create({source});
+
+    ConstraintAuthoringIntent resize;
+    resize.wall_resize = WallResizeIntent{"measured-arc", parse_quantity("5 m"),
+        WallResizeAnchor::start, false};
+    const auto resized = preview_constraint_authoring(document.snapshot(), resize);
+    require_accepted(resized, "measured arc receipt fixture could not establish exact length entry");
+    (void)apply_constraint_authoring(document, resized);
+    auto annotated = document.snapshot().entities().at("measured-arc");
+    auto& receipt = annotated.extensions["constraint_authoring"]["last_length_entry"];
+    receipt["vendor"] = "retain";
+    receipt["exact_metres"]["vendor"] = 23;
+    receipt["baseline"]["vendor"] = true;
+    document.apply(ApplyEntityChanges{document.revision(),
+        {EntityChange::upsert(annotated)}, {}, "Annotate exact length receipt"});
+
+    const auto before = document.snapshot();
+    const auto old = baseline(before.entities().at("measured-arc"));
+    ConstraintAuthoringIntent move;
+    move.wall_geometry_move = WallGeometryMoveIntent{{
+        {"measured-arc", {10,-3}, {10,-3 + old.end.x - old.start.x}}}, false};
+    const auto preview = preview_constraint_authoring(before, move);
+    require_accepted(preview, "rigid arc endpoint movement rejected");
+    const auto moved = baseline(preview.candidate_entities().at("measured-arc"));
+    require(moved.start.x == 10 && moved.start.y == -3 && moved.end.x == 10 &&
+        moved.sweep_radians == old.sweep_radians,
+        "arc movement changed its explicit endpoints or signed sweep");
+    require_near(segment_length(moved), segment_length(old), 1e-7,
+        "rigid arc movement changed physical arc length");
+    const auto& candidate = preview.candidate_entities().at("measured-arc");
+    require(candidate.extensions.at("curve_input_derivation").at("source_input") == original_input,
+        "rigid arc movement rewrote the original curve construction provenance");
+    const auto& moved_receipt = candidate.extensions.at("constraint_authoring").at("last_length_entry");
+    require(moved_receipt.at("original_expression") == "5 m" &&
+        moved_receipt.at("entered_unit") == "m" &&
+        moved_receipt.at("exact_metres").at("numerator") == 5 &&
+        moved_receipt.at("exact_metres").at("denominator") == 1 &&
+        moved_receipt.at("vendor") == "retain" &&
+        moved_receipt.at("exact_metres").at("vendor") == 23 &&
+        moved_receipt.at("baseline").at("vendor") == true &&
+        moved_receipt.at("baseline").at("start") == candidate.properties.at("baseline").at("start") &&
+        moved_receipt.at("baseline").at("end") == candidate.properties.at("baseline").at("end") &&
+        moved_receipt.at("baseline").at("sweep_radians") == candidate.properties.at("baseline").at("sweep_radians"),
+        "rigid arc movement lost or failed to rebase the original exact length receipt");
+
+    (void)apply_constraint_authoring(document, preview);
+    const auto committed = document.snapshot();
+    const auto& proof = *committed.history().back().boundary_constraint_changes;
+    const auto edit = std::find_if(proof.wall_edits.begin(), proof.wall_edits.end(),
+        [](const ConstraintWallGeometryEdit& value) { return value.wall_id == "measured-arc"; });
+    require(edit != proof.wall_edits.end() && edit->version == 3 && edit->length_entry.has_value() &&
+        edit->length_entry->original_expression == "5 m" &&
+        edit->length_entry->exact_metres.numerator == 5 &&
+        edit->length_entry->exact_metres.denominator == 1,
+        "typed wall proof did not retain the existing exact length quantity");
+    require(Document::fork(committed).snapshot().entities() == committed.entities(),
+        "arc movement proof did not independently reconstruct its candidate");
+    document.undo(document.revision());
+    require(document.snapshot().entities() == before.entities(),
+        "arc movement undo did not restore its source curve and receipt");
+    document.redo(document.revision());
+    require(document.snapshot().entities() == committed.entities(),
+        "arc movement redo did not restore its exact receipt and provenance");
+}
+
 int main() {
     sketch::testing::noninteractive_errors();
     try {
+        test_wall_geometry_move_propagates_explicit_connections_only();
+        test_wall_geometry_move_multiselection_validation_and_hosting();
+        test_wall_geometry_move_preserves_arc_provenance_and_exact_length_receipt();
         test_straight_wall_only_authoring_retains_guarded_typed_intent();
         test_physical_arc_length_authoring_and_connected_editing();
         test_physical_arc_length_conditioning_at_near_full_turn_and_translated_origin();

@@ -3128,6 +3128,7 @@ class MainWindow::Impl {
         Vec2 position;
         std::optional<ArchitecturalViewContext> view_context;
         std::shared_ptr<std::optional<VertexPreviewProjection>> result;
+        std::optional<WallGeometryMoveIntent> wall_geometry_move;
     };
 
 public:
@@ -3656,6 +3657,9 @@ public:
         const PlanarTransform transform{pivot, radians, flip_horizontal, flip_vertical, translation};
         const auto baseline = transform_segment(wall.baseline, transform);
         const bool reflected = flip_horizontal != flip_vertical;
+        if (!clone && !reflected)
+            return {wallGeometryCommand(source, {{original.id,baseline.start,baseline.end}},
+                "Transform wall and connected corners"), original.id};
         wall.baseline = baseline;
         validate_wall_semantics(wall);
         std::map<std::string, std::string, std::less<>> identities;
@@ -3805,10 +3809,11 @@ public:
             const auto [transaction, root] = makeArchitecturalObjectTransformTransaction(
                 source, found->second, rotation_degrees, offset_x, offset_y, offset_z,
                 uniform_scale, clone);
-            (void)preview_architectural_transaction(source, transaction);
-            const auto command = architectural_transaction_command(
-                source, transaction, source.revision());
-            applyDocumentCommand(Command{command});
+            const auto command = architecturalObjectTransformCommand(source,found->second,transaction);
+            if (const auto* changes=std::get_if<ApplyEntityChanges>(&command);
+                changes && changes->entity_changes.empty()) { clearError(); return true; }
+            (void)Document::preview_command(source,command);
+            applyDocumentCommand(command);
             m_selected_id = id_from(root);
             clearError();
             refresh();
@@ -6012,7 +6017,8 @@ public:
                 const auto [transaction, root] = makeArchitecturalObjectTransformTransaction(
                     source, *original, rotation->text(), offset_x->text(), offset_y->text(),
                     offset_z->text(), scale->text(), clone->isChecked());
-                const auto preview = preview_architectural_transaction(source, transaction);
+                const auto preview = Document::preview_command(source,
+                    architecturalObjectTransformCommand(source,*original,transaction));
                 const auto preview_entity = preview.entities().find(root);
                 if (preview_entity == preview.entities().end())
                     throw std::invalid_argument("The transform preview did not produce its target object.");
@@ -12638,7 +12644,7 @@ public:
         return true;
     }
 
-    bool moveSelectionBy(const QStringList& requested_ids, Vec2 delta) {
+    bool moveSelectionBy(const QStringList& requested_ids, Vec2 delta, PlanCanvas* canvas = nullptr) {
         if (!m_document->is_editable()) {
             setError(QStringLiteral("This document is read-only."));
             return false;
@@ -12733,6 +12739,26 @@ public:
                 model_delta = {delta.x*right.x+delta.y*up.x,
                                delta.x*right.y+delta.y*up.y};
             }
+            const bool only_walls = presentation_changes.empty() &&
+                std::all_of(model_ids.begin(), model_ids.end(), [&](const auto& id) {
+                    const auto found = source.entities().find(id.toStdString());
+                    return found != source.entities().end() && found->second.type == "wall";
+                });
+            if (only_walls) {
+                if (canvas && (!m_wall_move_source || m_wall_move_document!=m_document ||
+                    m_wall_move_canvas!=canvas || m_wall_move_source->revision()!=source.revision() ||
+                    m_wall_move_source->entities()!=source.entities()))
+                    throw std::invalid_argument("The project changed during this wall drag. Try the move again.");
+                ConstraintAuthoringIntent intent;
+                intent.wall_geometry_move = wallTranslationIntent(source, model_ids, model_delta);
+                intent.message = model_ids.size() == 1 ? "Move wall and connected corners" : "Move walls and connected corners";
+                const auto preview = preview_constraint_authoring(source, intent);
+                requireAcceptedConstraintPreview(preview);
+                applyConstraintPreview(preview);
+                clearError();
+                refresh();
+                return true;
+            }
             std::vector<BoundaryTranslation> translations;
             std::vector<std::string> roots;
             std::vector<ArchitecturalOperation> operations;
@@ -12797,6 +12823,70 @@ public:
         }
     }
 
+    static void requireAcceptedConstraintPreview(const ConstraintAuthoringPreview& preview) {
+        if (preview.accepted()) return;
+        QStringList diagnostics;
+        for (const auto& diagnostic : preview.diagnostics())
+            diagnostics.push_back(QString::fromStdString(diagnostic));
+        throw std::invalid_argument(diagnostics.join(QStringLiteral("\n")).toStdString());
+    }
+
+    static Command wallGeometryCommand(const DocumentSnapshot& source,
+        std::vector<WallGeometryMoveTarget> targets, const std::string& message) {
+        const bool unchanged=std::all_of(targets.begin(),targets.end(),[&](const auto& target) {
+            const auto& entity=source.entities().at(target.wall_id);
+            const auto baseline=read_segment(entity.properties.at("baseline"));
+            return baseline && baseline->start.x==target.proposed_start.x && baseline->start.y==target.proposed_start.y &&
+                baseline->end.x==target.proposed_end.x && baseline->end.y==target.proposed_end.y;
+        });
+        if (unchanged) return ApplyEntityChanges{source.revision(),{}, {},message};
+        ConstraintAuthoringIntent intent;
+        intent.wall_geometry_move=WallGeometryMoveIntent{std::move(targets),true};
+        intent.message=message;
+        const auto preview=preview_constraint_authoring(source,intent);
+        requireAcceptedConstraintPreview(preview);
+        auto document=Document::fork(source);
+        apply_constraint_authoring(document,preview);
+        const auto candidate=document.snapshot();
+        if (candidate.revision()==source.revision())
+            return ApplyEntityChanges{source.revision(),{}, {},message};
+        const auto& proof=candidate.history().back().boundary_constraint_changes;
+        if (!proof) throw std::invalid_argument("Wall movement did not retain its geometry history.");
+        return *proof;
+    }
+
+    static Command architecturalObjectTransformCommand(const DocumentSnapshot& source,
+        const Entity& original, const ArchitecturalTransaction& transaction) {
+        const auto& operations=transaction.operations();
+        if (original.type=="wall" && operations.size()==1 && operations.front().transform) {
+            const auto& transform=*operations.front().transform;
+            if (transform.scale==1.0 && transform.z==0.0) {
+                const auto baseline=read_segment(original.properties.at("baseline"));
+                if (!baseline) throw std::invalid_argument("The selected wall has no valid baseline.");
+                const auto proposed=transform_segment(*baseline,
+                    {{0.0,0.0},transform.rotation_z_radians,false,false,{transform.x,transform.y}});
+                return wallGeometryCommand(source,{{original.id,proposed.start,proposed.end}},
+                    "Transform wall and connected corners");
+            }
+        }
+        return architectural_transaction_command(source,transaction,source.revision());
+    }
+
+    static WallGeometryMoveIntent wallTranslationIntent(const DocumentSnapshot& source,
+        const QStringList& ids, Vec2 delta) {
+        WallGeometryMoveIntent intent;
+        for (const auto& id : ids) {
+            const auto& entity = source.entities().at(id.toStdString());
+            if (entity.type != "wall") throw std::invalid_argument("Select walls to move their connected corners.");
+            const auto baseline = read_segment(entity.properties.at("baseline"));
+            if (!baseline) throw std::invalid_argument("The selected wall has no valid baseline.");
+            intent.targets.push_back({entity.id,
+                {baseline->start.x + delta.x, baseline->start.y + delta.y},
+                {baseline->end.x + delta.x, baseline->end.y + delta.y}});
+        }
+        return intent;
+    }
+
     static std::optional<VertexPreviewProjection> computeBoundaryVertexPreview(
         const DocumentSnapshot& source,const std::vector<CanvasEntity>& retained,
         const std::vector<CanvasEntity>& eligible,
@@ -12806,8 +12896,6 @@ public:
         const QString& entity_id,const QString& vertex_id,Vec2 position,
         const std::optional<ArchitecturalViewContext>& view_context) {
         try {
-            const bool shape_projection = view_context &&
-                !analytical_plan_context(BuildingViewKind::plan, *view_context);
             const BoundaryGeometryEdit edit{entity_id.toStdString(),BoundaryGeometryEditKind::move_vertex,
                 vertex_id.toStdString(),position};
             std::map<std::string,Entity,std::less<>> candidate;
@@ -12816,6 +12904,26 @@ public:
             const auto preview=preview_constraint_authoring(source,intent);
             if (!preview.accepted()) return std::nullopt;
             candidate=preview.candidate_entities();
+            auto result = computeConstraintGeometryProjection(source, candidate, retained, eligible,
+                labels, metric_units, appraisal_area_ids, label_footprints, component_bounds, view_context);
+            if (result) {
+                const auto geometry=boundary_geometry(decode_identified_boundary_entity(candidate.at(edit.boundary_id)));
+                result->metrics=CanvasBoundaryPreviewMetrics{std::abs(signed_area(geometry)),perimeter(geometry)};
+            }
+            return result;
+        } catch (const std::exception&) { return std::nullopt; }
+    }
+
+    static std::optional<VertexPreviewProjection> computeConstraintGeometryProjection(
+        const DocumentSnapshot& source, const std::map<std::string, Entity, std::less<>>& candidate,
+        const std::vector<CanvasEntity>& retained, const std::vector<CanvasEntity>& eligible,
+        const std::vector<CanvasLabel>& labels, bool metric_units,
+        const std::set<std::string, std::less<>>& appraisal_area_ids,
+        const std::map<QString,QSizeF>& label_footprints, const std::vector<Bounds2>& component_bounds,
+        const std::optional<ArchitecturalViewContext>& view_context) {
+        try {
+            const bool shape_projection = view_context &&
+                !analytical_plan_context(BuildingViewKind::plan, *view_context);
             std::map<std::string,Wall,std::less<>> changed_walls;
             for (const auto& [id,entity] : candidate) {
                 if (entity.type!="wall" || entity==source.entities().at(id)) continue;
@@ -12868,6 +12976,9 @@ public:
                         for (const auto& edge : after.segments)
                             if (handle.id.toStdString()==edge.start_vertex_id) handle.position=edge.segment.start;
                 } else if (const auto wall=changed_walls.find(entity.id);wall!=changed_walls.end()) {
+                    proposed.snap_points={wall->second.baseline.start,wall->second.baseline.end};
+                    if (view_context) for (auto& point : proposed.snap_points)
+                        point=project_plan_point(point,view_context->frame);
                     if (shape_projection) {
                         proposed.segments = project_architectural_view_shape(make_wall(wall->second),
                             BuildingViewKind::plan, *view_context).value_or(Boundary{});
@@ -12875,6 +12986,15 @@ public:
                     } else proposed.segments=wall_plan_footprint(wall->second.baseline,wall->second.openings,wall->second.thickness);
                     proposed.holes.clear();
                     proposed.resize_frame.reset();
+                    if (!shape_projection && wall->second.baseline.sweep_radians==0)
+                        proposed.resize_frame=CanvasSelectionFrame{
+                            {std::midpoint(wall->second.baseline.start.x,wall->second.baseline.end.x),
+                             std::midpoint(wall->second.baseline.start.y,wall->second.baseline.end.y)},
+                            std::atan2(wall->second.baseline.end.y-wall->second.baseline.start.y,
+                                       wall->second.baseline.end.x-wall->second.baseline.start.x),
+                            std::hypot(wall->second.baseline.end.x-wall->second.baseline.start.x,
+                                       wall->second.baseline.end.y-wall->second.baseline.start.y),
+                            wall->second.thickness};
                 } else if (entity.type=="opening") {
                     const auto host_wall=changed_walls.find(entity.properties.at("wall_id").get<std::string>());
                     if (host_wall==changed_walls.end()) continue;
@@ -12911,6 +13031,14 @@ public:
                         hole = project_plan_path(std::move(hole), view_context->frame);
                     for (auto& handle : proposed.vertex_handles)
                         handle.position = project_plan_point(handle.position, view_context->frame);
+                    if (proposed.resize_frame) {
+                        auto& frame = *proposed.resize_frame;
+                        const Vec2 direction{std::cos(frame.rotation_radians),std::sin(frame.rotation_radians)};
+                        const auto center = project_plan_point(frame.center,view_context->frame);
+                        const auto along = project_plan_point({frame.center.x+direction.x,frame.center.y+direction.y},view_context->frame);
+                        frame.center = center;
+                        frame.rotation_radians = std::atan2(along.y-center.y,along.x-center.x);
+                    }
                     if (view_context->crop && proposed.type != QStringLiteral("dimension_line")) {
                         const auto& crop = *view_context->crop;
                         clip_plan_entity(proposed, {{crop.min_horizontal_m, crop.min_vertical_m},
@@ -12927,7 +13055,20 @@ public:
                 const auto found=candidate.find(label.id.toStdString());
                 if (found==candidate.end()) continue;
                 const auto& entity=found->second;
-                if (can_recognize_boundary_dimension_entity_type(entity.type)) {
+                if (const auto changed = changed_walls.find(entity.id); changed != changed_walls.end()) {
+                    const auto& wall = changed->second;
+                    const auto midpoint=point_at_segment(wall.baseline,0.5);
+                    if (!midpoint) return std::nullopt;
+                    const auto dx=wall.baseline.end.x-wall.baseline.start.x;
+                    const auto dy=wall.baseline.end.y-wall.baseline.start.y;
+                    const auto chord=std::hypot(dx,dy);
+                    const auto offset=wall.thickness*0.5+0.14;
+                    auto proposed=label;
+                    proposed.position={midpoint->x-dy/chord*offset,midpoint->y+dx/chord*offset};
+                    if (view_context) proposed.position=project_plan_point(proposed.position,view_context->frame);
+                    proposed.text=format_length(segment_length(wall.baseline),metric_units);
+                    result.labels.push_back(std::move(proposed));
+                } else if (can_recognize_boundary_dimension_entity_type(entity.type)) {
                     const auto decoded=decode_boundary_dimension_entity(entity);
                     if (!decoded.supported()) return std::nullopt;
                     const auto& dimension=*decoded.dimension;
@@ -12962,8 +13103,6 @@ public:
                     result.labels.push_back(std::move(proposed));
                 }
             }
-            const auto selected_geometry=boundary_geometry(decode_identified_boundary_entity(candidate.at(edit.boundary_id)));
-            result.metrics=CanvasBoundaryPreviewMetrics{std::abs(signed_area(selected_geometry)),perimeter(selected_geometry)};
             return result;
         } catch (const std::exception&) { return std::nullopt; }
     }
@@ -12982,12 +13121,21 @@ public:
         const auto vertex=request.vertex_id;
         const auto position=request.position;
         const auto view_context=request.view_context;
+        const auto wall_move=request.wall_geometry_move;
         m_vertex_preview_sequence=m_vertex_preview_queue.enqueue(
-            [source,retained,eligible,labels,appraisal_area_ids,metric_units,label_footprints,component_bounds,result,id,vertex,position,view_context]
+            [source,retained,eligible,labels,appraisal_area_ids,metric_units,label_footprints,component_bounds,result,id,vertex,position,view_context,wall_move]
             (const RegenerationCancellationToken& cancellation) {
-                if (!cancellation.is_cancelled())
-                    *result=computeBoundaryVertexPreview(*source,*retained,*eligible,*labels,metric_units,*appraisal_area_ids,
+                if (!cancellation.is_cancelled()) {
+                    if (wall_move) {
+                        ConstraintAuthoringIntent intent;
+                        intent.wall_geometry_move=*wall_move;
+                        const auto preview=preview_constraint_authoring(*source,intent);
+                        if (preview.accepted() && !cancellation.is_cancelled())
+                            *result=computeConstraintGeometryProjection(*source,preview.candidate_entities(),*retained,
+                                *eligible,*labels,metric_units,*appraisal_area_ids,*label_footprints,*component_bounds,view_context);
+                    } else *result=computeBoundaryVertexPreview(*source,*retained,*eligible,*labels,metric_units,*appraisal_area_ids,
                         *label_footprints,*component_bounds,id,vertex,position,view_context);
+                }
                 return RegenerationReceipt{source->revision(),{}};
             });
         m_running_vertex_preview=std::move(request);
@@ -13043,12 +13191,7 @@ public:
         }
     }
 
-    std::optional<std::vector<CanvasEntity>> previewBoundaryVertexFromCanvas(
-        PlanCanvas* canvas,const QString& id,const QString& vertex,Vec2 position,std::uint64_t revision) {
-        if (!canvas || !m_document->is_editable() || m_selected_ids.size()!=1 ||
-            m_selected_ids.front()!=id || m_boundary_session || m_pending_wall_start ||
-            !m_pending_symbol_id.isEmpty() || m_document->revision()!=revision ||
-            !std::isfinite(position.x) || !std::isfinite(position.y)) return std::nullopt;
+    void captureConstraintGeometryPreview(PlanCanvas* canvas, std::uint64_t revision) {
         if (!m_vertex_preview_source || m_vertex_preview_document!=m_document || m_vertex_preview_canvas!=canvas ||
             m_vertex_preview_source->revision()!=revision) {
             auto captured_source=std::make_shared<DocumentSnapshot>(authoringSnapshot());
@@ -13121,6 +13264,52 @@ public:
             }
             m_vertex_preview_component_bounds=std::move(obstacles);
         }
+    }
+
+    std::optional<std::vector<CanvasEntity>> previewWallMoveFromCanvas(
+        PlanCanvas* canvas, const QStringList& ids, Vec2 delta, std::uint64_t serial) {
+        if (!canvas || ids.isEmpty() || !m_document->is_editable() || m_boundary_session ||
+            m_pending_wall_start || !m_pending_symbol_id.isEmpty()) return std::nullopt;
+        if (m_wall_move_document!=m_document || m_wall_move_canvas!=canvas || !m_wall_move_source ||
+            m_wall_move_source->revision()!=m_document->revision()) return std::vector<CanvasEntity>{};
+        if (!m_vertex_preview_source || m_vertex_preview_document!=m_document ||
+            m_vertex_preview_canvas!=canvas || m_vertex_preview_source->revision()!=m_document->revision()) {
+            const auto source=authoringSnapshot();
+            if (!std::all_of(ids.begin(),ids.end(),[&](const auto& id) {
+                const auto found=source.entities().find(id.toStdString());
+                return found!=source.entities().end() && found->second.type=="wall";
+            })) return std::nullopt;
+            captureConstraintGeometryPreview(canvas,source.revision());
+        }
+        if (!std::all_of(ids.begin(),ids.end(),[&](const auto& id) {
+            const auto found=m_vertex_preview_source->entities().find(id.toStdString());
+            return found!=m_vertex_preview_source->entities().end() && found->second.type=="wall";
+        })) return std::nullopt;
+        if (m_vertex_preview_view_context) {
+            const auto right=plan_view_right(m_vertex_preview_view_context->frame);
+            const auto up=plan_view_up(m_vertex_preview_view_context->frame);
+            delta={delta.x*right.x+delta.y*up.x,delta.x*right.y+delta.y*up.y};
+        }
+        if (!canvas->markEntitiesMovePreviewPending(serial)) return std::vector<CanvasEntity>{};
+        PendingVertexPreview request{canvas,serial,m_document,m_vertex_preview_source,m_vertex_preview_scene,
+            m_vertex_preview_eligible,m_vertex_preview_labels,m_vertex_preview_appraisal_area_ids,
+            m_vertex_preview_label_footprints,m_vertex_preview_component_bounds,m_metric_units,{}, {}, {},
+            m_vertex_preview_view_context,std::make_shared<std::optional<VertexPreviewProjection>>(),
+            wallTranslationIntent(*m_vertex_preview_source,ids,delta)};
+        if (m_running_vertex_preview) {
+            (void)m_vertex_preview_queue.cancel(m_vertex_preview_sequence);
+            m_pending_vertex_preview=std::move(request);
+        } else startVertexPreviewJob(std::move(request));
+        return std::nullopt;
+    }
+
+    std::optional<std::vector<CanvasEntity>> previewBoundaryVertexFromCanvas(
+        PlanCanvas* canvas,const QString& id,const QString& vertex,Vec2 position,std::uint64_t revision) {
+        if (!canvas || !m_document->is_editable() || m_selected_ids.size()!=1 ||
+            m_selected_ids.front()!=id || m_boundary_session || m_pending_wall_start ||
+            !m_pending_symbol_id.isEmpty() || m_document->revision()!=revision ||
+            !std::isfinite(position.x) || !std::isfinite(position.y)) return std::nullopt;
+        captureConstraintGeometryPreview(canvas,revision);
         const auto serial=canvas->boundaryVertexPreviewSerial();
         if (!canvas->markBoundaryVertexPreviewPending(serial)) return std::nullopt;
         if (m_vertex_preview_view_context)
@@ -13141,20 +13330,31 @@ public:
             if (!m_running_vertex_preview || completion.sequence!=m_vertex_preview_sequence) continue;
             auto request=std::move(*m_running_vertex_preview);
             m_running_vertex_preview.reset();
-            if (request.canvas && request.document==m_document && request.source->revision()==m_document->revision()) {
+            if (request.canvas && request.document==m_document && request.source->revision()!=m_document->revision() &&
+                request.wall_geometry_move)
+                (void)request.canvas->completeEntitiesMovePreview(request.serial,std::nullopt);
+            else if (request.canvas && request.document==m_document && request.source->revision()==m_document->revision()) {
                 if (completion.succeeded() && *request.result) {
                     auto& projection=**request.result;
-                    (void)request.canvas->completeBoundaryVertexPreview(request.serial,
+                    if (request.wall_geometry_move)
+                        (void)request.canvas->completeEntitiesMovePreview(request.serial,
+                            std::move(projection.entities),std::move(projection.labels));
+                    else (void)request.canvas->completeBoundaryVertexPreview(request.serial,
                         std::move(projection.entities),std::move(projection.labels),projection.metrics);
-                } else (void)request.canvas->completeBoundaryVertexPreview(request.serial,std::nullopt);
+                } else if (request.wall_geometry_move)
+                    (void)request.canvas->completeEntitiesMovePreview(request.serial,std::nullopt);
+                else (void)request.canvas->completeBoundaryVertexPreview(request.serial,std::nullopt);
             }
         }
         if (!m_running_vertex_preview && m_pending_vertex_preview) {
             auto request=std::move(*m_pending_vertex_preview);
             m_pending_vertex_preview.reset();
             if (request.canvas && request.document==m_document && request.source->revision()==m_document->revision() &&
-                request.canvas->boundaryVertexPreviewSerial()==request.serial)
+                (request.wall_geometry_move ? request.canvas->entitiesMovePreviewSerial()
+                    : request.canvas->boundaryVertexPreviewSerial())==request.serial)
                 startVertexPreviewJob(std::move(request));
+            else if (request.canvas && request.document==m_document && request.wall_geometry_move)
+                (void)request.canvas->completeEntitiesMovePreview(request.serial,std::nullopt);
         }
         if (!m_running_vertex_preview && !m_pending_vertex_preview) m_vertex_preview_timer->stop();
     }
@@ -23633,9 +23833,38 @@ private:
             m_selected_id = m_selected_ids.isEmpty() ? QString{} : m_selected_ids.back();
             refresh();
         });
-        canvas->setEntitiesMoveRequested([this](QStringList ids, Vec2 delta) {
-            return moveSelectionBy(ids, delta);
+        canvas->setEntitiesMoveStarted([this,canvas](QStringList ids) {
+            m_wall_move_source=std::make_shared<DocumentSnapshot>(authoringSnapshot());
+            m_wall_move_document=m_document;
+            m_wall_move_canvas=canvas;
+            (void)ids;
         });
+        canvas->setEntitiesMoveRequested([this,canvas](QStringList ids, Vec2 delta) {
+            return moveSelectionBy(ids, delta, canvas);
+        });
+        canvas->setEntitiesMoveRejected([this,canvas](QStringList ids, Vec2 delta) {
+            try {
+                if (!m_wall_move_source || m_wall_move_document!=m_document || m_wall_move_canvas!=canvas ||
+                    m_wall_move_source->revision()!=m_document->revision())
+                    throw std::invalid_argument("The project changed during this wall drag. Try the move again.");
+                if (m_vertex_preview_view_context) {
+                    const auto right=plan_view_right(m_vertex_preview_view_context->frame);
+                    const auto up=plan_view_up(m_vertex_preview_view_context->frame);
+                    delta={delta.x*right.x+delta.y*up.x,delta.x*right.y+delta.y*up.y};
+                }
+                ConstraintAuthoringIntent intent;
+                intent.wall_geometry_move=wallTranslationIntent(*m_wall_move_source,ids,delta);
+                requireAcceptedConstraintPreview(preview_constraint_authoring(*m_wall_move_source,intent));
+                throw std::invalid_argument("The wall move could not be previewed. The project was not changed.");
+            } catch (const std::exception& error) {
+                setError(QStringLiteral("Move: %1").arg(QString::fromUtf8(error.what())));
+                refresh();
+            }
+        });
+        canvas->setEntitiesMovePreviewRequested(
+            [this,canvas](QStringList ids, Vec2 delta, std::uint64_t serial) {
+                return previewWallMoveFromCanvas(canvas,ids,delta,serial);
+            });
         canvas->setEntityTransformRequested(
             [this](QString id, double scale, double rotation) {
                 return transformSelectionFromCanvas(id, scale, rotation);
@@ -23856,6 +24085,9 @@ private:
         m_vertex_preview_view_context.reset();
         m_vertex_preview_canvas.clear();
         m_vertex_preview_document.reset();
+        m_wall_move_source.reset();
+        m_wall_move_document.reset();
+        m_wall_move_canvas.clear();
         m_pending_vertex_preview.reset();
         if (m_running_vertex_preview)
             (void)m_vertex_preview_queue.cancel(m_vertex_preview_sequence);
@@ -29453,6 +29685,9 @@ private:
     std::optional<PendingVertexPreview> m_running_vertex_preview;
     std::optional<PendingVertexPreview> m_pending_vertex_preview;
     std::shared_ptr<const DocumentSnapshot> m_vertex_preview_source;
+    std::shared_ptr<const DocumentSnapshot> m_wall_move_source;
+    std::shared_ptr<Document> m_wall_move_document;
+    QPointer<PlanCanvas> m_wall_move_canvas;
     std::shared_ptr<const std::vector<CanvasEntity>> m_vertex_preview_scene;
     std::shared_ptr<const std::vector<CanvasEntity>> m_vertex_preview_eligible;
     std::set<std::string, std::less<>> m_plan_visible_model_ids;
