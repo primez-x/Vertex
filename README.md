@@ -39,7 +39,14 @@ bootstrap; see [CAD runtime preparation](docs/dependencies/cad-runtime.md).
 Connecting that runtime to the application import worker remains in progress.
 
 `build.ps1` discovers the installed compiler and runs CTest. Without `-Desktop`,
-it builds only the precision/document/storage core and CLI. CAD dependencies
+it builds the headless shared geometry, precision, measurement, document/storage
+engine and CLI. This configuration still requires the pinned native libraries:
+saved recovery histories validate area deductions through the same exact
+geometry engine as the desktop application. Qt and the desktop visualization
+host are excluded. Headless outputs use `build/windows-headless-debug` or
+`build/windows-headless-release`, so they cannot reconfigure the desktop build.
+The `-Architecture` switch remains accepted for this headless configuration.
+CAD dependencies
 use a short dedicated build cache because some upstream generated paths exceed
 Windows path limits; see [native build notes](docs/dependencies/native-build.md)
 and [Qt provisioning](docs/dependencies/qt-provisioning.md).
@@ -56,6 +63,20 @@ Launch the current development application with `.\scripts\run.ps1` (Debug) or
 `.\scripts\run.ps1 -Configuration Release`. This sets process-local DLL/plugin
 paths; it does not install runtimes globally. Source builds produce
 `build/windows-debug/vertex.exe` and `vertex-cli.exe`.
+
+Build and run the headless CLI without preparing Qt:
+
+```powershell
+python scripts/bootstrap.py
+.\scripts\bootstrap-native.ps1
+.\scripts\build.ps1 -Configuration Release -SkipTests -Targets @('vertex-cli')
+.\scripts\run-cli.ps1 -Configuration Release -ApplicationArguments @('inspect', 'example.bldproj')
+```
+
+The CLI runner supplies native DLL paths only for that invocation. Existing
+projects are inspected without alteration. An explicit CMake configuration with
+both geometry and desktop disabled is refused because it cannot perform the
+required recovery validation.
 
 Explicit native checks use `scripts/test-native.ps1` and
 `scripts/test-desktop.ps1`; their windows stay hidden and failures have timeouts.

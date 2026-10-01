@@ -281,7 +281,12 @@ canvases highlight every selected root. The last selected root remains the
 inspector context, so existing property editors still edit that one object.
 Copy, paste, cut, and delete combine all selected roots into one graph and
 deduplicate shared children (including an opening selected alongside its wall).
-Paste selects the fresh roots in their original order. Each mutating clipboard
+Paste selects fresh geometry roots in their original order and expands annotation
+containers into their visible, individually selectable label and symbol children.
+Pasted symbols immediately expose their canvas transform handles; selecting the
+invisible storage container is not required. Group movement and per-symbol
+transforms resolve the actual owning annotation group and preserve admitted raw
+metadata and unselected siblings. Each mutating clipboard
 operation creates one document revision and one undo/redo step. Older single-root
 clipboard payloads remain supported. Selecting individual labels or symbols
 copies only those instances; multiple selected children of one annotation group

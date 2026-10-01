@@ -1198,6 +1198,342 @@ void test_multiple_selection_clipboard_workflow() {
             "ordinary replacement and empty selection retain single-selection behavior");
 }
 
+sketch::Entity annotation_owner_for_selection(const sketch::DocumentSnapshot& snapshot, const QString& selected) {
+    if (const auto found = snapshot.entities().find(selected.toStdString());
+        found != snapshot.entities().end() && found->second.type == sketch::kAnnotationEntityType) return found->second;
+    for (const auto& [id, entity] : snapshot.entities()) {
+        (void)id;
+        if (entity.type != sketch::kAnnotationEntityType) continue;
+        const auto state = sketch::decode_annotation_entity(entity);
+        if (std::any_of(state.labels.begin(), state.labels.end(), [&](const auto& item) { return item.id == selected.toStdString(); }) ||
+            std::any_of(state.symbols.begin(), state.symbols.end(), [&](const auto& item) { return item.id == selected.toStdString(); }))
+            return entity;
+    }
+    throw std::runtime_error("selected annotation owner is missing");
+}
+
+void test_annotation_transform_legacy_and_ambiguity() {
+    const ScenarioTiming scenario_timing(__func__);
+    using namespace sketch;
+    const auto catalog = default_symbol_catalog();
+    const auto definition = std::find_if(catalog.begin(), catalog.end(), [](const auto& entry) {
+        return entry.catalog_revision == kLegacySymbolCatalogRevision && entry.artwork_revision == 1 &&
+            entry.width_metres > 0 && entry.depth_metres > 0;
+    });
+    require(definition != catalog.end(), "legacy transform fixture needs an original supported definition");
+    const auto fixture = [&] {
+        AnnotationState state;
+        for (int index = 0; index < 2; ++index) {
+            SymbolInstance symbol;
+            symbol.id = index == 0 ? "legacy-selected" : "legacy-sibling";
+            symbol.symbol_id = definition->id;
+            symbol.definition = *definition;
+            symbol.placement = {{index * 4.0, 0}, 0, 1, "layer-1"};
+            state.symbols.push_back(symbol);
+        }
+        auto label = instantiate_label(default_label_templates().front(), "legacy-label");
+        label.content = "Retained label";
+        state.labels.push_back(label);
+        state.overrides.push_back({"object", "legacy-sibling", {}, true});
+        return make_annotation_entity("legacy-owner", state);
+    };
+    const auto drag = [](desktop::PlanCanvas* canvas, QPointF start, QPointF end) {
+        const auto mouse = [&](QEvent::Type type, QPointF point, Qt::MouseButton button, Qt::MouseButtons buttons) {
+            QMouseEvent event(type, point, canvas->mapToGlobal(point.toPoint()), button, buttons, Qt::NoModifier);
+            QApplication::sendEvent(canvas, &event);
+        };
+        mouse(QEvent::MouseButtonPress, start, Qt::LeftButton, Qt::LeftButton);
+        mouse(QEvent::MouseMove, end, Qt::NoButton, Qt::LeftButton);
+        mouse(QEvent::MouseButtonRelease, end, Qt::LeftButton, Qt::NoButton);
+    };
+    for (const auto version : {1, 2}) {
+        desktop::MainWindow window;
+        auto legacy = fixture();
+        legacy.required = true;
+        legacy.extensions["vendor"] = "preserved";
+        auto& raw = legacy.properties["state"];
+        raw["version"] = version;
+        raw["catalog_revision"] = kLegacySymbolCatalogRevision;
+        raw["opaque"] = "legacy state";
+        raw["labels"][0]["opaque"] = "legacy label";
+        raw["overrides"][0]["opaque"] = "legacy override";
+        for (auto& symbol : raw["symbols"]) {
+            symbol["placement"]["opaque"] = "legacy placement";
+            for (const auto* key : {"width_scale", "depth_scale", "flip_horizontal", "flip_vertical"}) symbol.erase(key);
+            if (version == 1) { symbol.erase("definition"); symbol.erase("pinned_svg"); }
+            else symbol["definition"]["opaque"] = "legacy definition";
+        }
+        validate_annotation_entity(legacy);
+        window.document().apply(ApplyEntityChanges{window.document().revision(), {EntityChange::upsert(legacy)}, {}, "Legacy transform fixture"});
+        require(window.selectEntity("legacy-selected"), "select actual legacy symbol for independent resize");
+        auto* canvas = dynamic_cast<desktop::PlanCanvas*>(window.findChild<QWidget*>("measurementPlanCanvas"));
+        require(canvas, "legacy resize needs actual canvas");
+        canvas->resize(800, 600); canvas->setSnapEnabled(false); canvas->setOverviewMapEnabled(false); canvas->fitView();
+        QApplication::processEvents();
+        const auto before = window.document().snapshot();
+        const auto frame = canvas->selectionBounds();
+        require(frame.has_value(), "legacy symbol exposes independent resize controls");
+        const QPointF start(frame->right(), frame->center().y());
+        drag(canvas, start, start + QPointF(50, 0));
+        const auto after = window.document().snapshot();
+        const auto& upgraded = after.entities().at(legacy.id);
+        const auto decoded = decode_annotation_entity(upgraded);
+        require(after.revision() == before.revision() + 1 && upgraded.properties.at("state").at("version") == 3 &&
+                decoded.symbols[0].width_scale > 1 && decoded.symbols[1].width_scale == 1,
+                "v1/v2 independent resize must atomically promote the complete owner to valid v3 without resizing siblings");
+        auto expected = before.entities();
+        auto& expected_state = expected.at(legacy.id).properties["state"];
+        const auto defaults = encode_annotation_state(decode_annotation_entity(legacy), catalog);
+        expected_state["version"] = 3;
+        for (std::size_t index = 0; index < expected_state["symbols"].size(); ++index)
+            for (const auto* key : {"definition", "pinned_svg", "width_scale", "depth_scale", "flip_horizontal", "flip_vertical"})
+                if (!expected_state["symbols"][index].contains(key)) expected_state["symbols"][index][key] = defaults.at("symbols")[index].at(key);
+        const auto& changed = upgraded.properties.at("state").at("symbols")[0];
+        expected_state["symbols"][0]["width_scale"] = changed.at("width_scale");
+        expected_state["symbols"][0]["placement"]["x"] = changed.at("placement").at("x");
+        expected_state["symbols"][0]["placement"]["y"] = changed.at("placement").at("y");
+        require(after.entities() == expected && window.undoCommand() && window.document().snapshot().entities() == before.entities() &&
+                window.redoCommand() && window.document().snapshot().entities() == after.entities(),
+                "legacy promotion must retain raw metadata, labels, overrides, pinned definitions and siblings with exact Undo/Redo");
+    }
+    desktop::MainWindow ambiguous;
+    auto first_owner = fixture();
+    auto second_owner = first_owner;
+    second_owner.id = "other-duplicate-owner";
+    second_owner.properties["state"]["symbols"].erase(second_owner.properties["state"]["symbols"].begin() + 1);
+    second_owner.properties["state"]["labels"] = nlohmann::json::array();
+    second_owner.properties["state"]["overrides"] = nlohmann::json::array();
+    ambiguous.document().apply(ApplyEntityChanges{ambiguous.document().revision(),
+        {EntityChange::upsert(first_owner), EntityChange::upsert(second_owner)}, {}, "Admitted duplicate child identities"});
+    require(ambiguous.selectEntity("legacy-selected"), "retain the ambiguous child selection for diagnostic transforms");
+    auto* canvas = dynamic_cast<desktop::PlanCanvas*>(ambiguous.findChild<QWidget*>("measurementPlanCanvas"));
+    require(canvas, "ambiguous transforms need actual canvas");
+    canvas->resize(800, 600); canvas->setSnapEnabled(false); canvas->setOverviewMapEnabled(false); canvas->fitView();
+    const auto refuse = [&](QPointF start, QPointF end) {
+        const auto before = ambiguous.document().snapshot();
+        const auto selected = ambiguous.selectedEntityIds();
+        drag(canvas, start, end);
+        require(ambiguous.document().revision() == before.revision() && ambiguous.document().snapshot().entities() == before.entities() &&
+                ambiguous.document().snapshot().history().size() == before.history().size() && ambiguous.selectedEntityIds() == selected &&
+                ambiguous.lastError().contains("more than one group"),
+                "ambiguous child transforms must refuse atomically with exact content, history and selection retained");
+    };
+    auto frame = canvas->selectionBounds();
+    require(frame.has_value(), "ambiguous child retains a diagnostic selection frame");
+    refuse({frame->right(), frame->center().y()}, {frame->right() + 50, frame->center().y()});
+    frame = canvas->selectionBounds();
+    refuse(frame->bottomRight(), frame->bottomRight() + QPointF(50, 40));
+    frame = canvas->selectionBounds();
+    const QPointF rotation(frame->center().x(), frame->top() - 24);
+    refuse(rotation, frame->center() + QPointF(frame->center().y() - rotation.y(), 0));
+    require(ambiguous.selectEntity("legacy-sibling", true), "retain ambiguous child in a grouped movement selection");
+    const auto entity = std::find_if(canvas->entities().begin(), canvas->entities().end(), [](const auto& item) { return item.id == "legacy-selected"; });
+    require(entity != canvas->entities().end(), "ambiguous group retains drawable child geometry");
+    const auto bounds = boundary_bounds(entity->segments);
+    const auto point = QRectF(canvas->rect()).center() + QPointF(
+        ((bounds.minimum.x + bounds.maximum.x) / 2 - canvas->viewCenter().x) * canvas->viewScale(),
+        -((bounds.minimum.y + bounds.maximum.y) / 2 - canvas->viewCenter().y) * canvas->viewScale());
+    refuse(point, point + QPointF(35, -25));
+}
+
+void test_pasted_annotation_visible_selection() {
+    const ScenarioTiming scenario_timing(__func__);
+    using namespace sketch;
+    desktop::MainWindow source;
+    const auto first = source.createAnnotationSymbol("svg-v2-04_living-sectional-left", {0, 0});
+    const auto second = source.createAnnotationSymbol("svg-v2-04_living-sectional-left", {4, 0});
+    const auto wall = source.createStraightWall({0, -4}, {4, -4});
+    require(!first.isEmpty() && !second.isEmpty() && !wall.isEmpty(), "create real SVG instances and mixed geometry");
+    auto source_owner = annotation_owner_for_selection(source.document().snapshot(), first);
+    source_owner.extensions["clipboard_vendor"] = {{"preserve", true}};
+    source_owner.properties["state"]["opaque"] = "retain state";
+    for (auto& child : source_owner.properties["state"]["symbols"]) {
+        child["placement"]["opaque"] = "retain placement";
+    }
+    source.document().apply(ApplyEntityChanges{source.document().revision(), {EntityChange::upsert(source_owner)}, {}, "Opaque source symbols"});
+    require(source.selectEntity(first) && source.copySelection(), "copy a real SVG instance for immediate paste selection");
+    desktop::MainWindow target;
+    AnnotationState existing_state;
+    SymbolInstance existing_symbol;
+    existing_symbol.id = "existing-unselected-symbol";
+    existing_symbol.symbol_id = default_symbol_catalog().front().id;
+    existing_symbol.definition = default_symbol_catalog().front();
+    existing_symbol.placement = {{10, 10}, 0, 1, "layer-1"};
+    existing_state.symbols.push_back(existing_symbol);
+    auto existing = make_annotation_entity("000-existing-owner", existing_state);
+    existing.required = true;
+    existing.extensions = {{"destination", "retain"}};
+    existing.properties["state"]["opaque"] = "existing owner";
+    target.document().apply(ApplyEntityChanges{target.document().revision(), {EntityChange::upsert(existing)}, {}, "Existing destination owner"});
+    const auto before_paste = target.document().snapshot();
+    require(target.pasteSelection(), "paste one real SVG symbol");
+    const auto pasted = target.document().snapshot();
+    const auto owner = annotation_owner_for_selection(pasted, target.selectedEntityId());
+    const auto symbol = decode_annotation_entity(owner).symbols.front();
+    const auto child_id = QString::fromStdString(symbol.id);
+    require(target.selectedEntityIds() == QStringList{child_id} && child_id != first &&
+            pasted.revision() == before_paste.revision() + 1,
+            "paste must immediately select the fresh visible symbol child rather than its invisible annotation container");
+    auto* canvas = dynamic_cast<desktop::PlanCanvas*>(target.findChild<QWidget*>("measurementPlanCanvas"));
+    require(canvas && std::any_of(canvas->entities().begin(), canvas->entities().end(),
+            [&](const auto& item) { return item.id == child_id && item.selected; }),
+            "pasted symbol must be visibly selected on the actual canvas");
+    canvas->resize(800, 600);
+    canvas->setSnapEnabled(false);
+    canvas->setOverviewMapEnabled(false);
+    canvas->fitView();
+    QApplication::processEvents();
+    const auto mouse = [&](QEvent::Type type, QPointF point, Qt::MouseButton button, Qt::MouseButtons buttons) {
+        QMouseEvent event(type, point, canvas->mapToGlobal(point.toPoint()), button, buttons, Qt::NoModifier);
+        QApplication::sendEvent(canvas, &event);
+    };
+    const auto frame = canvas->selectionBounds();
+    require(frame.has_value(), "pasted SVG must immediately expose its canvas transform frame");
+    const auto resize_end = frame->bottomRight() + QPointF(60, 45);
+    mouse(QEvent::MouseButtonPress, frame->bottomRight(), Qt::LeftButton, Qt::LeftButton);
+    mouse(QEvent::MouseMove, resize_end, Qt::NoButton, Qt::LeftButton);
+    mouse(QEvent::MouseButtonRelease, resize_end, Qt::LeftButton, Qt::NoButton);
+    const auto resized = target.document().snapshot();
+    const auto resized_symbol = decode_annotation_entity(resized.entities().at(owner.id)).symbols.front();
+    auto resize_expected = pasted.entities();
+    auto& resize_child = resize_expected.at(owner.id).properties["state"]["symbols"][0];
+    const auto& actual_resize_child = resized.entities().at(owner.id).properties.at("state").at("symbols")[0];
+    resize_child["placement"]["x"] = actual_resize_child.at("placement").at("x");
+    resize_child["placement"]["y"] = actual_resize_child.at("placement").at("y");
+    resize_child["placement"]["scale"] = actual_resize_child.at("placement").at("scale");
+    resize_child["width_scale"] = actual_resize_child.at("width_scale");
+    resize_child["depth_scale"] = actual_resize_child.at("depth_scale");
+    require(resized.revision() == pasted.revision() + 1 &&
+            (resized_symbol.width_scale > symbol.width_scale || resized_symbol.placement.scale > symbol.placement.scale) &&
+            resized.entities() == resize_expected &&
+            target.undoCommand() && target.document().snapshot().entities() == pasted.entities(),
+            "a freshly pasted symbol resize handle must author one undoable transform");
+    require(target.selectEntity(child_id), "retain pasted symbol for rotation");
+    const auto rotate_frame = canvas->selectionBounds();
+    require(rotate_frame.has_value(), "pasted symbol retains its rotation frame after Undo");
+    const auto rotation_start = QPointF(rotate_frame->center().x(), rotate_frame->top() - 24);
+    const auto radial = rotation_start - rotate_frame->center();
+    const auto rotation_end = rotate_frame->center() + QPointF(-radial.y(), radial.x());
+    mouse(QEvent::MouseButtonPress, rotation_start, Qt::LeftButton, Qt::LeftButton);
+    mouse(QEvent::MouseMove, rotation_end, Qt::NoButton, Qt::LeftButton);
+    mouse(QEvent::MouseButtonRelease, rotation_end, Qt::LeftButton, Qt::NoButton);
+    const auto rotated = target.document().snapshot();
+    auto rotation_expected = pasted.entities();
+    auto& rotate_placement = rotation_expected.at(owner.id).properties["state"]["symbols"][0]["placement"];
+    const auto& actual_rotate_placement = rotated.entities().at(owner.id).properties.at("state").at("symbols")[0].at("placement");
+    rotate_placement["rotation_radians"] = actual_rotate_placement.at("rotation_radians");
+    rotate_placement["scale"] = actual_rotate_placement.at("scale");
+    require(target.document().revision() == resized.revision() + 2 && rotated.entities() == rotation_expected &&
+            std::abs(decode_annotation_entity(rotated.entities().at(owner.id)).symbols.front().placement.rotation_radians -
+                symbol.placement.rotation_radians) > 0.5 && target.undoCommand() &&
+            target.document().snapshot().entities() == pasted.entities(),
+            "a freshly pasted symbol rotation handle must author an undoable transform");
+    require(target.undoCommand() && target.document().snapshot().entities() == before_paste.entities() &&
+            target.redoCommand() && target.document().snapshot().entities() == pasted.entities(),
+            "paste remains one atomic undo step independent of later canvas transforms");
+
+    require(source.selectEntity(QString::fromStdString(source_owner.id)) && source.copySelection(),
+            "copy a whole annotation owner containing two real SVG children");
+    desktop::MainWindow group;
+    group.document().apply(ApplyEntityChanges{group.document().revision(), {EntityChange::upsert(existing)}, {}, "Existing group owner"});
+    require(group.pasteSelection(), "paste two annotation children as a visible group");
+    auto group_owner = annotation_owner_for_selection(group.document().snapshot(), group.selectedEntityId());
+    const auto group_state = decode_annotation_entity(group_owner);
+    const QStringList group_ids{QString::fromStdString(group_state.symbols[0].id), QString::fromStdString(group_state.symbols[1].id)};
+    require(group.selectedEntityIds() == group_ids, "whole-owner paste must select both actual instances rather than its container");
+    auto* group_canvas = dynamic_cast<desktop::PlanCanvas*>(group.findChild<QWidget*>("measurementPlanCanvas"));
+    require(group_canvas && group_canvas->selectionBounds().has_value(), "two pasted children immediately expose a grouped frame");
+    group_canvas->resize(800, 600);
+    group_canvas->setSnapEnabled(false);
+    group_canvas->setOverviewMapEnabled(false);
+    group_canvas->fitView();
+    const auto group_point = [&] {
+        const auto entity = std::find_if(group_canvas->entities().begin(), group_canvas->entities().end(),
+            [&](const auto& item) { return item.id == group_ids.front(); });
+        require(entity != group_canvas->entities().end(), "first pasted SVG retains its selectable geometry");
+        const auto bounds = boundary_bounds(entity->segments);
+        const Vec2 center{(bounds.minimum.x + bounds.maximum.x) / 2, (bounds.minimum.y + bounds.maximum.y) / 2};
+        return QRectF(group_canvas->rect()).center() + QPointF(
+            (center.x - group_canvas->viewCenter().x) * group_canvas->viewScale(),
+            -(center.y - group_canvas->viewCenter().y) * group_canvas->viewScale());
+    };
+    const auto group_mouse = [&](QEvent::Type type, QPointF point, Qt::MouseButton button, Qt::MouseButtons buttons) {
+        QMouseEvent event(type, point, group_canvas->mapToGlobal(point.toPoint()), button, buttons, Qt::NoModifier);
+        QApplication::sendEvent(group_canvas, &event);
+    };
+    bool grouped_menu = false;
+    QTimer::singleShot(0, &group, [&] {
+        if (auto* menu = qobject_cast<QMenu*>(QApplication::activePopupWidget())) {
+            const auto actions = menu->actions();
+            grouped_menu = std::any_of(actions.begin(), actions.end(),
+                [](const auto* action) { return action->text() == "2 selected"; });
+            menu->close();
+        }
+    });
+    group_mouse(QEvent::MouseButtonPress, group_point(), Qt::RightButton, Qt::RightButton);
+    group_mouse(QEvent::MouseButtonRelease, group_point(), Qt::RightButton, Qt::NoButton);
+    require(grouped_menu && group.selectedEntityIds() == group_ids,
+            "right-clicking a freshly pasted child must retain its grouped selection and offer the group menu");
+    group_owner.required = true;
+    auto sibling = group_owner.properties["state"]["symbols"][0];
+    sibling["id"] = "unselected-group-sibling";
+    sibling["placement"]["x"] = 9;
+    sibling["placement"]["y"] = 9;
+    group_owner.properties["state"]["symbols"].push_back(sibling);
+    group.document().apply(ApplyEntityChanges{group.document().revision(), {EntityChange::upsert(group_owner)}, {}, "Retain protected group sibling"});
+    require(group.selectEntity("existing-unselected-symbol", true), "include a selected child from another owner in group movement");
+    const auto before_move = group.document().snapshot();
+    const auto move_ids = group.selectedEntityIds();
+    const auto start = group_point();
+    const auto end = start + QPointF(35, -25);
+    group_mouse(QEvent::MouseButtonPress, start, Qt::LeftButton, Qt::LeftButton);
+    group_mouse(QEvent::MouseMove, end, Qt::NoButton, Qt::LeftButton);
+    group_mouse(QEvent::MouseButtonRelease, end, Qt::LeftButton, Qt::NoButton);
+    const auto moved = group.document().snapshot();
+    const auto& original_placement = before_move.entities().at(group_owner.id).properties.at("state").at("symbols")[0].at("placement");
+    const auto& moved_placement = moved.entities().at(group_owner.id).properties.at("state").at("symbols")[0].at("placement");
+    const auto dx = moved_placement.at("x").get<double>() - original_placement.at("x").get<double>();
+    const auto dy = moved_placement.at("y").get<double>() - original_placement.at("y").get<double>();
+    auto move_expected = before_move.entities();
+    for (auto& [id, entity] : move_expected) {
+        (void)id;
+        if (entity.type != kAnnotationEntityType) continue;
+        for (auto& child : entity.properties["state"]["symbols"])
+            if (move_ids.contains(QString::fromStdString(child.at("id").get<std::string>()))) {
+                child["placement"]["x"] = child["placement"].at("x").get<double>() + dx;
+                child["placement"]["y"] = child["placement"].at("y").get<double>() + dy;
+            }
+    }
+    require(moved.revision() == before_move.revision() + 1 && std::hypot(dx, dy) > 0.01 &&
+            moved.entities() == move_expected && group.selectedEntityIds() == move_ids &&
+            group.undoCommand() && group.document().snapshot().entities() == before_move.entities(),
+            "group move must update children across owners atomically while preserving opaque fields, required flags and unselected siblings");
+
+    require(source.selectEntity(wall) && source.selectEntity(first, true) && source.selectEntity(second, true) &&
+            source.copySelection(), "copy ordered geometry plus two children of one annotation owner");
+    desktop::MainWindow mixed;
+    require(mixed.pasteSelection(), "paste mixed geometry and annotation children");
+    const auto mixed_snapshot = mixed.document().snapshot();
+    const auto mixed_owner = annotation_owner_for_selection(mixed_snapshot, mixed.selectedEntityId());
+    const auto mixed_state = decode_annotation_entity(mixed_owner);
+    const auto selected = mixed.selectedEntityIds();
+    require(selected.size() == 3 && mixed_snapshot.entities().at(selected.front().toStdString()).type == "wall" &&
+            selected[1] == QString::fromStdString(mixed_state.symbols[0].id) &&
+            selected[2] == QString::fromStdString(mixed_state.symbols[1].id),
+            "paste must retain geometry root order and expand annotation containers into visible child selection");
+    auto* mixed_canvas = dynamic_cast<desktop::PlanCanvas*>(mixed.findChild<QWidget*>("measurementPlanCanvas"));
+    require(mixed_canvas && mixed_canvas->selectionBounds().has_value() &&
+            std::count_if(mixed_canvas->entities().begin(), mixed_canvas->entities().end(),
+                [&](const auto& item) { return item.selected && selected.contains(item.id); }) == 3,
+            "mixed pasted children and geometry must form a visible grouped selection");
+    QTemporaryDir directory;
+    require(mixed.saveProjectAs(directory.filePath("visible-paste.bldproj")) &&
+            mixed.openProject(directory.filePath("visible-paste.bldproj")) &&
+            mixed.document().snapshot().entities() == mixed_snapshot.entities() && mixed.undoCommand() &&
+            mixed.redoCommand() && mixed.document().snapshot().entities() == mixed_snapshot.entities(),
+            "visible selection must not change pasted content, save/reopen or its atomic history");
+}
+
 void test_annotation_instance_clipboard_workflow() {
     const ScenarioTiming scenario_timing(__func__);
     using namespace sketch;
@@ -1262,7 +1598,7 @@ void test_annotation_instance_clipboard_workflow() {
             "same-owner annotation slices must merge into one clipboard root");
     desktop::MainWindow target;
     require(target.pasteSelection(), "paste selected annotations into another project");
-    const auto pasted_owner = target.document().snapshot().entities().at(target.selectedEntityId().toStdString());
+    const auto pasted_owner = annotation_owner_for_selection(target.document().snapshot(), target.selectedEntityId());
     const auto pasted_state = decode_annotation_entity(pasted_owner);
     require(pasted_state.symbols.size() == 1 && pasted_state.labels.size() == 1 && pasted_state.overrides.size() == 1 &&
             pasted_state.overrides.front().target_id == pasted_state.symbols.front().id &&
@@ -1348,8 +1684,7 @@ void test_annotation_instance_clipboard_workflow() {
         const auto symbol_id = layer_source.createAnnotationSymbol("svg-v2-04_living-sectional-left", {2, 3});
         require(!symbol_id.isEmpty() && layer_source.selectEntity(symbol_id) && layer_source.copySelection() &&
                 layer_target.pasteSelection(), "copy actual pinned SVG component from a custom layer into another project");
-        const auto destination_owner = layer_target.document().snapshot().entities().at(
-            layer_target.selectedEntityId().toStdString());
+        const auto destination_owner = annotation_owner_for_selection(layer_target.document().snapshot(), layer_target.selectedEntityId());
         const auto destination_symbol = decode_annotation_entity(destination_owner).symbols.front();
         auto* destination_canvas = dynamic_cast<desktop::PlanCanvas*>(layer_target.findChild<QWidget*>(
             QStringLiteral("measurementPlanCanvas")));
@@ -1370,8 +1705,7 @@ void test_annotation_instance_clipboard_workflow() {
         require(protected_source.selectEntity("subset-symbol-0") && protected_source.copySelection() &&
                 protected_target.pasteSelection(),
                 "a copied child of a required owner must have a pasteable optional clipboard container");
-        const auto protected_copy = protected_target.document().snapshot().entities().at(
-            protected_target.selectedEntityId().toStdString());
+        const auto protected_copy = annotation_owner_for_selection(protected_target.document().snapshot(), protected_target.selectedEntityId());
         require(!protected_copy.required && decode_annotation_entity(protected_copy).symbols.size() == 1 &&
                 protected_source.document().snapshot().entities() == protected_original.entities(),
                 "child copy must not transfer source container protection or mutate the protected source");
@@ -1740,7 +2074,7 @@ void test_material_clipboard_transfer() {
     source.document().apply(ApplyEntityChanges{source.document().revision(),{EntityChange::upsert(annotation)},{},"clipboard annotation"});
     require(source.selectEntity(QString::fromStdString(label.id)) && source.copySelection() && target.pasteSelection(),
         "annotation clipboard transfer");
-    const auto copied_annotation=target.document().snapshot().entities().at(target.selectedEntityId().toStdString());
+    const auto copied_annotation=annotation_owner_for_selection(target.document().snapshot(),target.selectedEntityId());
     const auto copied_state=decode_annotation_entity(copied_annotation);
     require(copied_state.labels.front().id!=label.id && copied_state.labels.front().content==label.content &&
         copied_state.labels.front().template_id==label.template_id && copied_annotation.extensions==annotation.extensions,
@@ -7626,6 +7960,8 @@ int main(int argc, char** argv) {
     require(!families.isEmpty(), "bundled Inter font must expose a family");
     application.setFont(QFont(families.front(), 10));
     if (argc == 2 && std::string_view(argv[1]) == "--annotation-clipboard-only") {
+        test_annotation_transform_legacy_and_ambiguity();
+        test_pasted_annotation_visible_selection();
         test_annotation_instance_clipboard_workflow();
         test_multiple_selection_clipboard_workflow();
         test_selection_clipboard_workflow();
@@ -7737,6 +8073,8 @@ int main(int argc, char** argv) {
         return 0;
     }
     if (argc == 2 && std::string_view(argv[1]) == "--selection-clipboard-only") {
+        test_annotation_transform_legacy_and_ambiguity();
+        test_pasted_annotation_visible_selection();
         test_annotation_instance_clipboard_workflow();
         test_multiple_selection_clipboard_workflow();
         test_selection_clipboard_workflow();
@@ -7760,6 +8098,8 @@ int main(int argc, char** argv) {
     test_room_boundary_from_existing_geometry();
     test_room_volume_authoring_workflow();
     test_multiple_selection_clipboard_workflow();
+    test_annotation_transform_legacy_and_ambiguity();
+    test_pasted_annotation_visible_selection();
     test_annotation_instance_clipboard_workflow();
     test_selection_clipboard_workflow();
     test_wall_transform_workflow(field_ui_capture_directory);

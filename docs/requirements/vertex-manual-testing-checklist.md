@@ -393,6 +393,7 @@ Start with the workspace, draw a room, close it with the mouse, drag-select it, 
 - [ ] **U066 — Copy and paste a room or object**
   - Steps: Place two symbols and two text labels. Select one symbol and copy/paste it. Then Ctrl-select one symbol and one label and copy/paste them into another project.
   - Expected: A separate editable copy appears with the expected geometry and properties.
+  - Immediately after pasting: The pasted objects should already be selected. Drag inside their selection to move them; for a single symbol, use its resize and rotate handles without clicking to select it again. The rotation handle should retain its angle after release. Try 45, 90 and 180 degrees, then hold Shift for a fine angle and check the live degree readout. Undo each change and confirm nearby unselected items stay unchanged.
   - Also check: Only the selected symbols and labels are copied. Their sizes, rotation, mirroring, artwork and text are preserved; the unselected items remain untouched. Copy a symbol from a custom layer into another project: it should appear on that project's active layer. Undo/redo and save/reopen preserve the copies.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________

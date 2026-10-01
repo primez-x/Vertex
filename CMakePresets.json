@@ -16,14 +16,36 @@
       "inherits": "windows-debug",
       "binaryDir": "${sourceDir}/build/windows-release",
       "cacheVariables": {"CMAKE_BUILD_TYPE": "Release"}
+    },
+    {
+      "name": "windows-headless-debug",
+      "displayName": "Windows headless debug",
+      "inherits": "windows-debug",
+      "binaryDir": "${sourceDir}/build/windows-headless-debug",
+      "cacheVariables": {
+        "SKETCH_BUILD_ARCHITECTURE": "ON",
+        "SKETCH_BUILD_DESKTOP": "OFF",
+        "CMAKE_PREFIX_PATH": "${sourceDir}/.deps/native/x64-windows"
+      }
+    },
+    {
+      "name": "windows-headless-release",
+      "displayName": "Windows headless release",
+      "inherits": "windows-headless-debug",
+      "binaryDir": "${sourceDir}/build/windows-headless-release",
+      "cacheVariables": {"CMAKE_BUILD_TYPE": "Release"}
     }
   ],
   "buildPresets": [
     {"name": "windows-debug", "configurePreset": "windows-debug"},
-    {"name": "windows-release", "configurePreset": "windows-release"}
+    {"name": "windows-release", "configurePreset": "windows-release"},
+    {"name": "windows-headless-debug", "configurePreset": "windows-headless-debug"},
+    {"name": "windows-headless-release", "configurePreset": "windows-headless-release"}
   ],
   "testPresets": [
     {"name": "windows-debug", "configurePreset": "windows-debug", "output": {"outputOnFailure": true}},
-    {"name": "windows-release", "configurePreset": "windows-release", "output": {"outputOnFailure": true}}
+    {"name": "windows-release", "configurePreset": "windows-release", "output": {"outputOnFailure": true}},
+    {"name": "windows-headless-debug", "configurePreset": "windows-headless-debug", "output": {"outputOnFailure": true}},
+    {"name": "windows-headless-release", "configurePreset": "windows-headless-release", "output": {"outputOnFailure": true}}
   ]
 }

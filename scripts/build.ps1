@@ -31,14 +31,14 @@ $cmakePath = Join-Path $vsRoot 'Common7\IDE\CommonExtensions\Microsoft\CMake\CMa
 $ctestPath = Join-Path (Split-Path -Parent $cmakePath) 'ctest.exe'
 $ninjaDirectory = Join-Path $vsRoot 'Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja'
 $env:PATH = "$ninjaDirectory;$env:PATH"
-$preset = "windows-$($Configuration.ToLowerInvariant())"
+$preset = if ($Desktop) { "windows-$($Configuration.ToLowerInvariant())" }
+          else { "windows-headless-$($Configuration.ToLowerInvariant())" }
 $configureArguments = @('--preset', $preset)
 $nativePrefix = Join-Path $projectRoot '.deps\native\x64-windows'
-if ($Architecture -or $Desktop) {
-    $configureArguments += @('-DSKETCH_BUILD_ARCHITECTURE=ON', "-DCMAKE_PREFIX_PATH=$nativePrefix")
-} else {
-    $configureArguments += '-DSKETCH_BUILD_ARCHITECTURE=OFF'
-}
+# Saved workspace recovery validates exact area deductions through the shared
+# geometry engine even without Qt. -Architecture remains a compatibility alias
+# for the now-default headless engine build.
+$configureArguments += @('-DSKETCH_BUILD_ARCHITECTURE=ON', "-DCMAKE_PREFIX_PATH=$nativePrefix")
 if ($Desktop) {
     $qtPrefix = Join-Path $projectRoot '.deps\qt\6.8.3\msvc2022_64'
     if (!(Test-Path -LiteralPath (Join-Path $qtPrefix 'lib\cmake\Qt6\Qt6Config.cmake'))) {
@@ -48,6 +48,9 @@ if ($Desktop) {
 } else {
     $configureArguments += '-DSKETCH_BUILD_DESKTOP=OFF'
 }
+$vertexBuildPreviousPath = $env:PATH
+$vertexNativeBin = Join-Path $nativePrefix $(if ($Configuration -eq 'Debug') { 'debug\bin' } else { 'bin' })
+$env:PATH = "$vertexNativeBin;$env:PATH"
 Push-Location $projectRoot
 try {
     & $cmakePath @configureArguments
@@ -59,4 +62,7 @@ try {
         & $ctestPath --preset $preset
         if ($LASTEXITCODE -ne 0) { throw 'Tests failed.' }
     }
-} finally { Pop-Location }
+} finally {
+    Pop-Location
+    $env:PATH = $vertexBuildPreviousPath
+}

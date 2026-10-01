@@ -29,11 +29,27 @@ visualization. PROJ is built with `default-features: false`; its local `proj_9.d
 `proj.db`, and `proj.ini` are the only georeferencing runtime inputs currently
 declared for packaging. The complete shipped license closure remains under audit.
 
-Compile the application-specific architecture engine after provisioning:
+Compile the shared headless engine and CLI after provisioning:
 
 ```powershell
 .\scripts\build.ps1 -Architecture
 ```
+
+`-Architecture` is accepted for compatibility; the same headless engine is now
+the default when `-Desktop` is omitted. It includes exact area/deduction checks
+used while restoring saved workspace histories, so native dependencies remain
+required even for the CLI. This configuration uses OCCT, PROJ and the
+Eigen/PlaneGCS dependencies while excluding Qt and the desktop visualization
+host. `SKETCH_BUILD_ARCHITECTURE=OFF` together with
+`SKETCH_BUILD_DESKTOP=OFF` is an invalid configuration and reports the dependency
+before compilation.
+
+Headless Debug/Release presets have separate directories under
+`build/windows-headless-*`. Desktop builds continue using `build/windows-*`.
+Use `scripts/run-cli.ps1 -Configuration Release -ApplicationArguments
+@('inspect', 'example.bldproj')` for a source-built headless CLI; the runner
+temporarily supplies the pinned native DLL directory and restores the caller's
+PATH after it exits. Packaged executables retain their bundled runtime layout.
 
 Normal CMake builds use the prepared local libraries and do not invoke vcpkg
 installation or fetch sources.

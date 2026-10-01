@@ -2215,6 +2215,10 @@
     },
     {
       "category": "docs",
+      "path": "docs/verification/pasted-selection-headless-build-2026-10-01.md"
+    },
+    {
+      "category": "docs",
       "path": "docs/verification/physical-curve-length-2026-09-30.md"
     },
     {
@@ -2932,6 +2936,10 @@
     {
       "category": "source",
       "path": "scripts/restyle_architectural_svg_library.py"
+    },
+    {
+      "category": "source",
+      "path": "scripts/run-cli.ps1"
     },
     {
       "category": "source",

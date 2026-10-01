@@ -9,7 +9,10 @@ include(CTest)
 
 set(SKETCH_DEPS_DIR "${CMAKE_SOURCE_DIR}/.deps/src" CACHE PATH "Verified local dependency source cache")
 option(SKETCH_BUILD_DESKTOP "Build the native desktop application" OFF)
-option(SKETCH_BUILD_ARCHITECTURE "Build the Open CASCADE architectural solid engine" OFF)
+option(SKETCH_BUILD_ARCHITECTURE "Build the shared Open CASCADE geometry engine" ON)
+if(NOT SKETCH_BUILD_ARCHITECTURE AND NOT SKETCH_BUILD_DESKTOP)
+  message(FATAL_ERROR "Vertex storage/recovery validation requires the shared geometry engine. Set SKETCH_BUILD_ARCHITECTURE=ON; keep SKETCH_BUILD_DESKTOP=OFF for a headless build.")
+endif()
 
 set(SQLITE_SOURCE_DIR "${SKETCH_DEPS_DIR}/sqlite/sqlite-amalgamation-3530400")
 if(NOT EXISTS "${SQLITE_SOURCE_DIR}/sqlite3.c" OR NOT EXISTS "${SKETCH_DEPS_DIR}/json/include/nlohmann/json.hpp")

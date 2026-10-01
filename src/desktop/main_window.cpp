@@ -390,6 +390,49 @@ Entity annotation_child_subset(const Entity& original,
     return entity;
 }
 
+json& annotation_child_record(Entity& owner, std::string_view child_id) {
+    for (const auto* collection : {"labels", "symbols"})
+        for (auto& child : owner.properties.at("state").at(collection))
+            if (child.at("id").get<std::string>() == child_id) return child;
+    throw std::invalid_argument("The selected annotation is no longer available.");
+}
+
+std::map<std::string, std::string, std::less<>> annotation_selection_owners(
+    const DocumentSnapshot& snapshot, const QStringList& selection) {
+    std::set<std::string, std::less<>> requested;
+    for (const auto& id : selection) requested.insert(id.toStdString());
+    std::map<std::string, std::string, std::less<>> owners;
+    for (const auto& [owner_id, entity] : snapshot.entities()) {
+        if (entity.type != kAnnotationEntityType) continue;
+        const auto state = decode_annotation_entity(entity);
+        const auto admit = [&](const auto& children) {
+            for (const auto& child : children) {
+                if (!requested.contains(child.id)) continue;
+                if (snapshot.entities().contains(child.id))
+                    throw std::invalid_argument("Selection identity is ambiguous between an annotation and a model object.");
+                if (!owners.emplace(child.id, owner_id).second)
+                    throw std::invalid_argument("The selected annotation identity belongs to more than one group.");
+            }
+        };
+        admit(state.labels);
+        admit(state.symbols);
+    }
+    return owners;
+}
+
+void upgrade_annotation_transform_version(Entity& owner, const AnnotationState& state) {
+    auto& raw = owner.properties.at("state");
+    if (raw.at("version") == 3) return;
+    // Independent dimensions require v3 on every symbol in this owner. Add
+    // only its new required fields; retain admitted legacy records verbatim.
+    const auto upgraded = encode_annotation_state(state, default_symbol_catalog());
+    auto& symbols = raw.at("symbols");
+    for (std::size_t index = 0; index < symbols.size(); ++index)
+        for (const auto* key : {"definition", "pinned_svg", "width_scale", "depth_scale", "flip_horizontal", "flip_vertical"})
+            if (!symbols[index].contains(key)) symbols[index][key] = upgraded.at("symbols")[index].at(key);
+    raw["version"] = 3;
+}
+
 std::vector<Entity> clipboard_entities_for_selection(const DocumentSnapshot& snapshot,
                                                       std::string_view selected_id) {
     std::string root_id(selected_id);
@@ -12238,34 +12281,39 @@ public:
             const auto source = authoringSnapshot();
             auto model_ids = ids;
             std::vector<EntityChange> presentation_changes;
+            const auto annotation_owners = annotation_selection_owners(source, ids);
 
-            auto annotation = std::find_if(source.entities().begin(), source.entities().end(),
-                [](const auto& entry) { return entry.second.type == kAnnotationEntityType; });
-            if (annotation != source.entities().end()) {
-                auto state = decode_annotation_entity(annotation->second);
+            for (const auto& [owner_id, annotation_owner] : source.entities()) {
+                if (annotation_owner.type != kAnnotationEntityType) continue;
+                auto state = decode_annotation_entity(annotation_owner);
+                auto candidate = annotation_owner;
                 std::size_t moved = 0;
                 for (auto& label : state.labels) {
-                    if (!ids.contains(id_from(label.id))) continue;
+                    if (!annotation_owners.contains(label.id) || annotation_owners.at(label.id) != owner_id) continue;
                     label.placement.position.x += delta.x;
                     label.placement.position.y += delta.y;
                     if (source.entities().contains(label.id))
                         throw std::invalid_argument("Selection identity is ambiguous between an annotation and a model object.");
                     model_ids.removeAll(id_from(label.id));
+                    auto& placement = annotation_child_record(candidate, label.id).at("placement");
+                    placement["x"] = label.placement.position.x;
+                    placement["y"] = label.placement.position.y;
                     ++moved;
                 }
                 for (auto& symbol : state.symbols) {
-                    if (!ids.contains(id_from(symbol.id))) continue;
+                    if (!annotation_owners.contains(symbol.id) || annotation_owners.at(symbol.id) != owner_id) continue;
                     symbol.placement.position.x += delta.x;
                     symbol.placement.position.y += delta.y;
                     if (source.entities().contains(symbol.id))
                         throw std::invalid_argument("Selection identity is ambiguous between an annotation and a model object.");
                     model_ids.removeAll(id_from(symbol.id));
+                    auto& placement = annotation_child_record(candidate, symbol.id).at("placement");
+                    placement["x"] = symbol.placement.position.x;
+                    placement["y"] = symbol.placement.position.y;
                     ++moved;
                 }
                 if (moved != 0) {
-                    auto candidate = annotation->second;
-                    candidate.properties["state"] =
-                        make_annotation_entity(annotation->second.id, state).properties.at("state");
+                    validate_annotation_entity(candidate);
                     presentation_changes.push_back(EntityChange::upsert(std::move(candidate)));
                 }
             }
@@ -12952,8 +13000,10 @@ public:
                 throw std::invalid_argument("The resize dimensions are invalid.");
             const auto source = authoringSnapshot();
             const auto wanted = requested_id.toStdString();
+            const auto annotation_owners = annotation_selection_owners(source, {requested_id});
             for (const auto& [id, entity] : source.entities()) {
                 if (entity.type != kAnnotationEntityType) continue;
+                if (!annotation_owners.contains(wanted) || annotation_owners.at(wanted) != id) continue;
                 auto state = decode_annotation_entity(entity);
                 for (auto& symbol : state.symbols) {
                     if (symbol.id != wanted) continue;
@@ -12968,7 +13018,13 @@ public:
                     symbol.width_scale *= scale_x;
                     symbol.depth_scale *= scale_y;
                     auto candidate = entity;
-                    candidate.properties["state"] = make_annotation_entity(id, state).properties.at("state");
+                    upgrade_annotation_transform_version(candidate, state);
+                    auto& child = annotation_child_record(candidate, symbol.id);
+                    child.at("placement")["x"] = symbol.placement.position.x;
+                    child.at("placement")["y"] = symbol.placement.position.y;
+                    if (scale_x != 1.0) child["width_scale"] = symbol.width_scale;
+                    if (scale_y != 1.0) child["depth_scale"] = symbol.depth_scale;
+                    validate_annotation_entity(candidate);
                     const auto command = ApplyEntityChanges{source.revision(),
                         {EntityChange::upsert(std::move(candidate))}, {},
                         "Resize symbol dimensions"};
@@ -13014,10 +13070,10 @@ public:
 
             const auto source = authoringSnapshot();
             const auto wanted = requested_id.toStdString();
-            if (const auto annotation = std::find_if(source.entities().begin(), source.entities().end(),
-                    [](const auto& entry) { return entry.second.type == kAnnotationEntityType; });
-                annotation != source.entities().end()) {
-                auto state = decode_annotation_entity(annotation->second);
+            const auto annotation_owners = annotation_selection_owners(source, {requested_id});
+            if (const auto annotation_owner = annotation_owners.find(wanted); annotation_owner != annotation_owners.end()) {
+                auto candidate = source.entities().at(annotation_owner->second);
+                auto state = decode_annotation_entity(candidate);
                 bool transformed = false;
                 const auto apply = [&](AnnotationPlacement& placement) {
                     const auto scale = placement.scale * relative_scale;
@@ -13032,9 +13088,16 @@ public:
                 for (auto& label : state.labels) if (label.id == wanted) apply(label.placement);
                 for (auto& symbol : state.symbols) if (symbol.id == wanted) apply(symbol.placement);
                 if (transformed) {
-                    auto candidate = annotation->second;
-                    candidate.properties["state"] =
-                        make_annotation_entity(annotation->second.id, state).properties.at("state");
+                    auto& placement = annotation_child_record(candidate, wanted).at("placement");
+                    for (const auto& label : state.labels) if (label.id == wanted) {
+                        if (relative_scale != 1.0) placement["scale"] = label.placement.scale;
+                        if (rotation_radians != 0.0) placement["rotation_radians"] = label.placement.rotation_radians;
+                    }
+                    for (const auto& symbol : state.symbols) if (symbol.id == wanted) {
+                        if (relative_scale != 1.0) placement["scale"] = symbol.placement.scale;
+                        if (rotation_radians != 0.0) placement["rotation_radians"] = symbol.placement.rotation_radians;
+                    }
+                    validate_annotation_entity(candidate);
                     const auto command = ApplyEntityChanges{
                         source.revision(),
                         {EntityChange::upsert(std::move(candidate))},
@@ -14451,8 +14514,19 @@ public:
                 const auto root_mapping = remap.find(root_id);
                 if (!source_ids.contains(root_id) || root_mapping == remap.end())
                     throw std::invalid_argument("Clipboard root identity is missing from its payload.");
-                const auto mapped = id_from(root_mapping->second);
-                if (!pasted_roots.contains(mapped)) pasted_roots.push_back(mapped);
+                const auto append_selected = [&](const std::string& identity) {
+                    const auto mapped = id_from(remap.at(identity));
+                    if (!pasted_roots.contains(mapped)) pasted_roots.push_back(mapped);
+                };
+                const auto entity = std::find_if(source_entities.begin(), source_entities.end(),
+                    [&](const auto& value) { return value.id == root_id; });
+                if (entity->type == kAnnotationEntityType) {
+                    // The owner is a persistence container, not a drawable.
+                    // Keep wire roots intact and select their actual instances.
+                    for (const auto* collection : {"labels", "symbols"})
+                        for (const auto& child : entity->properties.at("state").at(collection))
+                            append_selected(child.at("id").get<std::string>());
+                } else append_selected(root_id);
             }
 
             std::vector<EntityChange> changes;
@@ -14498,7 +14572,7 @@ public:
             (void)Document::preview_command(source, command);
             applyDocumentCommand(command);
             m_selected_ids = pasted_roots;
-            m_selected_id = m_selected_ids.back();
+            m_selected_id = m_selected_ids.isEmpty() ? QString{} : m_selected_ids.back();
             clearError();
             refresh();
             return true;
