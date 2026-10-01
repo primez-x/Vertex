@@ -5,6 +5,7 @@
 #include "support/noninteractive_errors.hpp"
 
 #include <filesystem>
+#include <cmath>
 #include <iostream>
 #include <stdexcept>
 #include <string_view>
@@ -181,6 +182,47 @@ void test_unknown_lock_semantics_are_preserved_read_only() {
     }, "unknown lock allowed a generic edit");
 }
 
+void test_physical_arc_length_has_independent_persisted_admission() {
+    auto owner=wall();
+    const auto curve=arc_from_chord_arc_length({0,0},{4,0},5,false);
+    owner.properties["baseline"]["sweep_radians"]=curve.sweep_radians;
+    PersistentConstraint physical;
+    physical.id="physical"; physical.relation=ConstraintRelationKind::fixed_arc_length;
+    physical.bindings={{"wall-a",WallEndpointRole::start},{"wall-a",WallEndpointRole::end}};
+    physical.length=parse_quantity("5 m");
+    auto entity=encode_constraint_entity(physical);
+    entity.extensions["vendor"]={{"retained",true}};
+    auto document=Document::create({owner,entity});
+    require(document.is_editable(),"valid physical arc relation was made read-only");
+    physical.length=parse_quantity("4 m");
+    rejected_unchanged(document,[&] { document.apply(ApplyEntityChanges{document.revision(),
+        {EntityChange::upsert(encode_constraint_entity(physical,&entity))},{},"reinterpret arc as chord"}); },
+        "persisted physical relation silently measured chord distance");
+    auto deformed=owner; deformed.properties["baseline"]["sweep_radians"]=0.6;
+    rejected_unchanged(document,[&] { document.apply(ApplyEntityChanges{document.revision(),
+        {EntityChange::upsert(deformed)},{},"preserve chord but change arc"}); },
+        "raw geometry edit bypassed physical arc length");
+    for (const auto version : {1,2}) {
+        auto legacy=entity; legacy.properties["version"]=version;
+        if (version==1) { legacy.properties["wall_ids"]=legacy.properties.at("entity_ids"); legacy.properties.erase("entity_ids"); }
+        auto unknown=Document::create({owner,legacy});
+        require(!unknown.is_editable() && unknown.snapshot().entities().at("physical")==legacy,
+            "old schema version reinterpreted or lost opaque physical arc spelling");
+    }
+    auto straight=wall(); bool rejected=false;
+    try { (void)Document::create({straight,entity}); } catch (const DocumentError&) { rejected=true; }
+    require(rejected,"persisted physical arc relation accepted a straight owner");
+    const auto directory=std::filesystem::temp_directory_path()/("physical-arc-integrity-"+make_stable_id());
+    require(std::filesystem::create_directory(directory),"cannot reserve physical arc fixture directory");
+    const auto path=directory/"physical.bldproj";
+    (void)ProjectStore::save(path,document.snapshot());
+    auto loaded=ProjectStore::load(path);
+    require(loaded.document.is_editable() && loaded.document.snapshot().entities()==document.snapshot().entities(),
+        "physical arc relation/metadata changed across save/reopen");
+    require(Document::fork(loaded.document.snapshot()).snapshot().entities()==document.snapshot().entities(),
+        "physical arc retained state cannot replay");
+}
+
 void test_nested_owner_list_must_be_complete() {
     auto malformed = horizontal();
     malformed.properties["bindings"][1]["owner_id"] = "wall-b";
@@ -346,6 +388,7 @@ int main() {
         test_wall_shortening_cannot_strand_a_hosted_opening();
         test_every_persisted_relation_has_an_independent_residual_check();
         test_unknown_lock_semantics_are_preserved_read_only();
+        test_physical_arc_length_has_independent_persisted_admission();
         test_nested_owner_list_must_be_complete();
         test_wall_reversal_requires_explicit_binding_remap();
         test_save_reopen_preserves_enforcement_and_history();

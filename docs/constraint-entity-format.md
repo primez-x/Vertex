@@ -1,8 +1,10 @@
-# Persistent wall constraints v1
+# Persistent endpoint constraints v1 through v3
 
 Constraint entities store relationships to semantic wall endpoints. Wall
 baselines remain the geometry authority; constraint records do not contain a
-second editable point collection. This format is part of project format v1.
+second editable point collection. Version-1 wall relations are part of project
+format v1; boundary bindings use version 2, and physical arc-length relationships
+use version 3.
 Interactive constraint authoring uses these same stable bindings in both workspaces.
 
 ## Stable envelope
@@ -73,6 +75,22 @@ architectural dimension receipts. Optional unrelated entries are opaque data.
 Versioned codec edits preserve unknown metadata and may not silently migrate
 an unsupported relation/version into a known relation.
 
+## Physical curve length (version 3)
+
+`fixed_arc_length` is supported only in entity version 3. It uses sorted unique
+`entity_ids`, the same `length_m` and exact quantity receipt shown above, and two
+opposite endpoint roles belonging to one curved wall or one identified boundary
+segment. Boundary bindings also require the segment's actual stable vertex IDs.
+Straight geometry and unrelated endpoint pairs reject. Versions 1 and 2 do not
+interpret the new spelling; version 3 does not reinterpret earlier relation kinds.
+
+The quantity measures analytical arc length. For absolute sweep `t` and chord
+`c`, the physical length is `c * t / (2 * sin(t / 2))`. Authoring preserves signed
+sweep, derives a finite chord target from the entered physical length, then
+independently checks the candidate's actual segment length. Negative sweeps and
+major arcs use the same physical measure. Project format 12 and exchange version
+9 protect this semantic distinction throughout retained history.
+
 ## State integrity
 
 The solver-free validator runs in the document transition boundary after
@@ -102,7 +120,7 @@ application to ignore a constraint.
 
 ## Current verification and remaining work
 
-Codec tests exercise all seven relations and exact quantities. Document tests
+Codec tests exercise the endpoint relations and physical arc length with exact quantities. Document tests
 cover direct edit/delete rejection, independent residual checks, compound
 removal, reversal/remapping, hosted-opening validity, save/reopen, and
 unsupported historical locks. CLI fixtures independently construct valid
@@ -111,7 +129,8 @@ project manifests to distinguish semantic rejection from checksum failure.
 The preview/Apply service supports analytical wall endpoints and stable identified
 measurement and room-boundary vertices, with explicit anchors and connected-movement
 controls. Persistent coordinate rank is diagnosed separately from temporary
-editing anchors. Physical arc-length locks, tangency, complete branch/topology propagation,
+editing anchors. Physical arc-length locks have focused engine, persistence and
+desktop coverage; tangency, complete branch/topology propagation,
 level dependencies and interactive conflict repair still need broader
 qualification. This format and its focused tests do not certify the complete
 constraint workflow.

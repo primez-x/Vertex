@@ -11,6 +11,7 @@
 #include <fstream>
 #include <iostream>
 #include <iterator>
+#include <numbers>
 #include <set>
 #include <stdexcept>
 #include <string>
@@ -350,6 +351,45 @@ void test_straight_wall_only_authoring_exchange_v8(const std::filesystem::path& 
         mixed.at("revisions").back().at("boundary_constraint_changes").at("version") == 3,
         "later curved proof must not lower exchange8 required by retained straight wall-only intent");
 }
+
+void test_physical_curve_length_exchange_v9(const std::filesystem::path& root) {
+  const auto pi = std::numbers::pi;
+  sketch::Entity wall{"physical-curve", "wall",
+      {{"baseline", {{"start", {0, 0}}, {"end", {8 / pi, 0}}, {"sweep_radians", pi}}},
+       {"thickness_m", 0.14}, {"height_m", 2.4}, {"elevation_m", 0}}, false,
+      nlohmann::json::object()};
+  sketch::PersistentConstraint relation;
+  relation.id = "curve-length";
+  relation.relation = sketch::ConstraintRelationKind::fixed_arc_length;
+  relation.bindings = {{wall.id, sketch::WallEndpointRole::start}, {wall.id, sketch::WallEndpointRole::end}};
+  relation.length = sketch::parse_quantity("4 m");
+  auto document = sketch::Document::create({wall, sketch::encode_constraint_entity(relation)});
+  const auto initial = document.snapshot().entities();
+  relation.length = sketch::parse_quantity("6 m");
+  sketch::ApplyBoundaryConstraintChanges command{0, {},
+      {sketch::EntityChange::upsert(sketch::encode_constraint_entity(relation))}, "Edit physical curve length"};
+  command.wall_edits.push_back({wall.id, {{0, 0}, {12 / pi, 0}, pi}, std::nullopt, 2});
+  document.apply(command);
+  const auto edited = document.snapshot().entities();
+  document.undo(document.revision());
+  sketch::extract_project(document.snapshot(), root / "physical-curve-v9");
+  std::ifstream input(root / "physical-curve-v9" / "project.json");
+  const auto json = nlohmann::json::parse(input);
+  check(json.at("exchange_version") == 9,
+        "retained physical curve-length constraint must advertise exchange9");
+  auto replayed = sketch::Document::create({wall, sketch::encode_constraint_entity(
+      *sketch::decode_constraint_entity(initial.at(relation.id)).constraint)});
+  replayed.apply(sketch::command_from_json(json.at("revisions").at(1).at("boundary_constraint_changes")));
+  check(replayed.snapshot().entities() == edited, "physical curve exchange must replay exact geometry and quantity");
+  replayed.undo(replayed.revision());
+  check(replayed.snapshot().entities() == initial, "physical curve exchange must undo exactly");
+  document.apply(sketch::ApplyEntityChanges{document.revision(),
+      {sketch::EntityChange::erase(wall.id), sketch::EntityChange::erase(relation.id)}, {}, "Delete curve"});
+  sketch::extract_project(document.snapshot(), root / "deleted-physical-curve-v9");
+  std::ifstream deleted_input(root / "deleted-physical-curve-v9" / "project.json");
+  check(nlohmann::json::parse(deleted_input).at("exchange_version") == 9,
+        "deleted and undone physical curve history must retain exchange9");
+}
 } // namespace
 int main() {
   sketch::testing::noninteractive_errors();
@@ -357,6 +397,7 @@ int main() {
               ("property-exchange-" + sketch::make_stable_id());
   std::filesystem::create_directory(root);
   try {
+    test_physical_curve_length_exchange_v9(root);
     test_straight_wall_only_authoring_exchange_v8(root);
     test_safe_curved_wall_history_exchange_replays(root);
     const std::vector<std::byte> bytes{std::byte{1}, std::byte{2}, std::byte{0},

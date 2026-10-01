@@ -1,4 +1,5 @@
 #include "sketch/constraint_entity.hpp"
+#include "sketch/boundary_entity.hpp"
 #include "support/noninteractive_errors.hpp"
 
 #include <nlohmann/json.hpp>
@@ -626,6 +627,63 @@ void test_large_binding_envelopes_have_bounded_validation() {
     }
 }
 
+void test_fixed_arc_length_v3_is_known_without_reinterpreting_legacy() {
+    auto entity=encode_constraint_entity(model_for(ConstraintRelationKind::fixed_length));
+    entity.properties["version"]=3;
+    entity.properties["relation"]="fixed_arc_length";
+    entity.properties["entity_ids"]=entity.properties.at("wall_ids");
+    entity.properties.erase("wall_ids");
+    const auto decoded=decode_constraint_entity(entity);
+    require(decoded.supported() && decoded.constraint->length->original_expression=="1/3 ft",
+        "version-three physical arc length must be known and preserve its exact quantity");
+    require(encode_constraint_entity(*decoded.constraint)==entity,"physical arc length v3 codec changed receipt");
+    for (const auto version : {1,2}) {
+        auto legacy=entity; legacy.properties["version"]=version;
+        if (version==1) { legacy.properties["wall_ids"]=legacy.properties.at("entity_ids"); legacy.properties.erase("entity_ids"); }
+        const auto unknown=decode_constraint_entity(legacy);
+        require(!unknown.supported() && unknown.original_entity==legacy,
+            "legacy versions must preserve fixed_arc_length as unknown semantics");
+    }
+    auto other=entity; other.properties["relation"]="fixed_length";
+    require_unsupported(decode_constraint_entity(other),"v3 must not reinterpret legacy point-distance semantics");
+    auto arc=*decoded.constraint;
+    auto original=entity; original.required=true; original.extensions["vendor"]={{"keep",17}};
+    original.properties["vendor_property"]="keep";
+    original.properties["quantity_entries"]["/length_m"]["vendor_receipt"]="keep";
+    const auto merged=encode_constraint_entity(arc,&original);
+    require(merged==original,"arc relation codec lost envelope or exact-receipt metadata");
+    const auto wall=[](double sweep) { return Entity{"wall-a","wall",{
+        {"baseline",{{"start",{0,0}},{"end",{4,0}},{"sweep_radians",sweep}}},
+        {"thickness_m",0.1},{"height_m",3},{"elevation_m",0}}}; };
+    for (const auto sweep : {0.6,-0.6,4.0,-4.0}) {
+        const std::map<std::string,Entity,std::less<>> owners{{"wall-a",wall(sweep)}};
+        const auto resolved=resolve_constraint_arc_segment(arc,owners);
+        require(resolved.sweep_radians==sweep,"arc binding resolver changed signed sweep");
+        const auto chord=constraint_arc_chord_target(arc,owners);
+        require(std::abs(segment_length({{0,0},{chord,0},sweep})-arc.length->metres)<1e-10,
+            "physical arc target conversion does not preserve minor/major arc length");
+    }
+    require_invalid([&] { (void)resolve_constraint_arc_segment(arc,{{"wall-a",wall(0)}}); },
+        "physical arc relation accepted a straight baseline");
+    require_invalid([&] { (void)constraint_arc_chord_target(arc,{{"wall-a",wall(2*std::acos(-1.0)-1e-12)}}); },
+        "unrepresentable physical arc target chord accepted");
+    auto bad=arc; bad.bindings[1].owner_id="wall-b";
+    require_invalid([&] { (void)encode_constraint_entity(bad); },"arc relation accepted arbitrary owners");
+    bad=arc; bad.bindings[1].role=WallEndpointRole::start;
+    require_invalid([&] { (void)encode_constraint_entity(bad); },"arc relation accepted same endpoint role");
+    const auto outline=encode_identified_boundary_entity(IdentifiedBoundary{"outline","measurement_boundary",{
+        {"ab","a","b",{{0,0},{4,0},0.6}}, {"bc","b","c",{{4,0},{4,3},0}},
+        {"cd","c","d",{{4,3},{0,3},0}}, {"da","d","a",{{0,3},{0,0},0}}}});
+    arc.bindings={{"outline",WallEndpointRole::start,"ab","a"},{"outline",WallEndpointRole::end,"ab","b"}};
+    require(resolve_constraint_arc_segment(arc,{{"outline",outline}}).sweep_radians==0.6,
+        "stable curved boundary segment was not resolved");
+    bad=arc; bad.bindings[1].vertex_id="c";
+    require_invalid([&] { (void)resolve_constraint_arc_segment(bad,{{"outline",outline}}); },
+        "arc relation accepted a mismatched stable vertex");
+    bad=arc; bad.bindings[1].segment_id="bc";
+    require_invalid([&] { (void)encode_constraint_entity(bad); },"arc relation accepted separate boundary segments");
+}
+
 }  // namespace
 
 int main() {
@@ -660,5 +718,6 @@ int main() {
     test_numeric_integer_boundaries_and_receipts_reject_safely();
     test_encode_rejects_double_only_or_inconsistent_locks();
     test_large_binding_envelopes_have_bounded_validation();
+    test_fixed_arc_length_v3_is_known_without_reinterpreting_legacy();
     return 0;
 }

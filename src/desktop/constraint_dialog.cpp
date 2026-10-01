@@ -52,6 +52,20 @@ QString dimension(double metres, bool metric) {
         (metric ? QStringLiteral(" m") : QStringLiteral(" ft"));
 }
 
+QString relation_label(ConstraintRelationKind kind) {
+    if (kind == ConstraintRelationKind::fixed_length) return QStringLiteral("Endpoint distance");
+    if (kind == ConstraintRelationKind::fixed_arc_length) return QStringLiteral("Curve length");
+    return text(constraint_relation_name(kind)).replace('_', ' ');
+}
+
+QString diagnostic_text(std::string_view value) {
+    auto result = text(value);
+    result.replace(QStringLiteral("fixed_arc_length"), QStringLiteral("Curve length"));
+    result.replace(QStringLiteral("fixed physical arc length"), QStringLiteral("Curve length"));
+    result.replace(QStringLiteral("Fixed arc length"), QStringLiteral("Curve length"));
+    return result;
+}
+
 QString exact_number(double value) {
     std::array<char, 768> buffer{};
     const auto result = std::to_chars(buffer.data(), buffer.data() + buffer.size(), value, std::chars_format::fixed);
@@ -181,7 +195,7 @@ public:
                 if (!decoded.constraint) continue;
                 const auto& owners = decoded.constraint->bindings;
                 if (std::any_of(owners.begin(), owners.end(), [&](const auto& b) { return b.owner_id == selected_id; }))
-                    existing->addItem(text(constraint_relation_name(decoded.constraint->relation)) +
+                    existing->addItem(relation_label(decoded.constraint->relation) +
                         QStringLiteral(" · ") + text(id), text(id));
             }
         }
@@ -190,10 +204,10 @@ public:
         relation->setObjectName(QStringLiteral("constraintRelation"));
         for (const auto kind : {ConstraintRelationKind::horizontal, ConstraintRelationKind::vertical,
             ConstraintRelationKind::coincident, ConstraintRelationKind::fixed_length,
-            ConstraintRelationKind::parallel, ConstraintRelationKind::perpendicular, ConstraintRelationKind::fixed_anchor})
-            relation->addItem(kind == ConstraintRelationKind::fixed_length ? QStringLiteral("Endpoint distance") :
-                text(constraint_relation_name(kind)).replace('_', ' '), static_cast<int>(kind));
-        relation->setToolTip(QStringLiteral("Direction relationships use endpoint chords. Endpoint distance is the straight distance between chosen points, including on curved objects. It does not lock arc length or tangency."));
+            ConstraintRelationKind::parallel, ConstraintRelationKind::perpendicular, ConstraintRelationKind::fixed_anchor,
+            ConstraintRelationKind::fixed_arc_length})
+            relation->addItem(relation_label(kind), static_cast<int>(kind));
+        relation->setToolTip(QStringLiteral("Curve length measures along a curved wall or boundary edge. Endpoint distance measures straight between points. Direction relationships use the straight line between endpoints."));
         form->addRow(QStringLiteral("Relationship"), relation);
         for (std::size_t index = 0; index < bindings.size(); ++index) {
             bindings[index] = new QComboBox(body);
@@ -264,8 +278,15 @@ public:
         QObject::connect(relation, &QComboBox::currentIndexChanged, owner, [this] { if (!loading) configure(false); });
         for (auto* field : {length, anchor_x, anchor_y})
             QObject::connect(field, &QLineEdit::textChanged, owner, [this] { invalidate(); });
-        for (auto* field : bindings)
-            QObject::connect(field, &QComboBox::currentIndexChanged, owner, [this] { invalidate(); });
+        for (std::size_t index = 0; index < bindings.size(); ++index)
+            QObject::connect(bindings[index], &QComboBox::currentIndexChanged, owner, [this, index] {
+                if (!loading && index == 0 && relation->currentData().toInt() == static_cast<int>(ConstraintRelationKind::fixed_arc_length)) {
+                    loading = true;
+                    prefillCurveTarget();
+                    loading = false;
+                }
+                invalidate();
+            });
         QObject::connect(anchor, &QComboBox::currentIndexChanged, owner, [this] { invalidate(); });
         QObject::connect(connected, &QCheckBox::toggled, owner, [this] { invalidate(); });
         source_freedom = stored_component_analysis(snapshot.entities(), {selected_id}, snapshot.revision());
@@ -286,7 +307,7 @@ public:
             try {
                 const auto decoded = decode_constraint_entity(found->second);
                 if (decoded.constraint)
-                    names.push_back(text(constraint_relation_name(decoded.constraint->relation)).replace('_', ' ') + QStringLiteral(" constraint"));
+                    names.push_back(relation_label(decoded.constraint->relation) + QStringLiteral(" constraint"));
             } catch (const std::exception&) { /* Unsupported semantics have their own diagnostic. */ }
         }
         return names.join(QStringLiteral(", "));
@@ -334,7 +355,7 @@ public:
             if (!analysis.conflicting_constraint_ids.empty())
                 details.push_back(phase + QStringLiteral(" conflicting stored relations: ") + stored_constraint_names(analysis.conflicting_constraint_ids, entities));
             for (const auto& diagnostic : analysis.diagnostics)
-                details.push_back(phase + QStringLiteral(" stored component: ") + text(diagnostic));
+                details.push_back(phase + QStringLiteral(" stored component: ") + diagnostic_text(diagnostic));
         };
         append_details(before, snapshot.entities(), QStringLiteral("Current"));
         if (after) append_details(*after, candidate->candidate_entities(), QStringLiteral("Proposed"));
@@ -379,6 +400,65 @@ public:
         for (std::size_t i = 0; i < endpoints.size(); ++i)
             if (endpoints[i] == value) { bindings[index]->setCurrentIndex(static_cast<int>(i)); return; }
         bindings[index]->setCurrentIndex(-1);
+    }
+
+    std::optional<Segment> bindingSegment(const WallEndpointBinding& binding) const {
+        const auto found = snapshot.entities().find(binding.owner_id);
+        if (found == snapshot.entities().end()) return std::nullopt;
+        if (found->second.type == "wall") return baseline(found->second);
+        const auto boundary = decode_identified_boundary_entity(found->second);
+        for (const auto& edge : boundary.segments)
+            if (edge.segment_id == binding.segment_id) return edge.segment;
+        return std::nullopt;
+    }
+
+    void selectAnchor(const WallEndpointBinding& binding) {
+        for (std::size_t index = 0; index < endpoints.size(); ++index)
+            if (endpoints[index] == binding) { anchor->setCurrentIndex(static_cast<int>(index)); return; }
+    }
+
+    void prefillCurveTarget() {
+        const auto index = bindings[0]->currentIndex();
+        if (index < 0 || static_cast<std::size_t>(index) >= endpoints.size()) return;
+        const auto first = endpoints[static_cast<std::size_t>(index)];
+        const auto segment = bindingSegment(first);
+        if (!segment) return;
+        for (const auto& other : endpoints)
+            if (other.owner_id == first.owner_id && other.segment_id == first.segment_id && other.role != first.role) {
+                selectBinding(1, other);
+                break;
+            }
+        selectAnchor(first);
+        length->setText(editable_dimension(segment_length(*segment), metric));
+    }
+
+    void selectCurveDefaults() {
+        const auto index = bindings[0]->currentIndex();
+        const auto current = index >= 0 && static_cast<std::size_t>(index) < endpoints.size()
+            ? std::optional<WallEndpointBinding>{endpoints[static_cast<std::size_t>(index)]} : std::nullopt;
+        const auto segment = current ? bindingSegment(*current) : std::nullopt;
+        if (!current || current->owner_id != selected_id || !segment || segment->sweep_radians == 0.0) {
+            for (const auto& endpoint : endpoints) {
+                if (endpoint.owner_id != selected_id || endpoint.role != WallEndpointRole::start) continue;
+                const auto edge = bindingSegment(endpoint);
+                if (edge && edge->sweep_radians != 0.0) { selectBinding(0, endpoint); break; }
+            }
+        }
+        prefillCurveTarget();
+    }
+
+    void prefillEndpointDistance() {
+        std::array<Vec2, 2> positions;
+        for (std::size_t index = 0; index < positions.size(); ++index) {
+            const auto selected = bindings[index]->currentIndex();
+            if (selected < 0 || static_cast<std::size_t>(selected) >= endpoints.size()) return;
+            const auto& endpoint = endpoints[static_cast<std::size_t>(selected)];
+            const auto segment = bindingSegment(endpoint);
+            if (!segment) return;
+            positions[index] = endpoint.role == WallEndpointRole::start ? segment->start : segment->end;
+        }
+        length->setText(editable_dimension(std::hypot(positions[1].x - positions[0].x,
+                                                   positions[1].y - positions[0].y), metric));
     }
 
     void configure(bool load_values) {
@@ -431,18 +511,29 @@ public:
         }
         const auto kind = static_cast<ConstraintRelationKind>(relation->currentData().toInt());
         const bool editing_relation = operation == 1 || operation == 2;
+        if (editing_relation && kind == ConstraintRelationKind::fixed_arc_length &&
+            (load_values || !configured_relation || *configured_relation != kind)) {
+            if (load_values && selected_constraint && selected_constraint->relation == kind) {
+                selectAnchor(selected_constraint->bindings.front());
+            } else selectCurveDefaults();
+        }
+        if (editing_relation && !load_values && kind == ConstraintRelationKind::fixed_length &&
+            configured_relation == ConstraintRelationKind::fixed_arc_length) prefillEndpointDistance();
         if (auto* label = qobject_cast<QLabel*>(form->labelForField(length)))
-            label->setText(wall_resize ? QStringLiteral("Wall length") : QStringLiteral("Endpoint distance"));
+            label->setText(wall_resize ? QStringLiteral("Wall length") : kind == ConstraintRelationKind::fixed_arc_length
+                ? QStringLiteral("Curve length") : QStringLiteral("Endpoint distance"));
         const auto count = kind == ConstraintRelationKind::fixed_anchor ? 1U :
             (kind == ConstraintRelationKind::parallel || kind == ConstraintRelationKind::perpendicular ? 4U : 2U);
         form->setRowVisible(existing, operation >= 2);
         form->setRowVisible(relation, editing_relation);
         for (std::size_t i = 0; i < bindings.size(); ++i) form->setRowVisible(bindings[i], editing_relation && i < count);
-        form->setRowVisible(length, operation == 0 || (editing_relation && kind == ConstraintRelationKind::fixed_length));
+        form->setRowVisible(length, operation == 0 || (editing_relation &&
+            (kind == ConstraintRelationKind::fixed_length || kind == ConstraintRelationKind::fixed_arc_length)));
         form->setRowVisible(anchor, operation != 3);
         form->setRowVisible(connected, operation != 3);
         form->setRowVisible(anchor_x, editing_relation && kind == ConstraintRelationKind::fixed_anchor);
         form->setRowVisible(anchor_y, editing_relation && kind == ConstraintRelationKind::fixed_anchor);
+        configured_relation = kind;
         loading = false;
         invalidate();
     }
@@ -480,8 +571,18 @@ public:
                     throw std::invalid_argument("Select every endpoint required by the relationship");
                 value.bindings.push_back(endpoints[static_cast<std::size_t>(index)]);
             }
-            if (value.relation == ConstraintRelationKind::fixed_length)
+            if (value.relation == ConstraintRelationKind::fixed_arc_length) {
+                const auto& first = value.bindings[0];
+                const auto& second = value.bindings[1];
+                const auto segment = bindingSegment(first);
+                if (first.owner_id != second.owner_id || first.segment_id != second.segment_id ||
+                    first.role == second.role || !segment || segment->sweep_radians == 0.0)
+                    throw std::invalid_argument("Choose both ends of the same curved wall or boundary edge for Curve length");
+            }
+            if (value.relation == ConstraintRelationKind::fixed_length || value.relation == ConstraintRelationKind::fixed_arc_length)
                 value.length = parse_quantity(length->text().toStdString(), unit);
+            if (value.relation == ConstraintRelationKind::fixed_arc_length)
+                (void)resolve_constraint_arc_segment(value, snapshot.entities());
             if (value.relation == ConstraintRelationKind::fixed_anchor)
                 value.anchor = Vec2{parse_quantity(anchor_x->text().toStdString(), unit).metres,
                                     parse_quantity(anchor_y->text().toStdString(), unit).metres};
@@ -498,7 +599,7 @@ public:
             auto candidate = preview_constraint_authoring(snapshot, command);
             if (!candidate.accepted()) {
                 QStringList reasons;
-                for (const auto& diagnostic : candidate.diagnostics()) reasons.push_back(text(diagnostic));
+                for (const auto& diagnostic : candidate.diagnostics()) reasons.push_back(diagnostic_text(diagnostic));
                 throw std::invalid_argument(reasons.join(QStringLiteral("\n")).toStdString());
             }
             validate_solids(candidate);
@@ -564,12 +665,12 @@ public:
             if (preview->changed_walls().size() > 3)
                 summary.push_back(QStringLiteral("%1 more walls are listed in the preview details.").arg(preview->changed_walls().size() - 3));
             for (const auto& diagnostic : preview->diagnostics())
-                summary.push_back(QStringLiteral("Edit preview: ") + text(diagnostic));
+                summary.push_back(QStringLiteral("Edit preview: ") + diagnostic_text(diagnostic));
             summary.push_back(QStringLiteral("Apply records one undoable command."));
             status->setPlainText(summary.join('\n'));
             return true;
         } catch (const std::exception& exception) {
-            error = QString::fromUtf8(exception.what());
+            error = diagnostic_text(exception.what());
             status->setStyleSheet(status->palette().color(QPalette::Window).lightness() < 128
                 ? QStringLiteral("color:#ffb4a2;") : QStringLiteral("color:#9f1b11;"));
             status->setPlainText(QStringLiteral("Edit preview: ") +
@@ -600,6 +701,7 @@ public:
     std::vector<WallEndpointBinding> endpoints;
     QStringList endpoint_labels;
     std::optional<PersistentConstraint> selected_constraint;
+    std::optional<ConstraintRelationKind> configured_relation;
     std::optional<ConstraintAuthoringPreview> preview, accepted;
     PersistentConstraintComponentAnalysis source_freedom;
     QString error;

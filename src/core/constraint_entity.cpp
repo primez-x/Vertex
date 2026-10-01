@@ -1,4 +1,5 @@
 #include "sketch/constraint_entity.hpp"
+#include "sketch/boundary_entity.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -164,6 +165,7 @@ std::optional<ConstraintRelationKind> relation_from_name(std::string_view name) 
     if (name == "fixed_anchor") {
         return ConstraintRelationKind::fixed_anchor;
     }
+    if (name == "fixed_arc_length") return ConstraintRelationKind::fixed_arc_length;
     return std::nullopt;
 }
 
@@ -183,6 +185,7 @@ std::size_t expected_binding_count(ConstraintRelationKind relation) {
         case ConstraintRelationKind::vertical:
         case ConstraintRelationKind::coincident:
         case ConstraintRelationKind::fixed_length:
+        case ConstraintRelationKind::fixed_arc_length:
             return 2;
         case ConstraintRelationKind::parallel:
         case ConstraintRelationKind::perpendicular:
@@ -454,7 +457,7 @@ void validate_semantics(const json& properties, ConstraintRelationKind relation,
     const bool has_quantity_entries = properties.contains("quantity_entries");
     const bool has_anchor = properties.contains("anchor_m");
 
-    if (relation == ConstraintRelationKind::fixed_length) {
+    if (relation == ConstraintRelationKind::fixed_length || relation == ConstraintRelationKind::fixed_arc_length) {
         if (!has_length || !has_quantity_entries) {
             invalid("fixed length constraint requires length_m and quantity_entries");
         }
@@ -549,6 +552,7 @@ void validate_model(const PersistentConstraint& constraint) {
 
     switch (constraint.relation) {
         case ConstraintRelationKind::fixed_length:
+        case ConstraintRelationKind::fixed_arc_length:
             if (!constraint.length.has_value()) {
                 invalid("fixed length constraint requires an exact quantity");
             }
@@ -577,6 +581,12 @@ void validate_model(const PersistentConstraint& constraint) {
                 invalid("constraint contains semantic fields for the wrong relation");
             }
             break;
+    }
+    if (constraint.relation==ConstraintRelationKind::fixed_arc_length) {
+        const auto& first=constraint.bindings.at(0); const auto& second=constraint.bindings.at(1);
+        if (first.owner_id!=second.owner_id || first.role==second.role || first.segment_id!=second.segment_id ||
+            (!first.segment_id.empty() && first.vertex_id==second.vertex_id))
+            invalid("Fixed arc length requires opposite endpoints of the same curved segment");
     }
 }
 
@@ -658,6 +668,8 @@ std::string_view constraint_relation_name(ConstraintRelationKind relation) {
             return "perpendicular";
         case ConstraintRelationKind::fixed_anchor:
             return "fixed_anchor";
+        case ConstraintRelationKind::fixed_arc_length:
+            return "fixed_arc_length";
     }
     invalid("unknown constraint relation kind");
 }
@@ -685,7 +697,11 @@ ConstraintEntityDecodeResult decode_constraint_entity(const Entity& entity) {
     }
 
     const auto relation = relation_from_name(relation_text);
-    if ((version == 1 || version == 2) && relation) {
+    const bool known=relation && ((version==3 && *relation==ConstraintRelationKind::fixed_arc_length) ||
+        ((version==1 || version==2) && *relation!=ConstraintRelationKind::fixed_arc_length));
+    if (known) {
+        if (version==3 && (!properties.contains("entity_ids") || properties.contains("wall_ids")))
+            invalid("Fixed arc length version three requires generic entity_ids owners");
         const auto& bindings = required_property(properties, "bindings");
         if (!bindings.is_array() || bindings.size() != expected_binding_count(*relation))
             invalid("constraint has the wrong number of endpoint bindings");
@@ -698,7 +714,7 @@ ConstraintEntityDecodeResult decode_constraint_entity(const Entity& entity) {
     }
     (void)decode_wall_ids(properties, binding_owners);
 
-    if ((version != 1 && version != 2) || !relation.has_value()) {
+    if (!known) {
         std::string reason;
         if (version != 1) {
             reason = "unsupported constraint entity version";
@@ -709,6 +725,7 @@ ConstraintEntityDecodeResult decode_constraint_entity(const Entity& entity) {
             }
             reason += "unsupported constraint relation";
         }
+        if (reason.empty()) reason="unsupported constraint relation for this entity version";
         return ConstraintEntityDecodeResult{
             .constraint = std::nullopt,
             .unsupported_reason = std::move(reason),
@@ -728,6 +745,7 @@ ConstraintEntityDecodeResult decode_constraint_entity(const Entity& entity) {
     result.relation = *relation;
     result.bindings = bindings;
     validate_semantics(properties, *relation, result);
+    validate_model(result);
     return ConstraintEntityDecodeResult{
         .constraint = std::move(result),
         .unsupported_reason = {},
@@ -768,13 +786,15 @@ Entity encode_constraint_entity(const PersistentConstraint& constraint, const En
     auto& properties = result.properties;
     const bool boundary = std::any_of(constraint.bindings.begin(), constraint.bindings.end(),
         [](const auto& b) { return !b.segment_id.empty(); });
-    properties["version"] = boundary ? 2 : 1;
+    const bool arc=constraint.relation==ConstraintRelationKind::fixed_arc_length;
+    const bool generic=boundary || arc;
+    properties["version"] = arc ? 3 : boundary ? 2 : 1;
     properties["relation"] = std::string(constraint_relation_name(constraint.relation));
     properties["bindings"] = encode_bindings(constraint.bindings, original_bindings);
-    properties.erase(boundary ? "wall_ids" : "entity_ids");
-    properties[boundary ? "entity_ids" : "wall_ids"] = encode_wall_ids(constraint.bindings);
+    properties.erase(generic ? "wall_ids" : "entity_ids");
+    properties[generic ? "entity_ids" : "wall_ids"] = encode_wall_ids(constraint.bindings);
 
-    if (constraint.relation == ConstraintRelationKind::fixed_length) {
+    if (constraint.relation == ConstraintRelationKind::fixed_length || arc) {
         properties["length_m"] = constraint.length->metres;
         auto entries = json::object();
         const auto found = properties.find("quantity_entries");
@@ -794,6 +814,62 @@ Entity encode_constraint_entity(const PersistentConstraint& constraint, const En
         remove_length_semantics(properties);
         properties.erase("anchor_m");
     }
+    return result;
+}
+
+Segment resolve_constraint_arc_segment(const PersistentConstraint& constraint,
+    const std::map<std::string,Entity,std::less<>>& entities) {
+    validate_model(constraint);
+    if (constraint.relation!=ConstraintRelationKind::fixed_arc_length)
+        invalid("Arc segment resolution requires a fixed arc length relation");
+    const auto& first=constraint.bindings.at(0); const auto& second=constraint.bindings.at(1);
+    const auto found=entities.find(first.owner_id);
+    if (found==entities.end()) invalid("Fixed arc length owner is missing");
+    Segment segment;
+    if (first.segment_id.empty()) {
+        const auto& owner=found->second;
+        if (owner.type!="wall" || !owner.properties.contains("baseline") ||
+            !owner.properties.contains("thickness_m") || !owner.properties.contains("height_m") ||
+            !owner.properties.contains("elevation_m"))
+            invalid("Fixed arc length requires a genuine curved wall baseline");
+        if (!(json_finite_double(owner.properties.at("thickness_m"),"Wall thickness must be finite")>0) ||
+            !(json_finite_double(owner.properties.at("height_m"),"Wall height must be finite")>0))
+            invalid("Fixed arc length wall dimensions must be positive");
+        (void)json_finite_double(owner.properties.at("elevation_m"),"Wall elevation must be finite");
+        const auto& baseline=owner.properties.at("baseline");
+        const auto position=[&](const char* key) {
+            const auto& value=baseline.at(key);
+            if (!value.is_array() || value.size()!=2) invalid("Fixed arc length baseline endpoint is malformed");
+            return Vec2{json_finite_double(value.at(0),"Arc endpoint must be finite"),
+                json_finite_double(value.at(1),"Arc endpoint must be finite")};
+        };
+        segment={position("start"),position("end"),json_finite_double(baseline.at("sweep_radians"),"Arc sweep must be finite")};
+    } else {
+        const auto boundary=decode_identified_boundary_entity(found->second);
+        const auto edge=std::find_if(boundary.segments.begin(),boundary.segments.end(),
+            [&](const auto& value) { return value.segment_id==first.segment_id; });
+        if (edge==boundary.segments.end()) invalid("Fixed arc length stable boundary segment is missing");
+        for (const auto* binding : {&first,&second})
+            if ((binding->role==WallEndpointRole::start ? edge->start_vertex_id : edge->end_vertex_id)!=binding->vertex_id)
+                invalid("Fixed arc length stable boundary vertex does not match its endpoint");
+        segment=edge->segment;
+    }
+    if (segment.sweep_radians==0) invalid("Fixed arc length requires a genuinely curved segment, not endpoint distance");
+    (void)arc_from_chord_angle(segment.start,segment.end,segment.sweep_radians);
+    (void)segment_length(segment);
+    return segment;
+}
+
+double constraint_arc_chord_target(const PersistentConstraint& constraint,
+    const std::map<std::string,Entity,std::less<>>& entities) {
+    const auto segment=resolve_constraint_arc_segment(constraint,entities);
+    const long double sweep=std::abs(static_cast<long double>(segment.sweep_radians));
+    const long double chord=static_cast<long double>(constraint.length->metres)*(2*std::sin(sweep/2)/sweep);
+    if (!std::isfinite(chord) || chord<=default_geometry_tolerance_metres ||
+        chord>std::numeric_limits<double>::max()) invalid("Fixed arc length chord target is outside the supported range");
+    const auto result=static_cast<double>(chord);
+    if (!std::isfinite(result) || result<=default_geometry_tolerance_metres)
+        invalid("Fixed arc length chord target is outside the supported range");
     return result;
 }
 

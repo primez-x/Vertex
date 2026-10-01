@@ -260,7 +260,7 @@ decode_supported_constraints(const Entities& entities) {
     return result;
 }
 
-void append_relation(ConstraintSolveRequest& request, const PersistentConstraint& value) {
+void append_relation(ConstraintSolveRequest& request, const PersistentConstraint& value,const Entities& entities) {
     const auto id = value.id;
     const auto point_at = [&](std::size_t index) { return point_id(value.bindings.at(index)); };
     switch (value.relation) {
@@ -279,6 +279,10 @@ void append_relation(ConstraintSolveRequest& request, const PersistentConstraint
             }
             request.constraints.push_back(
                 FixedLengthConstraint{id, point_at(0), point_at(1), value.length->metres});
+            break;
+        case ConstraintRelationKind::fixed_arc_length:
+            request.constraints.push_back(FixedLengthConstraint{id,point_at(0),point_at(1),
+                constraint_arc_chord_target(value,entities)});
             break;
         case ConstraintRelationKind::parallel:
             request.constraints.push_back(
@@ -384,6 +388,9 @@ std::string relation_description(const Entities& entities,
             return "fixed length (" + measured + ") between " + point_at(0) + " and " +
                 point_at(1);
         }
+        case ConstraintRelationKind::fixed_arc_length:
+            return "fixed physical arc length ("+constraint.length->original_expression+") on "+
+                wall_display_name(entities,constraint.bindings.at(0).owner_id);
         case ConstraintRelationKind::parallel:
             return "parallel relation between " +
                 segment_description(entities, constraint.bindings.at(0),
@@ -678,7 +685,7 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(
         for (const auto& [id, value] : constraints) {
             if (!value.bindings.empty() && affected.contains(value.bindings.front().owner_id)) {
                 for (const auto& binding : value.bindings) (void)resolve(binding);
-                append_relation(request, value);
+                append_relation(request, value,candidate);
                 persistent_ids.insert(id);
                 constraint_descriptions.emplace(id, relation_description(candidate, value));
             }
@@ -1068,7 +1075,7 @@ PersistentConstraintComponentAnalysis analyze_persistent_constraint_component(
         for (const auto& item : relations) {
             if (!item.relation || !affected.contains(item.relation->bindings.front().owner_id)) continue;
             for (const auto& binding : item.relation->bindings) resolve(binding);
-            append_relation(request, *item.relation);
+            append_relation(request, *item.relation,entities);
             descriptions.emplace(item.id, std::string(constraint_relation_name(item.relation->relation)) +
                 " persisted relation " + item.id);
         }

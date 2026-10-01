@@ -38,10 +38,23 @@ codec and document command validation must also cover nested endpoint bindings
 and prevent deletion of referenced geometry without an explicit compound edit.
 
 The supported relations in the existing adapter are horizontal, vertical,
-coincident, endpoint distance, parallel, perpendicular and fixed anchor. Curved
-endpoints use the same point/chord meanings and retain their signed sweep.
-Physical arc-length locks, tangent relationships and the level dependency graph
-remain separate required work; point solving never flattens a curved wall.
+coincident, endpoint distance, parallel, perpendicular, fixed anchor and physical
+curve length. Endpoint distance and direction relationships retain their
+point/chord meanings. Curve length applies to opposite endpoints of one genuine
+curved wall or identified edge and preserves its signed sweep. Tangent
+relationships and the level dependency graph remain separate required work;
+point solving never flattens a curved wall.
+
+The Curve length relation uses version-3 constraint semantics and an exact
+positive length quantity. At a fixed sweep its solver target is the equivalent
+chord length, but independent integrity validation measures the analytical arc.
+The dialog distinguishes it from Endpoint distance, prefills the selected curved
+edge's physical length, and previews an anchored change before Apply. Editing its
+target changes geometry; removing it preserves geometry. Straight segments or
+unrelated endpoint pairs cannot masquerade as an arc-length relationship.
+Retained relations require project format 12 and exchange version 9. Direct
+curved-wall resize receipts remain a separate gap; this relation workflow does
+not change the existing straight-wall resize operation.
 
 ## Preview and commit
 

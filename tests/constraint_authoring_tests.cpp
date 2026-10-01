@@ -1601,6 +1601,154 @@ void test_boundary_resize_canonical_shape_and_related_owners() {
         "boundary resize must refuse unresolved explicit drawing context");
 }
 
+void test_physical_arc_length_authoring_and_connected_editing() {
+    for (const auto sweep : {0.6,-0.6,4.0,-4.0}) {
+        const auto measured=parse_quantity("7 m");
+        const auto chord=measured.metres*2*std::sin(std::abs(sweep)/2)/std::abs(sweep);
+        auto owner=wall("arc",{0,0},{chord,0},sweep);
+        const auto angle=angle_from_radians(sweep);
+        owner.extensions["curve_input"]={{"version",2},{"construction","arc_length"},
+            {"measure",measured.original_expression},{"normalized_measure",format_quantity(measured,Unit::metre)},
+            {"measure_value",measured.metres},{"clockwise",sweep<0},{"start",{0,0}},{"end",{chord,0}},
+            {"radians",sweep},{"sweep",angle.original_expression},{"normalized_sweep",angle.normalized_expression},
+            {"vendor","original measured curve"}};
+        const auto source_input=owner.extensions.at("curve_input");
+        require_near(segment_length(baseline(owner)),measured.metres,1e-10,
+            "physical fixture source does not reproduce its measured arc receipt");
+        auto level=relation("level",ConstraintRelationKind::horizontal,
+            {endpoint("arc",WallEndpointRole::start),endpoint("arc",WallEndpointRole::end)});
+        auto join=relation("join",ConstraintRelationKind::coincident,
+            {endpoint("arc",WallEndpointRole::end),endpoint("neighbor",WallEndpointRole::start)});
+        auto document=Document::create({owner,wall("neighbor",{chord,0},{chord+3,0}),opening("door","arc",0.3,0.5),
+            encode_constraint_entity(level),encode_constraint_entity(join)});
+        const auto before=document.snapshot();
+        auto physical=relation("physical",ConstraintRelationKind::fixed_arc_length,
+            {endpoint("arc",WallEndpointRole::start),endpoint("arc",WallEndpointRole::end)});
+        physical.length=parse_quantity("5 m");
+        ConstraintAuthoringIntent intent;
+        intent.relation_anchor=endpoint("arc",WallEndpointRole::start);
+        intent.relation_mutations={ConstraintRelationMutation::upsert(physical)};
+        const auto preview=preview_constraint_authoring(before,intent);
+        require_accepted(preview,"anchored physical minor/major arc length authoring rejected");
+        const auto changed=baseline(preview.candidate_entities().at("arc"));
+        require(changed.sweep_radians==sweep && changed.start.x==0 && changed.start.y==0,
+            "physical arc solve changed signed sweep or anchor");
+        require_near(segment_length(changed),5,1e-6,"physical target was solved as endpoint distance");
+        require(std::abs(length(changed)-5)>0.01,"physical length was confused with chord length");
+        require_near(baseline(preview.candidate_entities().at("neighbor")).start.x,changed.end.x,1e-6,
+            "connected neighbor did not follow physical arc edit");
+        require(preview.candidate_entities().at("arc").extensions.at("curve_input_derivation").at("source_input")==source_input,
+            "physical arc edit lost original curve measurement/metadata");
+        require(preview.candidate_entities().at("door")==before.entities().at("door"),"physical arc edit rewrote hosted opening");
+        (void)apply_constraint_authoring(document,preview);
+        const auto after=document.snapshot();
+        require(after.history().size()==before.history().size()+1,"physical arc solve must be one command");
+        const auto analysis=analyze_persistent_constraint_component(after,{"arc"});
+        require(analysis.supported && analysis.conflicting_constraint_ids.empty(),"persisted physical arc DOF analysis rejected");
+        require(Document::fork(after).snapshot().entities()==after.entities(),"physical arc history proof cannot replay");
+        document.undo(document.revision()); require(document.snapshot().entities()==before.entities(),"physical arc undo lost atomicity");
+        document.redo(document.revision()); require(document.snapshot().entities()==after.entities(),"physical arc redo differs");
+        physical.length=parse_quantity("6 m");
+        intent.relation_mutations={ConstraintRelationMutation::upsert(physical)};
+        const auto edited=preview_constraint_authoring(document.snapshot(),intent);
+        require_accepted(edited,"editing physical arc target with anchor rejected");
+        require_near(segment_length(baseline(edited.candidate_entities().at("arc"))),6,1e-6,"edited physical target not applied");
+        (void)apply_constraint_authoring(document,edited);
+        auto incompatible=relation("chord-lock",ConstraintRelationKind::fixed_length,physical.bindings);
+        incompatible.length=parse_quantity("6 m");
+        intent.relation_mutations={ConstraintRelationMutation::upsert(incompatible)};
+        const auto conflict=preview_constraint_authoring(document.snapshot(),intent);
+        require(!conflict.accepted(),"contradictory physical arc/chord lengths accepted");
+        require_rejected_unchanged(document,conflict,"contradictory arc apply must reject atomically");
+    }
+    for (const auto sweep : {0.6,-0.6}) {
+        auto owner=encode_identified_boundary_entity(IdentifiedBoundary{"outline","measurement_boundary",{
+            {"ab","a","b",{{0,0},{4,0},sweep}}, {"bc","b","c",{{4,0},{4,3},0}},
+            {"cd","c","d",{{4,3},{0,3},0}}, {"da","d","a",{{0,3},{0,0},0}}}});
+        owner.extensions["vendor"]="retained";
+        auto document=Document::create({owner});
+        const auto before=document.snapshot();
+        auto physical=relation("physical",ConstraintRelationKind::fixed_arc_length,
+            {{"outline",WallEndpointRole::start,"ab","a"},{"outline",WallEndpointRole::end,"ab","b"}});
+        physical.length=parse_quantity("5 m");
+        ConstraintAuthoringIntent intent;
+        intent.relation_anchor=physical.bindings.front();
+        intent.relation_mutations={ConstraintRelationMutation::upsert(physical)};
+        const auto preview=preview_constraint_authoring(before,intent);
+        require_accepted(preview,"stable identified boundary physical arc edit rejected");
+        const auto boundary=decode_identified_boundary_entity(preview.candidate_entities().at("outline"));
+        require(boundary.segments[0].segment_id=="ab" && boundary.segments[0].start_vertex_id=="a" &&
+            boundary.segments[0].end_vertex_id=="b" && boundary.segments[0].segment.sweep_radians==sweep,
+            "physical boundary edit changed stable IDs or signed sweep");
+        require_near(segment_length(boundary.segments[0].segment),5,1e-6,"boundary physical length differs");
+        (void)apply_constraint_authoring(document,preview);
+        require(document.snapshot().entities().at("outline").extensions==owner.extensions,"boundary arc metadata lost");
+        require(Document::fork(document.snapshot()).snapshot().entities()==document.snapshot().entities(),"boundary arc proof cannot replay");
+        physical.bindings[1].vertex_id="c";
+        intent.relation_mutations={ConstraintRelationMutation::upsert(physical)};
+        require(!preview_constraint_authoring(document.snapshot(),intent).accepted(),"physical arc accepted wrong stable endpoint");
+    }
+    auto straight=Document::create({wall("straight",{0,0},{4,0})});
+    auto invalid_arc=relation("physical",ConstraintRelationKind::fixed_arc_length,
+        {endpoint("straight",WallEndpointRole::start),endpoint("straight",WallEndpointRole::end)});
+    invalid_arc.length=parse_quantity("5 m");
+    ConstraintAuthoringIntent invalid_intent;
+    invalid_intent.relation_mutations={ConstraintRelationMutation::upsert(invalid_arc)};
+    const auto rejected=preview_constraint_authoring(straight.snapshot(),invalid_intent);
+    require(!rejected.accepted() && has_diagnostic(rejected,"genuinely curved"),"straight owner lacks clear physical arc refusal");
+    require_rejected_unchanged(straight,rejected,"straight physical arc apply accepted");
+}
+
+void test_physical_arc_length_conditioning_at_near_full_turn_and_translated_origin() {
+    const auto pi=std::acos(-1.0);
+    for (const bool near_full : {true,false}) for (const double sign : {-1.0,1.0}) {
+        const auto sweep=sign*(near_full ? 2*pi-1e-5 : 0.6);
+        const auto chord=7*2*std::sin(std::abs(sweep)/2)/std::abs(sweep);
+        const Vec2 start=near_full ? Vec2{0,0} : Vec2{1e6,-1e6};
+        auto owner=wall("arc",start,{start.x+chord,start.y},sweep);
+        require_near(segment_length(baseline(owner)),7,1e-6,
+            "conditioning fixture source does not independently measure seven metres");
+        auto level=relation("level",ConstraintRelationKind::horizontal,
+            {endpoint("arc",WallEndpointRole::start),endpoint("arc",WallEndpointRole::end)});
+        auto document=Document::create({owner,encode_constraint_entity(level)});
+        document.mark_saved(document.revision());
+        const auto before=document.snapshot();
+        auto physical=relation("physical",ConstraintRelationKind::fixed_arc_length,level.bindings);
+        physical.length=parse_quantity("5 m");
+        ConstraintAuthoringIntent intent;
+        intent.relation_anchor=physical.bindings.front();
+        intent.relation_mutations={ConstraintRelationMutation::upsert(physical)};
+        const auto preview=preview_constraint_authoring(before,intent);
+        require_accepted(preview,near_full ? "near-full physical arc solve rejected" : "translated physical arc solve rejected");
+        require(document.snapshot().entities()==before.entities() && document.revision()==before.revision() &&
+            document.snapshot().saved_revision_optional()==before.saved_revision_optional() &&
+            document.snapshot().history().size()==before.history().size(),"conditioning preview mutated source");
+        const auto proposed=baseline(preview.candidate_entities().at("arc"));
+        require(proposed.start.x==start.x && proposed.start.y==start.y && proposed.sweep_radians==sweep,
+            "conditioned physical arc solve changed exact anchor or sweep");
+        require_near(segment_length(proposed),5,1e-6,"conditioned proposed physical length exceeds admission tolerance");
+        (void)apply_constraint_authoring(document,preview);
+        require(Document::fork(document.snapshot()).snapshot().entities()==document.snapshot().entities(),
+            "conditioned physical arc proof cannot replay");
+    }
+    // A well-formed source can have a target chord below the geometric range;
+    // that refusal must be explicit and cannot be disguised as solver success.
+    auto document=Document::create({wall("arc",{0,0},{4,0},2*pi-1e-12)});
+    auto physical=relation("physical",ConstraintRelationKind::fixed_arc_length,
+        {endpoint("arc",WallEndpointRole::start),endpoint("arc",WallEndpointRole::end)});
+    physical.length=parse_quantity("5 m");
+    ConstraintAuthoringIntent intent;
+    intent.relation_anchor=physical.bindings.front();
+    intent.relation_mutations={ConstraintRelationMutation::upsert(physical)};
+    const auto before=document.snapshot();
+    const auto rejected=preview_constraint_authoring(before,intent);
+    require(!rejected.accepted() && has_diagnostic(rejected,"chord target is outside the supported range"),
+        "unrepresentable physical target lacks explicit range diagnosis");
+    require(document.snapshot().entities()==before.entities() && document.revision()==before.revision(),
+        "unrepresentable physical target preview mutated source");
+    require_rejected_unchanged(document,rejected,"unrepresentable physical target Apply accepted");
+}
+
 void test_curved_endpoint_relations_and_typed_propagation() {
     for (const auto kind : {ConstraintRelationKind::horizontal, ConstraintRelationKind::vertical,
             ConstraintRelationKind::coincident, ConstraintRelationKind::fixed_length,
@@ -1841,6 +1989,8 @@ int main() {
     sketch::testing::noninteractive_errors();
     try {
         test_straight_wall_only_authoring_retains_guarded_typed_intent();
+        test_physical_arc_length_authoring_and_connected_editing();
+        test_physical_arc_length_conditioning_at_near_full_turn_and_translated_origin();
         test_curved_endpoint_relations_and_typed_propagation();
         test_boundary_vertex_move_propagates_explicit_relations();
         test_boundary_resize_canonical_shape_and_related_owners();

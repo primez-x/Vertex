@@ -85,13 +85,18 @@ std::uint32_t ProjectStore::required_format_version(const DocumentSnapshot& snap
             if (command.boundary_edits.empty() && !command.wall_edits.empty() &&
                 std::none_of(command.wall_edits.begin(), command.wall_edits.end(),
                     [](const auto& edit) { return edit.version == 2; }))
-                required = 11;
+                required = std::max(required, 11U);
             for (const auto& edit : revision.boundary_constraint_changes->wall_edits)
                 if (edit.version == 2) required = std::max(required, 10U);
         }
         if (revision.boundary_translations) required = std::max(required, 9U);
         for (const auto& [id, entity] : revision.entities) {
             (void)id;
+            if (entity.type == "constraint") {
+                const auto decoded = decode_constraint_entity(entity);
+                if (decoded.constraint && decoded.version == 3)
+                    required = std::max(required, 12U);
+            }
             if (constraint_binds_curved_segment(entity, revision.entities)) required = std::max(required, 10U);
             // The reserved envelope is semantic on a wall even when it was
             // imported without its originating command history. Generic
@@ -1422,6 +1427,7 @@ bool verify_sqlite_schema(sqlite3* database, bool allow_recovery = false) {
          sqlite3_column_int(user_version.get(), 0) != 9 &&
          sqlite3_column_int(user_version.get(), 0) != 10 &&
          sqlite3_column_int(user_version.get(), 0) != 11 &&
+         sqlite3_column_int(user_version.get(), 0) != 12 &&
          !(allow_recovery && sqlite3_column_int(user_version.get(), 0) == 4))) {
         storage_error(StorageErrorCode::unsupported_format,
                       "unsupported SQLite project user_version");
@@ -1631,11 +1637,11 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
                                std::string* verified_digest = nullptr) {
     const auto format = required_metadata(database, "format_version");
     if (format != "1" && format != "2" && format != "3" && format != "5" &&
-        format != "6" && format != "7" && format != "8" && format != "9" && format != "10" && format != "11" && !(recovery && format == "4")) {
+        format != "6" && format != "7" && format != "8" && format != "9" && format != "10" && format != "11" && format != "12" && !(recovery && format == "4")) {
         storage_error(StorageErrorCode::unsupported_format,
                       "unsupported project format version: " + format);
     }
-    const auto format_number = format == "11" ? 11U : format == "10" ? 10U : format == "9" ? 9U : format == "8" ? 8U : format == "7" ? 7U : (format == "6" ? 6U :
+    const auto format_number = format == "12" ? 12U : format == "11" ? 11U : format == "10" ? 10U : format == "9" ? 9U : format == "8" ? 8U : format == "7" ? 7U : (format == "6" ? 6U :
         (format == "5" ? 5U : (format == "4" ? 4U : (format == "3" ? 3U :
         (format == "2" ? 2U : 1U)))));
     Statement format_marker(database, "PRAGMA user_version");
@@ -1844,7 +1850,7 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
 
     const auto required_format = ProjectStore::required_format_version(snapshot);
     if (required_format > format_number) {
-        const auto reason = required_format >= 11 ? "straight wall-only endpoint proof" : required_format >= 10 ? "curved endpoint constraint or wall proof" : required_format >= 9 ? "boundary translation group" : required_format >= 8 ? "boundary constraint changes" : required_format >= 7 ? "boundary geometry edit" :
+        const auto reason = required_format >= 12 ? "physical arc-length constraint" : required_format >= 11 ? "straight wall-only endpoint proof" : required_format >= 10 ? "curved endpoint constraint or wall proof" : required_format >= 9 ? "boundary translation group" : required_format >= 8 ? "boundary constraint changes" : required_format >= 7 ? "boundary geometry edit" :
             required_format >= 6 ? "boundary transform" : required_format >= 5 ? "boundary translation" : required_format >= 3 ? "boundary_authoring" :
                             "identified boundary, dimension or boundary draft";
         storage_error(StorageErrorCode::unsupported_format,

@@ -105,9 +105,10 @@ public:
     // proofs require v7; boundary constraint transactions require v8; atomic
     // boundary translation groups require v9. Curved wall proofs and known
     // constraints bound to curved segments require v10; straight wall-only
-    // endpoint command proofs require v11. Any may include
+    // endpoint command proofs require v11; physical arc-length constraints
+    // require v12. Any may include
     // the optional recovery ledger. Absent proofs preserve historical formats.
-    static constexpr std::uint32_t format_version = 11;
+    static constexpr std::uint32_t format_version = 12;
     static constexpr std::uint32_t recovery_format_version = 4;
     [[nodiscard]] static std::uint32_t required_format_version(const DocumentSnapshot& snapshot);
     static constexpr std::uint64_t maximum_file_bytes = 4ULL * 1024ULL * 1024ULL * 1024ULL;

@@ -85,6 +85,7 @@ struct ConstraintRelationMutation {
 // Removal-only intents always preserve geometry. Connected movement includes
 // identified boundary owners reached through explicit relations. Orientation
 // relations use endpoint/chord directions; fixed_length is endpoint distance.
+// fixed_arc_length measures one curved segment at its unchanged signed sweep.
 struct ConstraintAuthoringIntent {
     std::optional<WallResizeIntent> wall_resize;
     std::vector<ConstraintRelationMutation> relation_mutations;

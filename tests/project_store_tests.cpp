@@ -22,12 +22,14 @@
 #include <array>
 #include <atomic>
 #include <barrier>
+#include <cmath>
 #include <fstream>
 #include <iterator>
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
 #include <memory>
+#include <numbers>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -1132,6 +1134,85 @@ sketch::PersistentConstraint horizontal_curve_constraint() {
     return relation;
 }
 
+void test_physical_arc_length_history_requires_v12() {
+    TempDirectory temp;
+    auto wall = curved_constraint_wall();
+    const auto pi = std::numbers::pi;
+    wall.properties["baseline"] = {{"start", {0.0, 0.0}},
+        {"end", {8.0 / pi, 0.0}}, {"sweep_radians", pi}};
+    sketch::PersistentConstraint relation;
+    relation.id = "physical-curve-length";
+    relation.relation = sketch::ConstraintRelationKind::fixed_arc_length;
+    relation.bindings = {{wall.id, sketch::WallEndpointRole::start},
+                         {wall.id, sketch::WallEndpointRole::end}};
+    relation.length = sketch::parse_quantity("4 m");
+    const auto encoded = sketch::encode_constraint_entity(relation);
+    require(encoded.properties.at("version") == 3, "physical arc length must use entity version three");
+    auto document = Document::create({wall, encoded});
+    const auto initial = document.snapshot().entities();
+    require(ProjectStore::required_format_version(document.snapshot()) == 12,
+            "physical arc-length state must require v12 without an edit proof");
+    relation.length = sketch::parse_quantity("6 m");
+    sketch::ApplyBoundaryConstraintChanges command{0, {},
+        {EntityChange::upsert(sketch::encode_constraint_entity(relation))}, "Edit curve length"};
+    command.wall_edits.push_back({wall.id, {{0, 0}, {12.0 / pi, 0}, pi}, std::nullopt, 2});
+    document.apply(command);
+    const auto edited = document.snapshot().entities();
+    document.undo(document.revision());
+    const auto file = temp.path / "physical-curve-length-v12.bldproj";
+    (void)ProjectStore::save(file, document.snapshot());
+    auto loaded = ProjectStore::load(file);
+    require(loaded.document.snapshot().entities() == initial && loaded.document.can_redo(),
+            "physical arc-length undo and redo navigation must reopen exactly");
+    loaded.document.redo(loaded.document.revision());
+    require(loaded.document.snapshot().entities() == edited,
+            "reopened physical arc-length command must replay exact geometry and quantity");
+    const auto decoded = sketch::decode_constraint_entity(loaded.document.snapshot().entities().at(relation.id));
+    require(decoded.version == 3 && decoded.constraint->length->original_expression == "6 m",
+            "physical target and its exact entry must survive reopening");
+    loaded.document.apply(ApplyEntityChanges{loaded.document.revision(),
+        {EntityChange::erase(relation.id), EntityChange::erase(wall.id)}, {}, "Delete curve"});
+    // A later straight-only command must not lower the retained v12 reader floor.
+    auto straight = curved_constraint_wall();
+    straight.id = "later-straight";
+    straight.properties["baseline"]["sweep_radians"] = 0;
+    loaded.document.apply(ApplyEntityChanges{loaded.document.revision(),
+        {EntityChange::upsert(straight)}, {}, "Add straight wall"});
+    sketch::ApplyBoundaryConstraintChanges later{loaded.document.revision(), {}, {}, "Edit straight wall"};
+    later.wall_edits.push_back({straight.id, {{0, 0}, {5, 0}, 0}, std::nullopt});
+    loaded.document.apply(later);
+    require(ProjectStore::required_format_version(loaded.document.snapshot()) == 12,
+            "deleted arc constraint and later straight proof must retain v12");
+    const auto deleted_file = temp.path / "deleted-physical-curve-length.bldproj";
+    (void)ProjectStore::save(deleted_file, loaded.document.snapshot());
+    require(ProjectStore::load(deleted_file).document.snapshot().entities() == loaded.document.snapshot().entities(),
+            "retained physical curve history must remain readable after deleting its owner");
+    const auto source_hash = ProjectStore::file_sha256(file);
+    const auto downgraded = temp.path / "downgraded-physical-curve-length.bldproj";
+    std::filesystem::copy_file(file, downgraded);
+    execute_sql(downgraded, "PRAGMA user_version=11; UPDATE metadata SET value='11' WHERE key='format_version'");
+    rewrite_logical_digest(downgraded);
+    const auto downgraded_hash = ProjectStore::file_sha256(downgraded);
+    require_error([&] { (void)ProjectStore::load(downgraded); }, StorageErrorCode::unsupported_format,
+                  "recomputed digest cannot downgrade physical arc-length semantics to v11");
+    require(ProjectStore::file_sha256(file) == source_hash && ProjectStore::file_sha256(downgraded) == downgraded_hash,
+            "failed physical curve migration must preserve both original files");
+    const auto forged = temp.path / "chord-masquerading-as-physical-length.bldproj";
+    std::filesystem::copy_file(file, forged);
+    // The receipt still says six metres of arc. A six-metre chord does not
+    // satisfy it, even when the saved wall and typed proof agree exactly.
+    execute_sql(forged, "UPDATE revisions SET boundary_constraint_changes_json="
+        "json_set(boundary_constraint_changes_json,'$.wall_edits[0].baseline.end[0]',6.0) WHERE revision=1; "
+        "UPDATE revision_entities SET properties_json=json_set(properties_json,'$.baseline.end[0]',6.0) "
+        "WHERE revision=1 AND id='curve-wall'");
+    rewrite_logical_digest(forged);
+    const auto forged_hash = ProjectStore::file_sha256(forged);
+    require_error([&] { (void)ProjectStore::load(forged); }, StorageErrorCode::integrity_failure,
+                  "matching proof, geometry and recomputed digest cannot substitute chord distance for arc length");
+    require(ProjectStore::file_sha256(forged) == forged_hash && ProjectStore::file_sha256(file) == source_hash,
+            "refusing forged physical measurement must preserve saved artifacts");
+}
+
 void test_curved_constraint_state_requires_v10_without_geometry_proof() {
     TempDirectory temp;
     const auto wall = curved_constraint_wall();
@@ -1383,9 +1464,9 @@ void test_straight_wall_only_typed_history_requires_v11_and_rejects_consistent_f
                   "historical mixed v2 envelope cannot be substituted for v4 wall-only proof");
     const auto future = temp.path / "straight-future-format.psketch";
     std::filesystem::copy_file(authored_file, future);
-    execute_sql(future, "PRAGMA user_version=12; UPDATE metadata SET value='12' WHERE key='format_version'");
+    execute_sql(future, "PRAGMA user_version=13; UPDATE metadata SET value='13' WHERE key='format_version'");
     require_error([&] { (void)ProjectStore::load(future); }, StorageErrorCode::unsupported_format,
-                  "storage versions newer than v11 must reject before semantic admission");
+                  "storage versions newer than v12 must reject before semantic admission");
 
     // No length receipt is needed for a connected endpoint movement. Matching
     // proof/result forgery therefore isolates topology from exact-entry checks.
@@ -2133,6 +2214,7 @@ void test_native_room_topology_is_validated_on_restore() {
 int main() {
     sketch::testing::noninteractive_errors();
     try {
+        test_physical_arc_length_history_requires_v12();
         test_native_room_topology_is_validated_on_restore();
         test_save_reopen_preserves_exact_revision_history_and_assets();
         test_existing_destination_requires_fingerprint_and_creates_backup();

@@ -14,6 +14,7 @@
 #include <QLabel>
 #include <QKeyEvent>
 #include <QPushButton>
+#include <QPlainTextEdit>
 #include <QTimer>
 #include <QTableWidget>
 #include <QTemporaryDir>
@@ -356,6 +357,219 @@ void choose_endpoint(ConstraintDialog& dialog, const char* field, const QString&
     auto& choice = combo(dialog, field);
     choice.setCurrentIndex(endpoint_choice(choice, owner, endpoint));
 }
+
+Entity physical_curve_wall() {
+    auto value = wall();
+    const auto arc = arc_from_chord_arc_length({0, 0}, {4, 0}, 5, false);
+    value.properties["baseline"] = {{"start", {0, 0}}, {"end", {4, 0}}, {"sweep_radians", arc.sweep_radians}};
+    value.properties["name"] = "Measured curve";
+    return value;
+}
+Segment stored_wall_baseline(const Entity& value) {
+    const auto& line = value.properties.at("baseline");
+    return {{line.at("start")[0].get<double>(), line.at("start")[1].get<double>()},
+            {line.at("end")[0].get<double>(), line.at("end")[1].get<double>()},
+            line.at("sweep_radians").get<double>()};
+}
+void physical_curve_length_wall_workflow() {
+    const auto curve_length = ConstraintRelationKind::fixed_arc_length;
+    for (const bool end_anchor : {false, true}) {
+        auto document = Document::create({physical_curve_wall()});
+        const auto original = document.snapshot();
+        const auto before = stored_wall_baseline(original.entities().at("wall-a"));
+        ConstraintDialog add(original, "wall-a", true);
+        require(combo(add, "constraintRelation").findText("Curve length") >= 0,
+                "curved owner must expose the physical Curve length relationship");
+        require(combo(add, "constraintOperation").findData(0) < 0,
+                "physical curve length must not expose straight wall resize");
+        select_relation(add, curve_length);
+        auto* length = add.findChild<QLineEdit*>("constraintLength");
+        require(length && parse_quantity(length->text().toStdString()).metres > 4.9,
+                "Curve length must prefill physical arc length rather than endpoint distance");
+        require_near(parse_quantity(length->text().toStdString()).metres, 5);
+        select_relation(add, ConstraintRelationKind::fixed_length);
+        require_near(parse_quantity(length->text().toStdString()).metres, 4);
+        select_relation(add, curve_length);
+        require_near(parse_quantity(length->text().toStdString()).metres, 5);
+        require(combo(add, "constraintBinding0").currentText().endsWith("start") &&
+                combo(add, "constraintBinding1").currentText().endsWith("end"),
+                "curve length must default to opposite endpoints of its selected owner");
+        choose_endpoint(add, "constraintAnchor", "Measured curve", end_anchor ? "end fixed" : "start fixed");
+        add.setLengthExpression("6 m");
+        require(add.previewEdit(), "physical curve length must preview a changed anchored target");
+        require(document.snapshot().entities() == original.entities(), "curve length preview mutated source");
+        auto* table = add.findChild<QTableWidget*>("constraintChanges");
+        require(table && table->rowCount() == 1 && table->item(0, 1)->text() == "5 m" &&
+                table->item(0, 2)->text() == "6 m", "curve length comparison must show physical lengths");
+        capture(add, end_anchor ? "physical-curve-end-anchor" : "physical-curve-start-anchor");
+        require(add.submit() && add.acceptedPreview(), "physical curve length Apply must return accepted intent");
+        (void)apply_constraint_authoring(document, *add.acceptedPreview());
+        const auto after = document.snapshot();
+        const auto curve = stored_wall_baseline(after.entities().at("wall-a"));
+        require_near(segment_length(curve), 6);
+        require(curve.sweep_radians == before.sweep_radians, "curve length must preserve signed sweep");
+        require_near(end_anchor ? curve.end.x : curve.start.x, end_anchor ? before.end.x : before.start.x);
+        require_near(end_anchor ? curve.end.y : curve.start.y, end_anchor ? before.end.y : before.start.y);
+        std::string relation_id;
+        for (const auto& [id, entity] : after.entities()) if (entity.type == "constraint") {
+            const auto saved = *decode_constraint_entity(entity).constraint;
+            require(saved.relation == curve_length && saved.length && saved.length->original_expression == "6 m",
+                    "curve length dialog must persist its physical target and relation");
+            relation_id = id;
+        }
+        require(!relation_id.empty(), "curve length dialog did not persist a relation");
+
+        ConstraintDialog edit(after, "wall-a", true);
+        auto& operation = combo(edit, "constraintOperation"); operation.setCurrentIndex(operation.findData(2));
+        require(combo(edit, "constraintRelation").currentText() == "Curve length" &&
+                edit.findChild<QLineEdit*>("constraintLength")->text() == "6 m" &&
+                combo(edit, "existingConstraint").currentText().startsWith("Curve length"),
+                "existing physical curve target must reload with its exact expression");
+        choose_endpoint(edit, "constraintAnchor", "Measured curve", "end fixed");
+        edit.setLengthExpression("7 m");
+        require(edit.previewEdit() && edit.submit(), "existing physical curve target must remain editable");
+        (void)apply_constraint_authoring(document, *edit.acceptedPreview());
+        require_near(segment_length(stored_wall_baseline(document.snapshot().entities().at("wall-a"))), 7);
+        require(document.snapshot().entities().contains(relation_id), "editing curve target must retain relation identity");
+        const auto edited = document.snapshot();
+        ConstraintDialog conflict(edited, "wall-a", true);
+        select_relation(conflict, curve_length); conflict.setLengthExpression("8 m");
+        require(!conflict.previewEdit() && !conflict.submit() && !conflict.lastError().isEmpty(),
+                "a second incompatible physical curve target must reject with an explanation");
+        require(!conflict.lastError().contains("fixed_arc_length") &&
+                !conflict.findChild<QPlainTextEdit*>("constraintStatus")->toPlainText().contains("fixed_arc_length"),
+                "curve length diagnostics must not expose persistence spellings");
+        require(document.snapshot().entities() == edited.entities(), "curve length conflict mutated source");
+        ConstraintDialog cancel(edited, "wall-a", true);
+        combo(cancel, "constraintOperation").setCurrentIndex(combo(cancel, "constraintOperation").findData(2));
+        cancel.setLengthExpression("8 m");
+        require(cancel.previewEdit(), "changed curve target must preview before cancel");
+        cancel.findChild<QDialogButtonBox*>()->button(QDialogButtonBox::Cancel)->click();
+        require(!cancel.acceptedPreview() && document.snapshot().entities() == edited.entities(),
+                "Cancel must discard a physical curve target preview");
+        ConstraintDialog remove(edited, "wall-a", true);
+        combo(remove, "constraintOperation").setCurrentIndex(combo(remove, "constraintOperation").findData(3));
+        require(remove.previewEdit() && remove.submit(), "physical curve relation must remain removable");
+        (void)apply_constraint_authoring(document, *remove.acceptedPreview());
+        require(!document.snapshot().entities().contains(relation_id), "curve target removal retained the relation");
+        auto without_relation = edited.entities(); without_relation.erase(relation_id);
+        require(document.snapshot().entities() == without_relation, "removing curve target must preserve exact geometry");
+        document.undo(document.revision());
+        require(document.snapshot().entities() == edited.entities(), "curve length removal must undo atomically");
+    }
+}
+
+void physical_curve_length_boundary_workflow_and_invalid_bindings() {
+    auto shape = decode_identified_boundary_entity(boundary("region", 0, 0));
+    const auto physical = arc_from_chord_arc_length({4, 0}, {4, 4}, 5, false);
+    shape.segments[1].segment = physical;
+    auto owner = encode_identified_boundary_entity(shape); owner.properties["name"] = "Measured boundary";
+    auto document = Document::create({owner});
+    const auto original = document.snapshot();
+    ConstraintDialog add(original, "region", true);
+    select_relation(add, ConstraintRelationKind::fixed_arc_length);
+    require(combo(add, "constraintBinding0").currentText().contains("Edge 2 · start") &&
+            combo(add, "constraintBinding1").currentText().contains("Edge 2 · end") &&
+            combo(add, "constraintAnchor").currentText().contains("Edge 2 · start fixed"),
+            "curve length must select a curved edge and matching fixed anchor even when the first edge is straight");
+    require_near(parse_quantity(add.findChild<QLineEdit*>("constraintLength")->text().toStdString()).metres, 5);
+    add.setLengthExpression("6 m");
+    require(add.previewEdit() && add.submit(), "physical curved boundary edge must preview and apply");
+    const auto* table = add.findChild<QTableWidget*>("constraintChanges");
+    require(table && table->rowCount() == 4 && table->item(1, 1)->text() == "5 m" &&
+            table->item(1, 2)->text() == "6 m", "curved boundary comparison must show physical edge lengths");
+    capture(add, "physical-boundary-curve-length");
+    (void)apply_constraint_authoring(document, *add.acceptedPreview());
+    const auto applied = document.snapshot();
+    const auto updated = decode_identified_boundary_entity(applied.entities().at("region"));
+    require_near(segment_length(updated.segments[1].segment), 6);
+    require(updated.segments[1].segment.sweep_radians == physical.sweep_radians,
+            "physical edge length must preserve signed sweep");
+    require_near(updated.segments[1].segment.start.x, physical.start.x);
+    require_near(updated.segments[1].segment.start.y, physical.start.y);
+    std::string relation_id;
+    for (const auto& [id, entity] : applied.entities()) if (entity.type == "constraint") {
+        const auto saved = *decode_constraint_entity(entity).constraint;
+        require(saved.relation == ConstraintRelationKind::fixed_arc_length &&
+                saved.bindings == std::vector<WallEndpointBinding>{{"region", WallEndpointRole::start, "bc", "b"},
+                    {"region", WallEndpointRole::end, "bc", "c"}},
+                "physical boundary relation must persist exact same-edge and stable vertex bindings");
+        relation_id = id;
+    }
+    require(!relation_id.empty(), "physical boundary relation was not persisted");
+    ConstraintDialog edit(applied, "region", true);
+    combo(edit, "constraintOperation").setCurrentIndex(combo(edit, "constraintOperation").findData(2));
+    require(combo(edit, "constraintRelation").currentText() == "Curve length" &&
+            edit.findChild<QLineEdit*>("constraintLength")->text() == "6 m" &&
+            combo(edit, "constraintBinding0").currentText().contains("Edge 2 · start") &&
+            combo(edit, "constraintAnchor").currentText().contains("Edge 2 · start fixed"),
+            "existing physical edge target must reload correct bindings, exact expression, and matching anchor");
+    choose_endpoint(edit, "constraintAnchor", "Measured boundary", "Edge 2 · end fixed");
+    edit.setLengthExpression("5.5 m");
+    require(edit.previewEdit() && edit.submit(), "existing physical boundary target must remain editable with another anchor");
+    (void)apply_constraint_authoring(document, *edit.acceptedPreview());
+    const auto edited = document.snapshot();
+    const auto resized = decode_identified_boundary_entity(edited.entities().at("region"));
+    require_near(segment_length(resized.segments[1].segment), 5.5);
+    require_near(resized.segments[1].segment.end.x, updated.segments[1].segment.end.x);
+    require_near(resized.segments[1].segment.end.y, updated.segments[1].segment.end.y);
+    ConstraintDialog remove(edited, "region", true);
+    combo(remove, "constraintOperation").setCurrentIndex(combo(remove, "constraintOperation").findData(3));
+    require(remove.previewEdit() && remove.submit(), "physical boundary target must remain removable");
+    (void)apply_constraint_authoring(document, *remove.acceptedPreview());
+    auto without_relation = edited.entities(); without_relation.erase(relation_id);
+    require(document.snapshot().entities() == without_relation, "removing physical edge target must preserve exact boundary geometry");
+    document.undo(document.revision());
+    require(document.snapshot().entities() == edited.entities(), "physical boundary target removal must undo atomically");
+
+    for (const auto mismatch : {QStringLiteral("Edge 1 · end"), QStringLiteral("Edge 2 · start")}) {
+        ConstraintDialog invalid(original, "region", true);
+        select_relation(invalid, ConstraintRelationKind::fixed_arc_length);
+        choose_endpoint(invalid, "constraintBinding1", "Measured boundary", mismatch);
+        invalid.setLengthExpression("6 m");
+        require(!invalid.previewEdit() && !invalid.submit() && invalid.lastError().contains("same curved"),
+                "mismatched edge or same endpoint roles must produce a clear curve-length diagnostic");
+        require(document.snapshot().entities() == edited.entities(), "invalid physical boundary binding mutated project");
+    }
+    auto straight = Document::create({wall()});
+    const auto straight_original = straight.snapshot();
+    ConstraintDialog straight_dialog(straight_original, "wall-a", true);
+    auto& operation = combo(straight_dialog, "constraintOperation"); operation.setCurrentIndex(operation.findData(1));
+    select_relation(straight_dialog, ConstraintRelationKind::fixed_arc_length);
+    straight_dialog.setLengthExpression("5 m");
+    require(!straight_dialog.previewEdit() && !straight_dialog.submit() && straight_dialog.lastError().contains("curved"),
+            "a straight owner must reject physical curve length with an explanation");
+    require(straight.snapshot().entities() == straight_original.entities(), "invalid straight curve target mutated source");
+    auto other = physical_curve_wall(); other.id = "wall-b"; other.properties["name"] = "Other curve";
+    other.properties["baseline"]["start"] = {10, 0}; other.properties["baseline"]["end"] = {14, 0};
+    auto mismatched = Document::create({physical_curve_wall(), other});
+    const auto mismatch_source = mismatched.snapshot();
+    ConstraintDialog mismatched_dialog(mismatch_source, "wall-a", true);
+    select_relation(mismatched_dialog, ConstraintRelationKind::fixed_arc_length);
+    choose_endpoint(mismatched_dialog, "constraintBinding1", "Other curve", "end");
+    mismatched_dialog.setLengthExpression("6 m");
+    require(!mismatched_dialog.previewEdit() && !mismatched_dialog.submit() &&
+            mismatched_dialog.lastError().contains("same curved") && mismatched.snapshot().entities() == mismatch_source.entities(),
+            "different curved owners must not be accepted as one physical curve-length target");
+
+    auto two_curves = shape;
+    two_curves.segments[2].segment = arc_from_chord_arc_length({4, 4}, {0, 4}, 6, false);
+    auto alternate = encode_identified_boundary_entity(two_curves); alternate.properties["name"] = "Measured boundary";
+    auto alternate_source = Document::create({alternate});
+    ConstraintDialog edge_choice(alternate_source.snapshot(), "region", true);
+    select_relation(edge_choice, ConstraintRelationKind::fixed_arc_length);
+    choose_endpoint(edge_choice, "constraintBinding0", "Measured boundary", "Edge 3 · start");
+    require(combo(edge_choice, "constraintBinding1").currentText().contains("Edge 3 · end") &&
+            combo(edge_choice, "constraintAnchor").currentText().contains("Edge 3 · start fixed"),
+            "changing the physical target edge must choose its opposite endpoint and matching anchor");
+    require_near(parse_quantity(edge_choice.findChild<QLineEdit*>("constraintLength")->text().toStdString()).metres, 6);
+    select_relation(edge_choice, ConstraintRelationKind::fixed_length);
+    require_near(parse_quantity(edge_choice.findChild<QLineEdit*>("constraintLength")->text().toStdString()).metres, 4);
+    select_relation(edge_choice, ConstraintRelationKind::fixed_arc_length);
+    require(combo(edge_choice, "constraintBinding0").currentText().contains("Edge 3 · start"),
+            "Curve length must preserve a meaningful currently selected curved edge");
+    require_near(parse_quantity(edge_choice.findChild<QLineEdit*>("constraintLength")->text().toStdString()).metres, 6);
+}
 Document mixed_fixture() {
     auto line = wall(); line.properties["name"] = "Shared wall";
     auto region = boundary("region", 3.6576, 0); region.properties["name"] = "Shared boundary";
@@ -584,6 +798,8 @@ int main(int argc, char** argv) {
     QFontDatabase::addApplicationFont(QStringLiteral(":/fonts/Inter.ttf"));
     app.setFont(QFont(QStringLiteral("Inter"), 10));
     try {
+        physical_curve_length_wall_workflow();
+        physical_curve_length_boundary_workflow_and_invalid_bindings();
         resize_preview_anchor_and_invalidation();
         relationship_create_edit_conflict_remove();
         mixed_owner_choices_and_relation_editing();

@@ -1,4 +1,4 @@
-# Vertex project formats v1 through v11
+# Vertex project formats v1 through v12
 
 ## Circular column selection orientation
 
@@ -446,7 +446,7 @@ unknown project `format_version` is rejected rather than opened unsafely.
 ## SQLite schema
 
 The SQLite `application_id` is `0x50535444` (`PSTD`). `user_version` and metadata
-`format_version` are equal and range from `1` through `11`, according to the
+`format_version` are equal and range from `1` through `12`, according to the
 retained semantics. The baseline application tables below are shared; later
 versions add the proof columns and recovery data documented in this file.
 
@@ -841,3 +841,25 @@ version 8 and retains each exact command on its originating revision.
 These records do not retrofit missing endpoint-edit intent into old generic
 `ApplyEntityChanges` history. Explicit construction and object transforms
 remain distinct commands with their own validation policy.
+
+## Physical arc-length relationships (v12)
+
+Version 12 retains the existing SQLite columns. A supported version-3 constraint
+entity with relation `fixed_arc_length` locks the physical length of a single
+curved wall baseline or identified boundary edge. Its exact quantity measures
+the analytical arc, not the chord. Bindings identify the same owner and segment,
+with opposite endpoint roles and verified stable boundary vertex identities.
+The signed sweep remains fixed while endpoint coordinates are solved.
+
+Any retained revision containing this relation requires project format 12,
+including undone commands and relations or owners deleted later. A subsequent
+straight wall-only proof cannot lower that requirement. Both SQLite markers and
+the logical digest carry version 12; loading recomputes the minimum independently
+and rejects a downgraded file even if its digest was recalculated. Histories
+without this relation retain their previous minimum formats.
+
+JSON/assets extraction advertises exchange version 9 for the same retained
+semantics. Earlier constraint entity versions 1 and 2 retain their original
+encodings. They do not interpret the new relation spelling as endpoint distance;
+unrecognized geometric constraints retain their opaque payload and make the
+document read-only.

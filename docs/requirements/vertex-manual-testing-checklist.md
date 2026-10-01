@@ -510,6 +510,7 @@ Start with the workspace, draw a room, close it with the mouse, drag-select it, 
 - [ ] **U088 — Lock a line's length**
   - Steps: In **Dimensions and constraints**, choose **Endpoint distance** and enter a length. On a curved object, compare the straight distance between its endpoints with its longer curved edge measurement.
   - Curved check: The lock controls the straight endpoint distance. Changing that distance preserves the curve's sweep; its physical arc length changes accordingly. This control does not claim to lock physical arc length.
+  - Physical curve check: Select a curved wall or rounded area, open **Dimensions and constraints**, choose **Add constraint**, then **Curve length**. Check that the prefilled measurement matches the curved edge, choose the endpoint to keep fixed, enter a new length, Preview and Apply. The curved measurement must match the entry and remain curved. Use **Edit constraint** to change that target again. Undo, redo, save and reopen; the target and geometry must remain. Try a conflicting endpoint-distance lock and confirm the app leaves the project unchanged when it cannot satisfy both.
   - Expected: Later connected edits preserve that length or explain a conflict.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________

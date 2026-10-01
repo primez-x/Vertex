@@ -5,6 +5,7 @@
 #include "sketch/quantity.hpp"
 
 #include <cstdint>
+#include <map>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -12,8 +13,8 @@
 
 namespace sketch {
 
-// These names are the stable v1 relation spellings in a persisted constraint
-// entity. The codec deliberately does not expose solver point coordinates.
+// Existing names are stable v1/v2 relation spellings; fixed_arc_length is v3.
+// The codec deliberately does not expose solver point coordinates.
 enum class ConstraintRelationKind {
     horizontal,
     vertical,
@@ -22,6 +23,7 @@ enum class ConstraintRelationKind {
     parallel,
     perpendicular,
     fixed_anchor,
+    fixed_arc_length,
 };
 
 enum class WallEndpointRole { start, end };
@@ -62,15 +64,25 @@ struct ConstraintEntityDecodeResult {
 [[nodiscard]] std::string_view constraint_relation_name(ConstraintRelationKind relation);
 [[nodiscard]] std::string_view wall_endpoint_role_name(WallEndpointRole role);
 
+// Physical arc length is defined only by opposite endpoints of one genuine
+// curved wall baseline or one stable identified boundary segment.
+[[nodiscard]] Segment resolve_constraint_arc_segment(
+    const PersistentConstraint& constraint,
+    const std::map<std::string, Entity, std::less<>>& entities);
+[[nodiscard]] double constraint_arc_chord_target(
+    const PersistentConstraint& constraint,
+    const std::map<std::string, Entity, std::less<>>& entities);
+
 // Decodes a first-class type="constraint" entity. Malformed envelope or
-// malformed known v1/v2 semantics throw std::invalid_argument. Version two
+// malformed known semantics throw std::invalid_argument. Version two
 // adds stable boundary segment/vertex bindings and generic entity_ids owners.
 // A structurally
 // valid but unknown relation or version returns an unsupported result carrying
 // the original entity.
 [[nodiscard]] ConstraintEntityDecodeResult decode_constraint_entity(const Entity& entity);
 
-// Encodes baseline-only relations as v1 and boundary relations as v2.
+// Encodes baseline-only relations as v1, boundary relations as v2, and
+// physical fixed_arc_length alone as v3 (generic entity_ids owners).
 // When original is provided, its stable id/type,
 // required flag, unrelated properties, extensions, and opaque future fields
 // are retained while canonical v1 fields are replaced. The original must be a
