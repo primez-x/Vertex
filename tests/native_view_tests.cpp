@@ -17,6 +17,7 @@
 #include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
+#include <QSplitter>
 #include <QTemporaryDir>
 #include <QTimer>
 #include <QWheelEvent>
@@ -96,6 +97,63 @@ void mouse(sketch::visualization::NativeModelView& view,QEvent::Type type,QPoint
            Qt::KeyboardModifiers modifiers = Qt::NoModifier) {
     QMouseEvent event(type,p,view.mapToGlobal(p.toPoint()),button,buttons,modifiers);
     QApplication::sendEvent(&view,&event);
+}
+
+void check_native_resize(const sketch::DocumentSnapshot& snapshot, QTemporaryDir& temporary) {
+    QSplitter splitter;
+    splitter.setAttribute(Qt::WA_DontShowOnScreen, true);
+    splitter.setAttribute(Qt::WA_ShowWithoutActivating, true);
+    splitter.addWidget(new QWidget(&splitter));
+    auto* view = new sketch::visualization::NativeModelView(&splitter);
+    splitter.addWidget(view);
+    view->setSnapshot(snapshot);
+    view->hide();
+    check(!view->nativeRenderSizePixels(), "An uninitialized view has no native render extent");
+    splitter.resize(1200, 760);
+    splitter.show();
+    QApplication::processEvents();
+    settle_geometry(*view);
+    view->pollGeometryPreparation();
+    check(view->isGeometryPrepared(), "Hidden resize fixture must prepare before native publication");
+
+    const auto check_extent = [&] {
+        QApplication::processEvents();
+        view->repaint();
+        const auto physical_size = QSize(qRound(view->width() * view->devicePixelRatioF()),
+                                         qRound(view->height() * view->devicePixelRatioF()));
+        const auto render_size = view->nativeRenderSizePixels();
+        if (render_size != std::optional<QSize>(physical_size)) {
+            std::cerr << "Native extent: render "
+                      << (render_size ? render_size->width() : 0) << 'x'
+                      << (render_size ? render_size->height() : 0) << ", client "
+                      << physical_size.width() << 'x' << physical_size.height() << '\n';
+        }
+        check(render_size == std::optional<QSize>(physical_size),
+              "The live OpenGL render extent must follow late-show splitter layout before Fit or export");
+    };
+
+    // Match the desktop's 3D toggle: show first, then assign splitter sizes.
+    view->show();
+    splitter.setSizes({600, 600});
+    check_extent();
+    check(view->isReady(), "Late-show resize fixture must publish native geometry");
+
+    splitter.resize(1482, 934);
+    splitter.setSizes({900, 580});
+    check_extent();
+    view->hide();
+    splitter.resize(1300, 810);
+    QApplication::processEvents();
+    view->show();
+    splitter.setSizes({700, 600});
+    check_extent();
+
+    // Preserve the normal native-render evidence after checking the live extent:
+    // Dump can create its own correctly sized framebuffer and mask this defect.
+    view->fitAll();
+    const auto frame = capture(*view, temporary.filePath("late-show-resized.png"));
+    check(frame.image.size() == *view->nativeRenderSizePixels() && !frame.bounds.isEmpty(),
+          "The resized native viewport must render the prepared model");
 }
 
 void check_gestures(sketch::visualization::NativeModelView& view, const QString& id,
@@ -405,8 +463,8 @@ int main(int argc,char** argv) {
     }
     const int scenario_index = arguments.indexOf(QStringLiteral("--scenario"));
     const QString scenario = scenario_index < 0 ? QStringLiteral("all") : arguments.value(scenario_index + 1);
-    if (scenario != "all" && scenario != "geometry" && scenario != "forms" && scenario != "publication" && scenario != "gestures") {
-        std::cerr << "Native scenario must be all, geometry, forms, publication or gestures\n";
+    if (scenario != "all" && scenario != "geometry" && scenario != "forms" && scenario != "publication" && scenario != "gestures" && scenario != "resize") {
+        std::cerr << "Native scenario must be all, geometry, forms, publication, gestures or resize\n";
         return 1;
     }
     QTemporaryDir temporary;
@@ -434,6 +492,14 @@ int main(int argc,char** argv) {
                 return;
             }
             check(ready_settled(view),"Native viewport must be ready");
+            if (scenario == "all" || scenario == "resize") {
+                check_native_resize(document.snapshot(), temporary);
+                if (scenario == "resize") {
+                    std::cout << "Native resize checks passed at DPR " << ratio << '\n';
+                    application.exit(0);
+                    return;
+                }
+            }
             view.setSelectedEntity(wall_id);
             check(view.transformControlsVisible(),
                   "A selected transformable solid must expose native transform controls");

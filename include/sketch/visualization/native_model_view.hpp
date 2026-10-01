@@ -2,6 +2,7 @@
 
 #include <QWidget>
 #include <QString>
+#include <QSize>
 
 #include <cstddef>
 #include <functional>
@@ -66,6 +67,11 @@ public:
     // are process-local diagnostics, not compositor or display frame timings.
     // A new request clears the result until it has been published successfully.
     [[nodiscard]] std::optional<PublicationMetrics> lastPublicationMetrics() const noexcept;
+
+    // Actual OCCT render-window extent in physical pixels. This read-only
+    // diagnostic does not resize, redraw, or export the view; a widget size or
+    // exported image alone cannot detect a stale native OpenGL viewport.
+    [[nodiscard]] std::optional<QSize> nativeRenderSizePixels() const noexcept;
 
     // Callbacks receive stable semantic entity IDs. onError also receives
     // pending-geometry messages when the viewport cannot claim an authoritative

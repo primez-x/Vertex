@@ -12,6 +12,8 @@
 #include <Aspect_DisplayConnection.hxx>
 #include <Aspect_Handle.hxx>
 #include <OpenGl_GraphicDriver.hxx>
+#include <OpenGl_View.hxx>
+#include <OpenGl_Window.hxx>
 #include <Quantity_Color.hxx>
 #include <Standard_Failure.hxx>
 #include <TopoDS_Shape.hxx>
@@ -192,6 +194,27 @@ public:
     }
 
     qreal input_scale() const noexcept { return input_device_pixel_ratio(*owner); }
+
+    void synchronize_native_size() {
+        if (!native_ready || view.IsNull() || window.IsNull()) return;
+        int native_width = 0;
+        int native_height = 0;
+        window->Size(native_width, native_height);
+        // A minimized native client has no useful camera aspect or framebuffer.
+        if (native_width <= 0 || native_height <= 0) return;
+        const auto gl_view = occ::handle<OpenGl_View>::DownCast(view->View());
+        if (gl_view.IsNull() || gl_view->GlWindow().IsNull()) return;
+        if (gl_view->GlWindow()->Width() == native_width &&
+            gl_view->GlWindow()->Height() == native_height) return;
+
+        // Qt can deliver resizeEvent before it applies the final child HWND
+        // geometry (notably when showing a hidden splitter pane). OCCT caches
+        // the OpenGL window extent separately from WNT_Window's live client
+        // size. Recheck at paint/show boundaries so the first settled frame
+        // updates both that extent and the camera aspect, without refitting or
+        // losing the user's pan, zoom, orbit, selection, or manipulation state.
+        view->MustBeResized();
+    }
 
     void fit_all() {
         if (!native_ready || view.IsNull() || window.IsNull()) {
@@ -916,6 +939,13 @@ NativeModelView::lastPublicationMetrics() const noexcept {
     return m_impl->publication_metrics;
 }
 
+std::optional<QSize> NativeModelView::nativeRenderSizePixels() const noexcept {
+    if (!m_impl->native_ready || m_impl->view.IsNull()) return std::nullopt;
+    const auto gl_view = occ::handle<OpenGl_View>::DownCast(m_impl->view->View());
+    if (gl_view.IsNull() || gl_view->GlWindow().IsNull()) return std::nullopt;
+    return QSize(gl_view->GlWindow()->Width(), gl_view->GlWindow()->Height());
+}
+
 void NativeModelView::setEntitySelectedCallback(std::function<void(QString)> callback) {
     onEntitySelected = std::move(callback);
 }
@@ -993,14 +1023,16 @@ bool NativeModelView::event(QEvent* event) {
 void NativeModelView::showEvent(QShowEvent* event) {
     QWidget::showEvent(event);
     m_impl->initialize_native_view();
+    m_impl->synchronize_native_size();
     m_impl->refresh_status_label();
+    update();
 }
 
 void NativeModelView::resizeEvent(QResizeEvent* event) {
     QWidget::resizeEvent(event);
     m_impl->refresh_status_label();
     if (m_impl->native_ready && !m_impl->view.IsNull()) {
-        m_impl->view->MustBeResized();
+        m_impl->synchronize_native_size();
         m_impl->view->Redraw();
     }
 }
@@ -1008,6 +1040,7 @@ void NativeModelView::resizeEvent(QResizeEvent* event) {
 void NativeModelView::paintEvent(QPaintEvent* event) {
     (void)event;
     if (m_impl->native_ready && !m_impl->view.IsNull()) {
+        m_impl->synchronize_native_size();
         m_impl->view->Redraw();
     }
 }

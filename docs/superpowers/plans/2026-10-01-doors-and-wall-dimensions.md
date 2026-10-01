@@ -27,3 +27,10 @@ commit/push and provide an updated build. These repairs do not complete the
 original production gate. Pocket/bifold/barn/garage mechanisms, specialized
 window/roof hosting, Apex fixtures/adapters and other recorded gaps remain in
 the full goal and require further implementation and qualification.
+
+Native verification found the 3D renderer retaining its original 480 x 360
+backing viewport after a larger split workspace opened. Repair that lifecycle
+before delivering this checkpoint: synchronize the actual native render size
+after layout without resetting navigation. A visualization worker owns its
+view implementation, header and focused native regression; root verifies the
+new installed application against the preserved failure screenshot.
