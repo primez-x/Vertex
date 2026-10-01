@@ -104,9 +104,10 @@ public:
     // require v5; general transform proofs require v6; boundary geometry edit
     // proofs require v7; boundary constraint transactions require v8; atomic
     // boundary translation groups require v9. Curved wall proofs and known
-    // constraints bound to curved segments require v10. Any may include
+    // constraints bound to curved segments require v10; straight wall-only
+    // endpoint command proofs require v11. Any may include
     // the optional recovery ledger. Absent proofs preserve historical formats.
-    static constexpr std::uint32_t format_version = 10;
+    static constexpr std::uint32_t format_version = 11;
     static constexpr std::uint32_t recovery_format_version = 4;
     [[nodiscard]] static std::uint32_t required_format_version(const DocumentSnapshot& snapshot);
     static constexpr std::uint64_t maximum_file_bytes = 4ULL * 1024ULL * 1024ULL * 1024ULL;
@@ -121,7 +122,7 @@ public:
                                           const DocumentSnapshot& snapshot,
                                           const SaveOptions& options = {});
     [[nodiscard]] static LoadResult load(const std::filesystem::path& source);
-    // Recovery-bearing v4 through v10 only. A document-only path never drops a ledger.
+    // Recovery-bearing v4 through v11 only. A document-only path never drops a ledger.
     [[nodiscard]] static SaveReceipt save_archive(const std::filesystem::path& destination,
         const ProjectArchiveSnapshot&, const SaveOptions& options = {});
     [[nodiscard]] static ArchiveLoadResult load_archive(const std::filesystem::path& source, ArchiveRole role);

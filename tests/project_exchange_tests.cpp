@@ -1,4 +1,5 @@
 #include "sketch/project_exchange.hpp"
+#include "sketch/project_store.hpp"
 #include "sketch/boundary_entity.hpp"
 #include "sketch/boundary_receipt.hpp"
 #include "sketch/boundary_translation.hpp"
@@ -10,8 +11,10 @@
 #include <fstream>
 #include <iostream>
 #include <iterator>
+#include <set>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 
 namespace {
 void check(bool value, const char *message) {
@@ -231,6 +234,122 @@ void test_curved_constraint_export_floor(const std::filesystem::path& root) {
   check(nlohmann::json::parse(curve_input).at("exchange_version") == 7,
         "bound curved boundary edge must advertise exchange7 without a wall edit proof");
 }
+
+void test_safe_curved_wall_history_exchange_replays(const std::filesystem::path& root) {
+  sketch::Entity source{"curve-wall", "wall",
+      {{"baseline", {{"start", {0, 0}}, {"end", {4, 0}}, {"sweep_radians", 0.4}}},
+       {"thickness_m", 0.14}, {"height_m", 2.4}, {"elevation_m", 0.0}}, false,
+      nlohmann::json::object()};
+  auto obstacle = source;
+  obstacle.id = "crossing-obstacle";
+  obstacle.properties["baseline"] = {{"start", {6, -10}}, {"end", {6, 10}}, {"sweep_radians", 0}};
+  auto document = sketch::Document::create({source, obstacle});
+  const auto initial = document.snapshot().entities();
+  sketch::ApplyBoundaryConstraintChanges command{0, {}, {}, "safe curved endpoint edit"};
+  command.wall_edits.push_back({source.id, {{0, 0}, {5, 0}, 0.4}, std::nullopt, 2});
+  document.apply(command);
+  const auto edited = document.snapshot().entities();
+  document.undo(document.revision());
+  sketch::extract_project(document.snapshot(), root / "safe-curved-wall-history");
+  std::ifstream input(root / "safe-curved-wall-history" / "project.json");
+  const auto exchanged = nlohmann::json::parse(input);
+  const auto& rows = exchanged.at("revisions");
+  check(exchanged.at("exchange_version") == 7 && rows.size() == 3,
+        "valid undone curved wall history must preserve its reader floor and all revisions");
+  std::vector<sketch::Entity> source_entities;
+  for (const auto& value : rows[0].at("entities"))
+    source_entities.push_back({value.at("id").get<std::string>(), value.at("type").get<std::string>(),
+        value.at("properties"), value.at("required").get<bool>(), value.at("extensions")});
+  auto replayed = sketch::Document::create(std::move(source_entities));
+  check(replayed.snapshot().entities() == initial, "exchange must reconstruct the exact source wall state");
+  replayed.apply(sketch::command_from_json(rows[1].at("boundary_constraint_changes")));
+  check(replayed.snapshot().entities() == edited,
+        "exchanged curved command must replay exact safe geometry after topology admission");
+  replayed.undo(replayed.revision());
+  check(replayed.snapshot().entities() == initial,
+        "exchanged safe curved command must undo exactly");
+  replayed.redo(replayed.revision());
+  check(replayed.snapshot().entities() == edited,
+        "exchanged safe curved command must redo exactly");
+
+  auto forged_exchange = exchanged;
+  auto& forged_rows = forged_exchange.at("revisions");
+  auto& forged_proof = forged_rows[1].at("boundary_constraint_changes");
+  forged_proof["wall_edits"][0]["baseline"]["end"][0] = 7.0;
+  for (auto& value : forged_rows[1].at("entities"))
+    if (value.at("id") == source.id) value["properties"]["baseline"]["end"][0] = 7.0;
+  const auto forged_command = sketch::command_from_json(forged_proof);
+  const auto& typed = std::get<sketch::ApplyBoundaryConstraintChanges>(forged_command);
+  const auto forged_wall = sketch::replay_constraint_wall_edit(source, typed.wall_edits.front());
+  std::size_t matched_walls = 0;
+  for (const auto& value : forged_rows[1].at("entities"))
+    if (value.at("id") == source.id) {
+      ++matched_walls;
+      check(value.at("properties") == forged_wall.properties && value.at("extensions") == forged_wall.extensions,
+            "forged exchanged proof and retained wall result must agree exactly");
+    }
+  check(matched_walls == 1, "forged exchanged result must contain exactly one matching wall");
+  // Exchange has no history importer: exercise its decoded typed command at
+  // the same document admission boundary used by history restoration.
+  auto refused = sketch::Document::create({source, obstacle});
+  const auto before_refusal = refused.snapshot();
+  const auto source_path = root / "safe-curved-wall-history" / "project.json";
+  const auto source_hash = sketch::ProjectStore::file_sha256(source_path);
+  bool rejected = false;
+  try {
+    refused.apply(forged_command);
+  } catch (const sketch::DocumentError& error) {
+    rejected = std::string_view(error.what()).find("topology") != std::string_view::npos;
+  }
+  check(rejected && refused.snapshot().entities() == before_refusal.entities() &&
+        refused.snapshot().revision() == before_refusal.revision() &&
+        refused.snapshot().history().size() == before_refusal.history().size(),
+        "matching forged exchanged proof/result must refuse new crossing atomically");
+  check(sketch::ProjectStore::file_sha256(source_path) == source_hash,
+        "refusing forged exchanged command must preserve exact source artifact bytes");
+}
+
+void test_straight_wall_only_authoring_exchange_v8(const std::filesystem::path& root) {
+  sketch::Entity source{"straight-wall", "wall",
+      {{"baseline", {{"start", {0, 0}}, {"end", {4, 0}}, {"sweep_radians", 0}}},
+       {"thickness_m", 0.14}, {"height_m", 2.4}, {"elevation_m", 0.0}}, false,
+      nlohmann::json::object()};
+  auto document = sketch::Document::create({source});
+  const auto initial = document.snapshot().entities();
+  sketch::ApplyBoundaryConstraintChanges intent{document.revision(), {}, {}, "Resize straight wall"};
+  intent.wall_edits.push_back({source.id, {{0, 0}, {5, 0}, 0}, sketch::parse_quantity("5 m")});
+  document.apply(intent);
+  const auto edited = document.snapshot().entities();
+  document.undo(document.revision());
+  sketch::extract_project(document.snapshot(), root / "straight-wall-only-v8");
+  std::ifstream input(root / "straight-wall-only-v8" / "project.json");
+  const auto exchanged = nlohmann::json::parse(input);
+  const auto& rows = exchanged.at("revisions");
+  check(exchanged.at("exchange_version") == 8 && rows[1].at("boundary_constraint_changes").at("version") == 4 &&
+        !rows[2].contains("boundary_constraint_changes"),
+        "undone straight wall-only authoring must retain exchange8 and originating version4 proof");
+  auto replayed = sketch::Document::create({source});
+  replayed.apply(sketch::command_from_json(rows[1].at("boundary_constraint_changes")));
+  check(replayed.snapshot().entities() == edited, "exchanged version4 must replay exact straight geometry and receipt");
+  replayed.undo(replayed.revision());
+  check(replayed.snapshot().entities() == initial, "exchanged version4 must undo to exact source");
+  replayed.redo(replayed.revision());
+  check(replayed.snapshot().entities() == edited, "exchanged version4 must redo exact guarded endpoint intent");
+  auto curve = source;
+  curve.id = "later-curve";
+  curve.properties["baseline"] = {{"start", {10, 0}}, {"end", {14, 0}}, {"sweep_radians", 0.4}};
+  document.apply(sketch::ApplyEntityChanges{document.revision(),
+      {sketch::EntityChange::upsert(curve)}, {}, "Add later curve"});
+  sketch::ApplyBoundaryConstraintChanges curve_edit{document.revision(), {}, {}, "Edit later curve"};
+  curve_edit.wall_edits.push_back({curve.id, {{10, 0}, {15, 0}, 0.4}, std::nullopt, 2});
+  document.apply(curve_edit);
+  sketch::extract_project(document.snapshot(), root / "mixed-straight-curved-v8");
+  std::ifstream mixed_input(root / "mixed-straight-curved-v8" / "project.json");
+  const auto mixed = nlohmann::json::parse(mixed_input);
+  check(mixed.at("exchange_version") == 8 &&
+        mixed.at("revisions").back().at("boundary_constraint_changes").at("version") == 3,
+        "later curved proof must not lower exchange8 required by retained straight wall-only intent");
+}
 } // namespace
 int main() {
   sketch::testing::noninteractive_errors();
@@ -238,6 +357,8 @@ int main() {
               ("property-exchange-" + sketch::make_stable_id());
   std::filesystem::create_directory(root);
   try {
+    test_straight_wall_only_authoring_exchange_v8(root);
+    test_safe_curved_wall_history_exchange_replays(root);
     const std::vector<std::byte> bytes{std::byte{1}, std::byte{2}, std::byte{0},
                                        std::byte{255}};
     auto asset =
@@ -282,6 +403,13 @@ int main() {
     }
     check(rejected && std::filesystem::exists(target / "project.json"),
           "Existing extraction must remain untouched");
+    const auto directory_names = [&] {
+      std::set<std::filesystem::path> names;
+      for (const auto& entry : std::filesystem::directory_iterator(root))
+        names.insert(entry.path().filename());
+      return names;
+    };
+    const auto retained_entries = directory_names();
     for (auto fault : {sketch::ExtractFaultStage::after_assets,
                        sketch::ExtractFaultStage::before_publish,
                        sketch::ExtractFaultStage::after_publish}) {
@@ -294,7 +422,7 @@ int main() {
       check(rejected, "Injected extraction failure must report an error");
       check(!std::filesystem::exists(root / "fault"),
             "Failure must not publish a partial destination");
-      check(std::distance(std::filesystem::directory_iterator(root), {}) == 1,
+      check(directory_names() == retained_entries,
             "Failure must clean all private staging data");
     }
     // A live extraction owns directory and payload identities until

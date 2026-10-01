@@ -13,7 +13,9 @@
 #include "sketch/terrain_surface.hpp"
 #include "support/noninteractive_errors.hpp"
 
+#include <algorithm>
 #include <cstdlib>
+#include <cmath>
 #include <iostream>
 #include <limits>
 #include <stdexcept>
@@ -1426,6 +1428,311 @@ void test_boundary_constraint_transaction_preserves_proof_and_is_atomic() {
 
 }  // namespace
 
+void test_direct_constraint_topology_admission() {
+    using namespace sketch;
+    const auto require_cycle_error=[](auto&& operation,std::string_view message) {
+        try { operation(); }
+        catch (const DocumentError& error) {
+            require(error.code()==DocumentErrorCode::invalid_entity &&
+                std::string_view(error.what()).find("wall-cycle")!=std::string_view::npos,
+                "cycle refusal did not diagnose analytical winding/branch topology");
+            return;
+        }
+        fail(message);
+    };
+    const auto wall_entity=[](std::string id,Segment baseline,double elevation=0.0) {
+        return Entity{std::move(id),"wall",{{"baseline",{{"start",{baseline.start.x,baseline.start.y}},
+            {"end",{baseline.end.x,baseline.end.y}},{"sweep_radians",baseline.sweep_radians}}},
+            {"thickness_m",0.1},{"height_m",3},{"elevation_m",elevation}}};
+    };
+    const auto area=encode_identified_boundary_entity(IdentifiedBoundary{"area","measurement_boundary",{
+        {"ab","a","b",{{100,100},{102,100},0}}, {"bc","b","c",{{102,100},{102,102},0}},
+        {"cd","c","d",{{102,102},{100,102},0}}, {"da","d","a",{{100,102},{100,100},0}}}});
+    for (const auto sweep : {0.0,0.6}) {
+        for (int scenario=0;scenario<3;++scenario) {
+            const Segment source{{0,0},{4,0},sweep};
+            const Segment target{{0,0},{scenario==2 ? 5.0 : 6.0,0},sweep};
+            const Segment obstacle=scenario==0 ? Segment{{5,-2},{5,2},0} : scenario==1 ?
+                (sweep==0 ? Segment{{5,0},{7,0},0} : target) : Segment{{5,0},{7,2},0};
+            auto document=Document::create({area,wall_entity("move",source),wall_entity("obstacle",obstacle)});
+            document.mark_saved(document.revision());
+            const auto before=document.snapshot();
+            ApplyBoundaryConstraintChanges command{document.revision(),
+                {{"area",BoundaryGeometryEditKind::move_vertex,"a",{100,100}}},{},"Forged topology"};
+            command.wall_edits.push_back({"move",target,std::nullopt,sweep==0 ? 1ULL : 2ULL});
+            require_error([&] { (void)Document::preview_command(before,command); },DocumentErrorCode::invalid_entity,
+                "direct typed preview accepted a new crossing, overlap or implicit contact");
+            require_error([&] { (void)document.apply(command); },DocumentErrorCode::invalid_entity,
+                "direct typed apply accepted a new crossing, overlap or implicit contact");
+            require(document.snapshot().entities()==before.entities() && document.revision()==before.revision() &&
+                document.snapshot().history().size()==before.history().size() &&
+                document.snapshot().saved_revision_optional()==before.saved_revision_optional(),
+                "topology rejection changed document state or history");
+        }
+        // XY crossings in disjoint vertical extents remain valid.
+        auto separated=Document::create({area,wall_entity("move",{{0,0},{4,0},sweep}),
+            wall_entity("upper",{{5,-2},{5,2},0},5)});
+        ApplyBoundaryConstraintChanges valid{separated.revision(),
+            {{"area",BoundaryGeometryEditKind::move_vertex,"a",{100,100}}},{},"Separate elevations"};
+        valid.wall_edits.push_back({"move",{{0,0},{6,0},sweep},std::nullopt,sweep==0 ? 1ULL : 2ULL});
+        const auto preview=Document::preview_command(separated.snapshot(),valid);
+        separated.apply(valid);
+        require(separated.snapshot().entities()==preview.entities(),"valid separated-plane preview/apply differ");
+        require(Document::fork(separated.snapshot()).snapshot().entities()==preview.entities(),"valid topology history replay differs");
+        // Preserve existing draft intersections and endpoint contacts without
+        // inventing a connection from coordinate equality.
+        for (const bool contact : {false,true}) {
+            auto existing=Document::create({area,wall_entity("move",{{0,0},{4,0},sweep}),
+                wall_entity("other",contact ? Segment{{4,0},{4,2},0} : Segment{{2,-5},{2,5},0}),
+                Entity{"legacy-marker","wall",{{"name","Opaque marker"}}}});
+            ApplyBoundaryConstraintChanges keep{existing.revision(),
+                {{"area",BoundaryGeometryEditKind::move_vertex,"a",{100,100}}},{},"Keep existing draft topology"};
+            keep.wall_edits.push_back({"move",contact ? Segment{{-1,0},{4,0},sweep} : Segment{{0,0},{6,0},sweep},
+                std::nullopt,sweep==0 ? 1ULL : 2ULL});
+            existing.apply(keep);
+            require(existing.snapshot().entities().at("legacy-marker").properties.at("name")=="Opaque marker",
+                "unrelated nonphysical wall marker was interpreted or changed");
+            require(Document::fork(existing.snapshot()).snapshot().entities()==existing.snapshot().entities(),
+                "existing draft intersection cannot replay");
+            if (contact) {
+                auto source=Document::create({area,wall_entity("move",{{0,0},{4,0},sweep}),wall_entity("other",{{4,0},{4,2},0})});
+                keep.expected_revision=source.revision(); keep.wall_edits[0].baseline={{4,0},{8,0},sweep};
+                require_error([&] { (void)source.apply(keep); },DocumentErrorCode::invalid_entity,
+                    "retained endpoint contact silently switched stable endpoint role");
+            }
+        }
+        auto reverse=Document::create({area,wall_entity("move",{{0,0},{4,0},sweep})});
+        valid.expected_revision=reverse.revision(); valid.wall_edits[0].baseline={{4,0},{0,0},sweep};
+        require_error([&] { (void)reverse.apply(valid); },DocumentErrorCode::invalid_entity,
+            "unconstrained typed proof reversed endpoint identity");
+        // The same coordinate reversal remains an intentional ordinary object
+        // transform, outside endpoint-authoring topology policy.
+        auto transformed=reverse.snapshot().entities().at("move");
+        transformed.properties["baseline"]["start"]={4,0}; transformed.properties["baseline"]["end"]={0,0};
+        reverse.apply(ApplyEntityChanges{reverse.revision(),{EntityChange::upsert(transformed)}, {},"Explicit object transform"});
+    }
+    // A major analytical arc can have two proper intersections. Preserving
+    // both is valid; silently turning one into an endpoint touch is refused.
+    const double major=1.5*std::acos(-1.0);
+    auto multiple=Document::create({area,wall_entity("move",{{0,0},{4,0},major}),wall_entity("other",{{-5,-2},{10,-2},0})});
+    ApplyBoundaryConstraintChanges preserve{multiple.revision(),{{"area",BoundaryGeometryEditKind::move_vertex,"a",{100,100}}},{},"Two analytical crossings"};
+    preserve.wall_edits.push_back({"move",{{0,0},{5,0},major},std::nullopt,2});
+    multiple.apply(preserve);
+    const auto valid_multiple=multiple.snapshot();
+    require(Document::fork(valid_multiple).snapshot().entities()==valid_multiple.entities(),"two-crossing topology replay differs");
+    auto contact_source=Document::create({area,wall_entity("move",{{0,0},{4,0},major}),wall_entity("other",{{-1,-2},{10,-2},0})});
+    preserve.expected_revision=contact_source.revision();
+    require_error([&] { (void)contact_source.apply(preserve); },DocumentErrorCode::invalid_entity,
+        "aggregate proper kind hid loss of a proper crossing and new endpoint touch");
+    const Vec2 endpoint{2+std::sqrt(8.0),-2};
+    auto signatures=Document::create({area,wall_entity("move",{{0,0},{4,0},major}),
+        wall_entity("other",{{-10,-2},endpoint,0})});
+    preserve.expected_revision=signatures.revision(); preserve.wall_edits[0].baseline={{0,0},endpoint,major};
+    require_error([&] { (void)signatures.apply(preserve); },DocumentErrorCode::invalid_entity,
+        "same aggregate/count crossings hid a new unbound semantic endpoint contact");
+    for (int scenario=0;scenario<8;++scenario) {
+        const Vec2 corners[]{{0,0},{4,0},{4,3},{0,3}};
+        std::vector<Entity> entities{area,
+            {"property","property",{{"name","Property"}}},
+            {"building","building",{{"name","Building"},{"property_id","property"}}},
+            {"floor-a","floor",{{"name","A"},{"building_id","building"}}},
+            {"floor-b","floor",{{"name","B"},{"building_id","building"}}},
+            {"layer-a","layer",{{"floor_id","floor-a"}}},
+            {"layer-b","layer",{{"floor_id","floor-b"}}}};
+        const double sweep=scenario==7 ? 0.2 : 0.0;
+        for (int i=0;i<4;++i) {
+            auto owner=wall_entity("edge-"+std::to_string(i),{corners[i],corners[(i+1)%4],sweep},
+                scenario==4 && i==3 ? 10.0 : 0.0);
+            owner.properties["floor_id"]=scenario==3 && i==3 ? "floor-b" : "floor-a";
+            owner.properties["layer_id"]=scenario==3 && i==3 ? "layer-b" : "layer-a";
+            entities.push_back(std::move(owner));
+        }
+        const auto coincidence=[](std::string id,WallEndpointBinding first,WallEndpointBinding second) {
+            PersistentConstraint relation;
+            relation.id=std::move(id); relation.relation=ConstraintRelationKind::coincident;
+            relation.bindings={std::move(first),std::move(second)};
+            return encode_constraint_entity(relation);
+        };
+        for (int i=0;i<4;++i) {
+            if (scenario==2 && i==3) continue;
+            entities.push_back(coincidence("corner-"+std::to_string(i),
+                {"edge-"+std::to_string(i),WallEndpointRole::end},
+                {"edge-"+std::to_string((i+1)%4),WallEndpointRole::start}));
+        }
+        if (scenario==2) {
+            entities.push_back(encode_identified_boundary_entity(IdentifiedBoundary{"bridge","measurement_boundary",{
+                {"ab","a","b",{{0,0},{1,0},0}}, {"bc","b","c",{{1,0},{1,1},0}},
+                {"cd","c","d",{{1,1},{0,1},0}}, {"da","d","a",{{0,1},{0,0},0}}}}));
+            entities.push_back(coincidence("bridge-left",{"edge-3",WallEndpointRole::end},
+                {"bridge",WallEndpointRole::start,"ab","a"}));
+            entities.push_back(coincidence("bridge-right",{"bridge",WallEndpointRole::start,"ab","a"},
+                {"edge-0",WallEndpointRole::start}));
+        }
+        const bool spur=scenario==1 || scenario==5 || scenario==6;
+        if (spur) {
+            auto owner=wall_entity("spur",{{0,0},{-2,-1},0},scenario==6 ? 10.0 : 0.0);
+            owner.properties["floor_id"]=scenario==5 ? "floor-b" : "floor-a";
+            owner.properties["layer_id"]=scenario==5 ? "layer-b" : "layer-a";
+            entities.push_back(std::move(owner));
+            entities.push_back(coincidence("spur-join",{"edge-0",WallEndpointRole::start},{"spur",WallEndpointRole::start}));
+        }
+        auto document=Document::create(entities);
+        const auto before=document.snapshot();
+        ApplyBoundaryConstraintChanges flip{document.revision(),{{"area",BoundaryGeometryEditKind::move_vertex,"a",{100,100}}},{},"Reflect endpoint cycle"};
+        for (int i=0;i<4;++i) flip.wall_edits.push_back({"edge-"+std::to_string(i),
+            {{10-corners[i].x,corners[i].y},{10-corners[(i+1)%4].x,corners[(i+1)%4].y},sweep},
+            std::nullopt,sweep==0 ? 1ULL : 2ULL});
+        if (spur) flip.wall_edits.push_back({"spur",{{10,0},{12,-1},0},std::nullopt});
+        if (scenario==0) flip.entity_changes.push_back(EntityChange::erase("corner-0"));
+        if (scenario==2) {
+            const Vec2 points[]{{10,0},{11,0},{11,1},{10,1}};
+            const char* ids[]{"a","b","c","d"};
+            for (int i=0;i<4;++i) flip.boundary_edits.push_back({"bridge",BoundaryGeometryEditKind::move_vertex,ids[i],points[i]});
+        }
+        if (scenario==3 || scenario==4) {
+            const auto preview=Document::preview_command(before,flip);
+            document.apply(flip);
+            require(document.snapshot().entities()==preview.entities(),"separate-plane component invented a fictitious winding cycle");
+            require(Document::fork(document.snapshot()).snapshot().entities()==preview.entities(),"separate-plane cycle proof cannot replay");
+        } else {
+            require_cycle_error([&] { (void)Document::preview_command(before,flip); },
+                "direct preview accepted winding reversal through removed join, branch or stable boundary bridge");
+            require_cycle_error([&] { (void)document.apply(flip); },
+                "direct apply accepted winding reversal through removed join, branch or stable boundary bridge");
+            require(document.revision()==before.revision() && document.snapshot().entities()==before.entities(),
+                "cycle winding refusal mutated source");
+        }
+    }
+    // Swapping the two paths of a theta graph reverses its nonbasis loop,
+    // although the two triangles in the deterministic cycle basis keep signs.
+    // Arc sweeps remain exact and endpoint tangents, not chords, order branches.
+    for (const auto sweep : {0.0,0.2}) {
+        const Segment segments[]{ {{4,0},{0,0},0}, {{0,0},{2,1},sweep},
+            {{2,1},{4,0},sweep}, {{0,0},{2,2},sweep}, {{2,2},{4,0},sweep} };
+        const char* ids[]{"a-base","b-low","c-low","d-high","e-high"};
+        std::vector<Entity> entities{area};
+        for (int i=0;i<5;++i) entities.push_back(wall_entity(ids[i],segments[i]));
+        const auto join=[&](std::string id,WallEndpointBinding first,WallEndpointBinding second) {
+            PersistentConstraint relation;
+            relation.id=std::move(id); relation.relation=ConstraintRelationKind::coincident;
+            relation.bindings={std::move(first),std::move(second)};
+            entities.push_back(encode_constraint_entity(relation));
+        };
+        join("A-base-low",{"a-base",WallEndpointRole::end},{"b-low",WallEndpointRole::start});
+        join("A-low-high",{"b-low",WallEndpointRole::start},{"d-high",WallEndpointRole::start});
+        join("B-base-low",{"a-base",WallEndpointRole::start},{"c-low",WallEndpointRole::end});
+        join("B-low-high",{"c-low",WallEndpointRole::end},{"e-high",WallEndpointRole::end});
+        join("L",{"b-low",WallEndpointRole::end},{"c-low",WallEndpointRole::start});
+        join("H",{"d-high",WallEndpointRole::end},{"e-high",WallEndpointRole::start});
+        auto document=Document::create(entities);
+        const auto before=document.snapshot();
+        ApplyBoundaryConstraintChanges swap{document.revision(),
+            {{"area",BoundaryGeometryEditKind::move_vertex,"a",{100,100}}},{},"Swap theta paths"};
+        const Segment targets[]{ {{0,0},{2,2},sweep}, {{2,2},{4,0},sweep},
+            {{0,0},{2,1},sweep}, {{2,1},{4,0},sweep} };
+        for (int i=1;i<5;++i) swap.wall_edits.push_back({ids[i],targets[i-1],std::nullopt,sweep==0 ? 1ULL : 2ULL});
+        require_cycle_error([&] { (void)Document::preview_command(before,swap); },
+            "theta preview accepted a nonbasis winding reversal");
+        require_cycle_error([&] { (void)document.apply(swap); },
+            "theta apply accepted a nonbasis winding reversal");
+        require(document.revision()==before.revision() && document.snapshot().entities()==before.entities(),
+            "theta refusal mutated source");
+        ApplyBoundaryConstraintChanges rotate{document.revision(),swap.boundary_edits,{},"Rotate theta junction"};
+        const auto quarter_turn=[](Vec2 value) { return Vec2{10-value.y,10+value.x}; };
+        for (int i=0;i<5;++i) rotate.wall_edits.push_back({ids[i],
+            {quarter_turn(segments[i].start),quarter_turn(segments[i].end),segments[i].sweep_radians},
+            std::nullopt,segments[i].sweep_radians==0 ? 1ULL : 2ULL});
+        const auto preview=Document::preview_command(before,rotate);
+        document.apply(rotate);
+        require(document.snapshot().entities()==preview.entities(),"valid analytical junction rotation differs from preview");
+        require(Document::fork(document.snapshot()).snapshot().entities()==preview.entities(),
+            "valid analytical junction rotation cannot replay");
+    }
+    for (const bool narrow : {false,true}) {
+        const double low_sweep=narrow ? 0 : 2*std::atan(0.5), high_sweep=narrow ? 0 : 2*std::atan(0.75);
+        const double extent=narrow ? 1e6 : 4, old_low=narrow ? 0.001 : 1, old_high=narrow ? 0.002 : 1.5;
+        const double new_low=narrow ? old_high : 2, new_high=narrow ? old_low : 1.6;
+        const Segment source[]{ {{extent,0},{0,0},0}, {{0,0},{extent/2,old_low},low_sweep},
+            {{extent/2,old_low},{extent,0},low_sweep}, {{0,0},{extent/2,old_high},high_sweep},
+            {{extent/2,old_high},{extent,0},high_sweep} };
+        const Segment target[]{ source[0], {{0,0},{extent/2,new_low},low_sweep},
+            {{extent/2,new_low},{extent,0},low_sweep}, {{0,0},{extent/2,new_high},high_sweep},
+            {{extent/2,new_high},{extent,0},high_sweep} };
+        const auto reverse=[](Segment segment) {
+            std::swap(segment.start,segment.end); segment.sweep_radians=-segment.sweep_radians; return segment;
+        };
+        const auto loop=[&](const auto& segments,int kind) {
+            return kind==0 ? Boundary{segments[0],segments[1],segments[2]} : kind==1 ?
+                Boundary{segments[0],segments[3],segments[4]} :
+                Boundary{segments[1],segments[2],reverse(segments[4]),reverse(segments[3])};
+        };
+        for (int i=0;i<3;++i) {
+            const auto old_loop=loop(source,i), current_loop=loop(target,i);
+            require(validate_boundary(old_loop,1e-6).empty() && validate_boundary(current_loop,1e-6).empty(),
+                "tangential theta fixture does not have valid analytical source/result loops");
+            require(std::abs(signed_area(old_loop))>1e-6 && std::abs(signed_area(current_loop))>1e-6 &&
+                ((signed_area(old_loop)>0)==(signed_area(current_loop)>0))==(i<2),
+                "tangential theta fixture must reverse only its nonbasis loop");
+        }
+        const auto signatures=[](const Segment& first,const Segment& second) {
+            const auto hit=segment_intersection(first,second,1e-6);
+            require(hit.kind!=SegmentIntersectionKind::indeterminate,"tangential theta intersection is indeterminate");
+            const auto role=[](const Segment& segment,Vec2 point) {
+                return std::hypot(segment.start.x-point.x,segment.start.y-point.y)<=1e-6 ? 0 :
+                    std::hypot(segment.end.x-point.x,segment.end.y-point.y)<=1e-6 ? 1 : 2;
+            };
+            std::vector<std::pair<int,int>> contacts;
+            for (const auto point : hit.points) contacts.emplace_back(role(first,point),role(second,point));
+            std::sort(contacts.begin(),contacts.end());
+            return std::make_pair(hit.kind,contacts);
+        };
+        for (int i=0;i<5;++i) for (int j=i+1;j<5;++j)
+            require(signatures(source[i],source[j])==signatures(target[i],target[j]),
+                "tangential theta fixture changes pair crossing/overlap/contact signatures");
+        const char* ids[]{"a-base","b-low","c-low","d-high","e-high"};
+        std::vector<Entity> entities{area};
+        for (int i=0;i<5;++i) entities.push_back(wall_entity(ids[i],source[i]));
+        const auto join=[&](std::string id,WallEndpointBinding first,WallEndpointBinding second) {
+            PersistentConstraint relation;
+            relation.id=std::move(id); relation.relation=ConstraintRelationKind::coincident;
+            relation.bindings={std::move(first),std::move(second)};
+            entities.push_back(encode_constraint_entity(relation));
+        };
+        join("A-base-low",{"a-base",WallEndpointRole::end},{"b-low",WallEndpointRole::start});
+        join("A-low-high",{"b-low",WallEndpointRole::start},{"d-high",WallEndpointRole::start});
+        join("B-base-low",{"a-base",WallEndpointRole::start},{"c-low",WallEndpointRole::end});
+        join("B-low-high",{"c-low",WallEndpointRole::end},{"e-high",WallEndpointRole::end});
+        join("L",{"b-low",WallEndpointRole::end},{"c-low",WallEndpointRole::start});
+        join("H",{"d-high",WallEndpointRole::end},{"e-high",WallEndpointRole::start});
+        auto document=Document::create(entities);
+        const auto before=document.snapshot();
+        ApplyBoundaryConstraintChanges swap{document.revision(),
+            {{"area",BoundaryGeometryEditKind::move_vertex,"a",{100,100}}},{},
+            narrow ? "Swap narrow straight theta paths" : "Swap tangential theta paths"};
+        for (int i=1;i<5;++i) swap.wall_edits.push_back({ids[i],target[i],std::nullopt,narrow ? 1ULL : 2ULL});
+        require_cycle_error([&] { (void)Document::preview_command(before,swap); },
+            narrow ? "narrow straight theta preview accepted a nonbasis winding reversal" :
+                "tangential theta preview accepted a nonbasis winding reversal");
+        require_cycle_error([&] { (void)document.apply(swap); },
+            narrow ? "narrow straight theta apply accepted a nonbasis winding reversal" :
+                "tangential theta apply accepted a nonbasis winding reversal");
+        require(document.revision()==before.revision() && document.snapshot().entities()==before.entities(),
+            "tangential theta refusal mutated source");
+        for (const auto angle : {std::acos(-1.0)/2,-1e-10}) {
+            ApplyBoundaryConstraintChanges rotate{document.revision(),swap.boundary_edits,{},"Rotate tangential theta junction"};
+            const PlanarTransform transform{{0,0},angle,false,false,{10,10}};
+            for (int i=0;i<5;++i) rotate.wall_edits.push_back({ids[i],transform_segment(source[i],transform),
+                std::nullopt,i==0 || narrow ? 1ULL : 2ULL});
+            auto valid=Document::fork(before);
+            const auto preview=Document::preview_command(before,rotate);
+            valid.apply(rotate);
+            require(valid.snapshot().entities()==preview.entities(),"tangential junction rotation differs from preview");
+            require(Document::fork(valid.snapshot()).snapshot().entities()==preview.entities(),
+                "tangential junction rotation cannot replay");
+        }
+    }
+}
+
 void test_curved_wall_proof_codec_and_replay() {
     using namespace sketch;
     Entity arc{"curve","wall",{{"baseline",{{"start",{0,0}},{"end",{4,0}},{"sweep_radians",0.6}}},
@@ -1485,6 +1792,7 @@ int main() {
         test_session_read_only_latch_survives_navigation_and_fork();
         test_typed_command_codec_round_trips_and_rejects_tampering();
         test_curved_wall_proof_codec_and_replay();
+        test_direct_constraint_topology_admission();
     } catch (const std::exception& error) {
         std::cerr << "document_tests: unexpected exception: " << error.what() << '\n';
         return 1;

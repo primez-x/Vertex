@@ -1335,9 +1335,7 @@ static void validate_split_dimension_lifetime(const BoundaryGeometryEdit& edit,
 std::map<std::string, Entity, std::less<>> boundary_constraint_entities(
     const std::map<std::string, Entity, std::less<>>& source,
     const ApplyBoundaryConstraintChanges& command) {
-    const bool curved=std::any_of(command.wall_edits.begin(),command.wall_edits.end(),
-        [](const auto& edit) { return edit.version==2; });
-    if (command.boundary_edits.empty() && !curved)
+    if (command.boundary_edits.empty() && command.wall_edits.empty())
         document_error(DocumentErrorCode::invalid_entity,
                        "Boundary constraint transaction requires geometry edits");
     auto result = source;
@@ -1385,6 +1383,8 @@ std::map<std::string, Entity, std::less<>> boundary_constraint_entities(
         try { validate_constraint_wall_host(edit.wall_id, result); }
         catch (const std::exception& error) { document_error(DocumentErrorCode::invalid_entity,error.what()); }
     }
+    try { validate_constraint_edit_topology(source,result); }
+    catch (const std::exception& error) { document_error(DocumentErrorCode::invalid_entity,error.what()); }
     return result;
 }
 
@@ -1665,7 +1665,8 @@ nlohmann::json command_to_json(const Command& command) {
                     encoded["boundary_edits"].push_back(encode_boundary_geometry_edit(edit));
                 if (!typed.wall_edits.empty()) {
                     encoded["version"] = std::any_of(typed.wall_edits.begin(),typed.wall_edits.end(),
-                        [](const auto& edit) { return edit.version==2; }) ? 3 : 2;
+                        [](const auto& edit) { return edit.version==2; }) ? 3 :
+                        typed.boundary_edits.empty() ? 4 : 2;
                     encoded["wall_edits"] = nlohmann::json::array();
                     for (const auto& edit : typed.wall_edits)
                         encoded["wall_edits"].push_back(encode_constraint_wall_edit(edit));
@@ -1711,7 +1712,7 @@ Command command_from_json(const nlohmann::json& value) {
     try {
         if (!value.is_object() || !value.contains("version") || !value.contains("kind") ||
             !value.at("version").is_number_integer() ||
-            (value.at("version") != 1 && value.at("version") != 2 && value.at("version") != 3) ||
+            (value.at("version") != 1 && value.at("version") != 2 && value.at("version") != 3 && value.at("version") != 4) ||
             !value.at("kind").is_string()) {
             document_error(DocumentErrorCode::invalid_entity, "serialized command envelope is invalid");
         }
@@ -1750,8 +1751,10 @@ Command command_from_json(const nlohmann::json& value) {
                                           "entity_changes", "boundary_edits"},
                                  DocumentErrorCode::invalid_entity, "serialized boundary constraint command");
             if (!value.at("boundary_edits").is_array() ||
-                (value.at("boundary_edits").empty() && value.at("version")!=3))
+                (value.at("boundary_edits").empty() && value.at("version")!=3 && value.at("version")!=4))
                 document_error(DocumentErrorCode::invalid_entity, "Boundary edits must be a nonempty array");
+            if (value.at("version")==4 && !value.at("boundary_edits").empty())
+                document_error(DocumentErrorCode::invalid_entity, "Version 4 requires a straight wall-only transaction");
             auto ordinary = value;
             ordinary["kind"] = "apply_entity_changes";
             ordinary["version"] = 1;
@@ -1766,7 +1769,7 @@ Command command_from_json(const nlohmann::json& value) {
                     result.boundary_edits.push_back(decode_boundary_geometry_edit(edit));
                 if (mixed) {
                     if (!value.at("wall_edits").is_array() || value.at("wall_edits").empty())
-                        document_error(DocumentErrorCode::invalid_entity,"Version 2 requires nonempty wall edits");
+                        document_error(DocumentErrorCode::invalid_entity,"Versioned wall transaction requires nonempty wall edits");
                     for (const auto& edit : value.at("wall_edits"))
                         result.wall_edits.push_back(decode_constraint_wall_edit(edit));
                     const bool curved=std::any_of(result.wall_edits.begin(),result.wall_edits.end(),

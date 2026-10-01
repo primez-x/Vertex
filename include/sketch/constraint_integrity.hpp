@@ -17,4 +17,11 @@ void validate_constraint_transition(
     const std::map<std::string, Entity, std::less<>>& before,
     const std::map<std::string, Entity, std::less<>>& after);
 
+// Endpoint-authoring and typed replay share this solver-free admission.
+// Only changed geometry is checked against the original drawing topology;
+// ordinary explicit construction/transform commands do not call this policy.
+void validate_constraint_edit_topology(
+    const std::map<std::string, Entity, std::less<>>& before,
+    const std::map<std::string, Entity, std::less<>>& after);
+
 } // namespace sketch

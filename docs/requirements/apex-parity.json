@@ -887,7 +887,7 @@
       "requirement": "Prevent unintended mirrored solutions, winding changes, topology changes, and unstable alternate branches during solve.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "verified",
+      "implementation_status": "in_progress",
       "acceptance": "Branch and mirrored-solution fixtures either retain the intended branch or ask for an explicit alternative selection.",
       "package": 4,
       "blocker": null,
@@ -904,7 +904,7 @@
         "scripts/generate_workflow_acceptance_evidence.py",
         "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "Wall reversal remapping, closed-loop winding and crossing/overlap checks protect current straight-wall candidate solves; scaled, translated and orthogonal-edit fixtures are added. General branch selection, boundary identity and curve topology remain incomplete. Deterministic Debug/Release workflow evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
+      "implementation_note": "Shared analytical topology admission now protects endpoint authoring, typed preview/apply and saved typed history against new crossings, overlaps, implicit contacts, endpoint reversal and protected loop winding changes. Source and candidate coincidence graphs, floor/vertical-plane separation, cyclic branch order, tangent/curvature ties and narrow theta cases have focused Release coverage and independent source review. Straight wall-only authoring retains envelope-4 intent under project format 11/exchange format 8; matching proof/state and a recomputed checksum cannot bypass the typed policy. Historical generic commands lack that intent. Large cyclic-component performance, general alternate-branch selection and production qualification remain incomplete; historical workflow evidence does not certify this checkpoint."
     },
     {
       "id": "GEO-CON-005",

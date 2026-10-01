@@ -1,4 +1,4 @@
-# Vertex project formats v1 through v10
+# Vertex project formats v1 through v11
 
 ## Circular column selection orientation
 
@@ -34,6 +34,17 @@ supported project and writes a validated copy at the current storage version. Mi
 an existing destination, reports source and destination SHA-256 fingerprints, and verifies that
 the source hash is unchanged. A failed migration leaves the source and any existing destination
 untouched.
+
+Retained typed `ApplyBoundaryConstraintChanges` endpoint commands replay through the same analytical
+topology checks used by interactive authoring. A matching command/result pair
+and recomputed logical digest cannot authorize new undeclared wall contacts,
+crossings, overlap or reversal of a protected closed loop. Unsafe history
+rejects with an integrity diagnostic; the loader preserves the original bytes.
+Ordinary explicit construction/transform commands retain their separate policy.
+New straight wall-only endpoint authoring retains this typed intent. Historical
+straight wall-only authoring stored as generic `ApplyEntityChanges`
+does not encode endpoint-edit intent and is not covered by this typed replay
+policy; its missing intent is not inferred retrospectively.
 
 Version 2 retains the v1 table structure and adds a mandatory compatibility
 boundary for identified geometry. Any identified boundary, boundary draft or
@@ -435,7 +446,7 @@ unknown project `format_version` is rejected rather than opened unsafely.
 ## SQLite schema
 
 The SQLite `application_id` is `0x50535444` (`PSTD`). `user_version` and metadata
-`format_version` are equal and range from `1` through `10`, according to the
+`format_version` are equal and range from `1` through `11`, according to the
 retained semantics. The baseline application tables below are shared; later
 versions add the proof columns and recovery data documented in this file.
 
@@ -803,3 +814,30 @@ proofs, bound relations, and wall derivation envelopes. It writes the complete v
 the originating revision. Later ordinary commands and undo records cannot
 lower the exchange version; curve-free histories keep exchange versions 1
 through 6 according to their existing proofs.
+
+## Straight wall-only endpoint intent (v11)
+
+Version 11 uses the existing v9 SQLite columns. It protects version 4 of
+`apply_boundary_constraint_changes`: an empty `boundary_edits` array, a nonempty
+`wall_edits` array containing only historical unversioned straight proofs, and
+optional constraint entity changes. Version 4 rejects boundary edits or curved
+wall proofs. Versions 1/2/3 retain their earlier decoding and encoding rules.
+
+Endpoint authoring emits this typed command when it changes straight walls
+without changing a boundary. Replay reconstructs geometry and measurements
+from each proof, then applies the shared analytical topology admission and
+independent hard-relation/host validation before accepting the complete state.
+Undo/redo and abandoned history retain the originating proof. Deleting its wall
+later does not reduce the required reader version.
+
+Both SQLite format markers and the logical digest use v11 whenever any retained
+revision contains this capability. Loading independently recomputes that
+minimum; changing both markers and recalculating the digest cannot downgrade a
+v11 history to v10. Mixed curved and straight-only histories retain the highest
+minimum version. Projects without a straight wall-only proof retain their
+earlier format requirements. JSON/assets extraction advertises exchange
+version 8 and retains each exact command on its originating revision.
+
+These records do not retrofit missing endpoint-edit intent into old generic
+`ApplyEntityChanges` history. Explicit construction and object transforms
+remain distinct commands with their own validation policy.

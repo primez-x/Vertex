@@ -236,7 +236,7 @@ add_library(sketch_document src/core/document.cpp src/core/document_digest.cpp s
   src/core/boundary_geometry_edit.cpp src/core/constraint_wall_edit.cpp
   src/core/boundary_dimension.cpp src/core/sheet_view_entity_codec.cpp
   src/core/annotation_entity_codec.cpp src/core/georeferencing_entity_codec.cpp
-  src/core/vertical_level_document_adapter.cpp)
+  src/core/vertical_level_document_adapter.cpp src/core/project_organization.cpp)
 target_include_directories(sketch_document PUBLIC include)
 target_link_libraries(sketch_document PUBLIC sketch_json PRIVATE sketch_wall_semantics sketch_roof_join_semantics sketch_boundary_receipts
   sketch_slab_semantics sketch_sheet_view_model sketch_annotation_catalog sketch_assembly_model sketch_model_phases
@@ -248,8 +248,8 @@ if(SKETCH_BUILD_ARCHITECTURE OR SKETCH_BUILD_DESKTOP)
   target_link_libraries(sketch_georeferencing_runtime PUBLIC
     sketch_georeferencing_contract sketch_document PROJ::proj)
 endif()
-add_library(sketch_project_organization src/core/project_organization.cpp)
-target_link_libraries(sketch_project_organization PUBLIC sketch_document)
+add_library(sketch_project_organization INTERFACE)
+target_link_libraries(sketch_project_organization INTERFACE sketch_document)
 target_link_libraries(sketch_architectural_document_adapter PUBLIC sketch_project_organization)
 if(SKETCH_BUILD_ARCHITECTURE OR SKETCH_BUILD_DESKTOP)
   add_library(sketch_section_dimension_resolution src/architecture/section_dimension_resolution.cpp)
@@ -330,7 +330,7 @@ add_executable(vertex-cli src/cli/main.cpp resources/windows/vertex-cli.rc)
 target_link_libraries(vertex-cli PRIVATE sketch_storage sketch_exchange sketch_project_resource_catalog
   sketch_annotation_catalog)
 if(MSVC)
-  foreach(target IN ITEMS sketch_document sketch_project_organization sketch_project_visibility sketch_output_fingerprint sketch_storage sketch_exchange vertex-cli)
+  foreach(target IN ITEMS sketch_document sketch_project_visibility sketch_output_fingerprint sketch_storage sketch_exchange vertex-cli)
     target_compile_options(${target} PRIVATE /W4 /permissive- /utf-8)
   endforeach()
 endif()

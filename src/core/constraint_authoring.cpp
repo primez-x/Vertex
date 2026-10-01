@@ -298,190 +298,6 @@ void append_relation(ConstraintSolveRequest& request, const PersistentConstraint
     }
 }
 
-struct DisjointPoints {
-    std::map<std::string, std::string, std::less<>> parent;
-
-    void add(const std::string& value) { parent.try_emplace(value, value); }
-
-    std::string root(const std::string& value) {
-        auto found = parent.find(value);
-        if (found == parent.end()) {
-            add(value);
-            return value;
-        }
-        if (found->second == value) {
-            return value;
-        }
-        found->second = root(found->second);
-        return found->second;
-    }
-
-    void unite(const std::string& first, const std::string& second) {
-        auto first_root = root(first);
-        auto second_root = root(second);
-        if (first_root == second_root) {
-            return;
-        }
-        if (second_root < first_root) {
-            std::swap(first_root, second_root);
-        }
-        parent[second_root] = first_root;
-    }
-};
-
-DisjointPoints explicit_coincident_points(
-    const std::map<std::string, PersistentConstraint, std::less<>>& constraints) {
-    DisjointPoints points;
-    for (const auto& [id, constraint] : constraints) {
-        (void)id;
-        if (constraint.relation == ConstraintRelationKind::coincident)
-            points.unite(point_id(constraint.bindings.at(0)),point_id(constraint.bindings.at(1)));
-    }
-    return points;
-}
-
-struct AnalyticalWallWinding {
-    std::vector<std::pair<std::string,bool>> edges;
-    double area{};
-};
-
-void append_winding_invariants(
-    ConstraintSolveRequest& request,
-    const std::set<std::string, std::less<>>& affected_walls,
-    const std::map<std::string, Segment, std::less<>>& old_baselines,
-    const std::map<std::string, PersistentConstraint, std::less<>>& constraints,
-    std::vector<AnalyticalWallWinding>& analytical_windings) {
-    auto points = explicit_coincident_points(constraints);
-    for (const auto& wall_id : affected_walls) {
-        points.add(point_id({wall_id, WallEndpointRole::start}));
-        points.add(point_id({wall_id, WallEndpointRole::end}));
-    }
-    // Boundary vertices participate in the explicit identity graph; only
-    // affected wall edges enter the cycle below.
-
-    struct Edge {
-        std::string wall_id;
-        std::string first;
-        std::string second;
-    };
-    std::vector<Edge> edges;
-    std::map<std::string, std::vector<std::size_t>, std::less<>> incident;
-    for (const auto& wall_id : affected_walls) {
-        auto first = points.root(point_id({wall_id, WallEndpointRole::start}));
-        auto second = points.root(point_id({wall_id, WallEndpointRole::end}));
-        if (first == second) {
-            continue;
-        }
-        const auto index = edges.size();
-        edges.push_back({wall_id, first, second});
-        incident[first].push_back(index);
-        incident[second].push_back(index);
-    }
-
-    std::set<std::string, std::less<>> visited_vertices;
-    for (const auto& [start, start_edges] : incident) {
-        if (visited_vertices.contains(start)) {
-            continue;
-        }
-        std::set<std::string, std::less<>> component_vertices;
-        std::set<std::size_t> component_edges;
-        std::vector<std::string> queue{start};
-        while (!queue.empty()) {
-            auto vertex = std::move(queue.back());
-            queue.pop_back();
-            if (!component_vertices.insert(vertex).second) {
-                continue;
-            }
-            visited_vertices.insert(vertex);
-            for (const auto edge_index : incident.at(vertex)) {
-                component_edges.insert(edge_index);
-                const auto& edge = edges[edge_index];
-                queue.push_back(edge.first == vertex ? edge.second : edge.first);
-            }
-        }
-        if (component_vertices.size() < 2 || component_edges.size() != component_vertices.size() ||
-            std::any_of(component_vertices.begin(), component_vertices.end(),
-                        [&](const std::string& vertex) { return incident.at(vertex).size() != 2; })) {
-            continue;
-        }
-
-        std::vector<std::string> loop_vertices;
-        std::vector<std::pair<std::string,bool>> loop_edges;
-        std::set<std::size_t> used_edges;
-        std::string current = *component_vertices.begin();
-        std::string previous;
-        while (loop_vertices.size() < component_vertices.size()) {
-            loop_vertices.push_back(current);
-            std::optional<std::size_t> chosen;
-            for (const auto edge_index : incident.at(current)) {
-                if (!used_edges.contains(edge_index)) {
-                    chosen = edge_index;
-                    break;
-                }
-            }
-            if (!chosen.has_value()) {
-                loop_vertices.clear();
-                break;
-            }
-            used_edges.insert(*chosen);
-            const auto& edge = edges[*chosen];
-            loop_edges.emplace_back(edge.wall_id,edge.first==current);
-            previous = current;
-            current = edge.first == current ? edge.second : edge.first;
-            (void)previous;
-        }
-        if (loop_vertices.size() != component_vertices.size() ||
-            current != loop_vertices.front()) {
-            continue;
-        }
-        Boundary analytical_loop;
-        bool curved=false;
-        for (const auto& [id,forward] : loop_edges) {
-            auto segment=old_baselines.at(id);
-            curved=curved || segment.sweep_radians!=0;
-            if (!forward) { std::swap(segment.start,segment.end); segment.sweep_radians=-segment.sweep_radians; }
-            analytical_loop.push_back(segment);
-        }
-        const auto area=signed_area(analytical_loop);
-        if (!std::isfinite(area) || std::abs(area)<=constraint_linear_tolerance_metres*constraint_linear_tolerance_metres)
-            invalid("Explicit wall cycle has degenerate analytical winding");
-        analytical_windings.push_back({loop_edges,area});
-        if (curved || loop_vertices.size()<3) continue;
-
-        std::map<std::string, std::string, std::less<>> representative;
-        std::map<std::string, Vec2, std::less<>> coordinates;
-        for (const auto& wall_id : affected_walls) {
-            for (const auto role : {WallEndpointRole::start, WallEndpointRole::end}) {
-                const auto semantic_id = point_id({wall_id, role});
-                const auto vertex = points.root(semantic_id);
-                const auto coordinate = endpoint_position(old_baselines.at(wall_id), role);
-                if (!representative.contains(vertex) || semantic_id < representative.at(vertex)) {
-                    representative[vertex] = semantic_id;
-                    coordinates[vertex] = coordinate;
-                }
-            }
-        }
-        long double twice_area = 0.0L;
-        for (std::size_t index = 0; index < loop_vertices.size(); ++index) {
-            const auto first = coordinates.at(loop_vertices[index]);
-            const auto second = coordinates.at(loop_vertices[(index + 1) % loop_vertices.size()]);
-            twice_area += static_cast<long double>(first.x) * static_cast<long double>(second.y) -
-                          static_cast<long double>(second.x) * static_cast<long double>(first.y);
-        }
-        if (!std::isfinite(twice_area) || std::abs(twice_area) <=
-                static_cast<long double>(constraint_linear_tolerance_metres) *
-                    constraint_linear_tolerance_metres) {
-            continue;
-        }
-        WindingInvariant invariant;
-        invariant.orientation = twice_area > 0.0L ? WindingOrientation::counter_clockwise
-                                                   : WindingOrientation::clockwise;
-        for (const auto& vertex : loop_vertices) {
-            invariant.loop.push_back(representative.at(vertex));
-        }
-        request.winding_invariants.push_back(std::move(invariant));
-    }
-}
 
 std::string unique_temporary_id(const std::set<std::string, std::less<>>& persistent_ids,
                                 std::size_t index) {
@@ -498,176 +314,9 @@ bool points_near(Vec2 first, Vec2 second, double tolerance = kPointComparisonTol
         std::hypot(first.x - second.x, first.y - second.y) <= tolerance;
 }
 
-enum class IntersectionKind { none, touch, proper, overlap };
-
-long double cross(Vec2 a, Vec2 b, Vec2 c) {
-    return (static_cast<long double>(b.x) - a.x) *
-               (static_cast<long double>(c.y) - a.y) -
-           (static_cast<long double>(b.y) - a.y) *
-               (static_cast<long double>(c.x) - a.x);
-}
-
-int side_sign(Vec2 first, Vec2 second, Vec2 value) {
-    const long double dx = static_cast<long double>(second.x) - first.x;
-    const long double dy = static_cast<long double>(second.y) - first.y;
-    const long double line_length = std::hypot(dx, dy);
-    if (!std::isfinite(line_length) || line_length <= default_geometry_tolerance_metres) {
-        invalid("Topology classification requires a finite non-degenerate wall");
-    }
-    const long double signed_distance = cross(first, second, value) / line_length;
-    constexpr long double tolerance = constraint_linear_tolerance_metres;
-    return signed_distance > tolerance ? 1 : (signed_distance < -tolerance ? -1 : 0);
-}
-
-bool within(double value, double first, double second) {
-    const auto low = std::min(first, second) - constraint_linear_tolerance_metres;
-    const auto high = std::max(first, second) + constraint_linear_tolerance_metres;
-    return value >= low && value <= high;
-}
-
-bool on_segment(Vec2 point_value, Vec2 first, Vec2 second) {
-    return side_sign(first, second, point_value) == 0 &&
-        within(point_value.x, first.x, second.x) && within(point_value.y, first.y, second.y);
-}
-
-IntersectionKind intersection_kind(const Segment& first, const Segment& second) {
-    const auto o1 = side_sign(first.start, first.end, second.start);
-    const auto o2 = side_sign(first.start, first.end, second.end);
-    const auto o3 = side_sign(second.start, second.end, first.start);
-    const auto o4 = side_sign(second.start, second.end, first.end);
-    if (o1 * o2 < 0 && o3 * o4 < 0) {
-        return IntersectionKind::proper;
-    }
-    const bool touches = (o1 == 0 && on_segment(second.start, first.start, first.end)) ||
-        (o2 == 0 && on_segment(second.end, first.start, first.end)) ||
-        (o3 == 0 && on_segment(first.start, second.start, second.end)) ||
-        (o4 == 0 && on_segment(first.end, second.start, second.end));
-    if (!touches) {
-        return IntersectionKind::none;
-    }
-    if (o1 == 0 && o2 == 0 && o3 == 0 && o4 == 0) {
-        const auto use_x = std::abs(first.end.x - first.start.x) >=
-            std::abs(first.end.y - first.start.y);
-        const auto a0 = use_x ? first.start.x : first.start.y;
-        const auto a1 = use_x ? first.end.x : first.end.y;
-        const auto b0 = use_x ? second.start.x : second.start.y;
-        const auto b1 = use_x ? second.end.x : second.end.y;
-        const auto overlap = std::min(std::max(a0, a1), std::max(b0, b1)) -
-            std::max(std::min(a0, a1), std::min(b0, b1));
-        if (overlap > constraint_linear_tolerance_metres) {
-            return IntersectionKind::overlap;
-        }
-    }
-    return IntersectionKind::touch;
-}
-
-bool explicitly_coincident_endpoints(
-    const std::string& first_wall, const Segment& first,
-    const std::string& second_wall, const Segment& second,
-    DisjointPoints& points) {
-    for (const auto a : {WallEndpointRole::start,WallEndpointRole::end})
-        for (const auto b : {WallEndpointRole::start,WallEndpointRole::end})
-            if (points.root(point_id({first_wall,a})) == points.root(point_id({second_wall,b})) &&
-                points_near(endpoint_position(first,a),endpoint_position(second,b),
-                    constraint_linear_tolerance_metres)) return true;
-    return false;
-}
-
 bool has_organization_reference(const Entity& entity) {
     return entity.properties.contains("layer_id") || entity.properties.contains("floor_id") ||
         entity.properties.contains("building_id") || entity.properties.contains("property_id");
-}
-
-std::optional<DrawingContext> resolved_context(const Entity& entity,
-                                               const ProjectOrganization& organization) {
-    const auto context = organization.drawing_context(entity.id);
-    if (has_organization_reference(entity) && !context.has_value()) {
-        invalid("Wall has an unresolved explicit drawing context: " + entity.id);
-    }
-    return context;
-}
-
-bool same_drawing_plane(const Entity& first, const Entity& second,
-                        const ProjectOrganization& organization) {
-    const auto first_context = resolved_context(first, organization);
-    const auto second_context = resolved_context(second, organization);
-    if (first_context.has_value() && second_context.has_value() &&
-        first_context->floor_id != second_context->floor_id) {
-        return false;
-    }
-    const auto first_elevation =
-        finite_number(first.properties.at("elevation_m"), "Wall elevation");
-    const auto second_elevation =
-        finite_number(second.properties.at("elevation_m"), "Wall elevation");
-    const auto first_height = finite_number(first.properties.at("height_m"), "Wall height");
-    const auto second_height = finite_number(second.properties.at("height_m"), "Wall height");
-    const long double first_top = static_cast<long double>(first_elevation) + first_height;
-    const long double second_top = static_cast<long double>(second_elevation) + second_height;
-    if (!std::isfinite(first_top) || !std::isfinite(second_top)) {
-        invalid("Wall vertical extent exceeds the supported numeric range");
-    }
-    return std::max(static_cast<long double>(first_elevation),
-                    static_cast<long double>(second_elevation)) <
-        std::min(first_top, second_top) + constraint_linear_tolerance_metres;
-}
-
-void validate_topology(
-    const Entities& before, const Entities& after,
-    const std::set<std::string, std::less<>>& changed_walls,
-    const std::map<std::string, PersistentConstraint, std::less<>>& constraints,
-    const ProjectOrganization& organization) {
-    auto coincidences = explicit_coincident_points(constraints);
-    std::set<std::pair<std::string, std::string>> checked_pairs;
-    for (const auto& changed_id : changed_walls) {
-        for (const auto& [other_id, other_entity] : after) {
-            if (other_id == changed_id || other_entity.type != "wall") {
-                continue;
-            }
-            const auto pair = std::minmax(changed_id, other_id);
-            if (!checked_pairs.emplace(pair.first, pair.second).second) {
-                continue;
-            }
-            const auto& first_id = pair.first;
-            const auto& second_id = pair.second;
-            if (!before.contains(first_id) || !before.contains(second_id) ||
-                before.at(first_id).type != "wall" || before.at(second_id).type != "wall") {
-                invalid("Constraint solve cannot change wall topology across unknown owners");
-            }
-            if (!same_drawing_plane(after.at(first_id), after.at(second_id), organization)) {
-                continue;
-            }
-            const auto old_first = read_baseline(before.at(first_id));
-            const auto old_second = read_baseline(before.at(second_id));
-            const auto new_first = read_baseline(after.at(first_id));
-            const auto new_second = read_baseline(after.at(second_id));
-            if (old_first.sweep_radians!=0.0 || old_second.sweep_radians!=0.0) {
-                const auto old_hit=segment_intersection(old_first,old_second,constraint_linear_tolerance_metres);
-                const auto new_hit=segment_intersection(new_first,new_second,constraint_linear_tolerance_metres);
-                using Kind=SegmentIntersectionKind;
-                if (old_hit.kind==Kind::indeterminate || new_hit.kind==Kind::indeterminate)
-                    invalid("Constraint wall topology has indeterminate analytical intersections");
-                if ((old_hit.kind==Kind::proper)!=(new_hit.kind==Kind::proper) ||
-                    (old_hit.kind==Kind::overlap)!=(new_hit.kind==Kind::overlap) ||
-                    (old_hit.kind==Kind::proper && old_hit.points.size()!=new_hit.points.size()))
-                    invalid("Constraint solve would change analytical wall crossing or overlap topology");
-                if (old_hit.kind==Kind::none && new_hit.kind==Kind::touch &&
-                    !explicitly_coincident_endpoints(first_id,new_first,second_id,new_second,coincidences))
-                    invalid("Constraint solve would create an implicit coordinate-only curved wall connection");
-                continue;
-            }
-            const auto old_kind = intersection_kind(old_first, old_second);
-            const auto new_kind = intersection_kind(new_first, new_second);
-            if ((old_kind == IntersectionKind::proper) != (new_kind == IntersectionKind::proper) ||
-                (old_kind == IntersectionKind::overlap) != (new_kind == IntersectionKind::overlap)) {
-                invalid("Constraint solve would change wall crossing or overlap topology");
-            }
-            if (old_kind == IntersectionKind::none && new_kind == IntersectionKind::touch &&
-                !explicitly_coincident_endpoints(first_id, new_first, second_id, new_second,
-                                                 coincidences)) {
-                invalid("Constraint solve would create an implicit coordinate-only wall connection");
-            }
-        }
-    }
 }
 
 bool baseline_same(const Segment& first, const Segment& second) {
@@ -1034,8 +683,6 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(
                 constraint_descriptions.emplace(id, relation_description(candidate, value));
             }
         }
-        std::vector<AnalyticalWallWinding> analytical_windings;
-        append_winding_invariants(request, affected_walls, old_baselines, constraints,analytical_windings);
 
         std::map<std::string, Vec2, std::less<>> fixed_points;
         const auto add_fixed = [&](const WallEndpointBinding& binding, Vec2 position) {
@@ -1169,7 +816,6 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(
             solved->second = position;
         }
 
-        std::set<std::string, std::less<>> changed_ids;
         for (const auto& wall_id : affected_walls) {
             const auto old = old_baselines.at(wall_id);
             Segment proposed{
@@ -1191,7 +837,6 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(
                 old.sweep_radians==0 ? 1ULL : 2ULL});
             validate_constraint_wall_host(wall_id, candidate);
             result.changed_walls_.push_back({wall_id, old, proposed});
-            changed_ids.insert(wall_id);
         }
 
         if (boundary_edit) result.boundary_edits_.push_back(*boundary_edit);
@@ -1209,25 +854,9 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(
         candidate = edited_boundary_entities_batch(candidate, result.boundary_edits_);
         for (const auto& [id, before] : boundaries) {
             const auto after = decode_identified_boundary_entity(candidate.at(id));
-            const auto old_area=signed_area(boundary_geometry(before));
-            const auto new_area=signed_area(boundary_geometry(after));
-            if (!std::isfinite(new_area) || std::abs(new_area)<=constraint_linear_tolerance_metres*constraint_linear_tolerance_metres ||
-                (old_area>0)!=(new_area>0)) invalid("Constraint solve would change analytical boundary winding");
             if (after != before) result.changed_boundaries_.push_back({before, after});
         }
-        for (const auto& winding : analytical_windings) {
-            Boundary loop;
-            for (const auto& [id,forward] : winding.edges) {
-                auto segment=read_baseline(candidate.at(id));
-                if (!forward) { std::swap(segment.start,segment.end); segment.sweep_radians=-segment.sweep_radians; }
-                loop.push_back(segment);
-            }
-            const auto area=signed_area(loop);
-            if (!validate_boundary(loop,constraint_linear_tolerance_metres).empty() ||
-                !std::isfinite(area) || std::abs(area)<=constraint_linear_tolerance_metres*constraint_linear_tolerance_metres ||
-                (area>0)!=(winding.area>0)) invalid("Constraint solve would change analytical wall-cycle winding or topology");
-        }
-        validate_topology(snapshot.entities(), candidate, changed_ids, constraints, organization);
+        validate_constraint_edit_topology(snapshot.entities(),candidate);
         (void)validate_boundary_integrity(candidate);
         (void)validate_constraint_integrity(candidate);
 
@@ -1516,9 +1145,7 @@ Revision apply_constraint_authoring(Document& document,
         throw DocumentError(DocumentErrorCode::invalid_entity,
                             "Constraint preview does not contain a document change");
     }
-    const bool curved_walls=std::any_of(recomputed.changed_walls_.begin(),recomputed.changed_walls_.end(),
-        [](const auto& wall) { return wall.old_baseline.sweep_radians!=0; });
-    if (!recomputed.boundary_edits_.empty() || curved_walls) {
+    if (!recomputed.boundary_edits_.empty() || !recomputed.changed_walls_.empty()) {
         std::vector<EntityChange> constraint_changes;
         for (const auto& change : changes) {
             const auto id = change.kind == EntityChangeKind::upsert

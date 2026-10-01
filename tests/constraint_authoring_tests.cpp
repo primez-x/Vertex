@@ -866,6 +866,68 @@ void test_history_reopen_and_host_failures() {
     require(!missing_preview.accepted(), "missing relation owner was accepted");
 }
 
+void test_straight_wall_only_authoring_retains_guarded_typed_intent() {
+    auto document = Document::create({wall("straight", {0, 0}, {4, 0})});
+    const auto initial = document.snapshot().entities();
+    ConstraintAuthoringIntent intent;
+    intent.wall_resize = WallResizeIntent{"straight", parse_quantity("5 m"), WallResizeAnchor::start, false};
+    intent.message = "Resize straight wall";
+    const auto preview = preview_constraint_authoring(document.snapshot(), intent);
+    require_accepted(preview, "straight wall-only resize must remain authorable");
+    (void)apply_constraint_authoring(document, preview);
+    const auto edited = document.snapshot().entities();
+    const auto snapshot = document.snapshot();
+    const auto& retained = snapshot.history().back().boundary_constraint_changes;
+    require(retained.has_value(), "straight wall-only authoring must retain typed endpoint intent");
+    const auto encoded = command_to_json(*retained);
+    require(encoded.at("version") == 4 && encoded.at("boundary_edits").empty() &&
+                encoded.at("wall_edits").size() == 1 && !encoded.at("wall_edits")[0].contains("version") &&
+                encoded.at("wall_edits")[0].at("length_entry").at("original_expression") == "5 m",
+            "straight wall-only proof must use version4 with unchanged historical inner receipt encoding");
+    require(command_to_json(command_from_json(encoded)) == encoded,
+            "straight wall-only command codec must preserve exact endpoint and length evidence");
+    for (const auto version : {1, 2, 3}) {
+        auto downgraded = encoded;
+        downgraded["version"] = version;
+        bool rejected = false;
+        try { (void)command_from_json(downgraded); } catch (const DocumentError&) { rejected = true; }
+        require(rejected, "old command envelopes must not accept straight wall-only typed proof");
+    }
+    auto with_boundary = encoded;
+    with_boundary["boundary_edits"] = json::array({{{"version", 1}, {"kind", "move_vertex"},
+        {"boundary_id", "area"}, {"vertex_id", "corner"}, {"position", {0, 0}}}});
+    bool rejected = false;
+    try { (void)command_from_json(with_boundary); } catch (const DocumentError&) { rejected = true; }
+    require(rejected, "version4 must be reserved for straight wall-only transactions");
+    auto empty_walls = encoded;
+    empty_walls["wall_edits"] = json::array();
+    rejected = false;
+    try { (void)command_from_json(empty_walls); } catch (const DocumentError&) { rejected = true; }
+    require(rejected, "version4 must contain a nonempty straight wall proof");
+    auto curved_proof = encoded;
+    curved_proof["wall_edits"][0]["version"] = 2;
+    curved_proof["wall_edits"][0]["baseline"]["sweep_radians"] = 0.4;
+    curved_proof["wall_edits"][0]["length_entry"] = nullptr;
+    rejected = false;
+    try { (void)command_from_json(curved_proof); } catch (const DocumentError&) { rejected = true; }
+    require(rejected, "version4 cannot substitute for the exact version3 curved proof envelope");
+    auto restored = Document::fork(document.snapshot());
+    restored.undo(restored.revision());
+    require(restored.snapshot().entities() == initial, "restored typed straight authoring must undo exactly");
+    restored.redo(restored.revision());
+    require(restored.snapshot().entities() == edited, "restored typed straight authoring must redo exactly");
+
+    // Generic explicit construction/transform commands retain their policy.
+    auto transformed = Document::create({wall("straight", {0, 0}, {4, 0})});
+    auto moved = transformed.snapshot().entities().at("straight");
+    moved.properties["baseline"]["start"] = {2, 3};
+    moved.properties["baseline"]["end"] = {6, 3};
+    transformed.apply(ApplyEntityChanges{0, {EntityChange::upsert(moved)}, {}, "Explicit translation"});
+    require(!transformed.snapshot().history().back().boundary_constraint_changes &&
+                Document::fork(transformed.snapshot()).snapshot().entities().at("straight") == moved,
+            "valid generic explicit straight wall transforms must retain their original admission policy");
+}
+
 void test_noop_and_cancel_leave_revision_saved_state_and_history_unchanged() {
     auto document = Document::create({wall("wall-a", {0.0, 0.0}, {4.0, 0.0})});
     document.mark_saved(document.revision());
@@ -1778,6 +1840,7 @@ void test_boundary_vertex_move_propagates_explicit_relations() {
 int main() {
     sketch::testing::noninteractive_errors();
     try {
+        test_straight_wall_only_authoring_retains_guarded_typed_intent();
         test_curved_endpoint_relations_and_typed_propagation();
         test_boundary_vertex_move_propagates_explicit_relations();
         test_boundary_resize_canonical_shape_and_related_owners();

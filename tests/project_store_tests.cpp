@@ -1247,6 +1247,173 @@ void test_curved_wall_proof_storage_and_recovery_overwrite_guard() {
             "rejected document-only overwrite must preserve v10 archive bytes");
 }
 
+void test_consistent_curved_wall_history_forgery_rejects_new_crossing() {
+    TempDirectory temp;
+    const auto source = curved_constraint_wall();
+    auto obstacle = source;
+    obstacle.id = "crossing-obstacle";
+    obstacle.properties["baseline"] = {{"start", {6.0, -10.0}}, {"end", {6.0, 10.0}},
+                                        {"sweep_radians", 0.0}};
+    auto straight_source = source;
+    straight_source.properties["baseline"]["sweep_radians"] = 0.0;
+    auto straight = Document::create({straight_source, obstacle, translation_fixture()});
+    const auto straight_initial = straight.snapshot().entities();
+    sketch::ApplyBoundaryConstraintChanges historical{0,
+        {{"translated-boundary", sketch::BoundaryGeometryEditKind::move_vertex, "vertex-1", {2.5, 0}}},
+        {}, "safe historical straight wall edit"};
+    historical.wall_edits.push_back({source.id, {{0, 0}, {5, 0}, 0}, std::nullopt});
+    straight.apply(historical);
+    const auto straight_edited = straight.snapshot().entities();
+    require(sketch::command_to_json(historical).at("version") == 2,
+            "historical straight fixture must retain its command version");
+    const auto straight_file = temp.path / "safe-straight-wall-history.psketch";
+    (void)ProjectStore::save(straight_file, straight.snapshot());
+    auto straight_loaded = ProjectStore::load(straight_file);
+    require(straight_loaded.document.snapshot().entities() == straight_edited,
+            "safe historical straight wall command must reopen after topology admission");
+    straight_loaded.document.undo(straight_loaded.document.revision());
+    require(straight_loaded.document.snapshot().entities() == straight_initial,
+            "historical straight wall command must undo exactly");
+    straight_loaded.document.redo(straight_loaded.document.revision());
+    require(straight_loaded.document.snapshot().entities() == straight_edited,
+            "historical straight wall command must redo exactly");
+    auto document = Document::create({source, obstacle});
+    const auto initial = document.snapshot().entities();
+    sketch::ApplyBoundaryConstraintChanges command{0, {}, {}, "safe curved endpoint edit"};
+    command.wall_edits.push_back({source.id, {{0, 0}, {5, 0}, 0.4}, std::nullopt, 2});
+    document.apply(command);
+    const auto edited = document.snapshot().entities();
+    const auto file = temp.path / "safe-curved-wall-history.psketch";
+    (void)ProjectStore::save(file, document.snapshot());
+    auto valid = ProjectStore::load(file);
+    require(valid.document.snapshot().entities() == edited,
+            "valid historical curved typed command must still reopen before forgery");
+    valid.document.undo(valid.document.revision());
+    require(valid.document.snapshot().entities() == initial,
+            "valid historical curved typed command must undo exactly");
+    valid.document.redo(valid.document.revision());
+    require(valid.document.snapshot().entities() == edited,
+            "valid historical curved typed command must redo exactly");
+
+    auto forged_wall = edited.at(source.id);
+    forged_wall.properties["baseline"]["end"][0] = 7.0;
+    const sketch::ConstraintWallGeometryEdit forged_edit{source.id, {{0, 0}, {7, 0}, 0.4}, std::nullopt, 2};
+    require(sketch::replay_constraint_wall_edit(source, forged_edit) == forged_wall,
+            "forged result must exactly match the independently replayed typed wall proof");
+    require(sketch::segment_intersection(forged_edit.baseline, {{6, -10}, {6, 10}, 0}).kind ==
+                sketch::SegmentIntersectionKind::proper,
+            "forgery fixture must introduce an analytical proper crossing");
+    // Both stored command and result agree; the logical digest is recomputed.
+    // The sole invalid behavior is a new same-plane wall crossing on replay.
+    const auto forged = temp.path / "consistent-crossing-wall-history.psketch";
+    std::filesystem::copy_file(file, forged);
+    execute_sql(forged, "UPDATE revisions SET boundary_constraint_changes_json="
+        "json_set(boundary_constraint_changes_json,'$.wall_edits[0].baseline.end[0]',7.0) WHERE revision=1; "
+        "UPDATE revision_entities SET properties_json=json_set(properties_json,'$.baseline.end[0]',7.0) "
+        "WHERE revision=1 AND id='curve-wall'");
+    rewrite_logical_digest(forged);
+    const auto valid_hash = ProjectStore::file_sha256(file);
+    const auto forged_hash = ProjectStore::file_sha256(forged);
+    require_error_contains([&] { (void)ProjectStore::load(forged); }, StorageErrorCode::integrity_failure,
+                           "topology", "consistent proof/result and recomputed digest must not bless new wall crossing");
+    require(ProjectStore::file_sha256(file) == valid_hash && ProjectStore::file_sha256(forged) == forged_hash,
+            "refusing forged topology must preserve both source and rejected history bytes");
+}
+
+void test_straight_wall_only_typed_history_requires_v11_and_rejects_consistent_forgery() {
+    TempDirectory temp;
+    auto source = curved_constraint_wall();
+    source.id = "straight-wall";
+    source.properties["baseline"]["sweep_radians"] = 0.0;
+    auto obstacle = source;
+    obstacle.id = "crossing-obstacle";
+    obstacle.properties["baseline"] = {{"start", {6.0, -10.0}}, {"end", {6.0, 10.0}}, {"sweep_radians", 0.0}};
+    auto authored = Document::create({source, obstacle});
+    const auto initial = authored.snapshot().entities();
+    // Authoring coverage independently proves the service emits this intent.
+    // Storage admission itself must remain solver-independent.
+    sketch::ApplyBoundaryConstraintChanges intent{authored.revision(), {}, {}, "Resize straight wall"};
+    intent.wall_edits.push_back({source.id, {{0, 0}, {5, 0}, 0}, sketch::parse_quantity("5 m")});
+    authored.apply(intent);
+    const auto head = authored.snapshot();
+    require(head.history().back().boundary_constraint_changes && ProjectStore::required_format_version(head) == 11,
+            "straight wall-only typed intent must require v11");
+    const auto authored_file = temp.path / "authored-straight-v11.psketch";
+    (void)ProjectStore::save(authored_file, head);
+    auto reopened = ProjectStore::load(authored_file);
+    require(reopened.document.snapshot().entities() == head.entities(), "v11 straight authoring must reopen exactly");
+    reopened.document.undo(reopened.document.revision());
+    require(reopened.document.snapshot().entities() == initial && ProjectStore::required_format_version(reopened.document.snapshot()) == 11,
+            "undone straight authoring must retain v11 and exact pre-authoring state");
+    const auto undone_file = temp.path / "authored-straight-v11-undone.psketch";
+    (void)ProjectStore::save(undone_file, reopened.document.snapshot());
+    auto undone = ProjectStore::load(undone_file);
+    require(undone.document.can_redo(), "v11 undone straight proof must retain redo on reopen");
+    undone.document.redo(undone.document.revision());
+    require(undone.document.snapshot().entities() == head.entities(), "v11 redo must reproduce exact straight wall length receipt");
+    undone.document.apply(ApplyEntityChanges{undone.document.revision(), {EntityChange::erase(source.id)}, {}, "delete wall"});
+    require(ProjectStore::required_format_version(undone.document.snapshot()) == 11,
+            "deleting an authored wall must not lower its retained straight proof reader floor");
+    auto later_curve = source;
+    later_curve.id = "later-curve";
+    later_curve.properties["baseline"]["sweep_radians"] = 0.4;
+    undone.document.apply(ApplyEntityChanges{undone.document.revision(),
+        {EntityChange::upsert(later_curve)}, {}, "Add later curve"});
+    sketch::ApplyBoundaryConstraintChanges curve_edit{undone.document.revision(), {}, {}, "Edit later curve"};
+    curve_edit.wall_edits.push_back({later_curve.id, {{0, 0}, {5, 0}, 0.4}, std::nullopt, 2});
+    undone.document.apply(curve_edit);
+    require(ProjectStore::required_format_version(undone.document.snapshot()) == 11,
+            "later curved proof must not lower a retained straight wall-only reader floor");
+    const auto mixed_file = temp.path / "mixed-straight-curved-v11.psketch";
+    (void)ProjectStore::save(mixed_file, undone.document.snapshot());
+    require(ProjectStore::load(mixed_file).document.snapshot().entities() == undone.document.snapshot().entities(),
+            "mixed straight and later curved proofs must reopen exactly");
+    const auto downgraded = temp.path / "authored-straight-downgraded.psketch";
+    std::filesystem::copy_file(undone_file, downgraded);
+    execute_sql(downgraded, "PRAGMA user_version=10; UPDATE metadata SET value='10' WHERE key='format_version'");
+    rewrite_logical_digest(downgraded);
+    require_error([&] { (void)ProjectStore::load(downgraded); }, StorageErrorCode::unsupported_format,
+                  "recomputed checksum cannot downgrade retained straight wall-only proof to v10");
+    const auto wrong_envelope = temp.path / "straight-wall-only-wrong-envelope.psketch";
+    std::filesystem::copy_file(authored_file, wrong_envelope);
+    execute_sql(wrong_envelope, "UPDATE revisions SET boundary_constraint_changes_json="
+        "json_set(boundary_constraint_changes_json,'$.version',2) WHERE revision=1");
+    rewrite_logical_digest(wrong_envelope);
+    require_error([&] { (void)ProjectStore::load(wrong_envelope); }, StorageErrorCode::integrity_failure,
+                  "historical mixed v2 envelope cannot be substituted for v4 wall-only proof");
+    const auto future = temp.path / "straight-future-format.psketch";
+    std::filesystem::copy_file(authored_file, future);
+    execute_sql(future, "PRAGMA user_version=12; UPDATE metadata SET value='12' WHERE key='format_version'");
+    require_error([&] { (void)ProjectStore::load(future); }, StorageErrorCode::unsupported_format,
+                  "storage versions newer than v11 must reject before semantic admission");
+
+    // No length receipt is needed for a connected endpoint movement. Matching
+    // proof/result forgery therefore isolates topology from exact-entry checks.
+    auto direct = Document::create({source, obstacle});
+    sketch::ApplyBoundaryConstraintChanges command{0, {}, {}, "safe straight endpoint edit"};
+    command.wall_edits.push_back({source.id, {{0, 0}, {5, 0}, 0}, std::nullopt});
+    direct.apply(command);
+    const auto file = temp.path / "direct-straight-v4.psketch";
+    (void)ProjectStore::save(file, direct.snapshot());
+    auto forged_wall = direct.snapshot().entities().at(source.id);
+    forged_wall.properties["baseline"]["end"][0] = 7.0;
+    require(sketch::replay_constraint_wall_edit(source, {source.id, {{0, 0}, {7, 0}, 0}, std::nullopt}) == forged_wall,
+            "straight wall-only forged result must exactly match its endpoint proof");
+    const auto forged = temp.path / "consistent-straight-crossing.psketch";
+    std::filesystem::copy_file(file, forged);
+    execute_sql(forged, "UPDATE revisions SET boundary_constraint_changes_json="
+        "json_set(boundary_constraint_changes_json,'$.wall_edits[0].baseline.end[0]',7.0) WHERE revision=1; "
+        "UPDATE revision_entities SET properties_json=json_set(properties_json,'$.baseline.end[0]',7.0) "
+        "WHERE revision=1 AND id='straight-wall'");
+    rewrite_logical_digest(forged);
+    const auto original_hash = ProjectStore::file_sha256(file);
+    const auto forged_hash = ProjectStore::file_sha256(forged);
+    require_error_contains([&] { (void)ProjectStore::load(forged); }, StorageErrorCode::integrity_failure,
+                           "topology", "matching straight v4 proof/result and recomputed checksum cannot bless crossing");
+    require(ProjectStore::file_sha256(file) == original_hash && ProjectStore::file_sha256(forged) == forged_hash,
+            "straight topology refusal must preserve both source and rejected file bytes");
+}
+
 void test_imported_curve_derivation_requires_v10_without_command_history() {
     TempDirectory temp;
     auto source = curved_constraint_wall();
@@ -1984,6 +2151,8 @@ int main() {
         test_curved_constraint_state_requires_v10_without_geometry_proof();
         test_curved_constraint_floor_uses_actual_bound_segment();
         test_curved_wall_proof_storage_and_recovery_overwrite_guard();
+        test_consistent_curved_wall_history_forgery_rejects_new_crossing();
+        test_straight_wall_only_typed_history_requires_v11_and_rejects_consistent_forgery();
         test_imported_curve_derivation_requires_v10_without_command_history();
         test_boundary_authoring_receipt_after_v2_entity_requires_v3();
         test_unqualified_authoring_property_collisions_remain_v1_and_opaque();

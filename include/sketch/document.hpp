@@ -142,8 +142,9 @@ struct ApplyBoundaryConstraintChanges {
     std::vector<BoundaryGeometryEdit> boundary_edits;
     std::vector<EntityChange> entity_changes;
     std::string message;
-    // Straight wall edits use envelope version 2; any version-two curved
-    // wall proof requires envelope version 3. Boundary-only stays version 1.
+    // Mixed straight wall/boundary edits use envelope version 2; any
+    // version-two curved wall proof requires envelope version 3. Straight
+    // wall-only edits use version 4. Boundary-only stays version 1.
     std::vector<ConstraintWallGeometryEdit> wall_edits;
 };
 

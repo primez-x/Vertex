@@ -137,11 +137,17 @@ distance. The straight-wall resize operation is not offered for curved walls.
 
 Curved wall geometry proofs use explicit wall-edit version 2 inside command
 envelope version 3. Historical unversioned straight proofs and envelopes 1/2
-retain their old rules. Version 3 alone permits wall-only geometry transactions.
+retain their old rules. Version 3 permits curved wall-only geometry transactions;
+version 4 permits straight wall-only transactions. Both use the shared topology
+admission during preview, apply and retained-history replay.
 Original curve construction input is retained as derivation evidence when its
 measured length or height no longer describes the fixed-sweep endpoint result.
 Project format 10 and exchange format 7 protect new proofs and curved-bound
 relations throughout retained history, including undone states.
+Straight wall-only endpoint authoring now retains an unversioned straight wall
+proof in command envelope 4, requiring project format 11 and exchange format 8.
+The minimum version follows the complete retained history, including undone
+edits. Projects without this new proof retain their earlier minimum version.
 
 An explicit construction operation supplies a complete, independently validated
 input and baseline. It may follow a derived curve through an ordinary entity
@@ -149,6 +155,14 @@ command if it appends exactly one construction operation without rewriting the
 original archive or prior operations. An endpoint-only appended operation still
 requires typed wall replay. These are different recorded operations; generic
 construction commands are not claimed to carry the solver's topology proof.
+
+Connected endpoint edits use `validate_constraint_edit_topology` at both the
+authoring and typed document command boundaries. It checks analytical
+intersections against existing topology, requires declared stable endpoint
+relationships for new contacts, and protects closed wall-cycle and boundary
+winding. Saved command replay uses the same admission path; matching retained
+geometry, a valid command encoding and a recomputed checksum do not bypass it.
+Ordinary explicit construction and transformation remain distinct operations.
 
 ## Implemented command and receipt boundary
 

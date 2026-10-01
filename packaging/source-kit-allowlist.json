@@ -2139,6 +2139,10 @@
     },
     {
       "category": "docs",
+      "path": "docs/superpowers/plans/2026-09-30-shared-topology-admission.md"
+    },
+    {
+      "category": "docs",
       "path": "docs/survey-georeferencing-contracts.md"
     },
     {
@@ -2184,6 +2188,10 @@
     {
       "category": "docs",
       "path": "docs/verification/selection-rotation-2026-09-30.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/verification/shared-topology-admission-2026-09-30.md"
     },
     {
       "category": "docs",
