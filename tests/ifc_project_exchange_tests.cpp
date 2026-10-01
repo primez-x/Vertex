@@ -300,7 +300,7 @@ void native_window_layouts() {
             "contradictory window partition or fill geometry must not activate a native profile");
     };
     for (const auto layout : {WindowLayoutKind::fixed, WindowLayoutKind::double_fixed,
-            WindowLayoutKind::triple_fixed, WindowLayoutKind::casement, WindowLayoutKind::sliding}) {
+            WindowLayoutKind::triple_fixed, WindowLayoutKind::casement, WindowLayoutKind::sliding, WindowLayoutKind::bay}) {
         auto wall = make_document().snapshot().entities().at("wall-1");
         auto opening = make_document().snapshot().entities().at("opening-1");
         opening.properties["opening_kind"] = "window";
@@ -312,6 +312,12 @@ void native_window_layouts() {
             profile.window_angle_degrees = 37.0;
         }
         if (layout == WindowLayoutKind::sliding) profile.window_slide_fraction = 0.35;
+        if (layout == WindowLayoutKind::bay) {
+            profile.window_bay_projection_m = 0.6;
+            profile.window_bay_front_fraction = 0.5;
+            profile.window_open_left = false;
+            wall.properties["baseline"] = {{"start", {1, 2}}, {"end", {9, 8}}, {"sweep_radians", 0.0}};
+        }
         opening.properties["opening_assembly"] = opening_assembly_json(profile);
         const auto exported = export_project_ifc(Document::create({wall, opening}).snapshot());
         const auto graph = records(exported.step);
@@ -319,10 +325,19 @@ void native_window_layouts() {
         for (const auto& [id, record] : graph) if (record.type == "IFCWINDOW") fill_id = id;
         check(!fill_id.empty(), "each window layout must export a physical fill");
         const auto& fill = graph.at(fill_id);
-        check(fill.fields[11] == (layout == WindowLayoutKind::triple_fixed ? ".TRIPLE_PANEL_VERTICAL." :
+        check(fill.fields[11] == (layout == WindowLayoutKind::bay ? ".USERDEFINED." : layout == WindowLayoutKind::triple_fixed ? ".TRIPLE_PANEL_VERTICAL." :
             layout == WindowLayoutKind::double_fixed || layout == WindowLayoutKind::sliding
             ? ".DOUBLE_PANEL_VERTICAL." : ".SINGLE_PANEL."),
             "IFC partition must describe actual side-by-side panel arrangement");
+        check(fill.fields[12] == (layout == WindowLayoutKind::bay ? "'BAY_WINDOW'" : "$"),
+            "bay partition label must truthfully identify a projecting multi-facet window");
+        if (layout == WindowLayoutKind::bay) {
+            auto wrong_label = fill;
+            wrong_label.fields[12] = "'FLAT_WINDOW'";
+            inactive(replace_record(exported.step, fill_id, wrong_label));
+            wrong_label.fields[12] = "$";
+            inactive(replace_record(exported.step, fill_id, wrong_label));
+        }
         const auto imported = import_project_ifc(exported.step);
         verify_worker_candidate(imported);
         const auto restored = std::find_if(imported.entities.begin(), imported.entities.end(), [](const Entity& entity) {
@@ -341,17 +356,27 @@ void native_window_layouts() {
         }
         const auto& shape = graph.at(fill.fields[6]);
         const auto& representation = graph.at(list(shape.fields[2])[0]);
+        if (layout == WindowLayoutKind::bay) {
+            double projected_extent = 0.0;
+            for (const auto& item : list(representation.fields[3]))
+                for (const auto& coordinate : list(graph.at(graph.at(item).fields[0]).fields[0])) {
+                    const auto point = list(coordinate);
+                    projected_extent = std::max(projected_extent, -std::stod(point[1]));
+                }
+            check(projected_extent > wall.properties.at("thickness_m").get<double>() / 2.0 + 0.55,
+                "bay IFC fill tessellation must physically project beyond the host face");
+        }
         const auto& mesh = graph.at(list(representation.fields[3]).back());
         const auto points_id = mesh.fields[0];
         auto points = graph.at(points_id);
         const auto vertex_end = points.fields[0].find(',', 2);
         points.fields[0].replace(2, vertex_end - 2, "0.123456");
         inactive(replace_record(exported.step, points_id, points));
-        if (layout == WindowLayoutKind::casement || layout == WindowLayoutKind::sliding) {
+        if (layout == WindowLayoutKind::casement || layout == WindowLayoutKind::sliding || layout == WindowLayoutKind::bay) {
             // Both metadata copies agree, but the physical mesh still represents the original movement.
-            const std::string key = layout == WindowLayoutKind::casement ? "window_angle_degrees" : "window_slide_fraction";
+            const std::string key = layout == WindowLayoutKind::bay ? "window_bay_projection_m" : layout == WindowLayoutKind::casement ? "window_angle_degrees" : "window_slide_fraction";
             const std::string original = "\"" + key + "\":" + opening.properties.at("opening_assembly").at(key).dump();
-            const std::string replacement = "\"" + key + "\":" + nlohmann::json(layout == WindowLayoutKind::casement ? 63.0 : 0.65).dump();
+            const std::string replacement = "\"" + key + "\":" + nlohmann::json(layout == WindowLayoutKind::bay ? 0.8 : layout == WindowLayoutKind::casement ? 63.0 : 0.65).dump();
             auto altered = exported.step;
             std::size_t count = 0, position = 0;
             while ((position = altered.find(original, position)) != std::string::npos) {

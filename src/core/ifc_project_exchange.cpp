@@ -682,9 +682,18 @@ std::string window_partition_enum(const OpeningAssembly& profile) {
     case WindowLayoutKind::double_fixed: case WindowLayoutKind::sliding:
         return ".DOUBLE_PANEL_VERTICAL.";
     case WindowLayoutKind::triple_fixed: return ".TRIPLE_PANEL_VERTICAL.";
+    case WindowLayoutKind::bay: return ".USERDEFINED.";
     case WindowLayoutKind::fixed: case WindowLayoutKind::casement: return ".SINGLE_PANEL.";
     }
     throw std::invalid_argument("Unknown window layout");
+}
+
+std::string window_partition_label(const OpeningAssembly& profile,
+                                   const IfcExchangeLimits& limits) {
+    // IFC4 permits a partition label only with USERDEFINED. The bay has
+    // three projecting facets, rather than three panels in one plane.
+    // https://standards.buildingsmart.org/IFC/RELEASE/IFC4/ADD2_TC1/HTML/schema/ifcsharedbldgelements/lexical/ifcwindow.htm
+    return profile.window_layout == WindowLayoutKind::bay ? step_string("BAY_WINDOW", limits) : "$";
 }
 
 std::string door_operation_label(const std::optional<DoorOperation>& operation,
@@ -809,7 +818,7 @@ void export_fill(const DocumentSnapshot& document, const Entity& entity, int voi
         context.root("fill:" + entity.id, entity.id + " fill") + ",$," + ref(placement) +
         "," + ref(shape) + ",$," + real_text(opening.height) + "," + real_text(fill_overall_width(wall, opening, frame)) +
         (door ? ",.DOOR.," + door_operation_enum(operation) + "," + door_operation_label(operation, context.limits)
-              : ",.WINDOW.," + window_partition_enum(profile) + ",$"));
+              : ",.WINDOW.," + window_partition_enum(profile) + "," + window_partition_label(profile, context.limits)));
     context.builder.add("IFCRELFILLSELEMENT", context.root("fills:" + entity.id, "") +
         "," + ref(void_id) + "," + ref(fill));
     context.contained_products.push_back(fill);
@@ -2078,7 +2087,7 @@ IfcProjectImportResult import_project_ifc(std::string_view bytes,
                 (!door && operation) || fields[10] != (door ? ".DOOR." : ".WINDOW.") ||
                 (fields[11] != (door ? door_operation_enum(operation) : window_partition_enum(profile)) &&
                  !(legacy_fixed_window && fields[11] == ".NOTDEFINED.")) ||
-                fields[12] != (door ? door_operation_label(operation, limits) : "$") ||
+                fields[12] != (door ? door_operation_label(operation, limits) : window_partition_label(profile, limits)) ||
                 std::abs(number<double>(fields[8]) - opening.properties.at("height_m").get<double>()) > kTolerance ||
                 !frame || !same_frame(*frame, fill_frame(native_wall(*host), checked_opening, operation)) ||
                 std::abs(number<double>(fields[9]) - fill_overall_width(native_wall(*host), checked_opening, *frame)) > kTolerance ||

@@ -540,9 +540,14 @@ void test_window_layout_native_correspondence() {
     const auto fixed_geometry = geometry_bytes(window_block(fixed));
     std::vector<std::string> layout_geometry;
     for (const auto layout : {WindowLayoutKind::double_fixed, WindowLayoutKind::triple_fixed,
-                              WindowLayoutKind::casement, WindowLayoutKind::sliding}) {
+                              WindowLayoutKind::casement, WindowLayoutKind::sliding, WindowLayoutKind::bay}) {
         auto profile = default_opening_assembly(OpeningAssemblyKind::window);
         profile.window_layout = layout;
+        if (layout == WindowLayoutKind::bay) {
+            profile.window_bay_projection_m = 0.6;
+            profile.window_bay_front_fraction = 0.5;
+            profile.window_open_left = false;
+        }
         if (layout == WindowLayoutKind::casement) {
             profile.window_hinge_at_end = true;
             profile.window_open_left = false;
@@ -560,6 +565,20 @@ void test_window_layout_native_correspondence() {
         auto exported = export_project_dxf(Document::create(std::move(fixture)).snapshot());
         check(exported.diagnostics.empty(), "supported window layout must export without semantic loss");
         auto& block = window_block(exported.drawing);
+        if (layout == WindowLayoutKind::bay) {
+            double projected_extent = 0.0;
+            bool angled_facet = false;
+            for (const auto& line : block.lines) {
+                for (const auto& point : {line.start, line.end})
+                    projected_extent = std::max(projected_extent,
+                        -(-0.6 * (point.x - 2.0) + 0.8 * (point.y - 3.0)));
+                const double tangent = 0.8 * (line.end.x - line.start.x) + 0.6 * (line.end.y - line.start.y);
+                const double normal = -0.6 * (line.end.x - line.start.x) + 0.8 * (line.end.y - line.start.y);
+                angled_facet = angled_facet || (std::abs(tangent) > 0.1 && std::abs(normal) > 0.1);
+            }
+            check(projected_extent > 0.7 && angled_facet,
+                "bay DXF must physically project beyond its host face with angled side facets");
+        }
         const auto geometry = geometry_bytes(block);
         check(geometry != fixed_geometry &&
                   std::find(layout_geometry.begin(), layout_geometry.end(), geometry) == layout_geometry.end(),
@@ -599,6 +618,8 @@ void test_window_layout_native_correspondence() {
         false_profile.window_open_left = true;
         false_profile.window_angle_degrees = 90.0;
         false_profile.window_slide_fraction = 0.0;
+        false_profile.window_bay_projection_m = 0.0;
+        false_profile.window_bay_front_fraction = 0.5;
         payload["properties"]["opening_assembly"] = opening_assembly_json(false_profile);
         metadata_block.vertex_entity_json = payload.dump();
         reject_false_model(metadata_tamper);

@@ -213,7 +213,8 @@ int main(int argc, char** argv) {
                  std::pair{"svg-v2-10_windows-window-casement", "casement"},
                  std::pair{"svg-v2-10_windows-window-sliding", "sliding"},
                  std::pair{"svg-v2-10_windows-window-double", "double_fixed"},
-                 std::pair{"svg-v2-10_windows-window-triple", "triple_fixed"}}) {
+                 std::pair{"svg-v2-10_windows-window-triple", "triple_fixed"},
+                 std::pair{"svg-v2-10_windows-window-bay", "bay"}}) {
             sketch::desktop::MainWindow variant;
             variant.resize(1200, 800);
             variant.setMetricUnits(true);
@@ -243,6 +244,14 @@ int main(int argc, char** argv) {
             const auto profile = created->second.properties.at("opening_assembly");
             require(profile.value("window_layout", std::string{}) == layout,
                     "catalog windows retain their actual panel layout and mechanism");
+            if (std::string(layout) == "bay") {
+                require(profile.at("version") == 3 && profile.at("window_bay_projection_m") == 0.65 &&
+                            profile.at("window_bay_front_fraction") == 0.5,
+                        "bay catalog creates a projecting v3 assembly with its actual depth");
+                const auto plan = projection_samples(opening_plan(snapshot, created->first));
+                require(std::any_of(plan.begin(), plan.end(), [](const auto p) { return p.y > 0.7; }),
+                        "bay catalog drop projects real facets beyond the host wall");
+            }
             require(variant.undoCommand() && variant.redoCommand(), "window layout supports undo/redo");
             const auto opening_id = QString::fromStdString(created->first);
             require(variant.selectEntity(opening_id) && variant.editSelectedLength("1.8 m"),
@@ -270,6 +279,16 @@ int main(int argc, char** argv) {
                     if (editor_changed) {
                         if (std::string(layout) == "casement") angle->setValue(70.0);
                         if (std::string(layout) == "sliding") travel->setValue(50.0);
+                        if (std::string(layout) == "bay") {
+                            auto* depth = dialog->findChild<QLineEdit*>(QStringLiteral("openingWindowBayProjection"));
+                            auto* front = dialog->findChild<QDoubleSpinBox*>(QStringLiteral("openingWindowBayFront"));
+                            auto* side = dialog->findChild<QComboBox*>(QStringLiteral("openingWindowSide"));
+                            editor_changed = depth && front && side && depth->isVisible() && front->isVisible();
+                            if (!editor_changed) { dialog->reject(); continue; }
+                            depth->setText(QStringLiteral("0.85 m"));
+                            front->setValue(40.0);
+                            side->setCurrentIndex(1);
+                        }
                         buttons->button(QDialogButtonBox::Save)->click();
                     } else dialog->reject();
                 }
@@ -285,6 +304,15 @@ int main(int argc, char** argv) {
                     "casement editor changes the physical sash angle");
             if (std::string(layout) == "sliding") require(edited_profile.at("window_slide_fraction") == 0.5,
                     "sliding editor changes the physical sash travel");
+            if (std::string(layout) == "bay") {
+                require(edited_profile.at("window_bay_projection_m") == 0.85 &&
+                            edited_profile.at("window_bay_front_fraction") == 0.4 &&
+                            edited_profile.at("window_open_left") == false,
+                        "bay editor commits projection, front width and side");
+                const auto plan = projection_samples(opening_plan(variant.document().snapshot(), created->first));
+                require(std::any_of(plan.begin(), plan.end(), [](const auto p) { return p.y < -0.9; }),
+                        "edited bay geometry follows its depth and new projection side");
+            }
             if (std::string(layout) == "casement") {
                 QTimer::singleShot(0, &variant, [&] {
                     for (auto* widget : QApplication::topLevelWidgets()) {
@@ -343,12 +371,26 @@ int main(int argc, char** argv) {
             auto* place_window = variant.findChild<QPushButton*>(QStringLiteral("libraryWindow"));
             auto* placement_style = variant.findChild<QComboBox*>(QStringLiteral("openingPlacementStyle"));
             require(place_window && placement_style, "shared window placement controls exist");
+            for (auto* tabs : variant.findChildren<QTabWidget*>())
+                for (int index = 0; index < tabs->count(); ++index)
+                    if (tabs->tabText(index).contains(QStringLiteral("Library"), Qt::CaseInsensitive))
+                        tabs->setCurrentIndex(index);
+            QApplication::processEvents();
             place_window->click();
             placement_style->setCurrentIndex(placement_style->findData(QString::fromLatin1(catalog_id)));
             if (std::string(layout) == "casement")
                 variant.findChild<QDoubleSpinBox*>(QStringLiteral("openingDrawAngle"))->setValue(65.0);
             if (std::string(layout) == "sliding")
                 variant.findChild<QDoubleSpinBox*>(QStringLiteral("openingDrawTravel"))->setValue(25.0);
+            if (std::string(layout) == "bay") {
+                auto* depth = variant.findChild<QLineEdit*>(QStringLiteral("openingDrawBayProjection"));
+                auto* side = variant.findChild<QComboBox*>(QStringLiteral("openingDrawBaySide"));
+                require(depth && side && depth->isVisible() && side->isVisible(),
+                        "bay placement exposes projection and side controls");
+                depth->setText(QStringLiteral("0.55 m"));
+                QMetaObject::invokeMethod(depth, "editingFinished", Qt::DirectConnection);
+                side->setCurrentIndex(1);
+            }
             require(target->boundaryDraftPreview() && target->boundaryDraftPreview()->segments.empty() &&
                         target->boundaryDraftPreview()->instruction.contains(QStringLiteral("place the window")) &&
                         variant.lastError().isEmpty() && variant.document().revision() == revision_before_preset,

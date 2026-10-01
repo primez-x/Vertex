@@ -4,6 +4,7 @@
 #include "sketch/hosted_opening_plan.hpp"
 
 #include <BRepAdaptor_Curve.hxx>
+#include <BRepAdaptor_Surface.hxx>
 #include <BRepAlgoAPI_Common.hxx>
 #include <BRepBuilderAPI_Transform.hxx>
 #include <BRepCheck_Analyzer.hxx>
@@ -51,8 +52,12 @@ sketch::HostedOpening opening() {
     return {"opening-assembly", 1.0, 1.2, 0.25, 2.1};
 }
 
-void near(double actual, double expected, const char* message) {
-    require(std::abs(actual - expected) < 1e-7, message);
+void near(double actual, double expected, const char* message, double epsilon = 1e-7) {
+    if (!(std::abs(actual - expected) < epsilon)) {
+        std::ostringstream detail;
+        detail << message << ": actual " << std::setprecision(17) << actual << ", expected " << expected;
+        throw std::runtime_error(detail.str());
+    }
 }
 
 sketch::Wall curved_wall(double sweep, double rotation, sketch::Vec2 origin) {
@@ -175,6 +180,31 @@ double intersection_volume(const TopoDS_Shape& first, const TopoDS_Shape& second
     return sketch::solid_volume(common.Shape());
 }
 
+double shared_face_area(const TopoDS_Shape& first, const TopoDS_Shape& second) {
+    // Solid Common may discard lower-dimensional contacts. Intersect actual
+    // coplanar faces so an edge or point connection cannot masquerade as a
+    // finite physical mating face. Derive the contact solely from the solids.
+    double area = 0.0;
+    for (TopExp_Explorer a(first, TopAbs_FACE); a.More(); a.Next()) {
+        const auto face_a = TopoDS::Face(a.Current());
+        const BRepAdaptor_Surface surface_a(face_a);
+        if (surface_a.GetType() != GeomAbs_Plane) continue;
+        const auto plane_a = surface_a.Plane();
+        for (TopExp_Explorer b(second, TopAbs_FACE); b.More(); b.Next()) {
+            const auto face_b = TopoDS::Face(b.Current());
+            const BRepAdaptor_Surface surface_b(face_b);
+            if (surface_b.GetType() != GeomAbs_Plane) continue;
+            const auto plane_b = surface_b.Plane();
+            if (!plane_a.Axis().Direction().IsParallel(plane_b.Axis().Direction(), 1e-7) ||
+                plane_a.Distance(plane_b.Location()) > 1e-7) continue;
+            BRepAlgoAPI_Common common(face_a, face_b); common.Build();
+            require(common.IsDone() && !common.HasErrors(), "assembly mating-face check failed");
+            area += sketch::surface_area(common.Shape());
+        }
+    }
+    return area;
+}
+
 gp_Pnt mass_centre(const TopoDS_Shape& shape) {
     GProp_GProps properties;
     BRepGProp::VolumeProperties(shape, properties);
@@ -219,6 +249,14 @@ bool has_vertex_at(const TopoDS_Shape& shape, const gp_Pnt& point) {
 
 void check_window_descriptors() {
     using namespace sketch;
+    const nlohmann::json bay{{"version", 3}, {"kind", "window"},
+        {"frame_width_m", 0.08}, {"frame_depth_m", 0.12},
+        {"panel_thickness_m", 0.04}, {"glazing_thickness_m", 0.02}, {"inset_m", 0.0},
+        {"window_layout", "bay"}, {"window_hinge_at_end", false}, {"window_open_left", true},
+        {"window_angle_degrees", 90.0}, {"window_slide_fraction", 0.0},
+        {"window_bay_projection_m", 0.65}, {"window_bay_front_fraction", 0.5}};
+    require(opening_assembly_json(parse_opening_assembly(bay)) == bay,
+            "projecting bay descriptor did not round trip through its exact v3 schema");
     const auto canonical = default_opening_assembly(OpeningAssemblyKind::window);
     const auto legacy = opening_assembly_json(canonical);
     require(legacy.size() == 7 && legacy.at("version") == 1,
@@ -287,6 +325,131 @@ void check_window_descriptors() {
     rejects([&]{ validate_opening_assembly(value); }, "negative slider travel accepted");
     value.window_slide_fraction = std::numeric_limits<double>::quiet_NaN();
     rejects([&]{ validate_opening_assembly(value); }, "nonfinite slider travel accepted");
+}
+
+void check_bay_windows() {
+    using namespace sketch;
+    auto profile = default_opening_assembly(OpeningAssemblyKind::window);
+    profile.window_layout = WindowLayoutKind::bay;
+    profile.window_bay_projection_m = 0.65;
+    const HostedOpening hosted{"bay", 1.0, 2.1, 0.3, 1.6};
+    auto host = wall(); host.openings.push_back(hosted);
+    const auto cut_wall = make_wall(host);
+    near(solid_volume(cut_wall), 2.328, "bay changed the straight wall mouth cut");
+    for (bool left : {true, false}) for (double inset : {-0.025, 0.025}) {
+        profile.window_open_left = left; profile.inset_m = inset;
+        const auto geometry = make_opening_assembly_geometry(host, hosted, profile);
+        const auto parts = parts_of(geometry.shape);
+        require(parts.size() == 14 && BRepCheck_Analyzer(geometry.shape).IsValid(),
+                "bay lost mounting parts, sealed plates or three framed panes");
+        for (std::size_t facet : {6u, 10u}) {
+            double rear_attachment = 0.0;
+            for (std::size_t mounting = 0; mounting < parts.size(); ++mounting)
+                if (mounting < 4 || mounting >= 12)
+                    rear_attachment += shared_face_area(parts[facet], parts[mounting]);
+            require(rear_attachment > 0.05,
+                    "bay rear facet has no finite mating face with its mounting assembly");
+        }
+        require(shared_face_area(parts[6], parts[8]) > 0.05 &&
+                shared_face_area(parts[8], parts[10]) > 0.05,
+                "consecutive bay facets have no finite miter mating faces");
+        require(shared_face_area(parts[0], parts[12]) > 0.05 &&
+                shared_face_area(parts[1], parts[13]) > 0.05,
+                "bay butt adapters have no finite mating faces with their mounting jambs");
+        require(shared_face_area(parts[2], parts[12]) > 0.01 &&
+                shared_face_area(parts[3], parts[13]) > 0.01,
+                "bay butt adapters have no finite mating faces with recessed mounting returns");
+        require(shared_face_area(parts[6], parts[12]) > 0.05 &&
+                shared_face_area(parts[10], parts[13]) > 0.05,
+                "bay butt adapters have no finite mating faces with their rear facets");
+        require(!geometry.door_swing && geometry.door_swings.empty(), "bay gained a door swing");
+        const double side = left ? 1.0 : -1.0;
+        double outermost = 0.0, low_z = 10.0, high_z = -10.0;
+        for (const auto& part : parts) {
+            require(solid_volume(part) > 0, "bay contains a surface in place of a material solid");
+            near(intersection_volume(part, cut_wall), 0, "bay penetrated real host wall material");
+            for (TopExp_Explorer v(part, TopAbs_VERTEX); v.More(); v.Next()) {
+                const auto p = BRep_Tool::Pnt(TopoDS::Vertex(v.Current()));
+                require(p.X() >= 1.0 - 1e-7 && p.X() <= 3.1 + 1e-7,
+                        "bay escaped its hosted mouth width");
+                outermost = std::max(outermost, side * p.Y());
+                low_z = std::min(low_z, p.Z()); high_z = std::max(high_z, p.Z());
+            }
+        }
+        // Boolean-cut vertices carry OCCT's 1e-7 modelling tolerance. Allow
+        // that skin plus floating-point roundoff without relaxing other checks.
+        near(outermost, 0.75, "bay depth was not measured beyond the selected wall face", 2e-7);
+        near(low_z, 0.3, "bay lost sill elevation"); near(high_z, 1.9, "bay lost opening height");
+        near(mass_centre(parts[0]).Y(), inset, "bay mounting jamb lost its inset anchor");
+        // Front pane and two angled panes are distinct positive-volume parts.
+        near(side * mass_centre(parts[9]).Y(), 0.69, "front glazing lost its facet depth");
+        for (std::size_t pane : {7u, 9u, 11u}) {
+            require(solid_volume(parts[pane]) > 0.005, "bay pane has no useful glazed area");
+            for (std::size_t other = 0; other < parts.size(); ++other)
+                if (other != pane) near(intersection_volume(parts[pane], parts[other]), 0,
+                                       "bay glazing overlaps another material");
+        }
+        for (std::size_t first = 0; first < parts.size(); ++first)
+            for (std::size_t second = first + 1; second < parts.size(); ++second)
+                near(intersection_volume(parts[first], parts[second]), 0, "bay facet joints share material");
+        const auto plan = project_hosted_opening_plan(host, hosted, profile);
+        require(std::any_of(plan.begin(), plan.end(), [&](const auto& s) {
+            return std::max(side * s.start.y, side * s.end.y) > 0.74;
+        }), "bay plan omitted projecting front facet");
+        require(std::any_of(plan.begin(), plan.end(), [](const auto& s) {
+            return std::abs(s.start.x - s.end.x) > 0.2 && std::abs(s.start.y - s.end.y) > 0.2;
+        }), "bay plan omitted its angled side glazing");
+    }
+    profile.inset_m = 0; profile.window_open_left = true;
+    const auto original = make_opening_assembly(host, hosted, profile);
+    auto rotated = host;
+    const double angle = 0.63;
+    rotated.baseline = {{7, -4}, {7 + 5 * std::cos(angle), -4 + 5 * std::sin(angle)}, 0};
+    rotated.elevation = 0.4;
+    gp_Trsf transform; transform.SetRotation(gp_Ax1(gp_Pnt(0, 0, 0), gp_Dir(0, 0, 1)), angle);
+    transform.SetTranslationPart(gp_Vec(7, -4, 0.4));
+    const auto expected = BRepBuilderAPI_Transform(original, transform, true).Shape();
+    near(intersection_volume(expected, make_opening_assembly(rotated, hosted, profile)), solid_volume(original),
+         "bay did not follow its rotated and elevated host");
+    const auto json = opening_assembly_json(profile);
+    for (const char* key : {"window_bay_projection_m", "window_bay_front_fraction"}) {
+        auto invalid = json; invalid.erase(key);
+        rejects([&] { (void)parse_opening_assembly(invalid); }, "incomplete bay schema accepted");
+        invalid = json; invalid[key] = "0.5";
+        rejects([&] { (void)parse_opening_assembly(invalid); }, "nonnumeric bay dimension accepted");
+    }
+    auto invalid = json; invalid["unknown"] = 0;
+    rejects([&] { (void)parse_opening_assembly(invalid); }, "extra bay schema field accepted");
+    invalid = json; invalid["version"] = 2;
+    invalid.erase("window_bay_projection_m"); invalid.erase("window_bay_front_fraction");
+    rejects([&] { (void)parse_opening_assembly(invalid); }, "v2 bay descriptor accepted");
+    invalid = json; invalid["window_layout"] = "fixed";
+    rejects([&] { (void)parse_opening_assembly(invalid); }, "v3 non-bay descriptor accepted");
+    invalid = json; invalid["kind"] = "door";
+    rejects([&] { (void)parse_opening_assembly(invalid); }, "v3 bay door accepted");
+    for (double projection : {0.0, -0.1, 10.1, std::numeric_limits<double>::infinity()}) {
+        auto bad = profile; bad.window_bay_projection_m = projection;
+        rejects([&] { validate_opening_assembly(bad); }, "invalid bay projection accepted");
+    }
+    for (double fraction : {0.0, 1.0, -0.1, std::numeric_limits<double>::quiet_NaN()}) {
+        auto bad = profile; bad.window_bay_front_fraction = fraction;
+        rejects([&] { validate_opening_assembly(bad); }, "invalid front fraction accepted");
+    }
+    for (double fraction : {0.01, 0.99}) {
+        auto bad = profile; bad.window_bay_front_fraction = fraction;
+        rejects([&] { (void)make_opening_assembly(host, hosted, bad); }, "bay facets admitted no glazing/frame fit");
+    }
+    for (int field = 0; field < 3; ++field) {
+        auto bad = profile;
+        if (field == 0) bad.window_hinge_at_end = true;
+        if (field == 1) bad.window_angle_degrees = 0;
+        if (field == 2) bad.window_slide_fraction = 0.1;
+        rejects([&] { validate_opening_assembly(bad); }, "bay admitted dormant movement");
+    }
+    auto bad = profile; bad.window_layout = WindowLayoutKind::fixed;
+    rejects([&] { validate_opening_assembly(bad); }, "fixed window admitted dormant projection");
+    rejects([&] { (void)make_opening_assembly(curved_wall(1.5, 0.63, {7, -4}), hosted, profile); },
+            "bay accepted an unfitted curved host");
 }
 
 void check_window_layout_geometry() {
@@ -645,6 +808,7 @@ int main() {
         const auto door = default_opening_assembly(OpeningAssemblyKind::door);
         const auto window = default_opening_assembly(OpeningAssemblyKind::window);
         check_window_descriptors();
+        check_bay_windows();
         check_window_layout_geometry();
         check_multi_leaf_doors();
         require(parse_opening_assembly_kind("door") == OpeningAssemblyKind::door,

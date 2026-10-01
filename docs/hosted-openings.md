@@ -161,3 +161,20 @@ refreshed document cancels it. Save/reopen retains width and offset. Print and
 export use committed geometry and exclude handles and drag proposals. Cropped
 plans and alternate projection frames retain dimension editing through
 properties; their plan-width handles are not available.
+
+The **Bay** Window style creates a projecting fixed assembly on a straight wall.
+Set Projection and Projection side before placing it. Projection is measured
+beyond that wall face; the live preview shows the selected side. Double-click
+the window and open **Opening assembly** to edit projection, front width as a
+percentage of the full wall-opening width, or side. Its three framed panes,
+sealed plates and mounting shoulders derive from the common physical model.
+There is no separate operable sash or swing. Width handles resize the mouth
+while preserving projection and the front-width ratio. Rotation or reflection
+of its host carries the bay with it. Save/reopen preserves the complete profile.
+
+Bay schedules report three panes, depth, front ratio and side. IFC uses
+`USERDEFINED` with `BAY_WINDOW` for its non-coplanar partition; native import
+also requires actual mesh correspondence. DXF uses the manufactured mid-height
+section and requires matching primitives before activating an editable host
+graph. A bay window does not automatically extend a room, floor or appraisal
+measurement area. Curved fitting and roof-hosted skylights remain open work.

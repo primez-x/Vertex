@@ -365,6 +365,24 @@ Both moving layouts currently require a straight host. Split fixed panes
 preserve curved-host geometry. Their manufactured parts, plans and exchange
 derive from this profile; the original hosted wall cut remains authoritative.
 
+Bay windows use profile version 3: exactly the twelve v2 fields plus
+`window_bay_projection_m` and `window_bay_front_fraction`. Only a window with
+`window_layout: "bay"` may use v3, and bay layouts cannot use v2. Projection is
+positive, finite, bounded to 10 metres, and measured beyond the selected host
+wall face. The front fraction is strictly between zero and one and describes
+front-face width relative to the full wall-opening width. Geometry admission
+also requires room for its mitered frames and glazing. `window_open_left`
+selects the projecting side relative to the host direction; bay hinge, angle
+and travel remain `false`, `90`, and `0`. Non-bay profiles cannot carry dormant
+bay dimensions. Earlier v1/v2 shapes and serialized fields remain unchanged.
+
+A bay is a fixed, directly glazed assembly with three frame facets, sealed
+top/bottom plates and mounting shoulders. Its existing panel-thickness field
+is retained for profile compatibility and bounds glazing thickness; it does
+not describe a separate operable sash. A bay alone adds no floor or appraisal
+measurement area. Curved-host bay geometry remains a required unimplemented
+feature; current admission explains the straight-host requirement.
+
 An opening may also carry `properties.door_operation`. Version 1 has exactly
 `version: 1`, `hinge: "start" | "end"`, `side: "left" | "right"`, and a finite
 `angle_degrees` in (0,180]. Version 2 adds exactly `kind` (`hinged`,

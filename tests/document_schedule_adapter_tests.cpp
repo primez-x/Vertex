@@ -43,7 +43,7 @@ void test_revision_and_opening_schedule() {
 void test_window_profile_schedule() {
     using namespace sketch;
     for (const auto layout : {WindowLayoutKind::fixed, WindowLayoutKind::double_fixed,
-            WindowLayoutKind::triple_fixed, WindowLayoutKind::casement, WindowLayoutKind::sliding}) {
+            WindowLayoutKind::triple_fixed, WindowLayoutKind::casement, WindowLayoutKind::sliding, WindowLayoutKind::bay}) {
         auto profile = default_opening_assembly(OpeningAssemblyKind::window);
         profile.window_layout = layout;
         if (layout == WindowLayoutKind::casement) {
@@ -52,6 +52,11 @@ void test_window_profile_schedule() {
             profile.window_angle_degrees = 37.0;
         }
         if (layout == WindowLayoutKind::sliding) profile.window_slide_fraction = 0.35;
+        if (layout == WindowLayoutKind::bay) {
+            profile.window_bay_projection_m = 0.6;
+            profile.window_bay_front_fraction = 0.5;
+            profile.window_open_left = false;
+        }
         const auto document = Document::create({entity("window", "opening", {
             {"mark", "W1"}, {"opening_kind", "window"}, {"width_m", 1.2}, {"height_m", 1.0},
             {"opening_assembly", opening_assembly_json(profile)}})});
@@ -61,10 +66,17 @@ void test_window_profile_schedule() {
         const auto& cells = projection.snapshot.rows.front().cells;
         require(std::get<std::string>(cells.at("window_layout").value) == window_layout_kind_name(layout) &&
                 std::get<std::int64_t>(cells.at("panel_count").value) ==
-                (layout == WindowLayoutKind::triple_fixed ? 3 :
+                (layout == WindowLayoutKind::triple_fixed || layout == WindowLayoutKind::bay ? 3 :
                  layout == WindowLayoutKind::double_fixed || layout == WindowLayoutKind::sliding ? 2 : 1),
                 "schedule must identify actual window panel arrangement");
         const bool casement = layout == WindowLayoutKind::casement;
+        if (layout == WindowLayoutKind::bay) {
+            require(std::get<std::string>(cells.at("mechanism").value) == "Fixed" &&
+                std::get<ScheduleQuantity>(cells.at("bay_projection").value).value == 0.6 &&
+                std::get<double>(cells.at("bay_front_fraction").value) == 0.5 &&
+                std::get<std::string>(cells.at("projection_side").value) == "right",
+                "bay schedule must expose fixed three-facet dimensions and projection side");
+        }
         require(cells.contains("hinge") == casement && cells.contains("swing_side") == casement &&
                 cells.contains("swing_angle_degrees") == casement &&
                 cells.contains("open_percent") == (layout == WindowLayoutKind::sliding),

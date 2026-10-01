@@ -1606,6 +1606,10 @@ OpeningAssembly catalog_opening_assembly(const QString& kind, const QString& sym
             profile.window_layout = WindowLayoutKind::casement;
         else if (symbol_id == QStringLiteral("svg-v2-10_windows-window-sliding"))
             profile.window_layout = WindowLayoutKind::sliding;
+        else if (symbol_id == QStringLiteral("svg-v2-10_windows-window-bay")) {
+            profile.window_layout = WindowLayoutKind::bay;
+            profile.window_bay_projection_m = 0.65;
+        }
     }
     return profile;
 }
@@ -3709,7 +3713,8 @@ public:
                     auto assembly = parse_opening_assembly(entity.properties.at("opening_assembly"));
                     assembly.inset_m = -assembly.inset_m;
                     if (assembly.window_layout == WindowLayoutKind::casement ||
-                        assembly.window_layout == WindowLayoutKind::sliding)
+                        assembly.window_layout == WindowLayoutKind::sliding ||
+                        assembly.window_layout == WindowLayoutKind::bay)
                         assembly.window_open_left = !assembly.window_open_left;
                     entity.properties["opening_assembly"] = opening_assembly_json(assembly);
                 }
@@ -16029,6 +16034,8 @@ public:
                         assembly.window_open_left = true;
                         assembly.window_angle_degrees = 90.0;
                         assembly.window_slide_fraction = 0.0;
+                        assembly.window_bay_projection_m = 0.0;
+                        assembly.window_bay_front_fraction = 0.5;
                     }
                     if (assembly.kind == OpeningAssemblyKind::window &&
                         assembly.glazing_thickness_m <= default_geometry_tolerance_metres) {
@@ -19962,6 +19969,18 @@ public:
             m_pending_opening_door_operation->kind == DoorOperationKind::sliding) ||
             (window && m_pending_opening_profile->window_layout == WindowLayoutKind::sliding);
         const bool casement = window && m_pending_opening_profile->window_layout == WindowLayoutKind::casement;
+        const bool bay = window && m_pending_opening_profile->window_layout == WindowLayoutKind::bay;
+        if (bay) m_pending_opening_profile->window_bay_projection_m *= scale;
+        {
+            const QSignalBlocker side_blocker(m_opening_draw_bay_side);
+            m_opening_draw_bay_side->setCurrentIndex(m_pending_opening_profile->window_open_left ? 0 : 1);
+            m_opening_draw_bay_projection->setText(QString::fromStdString(
+                json(m_pending_opening_profile->window_bay_projection_m).dump()) + QStringLiteral(" m"));
+        }
+        m_opening_draw_bay_projection->setVisible(bay);
+        m_opening_draw_bay_projection_label->setVisible(bay);
+        m_opening_draw_bay_side->setVisible(bay);
+        m_opening_draw_bay_side_label->setVisible(bay);
         {
             const QSignalBlocker blocker(m_opening_draw_travel);
             m_opening_draw_travel->setValue(0.0);
@@ -22884,6 +22903,29 @@ private:
         QObject::connect(m_opening_draw_angle, &QDoubleSpinBox::valueChanged, owner, [this](double value) {
             if (!m_pending_opening_profile || m_pending_opening_profile->window_layout != WindowLayoutKind::casement) return;
             m_pending_opening_profile->window_angle_degrees = value;
+            resetOpeningPlacementHover();
+        });
+        m_opening_draw_bay_projection = new QLineEdit(m_opening_draw_fields);
+        m_opening_draw_bay_projection->setObjectName(QStringLiteral("openingDrawBayProjection"));
+        m_opening_draw_bay_projection->setToolTip(QStringLiteral("Distance beyond the selected wall face. Accepts mm, m, in or ft."));
+        m_opening_draw_bay_projection_label = new QLabel(QStringLiteral("Projection"), m_opening_draw_fields);
+        opening_form->addRow(m_opening_draw_bay_projection_label, m_opening_draw_bay_projection);
+        m_opening_draw_bay_projection->hide();
+        m_opening_draw_bay_projection_label->hide();
+        QObject::connect(m_opening_draw_bay_projection, &QLineEdit::editingFinished, owner, [this] {
+            if (m_pending_opening_profile && m_pending_opening_profile->window_layout == WindowLayoutKind::bay)
+                resetOpeningPlacementHover();
+        });
+        m_opening_draw_bay_side = new QComboBox(m_opening_draw_fields);
+        m_opening_draw_bay_side->setObjectName(QStringLiteral("openingDrawBaySide"));
+        m_opening_draw_bay_side->addItems({QStringLiteral("Left of wall"), QStringLiteral("Right of wall")});
+        m_opening_draw_bay_side_label = new QLabel(QStringLiteral("Projection side"), m_opening_draw_fields);
+        opening_form->addRow(m_opening_draw_bay_side_label, m_opening_draw_bay_side);
+        m_opening_draw_bay_side->hide();
+        m_opening_draw_bay_side_label->hide();
+        QObject::connect(m_opening_draw_bay_side, &QComboBox::currentIndexChanged, owner, [this](int index) {
+            if (!m_pending_opening_profile || m_pending_opening_profile->window_layout != WindowLayoutKind::bay) return;
+            m_pending_opening_profile->window_open_left = index == 0;
             resetOpeningPlacementHover();
         });
         architecture_layout->addWidget(m_opening_draw_fields);
@@ -28102,6 +28144,11 @@ private:
             const auto sill = parse_quantity(m_opening_draw_sill->text().toStdString(), unit).metres;
             if (!std::isfinite(width) || width <= 0 || !std::isfinite(height) || height <= 0 ||
                 !std::isfinite(sill) || sill < 0) throw std::invalid_argument("Width and height must be positive; sill cannot be negative.");
+            if (m_pending_opening_profile && m_pending_opening_profile->window_layout == WindowLayoutKind::bay) {
+                m_pending_opening_profile->window_bay_projection_m =
+                    parse_quantity(m_opening_draw_bay_projection->text().toStdString(), unit).metres;
+                validate_opening_assembly(*m_pending_opening_profile);
+            }
             const auto snapshot = m_document->snapshot();
             const auto* canvas = m_workspace == Workspace::measurement ? m_measurementCanvas : m_architecturalCanvas;
             std::optional<Entity> host_entity;
@@ -29791,12 +29838,6 @@ private:
             dialog.setObjectName(QStringLiteral("openingAssemblyDialog"));
             dialog.setWindowTitle(QStringLiteral("Opening assembly"));
             auto* layout = new QVBoxLayout(&dialog);
-            auto* description = new QLabel(
-                QStringLiteral("%1 profile dimensions are stored in metres and remain editable after placement.")
-                    .arg(QString::fromUtf8(opening_assembly_kind_name(assembly.kind).data())),
-                &dialog);
-            description->setWordWrap(true);
-            layout->addWidget(description);
             auto* form = new QFormLayout;
             auto* frame_width = new QLineEdit(format_length(assembly.frame_width_m, m_metric_units), &dialog);
             auto* frame_depth = new QLineEdit(format_length(assembly.frame_depth_m, m_metric_units), &dialog);
@@ -29823,13 +29864,17 @@ private:
             QComboBox* window_side = nullptr;
             QDoubleSpinBox* window_angle = nullptr;
             QDoubleSpinBox* window_travel = nullptr;
+            QLineEdit* bay_projection = nullptr;
+            QDoubleSpinBox* bay_front = nullptr;
             double displayed_window_angle = assembly.window_angle_degrees;
             double displayed_window_travel = assembly.window_slide_fraction * 100.0;
+            double displayed_bay_front = assembly.window_bay_front_fraction * 100.0;
             if (assembly.kind == OpeningAssemblyKind::window) {
                 window_layout = new QComboBox(&dialog);
                 window_layout->setObjectName(QStringLiteral("openingWindowLayout"));
                 window_layout->addItems({QStringLiteral("Fixed single pane"), QStringLiteral("Fixed double pane"),
-                    QStringLiteral("Fixed triple pane"), QStringLiteral("Casement"), QStringLiteral("Sliding")});
+                    QStringLiteral("Fixed triple pane"), QStringLiteral("Casement"), QStringLiteral("Sliding"),
+                    QStringLiteral("Bay")});
                 window_layout->setCurrentIndex(static_cast<int>(assembly.window_layout));
                 window_jamb = new QComboBox(&dialog);
                 window_jamb->setObjectName(QStringLiteral("openingWindowJamb"));
@@ -29854,19 +29899,37 @@ private:
                 window_travel->setSuffix(QStringLiteral("%"));
                 window_travel->setValue(assembly.window_slide_fraction * 100.0);
                 displayed_window_travel = window_travel->value();
+                bay_projection = new QLineEdit(format_length(assembly.window_layout == WindowLayoutKind::bay
+                    ? assembly.window_bay_projection_m : 0.65, m_metric_units), &dialog);
+                bay_projection->setObjectName(QStringLiteral("openingWindowBayProjection"));
+                bay_projection->setToolTip(QStringLiteral("Distance beyond the selected wall face."));
+                bay_front = new QDoubleSpinBox(&dialog);
+                bay_front->setObjectName(QStringLiteral("openingWindowBayFront"));
+                bay_front->setRange(0.01, 99.99);
+                bay_front->setDecimals(2);
+                bay_front->setSuffix(QStringLiteral("%"));
+                bay_front->setValue(assembly.window_bay_front_fraction * 100.0);
+                bay_front->setToolTip(QStringLiteral("Front face width as a percentage of the bay's full wall opening."));
+                displayed_bay_front = bay_front->value();
                 form->addRow(QStringLiteral("Window layout"), window_layout);
                 form->addRow(QStringLiteral("Hinge / moving half"), window_jamb);
-                form->addRow(QStringLiteral("Opening / track side"), window_side);
+                form->addRow(QStringLiteral("Side of wall"), window_side);
                 form->addRow(QStringLiteral("Angle"), window_angle);
                 form->addRow(QStringLiteral("Open"), window_travel);
+                form->addRow(QStringLiteral("Projection"), bay_projection);
+                form->addRow(QStringLiteral("Front width"), bay_front);
                 const auto sync_window_fields = [=] {
                     const auto choice = static_cast<WindowLayoutKind>(window_layout->currentIndex());
                     const bool casement = choice == WindowLayoutKind::casement;
                     const bool sliding = choice == WindowLayoutKind::sliding;
+                    const bool bay = choice == WindowLayoutKind::bay;
+                    form->setRowVisible(panel, !bay);
                     form->setRowVisible(window_jamb, casement || sliding);
-                    form->setRowVisible(window_side, casement || sliding);
+                    form->setRowVisible(window_side, casement || sliding || bay);
                     form->setRowVisible(window_angle, casement);
                     form->setRowVisible(window_travel, sliding);
+                    form->setRowVisible(bay_projection, bay);
+                    form->setRowVisible(bay_front, bay);
                 };
                 QObject::connect(window_layout, &QComboBox::currentIndexChanged, &dialog, sync_window_fields);
                 sync_window_fields();
@@ -29891,23 +29954,36 @@ private:
                     return;
                 }
                 auto edited = assembly;
+                const auto exact_if_unchanged = [&](QLineEdit* field, double original) {
+                    return field->text() == format_length(original, m_metric_units)
+                        ? QString::fromStdString(json(original).dump()) + QStringLiteral(" m") : field->text();
+                };
                 if (window_layout) {
                     edited.window_layout = static_cast<WindowLayoutKind>(window_layout->currentIndex());
                     const bool casement = edited.window_layout == WindowLayoutKind::casement;
                     const bool sliding = edited.window_layout == WindowLayoutKind::sliding;
+                    const bool bay = edited.window_layout == WindowLayoutKind::bay;
                     edited.window_hinge_at_end = (casement || sliding) && window_jamb->currentIndex() == 1;
-                    edited.window_open_left = !(casement || sliding) || window_side->currentIndex() == 0;
+                    edited.window_open_left = !(casement || sliding || bay) || window_side->currentIndex() == 0;
                     edited.window_angle_degrees = casement
                         ? window_angle->value() == displayed_window_angle ? assembly.window_angle_degrees : window_angle->value()
                         : 90.0;
                     edited.window_slide_fraction = sliding
                         ? window_travel->value() == displayed_window_travel ? assembly.window_slide_fraction : window_travel->value() / 100.0
                         : 0.0;
+                    try {
+                        edited.window_bay_projection_m = bay ? parse_quantity(exact_if_unchanged(bay_projection,
+                            assembly.window_layout == WindowLayoutKind::bay ? assembly.window_bay_projection_m : 0.65)
+                            .toStdString(), m_metric_units ? Unit::metre : Unit::foot).metres : 0.0;
+                    } catch (const std::exception& error) {
+                        status->setText(QString::fromUtf8(error.what()));
+                        status->show();
+                        return;
+                    }
+                    edited.window_bay_front_fraction = bay
+                        ? bay_front->value() == displayed_bay_front ? assembly.window_bay_front_fraction : bay_front->value() / 100.0
+                        : 0.5;
                 }
-                const auto exact_if_unchanged = [&](QLineEdit* field, double original) {
-                    return field->text() == format_length(original, m_metric_units)
-                        ? QString::fromStdString(json(original).dump()) + QStringLiteral(" m") : field->text();
-                };
                 if (editSelectedOpeningAssembly(exact_if_unchanged(frame_width, assembly.frame_width_m),
                                                  exact_if_unchanged(frame_depth, assembly.frame_depth_m),
                                                  exact_if_unchanged(panel, assembly.panel_thickness_m),
@@ -30272,6 +30348,10 @@ private:
     QLabel* m_opening_draw_travel_label{};
     QDoubleSpinBox* m_opening_draw_angle{};
     QLabel* m_opening_draw_angle_label{};
+    QLineEdit* m_opening_draw_bay_projection{};
+    QLabel* m_opening_draw_bay_projection_label{};
+    QComboBox* m_opening_draw_bay_side{};
+    QLabel* m_opening_draw_bay_side_label{};
     QLabel* m_architecture_hint{};
     BuildingViewKind m_architectural_view_kind{BuildingViewKind::plan};
     QString m_active_named_view;

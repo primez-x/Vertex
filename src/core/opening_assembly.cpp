@@ -25,7 +25,8 @@ void nonnegative(double value, const char* message) {
 bool canonical_window_descriptor(const OpeningAssembly& value) {
     return value.window_layout == WindowLayoutKind::fixed &&
            !value.window_hinge_at_end && value.window_open_left &&
-           value.window_angle_degrees == 90.0 && value.window_slide_fraction == 0.0;
+           value.window_angle_degrees == 90.0 && value.window_slide_fraction == 0.0 &&
+           value.window_bay_projection_m == 0.0 && value.window_bay_front_fraction == 0.5;
 }
 }  // namespace
 
@@ -62,6 +63,14 @@ void validate_opening_assembly(const OpeningAssembly& value) {
         reject("Window slide fraction must be finite and between 0 and 1");
     if (value.kind == OpeningAssemblyKind::door && !canonical_window_descriptor(value))
         reject("Door assembly cannot carry a window descriptor");
+    if (value.window_layout == WindowLayoutKind::bay) {
+        positive(value.window_bay_projection_m, "Bay projection must be positive, finite and bounded");
+        if (!std::isfinite(value.window_bay_front_fraction) ||
+            value.window_bay_front_fraction <= 0.0 || value.window_bay_front_fraction >= 1.0)
+            reject("Bay front fraction must be strictly between 0 and 1");
+    } else if (value.window_bay_projection_m != 0.0 || value.window_bay_front_fraction != 0.5) {
+        reject("Non-bay window cannot carry dormant bay dimensions");
+    }
     switch (value.window_layout) {
     case WindowLayoutKind::fixed:
     case WindowLayoutKind::double_fixed:
@@ -78,6 +87,11 @@ void validate_opening_assembly(const OpeningAssembly& value) {
         if (value.window_angle_degrees != 90.0)
             reject("Sliding window cannot carry a dormant casement angle");
         break;
+    case WindowLayoutKind::bay:
+        if (value.window_hinge_at_end || value.window_angle_degrees != 90.0 ||
+            value.window_slide_fraction != 0.0)
+            reject("Bay window cannot carry dormant movement fields");
+        break;
     }
 }
 
@@ -88,6 +102,7 @@ std::string_view window_layout_kind_name(WindowLayoutKind kind) noexcept {
     case WindowLayoutKind::triple_fixed: return "triple_fixed";
     case WindowLayoutKind::casement: return "casement";
     case WindowLayoutKind::sliding: return "sliding";
+    case WindowLayoutKind::bay: return "bay";
     }
     return "invalid";
 }
@@ -98,6 +113,7 @@ std::optional<WindowLayoutKind> parse_window_layout_kind(std::string_view value)
     if (value == "triple_fixed") return WindowLayoutKind::triple_fixed;
     if (value == "casement") return WindowLayoutKind::casement;
     if (value == "sliding") return WindowLayoutKind::sliding;
+    if (value == "bay") return WindowLayoutKind::bay;
     return std::nullopt;
 }
 
@@ -136,21 +152,24 @@ OpeningAssembly parse_opening_assembly(const nlohmann::json& value) {
     }
     const auto& version = value.at("version");
     if ((!version.is_number_integer() && !version.is_number_unsigned()) ||
-        (version != 1 && version != 2)) {
-        reject("Opening assembly version must be 1 or 2");
+        (version != 1 && version != 2 && version != 3)) {
+        reject("Opening assembly version must be 1, 2 or 3");
     }
-    const bool descriptor = version == 2;
+    const bool bay_descriptor = version == 3;
+    const bool descriptor = version != 1;
     if ((!descriptor && value.size() != 7) ||
-        (descriptor && (value.size() != 12 || !value.contains("window_layout") ||
+        (descriptor && (value.size() != (bay_descriptor ? 14 : 12) || !value.contains("window_layout") ||
          !value.contains("window_hinge_at_end") || !value.contains("window_open_left") ||
-         !value.contains("window_angle_degrees") || !value.contains("window_slide_fraction"))))
+         !value.contains("window_angle_degrees") || !value.contains("window_slide_fraction"))) ||
+        (bay_descriptor && (!value.contains("window_bay_projection_m") ||
+                            !value.contains("window_bay_front_fraction"))))
         reject("Opening assembly properties must match the exact versioned schema");
     const auto& kind = value.at("kind");
     if (!kind.is_string()) reject("Opening assembly kind must be a string");
     const auto parsed_kind = parse_opening_assembly_kind(kind.get<std::string>());
     if (!parsed_kind.has_value()) reject("Opening assembly kind is unsupported");
     if (descriptor && *parsed_kind != OpeningAssemblyKind::window)
-        reject("Version 2 opening assembly descriptors require a window");
+        reject("Versioned opening assembly descriptors require a window");
     OpeningAssembly result;
     result.kind = *parsed_kind;
     const auto read_number = [&](const char* key, double& output) {
@@ -170,6 +189,8 @@ OpeningAssembly parse_opening_assembly(const nlohmann::json& value) {
         const auto parsed = parse_window_layout_kind(layout.get<std::string>());
         if (!parsed) reject("Window assembly layout is unsupported");
         result.window_layout = *parsed;
+        if (bay_descriptor != (result.window_layout == WindowLayoutKind::bay))
+            reject("Bay windows require v3; v3 requires a bay window");
         if (!value.at("window_hinge_at_end").is_boolean() ||
             !value.at("window_open_left").is_boolean())
             reject("Window assembly handing fields must be booleans");
@@ -177,6 +198,10 @@ OpeningAssembly parse_opening_assembly(const nlohmann::json& value) {
         result.window_open_left = value.at("window_open_left").get<bool>();
         read_number("window_angle_degrees", result.window_angle_degrees);
         read_number("window_slide_fraction", result.window_slide_fraction);
+        if (bay_descriptor) {
+            read_number("window_bay_projection_m", result.window_bay_projection_m);
+            read_number("window_bay_front_fraction", result.window_bay_front_fraction);
+        }
     }
     validate_opening_assembly(result);
     return result;
@@ -198,6 +223,11 @@ nlohmann::json opening_assembly_json(const OpeningAssembly& value) {
         result["window_open_left"] = value.window_open_left;
         result["window_angle_degrees"] = value.window_angle_degrees;
         result["window_slide_fraction"] = value.window_slide_fraction;
+        if (value.window_layout == WindowLayoutKind::bay) {
+            result["version"] = 3;
+            result["window_bay_projection_m"] = value.window_bay_projection_m;
+            result["window_bay_front_fraction"] = value.window_bay_front_fraction;
+        }
     }
     return result;
 }

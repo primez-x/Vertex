@@ -345,6 +345,112 @@ double common_volume(const TopoDS_Shape& a, const TopoDS_Shape& b) {
     return solid_volume(operation.Shape());
 }
 
+TopoDS_Shape bay_window_parts(const Wall& host, const HostedOpening& opening,
+                             const OpeningAssembly& assembly, const OpeningFrame& frame) {
+    if (host.baseline.sweep_radians != 0.0)
+        throw std::invalid_argument("Bay windows require a straight host until curved fitting is available");
+    const double width = opening.width, bar = assembly.frame_width_m;
+    const double depth = assembly.frame_depth_m, projection = assembly.window_bay_projection_m;
+    const double height = opening.height - 2.0 * bar;
+    const double base = host.elevation + opening.sill;
+    const double side = assembly.window_open_left ? 1.0 : -1.0;
+    // Coordinates below use an outward-positive normal, regardless of handing.
+    // Projection starts at the physical wall face; inset locates the mounting
+    // frame and cannot silently shorten or deepen the requested projecting bay.
+    const double face = host.thickness * 0.5;
+    const double rear = side * assembly.inset_m - depth * 0.5;
+    const double mount_face = side * assembly.inset_m + depth * 0.5;
+    const double front_start = width * (1.0 - assembly.window_bay_front_fraction) * 0.5;
+    const double run = front_start - bar;
+    const double side_length = std::hypot(run, projection);
+    if (run <= tolerance || projection <= depth + tolerance || height <= 2.0 * bar + tolerance)
+        throw std::invalid_argument("Bay projection and facets leave no framed glazing cavity");
+    const double rear_inner = bar + depth * side_length / projection;
+    const double front_inner = front_start + depth * (side_length - run) / projection;
+    if (front_inner <= rear_inner + tolerance || width - 2.0 * front_inner <= 2.0 * bar + tolerance)
+        throw std::invalid_argument("Bay mitered frame does not fit the projecting facets");
+    const std::array<Vec2, 4> outer{{{bar, face}, {front_start, face + projection},
+                                  {width - front_start, face + projection}, {width - bar, face}}};
+    const std::array<Vec2, 4> inner{{{rear_inner, face}, {front_inner, face + projection - depth},
+                                  {width - front_inner, face + projection - depth}, {width - rear_inner, face}}};
+    const auto prism = [&](const std::vector<Vec2>& polygon, double z, double rise) {
+        std::vector<gp_Pnt> points;
+        for (const auto& p : polygon) points.push_back(opening_point(frame, p.x, side * p.y, z));
+        return extrude_polygon(points, gp_Vec(0, 0, rise), "Bay frame profile extrusion failed");
+    };
+    TopoDS_Compound result;
+    BRep_Builder builder; builder.MakeCompound(result);
+    std::vector<TopoDS_Shape> parts;
+    const auto add = [&](const TopoDS_Shape& part) { parts.push_back(part); builder.Add(result, part); };
+    const double mount_across = assembly.inset_m - depth * 0.5;
+    for (double x : {0.0, width - bar})
+        add(opening_box(frame, x, mount_across, bar, depth, opening.height, base,
+                        "Bay mounting jamb construction failed"));
+    // Recessed mounting jambs need real returns to the host face. Their width
+    // stays in the wall mouth, so they cannot clip material beside the opening.
+    const double return_depth = face - mount_face;
+    if (return_depth > tolerance) for (double x : {0.0, width - bar})
+        add(opening_box(frame, x, side > 0.0 ? mount_face : -face, bar, return_depth,
+                        opening.height, base, "Bay mounting return construction failed"));
+    const std::vector<Vec2> plate{{bar, rear}, {width - bar, rear}, outer[3], outer[2], outer[1], outer[0]};
+    add(prism(plate, base, bar));
+    add(prism(plate, base + opening.height - bar, bar));
+    for (std::size_t index = 0; index < 3; ++index) {
+        const auto& a = outer[index]; const auto& b = outer[index + 1];
+        const double length = std::hypot(b.x - a.x, b.y - a.y);
+        const Vec2 along{(b.x - a.x) / length, (b.y - a.y) / length};
+        const auto station = [&](const Vec2& point) {
+            return (point.x - a.x) * along.x + (point.y - a.y) * along.y;
+        };
+        // Miter joins shorten the inner edge. Apertures are inset from both
+        // inner and outer endpoints, leaving actual structural join material.
+        const double first = std::max(0.0, station(inner[index])) + bar;
+        const double last = std::min(length, station(inner[index + 1])) - bar;
+        const double glass_width = last - first;
+        const double glass_height = height - 2.0 * bar;
+        if (glass_width <= 4.0 * tolerance || glass_height <= 4.0 * tolerance)
+            throw std::invalid_argument("Bay facet leaves no clear glazing pane");
+        const auto global_a = opening_point(frame, a.x, side * a.y, base);
+        const auto global_b = opening_point(frame, b.x, side * b.y, base);
+        const Vec2 direction{(global_b.X() - global_a.X()) / length,
+                             (global_b.Y() - global_a.Y()) / length};
+        const OpeningFrame facet{{global_a.X(), global_a.Y()}, direction, {-direction.y, direction.x}};
+        const double inward_across = side > 0.0 ? -depth : 0.0;
+        const auto aperture = opening_box(facet, first, inward_across - tolerance,
+            glass_width, depth + 2.0 * tolerance, glass_height, base + 2.0 * bar,
+            "Bay glazing aperture construction failed");
+        add(cut(prism({a, b, inner[index + 1], inner[index]}, base + bar, height), aperture));
+        // A finite construction clearance keeps pane material out of frame
+        // and miter joints, including at the top and bottom aperture edges.
+        add(opening_box(facet, first + 2.0 * tolerance,
+            inward_across + (depth - assembly.glazing_thickness_m) * 0.5,
+            glass_width - 4.0 * tolerance, assembly.glazing_thickness_m,
+            glass_height - 4.0 * tolerance, base + 2.0 * bar + 2.0 * tolerance,
+            "Bay glazing construction failed"));
+    }
+    // Each angled facet's rear cap is wider than the jamb. Without these
+    // opaque butt adapters its connection to the mounting frame would be
+    // only a vertical edge. The adapters share a full rear-cap mating face
+    // with the facet and a finite side face with the jamb and any return.
+    // Their clear-height span butts against the plates without shared volume.
+    for (double x : {bar, width - rear_inner})
+        add(opening_box(frame, x, side > 0.0 ? rear : -face,
+            rear_inner - bar, face - rear, height, base + bar,
+            "Bay mounting butt adapter construction failed"));
+    const auto wall_shape = make_wall(host);
+    const double overlap_limit = tolerance * tolerance * std::max(1.0, opening.height);
+    for (std::size_t first = 0; first < parts.size(); ++first) {
+        if (common_volume(parts[first], wall_shape) > overlap_limit)
+            throw std::invalid_argument("Bay assembly intersects its host wall");
+        for (std::size_t second = first + 1; second < parts.size(); ++second)
+            if (common_volume(parts[first], parts[second]) > overlap_limit)
+                throw std::invalid_argument("Bay facet or mounting parts share material");
+    }
+    if (!BRepCheck_Analyzer(result).IsValid() || solid_volume(result) <= tolerance * tolerance * tolerance)
+        throw std::invalid_argument("Bay assembly did not produce valid material solids");
+    return result;
+}
+
 double endpoint_distance(const Vec2& first, const Vec2& second) {
     const auto distance = std::hypot(first.x - second.x, first.y - second.y);
     if (!std::isfinite(distance)) {
@@ -526,6 +632,13 @@ OpeningAssemblyGeometry make_opening_assembly_geometry(const Wall& wall, const H
     }
 
     const auto frame = opening_frame(wall.baseline, opening.offset / wall_length);
+    if (window && assembly.window_layout == WindowLayoutKind::bay) {
+        try {
+            return {bay_window_parts(checked, opening, assembly, frame), std::nullopt, {}};
+        } catch (const Standard_Failure& error) {
+            throw std::invalid_argument(std::string("Bay geometry failed: ") + error.what());
+        }
+    }
     const double base_elevation = wall.elevation + opening.sill;
     const double frame_across = assembly.inset_m - assembly.frame_depth_m * 0.5;
     const double panel_across = assembly.inset_m - assembly.panel_thickness_m * 0.5;

@@ -1,6 +1,6 @@
 # Vertex user testing checklist
 
-301 practical tasks, grouped by how you use the app. This replaces the earlier engineering-oriented checklist. The old 130-item list is preserved separately as engineering-requirements-checklist.md.
+302 practical tasks, grouped by how you use the app. This replaces the earlier engineering-oriented checklist. The old 130-item list is preserved separately as engineering-requirements-checklist.md.
 
 This is a user acceptance list for the intended app, not a claim that every listed action is implemented or working in the current preview. If you cannot find a control, or a feature is absent, mark **Blocked / missing** and describe it. Specialized sections can be skipped if you do not use them or lack the device or sample files.
 
@@ -1707,6 +1707,12 @@ drawing; switching modes does not change existing geometry.
 - [ ] **U300 — Slide a window open**
   - Steps: Choose the Sliding Window style and set Open to 50%. Place it on a straight wall. In **Opening assembly**, try 0%, 50% and 100%, change the moving half and track side, then resize its width. Undo, redo, save and reopen. Compare plan, 3D, DXF and IFC output.
   - Expected: One framed sash moves on a separate track; the other remains fixed. At 100% the moving sash stacks behind the fixed one, leaving half the aperture open. There is no hinged swing. Reopening and exported native geometry retain the window layout and travel.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **U301 — Place and reshape a bay window**
+  - Steps: Choose Window in Library, then Bay. Set Projection to 0.65 m and choose a side of a straight wall. Place it. Double-click it and open **Opening assembly**. Change Projection to 0.85 m, Front width to 40%, and the side. Resize its wall-opening width, undo, redo, reflect its host wall, save and reopen. Compare the plan and 3D; export DXF and IFC.
+  - Expected: The bay projects beyond the selected wall face with a front pane and two angled side panes. Changing depth, front width or side reshapes the same assembly. The wall cut, frame and glass remain attached and follow width edits. Reopening and exported geometry retain the shape. Invalid dimensions are refused without changing the project. The window alone does not add floor or appraisal area. A curved host explains the straight-wall requirement.
   - Result: Not tested
   - Notes: ______________________________
 
