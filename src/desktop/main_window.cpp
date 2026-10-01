@@ -3246,19 +3246,9 @@ public:
         const auto radians = degrees * std::numbers::pi / 180.0;
         const Vec2 pivot{std::midpoint(wall.baseline.start.x, wall.baseline.end.x),
                          std::midpoint(wall.baseline.start.y, wall.baseline.end.y)};
-        const auto transform = [&](Vec2 point) {
-            const double x = point.x - pivot.x, y = point.y - pivot.y;
-            double rx = x * std::cos(radians) - y * std::sin(radians);
-            double ry = x * std::sin(radians) + y * std::cos(radians);
-            if (flip_horizontal) rx = -rx;
-            if (flip_vertical) ry = -ry;
-            return Vec2{pivot.x + rx + translation.x, pivot.y + ry + translation.y};
-        };
-        auto baseline = wall.baseline;
-        baseline.start = transform(baseline.start);
-        baseline.end = transform(baseline.end);
+        const PlanarTransform transform{pivot, radians, flip_horizontal, flip_vertical, translation};
+        const auto baseline = transform_segment(wall.baseline, transform);
         const bool reflected = flip_horizontal != flip_vertical;
-        if (reflected) baseline.sweep_radians = -baseline.sweep_radians;
         wall.baseline = baseline;
         validate_wall_semantics(wall);
         std::map<std::string, std::string, std::less<>> identities;
@@ -3266,31 +3256,10 @@ public:
         std::vector<EntityChange> changes;
         for (auto entity : graph) {
             if (entity.type == "wall") {
+                transform_wall_curve_input(entity, transform);
                 rebase_wall_length_receipt(entity, baseline);
-                const auto original_wall = entity;
-                if (!reflected && entity.extensions.contains("curve_input"))
-                    rebase_wall_curve_input(entity, baseline);
                 const auto geometry = segment_json(baseline);
                 for (const auto& [key, value] : geometry.items()) entity.properties["baseline"][key] = value;
-                if (reflected && entity.extensions.contains("curve_input") &&
-                    entity.extensions.at("curve_input").is_object()) {
-                    auto& curve_input = entity.extensions["curve_input"];
-                    curve_input["start"] = point_json(baseline.start);
-                    curve_input["end"] = point_json(baseline.end);
-                    curve_input["radians"] = baseline.sweep_radians;
-                    if (reflected) {
-                        const auto reflected_sweep = angle_from_radians(baseline.sweep_radians);
-                        curve_input["version"] = 2;
-                        curve_input["construction"] = "angle";
-                        curve_input["measure"] = reflected_sweep.original_expression;
-                        curve_input["normalized_measure"] = reflected_sweep.normalized_expression;
-                        curve_input["measure_value"] = baseline.sweep_radians;
-                        curve_input["clockwise"] = baseline.sweep_radians < 0.0;
-                        curve_input["sweep"] = reflected_sweep.original_expression;
-                        curve_input["normalized_sweep"] = reflected_sweep.normalized_expression;
-                    }
-                    preserve_wall_curve_construction(entity, original_wall);
-                }
             } else if (reflected && entity.properties.contains("door_operation")) {
                 auto operation = decode_door_operation(entity.properties.at("door_operation"));
                 operation.swing_left = !operation.swing_left;
@@ -11159,6 +11128,11 @@ public:
                 }
             }
             auto candidate = *selected;
+            const auto& original_baseline=selected->properties.at("baseline");
+            if (original_baseline.at("start")!=point_json(baseline.start) ||
+                original_baseline.at("end")!=point_json(baseline.end) ||
+                original_baseline.at("sweep_radians")!=baseline.sweep_radians)
+                clear_wall_length_input(candidate);
             auto& stored_baseline = candidate.properties["baseline"];
             stored_baseline["start"] = point_json(baseline.start);
             stored_baseline["end"] = point_json(baseline.end);

@@ -13,11 +13,18 @@ void rebase_wall_length_receipt(Entity& wall, const Segment& transformed_baselin
 // physical curved v2. Missing/future optional versions remain opaque on open;
 // editing or rebasing unsupported metadata still refuses without loss.
 void validate_wall_length_input(const Entity& wall);
+// Invalidate a known measurement receipt before explicit reconstruction.
+// Validate against the original baseline and refuse opaque metadata loss.
+void clear_wall_length_input(Entity& wall);
 // Checks active curve construction and any archived fixed-sweep derivation.
 void validate_wall_curve_input(const Entity& wall);
-// Preserve exact source input during endpoint deformation; rigid transforms
-// preserve the active construction and append to an existing derivation.
+// Preserve exact source input during fixed-signed-sweep endpoint deformation.
+// Reflections use the separate rigid-transform helper below.
 void rebase_wall_curve_input(Entity& wall, const Segment& transformed_baseline);
+// Metadata-only rigid transform while the wall still has its original baseline.
+// Archives the exact original input and independently replays rotation,
+// reflection and translation; the caller then updates the baseline geometry.
+void transform_wall_curve_input(Entity& wall, const PlanarTransform& transform);
 // Explicit curve construction after an endpoint derivation keeps its full
 // archived source and records the independently validated new construction.
 void preserve_wall_curve_construction(Entity& candidate,const Entity& source);

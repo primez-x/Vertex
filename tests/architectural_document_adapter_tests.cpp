@@ -520,6 +520,12 @@ void test_rigid_curved_wall_transform_preserves_input_provenance() {
         auto expected = curved.extensions;
         expected["curve_input"]["start"] = moved.properties.at("baseline").at("start");
         expected["curve_input"]["end"] = moved.properties.at("baseline").at("end");
+        const auto& archive=moved.extensions.at("curve_input_derivation");
+        expected["curve_input_derivation"]=archive;
+        require(archive.at("version")==2 && archive.at("source_input")==curved.extensions.at("curve_input") &&
+                archive.at("source_baseline")==curved.properties.at("baseline") &&
+                archive.at("operations").size()==1 && archive.at("operations").front().at("kind")=="rigid_transform",
+                "rigid curved-wall transform must archive and independently replay the exact source construction");
         require(moved.extensions == expected && moved.properties.at("baseline").at("sweep_radians") == baseline.sweep_radians,
                 "rigid curved-wall transform must move retained input coordinates and preserve every defining expression and value");
         apply_architectural_transaction(document,transaction,document.revision());

@@ -67,3 +67,24 @@ This focused recheck used the native development test executable; it does not
 establish which build a user has launched or constitute a user-observed fix.
 The manual symbol check now distinguishes returning to zero from returning to
 a nonzero starting angle.
+
+## Latest feedback recheck
+
+The requested frame/pin retention, 45-degree snapping, Shift fine adjustment,
+and live degree readout were already present in the inspected source. No new
+canvas patch was needed. A bounded independent source audit found no remaining
+single-object reset defect in ordinary or saved horizontal plan views.
+
+After the integrated Release rebuild, `symbol_transform_desktop` passed in
+14.60 seconds and `axis_canvas_controls` in 0.15 seconds. The complete focused
+run passed 10/10 in 25.30 seconds, including curve authoring, native dialogs,
+architectural adapter, document history, storage, exchange, CLI and schema checks.
+Root inspected `artifacts/rotation-current-20260930-final/rotation-live-90.png`:
+the pin follows the rotated side, the frame remains clear, and the live readout
+shows 90.0 degrees. Those are controlled native checks, not a claim that the
+user's reported gesture has been retested in their previous executable.
+
+Current development executable: `build/windows-release/vertex.exe`, SHA-256
+`7994bc257bb719e47112e607b544f7b4cb101b8a405bdd797ae013167ce39bd9`.
+The earlier installed checkpoint remains separate; this recheck did not replace
+that installer or certify the full production application.

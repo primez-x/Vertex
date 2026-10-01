@@ -161,6 +161,13 @@ entry and a version-2 physical length receipt. All use the shared topology
 admission during preview, apply and retained-history replay.
 Original curve construction input is retained as derivation evidence when its
 measured length or height no longer describes the fixed-sweep endpoint result.
+Rigid curve transforms use a separate shared helper: rotation, reflection,
+translation, and cloning retain the exact original construction and append an
+independently replayed operation. Its version-2 archive preserves prior endpoint
+and construction history, requires project format 14 and exchange version 11,
+and does not weaken the fixed-signed-sweep endpoint-edit rules. Shift-adjusted
+rotation changes geometry while retaining that measurement evidence. Scaling
+measured curves remains unsupported and rejects atomically.
 Project format 10 and exchange format 7 protect new proofs and curved-bound
 relations throughout retained history, including undone states.
 Straight wall-only endpoint authoring now retains an unversioned straight wall

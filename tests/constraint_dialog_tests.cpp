@@ -21,6 +21,7 @@
 
 #include <cmath>
 #include <iostream>
+#include <numeric>
 #include <numbers>
 #include <stdexcept>
 
@@ -159,6 +160,117 @@ void analytical_curve_preview() {
         require(!blue_near(210, sign > 0 ? 62 : 220), "preview incorrectly draws the arc as its chord");
     }
 }
+void fresh_measured_curve_transform_preserves_source() {
+    const auto read_curve = [](const Entity& entity) {
+        const auto& line = entity.properties.at("baseline");
+        return Segment{{line.at("start")[0].get<double>(), line.at("start")[1].get<double>()},
+            {line.at("end")[0].get<double>(), line.at("end")[1].get<double>()}, line.at("sweep_radians").get<double>()};
+    };
+    for (const auto workspace : {Workspace::measurement, Workspace::architectural}) {
+        MainWindow window;
+        window.setWorkspace(workspace);
+        const auto id = window.createCurvedWallFromConstruction({0, 0}, {4, 0}, "arc_length", "5 m");
+        require(!id.isEmpty() && window.selectEntity(id), "fresh measured curve transform fixture failed");
+        auto measured = window.document().snapshot().entities().at(id.toStdString());
+        measured.extensions["curve_input"]["vendor_note"] = {{"exact", "original measured input"}};
+        measured.properties["baseline"]["vendor_note"] = "original baseline";
+        window.document().apply(ApplyEntityChanges{window.document().revision(),
+            {EntityChange::upsert(measured)}, {}, "retain unknown measured curve metadata"});
+        const auto source = window.document().snapshot();
+        const auto source_input = measured.extensions.at("curve_input");
+        const auto source_baseline = measured.properties.at("baseline");
+        const auto archive = [&](const Entity& entity) {
+            require(entity.extensions.contains("curve_input_derivation"),
+                "fresh measured curve reflection must archive its exact defining input");
+            const auto& proof = entity.extensions.at("curve_input_derivation");
+            require(proof.at("version") == 2 && proof.at("source_input") == source_input &&
+                    proof.at("source_baseline") == source_baseline,
+                "rigid curve transforms must retain exact original input and baseline including unknown metadata");
+        };
+        require(window.transformSelectedBoundary("0", true, false, "0", "0", false),
+            "fresh measured curve must reflect through the actual transform action");
+        const auto reflected = window.document().snapshot();
+        archive(reflected.entities().at(id.toStdString()));
+        require(reflected.entities().at(id.toStdString()).properties.at("baseline").at("sweep_radians") ==
+                -source_baseline.at("sweep_radians").get<double>(), "one reflection must reverse signed curve sweep");
+        require(window.undoCommand() && window.document().snapshot().entities() == source.entities() &&
+                window.redoCommand() && window.document().snapshot().entities() == reflected.entities(),
+            "fresh measured reflection must undo and redo exactly");
+
+        auto previous_ops = reflected.entities().at(id.toStdString()).extensions.at("curve_input_derivation").at("operations");
+        const auto transformed = [&](const QString& angle, bool horizontal, bool vertical,
+                                     const QString& x, const QString& y, bool clone) {
+            const auto before = window.document().snapshot();
+            const auto old_curve = read_curve(before.entities().at(window.selectedEntityId().toStdString()));
+            const auto expected = transform_segment(old_curve, {
+                {std::midpoint(old_curve.start.x, old_curve.end.x), std::midpoint(old_curve.start.y, old_curve.end.y)},
+                angle.toDouble() * std::numbers::pi / 180.0, horizontal, vertical,
+                {parse_quantity(x.toStdString()).metres, parse_quantity(y.toStdString()).metres}});
+            require(window.transformSelectedBoundary(angle, horizontal, vertical, x, y, clone),
+                "archived measured curve transform failed");
+            const auto current = window.document().snapshot();
+            const auto& entity = current.entities().at(window.selectedEntityId().toStdString());
+            archive(entity);
+            const auto actual = read_curve(entity);
+            require_near(actual.start.x, expected.start.x); require_near(actual.start.y, expected.start.y);
+            require_near(actual.end.x, expected.end.x); require_near(actual.end.y, expected.end.y);
+            require(actual.sweep_radians == expected.sweep_radians,
+                "native wall transform must use the archived rotation, reflection and translation order");
+            const auto& operations = entity.extensions.at("curve_input_derivation").at("operations");
+            require(operations.size() == previous_ops.size() + 1, "rigid transform must append one provenance operation");
+            for (std::size_t index = 0; index < previous_ops.size(); ++index)
+                require(operations[index] == previous_ops[index], "rigid transform rewrote a retained provenance operation");
+            previous_ops = operations;
+        };
+        transformed("0", false, true, "0", "0", false);
+        transformed("0", false, true, "0", "0", false);
+        const auto before_double = window.document().snapshot().entities().at(id.toStdString()).properties.at("baseline").at("sweep_radians");
+        transformed("0", true, true, "0", "0", false);
+        require(window.document().snapshot().entities().at(id.toStdString()).properties.at("baseline").at("sweep_radians") == before_double,
+            "two-axis reflection must preserve signed sweep");
+        transformed("37", true, false, "1 m", "2 m", false);
+        transformed("23", false, true, "2 m", "0", true);
+        const auto clone = window.selectedEntityId();
+        require(clone != id && window.document().snapshot().entities().contains(id.toStdString()),
+            "transformed curve clone must retain its source owner and receive a new identity");
+        const auto before_resize = window.document().snapshot();
+        QTimer::singleShot(0, &window, [&] {
+            auto* dialog = dynamic_cast<ConstraintDialog*>(QApplication::activeModalWidget());
+            require(dialog && combo(*dialog, "constraintOperation").currentData().toInt() == 0,
+                "reflected curve must keep its direct length operation");
+            dialog->setLengthExpression("6 m");
+            if (!dialog->previewEdit()) throw std::runtime_error(dialog->lastError().toStdString());
+            require(dialog->submit(), "direct physical length after reflection must apply");
+        });
+        window.showConstraintEditor();
+        const auto resized = window.document().snapshot();
+        const auto& resized_entity = resized.entities().at(clone.toStdString());
+        archive(resized_entity);
+        require_near(segment_length(read_curve(resized_entity)), 6);
+        require(resized.entities().size() == before_resize.entities().size() &&
+                resized_entity.extensions.at("constraint_authoring").at("last_length_entry").at("version") == 2,
+            "direct reflected curve resize must retain physical receipt without adding a lock");
+        const auto& line = resized_entity.properties.at("baseline");
+        require(window.editSelectedCurvedWallFromConstruction(
+            {line.at("start")[0].get<double>(), line.at("start")[1].get<double>()},
+            {line.at("end")[0].get<double>(), line.at("end")[1].get<double>()}, "arc_height", "1 m"),
+            "reflected measured curve must remain editable through deliberate construction");
+        const auto reconstructed = window.document().snapshot();
+        archive(reconstructed.entities().at(clone.toStdString()));
+        require(!reconstructed.entities().at(clone.toStdString()).extensions.at("constraint_authoring").contains("last_length_entry"),
+            "explicit construction must invalidate the stale known physical receipt");
+        require(window.undoCommand() && window.document().snapshot().entities() == resized.entities() &&
+                window.redoCommand() && window.document().snapshot().entities() == reconstructed.entities(),
+            "construction after reflected physical resize must undo and redo exactly");
+        QTemporaryDir directory;
+        MainWindow reopened;
+        require(directory.isValid() && window.saveProjectAs(directory.filePath("measured-curve-transforms.bldproj")) &&
+                reopened.openProject(directory.filePath("measured-curve-transforms.bldproj")) &&
+                reopened.document().snapshot().entities() == reconstructed.entities(),
+            "fresh and archived measured curve transforms, clone, resize and construction must save and replay exactly");
+    }
+}
+
 void curved_wall_workspace_entrypoints() {
     for (const auto workspace : {Workspace::measurement, Workspace::architectural}) {
         MainWindow window;
@@ -938,6 +1050,7 @@ int main(int argc, char** argv) {
     QFontDatabase::addApplicationFont(QStringLiteral(":/fonts/Inter.ttf"));
     app.setFont(QFont(QStringLiteral("Inter"), 10));
     try {
+        fresh_measured_curve_transform_preserves_source();
         direct_curve_length_resize_workflow();
         direct_curve_length_connected_boundary_and_host();
         direct_curve_length_workspace_entrypoints();

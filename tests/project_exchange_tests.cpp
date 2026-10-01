@@ -428,6 +428,67 @@ void test_direct_curve_length_exchange_v10(const std::filesystem::path& root) {
   check(nlohmann::json::parse(deleted_input).at("exchange_version") == 10,
         "later geometry-only proof and owner deletion must retain exchange10");
 }
+void test_rigid_curve_archive_exchange_v11(const std::filesystem::path& root) {
+  const auto curve = sketch::arc_from_chord_arc_length({0, 0}, {4, 0}, 5.0, false);
+  const auto angle = sketch::angle_from_radians(curve.sweep_radians);
+  sketch::Entity source{"rigid-curve", "wall",
+      {{"baseline", {{"start", {0, 0}}, {"end", {4, 0}}, {"sweep_radians", curve.sweep_radians}, {"vendor", "original geometry"}}},
+       {"thickness_m", 0.14}, {"height_m", 2.4}, {"elevation_m", 0}}, false,
+      {{"curve_input", {{"version", 2}, {"construction", "arc_length"}, {"measure", "5 m"},
+          {"normalized_measure", "5 m"}, {"measure_value", 5.0}, {"clockwise", false},
+          {"start", {0, 0}}, {"end", {4, 0}}, {"sweep", angle.original_expression},
+          {"normalized_sweep", angle.normalized_expression}, {"radians", curve.sweep_radians},
+          {"vendor", {{"preserve", "exact input"}}}}}}};
+  auto reflected = source;
+  const sketch::PlanarTransform transform{{2, 0}, 0, true, false, {}};
+  sketch::transform_wall_curve_input(reflected, transform);
+  const auto changed = sketch::transform_segment(curve, transform);
+  reflected.properties["baseline"]["start"] = {changed.start.x, changed.start.y};
+  reflected.properties["baseline"]["end"] = {changed.end.x, changed.end.y};
+  reflected.properties["baseline"]["sweep_radians"] = changed.sweep_radians;
+  auto document = sketch::Document::create({source});
+  document.apply(sketch::ApplyEntityChanges{document.revision(),
+      {sketch::EntityChange::upsert(reflected)}, {}, "Reflect measured curve"});
+  const auto extract = [&](const sketch::DocumentSnapshot& snapshot, const char* directory) {
+    sketch::extract_project(snapshot, root / directory);
+    std::ifstream input(root / directory / "project.json");
+    auto json = nlohmann::json::parse(input);
+    check(json.at("exchange_version") == 11, "head, undone, deleted and imported rigid archives must advertise exchange11");
+    return json;
+  };
+  const auto head = extract(document.snapshot(), "rigid-curve-head-v11");
+  std::size_t found = 0;
+  for (const auto& value : head.at("revisions").at(1).at("entities")) if (value.at("id") == source.id) {
+    ++found;
+    const sketch::Entity encoded{value.at("id").get<std::string>(), value.at("type").get<std::string>(),
+        value.at("properties"), value.at("required").get<bool>(), value.at("extensions")};
+    check(encoded == reflected, "exchanged rigid archive must retain exact entity and unknown source metadata");
+    const auto& archive = encoded.extensions.at("curve_input_derivation");
+    check(archive.at("version") == 2 && archive.at("source_input") == source.extensions.at("curve_input") &&
+          archive.at("source_baseline") == source.properties.at("baseline"),
+        "exchanged reflection must retain its exact original measured source");
+    auto replayed = sketch::Document::create({source});
+    replayed.apply(sketch::ApplyEntityChanges{replayed.revision(), {sketch::EntityChange::upsert(encoded)}, {}, "Replay rigid transform"});
+    check(replayed.snapshot().entities() == document.snapshot().entities(), "exchanged rigid entity must independently validate on replay");
+    replayed.undo(replayed.revision());
+    check(replayed.snapshot().entities().at(source.id) == source, "exchanged rigid transform must undo exactly");
+    replayed.redo(replayed.revision());
+    check(replayed.snapshot().entities().at(source.id) == reflected, "exchanged rigid transform must redo exactly");
+  }
+  check(found == 1, "rigid exchange must contain exactly one reflected owner");
+  document.undo(document.revision());
+  const auto undone = extract(document.snapshot(), "rigid-curve-undone-v11");
+  check(undone.at("revisions").size() == 3 && document.snapshot().entities().at(source.id) == source,
+      "undone rigid exchange must retain source head and full transform history");
+  const auto imported = sketch::Document::create({reflected});
+  const auto imported_json = extract(imported.snapshot(), "rigid-curve-imported-v11");
+  check(imported_json.at("revisions").size() == 1 &&
+        imported_json.at("revisions").at(0).at("entities").at(0).at("extensions") == reflected.extensions,
+      "rigid archive must retain exchange11 and exact evidence without its originating history");
+  document.redo(document.revision());
+  document.apply(sketch::ApplyEntityChanges{document.revision(), {sketch::EntityChange::erase(source.id)}, {}, "Delete rigid curve"});
+  (void)extract(document.snapshot(), "rigid-curve-deleted-v11");
+}
 } // namespace
 int main() {
   sketch::testing::noninteractive_errors();
@@ -437,6 +498,7 @@ int main() {
   try {
     test_physical_curve_length_exchange_v9(root);
     test_direct_curve_length_exchange_v10(root);
+    test_rigid_curve_archive_exchange_v11(root);
     test_straight_wall_only_authoring_exchange_v8(root);
     test_safe_curved_wall_history_exchange_replays(root);
     const std::vector<std::byte> bytes{std::byte{1}, std::byte{2}, std::byte{0},

@@ -299,7 +299,9 @@ Entity transform_wall_entity(EntityState& entities, const Entity& source,
     if (!read_document_wall(source, openings, wall, error)) {
         throw std::invalid_argument(error);
     }
-    wall.baseline = transform_plan_segment(wall.baseline, transform);
+    const PlanarTransform rigid_transform{{0,0},transform.rotation_z_radians,false,false,{transform.x,transform.y}};
+    wall.baseline = transform.scale == 1.0 ? transform_segment(wall.baseline,rigid_transform)
+                                         : transform_plan_segment(wall.baseline, transform);
     wall.thickness *= transform.scale;
     wall.height *= transform.scale;
     wall.elevation = wall.elevation * transform.scale + transform.z;
@@ -328,7 +330,7 @@ Entity transform_wall_entity(EntityState& entities, const Entity& source,
             throw std::invalid_argument(
                 "Curve input provenance requires a length-preserving transform; scaling measured curves is unsupported: " + source.id);
         }
-        rebase_wall_curve_input(result,wall.baseline);
+        transform_wall_curve_input(result,rigid_transform);
     }
     update_segment_geometry(result.properties["baseline"], wall.baseline);
     result.properties["thickness_m"] = wall.thickness;

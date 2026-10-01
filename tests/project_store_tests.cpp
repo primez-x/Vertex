@@ -1570,9 +1570,9 @@ void test_straight_wall_only_typed_history_requires_v11_and_rejects_consistent_f
                   "historical mixed v2 envelope cannot be substituted for v4 wall-only proof");
     const auto future = temp.path / "straight-future-format.psketch";
     std::filesystem::copy_file(authored_file, future);
-    execute_sql(future, "PRAGMA user_version=14; UPDATE metadata SET value='14' WHERE key='format_version'");
+    execute_sql(future, "PRAGMA user_version=15; UPDATE metadata SET value='15' WHERE key='format_version'");
     require_error([&] { (void)ProjectStore::load(future); }, StorageErrorCode::unsupported_format,
-                  "storage versions newer than v13 must reject before semantic admission");
+                  "storage versions newer than v14 must reject before semantic admission");
 
     // No length receipt is needed for a connected endpoint movement. Matching
     // proof/result forgery therefore isolates topology from exact-entry checks.
@@ -1599,6 +1599,105 @@ void test_straight_wall_only_typed_history_requires_v11_and_rejects_consistent_f
                            "topology", "matching straight v4 proof/result and recomputed checksum cannot bless crossing");
     require(ProjectStore::file_sha256(file) == original_hash && ProjectStore::file_sha256(forged) == forged_hash,
             "straight topology refusal must preserve both source and rejected file bytes");
+}
+
+void test_rigid_curve_archive_requires_v14_and_rejects_forgery() {
+    TempDirectory temp;
+    auto source = curved_constraint_wall();
+    const auto curve = sketch::arc_from_chord_arc_length({0, 0}, {4, 0}, 5.0, false);
+    source.properties["baseline"]["sweep_radians"] = curve.sweep_radians;
+    source.properties["baseline"]["vendor"] = "original geometry";
+    const auto angle = sketch::angle_from_radians(curve.sweep_radians);
+    source.extensions["curve_input"] = {{"version", 2}, {"construction", "arc_length"},
+        {"measure", "5 m"}, {"normalized_measure", "5 m"}, {"measure_value", 5.0},
+        {"clockwise", false}, {"start", {0, 0}}, {"end", {4, 0}},
+        {"sweep", angle.original_expression}, {"normalized_sweep", angle.normalized_expression},
+        {"radians", curve.sweep_radians}, {"vendor", {{"preserve", "exact input"}}}};
+    auto reflected = source;
+    const sketch::PlanarTransform transform{{2, 0}, 0, true, false, {}};
+    sketch::transform_wall_curve_input(reflected, transform);
+    require(reflected.properties == source.properties, "curve helper must leave geometry publication to its caller");
+    const auto changed_curve = sketch::transform_segment(curve, transform);
+    reflected.properties["baseline"]["start"] = {changed_curve.start.x, changed_curve.start.y};
+    reflected.properties["baseline"]["end"] = {changed_curve.end.x, changed_curve.end.y};
+    reflected.properties["baseline"]["sweep_radians"] = changed_curve.sweep_radians;
+    const auto& archive = reflected.extensions.at("curve_input_derivation");
+    require(archive.at("version") == 2 && archive.at("source_input") == source.extensions.at("curve_input") &&
+            archive.at("source_baseline") == source.properties.at("baseline"),
+        "fresh reflection must retain the exact original measured input and baseline");
+    auto document = Document::create({source});
+    document.apply(ApplyEntityChanges{document.revision(), {EntityChange::upsert(reflected)}, {}, "Flip measured curve"});
+    require(ProjectStore::required_format_version(document.snapshot()) == 14, "rigid archive must require v14 at head");
+    const auto head_file = temp.path / "rigid-curve-head.bldproj";
+    (void)ProjectStore::save(head_file, document.snapshot());
+    require(ProjectStore::load(head_file).document.snapshot().entities() == document.snapshot().entities(),
+        "rigid archive head must reopen exactly");
+    document.undo(document.revision());
+    require(ProjectStore::required_format_version(document.snapshot()) == 14,
+        "undone rigid archive must retain the v14 floor");
+    const auto undone_file = temp.path / "rigid-curve-undone.bldproj";
+    (void)ProjectStore::save(undone_file, document.snapshot());
+    auto loaded = ProjectStore::load(undone_file);
+    require(loaded.document.snapshot().entities().at(source.id) == source && loaded.document.can_redo(),
+        "undone rigid transform must reopen its source and redo navigation");
+    loaded.document.redo(loaded.document.revision());
+    require(loaded.document.snapshot().entities().at(source.id) == reflected, "reopened rigid transform must redo exact archive");
+    loaded.document.apply(ApplyEntityChanges{loaded.document.revision(), {EntityChange::erase(source.id)}, {}, "Delete curve"});
+    require(ProjectStore::required_format_version(loaded.document.snapshot()) == 14,
+        "deleted rigid archive must retain the v14 floor");
+    const auto deleted_file = temp.path / "rigid-curve-deleted.bldproj";
+    (void)ProjectStore::save(deleted_file, loaded.document.snapshot());
+    require(ProjectStore::load(deleted_file).document.snapshot().entities().empty(), "deleted rigid history must reopen");
+
+    const auto imported = Document::create({reflected});
+    require(imported.snapshot().history().size() == 1 && ProjectStore::required_format_version(imported.snapshot()) == 14,
+        "imported rigid archive must require v14 without its originating transform");
+    const auto imported_file = temp.path / "rigid-curve-imported.bldproj";
+    (void)ProjectStore::save(imported_file, imported.snapshot());
+    require(ProjectStore::load(imported_file).document.snapshot().entities() == imported.snapshot().entities(),
+        "imported rigid archive must reopen exact source evidence");
+    auto floating_version = reflected;
+    floating_version.extensions["curve_input_derivation"]["version"] = 2.0;
+    require_document_error([&] { (void)Document::create({floating_version}); },
+        "floating archive version must not bypass the known rigid archive reader floor");
+    sketch::ProjectWorkspace workspace(imported.snapshot());
+    const auto capture = workspace.capture();
+    const auto history = sketch::capture_workspace_history_record(capture);
+    sketch::RecoveryLedger ledger{{"history", "workspace_history",
+        sketch::encode_workspace_history_record(capture.document(), history, std::nullopt)}};
+    const auto workspace_file = temp.path / "rigid-curve-workspace.bldproj";
+    (void)ProjectStore::save_archive(workspace_file, {capture.document(), ledger, sketch::ArchiveRole::ordinary});
+    const auto recovered = ProjectStore::load_archive(workspace_file, sketch::ArchiveRole::ordinary);
+    require(recovered.supported() && recovered.archive->document().entities() == imported.snapshot().entities() &&
+            ProjectStore::required_format_version(recovered.archive->document()) == 14,
+        "recovery archive must retain exact rigid evidence and format14");
+    const auto source_hash = ProjectStore::file_sha256(imported_file);
+    const auto downgrade = temp.path / "rigid-curve-downgraded.bldproj";
+    std::filesystem::copy_file(imported_file, downgrade);
+    execute_sql(downgrade, "PRAGMA user_version=13; UPDATE metadata SET value='13' WHERE key='format_version'");
+    rewrite_logical_digest(downgrade);
+    const auto downgrade_hash = ProjectStore::file_sha256(downgrade);
+    require_error([&] { (void)ProjectStore::load(downgrade); }, StorageErrorCode::unsupported_format,
+        "recomputed digest must not authorize a v13 rigid archive downgrade");
+    require(ProjectStore::file_sha256(downgrade) == downgrade_hash, "refused downgrade must preserve its exact bytes");
+    for (const bool parity : {true, false}) {
+        const auto forged = temp.path / (parity ? "rigid-parity-forged.bldproj" : "rigid-baseline-forged.bldproj");
+        std::filesystem::copy_file(imported_file, forged);
+        if (parity) execute_sql(forged, "UPDATE revision_entities SET extensions_json=json_set(extensions_json,"
+            "'$.curve_input_derivation.operations[0].transform.flip_horizontal',json('false')) WHERE revision=0");
+        else execute_sql(forged, "UPDATE revision_entities SET properties_json=json_set(properties_json,'$.baseline.end[0]',-0.5),"
+            "extensions_json=json_set(extensions_json,'$.curve_input.end[0]',-0.5,"
+            "'$.curve_input_derivation.operations[0].baseline.end[0]',-0.5) WHERE revision=0");
+        rewrite_logical_digest(forged);
+        const auto forged_hash = ProjectStore::file_sha256(forged);
+        require_error_contains([&] { (void)ProjectStore::load(forged); }, StorageErrorCode::integrity_failure,
+            "rigid operation does not reproduce", "imported rigid archive must independently replay despite a recomputed digest");
+        require(ProjectStore::file_sha256(forged) == forged_hash, "refused rigid forgery must preserve its exact bytes");
+    }
+    require(ProjectStore::file_sha256(imported_file) == source_hash, "all refusals must preserve the original valid archive");
+    auto vendor = reflected; vendor.type = "vendor_wall";
+    require(ProjectStore::required_format_version(Document::create({vendor}).snapshot()) == 1,
+        "generic vendor archive collision must remain opaque");
 }
 
 void test_imported_curve_derivation_requires_v10_without_command_history() {
@@ -2343,6 +2442,7 @@ int main() {
         test_consistent_curved_wall_history_forgery_rejects_new_crossing();
         test_straight_wall_only_typed_history_requires_v11_and_rejects_consistent_forgery();
         test_imported_curve_derivation_requires_v10_without_command_history();
+        test_rigid_curve_archive_requires_v14_and_rejects_forgery();
         test_boundary_authoring_receipt_after_v2_entity_requires_v3();
         test_unqualified_authoring_property_collisions_remain_v1_and_opaque();
         test_unknown_boundary_model_collision_requires_v2();

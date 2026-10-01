@@ -1763,6 +1763,170 @@ void test_physical_arc_length_conditioning_at_near_full_turn_and_translated_orig
     require_rejected_unchanged(document,rejected,"unrepresentable physical target Apply accepted");
 }
 
+void test_measured_curve_rigid_transform_provenance() {
+    std::vector<Entity> sources;
+    for (const auto sweep : {0.6,-0.6,4.0,-4.0}) {
+        for (const auto version : {1,2}) {
+            auto owner=wall("arc",{2,3},{6,3},sweep);
+            const auto angle=angle_from_radians(sweep);
+            owner.extensions["curve_input"]={{"version",version},{"construction","angle"},
+                {"measure",angle.original_expression},{"normalized_measure",angle.normalized_expression},
+                {"measure_value",sweep},{"clockwise",sweep<0},{"radians",sweep},
+                {"start",{2,3}},{"end",{6,3}},{"vendor",{{"exact",17}}}};
+            sources.push_back(owner);
+        }
+        for (const auto expression : {"7", "16 3/8 ft"}) {
+            const auto quantity=parse_quantity(expression,Unit::metre);
+            const auto chord=quantity.metres*2*std::sin(std::abs(sweep)/2)/std::abs(sweep);
+            auto owner=wall("arc",{2,3},{2+chord,3},sweep);
+            owner.extensions["curve_input"]={{"version",2},{"construction","arc_length"},
+                {"measure",expression},{"normalized_measure",format_quantity(quantity,Unit::metre)},
+                {"measure_value",quantity.metres},{"clockwise",sweep<0},{"radians",sweep},
+                {"start",{2,3}},{"end",{2+chord,3}},{"vendor",{{"exact",17}}}};
+            sources.push_back(owner);
+        }
+    }
+    for (const auto expression : {"1/2 m","-1/2 m","3 m","-3 m"}) {
+        const auto quantity=parse_quantity(expression);
+        const auto geometry=arc_from_chord_height({2,3},{6,3},quantity.metres);
+        auto owner=wall("arc",geometry.start,geometry.end,geometry.sweep_radians);
+        owner.extensions["curve_input"]={{"version",2},{"construction","arc_height"},
+            {"measure",expression},{"normalized_measure",format_quantity(quantity,Unit::metre)},
+            {"measure_value",quantity.metres},{"clockwise",geometry.sweep_radians<0},
+            {"radians",geometry.sweep_radians},{"start",{2,3}},{"end",{6,3}},{"vendor",{{"exact",17}}}};
+        sources.push_back(owner);
+    }
+    const std::vector<PlanarTransform> transforms={
+        {{2,3},0.3,false,false,{1,-2}},{{1,2},0,true,false,{3,4}},
+        {{0,0},-0.2,false,true,{-1,2}},{{2,3},0.1,true,true,{0,0}},
+        {{0,0},0,true,false,{0,0}},{{0,0},0,true,false,{0,0}}};
+    for (auto source : sources) {
+        source.properties["baseline"]["vendor_baseline"]={{"retain",true}};
+        const auto original_input=source.extensions.at("curve_input");
+        auto document=Document::create({source});
+        auto noop=source; transform_wall_curve_input(noop,{});
+        require(noop==source,"no-op rigid transform created a provenance-only archive");
+        for (const auto& transform : transforms) {
+            const auto before=document.snapshot();
+            const auto& original=before.entities().at("arc");
+            auto candidate=original;
+            const auto geometry=transform_segment(baseline(original),transform);
+            transform_wall_curve_input(candidate,transform);
+            require(candidate.properties==original.properties,"rigid provenance helper changed geometry prematurely");
+            candidate.properties["baseline"]["start"]={geometry.start.x,geometry.start.y};
+            candidate.properties["baseline"]["end"]={geometry.end.x,geometry.end.y};
+            candidate.properties["baseline"]["sweep_radians"]=geometry.sweep_radians;
+            validate_wall_curve_input(candidate);
+            const auto& proof=candidate.extensions.at("curve_input_derivation");
+            require(proof.at("version")==2 && proof.at("source_input")==original_input &&
+                proof.at("source_baseline")==source.properties.at("baseline"),
+                "rigid transform lost exact original input or baseline metadata");
+            require(candidate.properties.at("baseline").at("vendor_baseline")==source.properties.at("baseline").at("vendor_baseline") &&
+                candidate.extensions.at("curve_input").at("vendor")==original_input.at("vendor") &&
+                candidate.extensions.at("future_extension")==source.extensions.at("future_extension"),
+                "rigid transform lost opaque metadata");
+            require_near(segment_length(geometry),segment_length(baseline(original)),1e-6,"rigid transform changed physical length");
+            if (transform.flip_horizontal==transform.flip_vertical)
+                require(candidate.extensions.at("curve_input").at("measure")==original.extensions.at("curve_input").at("measure"),
+                    "orientation-preserving transform rewrote active measurement");
+            const Command command=ApplyEntityChanges{document.revision(),{EntityChange::upsert(candidate)}, {},"Rigid measured curve transform"};
+            const auto preview=Document::preview_command(before,command);
+            require(document.snapshot().entities()==before.entities() && document.revision()==before.revision(),
+                "rigid transform preview mutated source");
+            document.apply(command);
+            const auto after=document.snapshot();
+            require(after.entities()==preview.entities() && Document::fork(after).snapshot().entities()==after.entities(),
+                "rigid curve command did not independently replay");
+            document.undo(document.revision()); require(document.snapshot().entities()==before.entities(),"rigid curve undo lost input");
+            document.redo(document.revision()); require(document.snapshot().entities()==after.entities(),"rigid curve redo differs");
+        }
+        auto invalid=source; const auto unchanged=invalid;
+        bool rejected=false;
+        try { transform_wall_curve_input(invalid,{{0,0},std::numeric_limits<double>::infinity(),false,false,{0,0}}); }
+        catch (const std::exception&) { rejected=true; }
+        require(rejected && invalid==unchanged,"failed rigid helper partially mutated source");
+    }
+    auto source=sources.at(2);
+    auto document=Document::create({source});
+    const PlanarTransform reflection{{0,0},0.2,true,false,{3,1}};
+    auto good=source; transform_wall_curve_input(good,reflection);
+    const auto geometry=transform_segment(baseline(source),reflection);
+    good.properties["baseline"]=segment_json(geometry.start,geometry.end,geometry.sweep_radians);
+    std::vector<Entity> corruptions;
+    auto bad=good; bad.extensions["curve_input_derivation"]["operations"][0]["transform"]["flip_horizontal"]=false; corruptions.push_back(bad);
+    bad=good; bad.extensions["curve_input_derivation"]["operations"][0]["transform"]["vendor"]=true; corruptions.push_back(bad);
+    bad=good; bad.extensions["curve_input_derivation"]["version"]=1; corruptions.push_back(bad);
+    bad=good; bad.extensions["curve_input_derivation"]["version"]=2.0; corruptions.push_back(bad);
+    bad=good; bad.extensions["curve_input_derivation"]["version"]=2.5; corruptions.push_back(bad);
+    bad=good; bad.extensions["curve_input_derivation"]["operations"][0]["transform"]["version"]=1.0; corruptions.push_back(bad);
+    bad=good; bad.extensions["curve_input_derivation"]["source_input"]["vendor"]["exact"]=18;
+    bad.extensions["curve_input"]["vendor"]["exact"]=18; corruptions.push_back(bad);
+    bad=good; bad.extensions["curve_input_derivation"]["operations"].push_back(bad.extensions.at("curve_input_derivation").at("operations").front()); corruptions.push_back(bad);
+    for (const auto& corrupted : corruptions) {
+        const auto before=document.snapshot(); bool rejected=false;
+        const Command command=ApplyEntityChanges{document.revision(),{EntityChange::upsert(corrupted)}, {},"Forged rigid provenance"};
+        try { (void)Document::preview_command(before,command); } catch (const DocumentError&) { rejected=true; }
+        require(rejected,"forged rigid curve preview accepted");
+        rejected=false; try { document.apply(command); } catch (const DocumentError&) { rejected=true; }
+        require(rejected && document.revision()==before.revision() && document.snapshot().entities()==before.entities(),
+            "forged rigid provenance changed document atomically");
+    }
+    // Upgrade an existing endpoint archive without rewriting its prefix, and
+    // retain an exact physical-length receipt through reflected rigid motion.
+    source=sources.at(2); auto resized=Document::create({source});
+    ConstraintAuthoringIntent resize;
+    resize.wall_resize=WallResizeIntent{"arc",parse_quantity("5 m"),WallResizeAnchor::start,true};
+    const auto first=preview_constraint_authoring(resized.snapshot(),resize);
+    require_accepted(first,"measured archive fixture resize rejected"); (void)apply_constraint_authoring(resized,first);
+    const auto archive=resized.snapshot().entities().at("arc").extensions.at("curve_input_derivation");
+    auto legacy=resized.snapshot().entities().at("arc");
+    legacy.extensions["curve_input_derivation"]["operations"][0]["kind"]="vendor-baseline-kind";
+    auto legacy_document=Document::create({legacy});
+    const auto legacy_prefix=legacy.extensions.at("curve_input_derivation").at("operations");
+    auto upgraded=legacy;
+    const auto upgraded_geometry=transform_segment(baseline(legacy),reflection);
+    transform_wall_curve_input(upgraded,reflection);
+    rebase_wall_length_receipt(upgraded,upgraded_geometry);
+    upgraded.properties["baseline"]=segment_json(upgraded_geometry.start,upgraded_geometry.end,upgraded_geometry.sweep_radians);
+    legacy_document.apply(ApplyEntityChanges{legacy_document.revision(),{EntityChange::upsert(upgraded)}, {},"Upgrade vendor baseline archive"});
+    require(upgraded.extensions.at("curve_input_derivation").at("version")==2 &&
+        upgraded.extensions.at("curve_input_derivation").at("operations").front()==legacy_prefix.front() &&
+        Document::fork(legacy_document.snapshot()).snapshot().entities()==legacy_document.snapshot().entities(),
+        "legacy baseline vendor kind must remain opaque through archive upgrade and replay");
+    auto moved=resized.snapshot().entities().at("arc");
+    const auto mirrored=transform_segment(baseline(moved),reflection);
+    transform_wall_curve_input(moved,reflection); rebase_wall_length_receipt(moved,mirrored);
+    moved.properties["baseline"]=segment_json(mirrored.start,mirrored.end,mirrored.sweep_radians);
+    require(moved.extensions.at("curve_input_derivation").at("operations").front()==archive.at("operations").front(),
+        "archive upgrade rewrote endpoint derivation prefix");
+    validate_wall_length_input(moved);
+    resized.apply(ApplyEntityChanges{resized.revision(),{EntityChange::upsert(moved)}, {},"Reflect physical receipt curve"});
+    resize.wall_resize->exact_length=parse_quantity("600 cm");
+    const auto second=preview_constraint_authoring(resized.snapshot(),resize);
+    require_accepted(second,"physical resize after rigid provenance rejected"); (void)apply_constraint_authoring(resized,second);
+    require(resized.snapshot().entities().at("arc").extensions.at("curve_input_derivation").at("version")==2 &&
+        resized.snapshot().entities().at("arc").extensions.at("curve_input_derivation").at("source_input")==source.extensions.at("curve_input"),
+        "subsequent endpoint proof lost transformed source archive");
+    auto construction=resized.snapshot().entities().at("arc"); const auto previous=construction;
+    auto opaque=construction;
+    opaque.extensions["constraint_authoring"]["last_length_entry"]["vendor"]=true;
+    const auto opaque_before=opaque;
+    bool clear_rejected=false;
+    try { clear_wall_length_input(opaque); } catch (const std::exception&) { clear_rejected=true; }
+    require(clear_rejected && opaque==opaque_before,"receipt invalidation lost opaque input or mutated on refusal");
+    clear_wall_length_input(construction);
+    const auto new_geometry=arc_from_chord_height(baseline(construction).start,baseline(construction).end,0.5);
+    construction.properties["baseline"]=segment_json(new_geometry.start,new_geometry.end,new_geometry.sweep_radians);
+    auto& input=construction.extensions["curve_input"];
+    input["version"]=2; input["construction"]="arc_height"; input["measure"]="1/2 m";
+    input["normalized_measure"]="0.5 m"; input["measure_value"]=0.5; input["clockwise"]=false;
+    input["radians"]=new_geometry.sweep_radians;
+    preserve_wall_curve_construction(construction,previous);
+    resized.apply(ApplyEntityChanges{resized.revision(),{EntityChange::upsert(construction)}, {},"Explicit construction after rigid provenance"});
+    require(Document::fork(resized.snapshot()).snapshot().entities()==resized.snapshot().entities(),
+        "construction after reflected physical receipt cannot replay");
+}
+
 void test_direct_curved_wall_physical_resize() {
     for (const auto sweep : {0.6,-0.6,4.0,-4.0}) for (const auto anchor : {WallResizeAnchor::start,WallResizeAnchor::end}) {
         const auto chord=7*2*std::sin(std::abs(sweep)/2)/std::abs(sweep);
@@ -2177,6 +2341,7 @@ int main() {
         test_physical_arc_length_authoring_and_connected_editing();
         test_physical_arc_length_conditioning_at_near_full_turn_and_translated_origin();
         test_direct_curved_wall_physical_resize();
+        test_measured_curve_rigid_transform_provenance();
         test_curved_endpoint_relations_and_typed_propagation();
         test_boundary_vertex_move_propagates_explicit_relations();
         test_boundary_resize_canonical_shape_and_related_owners();

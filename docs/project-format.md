@@ -1,4 +1,4 @@
-# Vertex project formats v1 through v13
+# Vertex project formats v1 through v14
 
 ## Circular column selection orientation
 
@@ -55,9 +55,9 @@ v1 legacy history, v2 identity history, v3 construction-receipt history, v5
 translation history, v6 transform history, v7 boundary-coordinate edit
 history, v8 boundary-constraint transactions, v9 measured group translations,
 v10 curved endpoint constraints, v11 straight wall-only intent, v12 physical
-arc-length locks, and v13 direct physical curve-length inputs, plus v4 through
-v13 archives through recovery-aware APIs.
-Under-versioned semantic data and versions above 13 reject. Legacy-only history
+arc-length locks, v13 direct physical curve-length inputs, and v14 rigid curve
+construction transforms, plus v4 through v14 archives through recovery-aware APIs.
+Under-versioned semantic data and versions above 14 reject. Legacy-only history
 is still written as v1. Unknown boundary entity
 versions in v2 remain preserved read-only. See `boundary-entity-format.md`.
 Version 2 also recognizes `dimension` entities. Segment-length dimensions refer
@@ -448,7 +448,7 @@ unknown project `format_version` is rejected rather than opened unsafely.
 ## SQLite schema
 
 The SQLite `application_id` is `0x50535444` (`PSTD`). `user_version` and metadata
-`format_version` are equal and range from `1` through `13`, according to the
+`format_version` are equal and range from `1` through `14`, according to the
 retained semantics. The baseline application tables below are shared; later
 versions add the proof columns and recovery data documented in this file.
 
@@ -885,9 +885,8 @@ checks recognized receipts even when imported without originating history.
 Rigid moves and rotations rebase the receipt; they preserve physical length
 and signed sweep. Reflection rebases the receipt's signed sweep while preserving
 its magnitude and physical length. Existing measured construction provenance
-has separate validation: the native transform editor preserves an existing
-archive on reflection, but preserving a fresh measured input before its first
-reflection and supporting reflection through the shared helper remain gaps.
+has separate validation: the shared rigid-transform helper now preserves fresh
+and existing measured inputs through the version-2 archive described below.
 Subsequent typed
 endpoint deformation clears a stale known
 receipt unless another explicit length was entered. Unknown nested metadata is
@@ -901,3 +900,35 @@ Generic vendor entities do not acquire this wall-specific extension semantics.
 Recovery-aware APIs retain the document and ledger together. JSON/assets
 extraction advertises exchange version 10 and preserves exact proof/receipt
 payloads; extraction does not constitute a JSON project importer.
+
+## Rigid curve construction transforms (v14)
+
+A measured curved wall's first nonidentity rigid transform retains its exact
+original `curve_input` and baseline, including unknown nested metadata, in
+`extensions.curve_input_derivation.version: 2`. The archive has four fields:
+`version`, `source_input`, `source_baseline`, and a nonempty `operations` array.
+Historical version-1 archives keep their encoding; adding a rigid transform
+upgrades their version and retains every previous operation verbatim.
+
+A rigid operation has exactly three fields: `kind: "rigid_transform"`,
+`transform`, and `baseline`. The transform has six fields: `version: 1`,
+`pivot: [x,y]`, finite `rotation_radians`, boolean `flip_horizontal` and
+`flip_vertical`, and `offset: [x,y]`. Replay rotates about the pivot, reflects
+about the pivot, then translates. An odd number of reflections reverses signed
+sweep; physical length and sweep magnitude remain unchanged. The recorded
+baseline must match that independent reconstruction. Original measurement
+expressions remain archived even when reflection changes the active input to a
+canonical angle construction. No identity transform adds an archive operation.
+
+Version 2 requires at least one rigid operation and also supports the earlier
+fixed-sweep endpoint and explicit reconstruction operations. Admission compares
+an appended rigid operation against the exact source entity; source input,
+baseline, and prior operations cannot be rewritten or dropped. The existing
+typed endpoint proof rules are unchanged.
+
+Every retained or imported wall with a known version-2 archive requires project
+format 14, including undone and deleted history. Recovery-aware APIs retain the
+same floor. Older format markers reject even with a recomputed logical digest.
+JSON/assets extraction advertises exchange version 11 and retains the complete
+archive; it does not supply a JSON project importer. Measured-curve scaling
+remains unsupported and rejects without changing the document.

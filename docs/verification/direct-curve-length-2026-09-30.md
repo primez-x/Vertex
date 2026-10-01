@@ -104,3 +104,34 @@ consistency, not general output fidelity or full acceptance. The source package
 still has dependency/source licensing qualification work outstanding. This is
 an internal implementation checkpoint, not certification of the full production
 replacement.
+
+## Fresh measured-curve transform follow-up
+
+The subsequent source checkpoint closes the fresh-input reflection gap described
+above. The shared metadata-only rigid helper archives the exact defining input
+and baseline before the first actual transform, then independently replays
+rotation, reflection and translation. Existing derivation prefixes and unknown
+input/baseline metadata remain unchanged. Clones retain that archive with their
+new owner identity. Archive version 2 requires project format 14 and exchange 11
+across imported, undone and deleted states; historical version-1 archives keep
+their prior semantics.
+
+Native RED reproduced the missing archive in 0.44 seconds. Integrated testing
+then found that explicit reconstruction after physical resizing retained a stale
+length receipt (0.62-second failure). Reconstruction now clears a known receipt
+against the original baseline before publication and refuses opaque metadata
+loss on a detached copy.
+
+The final Release run passed 10/10 checks in 25.30 seconds: authoring 0.83,
+rotation desktop 14.60, canvas controls 0.15, native constraints 4.26, schema 0.08,
+architectural adapter 0.61, document history 0.10, storage 3.42, exchange 0.27 and
+CLI 0.95 seconds. New coverage includes fresh/repeated flips, combined transforms,
+clone, subsequent resize/reconstruction, both workspaces, exact undo/reopen,
+legacy vendor-key archive upgrades, strict integer envelope versions, imported
+proofs, recovery, downgraded markers and recomputed-digest geometry forgeries.
+Independent review found no remaining blocker for this bounded change.
+
+This follow-up rebuilt the development executable; it did not replace the
+earlier installed format-13 checkpoint above. Full numerical-domain qualification,
+large-history performance, measured-curve scaling and production acceptance
+remain open.
