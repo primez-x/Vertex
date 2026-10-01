@@ -51,3 +51,19 @@ for those angles and for a Shift-modified 23.5-degree gesture.
 Release `symbol_transform_desktop` passed in 15.05 seconds. The final combined
 run with `measurement_group_move` and `coordinated_view_output` passed 3/3 in
 37.26 seconds. Root visually inspected the captured 90-degree callout and pin.
+
+## Current-build recheck
+
+The focused Release `symbol_transform_desktop` check passed again in 17.53
+seconds at source checkpoint `c2b41ed`. It exercises consecutive committed
+drags, nearby 45/90/180-degree snapping, Shift-modified fine adjustment, the
+rendered live angle, history navigation, and save/reopen. No new rotation
+product patch was required by this recheck.
+
+The installed build is `artifacts/installed/vertex-20260930-curve-length/bin/vertex.exe`
+from source checkpoint `04bd847`, which includes the rotation changes. Its
+SHA-256 is `33e43add1b294f6391ea8b0481d3bfe098c368822d4d05a2ddf2412b488836cf`.
+This focused recheck used the native development test executable; it does not
+establish which build a user has launched or constitute a user-observed fix.
+The manual symbol check now distinguishes returning to zero from returning to
+a nonzero starting angle.
