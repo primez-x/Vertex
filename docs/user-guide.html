@@ -35,8 +35,12 @@
   <h2>Drawing in 2D</h2>
   <p>Choose <strong>Wall</strong> to draw physical walls, or <strong>Measurement</strong>
   to draw an appraisal boundary. Wall is the default. Click to place the start,
-  then click each next endpoint. Press <kbd>Esc</kbd> to finish a wall chain;
-  completed walls remain. Wall thickness and height are in the Library tab.</p>
+  then click each next endpoint. Click the original anchor to close and finish
+  the outline, or press <kbd>Esc</kbd> to finish an open wall chain; completed
+  walls remain. Wall thickness and height are in the Library tab.</p>
+  <p>Wall endpoints authored together in the same floor, layer and design phase
+  retain their connection. To change a wall length, use its dimensions and
+  constraints editor and review connected movement before applying the edit.</p>
   <p>A click selects an existing object. Drag empty canvas to pan; drag inside an
   already selected object to move it. Click empty canvas once to clear a selection
   before starting another drawing. Use <kbd>Ctrl</kbd>+click to add selections and
@@ -66,7 +70,10 @@
   <p>The Library tab offers <strong>Wall</strong>, <strong>Doorway</strong>,
   <strong>Door</strong> and <strong>Window</strong>. Doors and windows belong to an
   existing wall: hover over that wall to preview the opening, then click to place it.
-  Furniture and equipment remain freely placed, adjustable symbols.</p>
+  The door and window library entries are hosted opening variants: drag onto a
+  wall, or double-click an entry and then click the wall. The quick insertion
+  buttons use the same wall-hosted model with default dimensions. Furniture and
+  equipment remain freely placed, adjustable symbols.</p>
   <p>Use building commands to author
   floors, ceilings, foundations, beams, columns, roofs, stairs, railings, assemblies,
   and levels. The same semantic objects drive plan, elevation, section, schedule, sheet,

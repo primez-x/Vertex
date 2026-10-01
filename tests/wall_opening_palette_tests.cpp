@@ -12,6 +12,7 @@
 #include <QFontDatabase>
 #include <QKeyEvent>
 #include <QInputDialog>
+#include <QListWidget>
 #include <QTimer>
 #include <QLineEdit>
 #include <QMouseEvent>
@@ -138,6 +139,37 @@ int main(int argc, char** argv) {
             QApplication::sendEvent(target_canvas, &drop);
             require(drop.isAccepted(), "plan canvas accepts the catalog symbol drop");
         };
+        const auto activate_catalog_symbol = [&](const QString& symbol_id) {
+            auto* list = window.findChild<QListWidget*>(QStringLiteral("symbolLibraryItems"));
+            require(list && list->isVisible(), "catalog symbols are available in the visible Library");
+            QListWidgetItem* item = nullptr;
+            for (int index = 0; index < list->count(); ++index) {
+                if (list->item(index)->data(Qt::UserRole).toString() == symbol_id) {
+                    item = list->item(index);
+                    break;
+                }
+            }
+            require(item != nullptr, "requested catalog symbol is present in the Library");
+            list->scrollToItem(item);
+            QApplication::processEvents();
+            auto* viewport = list->viewport();
+            const auto item_rect = list->visualItemRect(item);
+            const auto item_point = item_rect.center();
+            require(viewport && viewport->rect().contains(item_point),
+                    "requested catalog symbol is visible for the Library interaction");
+            const auto global_point = viewport->mapToGlobal(item_point);
+            const auto send_list_mouse = [&](QEvent::Type type, Qt::MouseButton button,
+                                             Qt::MouseButtons buttons) {
+                QMouseEvent event(type, QPointF(item_point), QPointF(global_point), button,
+                                  buttons, Qt::NoModifier);
+                QApplication::sendEvent(viewport, &event);
+            };
+            send_list_mouse(QEvent::MouseButtonPress, Qt::LeftButton, Qt::LeftButton);
+            send_list_mouse(QEvent::MouseButtonRelease, Qt::LeftButton, Qt::NoButton);
+            send_list_mouse(QEvent::MouseButtonDblClick, Qt::LeftButton, Qt::LeftButton);
+            send_list_mouse(QEvent::MouseButtonRelease, Qt::LeftButton, Qt::NoButton);
+            QApplication::processEvents();
+        };
         const auto capture_directory = qEnvironmentVariable("VERTEX_TEST_CAPTURE_DIR");
         const auto save_capture = [&](QWidget& widget, const QString& file_name) {
             if (capture_directory.isEmpty()) return;
@@ -255,9 +287,25 @@ int main(int argc, char** argv) {
                     same_point(third_wall.baseline.start, second_wall.baseline.end),
                 "third commit preserves the connected wall chain and preview geometry");
 
-        QKeyEvent escape_wall_chain(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
-        QApplication::sendEvent(canvas, &escape_wall_chain);
-        require(window.selectEntity(QString::fromStdString(third_wall_id)),
+        const QPointF near_original_anchor =
+            model_to_canvas(first_wall.baseline.start) + QPointF(5, -4);
+        mouse(QEvent::MouseMove, near_original_anchor, Qt::NoButton, Qt::NoButton);
+        require(canvas->wallPreview().has_value(),
+                "wall chain previews a closing segment at the original anchor");
+        const auto closing_preview = *canvas->wallPreview();
+        require(same_point(closing_preview.start, third_wall.baseline.end) &&
+                    same_point(closing_preview.end, first_wall.baseline.start),
+                "closing preview snaps its endpoint exactly to the original anchor");
+        click(near_original_anchor);
+        const auto after_close = window.document().snapshot();
+        const auto closing_wall_id = added_wall_id(after_third, after_close);
+        const auto closing_wall = read_wall(after_close.entities().at(closing_wall_id));
+        require(same_point(closing_wall.baseline.start, closing_preview.start) &&
+                    same_point(closing_wall.baseline.end, first_wall.baseline.start),
+                "clicking the original anchor commits the coincident closing endpoint");
+        require(!canvas->wallPreview(),
+                "snapping the connected wall chain to its original anchor closes it without Escape");
+        require(window.selectEntity(QString::fromStdString(closing_wall_id)),
                 "connected wall selects before the next idle gesture");
         const auto before_snap_wall = window.document().snapshot();
         const auto start_point = sketch::Vec2{first_wall.baseline.start.x,
@@ -315,6 +363,7 @@ int main(int argc, char** argv) {
                     same_point(on_wall.baseline.end, on_wall_preview.end) &&
                     same_point(on_wall.baseline.end, second_baseline_midpoint),
                 "on-wall-snapped segment commits the exact projected preview target");
+        QKeyEvent escape_wall_chain(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
         QApplication::sendEvent(canvas, &escape_wall_chain);
 
         require(window.selectEntity(QString::fromStdString(on_wall_id)),
@@ -476,8 +525,10 @@ int main(int argc, char** argv) {
         const auto door_symbol_id = QStringLiteral("svg-v2-09_doors-door-hinged-760-left");
         const auto window_symbol_id = QStringLiteral("svg-v2-10_windows-window-casement");
         const auto annotations_before_catalog_openings = annotation_child_count(window.document().snapshot());
-        drop_catalog_symbol(canvas, door_symbol_id, 1.0, hosted_door_point);
-        drop_catalog_symbol(canvas, window_symbol_id, 1.0, hosted_window_point);
+        activate_catalog_symbol(door_symbol_id);
+        click(hosted_door_point);
+        activate_catalog_symbol(window_symbol_id);
+        click(hosted_window_point);
         int opening_count = 0;
         const auto opening_snapshot = window.document().snapshot();
         std::set<std::string> opening_kinds;
@@ -508,7 +559,7 @@ int main(int argc, char** argv) {
         }
         require(opening_count == 2 && opening_kinds.contains("door") && opening_kinds.contains("window") &&
                     !hosted_door_id.empty() && !hosted_window_id.empty(),
-                "catalog door and window drops commit their hosted opening kinds");
+                "double-clicking Library symbols and clicking the wall commits hosted door and window openings");
         require(annotation_child_count(opening_snapshot) == annotations_before_catalog_openings,
                 "catalog door and window drops add no annotation symbols");
         click(hosted_window_point);

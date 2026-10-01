@@ -1607,6 +1607,26 @@ drawing; switching modes does not change existing geometry.
   - Steps: Name the exterior measurement, change its appearance, and add an area dimension. Change a source wall's thickness. Select the area, right-click and choose **Refresh exterior measurement…**; review and apply. Undo, redo, save, and reopen.
   - Expected: Before refresh, the old outline is marked stale and qualified appraisal totals are withheld. Refresh changes the exterior outline and area while keeping its name, appearance, facts, deduction links and dimension bindings. Undo restores the previous outline; redo restores the refreshed area. An open perimeter, missing source wall or read-only project is refused without a partial change.
 
+## Wall drawing and connected edits
+
+- [ ] **U286 — Draw and close a wall outline with ordinary clicks**
+  - Steps: Start a new project with **Draw > Wall**. Click four corners, then click near the first corner. Move the mouse without clicking. Select a wall. Start another wall chain and press Esc after two segments.
+  - Expected: Corners snap to existing endpoints and horizontal/vertical alignment when Snap is enabled. Every committed wall shows its length. Returning to the starting corner finishes the chain without another draft following the pointer. The next wall click selects it. Esc finishes an open chain while keeping its committed walls.
+  - Result: Not tested
+  - Notes / steps to reproduce: ____________________
+
+- [ ] **U287 — Change a connected wall's length without separating its corner**
+  - Steps: Draw two connected walls. Double-click the first wall, edit its length, keep its starting endpoint anchored and enable connected movement. Review and apply. Undo, redo, save and reopen.
+  - Expected: The shared endpoint moves together on both walls. The preview shows the adjacent wall's changed geometry. Undo restores the entire edit in one step. Redo and reopening preserve the connection. Conflicting locked measurements block the edit with an explanation rather than separating the walls.
+  - Result: Not tested
+  - Notes / steps to reproduce: ____________________
+
+- [ ] **U288 — Place a library window into a physical wall**
+  - Steps: Draw a long wall. In Library, search for a window, double-click it, then click the wall away from its corners. Try the Window quick-insertion button on another part of the wall. Try placing a window outside any wall and too close to a corner.
+  - Expected: Both paths create wall-hosted windows with a real wall cut and editable opening dimensions. A library item supplies the selected variant. An invalid location explains how to place the opening; it creates neither a detached decorative window nor a partial wall edit.
+  - Result: Not tested
+  - Notes / steps to reproduce: ____________________
+
 ## Issue report template
 
 - Task ID(s):

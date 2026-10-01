@@ -1,6 +1,7 @@
 #include "sketch/annotation_entity_codec.hpp"
 #include "sketch/boundary_dimension.hpp"
 #include "sketch/boundary_entity.hpp"
+#include "sketch/constraint_entity.hpp"
 #include "sketch/desktop/main_window.hpp"
 #include "sketch/document_wall.hpp"
 #include "support/noninteractive_errors.hpp"
@@ -444,9 +445,25 @@ void wall_measurement_admission_failures_are_atomic() {
     auto open_source = open_loop.document().snapshot();
     auto broken_wall = open_source.entities().at(open_ids.back().toStdString());
     broken_wall.properties["baseline"]["start"][0] = -0.25;
+    bool locked_corner_rejected = false;
+    try {
+        open_loop.document().apply(sketch::ApplyEntityChanges{
+            open_source.revision(), {sketch::EntityChange::upsert(broken_wall)}, {},
+            "test breaking a connected wall corner"});
+    } catch (const std::exception&) { locked_corner_rejected = true; }
+    require(locked_corner_rejected && open_loop.document().snapshot().entities() == open_source.entities(),
+            "a raw wall edit cannot silently break its persisted corner connection");
+    std::vector<sketch::EntityChange> open_changes{sketch::EntityChange::upsert(broken_wall)};
+    for (const auto& [id, entity] : open_source.entities()) {
+        if (entity.type != "constraint") continue;
+        const auto decoded = sketch::decode_constraint_entity(entity);
+        if (decoded.supported() && std::any_of(decoded.constraint->bindings.begin(), decoded.constraint->bindings.end(),
+            [&](const auto& binding) { return binding.owner_id == broken_wall.id; }))
+            open_changes.push_back(sketch::EntityChange::erase(id));
+    }
     open_loop.document().apply(sketch::ApplyEntityChanges{
-        open_source.revision(), {sketch::EntityChange::upsert(broken_wall)}, {},
-        "test open wall loop"});
+        open_source.revision(), std::move(open_changes), {},
+        "test explicitly disconnecting an open wall loop"});
     select_walls(open_loop, open_ids);
     const auto open_before_attempt = open_loop.document().snapshot();
     require(open_loop.createMeasurementBoundaryFromSelectedWalls().isEmpty() &&

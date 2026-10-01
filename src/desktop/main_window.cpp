@@ -10508,6 +10508,10 @@ public:
 
     bool beginBoundaryDrawing(BoundaryAuthoringMode mode, QString classification,
                               QString subtract_target = {}) {
+        if (m_workspace != Workspace::measurement) {
+            setWorkspace(Workspace::measurement);
+            if (m_workspace != Workspace::measurement) return false;
+        }
         if (!m_document->is_editable()) {
             setError(QStringLiteral("This project is read-only."));
             return false;
@@ -11625,8 +11629,78 @@ public:
                                {"elevation_m", 0.0},
                                {"classification", classification.toStdString()}};
         add_default_level_placement(properties, *drawing_context);
-        if (!applyEntity(Entity{entity_id, "wall", properties, false, json::object()},
-                         "create straight wall", revision)) {
+        try {
+            const auto source = authoringSnapshot();
+            const Entity wall{entity_id, "wall", properties, false, json::object()};
+            ApplyEntityChanges command{revision, {EntityChange::upsert(wall)}, {}, "create straight wall"};
+            const auto candidate = Document::preview_command(source, command);
+            const auto visible = visible_project_entities_with_phase(source, ProjectViewFilter{});
+            using EndpointKey = std::pair<std::string, int>;
+            std::map<EndpointKey, EndpointKey> components;
+            const auto key = [](const WallEndpointBinding& binding) {
+                return EndpointKey{binding.owner_id, static_cast<int>(binding.role)};
+            };
+            const auto root = [&](EndpointKey endpoint) {
+                while (components.contains(endpoint) && components.at(endpoint) != endpoint)
+                    endpoint = components.at(endpoint);
+                return endpoint;
+            };
+            const auto join = [&](EndpointKey left, EndpointKey right) {
+                components[root(right)] = root(left);
+            };
+            for (const auto& [old_id, entity] : source.entities()) {
+                (void)old_id;
+                if (entity.type != "constraint") continue;
+                const auto decoded = decode_constraint_entity(entity);
+                if (!decoded.supported() || decoded.constraint->relation != ConstraintRelationKind::coincident ||
+                    decoded.constraint->bindings.size() != 2) continue;
+                const auto& bindings = decoded.constraint->bindings;
+                if (bindings[0].segment_id.empty() && bindings[0].vertex_id.empty() &&
+                    bindings[1].segment_id.empty() && bindings[1].vertex_id.empty())
+                    join(key(bindings[0]), key(bindings[1]));
+            }
+            ConstraintAuthoringIntent intent;
+            for (const auto role : {WallEndpointRole::start, WallEndpointRole::end}) {
+                const auto point = role == WallEndpointRole::start ? start : end;
+                const WallEndpointBinding new_binding{entity_id, role};
+                for (const auto& [old_id, entity] : source.entities()) {
+                    if (entity.type != "wall" || !visible.contains(old_id) ||
+                        read_string(entity.properties, "floor_id") != std::optional<std::string>{drawing_context->floor_id} ||
+                        read_string(entity.properties, "layer_id") != std::optional<std::string>{drawing_context->layer_id}) continue;
+                    Wall existing;
+                    std::string diagnostic;
+                    if (!read_document_wall(entity, {}, existing, diagnostic) || existing.baseline.sweep_radians != 0.0) continue;
+                    for (const auto old_role : {WallEndpointRole::start, WallEndpointRole::end}) {
+                        const auto old_point = old_role == WallEndpointRole::start ? existing.baseline.start : existing.baseline.end;
+                        // A snap establishes the exact coordinate. Do not infer a
+                        // joint from nearby, but intentionally distinct, endpoints.
+                        if (point.x != old_point.x || point.y != old_point.y) continue;
+                        const WallEndpointBinding old_binding{old_id, old_role};
+                        if (root(key(old_binding)) == root(key(new_binding))) continue;
+                        PersistentConstraint relation;
+                        relation.id = new_id("constraint");
+                        relation.relation = ConstraintRelationKind::coincident;
+                        relation.bindings = {old_binding, new_binding};
+                        intent.relation_mutations.push_back(ConstraintRelationMutation::upsert(std::move(relation)));
+                        join(key(old_binding), key(new_binding));
+                    }
+                }
+            }
+            if (!intent.relation_mutations.empty()) {
+                const auto preview = preview_constraint_authoring(candidate, intent);
+                if (!preview.accepted()) throw std::invalid_argument(preview.diagnostics().empty()
+                    ? "The wall endpoint connection could not be validated." : preview.diagnostics().front());
+                if (!preview.changed_walls().empty() || !preview.changed_boundaries().empty())
+                    throw std::invalid_argument("Creating a wall must not move existing geometry.");
+                for (const auto& mutation : intent.relation_mutations)
+                    command.entity_changes.push_back(EntityChange::upsert(encode_constraint_entity(mutation.constraint)));
+            }
+            const auto authored = augmentAuthoredCommand(Command{command});
+            (void)Document::preview_command(source, authored);
+            applyAuthoredCommand(authored);
+            clearError();
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Create wall: %1").arg(QString::fromUtf8(error.what())));
             return {};
         }
         m_selected_id = id;
@@ -19567,7 +19641,8 @@ public:
         m_pending_symbol_scale = 1.0;
         m_symbol_placement_document = m_document;
         m_symbol_library_status->setText(
-            QStringLiteral("Click the plan to place %1. Esc cancels.").arg(item->text()));
+            (hosted_opening ? QStringLiteral("Click a wall to place %1. Esc cancels.")
+                            : QStringLiteral("Click the plan to place %1. Esc cancels.")).arg(item->text()));
         m_measurementCanvas->setCursor(Qt::CrossCursor);
         m_architecturalCanvas->setCursor(Qt::CrossCursor);
     }
@@ -21008,6 +21083,22 @@ private:
             for (const auto& change : changes->entity_changes)
                 if (change.kind == EntityChangeKind::erase) removed_ids.insert(change.entity_id);
             if (!removed_ids.empty()) {
+                for (const auto& [id, entity] : source.entities()) {
+                    if (entity.type != "constraint" || removed_ids.contains(id)) continue;
+                    auto effective = entity;
+                    for (const auto& change : changes->entity_changes)
+                        if (change.kind == EntityChangeKind::upsert && change.entity.id == id)
+                            effective = change.entity;
+                    const auto decoded = decode_constraint_entity(effective);
+                    if (!decoded.supported()) continue;
+                    if (std::any_of(decoded.constraint->bindings.begin(), decoded.constraint->bindings.end(),
+                        [&](const auto& binding) { return removed_ids.contains(binding.owner_id); })) {
+                        std::erase_if(changes->entity_changes, [&](const auto& change) {
+                            return change.kind == EntityChangeKind::upsert && change.entity.id == id;
+                        });
+                        changes->entity_changes.push_back(EntityChange::erase(id));
+                    }
+                }
                 for (const auto& [id,original] : source.entities()) {
                     if (removed_ids.contains(id) || !is_closed_boundary_entity(original.type)) continue;
                     auto updated=original;
@@ -25388,7 +25479,7 @@ private:
         }
         std::map<std::string, QTreeWidgetItem*, std::less<>> items;
         for (const auto& [id, node] : organization.nodes) {
-            if (node.type == kAnnotationEntityType || node.type == "model_phases" ||
+            if (node.type == kAnnotationEntityType || node.type == "constraint" || node.type == "model_phases" ||
                 node.type == "sheet_view_model") continue;
             const auto name = read_string(snapshot.entities().at(id).properties, "name");
             QString label = QString::fromStdString(name && !name->empty() ? *name : node.type);
@@ -27487,11 +27578,15 @@ private:
                 host_entity = it->second;
             }
             if (host_entity) {
+                const auto length = segment_length(host.baseline);
+                if (width > length)
+                    throw std::invalid_argument("This opening is wider than the wall. Reduce its width or choose a longer wall.");
+                if (offset < 0.0 || offset + width > length)
+                    throw std::invalid_argument("Move the opening farther from the wall corner so its full width fits.");
                 host.openings.push_back(HostedOpening{"opening-placement-preview", offset, width, sill, height});
                 // Cheap analytical bounds, slope, layer, and overlap checks on hover.
                 // createHostedOpening performs full solid admission once on commit.
                 validate_wall_semantics(host);
-                const auto length = segment_length(host.baseline);
                 const auto a = point_at_segment(host.baseline, offset / length).value();
                 const auto b = point_at_segment(host.baseline, (offset + width) / length).value();
                 const auto chord = std::hypot(b.x - a.x, b.y - a.y);
@@ -27602,6 +27697,7 @@ private:
         if (m_tool == CanvasTool::wall || m_tool == CanvasTool::sloped_wall) {
             if (!m_pending_wall_start.has_value()) {
                 m_pending_wall_start = point;
+                m_wall_chain_anchor = point;
                 m_wall_chain_has_segments = false;
                 refreshWallPreview(point);
                 owner->statusBar()->showMessage(QStringLiteral("Wall start recorded  •  click the end point"));
@@ -27632,9 +27728,16 @@ private:
                 // retained selection that would consume the next empty click
                 // as a deselect-only gesture.
                 if (m_selected_id == id) (void)selectEntity({}, false);
+                const auto chain_anchor = m_wall_chain_anchor;
+                if (m_tool == CanvasTool::wall && m_wall_chain_has_segments && chain_anchor &&
+                    point.x == chain_anchor->x && point.y == chain_anchor->y) {
+                    finishWallChain();
+                    return;
+                }
                 clearPreview();
                 if (m_tool == CanvasTool::wall) {
                     m_pending_wall_start = point;
+                    m_wall_chain_anchor = chain_anchor;
                     m_wall_chain_has_segments = true;
                     refreshWallPreview(point);
                     owner->statusBar()->showMessage(QStringLiteral("Click the next wall end • Esc finishes the chain"));
@@ -27820,6 +27923,11 @@ private:
             return;
         }
         cancelSymbolPlacement();
+        if (m_workspace != Workspace::measurement &&
+            (tool == CanvasTool::wall || tool == CanvasTool::sloped_wall || tool == CanvasTool::boundary)) {
+            setWorkspace(Workspace::measurement);
+            if (m_workspace != Workspace::measurement) { syncToolControls(); return; }
+        }
         if (tool == CanvasTool::boundary) {
             if (m_boundary_session && m_tool == tool &&
                 m_boundary_session->mode() == BoundaryAuthoringMode::draw_first) return;
@@ -27904,6 +28012,7 @@ private:
         m_boundary_context.reset();
         m_boundary_document.reset();
         m_pending_wall_start.reset();
+        m_wall_chain_anchor.reset();
         m_wall_chain_has_segments = false;
         m_redefine_boundary_id.reset();
         m_restored_boundary_navigation = false;
@@ -27936,6 +28045,7 @@ private:
         if (!m_pending_wall_start) return;
         const bool kept_segments = m_wall_chain_has_segments;
         m_pending_wall_start.reset();
+        m_wall_chain_anchor.reset();
         m_wall_chain_has_segments = false;
         m_measurementCanvas->setWallPreview(std::nullopt);
         m_architecturalCanvas->setWallPreview(std::nullopt);
@@ -29437,6 +29547,7 @@ private:
     AssistanceSession m_assistance_session;
     QString m_last_boundary_classification{QStringLiteral("measurement")};
     std::optional<Vec2> m_pending_wall_start;
+    std::optional<Vec2> m_wall_chain_anchor;
     bool m_wall_chain_has_segments{};
     QString m_pending_opening_kind;
     QString m_pending_opening_symbol_id;
