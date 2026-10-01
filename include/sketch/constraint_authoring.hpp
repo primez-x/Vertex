@@ -43,13 +43,13 @@ enum class WallResizeAnchor { start, end };
 
 // Rebase an existing exact-length receipt after a rigid transform. The wall
 // must still contain its original baseline; properties are never changed.
-// Missing receipts are a no-op. Invalid metadata or a length-changing/curved
+// Missing receipts are a no-op. Invalid metadata, changed sweep magnitude or length-changing
 // transform throws without mutation, preserving all unknown receipt fields.
 void rebase_wall_length_receipt(Entity& wall, const Segment& transformed_baseline);
 
 struct WallResizeIntent {
     std::string wall_id;
-    Quantity exact_length;
+    Quantity exact_length; // Physical baseline length, including circular arcs.
     WallResizeAnchor anchored_endpoint{WallResizeAnchor::start};
     bool move_connected_walls{true};
 };

@@ -1,4 +1,4 @@
-# Vertex project formats v1 through v12
+# Vertex project formats v1 through v13
 
 ## Circular column selection orientation
 
@@ -54,8 +54,10 @@ must agree, and the logical digest includes that version. The reader accepts
 v1 legacy history, v2 identity history, v3 construction-receipt history, v5
 translation history, v6 transform history, v7 boundary-coordinate edit
 history, v8 boundary-constraint transactions, v9 measured group translations,
-and v10 curved endpoint constraints, plus v4 through v10 archives through recovery-aware APIs.
-Under-versioned semantic data and versions above 10 reject. Legacy-only history
+v10 curved endpoint constraints, v11 straight wall-only intent, v12 physical
+arc-length locks, and v13 direct physical curve-length inputs, plus v4 through
+v13 archives through recovery-aware APIs.
+Under-versioned semantic data and versions above 13 reject. Legacy-only history
 is still written as v1. Unknown boundary entity
 versions in v2 remain preserved read-only. See `boundary-entity-format.md`.
 Version 2 also recognizes `dimension` entities. Segment-length dimensions refer
@@ -446,7 +448,7 @@ unknown project `format_version` is rejected rather than opened unsafely.
 ## SQLite schema
 
 The SQLite `application_id` is `0x50535444` (`PSTD`). `user_version` and metadata
-`format_version` are equal and range from `1` through `12`, according to the
+`format_version` are equal and range from `1` through `13`, according to the
 retained semantics. The baseline application tables below are shared; later
 versions add the proof columns and recovery data documented in this file.
 
@@ -863,3 +865,36 @@ semantics. Earlier constraint entity versions 1 and 2 retain their original
 encodings. They do not interpret the new relation spelling as endpoint distance;
 unrecognized geometric constraints retain their opaque payload and make the
 document read-only.
+
+## Direct physical curve-length inputs (v13)
+
+Version 13 retains the existing SQLite columns. A wall edit proof with
+`version: 3` requires a positive exact `length_entry` matching the analytical
+arc length, and preserves the source's signed sweep. It uses version 5 of
+`apply_boundary_constraint_changes`, which may also contain historical straight
+proofs, version-2 curved endpoint proofs and boundary edits. An older command
+envelope cannot interpret a version-3 proof; version 5 without that proof rejects.
+Historical command and proof versions retain their earlier encodings and rules.
+
+The resulting wall records `extensions.constraint_authoring.version: 1` and
+`last_length_entry.version: 2`. Its five fields are `version`,
+`original_expression`, `entered_unit`, `exact_metres`, and `baseline`. The exact
+rational measures physical arc length; the recorded baseline includes the
+signed sweep and must exactly match the current wall. Restore independently
+checks recognized receipts even when imported without originating history.
+Rigid moves and rotations rebase the receipt; they preserve physical length
+and signed sweep. Reflection rebases the receipt's signed sweep while preserving
+its magnitude and physical length. Existing measured construction provenance
+has separate validation and does not yet support reflection. Subsequent typed
+endpoint deformation clears a stale known
+receipt unless another explicit length was entered. Unknown nested metadata is
+preserved on explicit resize and cannot be silently discarded. Future optional
+receipt versions remain opaque on open and cannot be edited by this reader.
+
+Any retained version-3 wall proof or known physical input receipt requires
+project format 13, including abandoned, undone and deleted history. The loader
+recomputes that minimum and refuses a downgrade despite a recomputed digest.
+Generic vendor entities do not acquire this wall-specific extension semantics.
+Recovery-aware APIs retain the document and ledger together. JSON/assets
+extraction advertises exchange version 10 and preserves exact proof/receipt
+payloads; extraction does not constitute a JSON project importer.

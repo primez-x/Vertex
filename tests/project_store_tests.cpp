@@ -1229,6 +1229,96 @@ void test_physical_arc_length_history_requires_v12() {
             "refusing forged physical measurement must preserve saved artifacts");
 }
 
+void test_direct_curve_length_history_requires_v13() {
+    TempDirectory temp;
+    const auto pi = std::numbers::pi;
+    auto wall = curved_constraint_wall();
+    wall.properties["baseline"] = {{"start", {0,0}}, {"end", {8/pi,0}}, {"sweep_radians", pi}};
+    auto document = Document::create({wall});
+    const auto initial = document.snapshot().entities();
+    sketch::ApplyBoundaryConstraintChanges command{0, {}, {}, "Direct curve length"};
+    command.wall_edits.push_back({wall.id, {{0,0},{12/pi,0},pi}, sketch::parse_quantity("6 m"), 3});
+    document.apply(command);
+    const auto edited = document.snapshot().entities();
+    require(ProjectStore::required_format_version(document.snapshot()) == 13,
+        "direct physical arc length must require v13");
+    document.undo(document.revision());
+    const auto file = temp.path / "direct-curve-v13.bldproj";
+    (void)ProjectStore::save(file, document.snapshot());
+    auto loaded = ProjectStore::load(file);
+    require(loaded.document.snapshot().entities() == initial && loaded.document.can_redo(),
+        "undone direct arc input must retain exact redo navigation");
+    loaded.document.redo(loaded.document.revision());
+    require(loaded.document.snapshot().entities() == edited,
+        "direct physical input must reopen and redo exactly");
+    const auto imported = Document::create({edited.at(wall.id)});
+    require(ProjectStore::required_format_version(imported.snapshot()) == 13,
+        "known physical input receipt must require v13 without original command history");
+    const auto imported_file = temp.path / "imported-direct-curve.bldproj";
+    (void)ProjectStore::save(imported_file, imported.snapshot());
+    require(ProjectStore::load(imported_file).document.snapshot().entities() == imported.snapshot().entities(),
+        "imported physical input must reopen exactly");
+    auto opaque = edited.at(wall.id); opaque.type = "vendor_wall";
+    const auto vendor = Document::create({opaque});
+    require(ProjectStore::required_format_version(vendor.snapshot()) == 1,
+        "generic vendor collision must not acquire physical input semantics");
+    auto future = edited.at(wall.id);
+    future.extensions["constraint_authoring"]["last_length_entry"]["version"] = 99;
+    require(ProjectStore::required_format_version(Document::create({future}).snapshot()) == 1,
+        "unknown optional receipt must not be claimed as understood physical input");
+    loaded.document.apply(ApplyEntityChanges{loaded.document.revision(),
+        {EntityChange::erase(wall.id)}, {}, "Delete curve"});
+    auto straight = curved_constraint_wall(); straight.id = "later-straight";
+    straight.properties["baseline"]["sweep_radians"] = 0;
+    loaded.document.apply(ApplyEntityChanges{loaded.document.revision(), {EntityChange::upsert(straight)}, {}, "Add straight"});
+    sketch::ApplyBoundaryConstraintChanges later{loaded.document.revision(), {}, {}, "Later straight edit"};
+    later.wall_edits.push_back({straight.id, {{0,0},{5,0},0}, std::nullopt});
+    loaded.document.apply(later);
+    require(ProjectStore::required_format_version(loaded.document.snapshot()) == 13,
+        "deleted, undone, and mixed later proofs must not lower physical input reader floor");
+    const auto mixed_file = temp.path / "retained-direct-curve.bldproj";
+    (void)ProjectStore::save(mixed_file, loaded.document.snapshot());
+    require(ProjectStore::load(mixed_file).document.snapshot().entities() == loaded.document.snapshot().entities(),
+        "retained physical input and later straight history must reopen");
+    sketch::ProjectWorkspace workspace(imported.snapshot());
+    const auto capture = workspace.capture();
+    const auto history = sketch::capture_workspace_history_record(capture);
+    sketch::RecoveryLedger ledger{{"history", "workspace_history",
+        sketch::encode_workspace_history_record(capture.document(), history, std::nullopt)}};
+    const auto archive_file = temp.path / "direct-curve-workspace.bldproj";
+    (void)ProjectStore::save_archive(archive_file, {capture.document(), ledger, sketch::ArchiveRole::ordinary});
+    const auto archive = ProjectStore::load_archive(archive_file, sketch::ArchiveRole::ordinary);
+    require(archive.supported() && archive.archive->document().entities() == imported.snapshot().entities() &&
+        ProjectStore::required_format_version(archive.archive->document()) == 13,
+        "workspace archive must retain direct curve input, v13 floor and recovery ledger");
+    require_error([&] { (void)ProjectStore::load(archive_file); }, StorageErrorCode::unsupported_format,
+        "document-only load must not discard a v13 recovery ledger");
+    if (const auto* path = std::getenv("VERTEX_DIRECT_CURVE_CAPTURE"))
+        std::filesystem::copy_file(archive_file, std::filesystem::path(path));
+    const auto source_hash = ProjectStore::file_sha256(file);
+    const auto downgraded = temp.path / "direct-curve-downgraded.bldproj";
+    std::filesystem::copy_file(file, downgraded);
+    execute_sql(downgraded, "PRAGMA user_version=12; UPDATE metadata SET value='12' WHERE key='format_version'");
+    rewrite_logical_digest(downgraded);
+    const auto downgrade_hash = ProjectStore::file_sha256(downgraded);
+    require_error([&] { (void)ProjectStore::load(downgraded); }, StorageErrorCode::unsupported_format,
+        "recomputed digest must not downgrade retained physical input to v12");
+    require(ProjectStore::file_sha256(downgraded) == downgrade_hash && ProjectStore::file_sha256(file) == source_hash,
+        "refused physical input downgrade must preserve both files");
+    const auto forged = temp.path / "direct-chord-forgery.bldproj";
+    std::filesystem::copy_file(file, forged);
+    execute_sql(forged, "UPDATE revisions SET boundary_constraint_changes_json="
+        "json_set(boundary_constraint_changes_json,'$.wall_edits[0].baseline.end[0]',6.0) WHERE revision=1; "
+        "UPDATE revision_entities SET properties_json=json_set(properties_json,'$.baseline.end[0]',6.0), "
+        "extensions_json=json_set(extensions_json,'$.constraint_authoring.last_length_entry.baseline.end[0]',6.0) "
+        "WHERE revision=1 AND id='curve-wall'");
+    rewrite_logical_digest(forged);
+    const auto forged_hash = ProjectStore::file_sha256(forged);
+    require_error([&] { (void)ProjectStore::load(forged); }, StorageErrorCode::integrity_failure,
+        "matching proof, wall and receipt cannot substitute chord distance for physical arc length");
+    require(ProjectStore::file_sha256(forged) == forged_hash, "refused physical input forgery must preserve saved bytes");
+}
+
 void test_curved_constraint_state_requires_v10_without_geometry_proof() {
     TempDirectory temp;
     const auto wall = curved_constraint_wall();
@@ -1480,9 +1570,9 @@ void test_straight_wall_only_typed_history_requires_v11_and_rejects_consistent_f
                   "historical mixed v2 envelope cannot be substituted for v4 wall-only proof");
     const auto future = temp.path / "straight-future-format.psketch";
     std::filesystem::copy_file(authored_file, future);
-    execute_sql(future, "PRAGMA user_version=13; UPDATE metadata SET value='13' WHERE key='format_version'");
+    execute_sql(future, "PRAGMA user_version=14; UPDATE metadata SET value='14' WHERE key='format_version'");
     require_error([&] { (void)ProjectStore::load(future); }, StorageErrorCode::unsupported_format,
-                  "storage versions newer than v12 must reject before semantic admission");
+                  "storage versions newer than v13 must reject before semantic admission");
 
     // No length receipt is needed for a connected endpoint movement. Matching
     // proof/result forgery therefore isolates topology from exact-entry checks.
@@ -2231,6 +2321,7 @@ int main() {
     sketch::testing::noninteractive_errors();
     try {
         test_physical_arc_length_history_requires_v12();
+        test_direct_curve_length_history_requires_v13();
         test_native_room_topology_is_validated_on_restore();
         test_save_reopen_preserves_exact_revision_history_and_assets();
         test_existing_destination_requires_fingerprint_and_creates_backup();

@@ -685,8 +685,11 @@ std::optional<std::string> validate_state(const std::map<std::string, Entity, st
                     const std::map<std::string, Asset, std::less<>>& assets) {
     for (const auto& [id, entity] : entities) {
         validate_entity(entity);
-        if (entity.type=="wall" && entity.extensions.contains("curve_input_derivation")) {
-            try { validate_wall_curve_input(entity); }
+        if (entity.type=="wall") {
+            try {
+                if (entity.extensions.contains("curve_input_derivation")) validate_wall_curve_input(entity);
+                validate_wall_length_input(entity);
+            }
             catch (const std::exception& error) { document_error(DocumentErrorCode::invalid_entity,error.what()); }
         }
         if (id != entity.id) {
@@ -1665,6 +1668,8 @@ nlohmann::json command_to_json(const Command& command) {
                     encoded["boundary_edits"].push_back(encode_boundary_geometry_edit(edit));
                 if (!typed.wall_edits.empty()) {
                     encoded["version"] = std::any_of(typed.wall_edits.begin(),typed.wall_edits.end(),
+                        [](const auto& edit) { return edit.version==3; }) ? 5 :
+                        std::any_of(typed.wall_edits.begin(),typed.wall_edits.end(),
                         [](const auto& edit) { return edit.version==2; }) ? 3 :
                         typed.boundary_edits.empty() ? 4 : 2;
                     encoded["wall_edits"] = nlohmann::json::array();
@@ -1712,7 +1717,7 @@ Command command_from_json(const nlohmann::json& value) {
     try {
         if (!value.is_object() || !value.contains("version") || !value.contains("kind") ||
             !value.at("version").is_number_integer() ||
-            (value.at("version") != 1 && value.at("version") != 2 && value.at("version") != 3 && value.at("version") != 4) ||
+            (value.at("version") != 1 && value.at("version") != 2 && value.at("version") != 3 && value.at("version") != 4 && value.at("version") != 5) ||
             !value.at("kind").is_string()) {
             document_error(DocumentErrorCode::invalid_entity, "serialized command envelope is invalid");
         }
@@ -1751,7 +1756,7 @@ Command command_from_json(const nlohmann::json& value) {
                                           "entity_changes", "boundary_edits"},
                                  DocumentErrorCode::invalid_entity, "serialized boundary constraint command");
             if (!value.at("boundary_edits").is_array() ||
-                (value.at("boundary_edits").empty() && value.at("version")!=3 && value.at("version")!=4))
+                (value.at("boundary_edits").empty() && value.at("version")!=3 && value.at("version")!=4 && value.at("version")!=5))
                 document_error(DocumentErrorCode::invalid_entity, "Boundary edits must be a nonempty array");
             if (value.at("version")==4 && !value.at("boundary_edits").empty())
                 document_error(DocumentErrorCode::invalid_entity, "Version 4 requires a straight wall-only transaction");
@@ -1772,9 +1777,13 @@ Command command_from_json(const nlohmann::json& value) {
                         document_error(DocumentErrorCode::invalid_entity,"Versioned wall transaction requires nonempty wall edits");
                     for (const auto& edit : value.at("wall_edits"))
                         result.wall_edits.push_back(decode_constraint_wall_edit(edit));
+                    const bool physical_curve=std::any_of(result.wall_edits.begin(),result.wall_edits.end(),
+                        [](const auto& edit) { return edit.version==3; });
                     const bool curved=std::any_of(result.wall_edits.begin(),result.wall_edits.end(),
                         [](const auto& edit) { return edit.version==2; });
-                    if (curved!=(value.at("version")==3))
+                    if (physical_curve!=(value.at("version")==5))
+                        document_error(DocumentErrorCode::invalid_entity,"Physical curve-length proof requires exactly command version 5");
+                    if (!physical_curve && curved!=(value.at("version")==3))
                         document_error(DocumentErrorCode::invalid_entity,"Curved wall proof requires exactly command version 3");
                 }
             } catch (const std::exception& error) {

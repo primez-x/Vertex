@@ -136,6 +136,7 @@ public:
         if (!ConstraintDialog::supportsEntity(selected))
             throw std::invalid_argument("Select a valid wall or an identified boundary");
         boundary_mode = selected.type != "wall";
+        curved_wall = !boundary_mode && baseline(selected).sweep_radians != 0.0;
         owner->setWindowTitle(boundary_mode ? QStringLiteral("Boundary dimensions and constraints") : QStringLiteral("Wall dimensions and constraints"));
         const auto available = owner->screen()->availableGeometry();
         owner->resize(std::min(710, std::max(360, available.width() - 48)),
@@ -157,8 +158,8 @@ public:
         form->setRowWrapPolicy(QFormLayout::WrapLongRows);
         mode = new QComboBox(body);
         mode->setObjectName(QStringLiteral("constraintOperation"));
-        if (!boundary_mode && baseline(selected).sweep_radians == 0.0)
-            mode->addItem(QStringLiteral("Change wall length"), 0);
+        if (!boundary_mode)
+            mode->addItem(curved_wall ? QStringLiteral("Change curve length") : QStringLiteral("Change wall length"), 0);
         mode->addItem(QStringLiteral("Add constraint"), 1);
         mode->addItem(QStringLiteral("Edit constraint"), 2);
         mode->addItem(QStringLiteral("Remove constraint"), 3);
@@ -520,7 +521,7 @@ public:
         if (editing_relation && !load_values && kind == ConstraintRelationKind::fixed_length &&
             configured_relation == ConstraintRelationKind::fixed_arc_length) prefillEndpointDistance();
         if (auto* label = qobject_cast<QLabel*>(form->labelForField(length)))
-            label->setText(wall_resize ? QStringLiteral("Wall length") : kind == ConstraintRelationKind::fixed_arc_length
+            label->setText(wall_resize ? (curved_wall ? QStringLiteral("Curve length") : QStringLiteral("Wall length")) : kind == ConstraintRelationKind::fixed_arc_length
                 ? QStringLiteral("Curve length") : QStringLiteral("Endpoint distance"));
         const auto count = kind == ConstraintRelationKind::fixed_anchor ? 1U :
             (kind == ConstraintRelationKind::parallel || kind == ConstraintRelationKind::perpendicular ? 4U : 2U);
@@ -546,7 +547,7 @@ public:
         if (operation == 0) {
             result.wall_resize = WallResizeIntent{selected_id, parse_quantity(length->text().toStdString(), unit),
                 role == WallEndpointRole::start ? WallResizeAnchor::start : WallResizeAnchor::end, connected->isChecked()};
-            result.message = "change wall length with preview";
+            result.message = curved_wall ? "change curve length with preview" : "change wall length with preview";
         } else {
             const auto anchor_index = anchor->currentData().toInt();
             if (anchor->currentIndex() < 0 || anchor_index < 0 || static_cast<std::size_t>(anchor_index) >= endpoints.size())
@@ -695,6 +696,7 @@ public:
     std::string selected_id;
     bool metric{};
     bool boundary_mode{};
+    bool curved_wall{};
     bool loading{};
     bool anchor_for_wall_resize{};
     std::string new_constraint_id = make_stable_id();

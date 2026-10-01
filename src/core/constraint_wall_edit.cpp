@@ -98,7 +98,8 @@ void set_baseline(Entity& wall, const Segment& baseline) {
 // destroy data whose meaning this version cannot establish.
 bool validate_length_receipt(const json& receipt, const Entity& wall) {
     if (!receipt.is_object() || !receipt.contains("version") ||
-        !receipt.at("version").is_number_integer() || receipt.at("version") != 1) {
+        !receipt.at("version").is_number_integer() ||
+        (receipt.at("version") != 1 && receipt.at("version") != 2)) {
         invalid("Wall has unsupported last_length_entry extension metadata: " + wall.id);
     }
     try {
@@ -134,11 +135,12 @@ bool validate_length_receipt(const json& receipt, const Entity& wall) {
         const auto current = read_baseline(wall);
         // Receipts store the coordinates produced by the command, not a
         // measurement approximation; any subsequent coordinate change stales it.
-        if (recorded.sweep_radians != 0.0 || current.sweep_radians != 0.0 ||
+        const bool curved=receipt.at("version")==2;
+        if ((curved ? recorded.sweep_radians==0.0 : recorded.sweep_radians!=0.0) ||
+            recorded.sweep_radians!=current.sweep_radians ||
             recorded.start.x != current.start.x || recorded.start.y != current.start.y ||
             recorded.end.x != current.end.x || recorded.end.y != current.end.y ||
-            std::abs(std::hypot(recorded.end.x - recorded.start.x,
-                                recorded.end.y - recorded.start.y) - quantity.metres) >
+            std::abs(segment_length(recorded) - quantity.metres) >
                 constraint_linear_tolerance_metres) {
             invalid("Wall length receipt does not match its stored baseline");
         }
@@ -173,7 +175,7 @@ void validate_or_clear_length_receipt(Entity& wall, bool write_receipt,
             section = wall.extensions.find("constraint_authoring");
         }
         auto& receipt = (*section)["last_length_entry"];
-        receipt["version"] = 1;
+        receipt["version"] = baseline.sweep_radians==0 ? 1 : 2;
         receipt["original_expression"] = quantity->original_expression;
         receipt["entered_unit"] = unit_name(quantity->entered_unit);
         receipt["exact_metres"]["numerator"] = quantity->exact_metres.numerator;
@@ -184,6 +186,17 @@ void validate_or_clear_length_receipt(Entity& wall, bool write_receipt,
     }
 }
 
+}
+
+void validate_wall_length_input(const Entity& wall) {
+    const auto section=wall.extensions.find("constraint_authoring");
+    if (section==wall.extensions.end() || !section->is_object() ||
+        !section->contains("version") || !section->at("version").is_number_integer() || section->at("version")!=1) return;
+    const auto receipt=section->find("last_length_entry");
+    if (receipt==section->end() || !receipt->is_object() || !receipt->contains("version") ||
+        !receipt->at("version").is_number_integer() ||
+        (receipt->at("version")!=1 && receipt->at("version")!=2)) return;
+    (void)validate_length_receipt(*receipt,wall);
 }
 
 void rebase_wall_length_receipt(Entity& wall, const Segment& transformed_baseline) {
@@ -202,17 +215,15 @@ void rebase_wall_length_receipt(Entity& wall, const Segment& transformed_baselin
     (void)validate_length_receipt(*receipt, wall);
     const auto original = read_baseline(wall);
     const auto& transformed = transformed_baseline;
-    const auto original_length = std::hypot(original.end.x - original.start.x,
-                                             original.end.y - original.start.y);
-    const auto transformed_length = std::hypot(transformed.end.x - transformed.start.x,
-                                                transformed.end.y - transformed.start.y);
-    if (transformed.sweep_radians != 0.0 ||
+    const auto original_length = segment_length(original);
+    const auto transformed_length = segment_length(transformed);
+    if (std::abs(transformed.sweep_radians) != std::abs(original.sweep_radians) ||
         !std::isfinite(transformed.start.x) || !std::isfinite(transformed.start.y) ||
         !std::isfinite(transformed.end.x) || !std::isfinite(transformed.end.y) ||
         !std::isfinite(original_length) || !std::isfinite(transformed_length) ||
         transformed_length <= 0.0 ||
         std::abs(transformed_length - original_length) > constraint_linear_tolerance_metres) {
-        invalid("Wall length receipt requires a finite length-preserving straight transform: " + wall.id);
+        invalid("Wall length receipt requires a finite length-preserving transform with unchanged sweep magnitude: " + wall.id);
     }
     auto updated = *receipt;
     update_baseline_json(updated.at("baseline"), transformed);
@@ -455,17 +466,18 @@ bool valid_wall_identifier(const std::string& id) {
 void validate_edit(const ConstraintWallGeometryEdit& edit) {
     const auto& b = edit.baseline;
     const auto baseline_length = std::hypot(b.end.x-b.start.x,b.end.y-b.start.y);
-    if (!valid_wall_identifier(edit.wall_id) || (edit.version!=1 && edit.version!=2) ||
+    if (!valid_wall_identifier(edit.wall_id) || (edit.version!=1 && edit.version!=2 && edit.version!=3) ||
         (edit.version==1 ? b.sweep_radians!=0.0 : b.sweep_radians==0.0) || !std::isfinite(b.sweep_radians) ||
         !std::isfinite(b.start.x) || !std::isfinite(b.start.y) ||
         !std::isfinite(b.end.x) || !std::isfinite(b.end.y) ||
         !std::isfinite(baseline_length) || baseline_length <= constraint_linear_tolerance_metres)
         invalid("Wall constraint edit requires an identified finite versioned nondegenerate baseline");
-    if (edit.version==2) (void)arc_from_chord_angle(b.start,b.end,b.sweep_radians);
+    if (edit.version>=2) (void)arc_from_chord_angle(b.start,b.end,b.sweep_radians);
+    if (edit.version==3 && !edit.length_entry) invalid("Curved physical length proof requires an exact length entry");
     if (edit.length_entry) {
-        if (edit.version!=1) invalid("Curved endpoint edits cannot contain straight length entries");
+        if (edit.version==2) invalid("Curved endpoint edits cannot contain physical length entries");
         const auto length = normalize_positive_quantity(*edit.length_entry);
-        if (std::abs(std::hypot(b.end.x-b.start.x,b.end.y-b.start.y)-length.metres) >
+        if (std::abs(segment_length(b)-length.metres) >
             constraint_linear_tolerance_metres)
             invalid("Wall constraint edit exact quantity does not match its baseline");
     }
@@ -484,7 +496,7 @@ Entity replay_constraint_wall_edit(const Entity& source, const ConstraintWallGeo
         invalid("Wall constraint edit owner is not its original wall");
     const auto old = read_baseline(source);
     if ((edit.version==1 && old.sweep_radians!=0.0) ||
-        (edit.version==2 && (old.sweep_radians==0.0 || old.sweep_radians!=edit.baseline.sweep_radians)))
+        (edit.version>=2 && (old.sweep_radians==0.0 || old.sweep_radians!=edit.baseline.sweep_radians)))
         invalid("Wall constraint proof must preserve the source signed sweep");
     const auto near = [](Vec2 a, Vec2 b) {
         return std::hypot(a.x-b.x,a.y-b.y) <= constraint_linear_tolerance_metres;
@@ -494,9 +506,10 @@ Entity replay_constraint_wall_edit(const Entity& source, const ConstraintWallGeo
     auto result = source;
     validate_or_clear_length_receipt(result, edit.length_entry.has_value(),
         edit.length_entry ? &*edit.length_entry : nullptr, edit.baseline);
-    if (edit.version==2) rebase_wall_curve_input(result,edit.baseline);
+    if (edit.version>=2) rebase_wall_curve_input(result,edit.baseline);
     set_baseline(result, edit.baseline);
-    if (edit.version==2) validate_wall_curve_input(result);
+    if (edit.version>=2) validate_wall_curve_input(result);
+    validate_wall_length_input(result);
     return result;
 }
 
@@ -511,21 +524,21 @@ nlohmann::json encode_constraint_wall_edit(const ConstraintWallGeometryEdit& edi
             {"exact_metres",{{"numerator",q.exact_metres.numerator},{"denominator",q.exact_metres.denominator}}}};
     }
     json result={{"wall_id",edit.wall_id},{"baseline",b},{"length_entry",receipt}};
-    if (edit.version==2) result["version"]=2;
+    if (edit.version>=2) result["version"]=edit.version;
     return result;
 }
 
 ConstraintWallGeometryEdit decode_constraint_wall_edit(const nlohmann::json& value) {
     if (value.contains("version")) {
         exact_fields(value,{"version","wall_id","baseline","length_entry"});
-        if (!value.at("version").is_number_integer() || value.at("version")!=2)
+        if (!value.at("version").is_number_integer() || (value.at("version")!=2 && value.at("version")!=3))
             invalid("Unsupported wall constraint proof version");
     } else exact_fields(value,{"wall_id","baseline","length_entry"});
     exact_fields(value.at("baseline"),{"start","end","sweep_radians"});
     if (!value.at("wall_id").is_string()) invalid("Wall constraint owner ID must be a string");
     Entity temporary{value.at("wall_id").get<std::string>(),"wall",{{"baseline",value.at("baseline")}}};
     ConstraintWallGeometryEdit result{temporary.id,read_baseline(temporary),std::nullopt};
-    result.version=value.contains("version") ? 2 : 1;
+    result.version=value.contains("version") ? value.at("version").get<std::uint64_t>() : 1;
     const auto& entry = value.at("length_entry");
     if (!entry.is_null()) {
         exact_fields(entry,{"original_expression","entered_unit","exact_metres"});

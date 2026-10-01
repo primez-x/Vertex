@@ -560,7 +560,7 @@ void extract_project(const DocumentSnapshot &snapshot,
                                      : Json(nullptr);
     const auto required_format = ProjectStore::required_format_version(snapshot);
     Json result = {{"exchange_format", "vertex-json-assets"},
-                   {"exchange_version", required_format >= 12 ? 9 : required_format >= 11 ? 8 : required_format >= 10 ? 7 : 1},
+                   {"exchange_version", required_format >= 13 ? 10 : required_format >= 12 ? 9 : required_format >= 11 ? 8 : required_format >= 10 ? 7 : 1},
                    {"document", std::move(document)},
                    {"revisions", Json::array()}};
     std::set<std::string> written_assets;

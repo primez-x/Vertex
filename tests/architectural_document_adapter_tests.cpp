@@ -470,6 +470,15 @@ void test_wall_group_transforms_preserve_exact_length_receipts() {
         auto malformed = first;
         if (unsupported) malformed.extensions["constraint_authoring"]["version"] = 99;
         else malformed.extensions["constraint_authoring"]["last_length_entry"]["baseline"]["end"] = {4,4};
+        if (!unsupported) {
+            rejects([&] { (void)Document::create({malformed,second,opening,join}); });
+            auto valid = Document::create({first,second,opening,join});
+            const auto before = valid.snapshot();
+            rejects([&] { valid.apply(ApplyEntityChanges{valid.revision(), {EntityChange::upsert(malformed)}, {}, "Invalid receipt"}); });
+            require(valid.snapshot().entities() == before.entities() && valid.revision() == before.revision(),
+                "known stale length receipt must reject before publication without mutation");
+            continue;
+        }
         auto invalid = Document::create({malformed,second,opening,join});
         const auto before = invalid.snapshot();
         rejects([&] { (void)architectural_transaction_command(before,transaction,before.revision()); });

@@ -390,6 +390,44 @@ void test_physical_curve_length_exchange_v9(const std::filesystem::path& root) {
   check(nlohmann::json::parse(deleted_input).at("exchange_version") == 9,
         "deleted and undone physical curve history must retain exchange9");
 }
+void test_direct_curve_length_exchange_v10(const std::filesystem::path& root) {
+  const auto pi = std::numbers::pi;
+  const sketch::Entity wall{"direct-curve", "wall",
+      {{"baseline", {{"start", {0,0}}, {"end", {8/pi,0}}, {"sweep_radians", pi}}},
+       {"thickness_m", 0.14}, {"height_m", 2.4}, {"elevation_m", 0}}};
+  auto document = sketch::Document::create({wall});
+  const auto initial = document.snapshot().entities();
+  sketch::ApplyBoundaryConstraintChanges command{0, {}, {}, "Direct physical length"};
+  command.wall_edits.push_back({wall.id, {{0,0},{12/pi,0},pi}, sketch::parse_quantity("6 m"), 3});
+  document.apply(command);
+  const auto edited = document.snapshot().entities();
+  document.undo(document.revision());
+  sketch::extract_project(document.snapshot(), root / "direct-curve-v10");
+  std::ifstream input(root / "direct-curve-v10" / "project.json");
+  const auto json = nlohmann::json::parse(input);
+  check(json.at("exchange_version") == 10 &&
+        json.at("revisions").at(1).at("boundary_constraint_changes").at("version") == 5,
+        "direct physical input must advertise exchange10 and explicit command5");
+  auto replayed = sketch::Document::create({wall});
+  replayed.apply(sketch::command_from_json(json.at("revisions").at(1).at("boundary_constraint_changes")));
+  check(replayed.snapshot().entities() == edited, "extracted physical input must replay exact receipt and geometry");
+  replayed.undo(replayed.revision());
+  check(replayed.snapshot().entities() == initial, "extracted physical input must undo exactly");
+  auto imported = sketch::Document::create({edited.at(wall.id)});
+  sketch::extract_project(imported.snapshot(), root / "imported-direct-curve-v10");
+  std::ifstream imported_input(root / "imported-direct-curve-v10" / "project.json");
+  check(nlohmann::json::parse(imported_input).at("exchange_version") == 10,
+        "known physical input receipt without history must advertise exchange10");
+  document.redo(document.revision());
+  sketch::ApplyBoundaryConstraintChanges later{document.revision(), {}, {}, "Later curve endpoint"};
+  later.wall_edits.push_back({wall.id, {{0,0},{14/pi,0},pi}, std::nullopt, 2});
+  document.apply(later);
+  document.apply(sketch::ApplyEntityChanges{document.revision(), {sketch::EntityChange::erase(wall.id)}, {}, "Delete curve"});
+  sketch::extract_project(document.snapshot(), root / "deleted-direct-curve-v10");
+  std::ifstream deleted_input(root / "deleted-direct-curve-v10" / "project.json");
+  check(nlohmann::json::parse(deleted_input).at("exchange_version") == 10,
+        "later geometry-only proof and owner deletion must retain exchange10");
+}
 } // namespace
 int main() {
   sketch::testing::noninteractive_errors();
@@ -398,6 +436,7 @@ int main() {
   std::filesystem::create_directory(root);
   try {
     test_physical_curve_length_exchange_v9(root);
+    test_direct_curve_length_exchange_v10(root);
     test_straight_wall_only_authoring_exchange_v8(root);
     test_safe_curved_wall_history_exchange_replays(root);
     const std::vector<std::byte> bytes{std::byte{1}, std::byte{2}, std::byte{0},

@@ -1765,6 +1765,71 @@ void test_curved_wall_proof_codec_and_replay() {
     require_error([&] { (void)command_from_json(legacy); },DocumentErrorCode::invalid_entity,"v3 without curved proof accepted");
 }
 
+void test_physical_curve_input_proof_codec_and_restore() {
+    using namespace sketch;
+    const auto pi = std::acos(-1.0);
+    const Entity arc{"physical-curve", "wall", {
+        {"baseline", {{"start", {0,0}}, {"end", {8/pi,0}}, {"sweep_radians", pi}}},
+        {"thickness_m", 0.14}, {"height_m", 3}, {"elevation_m", 0}}};
+    auto document = Document::create({arc});
+    ApplyBoundaryConstraintChanges command{0, {}, {}, "Resize physical curve"};
+    command.wall_edits.push_back({arc.id, {{0,0},{12/pi,0},pi}, parse_quantity("6 m"), 3});
+    const auto wire = command_to_json(Command{command});
+    require(wire.at("version") == 5 && wire.at("wall_edits")[0].at("version") == 3,
+        "physical curve input must have distinct inner and outer proof versions");
+    require(command_to_json(command_from_json(wire)) == wire,
+        "physical curve input proof must round-trip exactly");
+    for (int version = 1; version <= 4; ++version) {
+        auto old = wire; old["version"] = version;
+        require_error([&] { (void)command_from_json(old); }, DocumentErrorCode::invalid_entity,
+            "physical curve proof must not decode under an old command envelope");
+    }
+    auto missing = wire; missing["wall_edits"][0]["length_entry"] = nullptr;
+    require_error([&] { (void)command_from_json(missing); }, DocumentErrorCode::invalid_entity,
+        "physical curve proof must require its exact entry");
+    auto false_v5 = wire; false_v5["wall_edits"][0]["version"] = 2;
+    false_v5["wall_edits"][0]["length_entry"] = nullptr;
+    require_error([&] { (void)command_from_json(false_v5); }, DocumentErrorCode::invalid_entity,
+        "physical command envelope must contain an actual physical length proof");
+    auto mixed = command;
+    mixed.wall_edits.push_back({"second-curve", {{10,0},{15,0},0.6}, std::nullopt, 2});
+    mixed.wall_edits.push_back({"straight", {{20,0},{25,0},0}, std::nullopt, 1});
+    const auto mixed_wire = command_to_json(Command{mixed});
+    require(mixed_wire.at("version") == 5 && command_to_json(command_from_json(mixed_wire)) == mixed_wire,
+        "physical envelope must retain mixed physical, curved endpoint and straight proofs");
+    const auto before = document.snapshot();
+    const auto preview = Document::preview_command(before, command_from_json(wire));
+    document.apply(command_from_json(wire));
+    const auto after = document.snapshot();
+    require(before.entities().at(arc.id) == arc && preview.entities() == after.entities(),
+        "physical curve preview must be immutable and identical to commit");
+    require(Document::fork(after).snapshot().entities() == after.entities(),
+        "physical curve exact receipt must replay through a document fork");
+    const auto& edited = after.entities().at(arc.id);
+    const auto& receipt = edited.extensions.at("constraint_authoring").at("last_length_entry");
+    require(receipt.at("version") == 2 && receipt.at("original_expression") == "6 m",
+        "direct curve resize must retain a physical, exact-input receipt");
+    require(Document::create({edited}).snapshot().entities().at(arc.id) == edited,
+        "imported physical receipt without originating history must validate");
+    auto forged = edited;
+    forged.extensions["constraint_authoring"]["last_length_entry"]["baseline"]["end"][0] = 6;
+    require_error([&] { (void)Document::create({forged}); }, DocumentErrorCode::invalid_entity,
+        "restoration must reject a receipt baseline that differs from its wall");
+    forged = edited;
+    forged.properties["baseline"]["end"][0] = 6;
+    forged.extensions["constraint_authoring"]["last_length_entry"]["baseline"]["end"][0] = 6;
+    require_error([&] { (void)Document::create({forged}); }, DocumentErrorCode::invalid_entity,
+        "matching wall and receipt baseline cannot substitute chord for physical length");
+    auto future = edited;
+    future.extensions["constraint_authoring"]["last_length_entry"]["version"] = 99;
+    require(Document::create({future}).snapshot().entities().at(arc.id) == future,
+        "future optional receipt metadata must remain preserved and opaque");
+    document.undo(document.revision());
+    require(document.snapshot().entities() == before.entities(), "physical curve undo differs");
+    document.redo(document.revision());
+    require(document.snapshot().entities() == after.entities(), "physical curve redo differs");
+}
+
 int main() {
     sketch::testing::noninteractive_errors();
     try {
@@ -1792,6 +1857,7 @@ int main() {
         test_session_read_only_latch_survives_navigation_and_fork();
         test_typed_command_codec_round_trips_and_rejects_tampering();
         test_curved_wall_proof_codec_and_replay();
+        test_physical_curve_input_proof_codec_and_restore();
         test_direct_constraint_topology_admission();
     } catch (const std::exception& error) {
         std::cerr << "document_tests: unexpected exception: " << error.what() << '\n';

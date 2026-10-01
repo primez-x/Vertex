@@ -171,8 +171,8 @@ void curved_wall_workspace_entrypoints() {
         QTimer::singleShot(0, &window, [&] {
             auto* dialog = dynamic_cast<ConstraintDialog*>(QApplication::activeModalWidget());
             require(dialog, "curved constraint action did not open editor");
-            require(combo(*dialog, "constraintOperation").findData(0) == -1,
-                "curved wall must not offer the straight-wall resize operation");
+            require(combo(*dialog, "constraintOperation").itemText(combo(*dialog, "constraintOperation").findData(0)) == "Change curve length",
+                "curved wall must offer a clearly named direct physical length operation");
             select_relation(*dialog, ConstraintRelationKind::fixed_length);
             require(combo(*dialog, "constraintRelation").currentText() == "Endpoint distance",
                 "curved relationship length must explain its endpoint-distance meaning");
@@ -254,6 +254,8 @@ Entity boundary(std::string id, double x = 0, double tilt = 1) {
         {"da", "d", "a", {{x, 4}, {x, 0}, 0}}}});
 }
 void select_relation(ConstraintDialog& dialog, ConstraintRelationKind kind) {
+    auto& operation = combo(dialog, "constraintOperation");
+    if (operation.currentData().toInt() == 0) operation.setCurrentIndex(operation.findData(1));
     auto& field = combo(dialog, "constraintRelation");
     field.setCurrentIndex(field.findData(static_cast<int>(kind)));
 }
@@ -371,6 +373,144 @@ Segment stored_wall_baseline(const Entity& value) {
             {line.at("end")[0].get<double>(), line.at("end")[1].get<double>()},
             line.at("sweep_radians").get<double>()};
 }
+
+void direct_curve_length_resize_workflow() {
+    for (const bool end_anchor : {false, true}) {
+        auto document = Document::create({physical_curve_wall()});
+        const auto original = document.snapshot();
+        const auto old_curve = stored_wall_baseline(original.entities().at("wall-a"));
+        ConstraintDialog dialog(original, "wall-a", true);
+        require(combo(dialog, "constraintOperation").currentData().toInt() == 0 &&
+                combo(dialog, "constraintOperation").currentText() == "Change curve length",
+                "curved wall must default to the direct physical length operation");
+        require_near(parse_quantity(dialog.findChild<QLineEdit*>("constraintLength")->text().toStdString()).metres, 5);
+        combo(dialog, "constraintAnchor").setCurrentIndex(end_anchor ? 1 : 0);
+        dialog.setLengthExpression("6 m");
+        require(dialog.previewEdit(), "direct curve length must preview a changed physical target");
+        require(document.snapshot().entities() == original.entities(), "direct curve length preview mutated source");
+        capture(dialog, end_anchor ? "direct-curve-end-anchor" : "direct-curve-start-anchor");
+        require(dialog.submit() && dialog.acceptedPreview(), "direct curve length Apply must return accepted intent");
+        (void)apply_constraint_authoring(document, *dialog.acceptedPreview());
+        const auto resized = document.snapshot();
+        const auto& wall_entity = resized.entities().at("wall-a");
+        const auto curve = stored_wall_baseline(wall_entity);
+        require_near(segment_length(curve), 6);
+        require(curve.sweep_radians == old_curve.sweep_radians && curve.end.x > curve.start.x,
+                "direct curve length must preserve signed sweep and direction");
+        require_near(curve.end.y - curve.start.y, old_curve.end.y - old_curve.start.y);
+        require_near(end_anchor ? curve.end.x : curve.start.x, end_anchor ? old_curve.end.x : old_curve.start.x);
+        require_near(end_anchor ? curve.end.y : curve.start.y, end_anchor ? old_curve.end.y : old_curve.start.y);
+        const auto& receipt = wall_entity.extensions.at("constraint_authoring").at("last_length_entry");
+        require(receipt.size() == 5 && receipt.at("version") == 2 && receipt.at("original_expression") == "6 m" &&
+                receipt.at("entered_unit") == "m" && receipt.at("baseline") == wall_entity.properties.at("baseline") &&
+                receipt.at("exact_metres").at("numerator") == 6 && receipt.at("exact_metres").at("denominator") == 1,
+                "direct curve length must preserve the entered physical quantity exactly");
+        require(resized.entities().size() == original.entities().size(),
+                "direct curve length must not silently add a persistent length constraint");
+        ConstraintDialog repeat(resized, "wall-a", true);
+        require_near(parse_quantity(repeat.findChild<QLineEdit*>("constraintLength")->text().toStdString()).metres, 6);
+        combo(repeat, "constraintAnchor").setCurrentIndex(end_anchor ? 1 : 0);
+        repeat.setLengthExpression("7 m");
+        require(repeat.previewEdit() && repeat.submit(), "direct physical curve length must remain editable without adding a lock");
+        (void)apply_constraint_authoring(document, *repeat.acceptedPreview());
+        const auto repeated = document.snapshot();
+        const auto repeated_curve = stored_wall_baseline(repeated.entities().at("wall-a"));
+        require_near(segment_length(repeated_curve), 7);
+        require(repeated_curve.sweep_radians == old_curve.sweep_radians,
+                "repeated direct curve edit must preserve its signed sweep");
+        require_near(end_anchor ? repeated_curve.end.x : repeated_curve.start.x, end_anchor ? old_curve.end.x : old_curve.start.x);
+        require_near(end_anchor ? repeated_curve.end.y : repeated_curve.start.y, end_anchor ? old_curve.end.y : old_curve.start.y);
+        require(repeated.entities().size() == original.entities().size() &&
+                repeated.entities().at("wall-a").extensions.at("constraint_authoring").at("last_length_entry").at("original_expression") == "7 m",
+                "repeated direct curve edit must update exact entry without creating a constraint");
+        document.undo(document.revision());
+        require(document.snapshot().entities() == resized.entities(), "repeated direct curve edit must undo exactly");
+        document.undo(document.revision());
+        require(document.snapshot().entities() == original.entities(), "direct curve edit must undo to exact source");
+    }
+
+    auto unlocked = Document::create({physical_curve_wall()});
+    const auto before_cancel = unlocked.snapshot();
+    ConstraintDialog cancel(before_cancel, "wall-a", true); cancel.setLengthExpression("6 m");
+    require(cancel.previewEdit(), "direct physical curve edit must preview before cancel");
+    cancel.findChild<QDialogButtonBox*>()->button(QDialogButtonBox::Cancel)->click();
+    require(!cancel.acceptedPreview() && unlocked.snapshot().entities() == before_cancel.entities(),
+            "Cancel must discard direct physical curve edit");
+    PersistentConstraint lock{"physical-lock", ConstraintRelationKind::fixed_arc_length,
+        {{"wall-a", WallEndpointRole::start}, {"wall-a", WallEndpointRole::end}}, parse_quantity("5 m")};
+    auto locked = Document::create({physical_curve_wall(), encode_constraint_entity(lock)});
+    const auto locked_source = locked.snapshot();
+    ConstraintDialog conflict(locked_source, "wall-a", true); conflict.setLengthExpression("6 m");
+    require(!conflict.previewEdit() && !conflict.submit() && !conflict.lastError().isEmpty() &&
+            locked.snapshot().entities() == locked_source.entities(),
+            "direct curve edit must explain and preserve an incompatible existing physical length lock");
+    capture(conflict, "direct-curve-locked-conflict");
+}
+
+void direct_curve_length_connected_boundary_and_host() {
+    auto region = boundary("region", 4, 0); region.properties["name"] = "Joined boundary";
+    const PersistentConstraint join{"curve-join", ConstraintRelationKind::coincident,
+        {{"wall-a", WallEndpointRole::end}, {"region", WallEndpointRole::start, "ab", "a"}}};
+    const Entity opening{"curve-opening", "opening", {{"wall_id", "wall-a"}, {"offset_m", 4.7},
+        {"width_m", 0.2}, {"sill_m", 0.0}, {"height_m", 2.0}}, false, nlohmann::json::object()};
+    auto document = Document::create({physical_curve_wall(), region, opening, encode_constraint_entity(join)});
+    const auto original = document.snapshot();
+    ConstraintDialog frozen(original, "wall-a", true); frozen.setLengthExpression("6 m");
+    frozen.findChild<QCheckBox*>("constraintMoveConnected")->setChecked(false);
+    require(!frozen.previewEdit() && !frozen.submit() && !frozen.lastError().isEmpty() &&
+            document.snapshot().entities() == original.entities(),
+            "freezing a joined boundary must reject incompatible direct curve length");
+    ConstraintDialog move(original, "wall-a", true); move.setLengthExpression("6 m");
+    require(move.previewEdit() && move.submit(), "direct physical curve length must move its explicitly joined boundary");
+    require(move.acceptedPreview()->changed_boundaries().size() == 1,
+            "direct physical length preview omitted its moved boundary neighbor");
+    capture(move, "direct-curve-connected-boundary");
+    (void)apply_constraint_authoring(document, *move.acceptedPreview());
+    const auto changed = document.snapshot();
+    const auto curve = stored_wall_baseline(changed.entities().at("wall-a"));
+    require_near(segment_length(curve), 6);
+    const auto moved_boundary = decode_identified_boundary_entity(changed.entities().at("region"));
+    require_near(moved_boundary.segments.front().segment.start.x, curve.end.x);
+    require_near(moved_boundary.segments.front().segment.start.y, curve.end.y);
+    require(changed.entities().at("curve-opening") == opening && changed.entities().at("curve-join") == original.entities().at("curve-join") &&
+            changed.entities().size() == original.entities().size(),
+            "direct curve edit must preserve physical opening offsets and existing relation without adding a lock");
+    document.undo(document.revision());
+    require(document.snapshot().entities() == original.entities(), "direct curve edit with boundary and host must undo atomically");
+}
+
+void direct_curve_length_workspace_entrypoints() {
+    for (const auto workspace : {Workspace::measurement, Workspace::architectural}) {
+        MainWindow window;
+        const auto id = window.createCurvedWallFromConstruction({0, 0}, {4, 0}, "arc_length", "5 m");
+        require(!id.isEmpty(), "direct curve workspace fixture failed");
+        window.setWorkspace(workspace);
+        require(window.selectEntity(id), "direct curve workspace selection failed");
+        const auto original = window.document().snapshot();
+        QTimer::singleShot(0, &window, [&] {
+            auto* dialog = dynamic_cast<ConstraintDialog*>(QApplication::activeModalWidget());
+            require(dialog && combo(*dialog, "constraintOperation").currentData().toInt() == 0 &&
+                    combo(*dialog, "constraintOperation").currentText() == "Change curve length",
+                    "both workspaces must open the actual direct curve operation");
+            require_near(parse_quantity(dialog->findChild<QLineEdit*>("constraintLength")->text().toStdString()).metres, 5);
+            dialog->setLengthExpression("6 m");
+            if (!dialog->previewEdit()) throw std::runtime_error(dialog->lastError().toStdString());
+            capture(*dialog, workspace == Workspace::measurement ? "direct-curve-measurement-workspace"
+                                                                 : "direct-curve-architectural-workspace");
+            require(dialog->submit(), "workspace direct curve length Apply failed");
+        });
+        window.showConstraintEditor();
+        const auto resized = window.document().snapshot();
+        require(resized.revision() == original.revision() + 1 && resized.entities().size() == original.entities().size(),
+                "workspace direct curve edit must record one change without a persistent lock");
+        const auto curve = stored_wall_baseline(resized.entities().at(id.toStdString()));
+        require_near(segment_length(curve), 6);
+        require(curve.sweep_radians == stored_wall_baseline(original.entities().at(id.toStdString())).sweep_radians,
+                "workspace direct physical curve edit lost its sweep");
+        require(window.undoCommand() && window.document().snapshot().entities() == original.entities(),
+                "workspace direct curve length must undo exactly");
+    }
+}
 void physical_curve_length_wall_workflow() {
     const auto curve_length = ConstraintRelationKind::fixed_arc_length;
     for (const bool end_anchor : {false, true}) {
@@ -380,8 +520,8 @@ void physical_curve_length_wall_workflow() {
         ConstraintDialog add(original, "wall-a", true);
         require(combo(add, "constraintRelation").findText("Curve length") >= 0,
                 "curved owner must expose the physical Curve length relationship");
-        require(combo(add, "constraintOperation").findData(0) < 0,
-                "physical curve length must not expose straight wall resize");
+        require(combo(add, "constraintOperation").itemText(combo(add, "constraintOperation").findData(0)) == "Change curve length",
+                "physical curve length must retain the separate direct curve operation");
         select_relation(add, curve_length);
         auto* length = add.findChild<QLineEdit*>("constraintLength");
         require(length && parse_quantity(length->text().toStdString()).metres > 4.9,
@@ -798,6 +938,9 @@ int main(int argc, char** argv) {
     QFontDatabase::addApplicationFont(QStringLiteral(":/fonts/Inter.ttf"));
     app.setFont(QFont(QStringLiteral("Inter"), 10));
     try {
+        direct_curve_length_resize_workflow();
+        direct_curve_length_connected_boundary_and_host();
+        direct_curve_length_workspace_entrypoints();
         physical_curve_length_wall_workflow();
         physical_curve_length_boundary_workflow_and_invalid_bindings();
         resize_preview_anchor_and_invalidation();

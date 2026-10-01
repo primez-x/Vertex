@@ -9,6 +9,10 @@ namespace sketch {
 [[nodiscard]] nlohmann::json encode_constraint_wall_edit(const ConstraintWallGeometryEdit& edit);
 [[nodiscard]] ConstraintWallGeometryEdit decode_constraint_wall_edit(const nlohmann::json& value);
 void rebase_wall_length_receipt(Entity& wall, const Segment& transformed_baseline);
+// Independently checks understood section v1 receipts: straight v1 and
+// physical curved v2. Missing/future optional versions remain opaque on open;
+// editing or rebasing unsupported metadata still refuses without loss.
+void validate_wall_length_input(const Entity& wall);
 // Checks active curve construction and any archived fixed-sweep derivation.
 void validate_wall_curve_input(const Entity& wall);
 // Preserve exact source input during endpoint deformation; rigid transforms

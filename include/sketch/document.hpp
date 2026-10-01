@@ -131,6 +131,7 @@ struct ConstraintWallGeometryEdit {
     std::optional<Quantity> length_entry;
     // Version one is the historical straight edit. Version two preserves
     // an existing signed curve sweep during endpoint-coordinate editing.
+    // Version three records a physical curve-length entry at that fixed sweep.
     std::uint64_t version{1};
 };
 
@@ -144,7 +145,8 @@ struct ApplyBoundaryConstraintChanges {
     std::string message;
     // Mixed straight wall/boundary edits use envelope version 2; any
     // version-two curved wall proof requires envelope version 3. Straight
-    // wall-only edits use version 4. Boundary-only stays version 1.
+    // wall-only edits use version 4. A version-three physical curve-length
+    // proof requires envelope version 5. Boundary-only stays version 1.
     std::vector<ConstraintWallGeometryEdit> wall_edits;
 };
 

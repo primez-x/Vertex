@@ -255,10 +255,24 @@ void test_nested_metadata_and_receipt_validation() {
     for (const auto& receipt : invalid_receipts) {
         auto malformed = original;
         malformed.extensions["constraint_authoring"]["last_length_entry"] = receipt;
-        auto rejected_document = Document::create({malformed});
-        const auto rejected = preview_constraint_authoring(rejected_document.snapshot(), intent);
-        require(!rejected.accepted(), "malformed or inconsistent receipt was silently overwritten");
-        require_rejected_unchanged(rejected_document, rejected, "invalid receipt Apply was accepted");
+        bool creation_rejected=false;
+        try { (void)Document::create({malformed}); }
+        catch (const DocumentError& error) {
+            creation_rejected=error.code()==DocumentErrorCode::invalid_entity &&
+                std::string_view(error.what()).find("Wall length receipt")!=std::string_view::npos;
+        }
+        require(creation_rejected,"known malformed receipt bypassed independent document admission");
+        auto admitted=Document::create({original});
+        admitted.mark_saved(admitted.revision());
+        const auto before=admitted.snapshot();
+        bool edit_rejected=false;
+        try { admitted.apply(ApplyEntityChanges{admitted.revision(),{EntityChange::upsert(malformed)},{},
+            "Forge a known receipt"}); }
+        catch (const DocumentError& error) { edit_rejected=error.code()==DocumentErrorCode::invalid_entity; }
+        require(edit_rejected && admitted.snapshot().entities()==before.entities() &&
+            admitted.revision()==before.revision() && admitted.snapshot().history().size()==before.history().size() &&
+            admitted.snapshot().saved_revision_optional()==before.saved_revision_optional(),
+            "known malformed receipt edit was accepted or mutated admitted state");
     }
 
     ConstraintAuthoringIntent straighten;
@@ -1749,6 +1763,177 @@ void test_physical_arc_length_conditioning_at_near_full_turn_and_translated_orig
     require_rejected_unchanged(document,rejected,"unrepresentable physical target Apply accepted");
 }
 
+void test_direct_curved_wall_physical_resize() {
+    for (const auto sweep : {0.6,-0.6,4.0,-4.0}) for (const auto anchor : {WallResizeAnchor::start,WallResizeAnchor::end}) {
+        const auto chord=7*2*std::sin(std::abs(sweep)/2)/std::abs(sweep);
+        auto owner=wall("arc",{2,3},{2+chord,3},sweep);
+        const auto angle=angle_from_radians(sweep);
+        owner.extensions["curve_input"]={{"version",2},{"construction","arc_length"},{"measure","7 m"},
+            {"normalized_measure","7 m"},{"measure_value",7},{"clockwise",sweep<0},
+            {"start",{2,3}},{"end",{2+chord,3}},{"radians",sweep},{"sweep",angle.original_expression},
+            {"normalized_sweep",angle.normalized_expression},{"vendor","source retained"}};
+        const auto original_input=owner.extensions.at("curve_input");
+        const auto moved_role=anchor==WallResizeAnchor::start ? WallEndpointRole::end : WallEndpointRole::start;
+        const auto neighbor_role=anchor==WallResizeAnchor::start ? WallEndpointRole::start : WallEndpointRole::end;
+        auto neighbor=anchor==WallResizeAnchor::start ? wall("neighbor",{2+chord,3},{5+chord,3},0.2) :
+            wall("neighbor",{-1,3},{2,3},0.2);
+        const auto join=encode_constraint_entity(relation("join",ConstraintRelationKind::coincident,
+            {endpoint("arc",moved_role),endpoint("neighbor",neighbor_role)}));
+        auto document=Document::create({owner,neighbor,join,opening("door","arc",0.3,0.5)});
+        const auto before=document.snapshot();
+        ConstraintAuthoringIntent intent;
+        intent.wall_resize=WallResizeIntent{"arc",parse_quantity("5 m"),anchor,true};
+        const auto preview=preview_constraint_authoring(before,intent);
+        require_accepted(preview,"direct curved-wall physical resize must accept representable target");
+        require(document.snapshot().entities()==before.entities() && document.revision()==before.revision(),
+            "direct curved resize preview mutated source");
+        const auto proposed=baseline(preview.candidate_entities().at("arc"));
+        require_near(segment_length(proposed),5,1e-6,"direct curved-wall resize measured chord rather than physical length");
+        require(proposed.sweep_radians==sweep && proposed.start.y==3 && proposed.end.y==3,
+            "direct curved resize changed signed sweep or chord direction");
+        require(anchor==WallResizeAnchor::start ? proposed.start.x==2 : proposed.end.x==2+chord,
+            "direct curved resize changed selected exact anchor");
+        require(preview.candidate_entities().at("arc").extensions.at("curve_input_derivation").at("source_input")==original_input,
+            "direct resize lost original measured curve receipt");
+        require(preview.candidate_entities().at("door")==before.entities().at("door"),"resize rewrote hosted opening metadata");
+        const auto& receipt=preview.candidate_entities().at("arc").extensions.at("constraint_authoring").at("last_length_entry");
+        require(receipt.at("version")==2 && receipt.at("original_expression")=="5 m" &&
+            receipt.at("baseline")==preview.candidate_entities().at("arc").properties.at("baseline"),
+            "curved physical receipt does not record exact target and signed baseline");
+        validate_wall_length_input(preview.candidate_entities().at("arc"));
+        auto freeze=intent; freeze.wall_resize->move_connected_walls=false;
+        const auto conflict=preview_constraint_authoring(before,freeze);
+        require(!conflict.accepted(),"disabled connected movement silently detached resized curve");
+        require_rejected_unchanged(document,conflict,"frozen curved component Apply accepted");
+        auto arc_lock=relation("physical-lock",ConstraintRelationKind::fixed_arc_length,
+            {endpoint("arc",WallEndpointRole::start),endpoint("arc",WallEndpointRole::end)});
+        arc_lock.length=parse_quantity("7 m");
+        auto locked=Document::create({owner,encode_constraint_entity(arc_lock)});
+        const auto locked_preview=preview_constraint_authoring(locked.snapshot(),intent);
+        require(!locked_preview.accepted(),"direct curved resize bypassed fixed physical arc lock");
+        require_rejected_unchanged(locked,locked_preview,"locked physical curve Apply accepted");
+        (void)apply_constraint_authoring(document,preview);
+        const auto after=document.snapshot();
+        require(after.history().size()==before.history().size()+1,"curved resize split atomic command");
+        const auto& proof=*after.history().back().boundary_constraint_changes;
+        bool selected=false,related=false;
+        for (const auto& edit : proof.wall_edits) {
+            if (edit.wall_id=="arc") {
+                selected=edit.version==3 && edit.length_entry && edit.length_entry->original_expression=="5 m";
+                const auto encoded=encode_constraint_wall_edit(edit);
+                require(encoded.at("version")==3 && encode_constraint_wall_edit(decode_constraint_wall_edit(encoded))==encoded,
+                    "curved physical proof codec changed exact entry");
+                auto bad=encoded; bad["length_entry"]=nullptr;
+                bool rejected=false; try { (void)decode_constraint_wall_edit(bad); } catch (const std::exception&) { rejected=true; }
+                require(rejected,"physical curved proof accepted missing exact entry");
+                bad=encoded; bad["version"]=2; rejected=false;
+                try { (void)decode_constraint_wall_edit(bad); } catch (const std::exception&) { rejected=true; }
+                require(rejected,"physical curve proof downgraded to endpoint-only version");
+            } else if (edit.wall_id=="neighbor") related=edit.version==2 && !edit.length_entry;
+        }
+        require(selected && related,"selected/related curved walls used wrong proof semantics");
+        require(Document::fork(after).snapshot().entities()==after.entities(),"curved resize proof cannot replay");
+        document.undo(document.revision()); require(document.snapshot().entities()==before.entities(),"curved resize undo lost atomicity");
+        document.redo(document.revision()); require(document.snapshot().entities()==after.entities(),"curved resize redo differs");
+        auto annotated=document.snapshot().entities().at("arc");
+        auto& retained=annotated.extensions["constraint_authoring"]["last_length_entry"];
+        retained["vendor"]="retain"; retained["exact_metres"]["vendor"]=17; retained["baseline"]["vendor"]=true;
+        document.apply(ApplyEntityChanges{document.revision(),{EntityChange::upsert(annotated)},{},"Annotate exact receipt"});
+        intent.wall_resize->exact_length=parse_quantity("600 cm");
+        const auto second=preview_constraint_authoring(document.snapshot(),intent);
+        require_accepted(second,"second measured curved resize rejected");
+        (void)apply_constraint_authoring(document,second);
+        const auto resized=document.snapshot();
+        const auto& latest=resized.entities().at("arc").extensions.at("constraint_authoring").at("last_length_entry");
+        require(latest.at("version")==2 && latest.at("original_expression")=="600 cm" && latest.at("entered_unit")=="cm" &&
+            latest.at("vendor")=="retain" && latest.at("exact_metres").at("vendor")==17 && latest.at("baseline").at("vendor")==true,
+            "second curved resize lost exact entry or opaque receipt fields");
+        require(resized.entities().at("arc").extensions.at("curve_input_derivation").at("source_input")==original_input,
+            "second resize rewrote source construction archive");
+        auto forged=resized.entities().at("arc");
+        forged.extensions["constraint_authoring"]["last_length_entry"]["baseline"]["end"][0]=0;
+        bool receipt_rejected=false; try { validate_wall_length_input(forged); }
+        catch (const std::exception&) { receipt_rejected=true; }
+        require(receipt_rejected,"standalone physical receipt validation accepted stale baseline");
+        auto reflected=resized.entities().at("arc");
+        auto reflection=baseline(reflected); reflection.sweep_radians=-reflection.sweep_radians;
+        rebase_wall_length_receipt(reflected,reflection);
+        bool provenance_rejected=false; try { rebase_wall_curve_input(reflected,reflection); }
+        catch (const std::exception&) { provenance_rejected=true; }
+        require(provenance_rejected,"measured curve mirror bypassed original construction provenance");
+        reflected.properties["baseline"]=segment_json(reflection.start,reflection.end,reflection.sweep_radians);
+        bool mirror_rejected=false;
+        try { document.apply(ApplyEntityChanges{document.revision(),{EntityChange::upsert(reflected)},{},"Invalid measured mirror"}); }
+        catch (const DocumentError&) { mirror_rejected=true; }
+        require(mirror_rejected && document.snapshot().entities()==resized.entities() && document.revision()==resized.revision(),
+            "measured curve mirror changed document despite invalid provenance");
+        const PlanarTransform transform{{0,0},0.5,false,false,{10,-2}};
+        std::vector<EntityChange> transforms;
+        for (const auto* id : {"arc","neighbor"}) {
+            auto moved=resized.entities().at(id);
+            const auto transformed=transform_segment(baseline(moved),transform);
+            rebase_wall_length_receipt(moved,transformed);
+            rebase_wall_curve_input(moved,transformed);
+            moved.properties["baseline"]=segment_json(transformed.start,transformed.end,transformed.sweep_radians);
+            validate_wall_length_input(moved);
+            transforms.push_back(EntityChange::upsert(moved));
+        }
+        document.apply(ApplyEntityChanges{document.revision(),std::move(transforms),{},"Rigid curved receipt transform"});
+        require(Document::fork(document.snapshot()).snapshot().entities()==document.snapshot().entities(),
+            "rigid curved receipt transform cannot replay");
+        const auto moved_snapshot=document.snapshot();
+        const auto& moved_receipt=moved_snapshot.entities().at("arc").extensions.at("constraint_authoring").at("last_length_entry");
+        require(moved_receipt.at("original_expression")=="600 cm" && moved_receipt.at("vendor")=="retain",
+            "rigid transform lost physical receipt metadata");
+        auto invalidated=resized.entities().at("arc");
+        auto deformed=baseline(invalidated); deformed.end.x+=0.5;
+        bool rejected=false;
+        try { (void)replay_constraint_wall_edit(invalidated,{"arc",deformed,std::nullopt,2}); }
+        catch (const std::exception&) { rejected=true; }
+        require(rejected,"geometry-only edit erased opaque physical receipt data");
+        auto known=invalidated;
+        auto& known_receipt=known.extensions["constraint_authoring"]["last_length_entry"];
+        known_receipt.erase("vendor"); known_receipt["exact_metres"].erase("vendor"); known_receipt["baseline"].erase("vendor");
+        const auto cleared=replay_constraint_wall_edit(known,{"arc",deformed,std::nullopt,2});
+        require(!cleared.extensions.at("constraint_authoring").contains("last_length_entry"),
+            "geometry-only length change retained stale physical receipt");
+        auto future=resized.entities().at("arc");
+        future.extensions["constraint_authoring"]["last_length_entry"]["version"]=99;
+        const auto future_before=future;
+        validate_wall_length_input(future);
+        require(future==future_before,"restoration validator rewrote optional future receipt metadata");
+        bool future_rejected=false;
+        try { (void)replay_constraint_wall_edit(future,{"arc",baseline(future),parse_quantity("6 m"),3}); }
+        catch (const std::exception&) { future_rejected=true; }
+        require(future_rejected,"resize overwrote unsupported physical receipt metadata");
+    }
+    // A direct receipt does not introduce a new reflection restriction for a
+    // numeric curve that has no separate measured-construction provenance.
+    auto numeric=Document::create({wall("arc",{0,0},{4,0},0.6)});
+    ConstraintAuthoringIntent resize;
+    resize.wall_resize=WallResizeIntent{"arc",parse_quantity("5 m"),WallResizeAnchor::start,true};
+    const auto preview=preview_constraint_authoring(numeric.snapshot(),resize);
+    require_accepted(preview,"numeric curve direct resize rejected");
+    (void)apply_constraint_authoring(numeric,preview);
+    const auto before_mirror=numeric.snapshot();
+    auto reflected=before_mirror.entities().at("arc");
+    const auto mirrored=transform_segment(baseline(reflected),{{0,0},0,false,true,{3,2}});
+    rebase_wall_length_receipt(reflected,mirrored);
+    rebase_wall_curve_input(reflected,mirrored);
+    reflected.properties["baseline"]=segment_json(mirrored.start,mirrored.end,mirrored.sweep_radians);
+    validate_wall_length_input(reflected);
+    numeric.apply(ApplyEntityChanges{numeric.revision(),{EntityChange::upsert(reflected)},{},"Mirror numeric measured-length curve"});
+    const auto mirrored_snapshot=numeric.snapshot();
+    const auto& receipt=mirrored_snapshot.entities().at("arc").extensions.at("constraint_authoring").at("last_length_entry");
+    require(receipt.at("version")==2 && receipt.at("original_expression")=="5 m" &&
+        receipt.at("baseline").at("sweep_radians")==-0.6 &&
+        receipt.at("baseline")==reflected.properties.at("baseline"),"mirror lost exact physical receipt or reflected signed baseline");
+    require_near(segment_length(baseline(reflected)),5,1e-6,"reflection changed physical arc length");
+    require(Document::fork(mirrored_snapshot).snapshot().entities()==mirrored_snapshot.entities(),"reflected receipt cannot replay");
+    numeric.undo(numeric.revision()); require(numeric.snapshot().entities()==before_mirror.entities(),"mirror undo lost receipt");
+    numeric.redo(numeric.revision()); require(numeric.snapshot().entities()==mirrored_snapshot.entities(),"mirror redo differs");
+}
+
 void test_curved_endpoint_relations_and_typed_propagation() {
     for (const auto kind : {ConstraintRelationKind::horizontal, ConstraintRelationKind::vertical,
             ConstraintRelationKind::coincident, ConstraintRelationKind::fixed_length,
@@ -1991,6 +2176,7 @@ int main() {
         test_straight_wall_only_authoring_retains_guarded_typed_intent();
         test_physical_arc_length_authoring_and_connected_editing();
         test_physical_arc_length_conditioning_at_near_full_turn_and_translated_origin();
+        test_direct_curved_wall_physical_resize();
         test_curved_endpoint_relations_and_typed_propagation();
         test_boundary_vertex_move_propagates_explicit_relations();
         test_boundary_resize_canonical_shape_and_related_owners();

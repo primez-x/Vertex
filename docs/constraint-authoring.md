@@ -146,12 +146,18 @@ The desktop dialog binds named endpoints of analytical walls and stable
 endpoints of identified measurement and room boundaries, including mixed
 components. Previews render true arcs and show physical edge lengths; the
 relationship field explicitly labels a fixed point-distance lock as Endpoint
-distance. The straight-wall resize operation is not offered for curved walls.
+distance. Curved walls expose **Change curve length** as the direct resize
+operation, prefilled with their physical arc length. It needs no added lock.
+Keep start/end fixed chooses the anchor, and Allow connected objects to move
+controls related geometry. The signed sweep and chord direction remain fixed;
+an incompatible lock, frozen connection or host placement rejects atomically.
 
 Curved wall geometry proofs use explicit wall-edit version 2 inside command
 envelope version 3. Historical unversioned straight proofs and envelopes 1/2
 retain their old rules. Version 3 permits curved wall-only geometry transactions;
-version 4 permits straight wall-only transactions. Both use the shared topology
+version 4 permits straight wall-only transactions. Direct physical curve-length
+entries use wall-edit version 3 inside command version 5, with a mandatory exact
+entry and a version-2 physical length receipt. All use the shared topology
 admission during preview, apply and retained-history replay.
 Original curve construction input is retained as derivation evidence when its
 measured length or height no longer describes the fixed-sweep endpoint result.
@@ -195,8 +201,9 @@ authoritative. A subsequent service edit that moves a wall removes its previous
 receipt unless it supplies a new explicit resize entry. Unsupported overlapping
 receipt metadata rejects the operation instead of being overwritten.
 
-Recognized v1 receipts are decoded before an edit: the original expression,
-entered unit, normalized exact rational, and recorded straight baseline must
+Recognized v1 straight receipts and v2 physical curve receipts are validated
+on restoration and before an edit: the original expression,
+entered unit, normalized exact rational, and recorded baseline must
 agree with each other and the current wall. Unknown members of a supported
 receipt, its rational, and its baseline are retained when an explicit resize
 updates recognized fields. A relation edit that would remove a receipt with

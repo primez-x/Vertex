@@ -708,7 +708,6 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(
         if (intent.wall_resize.has_value()) {
             const auto& resize = *intent.wall_resize;
             const auto old = old_baselines.at(resize.wall_id);
-            if (old.sweep_radians!=0) invalid("Wall length resize requires a straight wall; endpoint/chord relations support curves");
             const long double dx = static_cast<long double>(old.end.x) - old.start.x;
             const long double dy = static_cast<long double>(old.end.y) - old.start.y;
             const long double old_length = std::hypot(dx, dy);
@@ -718,7 +717,15 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(
             const long double ux = dx / old_length;
             const long double uy = dy / old_length;
             Segment target = old;
-            const auto length = static_cast<long double>(resize.exact_length.metres);
+            long double length=resize.exact_length.metres;
+            if (old.sweep_radians!=0) {
+                PersistentConstraint physical;
+                physical.id="resize-physical-arc";
+                physical.relation=ConstraintRelationKind::fixed_arc_length;
+                physical.bindings={{resize.wall_id,WallEndpointRole::start},{resize.wall_id,WallEndpointRole::end}};
+                physical.length=resize.exact_length;
+                length=constraint_arc_chord_target(physical,candidate);
+            }
             if (resize.anchored_endpoint == WallResizeAnchor::start) {
                 target.end = {static_cast<double>(static_cast<long double>(old.start.x) + ux * length),
                               static_cast<double>(static_cast<long double>(old.start.y) + uy * length)};
@@ -730,6 +737,8 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(
                 !std::isfinite(target.end.x) || !std::isfinite(target.end.y)) {
                 invalid("Requested wall length exceeds the supported coordinate range");
             }
+            if (std::abs(segment_length(target)-resize.exact_length.metres)>constraint_linear_tolerance_metres)
+                invalid("Requested physical wall length cannot be represented at this coordinate scale");
             add_fixed({resize.wall_id, WallEndpointRole::start}, target.start);
             add_fixed({resize.wall_id, WallEndpointRole::end}, target.end);
             const auto resize_component = connected_from(resize.wall_id);
@@ -841,7 +850,7 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(
                 intent.wall_resize->wall_id == wall_id;
             wall_entity = replay_constraint_wall_edit(wall_entity, {wall_id, proposed,
                 resized ? std::optional<Quantity>{intent.wall_resize->exact_length} : std::nullopt,
-                old.sweep_radians==0 ? 1ULL : 2ULL});
+                old.sweep_radians==0 ? 1ULL : resized ? 3ULL : 2ULL});
             validate_constraint_wall_host(wall_id, candidate);
             result.changed_walls_.push_back({wall_id, old, proposed});
         }
@@ -1174,7 +1183,8 @@ Revision apply_constraint_authoring(Document& document,
             command.wall_edits.push_back({wall.wall_id, wall.proposed_baseline,
                 resize && resize->wall_id == wall.wall_id
                     ? std::optional<Quantity>{resize->exact_length} : std::nullopt,
-                wall.old_baseline.sweep_radians==0 ? 1ULL : 2ULL});
+                wall.old_baseline.sweep_radians==0 ? 1ULL :
+                    resize && resize->wall_id==wall.wall_id ? 3ULL : 2ULL});
         }
         const auto verified = Document::preview_command(current, Command{command});
         if (verified.entities() != recomputed.candidate_entities_ ||

@@ -462,7 +462,9 @@ Start with the workspace, draw a room, close it with the mouse, drag-select it, 
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U080 — Draw and edit a curved architectural wall**
+  - Steps: Draw a curved wall and note its curved length. Select it, open **Dimensions and constraints**, and choose **Change curve length**. Check that the prefilled length matches the arc. Choose **Keep start fixed**, enter a new length, Preview and Apply. Repeat with **Keep end fixed**. Try each connected-movement option on a joined wall or area; cancel an edit once before applying.
   - Expected: Its curvature and thickness remain consistent in plan and 3D.
+  - Also check: The chosen endpoint stays fixed and the final arc length matches your entry. No permanent length lock is added unless you explicitly add one. Existing locks or frozen connections that make the edit impossible produce a conflict without changing the project. Undo, redo, save and reopen; verify the resulting wall, hosted openings and entered length.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
