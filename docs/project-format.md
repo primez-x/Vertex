@@ -24,6 +24,13 @@ preserve it. Undo/redo and project history retain the value alongside geometry.
 
 ## Symbol instance transforms
 
+Area presentation overrides optionally carry `paper_line_width_mm` (finite,
+0.05–10.0) and `hatch_scale` (finite, 0.1–10.0). Both fields are optional within
+annotation state version 3: legacy records retain their existing defaults and
+encode without the fields when absent. These values affect presentation only;
+they do not change analytical geometry or area calculation facts. Desktop area
+appearance edits preserve unrelated raw annotation records and metadata.
+
 Annotation state version 3 adds `width_scale`, `depth_scale`, `flip_horizontal`
 and `flip_vertical` to each saved symbol. Dimensions equal the saved definition's
 physical width/depth multiplied by `placement.scale` and the corresponding axis

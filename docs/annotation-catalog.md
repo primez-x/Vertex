@@ -180,10 +180,18 @@ Stored stroke/fill colors, fill patterns, paper-independent text height,
 bold/italic emphasis, and symbol stroke width now flow into the same renderer
 for interactive views and fitted sheet/export scenes.
 
+Area overrides additionally support optional paper outline widths (0.05–10 mm)
+and hatch scales (0.1–10). Old records without these fields retain their defaults.
+The desktop **Area appearance…** editor changes outline/fill colors, pattern,
+width, scale and visibility, or removes the selected override to restore the
+classification preset. It applies one revision-guarded, undoable command and
+preserves sibling records and opaque metadata. Calculations still use the
+original analytical boundary and declarations.
+
 This is a bounded semantic and authoring slice for APX-ANNO-001, APX-ANNO-003
 and APX-SYM-001, **not completed parity**. The supplied detailed assets are now
-the primary desktop library; full human artwork review, visibility/override
-inspectors, and production print qualification remain open.
+the primary desktop library; full human artwork review, broader object/view
+appearance inspectors, and production print qualification remain open.
 Headless tests check every catalog preview, instance edits and JSON roundtrip,
 typed Document admission, save/reopen, category/query filtering, placement mathematics,
 deterministic IDs, physical-footprint bounds, independent resize behavior, and

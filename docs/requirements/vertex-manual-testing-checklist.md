@@ -330,7 +330,9 @@ Start with the workspace, draw a room, close it with the mouse, drag-select it, 
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U056 — Drag a selection rectangle**
+  - Steps: Place furniture and labels inside two rooms. Choose Areas in the selection filter beside the bottom-right canvas controls. Ctrl-drag a window around everything, then repeat with Symbols and Text labels. Return to All items. Try Ctrl-click, double-click and right-click under each filter.
   - Expected: Ctrl-drag shows a visible marquee and objects in the selected region are selected on release.
+    Only the chosen item kinds become new selections. Filtering leaves every item visible and does not change totals. Clicking an excluded item does not start a drawing. Existing selections retain their transform controls.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
@@ -538,17 +540,20 @@ Start with the workspace, draw a room, close it with the mouse, drag-select it, 
 ## Area colors, classifications and calculations
 
 - [ ] **U091 — Change an area's fill color**
-  - Expected: The selected area changes color on screen and in exported output.
+  - Steps: Select a closed room, open its quick properties, then Area attributes > Area appearance. Choose a fill color and Solid, then Apply. Save/reopen and export a PDF. Undo and redo the color edit.
+  - Expected: The selected area changes color on screen and in exported output. Its dimensions, classification and appraisal totals stay unchanged; reopening and history retain the appearance.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U092 — Apply a hatch or pattern to an area**
-  - Expected: The pattern and scale are readable and remain after reopening.
+  - Steps: In Area appearance, choose Hatch and change Hatch scale. Apply, save/reopen and export. Uncheck Show area, Apply, then select the area in the layer navigator and restore visibility. Try Reset to defaults followed by Apply, then Undo.
+  - Expected: The pattern and scale remain after reopening and appear in output. Hiding affects presentation only. Reset restores the classification's default appearance without changing geometry or calculations, and Undo restores the custom appearance.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U093 — Change an area's outline style**
-  - Expected: Color and line treatment apply to the intended boundary.
+  - Steps: In Area appearance, change Outline color and Line width. Apply, zoom in/out and export a PDF. Apply without changing any fields, then cancel a separate edit.
+  - Expected: Color and paper line width apply only to the intended boundary and stay consistent while zooming and in output. Unchanged Apply and Cancel add no edit; Undo/Redo preserve the accepted style.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 

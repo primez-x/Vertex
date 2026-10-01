@@ -5,6 +5,7 @@
 #include "sketch/boundary_dimension.hpp"
 #include "sketch/boundary_entity.hpp"
 #include "sketch/appraisal_document.hpp"
+#include "sketch/annotation_entity_codec.hpp"
 #include "sketch/desktop/boundary_input_dialog.hpp"
 #include "../src/desktop/plan_canvas.hpp"
 #include "support/noninteractive_errors.hpp"
@@ -37,9 +38,12 @@
 #include <QRegularExpression>
 #include <QMouseEvent>
 #include <QElapsedTimer>
+#include <QDoubleSpinBox>
+#include <QCheckBox>
 
 #include <algorithm>
 #include <cmath>
+#include <exception>
 #include <filesystem>
 #include <functional>
 #include <iostream>
@@ -1129,6 +1133,327 @@ void appraisal_plan_area_labels_workflow() {
             "unqualified plans retain their names and withhold numerical Appraisal assertions");
 }
 
+void selection_filter_dropdown_workflow() {
+    using namespace sketch::desktop;
+    MainWindow window;
+    const auto area = window.createBoundary(square(0, 0, 3.048));
+    require(!area.isEmpty() && window.selectEntity(area), "dimension filter fixture needs a closed boundary");
+    if (sketch::inspect_boundary_entity_version(window.document().snapshot().entities().at(area.toStdString())).format ==
+            sketch::BoundaryEntityFormat::anonymous_legacy)
+        require(window.upgradeSelectedBoundaryIdentities(), "measured dimensions need stable boundary identities");
+    const auto boundary = sketch::decode_identified_boundary_entity(
+        window.document().snapshot().entities().at(area.toStdString()));
+    const auto length_dimension = window.createLengthDimension(area,
+        QString::fromStdString(boundary.segments.front().segment_id), {1.5, -2});
+    const auto area_dimension = window.createAreaDimension(area, {-2, 1.5});
+    require(!length_dimension.isEmpty() && !area_dimension.isEmpty(), "persist both length and label-only area dimensions");
+    const auto symbol = window.createAnnotationSymbol("svg-v2-04_living-sectional-left", {5, 5});
+    require(!area.isEmpty() && !symbol.isEmpty() && window.selectEntity(area, true),
+            "selection filter fixture must retain a mixed area and furniture selection");
+    auto* filter = window.findChild<QComboBox*>(QStringLiteral("selectionFilter"));
+    auto* measurement = dynamic_cast<PlanCanvas*>(window.findChild<QWidget*>(QStringLiteral("measurementPlanCanvas")));
+    auto* architectural = dynamic_cast<PlanCanvas*>(window.findChild<QWidget*>(QStringLiteral("architecturalPlanCanvas")));
+    require(filter && measurement && architectural, "selection filter must be a real dropdown shared by both workspaces");
+    const auto before = window.document().snapshot();
+    const auto selected = window.selectedEntityIds();
+    require(selected.contains(area) && selected.contains(symbol), "capture both existing selected owners");
+    for (const auto value : {CanvasSelectionFilter::all, CanvasSelectionFilter::areas,
+             CanvasSelectionFilter::objects, CanvasSelectionFilter::dimensions, CanvasSelectionFilter::labels,
+             CanvasSelectionFilter::symbols, CanvasSelectionFilter::references}) {
+        const auto index = filter->findData(static_cast<int>(value));
+        require(index >= 0, "selection dropdown must expose every supported category");
+        filter->setCurrentIndex(index);
+        const auto after = window.document().snapshot();
+        require(measurement->selectionFilter() == value && architectural->selectionFilter() == value,
+                "dropdown changes must reach both real workspace canvases");
+        require(after.revision() == before.revision() && after.entities() == before.entities() &&
+                    after.history().size() == before.history().size() && window.selectedEntityIds() == selected,
+                "selection filters must preserve the document and existing mixed selection");
+    }
+    filter->setCurrentIndex(filter->findData(static_cast<int>(CanvasSelectionFilter::dimensions)));
+    require(std::any_of(measurement->entities().begin(), measurement->entities().end(),
+                [&](const auto& entity) { return entity.id == length_dimension && entity.type == "dimension_line"; }) &&
+            std::any_of(measurement->labels().begin(), measurement->labels().end(),
+                [&](const auto& label) { return label.id == area_dimension && label.selection_type == "dimension"; }),
+            "Dimensions must include real persisted line dimensions and label-only area dimensions");
+    window.show();
+    QApplication::processEvents();
+    measurement->setOverviewMapEnabled(false);
+    measurement->fitView();
+    for (const auto& id : {length_dimension, area_dimension}) {
+        const auto label = std::find_if(measurement->labels().begin(), measurement->labels().end(),
+            [&](const auto& item) { return item.id == id; });
+        require(label != measurement->labels().end(), "measured dimension retains its real selectable label");
+        const auto point = QRectF(measurement->rect()).center() + QPointF(
+            (label->position.x - measurement->viewCenter().x) * measurement->viewScale(),
+            -(label->position.y - measurement->viewCenter().y) * measurement->viewScale());
+        QMouseEvent down(QEvent::MouseButtonPress, point, measurement->mapToGlobal(point.toPoint()),
+            Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(measurement, &down);
+        QMouseEvent up(QEvent::MouseButtonRelease, point, measurement->mapToGlobal(point.toPoint()),
+            Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+        QApplication::sendEvent(measurement, &up);
+        require(window.selectedEntityId() == id, "Dimensions filter must allow clicking each measured dimension owner");
+    }
+    require(window.document().revision() == before.revision() && window.document().snapshot().entities() == before.entities(),
+            "dimension picking must not change persisted measurements");
+}
+
+void area_appearance_workflow() {
+    using namespace sketch;
+    sketch::desktop::MainWindow window;
+    window.setMetricUnits(false);
+    const auto area = window.createBoundary(square(0, 0, 3.048));
+    require(!area.isEmpty() && window.selectEntity(area), "area appearance needs a selected closed area");
+    auto* workflow = window.findChild<QComboBox*>(QStringLiteral("calculationWorkflow"));
+    workflow->setCurrentIndex(workflow->findData(QStringLiteral("appraisal")));
+    require(window.editSelectedAppraisalFacts(declarations()), "appearance fixture qualifies 100 square feet GLA");
+    const auto symbol = window.createAnnotationSymbol("svg-v2-04_living-sectional-left", {5, 5});
+    require(!symbol.isEmpty() && window.selectEntity(area), "appearance fixture retains unrelated furniture");
+    auto* appearance = window.findChild<QPushButton*>(QStringLiteral("areaAppearanceButton"));
+    require(appearance && appearance->isEnabled(), "selected areas must expose an editable Area appearance control");
+    auto* canvas = dynamic_cast<desktop::PlanCanvas*>(window.findChild<QWidget*>(QStringLiteral("measurementPlanCanvas")));
+    require(canvas, "appearance checks use the actual retained canvas");
+    const auto initial = window.document().snapshot();
+    const auto gla = [&] { return window.findChild<QLabel*>(QStringLiteral("appraisalGlaTotal"))->text(); };
+    const auto initial_gla = gla();
+    const auto open = [&](const std::function<void(QDialog*)>& edit) {
+        require(window.selectEntity(area), "select area before editing appearance");
+        std::exception_ptr callback_failure;
+        QTimer::singleShot(0, &window, [&] {
+            try {
+                auto* dialog = qobject_cast<QDialog*>(QApplication::activeModalWidget());
+                require(dialog && dialog->objectName() == QStringLiteral("areaAppearanceDialog"), "actual appearance dialog");
+                edit(dialog);
+            } catch (...) {
+                callback_failure = std::current_exception();
+                if (auto* dialog = qobject_cast<QDialog*>(QApplication::activeModalWidget())) dialog->reject();
+            }
+        });
+        appearance->click();
+        if (callback_failure) std::rethrow_exception(callback_failure);
+    };
+    const auto buttons = [](QDialog* dialog) {
+        auto* value = dialog->findChild<QDialogButtonBox*>();
+        require(value && value->button(QDialogButtonBox::Apply), "appearance must have Apply and Cancel");
+        return value;
+    };
+    open([&](QDialog* dialog) { buttons(dialog)->button(QDialogButtonBox::Apply)->click(); });
+    require(window.document().revision() == initial.revision() &&
+                window.document().snapshot().history().size() == initial.history().size() &&
+                window.document().snapshot().entities() == initial.entities(),
+            "untouched default appearance Apply must not create an override or history entry");
+    open([&](QDialog* dialog) {
+        require(dialog->findChild<QLineEdit*>("areaOutlineColor") && dialog->findChild<QLineEdit*>("areaFillColor") &&
+                dialog->findChild<QComboBox*>("areaFillPattern") && dialog->findChild<QDoubleSpinBox*>("areaHatchScale") &&
+                dialog->findChild<QDoubleSpinBox*>("areaLineWidthMm") && dialog->findChild<QCheckBox*>("areaVisible"),
+                "area editor must provide the usable outline/fill/hatch/width/visibility controls");
+        dialog->findChild<QLineEdit*>("areaOutlineColor")->setText("#253545");
+        dialog->findChild<QLineEdit*>("areaFillColor")->setText("#A4D9B0");
+        auto* pattern = dialog->findChild<QComboBox*>("areaFillPattern");
+        pattern->setCurrentIndex(pattern->findData("solid"));
+        dialog->findChild<QDoubleSpinBox*>("areaHatchScale")->setValue(2.5);
+        dialog->findChild<QDoubleSpinBox*>("areaLineWidthMm")->setValue(0.75);
+        const auto captures = qEnvironmentVariable("VERTEX_TEST_CAPTURE_DIR");
+        if (!captures.isEmpty())
+            require(QDir().mkpath(captures) && dialog->grab().save(QDir(captures).filePath("area-appearance-dialog.png")),
+                    "retain the actual configured area appearance dialog for visual review");
+        buttons(dialog)->button(QDialogButtonBox::Apply)->click();
+    });
+    auto styled = window.document().snapshot();
+    require(styled.revision() == initial.revision() + 1 && gla() == initial_gla &&
+            styled.entities().at(area.toStdString()) == initial.entities().at(area.toStdString()),
+            "appearance is one history command and preserves geometry, appraisal facts and totals");
+    const auto provider = [&](const DocumentSnapshot& snapshot) {
+        for (const auto& [id, entity] : snapshot.entities()) {
+            if (entity.type != kAnnotationEntityType) continue;
+            for (const auto& record : entity.properties.at("state").at("overrides"))
+                if (record.at("target_kind") == "area" && record.at("target_id") == area.toStdString()) return id;
+        }
+        return std::string{};
+    };
+    const auto provider_id = provider(styled);
+    require(!provider_id.empty(), "area appearance must be persisted as a presentation override");
+    for (const auto& [id, entity] : initial.entities())
+        if (id != provider_id) require(styled.entities().at(id) == entity, "appearance must preserve unrelated source entities");
+    const auto canvas_area = [&]() -> const desktop::CanvasEntity& {
+        const auto found = std::find_if(canvas->entities().begin(), canvas->entities().end(),
+            [&](const auto& item) { return item.id == area; });
+        require(found != canvas->entities().end(), "styled area must remain in the actual canvas");
+        return *found;
+    };
+    require(canvas_area().stroke_color == QColor("#253545") && canvas_area().fill_color == QColor("#A4D9B0") &&
+            canvas_area().filled && std::abs(canvas_area().hatch_scale - 2.5) < 1e-12 &&
+            std::abs(canvas_area().output_stroke_width_mm - 0.75) < 1e-12 &&
+            !canvas_area().dark_stroke_color.isValid(), "actual canvas must retain the explicit style and paper width");
+    require(window.undoCommand() && window.document().snapshot().entities() == initial.entities() &&
+            window.redoCommand() && window.document().snapshot().entities() == styled.entities(),
+            "one-step history restores the exact area style");
+    const auto before_noop = window.document().snapshot();
+    open([&](QDialog* dialog) { buttons(dialog)->button(QDialogButtonBox::Apply)->click(); });
+    const auto after_noop = window.document().snapshot();
+    require(after_noop.revision() == before_noop.revision() &&
+                after_noop.history().size() == before_noop.history().size() &&
+                after_noop.entities() == before_noop.entities(),
+            "applying unchanged appearance must not add a history command or normalize saved data");
+    const auto before_visibility = window.document().snapshot();
+    open([&](QDialog* dialog) {
+        dialog->findChild<QCheckBox*>("areaVisible")->setChecked(false);
+        buttons(dialog)->button(QDialogButtonBox::Apply)->click();
+    });
+    auto hidden_expected = before_visibility.entities();
+    hidden_expected.at(provider_id).properties["state"]["overrides"][0]["visible"] = false;
+    require(window.document().revision() == before_visibility.revision() + 1 &&
+                window.document().snapshot().entities() == hidden_expected && gla() == initial_gla &&
+                std::none_of(canvas->entities().begin(), canvas->entities().end(),
+                    [&](const auto& item) { return item.id == area; }) &&
+                std::none_of(canvas->labels().begin(), canvas->labels().end(),
+                    [&](const auto& item) { return item.id == area; }),
+            "hiding an area must change only its presentation, remove its canvas shape/name and preserve GLA");
+    require(window.undoCommand() && window.document().snapshot().entities() == before_visibility.entities() &&
+                gla() == initial_gla && canvas_area().filled,
+            "one Undo must restore exact visible appearance and physical appraisal truth");
+    auto annotated = styled.entities().at(provider_id);
+    annotated.required = true;
+    annotated.extensions["vendor"] = "retained";
+    annotated.properties["state"]["opaque"] = "retained";
+    auto& custom = annotated.properties["state"]["overrides"][0];
+    custom["opaque"] = "retained";
+    custom["style"]["opaque"] = "retained";
+    auto unrelated = custom;
+    unrelated["target_kind"] = "object";
+    unrelated["target_id"] = symbol.toStdString();
+    annotated.properties["state"]["overrides"].push_back(unrelated);
+    window.document().apply(ApplyEntityChanges{window.document().revision(),
+        {EntityChange::upsert(annotated)}, {}, "Retain appearance metadata"});
+    require(window.selectEntity(area), "refresh area appearance after metadata seed");
+    const auto before_edit = window.document().snapshot();
+    open([&](QDialog* dialog) {
+        auto* pattern = dialog->findChild<QComboBox*>("areaFillPattern");
+        pattern->setCurrentIndex(pattern->findData("hatch"));
+        buttons(dialog)->button(QDialogButtonBox::Apply)->click();
+    });
+    auto expected = before_edit.entities();
+    expected.at(provider_id).properties["state"]["overrides"][0]["style"]["fill_pattern"] = "hatch";
+    require(window.document().revision() == before_edit.revision() + 1 &&
+            window.document().snapshot().entities() == expected && gla() == initial_gla,
+            "editing one known style field must preserve required owners, unknown keys and unrelated overrides");
+    const auto hatched = window.document().snapshot();
+    require(canvas_area().hatch_pattern == "hatch", "hatch edit must reach the retained scene");
+    QTemporaryDir directory;
+    require(window.saveProjectAs(directory.filePath("area-style.bldproj")) &&
+            window.openProject(directory.filePath("area-style.bldproj")) &&
+            window.document().snapshot().entities() == hatched.entities(), "area style survives ordinary save/reopen");
+    require(window.exportDraftPdf(directory.filePath("area-style.pdf")), "styled plan exports through ordinary PDF command");
+    QPdfDocument pdf;
+    require(pdf.load(directory.filePath("area-style.pdf")) == QPdfDocument::Error::None && pdf.pageCount() > 0,
+            "styled plan PDF reopens");
+    const auto page = pdf.render(0, QSize(1400, 1000));
+    require(!page.isNull(), "styled plan PDF renders");
+    int outline_pixels = 0;
+    int fill_pixels = 0;
+    for (int y = 0; y < page.height(); ++y) {
+        for (int x = 0; x < page.width(); ++x) {
+            const auto pixel = page.pixelColor(x, y);
+            if (std::abs(pixel.red() - 37) <= 6 && std::abs(pixel.green() - 53) <= 6 &&
+                std::abs(pixel.blue() - 69) <= 6) ++outline_pixels;
+            // Hatch rasterization varies coverage, so check the chosen
+            // #A4D9B0 hue composited onto white across nontrivial coverage.
+            // A fixed fully-covered RGB misses correctly antialiased stripes.
+            const auto coverage = (255.0-pixel.red())/(255.0-164.0);
+            if (coverage >= .04 && coverage <= .30 &&
+                std::abs(pixel.green()-(255.0-(255.0-217.0)*coverage)) <= 3 &&
+                std::abs(pixel.blue()-(255.0-(255.0-176.0)*coverage)) <= 3) ++fill_pixels;
+        }
+    }
+    const auto captures = qEnvironmentVariable("VERTEX_TEST_CAPTURE_DIR");
+    if (!captures.isEmpty()) {
+        require(QDir().mkpath(captures) && QFile::copy(directory.filePath("area-style.pdf"),
+            QDir(captures).filePath("area-style.pdf")), "retain actual area style PDF");
+        require(page.save(QDir(captures).filePath("area-style.png")), "retain actual rendered area style page");
+    }
+    if (outline_pixels <= 50 || fill_pixels <= 50)
+        std::cerr << "area style PDF outline pixels=" << outline_pixels << ", fill pixels=" << fill_pixels << '\n';
+    require(outline_pixels > 50 && fill_pixels > 50,
+            "actual PDF pixels must contain the chosen area outline and fill colors");
+    const auto before_invalid = window.document().snapshot();
+    open([&](QDialog* dialog) {
+        dialog->findChild<QLineEdit*>("areaFillColor")->setText("garbage");
+        buttons(dialog)->button(QDialogButtonBox::Apply)->click();
+        require(window.document().revision() == before_invalid.revision() &&
+                window.document().snapshot().entities() == before_invalid.entities(), "invalid color must refuse without mutation");
+        buttons(dialog)->button(QDialogButtonBox::Cancel)->click();
+    });
+    open([&](QDialog* dialog) {
+        const auto current = window.document().snapshot();
+        auto changed = current.entities().at(area.toStdString());
+        changed.properties["external_note"] = "newer data";
+        window.document().apply(ApplyEntityChanges{current.revision(), {EntityChange::upsert(changed)}, {}, "External area edit"});
+        const auto newer = window.document().snapshot();
+        dialog->findChild<QDoubleSpinBox*>("areaLineWidthMm")->setValue(1.5);
+        buttons(dialog)->button(QDialogButtonBox::Apply)->click();
+        require(window.document().revision() == newer.revision() &&
+                window.document().snapshot().entities() == newer.entities(), "stale appearance must preserve newer area data");
+        buttons(dialog)->button(QDialogButtonBox::Cancel)->click();
+    });
+    require(window.undoCommand() && window.document().snapshot().entities() == hatched.entities(), "restore external edit fixture");
+    const auto before_reset = window.document().snapshot();
+    open([&](QDialog* dialog) {
+        auto* reset = dialog->findChild<QPushButton*>("resetAreaAppearance");
+        require(reset, "area appearance must offer Reset to classification defaults");
+        reset->click();
+        buttons(dialog)->button(QDialogButtonBox::Apply)->click();
+    });
+    auto reset_expected = before_reset.entities();
+    reset_expected.at(provider_id).properties["state"]["overrides"].erase(
+        reset_expected.at(provider_id).properties["state"]["overrides"].begin());
+    require(window.document().revision() == before_reset.revision() + 1 &&
+            window.document().snapshot().entities() == reset_expected && gla() == initial_gla &&
+            window.undoCommand() && window.document().snapshot().entities() == before_reset.entities(),
+            "Reset removes only the selected override and one Undo restores all its metadata");
+    auto legacy_owner = window.document().snapshot().entities().at(provider_id);
+    auto& legacy_override = legacy_owner.properties["state"]["overrides"][0];
+    legacy_override.erase("paper_line_width_mm");
+    legacy_override.erase("hatch_scale");
+    legacy_override["style"]["stroke_width_metres"] = 0.003;
+    window.document().apply(ApplyEntityChanges{window.document().revision(),
+        {EntityChange::upsert(legacy_owner)}, {}, "Retain legacy area appearance"});
+    require(window.selectEntity(area), "refresh the optional-free legacy appearance provider");
+    const auto legacy = window.document().snapshot();
+    open([&](QDialog* dialog) { buttons(dialog)->button(QDialogButtonBox::Apply)->click(); });
+    require(window.document().revision() == legacy.revision() && window.document().snapshot().entities() == legacy.entities(),
+            "unchanged legacy appearance must retain absent optional paper width and hatch scale");
+    open([&](QDialog* dialog) {
+        dialog->findChild<QLineEdit*>("areaOutlineColor")->setText("#456789");
+        buttons(dialog)->button(QDialogButtonBox::Apply)->click();
+    });
+    auto legacy_expected = legacy.entities();
+    legacy_expected.at(provider_id).properties["state"]["overrides"][0]["style"]["stroke_color"] = "#456789";
+    require(window.document().revision() == legacy.revision() + 1 &&
+                window.document().snapshot().entities() == legacy_expected && gla() == initial_gla &&
+                window.undoCommand() && window.document().snapshot().entities() == legacy.entities(),
+            "color-only legacy edits preserve absent optional fields, model stroke width and opaque owner data");
+    auto duplicate = legacy.entities().at(provider_id);
+    duplicate.id = "annotations-duplicate-area-style";
+    duplicate.required = false;
+    duplicate.properties["state"]["labels"] = nlohmann::json::array();
+    duplicate.properties["state"]["symbols"] = nlohmann::json::array();
+    duplicate.properties["state"]["overrides"] = nlohmann::json::array({
+        legacy.entities().at(provider_id).properties.at("state").at("overrides").at(0)});
+    window.document().apply(ApplyEntityChanges{window.document().revision(),
+        {EntityChange::upsert(duplicate)}, {}, "Duplicate provider refusal fixture"});
+    require(window.selectEntity(area), "refresh duplicate area presentation providers");
+    const auto duplicated = window.document().snapshot();
+    appearance->click();
+    require(window.lastError().contains("multiple annotation groups") &&
+                window.document().revision() == duplicated.revision() &&
+                window.document().snapshot().entities() == duplicated.entities() &&
+                window.undoCommand() && window.document().snapshot().entities() == legacy.entities(),
+            "ambiguous providers must report refusal without choosing or altering either record");
+    window.document().mark_read_only("Area style read-only fixture");
+    require(window.selectEntity(area) && !appearance->isEnabled(), "read-only areas must disable appearance editing");
+}
+
 void appraisal_area_display_precision_workflow() {
     sketch::desktop::MainWindow window;
     window.setMetricUnits(false);
@@ -1506,6 +1831,11 @@ int main(int argc, char** argv) {
         const auto families = QFontDatabase::applicationFontFamilies(font_id);
         require(!families.isEmpty(), "bundled appraisal workflow font must expose its family");
         app.setFont(QFont(families.front(), 10));
+        if (app.arguments().contains(QStringLiteral("--area-appearance-only"))) {
+            selection_filter_dropdown_workflow();
+            area_appearance_workflow();
+            return 0;
+        }
         if (app.arguments().contains(QStringLiteral("--area-display-only"))) {
             appraisal_area_display_precision_workflow();
             return 0;
@@ -1534,6 +1864,8 @@ int main(int argc, char** argv) {
         appraisal_declarations_reject_read_only_documents();
         appraisal_area_display_precision_workflow();
         appraisal_plan_area_labels_workflow();
+        selection_filter_dropdown_workflow();
+        area_appearance_workflow();
         malformed_appraisal_projection_prints_withheld_status();
         appraisal_summary_prints_from_the_automatic_report();
         std::cout << "appraisal_desktop_workflow_tests passed\n";

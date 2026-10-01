@@ -40,6 +40,13 @@ constexpr double maximum_scale = 4000.0;
 constexpr double output_minimum_scale = minimum_scale;
 constexpr double pi = std::numbers::pi;
 
+double paper_stroke_pixels(const CanvasEntity& entity, double pixels_per_mm) {
+    if (!std::isfinite(entity.output_stroke_width_mm) || entity.output_stroke_width_mm <= 0.0 ||
+        !std::isfinite(pixels_per_mm) || pixels_per_mm <= 0.0) return 0.0;
+    const auto width = entity.output_stroke_width_mm * pixels_per_mm;
+    return std::isfinite(width) ? std::max(0.1, width) : 0.0;
+}
+
 Qt::CursorShape jamb_resize_cursor(const CanvasOpeningWidthControls& controls,
                                    bool keep_start_jamb, double width_scale = 1.0) {
     auto tangent = std::atan2(controls.end_jamb.y-controls.start_jamb.y,
@@ -420,6 +427,20 @@ void PlanCanvas::setOverviewMapEnabled(bool enabled) {
 
 void PlanCanvas::setMetricUnits(bool metric) {
     m_metric_units = metric;
+    update();
+}
+
+void PlanCanvas::setSelectionFilter(CanvasSelectionFilter filter) {
+    if (m_selection_filter == filter) return;
+    m_selection_filter = filter;
+    // A selection press captures a target under the old filter. Navigation
+    // and explicit selected transform controls do not capture a new pick.
+    if (m_gesture_button == Qt::RightButton || m_left_gesture == LeftGesture::marquee ||
+        m_left_gesture == LeftGesture::canvas_pan || m_left_gesture == LeftGesture::object_move) {
+        resetGesture();
+        resetTouchInput();
+    }
+    if (m_last_mouse_position) updatePointerCursor(*m_last_mouse_position);
     update();
 }
 
@@ -1423,6 +1444,7 @@ void PlanCanvas::pointerPress(QPointF position, Qt::MouseButton button,
         return;
     }
     m_pressed_entity = hitTest(position);
+    m_pressed_occupied = !m_pressed_entity.isEmpty() || !hitTest(position, false).isEmpty();
     const auto retained_selection = selectedIds();
     const auto frame = selectionFrame(QRectF(rect()));
     if (selectionInteractionEnabled() && !retained_selection.isEmpty() && frame &&
@@ -1584,6 +1606,7 @@ void PlanCanvas::pointerRelease(QPointF position, Qt::MouseButton button,
                  QApplication::startDragDistance());
         const auto move_ids = m_move_ids;
         const auto pressed_entity = m_pressed_entity;
+        const auto pressed_occupied = m_pressed_occupied;
         const auto delta = dragDelta(position);
         const auto transform_scale = m_transform_scale_preview;
         const auto transform_rotation = m_transform_rotation_preview;
@@ -1624,6 +1647,11 @@ void PlanCanvas::pointerRelease(QPointF position, Qt::MouseButton button,
                     m_entity_selection_clicked(pressed_entity, false);
                 else if (m_entity_clicked)
                     m_entity_clicked(pressed_entity);
+            } else if (selectionInteractionEnabled() && pressed_occupied) {
+                // Excluded painted content is an ignored pick, never empty
+                // drawing space. Keep tracing in active drafts unchanged.
+                if (m_entity_selection_clicked) m_entity_selection_clicked({}, false);
+                else if (m_entity_clicked) m_entity_clicked({});
             } else if (selectionInteractionEnabled() && !selectedIds().isEmpty()) {
                 // An empty click outside the retained selection is an explicit
                 // deselect. Do not also interpret it as the first drawing node;
@@ -1692,6 +1720,7 @@ void PlanCanvas::resetGesture() {
     m_left_gesture = LeftGesture::none;
     m_left_dragging = false;
     m_pressed_entity.clear();
+    m_pressed_occupied = false;
     m_move_ids.clear();
     m_move_preview_delta.reset();
     m_transform_frame_start.reset();
@@ -2782,14 +2811,19 @@ QStringList PlanCanvas::rectangleHits(const QRectF& rectangle, bool crossing) co
     model_to_screen.scale(m_scale, -m_scale);
     model_to_screen.translate(-m_view_center.x, -m_view_center.y);
     for (const auto& entity : m_entities) {
+        if (!matchesSelectionType(entity.type)) continue;
         QPainterPath path;
         append_boundary_strokes(path, entity.segments);
         for (const auto& hole : entity.holes) append_boundary_strokes(path, hole);
         QPainterPathStroker stroker;
-        const auto width = wall_baseline_only(entity)
+        const auto width = entity.paper_stroke_width_on_screen
+            ? paper_stroke_pixels(entity, logicalDpiX()/25.4)
+            : wall_baseline_only(entity)
             ? std::max(entity.thickness_metres, 0.04) * m_scale
             : entity.stroke_width_metres * m_scale;
         stroker.setWidth(std::isfinite(width) ? std::max(3.0, width) : 3.0);
+        stroker.setCapStyle(Qt::RoundCap);
+        stroker.setJoinStyle(Qt::RoundJoin);
         // Stroke open paths before intersection so Qt cannot implicitly fill
         // an open chain and select empty space between unrelated segments.
         auto screen_path = stroker.createStroke(model_to_screen.map(path));
@@ -2801,6 +2835,7 @@ QStringList PlanCanvas::rectangleHits(const QRectF& rectangle, bool crossing) co
     }
     for (const auto& retained_label : m_labels) {
         const auto label = presentedLabel(retained_label,false);
+        if (!matchesSelectionFilter(label.id)) continue;
         if (!drawable_label(label)) continue;
         QPainterPath path;
         path.addRect(label_layout(label, font(), this, m_scale, logicalDpiY()).bounds);
@@ -2808,6 +2843,8 @@ QStringList PlanCanvas::rectangleHits(const QRectF& rectangle, bool crossing) co
             add(label.id);
     }
     for (const auto& reference : m_references) {
+        if (m_selection_filter != CanvasSelectionFilter::all &&
+            m_selection_filter != CanvasSelectionFilter::references) continue;
         const auto unit = reference.metres_per_source_unit * reference.scale;
         if (!reference.visible || reference.image.isNull() ||
             !std::isfinite(reference.position.x) || !std::isfinite(reference.position.y) ||
@@ -2824,11 +2861,50 @@ QStringList PlanCanvas::rectangleHits(const QRectF& rectangle, bool crossing) co
     return result;
 }
 
-QString PlanCanvas::hitTest(QPointF point) const {
+bool PlanCanvas::matchesSelectionType(const QString& type) const {
+    if (m_selection_filter == CanvasSelectionFilter::all) return true;
+    if (type == QStringLiteral("boundary") || type == QStringLiteral("measurement_boundary") ||
+        type == QStringLiteral("room_boundary") || type == QStringLiteral("room"))
+        return m_selection_filter == CanvasSelectionFilter::areas;
+    if (type == QStringLiteral("dimension") || type == QStringLiteral("dimension_line"))
+        return m_selection_filter == CanvasSelectionFilter::dimensions;
+    if (type == QStringLiteral("symbol")) return m_selection_filter == CanvasSelectionFilter::symbols;
+    if (type == QStringLiteral("wall") || type == QStringLiteral("opening") ||
+        type == QStringLiteral("door") || type == QStringLiteral("window") ||
+        type == QStringLiteral("slab") || type == QStringLiteral("roof") ||
+        type == QStringLiteral("stair") || type == QStringLiteral("railing") ||
+        type == QStringLiteral("column") || type == QStringLiteral("beam") || type == QStringLiteral("assembly") ||
+        type == QStringLiteral("assembly_instance"))
+        return m_selection_filter == CanvasSelectionFilter::objects;
+    return false;
+}
+
+bool PlanCanvas::matchesSelectionFilter(const QString& id) const {
+    for (const auto& entity : m_entities)
+        if (entity.id == id) return matchesSelectionType(entity.type);
+    for (const auto& reference : m_references)
+        if (reference.id == id)
+            return m_selection_filter == CanvasSelectionFilter::all ||
+                   m_selection_filter == CanvasSelectionFilter::references;
+    for (const auto& label : m_labels) {
+        if (label.id != id) continue;
+        // Unowned plan labels are generated titles, not authored annotations.
+        if (label.plan_only) return false;
+        if (!label.selection_type.isEmpty()) return matchesSelectionType(label.selection_type);
+        return m_selection_filter == CanvasSelectionFilter::all ||
+               m_selection_filter == CanvasSelectionFilter::labels;
+    }
+    return false;
+}
+
+QString PlanCanvas::hitTest(QPointF point, bool filtered) const {
     constexpr double hit_pixels = 9.0;
     QString result;
     auto best = std::numeric_limits<double>::max();
     for (const auto& entity : m_entities) {
+        if (filtered && !matchesSelectionType(entity.type)) continue;
+        const auto painted_half_width = entity.paper_stroke_width_on_screen
+            ? paper_stroke_pixels(entity, logicalDpiX()/25.4)*0.5 : 0.0;
         QPainterPath painted_footprint;
         const auto test_boundary = [&](const Boundary& boundary) {
             for (const auto& segment : boundary) {
@@ -2837,7 +2913,7 @@ QString PlanCanvas::hitTest(QPointF point) const {
                 if (segment.sweep_radians == 0.0) {
                     const auto end = toScreen(segment.end, rect());
                     painted_footprint.lineTo(end);
-                    const auto candidate = point_segment_distance(point, start, end);
+                    const auto candidate = std::max(0.0, point_segment_distance(point, start, end)-painted_half_width);
                     if (candidate < best) {
                         best = candidate;
                         result = entity.id;
@@ -2854,7 +2930,7 @@ QString PlanCanvas::hitTest(QPointF point) const {
                     const auto current = toScreen(
                         arc_point(segment, *arc, static_cast<double>(index) / samples), rect());
                     painted_footprint.lineTo(current);
-                    const auto candidate = point_segment_distance(point, previous, current);
+                    const auto candidate = std::max(0.0, point_segment_distance(point, previous, current)-painted_half_width);
                     if (candidate < best) {
                         best = candidate;
                         result = entity.id;
@@ -2890,6 +2966,7 @@ QString PlanCanvas::hitTest(QPointF point) const {
     // Retain the geometry selection tolerance outside that painted rectangle.
     for (const auto& retained_label : m_labels) {
         const auto label = presentedLabel(retained_label,false);
+        if (filtered && !matchesSelectionFilter(label.id)) continue;
         if (!drawable_label(label)) continue;
         const auto screen = toScreen(label.position, rect());
         const auto layout = label_layout(label, font(), this, m_scale, logicalDpiY());
@@ -2912,6 +2989,8 @@ QString PlanCanvas::hitTest(QPointF point) const {
     // when no authored geometry or label was hit.
     for (auto it = m_references.rbegin(); it != m_references.rend(); ++it) {
         const auto& reference = *it;
+        if (filtered && m_selection_filter != CanvasSelectionFilter::all &&
+            m_selection_filter != CanvasSelectionFilter::references) continue;
         if (!reference.visible || reference.image.isNull() ||
             !std::isfinite(reference.rotation_degrees)) continue;
         const auto radians = reference.rotation_degrees * std::numbers::pi / 180.0;
@@ -2949,7 +3028,8 @@ QString PlanCanvas::contextTarget(QPointF point) const {
     if (selectionInteractionEnabled()) {
         const auto ids = selectedIds();
         const auto frame = selectionFrame(QRectF(rect()));
-        if (!ids.isEmpty() && frame && frame->contains(point)) return ids.back();
+        if (!ids.isEmpty() && frame && frame->contains(point) && matchesSelectionFilter(ids.back()))
+            return ids.back();
     }
     return hitTest(point);
 }
@@ -3297,13 +3377,12 @@ void PlanCanvas::drawEntity(QPainter& painter, const CanvasEntity& entity, bool 
         }
     }
     QPen pen(color, 0.0, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);
-    const auto paper_width = output && std::isfinite(entity.output_stroke_width_mm) &&
-                             entity.output_stroke_width_mm > 0.0
-        ? entity.output_stroke_width_mm *
-              (paper_pixels_per_mm && std::isfinite(*paper_pixels_per_mm) &&
+    const auto paper_width = (output || entity.paper_stroke_width_on_screen)
+        ? paper_stroke_pixels(entity,
+              (output && paper_pixels_per_mm && std::isfinite(*paper_pixels_per_mm) &&
                        *paper_pixels_per_mm > 0.0
                    ? *paper_pixels_per_mm
-                   : painter.device()->logicalDpiX() / 25.4)
+                   : (output ? painter.device()->logicalDpiX() : logicalDpiX()) / 25.4))
         : 0.0;
     if (paper_width > 0.0 && std::isfinite(paper_width)) {
         // Output line treatment is a paper-space width. Cosmetic pens keep it

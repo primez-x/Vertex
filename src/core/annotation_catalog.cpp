@@ -1092,6 +1092,12 @@ void validate_annotation_state(const AnnotationState& state, const std::vector<S
         check(!o.target_id.empty() && o.target_id.size() <= 256 && targets.emplace(o.target_kind,o.target_id).second,
               "Invalid or duplicate presentation target");
         style(o.style);
+        check(!o.paper_line_width_mm || (std::isfinite(*o.paper_line_width_mm) &&
+                  *o.paper_line_width_mm >= 0.05 && *o.paper_line_width_mm <= 10.0),
+              "Invalid presentation paper line width");
+        check(!o.hatch_scale || (std::isfinite(*o.hatch_scale) &&
+                  *o.hatch_scale >= 0.1 && *o.hatch_scale <= 10.0),
+              "Invalid presentation hatch scale");
     }
 }
 
@@ -1110,8 +1116,13 @@ json encode_annotation_state(const AnnotationState& state, const std::vector<Sym
             {"pinned_svg",s.pinned_svg}, {"width_scale",s.width_scale}, {"depth_scale",s.depth_scale},
             {"flip_horizontal",s.flip_horizontal}, {"flip_vertical",s.flip_vertical}});
     }
-    for (const auto& o : state.overrides) j["overrides"].push_back({{"target_kind",o.target_kind},{"target_id",o.target_id},
-        {"style",encode_style(o.style)},{"visible",o.visible}});
+    for (const auto& o : state.overrides) {
+        json value{{"target_kind",o.target_kind},{"target_id",o.target_id},
+            {"style",encode_style(o.style)},{"visible",o.visible}};
+        if (o.paper_line_width_mm) value["paper_line_width_mm"] = *o.paper_line_width_mm;
+        if (o.hatch_scale) value["hatch_scale"] = *o.hatch_scale;
+        j["overrides"].push_back(std::move(value));
+    }
     return j;
 }
 
@@ -1183,8 +1194,13 @@ AnnotationState decode_annotation_state(const json& j, const std::vector<SymbolD
             }
             state.symbols.push_back(std::move(instance));
         }
-        for (const auto& o : j.at("overrides")) state.overrides.push_back({o.at("target_kind").get<std::string>(),
-            o.at("target_id").get<std::string>(),decode_style(o.at("style")),o.at("visible").get<bool>()});
+        for (const auto& o : j.at("overrides")) {
+            PresentationOverride value{o.at("target_kind").get<std::string>(),
+                o.at("target_id").get<std::string>(),decode_style(o.at("style")),o.at("visible").get<bool>()};
+            if (o.contains("paper_line_width_mm")) value.paper_line_width_mm = o.at("paper_line_width_mm").get<double>();
+            if (o.contains("hatch_scale")) value.hatch_scale = o.at("hatch_scale").get<double>();
+            state.overrides.push_back(std::move(value));
+        }
         validate_annotation_state(state,catalog); return state;
     } catch (const json::exception&) { throw std::invalid_argument("Malformed annotation JSON"); }
 }

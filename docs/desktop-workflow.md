@@ -292,8 +292,18 @@ instances commits atomically, including owned hosted geometry. Cut publishes
 its clipboard payload only after a successful document commit.
 Pasted annotations belong to the destination active layer, as pasted geometry
 does. Copies of children use optional new containers while leaving any source
-owner protection intact. Selection filtering and
-broader linked-object ownership policies remain open qualification work.
+owner protection intact. Broader linked-object ownership policies remain open
+qualification work.
+
+The compact selection filter beside the bottom-right canvas controls chooses
+**All items**, **Areas**, **Building objects**, **Dimensions**, **Text labels**,
+**Symbols**, or **Reference images**. It governs new clicks, Ctrl-clicks,
+Ctrl-drag windows, double-click properties and right-click targets in both plan
+canvases. Changing the filter keeps visible content and existing selections;
+selected objects can still move or use their transform handles. A filtered-out
+object does not become empty space that accidentally starts a drawing. Empty
+canvas still follows the normal drawing and navigation gestures. The filter
+is temporary workspace state and does not change calculations or project data.
 
 Ctrl-select compatible architectural objects, placed symbols, labels, and reference
 images, then drag inside the selected bounds to move them together. Release
@@ -501,6 +511,16 @@ level dependency propagation and the complete
 production constraint workflow are still required.
 
 ## Selection transforms
+
+For one selected closed area, open **Area appearance…** in Area attributes.
+Choose outline/fill colors, None/Solid/Hatch, hatch scale, paper line width,
+or Show area. **Apply** commits one undoable edit; **Reset to defaults** followed
+by Apply removes that area's override and restores its classification preset.
+Presentation changes preserve the boundary, classification and appraisal totals.
+Hidden areas remain available in the layer navigator so their visibility can be
+restored. Explicit line widths remain fixed on screen while zooming and use the
+same paper width in output. Duplicate override providers report an error rather
+than choosing one silently.
 
 Drag the outward circular handle to rotate a selected object. Its selection
 frame and handle retain the committed angle after release, so the next drag

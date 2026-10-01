@@ -36,6 +36,9 @@ enum class CanvasTool {
     sloped_wall,
 };
 
+// Controls new picks only; retained scene content and selections stay intact.
+enum class CanvasSelectionFilter { all, areas, objects, dimensions, labels, symbols, references };
+
 // Retained vector artwork for one placed catalog symbol. The fallback boundary
 // on CanvasEntity remains the authoritative hit-test, transform, minimap, and
 // interchange geometry; this payload supplies the detailed screen/print/export
@@ -121,6 +124,9 @@ struct CanvasEntity {
     std::vector<Boundary> holes;
     std::optional<CanvasSelectionFrame> resize_frame;
     std::optional<CanvasOpeningWidthControls> opening_width_controls;
+    // Opt-in area styling uses the explicit paper width in screen pixels too.
+    // Appended to retain existing aggregate initialization order.
+    bool paper_stroke_width_on_screen{false};
 };
 
 // A retained document annotation. Unlike BoundaryDraftPreview, labels are
@@ -157,6 +163,9 @@ struct CanvasLabel {
     // Room names and floor titles belong to plan views. Explicit annotation
     // labels remain available to elevation/section presentation.
     bool plan_only{false};
+    // Label-only semantic entities (for example an area dimension) have no
+    // line CanvasEntity from which category picking could infer their type.
+    QString selection_type;
 };
 
 // Exact geometric totals from the candidate document, used only while editing.
@@ -224,6 +233,8 @@ public:
     void setEntities(std::vector<CanvasEntity> entities);
     [[nodiscard]] const std::vector<CanvasEntity>& entities() const noexcept { return m_entities; }
     void setTool(CanvasTool tool);
+    void setSelectionFilter(CanvasSelectionFilter filter);
+    [[nodiscard]] CanvasSelectionFilter selectionFilter() const noexcept { return m_selection_filter; }
     void setGridEnabled(bool enabled);
     void setSnapEnabled(bool enabled);
     void setOverviewMapEnabled(bool enabled);
@@ -438,7 +449,9 @@ private:
     [[nodiscard]] QPointF toScreen(Vec2 point, const QRectF& viewport) const;
     [[nodiscard]] Vec2 toModel(QPointF point, const QRectF& viewport) const;
     [[nodiscard]] Vec2 snapped(Vec2 point) const;
-    [[nodiscard]] QString hitTest(QPointF point) const;
+    [[nodiscard]] QString hitTest(QPointF point, bool filtered = true) const;
+    [[nodiscard]] bool matchesSelectionFilter(const QString& id) const;
+    [[nodiscard]] bool matchesSelectionType(const QString& type) const;
     [[nodiscard]] bool selectionInteractionEnabled() const;
     [[nodiscard]] QString contextTarget(QPointF point) const;
     [[nodiscard]] QStringList selectedIds() const;
@@ -498,6 +511,8 @@ private:
     QPointF m_left_start;
     bool m_left_dragging{false};
     QString m_pressed_entity;
+    bool m_pressed_occupied{false};
+    CanvasSelectionFilter m_selection_filter{CanvasSelectionFilter::all};
     QStringList m_move_ids;
     std::optional<Vec2> m_move_preview_delta;
     bool m_selection_resize_enabled{};

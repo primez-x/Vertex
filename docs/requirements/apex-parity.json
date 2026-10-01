@@ -1164,9 +1164,11 @@
         "tests/desktop_smoke.cpp",
         "scripts/generate_workflow_acceptance_evidence.py",
         "tests/test_workflow_acceptance_evidence.py",
-        "docs/verification/annotation-instance-clipboard-2026-10-01.md"
+        "docs/verification/annotation-instance-clipboard-2026-10-01.md",
+        "tests/boundary_canvas_tests.cpp",
+        "docs/verification/area-appearance-selection-filters-2026-10-01.md"
       ],
-      "implementation_note": "Bounded local JSON clipboard supports copy, paste, cut, and guarded delete for supported geometry graphs. Ctrl-click toggles ordered selection roots, both plan canvases highlight the selection, and combined clipboard/delete commands deduplicate hosted dependencies in one revision and undo/redo step; paste preserves root order with fresh identities and remapped links. Canvas movement combines compatible architectural objects, individual annotation instances, and reference images in one admitted command, retaining owner metadata and wall measurements; partial constrained-group moves reject without publishing any member. Source or selection replacement cancels captured mouse gestures. Native movement evidence covers history, save/reopen, conflicts, and stale release; the development-host reference fixture tests downstream editing after asserting isolated import rejection, not decoder acceptance. Copy now slices selected labels/symbols, merges same-owner subsets, preserves raw artwork/transform/text/opaque metadata and carries only their targeted overrides. Individual and mixed annotation cut/delete update owners atomically while preserving unselected siblings; explicit whole-owner selection dominates child selection. Cut publishes its prepared clipboard only after document commit. Native clipboard coverage includes multiple owners, hosted geometry, fresh identities, history, save/reopen, invalid and read-only refusal. Selection filtering, broader linked-object policies and production qualification remain open. Current historical Debug/Release acceptance evidence remains hash-bound to its named sources and fixtures; this scoped checkpoint does not certify full parity."
+      "implementation_note": "Bounded local JSON clipboard supports copy, paste, cut, and guarded delete for supported geometry graphs. Ctrl-click toggles ordered selection roots, both plan canvases highlight the selection, and combined clipboard/delete commands deduplicate hosted dependencies in one revision and undo/redo step; paste preserves root order with fresh identities and remapped links. Canvas movement combines compatible architectural objects, individual annotation instances, and reference images in one admitted command, retaining owner metadata and wall measurements; partial constrained-group moves reject without publishing any member. Source or selection replacement cancels captured mouse gestures. Native movement evidence covers history, save/reopen, conflicts, and stale release; the development-host reference fixture tests downstream editing after asserting isolated import rejection, not decoder acceptance. Copy now slices selected labels/symbols, merges same-owner subsets, preserves raw artwork/transform/text/opaque metadata and carries only their targeted overrides. Individual and mixed annotation cut/delete update owners atomically while preserving unselected siblings; explicit whole-owner selection dominates child selection. Cut publishes its prepared clipboard only after document commit. Native clipboard coverage includes multiple owners, hosted geometry, fresh identities, history, save/reopen, invalid and read-only refusal. Both plan canvases now offer category filtering for new click, Ctrl-click, window/crossing marquee, double-click and context picks. Filtering retains scene content and existing transforms; excluded occupied content cannot start idle drawing. Broader linked-object policies and production qualification remain open. Current historical Debug/Release acceptance evidence remains hash-bound to its named sources and fixtures; this scoped checkpoint does not certify full parity."
     },
     {
       "id": "APX-EDIT-002",
@@ -1429,7 +1431,7 @@
       "requirement": "Support editable drawing styles, fills, and visibility controls for areas, objects, and output views.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "verified",
+      "implementation_status": "in_progress",
       "acceptance": "Style and fill changes affect presentation only, persist across save/reopen, and do not alter analytical geometry.",
       "package": 6,
       "blocker": null,
@@ -1442,9 +1444,14 @@
         "tests/annotation_entity_codec_tests.cpp",
         "docs/annotation-catalog.md",
         "scripts/generate_workflow_acceptance_evidence.py",
-        "tests/test_workflow_acceptance_evidence.py"
+        "tests/test_workflow_acceptance_evidence.py",
+        "src/desktop/main_window.cpp",
+        "src/desktop/plan_canvas.cpp",
+        "tests/appraisal_desktop_workflow_tests.cpp",
+        "tests/boundary_canvas_tests.cpp",
+        "docs/verification/area-appearance-selection-filters-2026-10-01.md"
       ],
-      "implementation_note": "Presentation styles, fills, visibility, and target overrides are validated separately from analytical geometry; typed Document persistence, shared vector rendering, undoable child deletion, annotation inspector visibility/placement edits, and stored label/symbol color, fill, emphasis, text-height, and stroke-width rendering are integrated, while visibility/override inspectors, polished assets, and production visual QA remain open. Deterministic Debug/Release workflow evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
+      "implementation_note": "Presentation styles, fills, visibility, and target overrides are validated separately from analytical geometry. The desktop Area appearance editor now changes closed-area outline/fill colors, fill pattern, hatch scale, paper line width and visibility, or resets to classification defaults. Revision-guarded raw edits preserve owner protection, opaque metadata and siblings; explicit widths survive analytical plan generation and shared rendering. Native area tests cover history, save/reopen, PDF, no-op, stale and read-only behavior. Broader object/output-view appearance workflows and production visual/print qualification remain open; this scoped implementation does not certify full parity. Historical evidence remains hash-bound to its original sources and fixtures."
     },
     {
       "id": "APX-SYM-001",

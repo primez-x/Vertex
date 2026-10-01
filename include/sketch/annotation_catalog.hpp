@@ -57,6 +57,10 @@ struct PresentationOverride {
     std::string target_id;
     AnnotationStyle style;
     bool visible{true};
+    // Optional paper-space outline and hatch spacing overrides. Absence keeps
+    // existing semantic presentation defaults; neither affects geometry.
+    std::optional<double> paper_line_width_mm;
+    std::optional<double> hatch_scale;
 };
 
 struct SymbolStroke { Vec2 start; Vec2 end; };

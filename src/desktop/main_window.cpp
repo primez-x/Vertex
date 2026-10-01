@@ -1226,6 +1226,7 @@ DimensionCanvasProjection project_boundary_dimension(const BoundaryDimension& di
         overlay=angle_dimension_overlay(decode_identified_boundary_entity(boundary),dimension);
     } else text=format_dimension_area(resolved.area_square_metres,metric);
     DimensionCanvasProjection result{{id_from(dimension.id),dimension.text_position,std::move(text),selected},{}};
+    result.label.selection_type = QStringLiteral("dimension");
     if (dimension.presentation) {
         const auto& presentation=*dimension.presentation;
         result.label.paper_height_mm=presentation.text_height_mm;
@@ -3317,6 +3318,235 @@ public:
         } catch (const std::exception& error) {
             setError(QStringLiteral("Area attributes: %1").arg(QString::fromUtf8(error.what())));
             return false;
+        }
+    }
+
+    void showAreaAppearance() {
+        try {
+            if (!m_document->is_editable()) throw std::invalid_argument("This document is read-only.");
+            const auto selected = selectedEntity();
+            if (!selected || !is_closed_boundary_entity(selected->type) || m_selected_ids.size() != 1)
+                throw std::invalid_argument("Select one closed area to edit its appearance.");
+            const auto context = captureModalContext();
+            const auto source = authoringSnapshot();
+            const auto presentation = plan_area_presentation(QString::fromStdString(
+                read_string(selected->properties, "classification").value_or("")));
+            PresentationOverride defaults;
+            defaults.target_kind = "area";
+            defaults.target_id = selected->id;
+            defaults.style.stroke_color = presentation.stroke.name(QColor::HexRgb).toStdString();
+            defaults.style.fill_color = presentation.fill.name(QColor::HexRgb).toStdString();
+            defaults.style.fill_pattern = !presentation.filled ? "none"
+                : presentation.hatch == QStringLiteral("solid") ? "solid" : "hatch";
+            defaults.paper_line_width_mm = 0.34;
+            defaults.hatch_scale = presentation.hatch.contains(QStringLiteral("diagonal")) ? 0.7 : 1.0;
+            auto initial = defaults;
+            std::optional<std::string> owner_id;
+            std::optional<std::string> provider_id;
+            json original_record;
+            for (const auto& [id, entity] : source.entities()) {
+                if (entity.type != kAnnotationEntityType) continue;
+                const auto state = decode_annotation_entity(entity);
+                if (!owner_id) owner_id = id;
+                for (const auto& value : state.overrides) {
+                    if (value.target_kind != "area" || value.target_id != selected->id) continue;
+                    if (provider_id)
+                        throw std::invalid_argument("This area has appearance overrides in multiple annotation groups. Remove duplicate overrides before editing.");
+                    provider_id = id;
+                    owner_id = id;
+                    initial = value;
+                    for (const auto& record : entity.properties.at("state").at("overrides"))
+                        if (record.at("target_kind") == "area" && record.at("target_id") == selected->id)
+                            original_record = record;
+                }
+            }
+
+            QDialog dialog(owner);
+            styleDialog(dialog);
+            dialog.setObjectName(QStringLiteral("areaAppearanceDialog"));
+            dialog.setWindowTitle(QStringLiteral("Area appearance"));
+            auto* layout = new QVBoxLayout(&dialog);
+            auto* form = new QFormLayout;
+            layout->addLayout(form);
+            const auto color_field = [&](const QString& label, const QString& object_name, const std::string& value) {
+                auto* row = new QWidget(&dialog);
+                auto* row_layout = new QHBoxLayout(row);
+                row_layout->setContentsMargins(0, 0, 0, 0);
+                auto* edit = new QLineEdit(QString::fromStdString(value), row);
+                edit->setObjectName(object_name);
+                edit->setPlaceholderText(QStringLiteral("#RRGGBB"));
+                row_layout->addWidget(edit, 1);
+                auto* choose = new QPushButton(QStringLiteral("Choose…"), row);
+                choose->setAccessibleName(QStringLiteral("Choose %1").arg(label.toLower()));
+                const auto update_swatch = [edit, choose] {
+                    const QColor color(edit->text().trimmed());
+                    QPixmap swatch(14, 14);
+                    swatch.fill(color.isValid() ? color : Qt::transparent);
+                    choose->setIcon(QIcon(swatch));
+                };
+                QObject::connect(edit, &QLineEdit::textChanged, &dialog, update_swatch);
+                QObject::connect(choose, &QPushButton::clicked, &dialog, [&, edit, label] {
+                    const QColor current(edit->text().trimmed());
+                    const auto color = QColorDialog::getColor(current.isValid() ? current : QColor(Qt::gray),
+                        &dialog, label);
+                    if (color.isValid()) edit->setText(color.name(QColor::HexRgb));
+                });
+                update_swatch();
+                row_layout->addWidget(choose);
+                form->addRow(label, row);
+                return edit;
+            };
+            auto* outline = color_field(QStringLiteral("Outline color"), QStringLiteral("areaOutlineColor"), initial.style.stroke_color);
+            auto* fill = color_field(QStringLiteral("Fill color"), QStringLiteral("areaFillColor"), initial.style.fill_color);
+            auto* pattern = new QComboBox(&dialog);
+            pattern->setObjectName(QStringLiteral("areaFillPattern"));
+            pattern->addItem(QStringLiteral("None"), QStringLiteral("none"));
+            pattern->addItem(QStringLiteral("Solid"), QStringLiteral("solid"));
+            pattern->addItem(QStringLiteral("Hatch"), QStringLiteral("hatch"));
+            pattern->setCurrentIndex(pattern->findData(QString::fromStdString(initial.style.fill_pattern)));
+            form->addRow(QStringLiteral("Fill pattern"), pattern);
+            auto* hatch = new QDoubleSpinBox(&dialog);
+            hatch->setObjectName(QStringLiteral("areaHatchScale"));
+            hatch->setRange(0.1, 10.0);
+            hatch->setDecimals(2);
+            hatch->setSingleStep(0.1);
+            hatch->setValue(initial.hatch_scale.value_or(*defaults.hatch_scale));
+            form->addRow(QStringLiteral("Hatch scale"), hatch);
+            auto* width = new QDoubleSpinBox(&dialog);
+            width->setObjectName(QStringLiteral("areaLineWidthMm"));
+            width->setRange(0.05, 10.0);
+            width->setDecimals(2);
+            width->setSingleStep(0.05);
+            width->setSuffix(QStringLiteral(" mm"));
+            width->setValue(initial.paper_line_width_mm.value_or(*defaults.paper_line_width_mm));
+            form->addRow(QStringLiteral("Line width"), width);
+            const auto initial_width = width->value();
+            const auto initial_hatch = hatch->value();
+            auto* visible = new QCheckBox(QStringLiteral("Show area"), &dialog);
+            visible->setObjectName(QStringLiteral("areaVisible"));
+            visible->setChecked(initial.visible);
+            form->addRow(visible);
+            auto* reset = new QPushButton(QStringLiteral("Reset to defaults"), &dialog);
+            reset->setObjectName(QStringLiteral("resetAreaAppearance"));
+            layout->addWidget(reset);
+            auto* error = new QLabel(&dialog);
+            error->setObjectName(QStringLiteral("areaAppearanceError"));
+            error->setWordWrap(true);
+            error->setStyleSheet(QStringLiteral("color:#b42318;"));
+            layout->addWidget(error);
+            auto* buttons = new QDialogButtonBox(QDialogButtonBox::Apply | QDialogButtonBox::Cancel, &dialog);
+            layout->addWidget(buttons);
+            bool reset_pending = false;
+            bool populating = false;
+            bool changed = false;
+            const auto edited = [&] { if (!populating) reset_pending = false; };
+            QObject::connect(outline, &QLineEdit::textChanged, &dialog, edited);
+            QObject::connect(fill, &QLineEdit::textChanged, &dialog, edited);
+            QObject::connect(pattern, &QComboBox::currentIndexChanged, &dialog, edited);
+            QObject::connect(hatch, &QDoubleSpinBox::valueChanged, &dialog, edited);
+            QObject::connect(width, &QDoubleSpinBox::valueChanged, &dialog, edited);
+            QObject::connect(visible, &QCheckBox::toggled, &dialog, edited);
+            QObject::connect(reset, &QPushButton::clicked, &dialog, [&] {
+                populating = true;
+                outline->setText(QString::fromStdString(defaults.style.stroke_color));
+                fill->setText(QString::fromStdString(defaults.style.fill_color));
+                pattern->setCurrentIndex(pattern->findData(QString::fromStdString(defaults.style.fill_pattern)));
+                hatch->setValue(*defaults.hatch_scale);
+                width->setValue(*defaults.paper_line_width_mm);
+                visible->setChecked(true);
+                populating = false;
+                reset_pending = true;
+                error->clear();
+            });
+            QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+            QObject::connect(buttons->button(QDialogButtonBox::Apply), &QPushButton::clicked, &dialog, [&] {
+                try {
+                    if (!m_document->is_editable()) throw std::invalid_argument("This document is read-only.");
+                    if (!modalContextUnchanged(context)) throw std::invalid_argument(lastError().toStdString());
+                    if (!reset_pending &&
+                        outline->text().trimmed() == QString::fromStdString(initial.style.stroke_color) &&
+                        fill->text().trimmed() == QString::fromStdString(initial.style.fill_color) &&
+                        pattern->currentData().toString() == QString::fromStdString(initial.style.fill_pattern) &&
+                        hatch->value() == initial_hatch && width->value() == initial_width &&
+                        visible->isChecked() == initial.visible) {
+                        // Merely opening and applying the editor must not add
+                        // overrides or materialize absent legacy defaults.
+                        clearError();
+                        dialog.accept();
+                        return;
+                    }
+                    std::vector<EntityChange> changes;
+                    if (reset_pending) {
+                        if (provider_id) {
+                            auto updated = source.entities().at(*provider_id);
+                            auto& records = updated.properties.at("state").at("overrides");
+                            records.erase(std::remove_if(records.begin(), records.end(), [&](const json& record) {
+                                return record.at("target_kind") == "area" && record.at("target_id") == selected->id;
+                            }), records.end());
+                            validate_annotation_entity(updated);
+                            changes.push_back(EntityChange::upsert(std::move(updated)));
+                        }
+                    } else {
+                        static const QRegularExpression hex_color(QStringLiteral("^#[0-9A-Fa-f]{6}$"));
+                        if (!hex_color.match(outline->text().trimmed()).hasMatch() ||
+                            !hex_color.match(fill->text().trimmed()).hasMatch())
+                            throw std::invalid_argument("Enter outline and fill colors as #RRGGBB.");
+                        auto value = initial;
+                        value.style.stroke_color = outline->text().trimmed().toStdString();
+                        value.style.fill_color = fill->text().trimmed().toStdString();
+                        value.style.fill_pattern = pattern->currentData().toString().toStdString();
+                        value.visible = visible->isChecked();
+                        if (!provider_id || width->value() != initial_width)
+                            value.paper_line_width_mm = width->value();
+                        if (!provider_id || hatch->value() != initial_hatch)
+                            value.hatch_scale = hatch->value();
+                        if (!provider_id || width->value() != initial_width)
+                            value.style.stroke_width_metres = *value.paper_line_width_mm / 1000.0;
+                        AnnotationState record_state;
+                        record_state.overrides.push_back(value);
+                        const auto encoded = encode_annotation_state(record_state, desktop_symbol_catalog()).at("overrides").at(0);
+                        auto record = provider_id ? original_record : encoded;
+                        for (const auto* key : {"stroke_color", "fill_color", "fill_pattern", "stroke_width_metres"})
+                            record.at("style")[key] = encoded.at("style").at(key);
+                        record["visible"] = encoded.at("visible");
+                        for (const auto* key : {"paper_line_width_mm", "hatch_scale"}) {
+                            if (encoded.contains(key)) record[key] = encoded.at(key);
+                            else record.erase(key);
+                        }
+                        Entity updated;
+                        if (owner_id) updated = source.entities().at(*owner_id);
+                        else {
+                            std::string id;
+                            do { id = new_id("annotations"); } while (source.entities().contains(id));
+                            updated = make_annotation_entity(id, AnnotationState{});
+                        }
+                        auto& records = updated.properties.at("state").at("overrides");
+                        if (provider_id) {
+                            for (auto& existing : records)
+                                if (existing.at("target_kind") == "area" && existing.at("target_id") == selected->id)
+                                    existing = record;
+                        } else records.push_back(std::move(record));
+                        validate_annotation_entity(updated);
+                        if (!owner_id || updated != source.entities().at(*owner_id))
+                            changes.push_back(EntityChange::upsert(std::move(updated)));
+                    }
+                    if (!changes.empty()) {
+                        const ApplyEntityChanges command{source.revision(), std::move(changes), {},
+                            reset_pending ? "Reset area appearance" : "Edit area appearance"};
+                        (void)Document::preview_command(source, command);
+                        if (!modalContextUnchanged(context)) throw std::invalid_argument(lastError().toStdString());
+                        applyDocumentCommand(command);
+                        changed = true;
+                    }
+                    clearError();
+                    dialog.accept();
+                } catch (const std::exception& exception) {
+                    error->setText(QString::fromUtf8(exception.what()));
+                }
+            });
+            if (dialog.exec() == QDialog::Accepted && changed) refresh();
+        } catch (const std::exception& exception) {
+            setError(QStringLiteral("Area appearance: %1").arg(QString::fromUtf8(exception.what())));
         }
     }
 
@@ -21703,6 +21933,30 @@ private:
         auto* status_controls_layout = new QHBoxLayout(canvas_status_controls);
         status_controls_layout->setContentsMargins(0, 0, 0, 0);
         status_controls_layout->setSpacing(1);
+        m_selection_filter_combo = new QComboBox(canvas_status_controls);
+        m_selection_filter_combo->setObjectName(QStringLiteral("selectionFilter"));
+        m_selection_filter_combo->setAccessibleName(QStringLiteral("Selection filter"));
+        m_selection_filter_combo->setToolTip(QStringLiteral("Choose which kinds of items new clicks and selection windows can select"));
+        for (const auto& [text, filter] : std::initializer_list<std::pair<QString, CanvasSelectionFilter>>{
+                 {QStringLiteral("All items"), CanvasSelectionFilter::all},
+                 {QStringLiteral("Areas"), CanvasSelectionFilter::areas},
+                 {QStringLiteral("Building objects"), CanvasSelectionFilter::objects},
+                 {QStringLiteral("Dimensions"), CanvasSelectionFilter::dimensions},
+                 {QStringLiteral("Text labels"), CanvasSelectionFilter::labels},
+                 {QStringLiteral("Symbols"), CanvasSelectionFilter::symbols},
+                 {QStringLiteral("Reference images"), CanvasSelectionFilter::references}}) {
+            m_selection_filter_combo->addItem(text, static_cast<int>(filter));
+        }
+        m_selection_filter_combo->setMinimumContentsLength(9);
+        m_selection_filter_combo->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+        m_selection_filter_combo->setMaximumWidth(150);
+        m_selection_filter_combo->setFixedHeight(24);
+        status_controls_layout->addWidget(m_selection_filter_combo);
+        QObject::connect(m_selection_filter_combo, &QComboBox::currentIndexChanged, owner, [this] {
+            const auto filter = static_cast<CanvasSelectionFilter>(m_selection_filter_combo->currentData().toInt());
+            if (m_measurementCanvas) m_measurementCanvas->setSelectionFilter(filter);
+            if (m_architecturalCanvas) m_architecturalCanvas->setSelectionFilter(filter);
+        });
         m_grid_button = new QToolButton(canvas_status_controls);
         m_grid_button->setText(QStringLiteral("Grid"));
         m_grid_button->setIcon(modern_toolbar_icon(
@@ -22614,6 +22868,11 @@ private:
             if (applyEntity(std::move(updated), "edit area name", m_area_name_context->revision))
                 refresh();
         });
+        m_area_appearance_button = new QPushButton(QStringLiteral("Area appearance…"), m_area_attributes_group);
+        m_area_appearance_button->setObjectName(QStringLiteral("areaAppearanceButton"));
+        area_attributes_layout->addRow(m_area_appearance_button);
+        QObject::connect(m_area_appearance_button, &QPushButton::clicked, owner,
+                         [this] { showAreaAppearance(); });
         m_area_attributes_edit = new QPlainTextEdit(m_area_attributes_group);
         m_area_attributes_edit->setObjectName(QStringLiteral("areaAttributesJson"));
         m_area_attributes_edit->setPlaceholderText(QStringLiteral("{\"key\": \"value\"}"));
@@ -23536,11 +23795,17 @@ private:
                     if (found == all_geometry.end()) continue;
                     found->stroke_color = QColor(QString::fromStdString(
                         override.style.stroke_color));
+                    found->dark_stroke_color = QColor{};
                     found->stroke_width_metres = override.style.stroke_width_metres;
+                    if (override.paper_line_width_mm) {
+                        found->output_stroke_width_mm = *override.paper_line_width_mm;
+                        found->paper_stroke_width_on_screen = true;
+                    }
                     found->fill_color = QColor(QString::fromStdString(
                         override.style.fill_color));
                     found->hatch_pattern = QString::fromStdString(
                         override.style.fill_pattern);
+                    if (override.hatch_scale) found->hatch_scale = *override.hatch_scale;
                     found->filled = override.style.fill_pattern != "none" &&
                                     found->fill_color.isValid();
                 }
@@ -23806,8 +24071,8 @@ private:
                             clip_plan_entity(retained, crop_bounds);
                             if (retained.segments.empty() && retained.holes.empty()) continue;
                         }
-                        retained.output_stroke_width_mm =
-                            view_context.presentation.projection_line_mm;
+                        if (!retained.paper_stroke_width_on_screen)
+                            retained.output_stroke_width_mm = view_context.presentation.projection_line_mm;
                         filtered.push_back(std::move(retained));
                     }
                 }
@@ -23825,7 +24090,7 @@ private:
                 const auto line_width_mm = kind == BuildingViewKind::section
                     ? presentation.cut_line_mm
                     : presentation.projection_line_mm;
-                if (std::isfinite(line_width_mm) && line_width_mm > 0.0) {
+                if (!entity.paper_stroke_width_on_screen && std::isfinite(line_width_mm) && line_width_mm > 0.0) {
                     // Persisted view line treatment is expressed in paper
                     // millimetres. The shared canvas converts it at render
                     // time, so a sheet viewport can keep its own scale.
@@ -25622,6 +25887,7 @@ private:
         m_project_details_group->setEnabled(editable && project_entity);
         m_area_attributes_group->setVisible(area_entity);
         m_area_attributes_group->setEnabled(editable && area_entity);
+        m_area_appearance_button->setEnabled(editable && area_entity && m_selected_ids.size() == 1);
         m_area_name_context.reset();
         {
             QSignalBlocker blocker(m_area_name_edit);
@@ -28569,6 +28835,7 @@ private:
     std::optional<ModalContext> m_roof_edit_context;
     QGroupBox* m_area_attributes_group{};
     QLineEdit* m_area_name_edit{};
+    QPushButton* m_area_appearance_button{};
     std::optional<ModalContext> m_area_name_context;
     QPlainTextEdit* m_area_attributes_edit{};
     QPushButton* m_apply_area_attributes_button{};
@@ -28657,6 +28924,7 @@ private:
     QPushButton* m_calibrate_reference_button{};
     QPushButton* m_constraint_button{};
     QPushButton* m_boundary_geometry_button{};
+    QComboBox* m_selection_filter_combo{};
     QToolButton* m_grid_button{};
     QToolButton* m_snap_button{};
     QToolButton* m_fit_button{};

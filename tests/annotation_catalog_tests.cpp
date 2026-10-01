@@ -24,6 +24,28 @@ int main() {
     using namespace sketch;
     const auto catalog = default_symbol_catalog();
     {
+        AnnotationState presentation;
+        presentation.overrides.push_back({"area", "area-a", {}, true});
+        auto wire = encode_annotation_state(presentation, catalog);
+        wire["overrides"][0]["paper_line_width_mm"] = 0.75;
+        wire["overrides"][0]["hatch_scale"] = 2.5;
+        require(encode_annotation_state(decode_annotation_state(wire, catalog), catalog) == wire,
+                "Area appearance must preserve explicit paper line width and hatch scale through persistence");
+        for (const auto* key : {"paper_line_width_mm", "hatch_scale"}) {
+            for (const auto invalid : {0.0, -1.0, 11.0, std::numeric_limits<double>::infinity()}) {
+                auto bad = wire; bad["overrides"][0][key] = invalid;
+                rejected([&] { (void)decode_annotation_state(bad, catalog); });
+            }
+            auto bad = wire; bad["overrides"][0][key] = "invalid";
+            rejected([&] { (void)decode_annotation_state(bad, catalog); });
+        }
+        const auto legacy = encode_annotation_state(presentation, catalog);
+        require(!legacy["overrides"][0].contains("paper_line_width_mm") &&
+                !legacy["overrides"][0].contains("hatch_scale") &&
+                encode_annotation_state(decode_annotation_state(legacy, catalog), catalog) == legacy,
+                "legacy styles must retain absent optional presentation defaults exactly");
+    }
+    {
         AnnotationState placed;
         placed.symbols.push_back({"sized", catalog.front().id, {}, {}, true});
         const auto saved = encode_annotation_state(placed, catalog);

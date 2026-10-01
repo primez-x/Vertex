@@ -46,6 +46,7 @@ using sketch::desktop::BoundaryDraftPreview;
 using sketch::desktop::CanvasEntity;
 using sketch::desktop::CanvasReferenceGrid;
 using sketch::desktop::CanvasTool;
+using sketch::desktop::CanvasSelectionFilter;
 using sketch::desktop::PlanCanvas;
 
 const auto background = QColor(24, 29, 37);
@@ -723,6 +724,12 @@ void test_two_line_area_label_rendering_and_hit_testing() {
     label.color = QColor(220, 20, 20);
     label.show_background = false;
     label.plan_only = true;
+    // Real derived area labels share their editable boundary owner's ID;
+    // unowned plan labels are generated floor titles, not selectable objects.
+    CanvasEntity owner{label.id, QStringLiteral("measurement_boundary"),
+        {{{-2,-2},{2,-2},0},{{2,-2},{2,2},0},{{2,2},{-2,2},0},{{-2,2},{-2,-2},0}}};
+    owner.stroke_color = Qt::black;
+    canvas.setEntities({owner});
     const auto output = [&] {
         QImage image(canvas.size(), QImage::Format_ARGB32_Premultiplied);
         image.fill(Qt::white);
@@ -829,6 +836,235 @@ void test_canvas_label_pdf_preserves_authored_text() {
     }), "canvas PDF must extract authored punctuation instead of font private-use substitutions");
     require(text.contains(QStringLiteral("Floor (GLA) A-901")) && text.contains(QStringLiteral("25.00 ft²")),
             "canvas PDF must retain both authored label lines with standard punctuation and square-foot units");
+}
+
+void test_selection_category_filters() {
+    PlanCanvas canvas;
+    canvas.resize(1000, 700);
+    canvas.setGridEnabled(false);
+    canvas.setOverviewMapEnabled(false);
+    canvas.setSnapEnabled(false);
+    const auto rectangle = [](Vec2 p) -> Boundary {
+        return {{{p.x-.4,p.y-.4},{p.x+.4,p.y-.4},0},
+                {{p.x+.4,p.y-.4},{p.x+.4,p.y+.4},0},
+                {{p.x+.4,p.y+.4},{p.x-.4,p.y+.4},0},
+                {{p.x-.4,p.y+.4},{p.x-.4,p.y-.4},0}};
+    };
+    CanvasEntity area{"area", "measurement_boundary", rectangle({-3,1.5})};
+    area.filled = true;
+    CanvasEntity wall{"object", "wall", {{{-1.4,1.5},{-.6,1.5},0}}};
+    CanvasEntity dimension{"dimension", "dimension", {{{.6,1.5},{1.4,1.5},0}}};
+    CanvasEntity symbol{"symbol", "symbol", rectangle({3,1.5})};
+    canvas.setEntities({area, wall, dimension, symbol});
+    CanvasLabel area_label{"area", {-3,1.5}, "Room"};
+    area_label.plan_only = true;
+    CanvasLabel dimension_label{"dimension", {1,2}, "12 ft"};
+    CanvasLabel authored_label{"label", {-3,-1.5}, "Authored note"};
+    CanvasLabel floor_label{"floor-title", {1,-1.5}, "Floor title"};
+    floor_label.plan_only = true;
+    canvas.setLabels({area_label, dimension_label, authored_label, floor_label});
+    QImage pixels(30, 20, QImage::Format_ARGB32_Premultiplied);
+    pixels.fill(QColor(180, 110, 90));
+    canvas.setReferences({{"reference", pixels, {-1,-1.5}, .02}});
+    const auto screen = [&](Vec2 p) {
+        return QRectF(canvas.rect()).center() + QPointF(p.x*80, -p.y*80);
+    };
+    QString picked, doubled, context;
+    QStringList rectangle_ids;
+    bool additive = false;
+    int authored = 0, selection_callbacks = 0, rectangle_callbacks = 0, moved = 0;
+    canvas.setPointClicked([&](Vec2) { ++authored; });
+    canvas.setEntitySelectionClicked([&](QString id, bool add) { picked = id; additive = add; ++selection_callbacks; });
+    canvas.setEntitiesSelected([&](QStringList ids, bool add) { rectangle_ids = ids; additive = add; ++rectangle_callbacks; });
+    canvas.setEntityDoubleClicked([&](QString id) { doubled = id; });
+    canvas.setRightClicked([&](Vec2, QString id) { context = id; });
+    canvas.setEntitiesMoveRequested([&](QStringList ids, Vec2) { require(ids == QStringList{"object"}, "retained move must keep selected IDs"); ++moved; return true; });
+    const auto event = [&](QEvent::Type type, QPointF p, Qt::MouseButton button, Qt::KeyboardModifiers modifiers = Qt::NoModifier) {
+        QMouseEvent e(type, p, p, button, type == QEvent::MouseButtonRelease ? Qt::NoButton : button, modifiers);
+        QApplication::sendEvent(&canvas, &e);
+    };
+    const auto click = [&](Vec2 p, Qt::MouseButton button = Qt::LeftButton, Qt::KeyboardModifiers modifiers = Qt::NoModifier) {
+        picked.clear(); doubled.clear(); context.clear();
+        event(QEvent::MouseButtonPress, screen(p), button, modifiers);
+        event(QEvent::MouseButtonRelease, screen(p), button, modifiers);
+    };
+    const auto marquee = [&](bool crossing) {
+        rectangle_ids.clear();
+        const auto start = crossing ? QPointF(950, 50) : QPointF(50, 50);
+        const auto end = crossing ? QPointF(50, 650) : QPointF(950, 650);
+        event(QEvent::MouseButtonPress, start, Qt::LeftButton, Qt::ControlModifier);
+        event(QEvent::MouseMove, end, Qt::NoButton, Qt::ControlModifier);
+        event(QEvent::MouseButtonRelease, end, Qt::LeftButton, Qt::ControlModifier);
+    };
+    struct Category { CanvasSelectionFilter filter; QString id; Vec2 point; };
+    const std::vector<Category> categories{
+        {CanvasSelectionFilter::areas,"area",{-3,1.5}},
+        {CanvasSelectionFilter::objects,"object",{-1,1.5}},
+        {CanvasSelectionFilter::dimensions,"dimension",{1,2}},
+        {CanvasSelectionFilter::labels,"label",{-3,-1.5}},
+        {CanvasSelectionFilter::symbols,"symbol",{3,1.5}},
+        {CanvasSelectionFilter::references,"reference",{-1,-1.5}}};
+    require(canvas.selectionFilter() == CanvasSelectionFilter::all, "canvas selection must default to all categories");
+    for (const auto& category : categories) {
+        click(category.point);
+        require(picked == category.id, "default All must pick each editable category");
+    }
+    // Actual persisted desktop dimensions use dimension_line in the retained
+    // scene; their same-ID text must stay in the Dimensions category too.
+    auto retained_entities = canvas.entities();
+    for (auto& entity : retained_entities)
+        if (entity.id == QStringLiteral("dimension")) entity.type = QStringLiteral("dimension_line");
+    canvas.setEntities(std::move(retained_entities));
+    const auto visible_scene = render(canvas, false);
+    for (const auto& category : categories) {
+        canvas.setSelectionFilter(category.filter);
+        require(canvas.selectionFilter() == category.filter && images_equal(visible_scene, render(canvas, false)),
+                "selection filter must retain every visible scene item");
+        for (const auto& target : categories) {
+            click(target.point);
+            require(picked == (category.id == target.id ? target.id : QString{}),
+                    "category click must ignore visibly occupied excluded content");
+            require(authored == 0, "ignored occupied picks must never start drawing nodes");
+        }
+        click(category.point, Qt::LeftButton, Qt::ControlModifier);
+        require(picked == category.id && additive, "Ctrl-click must obey the same category filter");
+        for (bool crossing : {false, true}) {
+            marquee(crossing);
+            require(rectangle_ids == QStringList{category.id} && additive,
+                    "window and crossing Ctrl-marquees must return only the requested category");
+        }
+        for (const auto& target : categories) {
+            click(target.point, Qt::RightButton);
+            require(context == (category.id == target.id ? target.id : QString{}),
+                    "context targets must obey the category filter");
+            event(QEvent::MouseButtonDblClick, screen(target.point), Qt::LeftButton);
+            require(doubled == (category.id == target.id ? target.id : QString{}),
+                    "double-click targets must obey the category filter");
+            doubled.clear();
+        }
+    }
+    canvas.setSelectionFilter(CanvasSelectionFilter::all);
+    click({1,-1.5});
+    require(picked.isEmpty() && authored == 0, "generated floor titles must never become authored label picks or drawing starts");
+    marquee(false);
+    require(rectangle_ids.size() == 6 && !rectangle_ids.contains("floor-title"),
+            "All marquee must deduplicate owner labels and omit generated floor titles");
+    canvas.setTool(CanvasTool::boundary);
+    canvas.setSelectionFilter(CanvasSelectionFilter::areas);
+    click({-1,1.5});
+    require(authored == 0, "idle boundary tool must not turn an excluded object into a first drawing node");
+    click({4,-2.5});
+    require(authored == 1, "unoccupied drawing space must retain the normal authoring path");
+    canvas.setTool(CanvasTool::select);
+
+    canvas.setSelectedIds({"object"});
+    const auto selection = canvas.selectionBounds();
+    canvas.setSelectionFilter(CanvasSelectionFilter::symbols);
+    require(canvas.entities()[1].selected && canvas.selectionBounds() == selection,
+            "filter changes must retain current selected IDs and their controls");
+    click({-1,1.5}, Qt::RightButton);
+    require(context.isEmpty(), "retained selection frame must not bypass filtering for a new context pick");
+    event(QEvent::MouseButtonPress, screen({-1,1.5}), Qt::LeftButton);
+    event(QEvent::MouseMove, screen({-.7,1.7}), Qt::NoButton);
+    event(QEvent::MouseButtonRelease, screen({-.7,1.7}), Qt::LeftButton);
+    require(moved == 1, "retained selected-object movement must remain available under a different pick filter");
+    canvas.setSelectedIds({});
+    canvas.setSelectionFilter(CanvasSelectionFilter::all);
+    const auto callbacks_before = selection_callbacks;
+    event(QEvent::MouseButtonPress, screen({-1,1.5}), Qt::LeftButton);
+    canvas.setSelectionFilter(CanvasSelectionFilter::areas);
+    event(QEvent::MouseButtonRelease, screen({-1,1.5}), Qt::LeftButton);
+    require(selection_callbacks == callbacks_before && authored == 1, "filter change must cancel a captured click target");
+    const auto rectangles_before = rectangle_callbacks;
+    event(QEvent::MouseButtonPress, {50,50}, Qt::LeftButton, Qt::ControlModifier);
+    event(QEvent::MouseMove, {950,650}, Qt::NoButton, Qt::ControlModifier);
+    canvas.setSelectionFilter(CanvasSelectionFilter::labels);
+    event(QEvent::MouseButtonRelease, {950,650}, Qt::LeftButton, Qt::ControlModifier);
+    require(rectangle_callbacks == rectangles_before, "filter change must cancel a captured marquee");
+    const auto before_pan = canvas.viewCenter();
+    event(QEvent::MouseButtonPress, screen({-1,1.5}), Qt::MiddleButton);
+    event(QEvent::MouseMove, screen({-.5,1.5}), Qt::NoButton);
+    event(QEvent::MouseButtonRelease, screen({-.5,1.5}), Qt::MiddleButton);
+    require(canvas.viewCenter().x != before_pan.x, "navigation must remain available over excluded content");
+
+    // Exercise semantic aliases without an opaque default-to-objects fallback.
+    canvas.setLabels({}); canvas.setReferences({});
+    for (const auto& type : {"boundary", "measurement_boundary", "room_boundary", "room",
+                             "wall", "opening", "door", "window", "slab", "roof", "stair", "railing", "column", "beam", "assembly", "assembly_instance"}) {
+        canvas.setEntities({{"typed-owner", QString::fromLatin1(type), rectangle(canvas.viewCenter()), .08, false, true}});
+        const bool is_area = QString::fromLatin1(type) == "boundary" || QString::fromLatin1(type) == "measurement_boundary" ||
+                             QString::fromLatin1(type) == "room_boundary" || QString::fromLatin1(type) == "room";
+        canvas.setSelectionFilter(is_area ? CanvasSelectionFilter::areas : CanvasSelectionFilter::objects);
+        picked.clear();
+        const auto painted_edge = QRectF(canvas.rect()).center() + QPointF(0,-.4*80);
+        event(QEvent::MouseButtonPress, painted_edge, Qt::LeftButton);
+        event(QEvent::MouseButtonRelease, painted_edge, Qt::LeftButton);
+        require(picked == "typed-owner", "all specified area and architectural types must participate in their category");
+    }
+}
+
+void test_opt_in_screen_paper_stroke_width() {
+    PlanCanvas canvas;
+    canvas.resize(800,600);
+    canvas.setGridEnabled(false); canvas.setOverviewMapEnabled(false);
+    CanvasEntity entity{"area-outline", "measurement_boundary", {{{-2,0},{2,0},0}}};
+    entity.stroke_color = QColor(220,20,20);
+    entity.output_stroke_width_mm = .75;
+    canvas.setEntities({entity});
+    const auto image = [&](bool output) {
+        QImage result(canvas.size(), QImage::Format_ARGB32_Premultiplied);
+        result.fill(Qt::white);
+        QPainter painter(&result);
+        if (output) canvas.renderSceneAt(painter, result.rect(), 100, {}, Qt::white);
+        else canvas.renderScene(painter, result.rect(), false, Qt::white);
+        return result;
+    };
+    const auto ink_width = [&](const QImage& rendered) {
+        double width = 0;
+        for (int y=rendered.height()/2-12; y<=rendered.height()/2+12; ++y)
+            width += (255-rendered.pixelColor(rendered.width()/2,y).green())/235.0;
+        return width;
+    };
+    const auto legacy_width = ink_width(image(false));
+    const auto unchanged_output = image(true);
+    entity.paper_stroke_width_on_screen = true;
+    canvas.setEntities({entity});
+    const auto first = image(false);
+    const auto physical_width = .75 * canvas.logicalDpiX() / 25.4;
+    require(std::abs(ink_width(first)-physical_width) < .6 && ink_width(first) > legacy_width*1.4,
+            "opt-in screen stroke must render the explicit physical paper width rather than its default preset");
+    canvas.zoomBy(3, QRectF(canvas.rect()).center());
+    const auto zoomed = image(false);
+    require(std::abs(ink_width(first)-ink_width(zoomed)) < .15,
+            "explicit paper stroke must stay fixed in screen pixels across model zoom");
+    require(images_equal(unchanged_output,image(true)), "screen paper-width opt-in must not alter explicit output rendering");
+    entity.output_stroke_width_mm = 10.0;
+    canvas.setEntities({entity});
+    canvas.setTool(CanvasTool::select);
+    QString picked;
+    QStringList rectangle_ids;
+    int authored = 0;
+    canvas.setEntitySelectionClicked([&](QString id, bool) { picked = id; });
+    canvas.setEntitiesSelected([&](QStringList ids, bool) { rectangle_ids = ids; });
+    canvas.setPointClicked([&](Vec2) { ++authored; });
+    const auto event = [&](QEvent::Type type, QPointF position, Qt::KeyboardModifiers modifiers = Qt::NoModifier) {
+        QMouseEvent input(type, position, position,
+            type == QEvent::MouseMove ? Qt::NoButton : Qt::LeftButton,
+            type == QEvent::MouseButtonRelease ? Qt::NoButton : Qt::LeftButton, modifiers);
+        QApplication::sendEvent(&canvas, &input);
+    };
+    const auto edge = QRectF(canvas.rect()).center() + QPointF(0, 10.0*canvas.logicalDpiX()/25.4*.5-1.0);
+    event(QEvent::MouseButtonPress, edge);
+    event(QEvent::MouseButtonRelease, edge);
+    require(picked == entity.id, "the outer painted edge of a thick paper outline must be selectable");
+    event(QEvent::MouseButtonPress, edge + QPointF(30,2), Qt::ControlModifier);
+    event(QEvent::MouseMove, edge + QPointF(-30,-2), Qt::ControlModifier);
+    event(QEvent::MouseButtonRelease, edge + QPointF(-30,-2), Qt::ControlModifier);
+    require(rectangle_ids == QStringList{entity.id}, "crossing selection must include the painted paper stroke footprint");
+    canvas.setSelectionFilter(CanvasSelectionFilter::symbols);
+    event(QEvent::MouseButtonPress, edge);
+    event(QEvent::MouseButtonRelease, edge);
+    require(authored == 0 && picked.isEmpty(), "an excluded thick painted edge must not initiate a drawing");
 }
 
 void test_analytic_arc_fit_bounds() {
@@ -2584,6 +2820,11 @@ int main(int argc, char** argv) {
         for (const auto character : QStringLiteral("2.00 m Draft boundary • place the next dimension")) {
             require(metrics.inFont(character), "capture font must contain each rendered character");
         }
+        if (application.arguments().contains(QStringLiteral("--selection-filter-only"))) {
+            test_selection_category_filters();
+            test_opt_in_screen_paper_stroke_width();
+            return 0;
+        }
         if (application.arguments().contains(QStringLiteral("--label-pdf-only"))) {
             test_canvas_label_pdf_preserves_authored_text();
             return 0;
@@ -2626,6 +2867,8 @@ int main(int argc, char** argv) {
         test_paper_label_style_and_hit_testing();
         test_two_line_area_label_rendering_and_hit_testing();
         test_canvas_label_pdf_preserves_authored_text();
+        test_selection_category_filters();
+        test_opt_in_screen_paper_stroke_width();
         std::cout << "Boundary canvas tests passed\n";
         return 0;
     } catch (const std::exception& error) {
