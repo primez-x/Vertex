@@ -1286,8 +1286,10 @@ bool PlanCanvas::completeEntitiesMovePreview(std::uint64_t serial,
     return true;
 }
 
-void PlanCanvas::setSymbolDropped(std::function<void(QString, double, Vec2)> callback) {
+void PlanCanvas::setSymbolDropped(std::function<void(QString, double, Vec2)> callback,
+                                 std::function<bool(const QString&)> uses_raw_point) {
     m_symbol_dropped = std::move(callback);
+    m_symbol_drop_uses_raw_point = std::move(uses_raw_point);
 }
 
 void PlanCanvas::dragEnterEvent(QDragEnterEvent* event) {
@@ -1313,7 +1315,9 @@ void PlanCanvas::dropEvent(QDropEvent* event) {
     const auto id = object.value("id").toString();
     const auto scale = object.value("scale").toDouble(0.0);
     if (id.isEmpty() || id.size() > 256 || !std::isfinite(scale) || scale <= 0.0 || scale > 100.0) return;
-    m_symbol_dropped(id, scale, snapped(toModel(event->position(), rect())));
+    const auto raw = toModel(event->position(), rect());
+    const bool project_onto_host = m_symbol_drop_uses_raw_point && m_symbol_drop_uses_raw_point(id);
+    m_symbol_dropped(id, scale, project_onto_host ? raw : snapped(raw));
     event->acceptProposedAction();
 }
 
@@ -3025,9 +3029,15 @@ std::optional<Vec2> PlanCanvas::closingAnchor(QPointF point) const {
         ? std::optional{anchor} : std::nullopt;
 }
 
+void PlanCanvas::setRawPointInput(bool enabled) {
+    if (m_raw_point_input == enabled) return;
+    m_raw_point_input = enabled;
+    update();
+}
+
 PlanCanvas::SnapResult PlanCanvas::snapResult(QPointF screen_point) const {
     const auto raw = toModel(screen_point, rect());
-    if (!m_snap_enabled) return {raw, SnapKind::none, {}, {}};
+    if (m_raw_point_input || !m_snap_enabled) return {raw, SnapKind::none, {}, {}};
     if (m_panning || m_left_dragging || m_selection_dragging || m_overview_dragging ||
         m_touch_navigation) {
         return {snapped(raw), SnapKind::none, {}, {}};

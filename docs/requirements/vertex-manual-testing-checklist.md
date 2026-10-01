@@ -1622,8 +1622,8 @@ drawing; switching modes does not change existing geometry.
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U288 — Place a library window into a physical wall**
-  - Steps: Draw a long wall. In Library, search for a window, double-click it, then click the wall away from its corners. Try the Window quick-insertion button on another part of the wall. Try placing a window outside any wall and too close to a corner.
-  - Expected: Both paths create wall-hosted windows with a real wall cut and editable opening dimensions. A library item supplies the selected variant. An invalid location explains how to place the opening; it creates neither a detached decorative window nor a partial wall edit.
+  - Steps: Draw a long wall. In Library, search for a window and double-click it. Choose Style and adjust width, height and sill; hover over the wall, then click away from its corners. Try the Window quick-insertion button on another part of the wall and change its Style before placement. Repeat with Door. Try placing a window outside any wall and too close to a corner.
+  - Expected: The catalog and quick buttons use the same style and dimension controls, with an opening preview before the click. Both create wall-hosted openings with a real wall cut and editable dimensions. Switching Style loads its dimensions. An invalid location explains how to place the opening; it creates neither a detached decorative window nor a partial wall edit. Escape cancels placement; subsequent empty clicks draw walls again.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 

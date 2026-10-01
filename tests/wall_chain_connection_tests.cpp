@@ -9,10 +9,13 @@
 #include <QApplication>
 #include <QComboBox>
 #include <QFontDatabase>
+#include <QInputDialog>
 #include <QKeyEvent>
 #include <QMouseEvent>
 #include <QStandardPaths>
 #include <QTemporaryDir>
+#include <QTimer>
+#include <QToolButton>
 #include <QTreeWidget>
 #include <QTreeWidgetItemIterator>
 #include <QUuid>
@@ -328,6 +331,85 @@ void test_escape_keeps_committed_wall_segments() {
             "Escape cancels only the unfinished next segment and preserves committed walls");
 }
 
+void test_sloped_wall_endpoint_snapping_respects_snap_toggle() {
+    for (const bool snap_enabled : {false, true}) {
+        MainWindow window;
+        window.resize(1200, 800);
+        window.setMetricUnits(true);
+        const Vec2 start{0.37, 0.37}, end{3.37, 0.37};
+        const auto existing = window.createStraightWall(start, end);
+        require(!existing.isEmpty(), "sloped snap fixture creates an analytical endpoint target");
+        window.show();
+        window.setWorkspace(Workspace::measurement);
+        QApplication::processEvents();
+        auto* canvas = dynamic_cast<PlanCanvas*>(
+            window.findChild<QWidget*>(QStringLiteral("measurementPlanCanvas")));
+        auto* sloped_wall = window.findChild<QAction*>(QStringLiteral("slopedWall"));
+        auto* snap = window.findChild<QToolButton*>(QStringLiteral("snapTool"));
+        require(canvas && sloped_wall && snap,
+                "sloped wall command exposes its canvas and snap toggle");
+        canvas->setOverviewMapEnabled(false);
+        snap->setChecked(snap_enabled);
+        sloped_wall->trigger();
+        QApplication::processEvents();
+
+        const auto screen = [&](Vec2 point) {
+            const auto center = canvas->viewCenter();
+            const auto viewport = QRectF(canvas->rect());
+            return QPointF(viewport.center().x() + (point.x - center.x) * canvas->viewScale(),
+                           viewport.center().y() - (point.y - center.y) * canvas->viewScale());
+        };
+        const auto mouse = [&](QEvent::Type type, Vec2 point, Qt::MouseButton button,
+                               Qt::MouseButtons buttons) {
+            const auto position = screen(point);
+            QMouseEvent event(type, position, canvas->mapToGlobal(position.toPoint()),
+                              button, buttons, Qt::NoModifier);
+            QApplication::sendEvent(canvas, &event);
+        };
+        const auto click = [&](Vec2 point) {
+            mouse(QEvent::MouseButtonPress, point, Qt::LeftButton, Qt::LeftButton);
+            mouse(QEvent::MouseButtonRelease, point, Qt::LeftButton, Qt::NoButton);
+        };
+        const auto close = [](Vec2 left, Vec2 right) {
+            return std::hypot(left.x - right.x, left.y - right.y) < 1e-8;
+        };
+        // Off-grid coordinates distinguish real endpoint snapping from grid
+        // rounding; both near misses remain within the 12 px endpoint target.
+        const auto offset = std::min(0.08, 6.0 / canvas->viewScale());
+        const Vec2 raw_start{start.x - offset, start.y + offset};
+        const Vec2 raw_end{end.x + offset, end.y + offset};
+        const auto expected_start = snap_enabled ? start : raw_start;
+        const auto expected_end = snap_enabled ? end : raw_end;
+        click(raw_start);
+        require(canvas->wallPreview() && close(canvas->wallPreview()->start, expected_start),
+                "sloped wall start uses analytical endpoint snap only while Snap is enabled");
+        mouse(QEvent::MouseMove, raw_end, Qt::NoButton, Qt::NoButton);
+        require(canvas->wallPreview() && close(canvas->wallPreview()->end, expected_end) &&
+                    !canvas->wallPreview()->dimension_text.isEmpty(),
+                "sloped wall previews its effective endpoint and physical length");
+
+        bool rise_prompt_seen = false;
+        QTimer::singleShot(0, &window, [&] {
+            auto* dialog = qobject_cast<QInputDialog*>(QApplication::activeModalWidget());
+            if (!dialog) return;
+            rise_prompt_seen = true;
+            dialog->setTextValue(QStringLiteral("0.3 m"));
+            dialog->accept();
+        });
+        click(raw_end);
+        require(rise_prompt_seen, "sloped wall commit asks for its signed rise");
+        const auto snapshot = window.document().snapshot();
+        const auto walls = wall_ids(snapshot);
+        require(walls.size() == 2, "two sloped tool clicks and accepted rise commit one wall");
+        const auto created = std::find_if(walls.begin(), walls.end(),
+            [&](const auto& id) { return id != existing.toStdString(); });
+        require(created != walls.end(), "committed sloped wall retains a distinct identity");
+        const auto baseline = wall_baseline(snapshot.entities().at(*created));
+        require(close(baseline.start, expected_start) && close(baseline.end, expected_end),
+                "sloped wall commit keeps the same snapped or raw endpoints as its preview");
+    }
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -344,6 +426,7 @@ int main(int argc, char** argv) {
         test_interactive_wall_chain_closure_finishes_at_its_start();
         test_wall_and_boundary_tools_route_from_architectural_views();
         test_escape_keeps_committed_wall_segments();
+        test_sloped_wall_endpoint_snapping_respects_snap_toggle();
     } catch (const std::exception& error) {
         std::cerr << "wall_chain_connection_tests: " << error.what() << '\n';
         return 1;

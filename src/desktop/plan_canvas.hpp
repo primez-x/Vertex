@@ -257,6 +257,9 @@ public:
     void setGridEnabled(bool enabled);
     void setSnapEnabled(bool enabled);
     void setWallSnapEnabled(bool enabled);
+    // Tools that project onto a host consume raw coordinates, independently
+    // of the user's retained grid/geometry snapping preference.
+    void setRawPointInput(bool enabled);
     void setOverviewMapEnabled(bool enabled);
     [[nodiscard]] bool overviewMapEnabled() const noexcept { return m_overview_map_enabled; }
     void setMetricUnits(bool metric);
@@ -407,7 +410,8 @@ public:
     // final admission recomputes the edit rather than trusting preview geometry.
     void setBoundaryVertexMoveRequested(
         std::function<bool(QString, QString, Vec2, std::uint64_t)> callback);
-    void setSymbolDropped(std::function<void(QString, double, Vec2)> callback);
+    void setSymbolDropped(std::function<void(QString, double, Vec2)> callback,
+                          std::function<bool(const QString&)> uses_raw_point = {});
     void setCursorMoved(std::function<void(Vec2)> callback);
     // Emitted only on a stationary right-button release. The target is the
     // painted entity under the pointer, or an empty string for canvas space.
@@ -553,6 +557,7 @@ private:
     bool m_grid_enabled{true};
     bool m_snap_enabled{true};
     bool m_wall_snap_enabled{false};
+    bool m_raw_point_input{false};
     bool m_overview_map_enabled{true};
     bool m_metric_units{false};
     QColor m_canvas_background{248, 250, 252};
@@ -658,6 +663,7 @@ private:
     std::function<bool(QString, QString, Vec2, std::uint64_t)>
         m_boundary_vertex_move_requested;
     std::function<void(QString, double, Vec2)> m_symbol_dropped;
+    std::function<bool(const QString&)> m_symbol_drop_uses_raw_point;
     std::function<void(Vec2)> m_cursor_moved;
     std::function<void(Vec2, QString)> m_right_clicked;
     std::function<void()> m_finish_requested;

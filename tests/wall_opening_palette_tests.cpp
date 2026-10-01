@@ -3,6 +3,7 @@
 #include "sketch/document.hpp"
 #include "sketch/document_solid.hpp"
 #include "sketch/document_schedule_adapter.hpp"
+#include "sketch/quantity.hpp"
 #include "../src/desktop/plan_canvas.hpp"
 #include "support/noninteractive_errors.hpp"
 #include <QApplication>
@@ -87,6 +88,84 @@ int main(int argc, char** argv) {
     const auto font_id = QFontDatabase::addApplicationFont(QStringLiteral(":/fonts/Inter.ttf"));
     if (font_id >= 0) QApplication::setFont(QFont(QFontDatabase::applicationFontFamilies(font_id).front(), 10));
     try {
+        {
+            sketch::desktop::MainWindow diagonal;
+            diagonal.resize(1200, 800);
+            diagonal.setMetricUnits(true);
+            diagonal.show();
+            const auto wall = diagonal.createStraightWall({-3, 3.248}, {3, -2.752});
+            require(!wall.isEmpty(), "off-grid diagonal host exists");
+            for (auto* tabs : diagonal.findChildren<QTabWidget*>())
+                for (int index = 0; index < tabs->count(); ++index)
+                    if (tabs->tabText(index).contains(QStringLiteral("Library"), Qt::CaseInsensitive))
+                        tabs->setCurrentIndex(index);
+            QApplication::processEvents();
+            auto* list = diagonal.findChild<QListWidget*>(QStringLiteral("symbolLibraryItems"));
+            require(list && list->isVisible(), "diagonal host library is visible");
+            QListWidgetItem* chosen = nullptr;
+            for (int index = 0; index < list->count(); ++index)
+                if (list->item(index)->data(Qt::UserRole).toString() == QStringLiteral("svg-v2-10_windows-window-fixed-600"))
+                    chosen = list->item(index);
+            require(chosen != nullptr, "diagonal window preset exists");
+            list->scrollToItem(chosen);
+            QApplication::processEvents();
+            const QPointF item_point = list->visualItemRect(chosen).center();
+            auto* list_view = list->viewport();
+            QMouseEvent first_press(QEvent::MouseButtonPress, item_point,
+                list_view->mapToGlobal(item_point.toPoint()), Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+            QApplication::sendEvent(list_view, &first_press);
+            QMouseEvent first_release(QEvent::MouseButtonRelease, item_point,
+                list_view->mapToGlobal(item_point.toPoint()), Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+            QApplication::sendEvent(list_view, &first_release);
+            QMouseEvent double_click(QEvent::MouseButtonDblClick, item_point,
+                list_view->mapToGlobal(item_point.toPoint()), Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+            QApplication::sendEvent(list_view, &double_click);
+            QApplication::sendEvent(list_view, &first_release);
+            auto* active_style = diagonal.findChild<QComboBox*>(QStringLiteral("openingPlacementStyle"));
+            require(active_style && active_style->isVisible() && active_style->currentData().toString() ==
+                        QStringLiteral("svg-v2-10_windows-window-fixed-600"),
+                    "real Library double-click arms the requested diagonal-window placement");
+            auto* preset_width = diagonal.findChild<QLineEdit*>(QStringLiteral("openingDrawWidth"));
+            require(preset_width && preset_width->text() == QStringLiteral("0.6 m"),
+                    "preset width uses clean round-trip decimal text");
+            auto* target = dynamic_cast<sketch::desktop::PlanCanvas*>(diagonal.findChild<QWidget*>(QStringLiteral("measurementPlanCanvas")));
+            require(target != nullptr, "diagonal target canvas exists");
+            const auto center = target->viewCenter();
+            const auto viewport = QRectF(target->rect());
+            const QPointF point{viewport.center().x() + (0.124 - center.x) * target->viewScale(),
+                                viewport.center().y() - (0.124 - center.y) * target->viewScale()};
+            require(target->rect().contains(point.toPoint()), "off-grid host point is inside canvas");
+            const auto send = [&](QEvent::Type type, Qt::MouseButton button, Qt::MouseButtons buttons) {
+                QMouseEvent event(type, point, target->mapToGlobal(point.toPoint()), button, buttons, Qt::NoModifier);
+                QApplication::sendEvent(target, &event);
+            };
+            send(QEvent::MouseMove, Qt::NoButton, Qt::NoButton);
+            send(QEvent::MouseButtonPress, Qt::LeftButton, Qt::LeftButton);
+            send(QEvent::MouseButtonRelease, Qt::LeftButton, Qt::NoButton);
+            const auto created = diagonal.document().snapshot();
+            if (!diagonal.lastError().isEmpty()) std::cerr << diagonal.lastError().toStdString() << '\n';
+            const auto selected = created.entities().find(diagonal.selectedEntityId().toStdString());
+            require(selected != created.entities().end() && selected->second.type == "opening" &&
+                        selected->second.properties.at("wall_id") == wall.toStdString(),
+                    "Snap-on Library placement accepts an exact click on an off-grid diagonal host");
+            require(selected->second.properties.at("catalog_symbol_id") == "svg-v2-10_windows-window-fixed-600",
+                    "shared Library preparation preserves selected window identity");
+            require(diagonal.undoCommand(), "diagonal Library placement is undoable");
+            QMimeData payload;
+            payload.setData("application/x-vertex-symbol", QJsonDocument(QJsonObject{
+                {QStringLiteral("id"), QStringLiteral("svg-v2-10_windows-window-fixed-600")},
+                {QStringLiteral("scale"), 1.0}}).toJson(QJsonDocument::Compact));
+            QDragEnterEvent drag_enter(point.toPoint(), Qt::CopyAction, &payload, Qt::LeftButton, Qt::NoModifier);
+            QApplication::sendEvent(target, &drag_enter);
+            require(drag_enter.isAccepted(), "diagonal host accepts catalog drag");
+            QDropEvent drop(point, Qt::CopyAction, &payload, Qt::LeftButton, Qt::NoModifier);
+            QApplication::sendEvent(target, &drop);
+            const auto dropped = diagonal.document().snapshot();
+            const auto dropped_opening = dropped.entities().find(diagonal.selectedEntityId().toStdString());
+            require(dropped_opening != dropped.entities().end() && dropped_opening->second.type == "opening" &&
+                        dropped_opening->second.properties.at("wall_id") == wall.toStdString(),
+                    "Snap-on catalog drop accepts an exact point on the off-grid diagonal host");
+        }
         sketch::desktop::MainWindow window;
         window.resize(1500, 950);
         window.show();
@@ -644,6 +723,16 @@ int main(int argc, char** argv) {
         verify_geometry(window.document().snapshot());
         const auto revision = window.document().revision();
         action("libraryWindow");
+        auto* opening_style = window.findChild<QComboBox*>(QStringLiteral("openingPlacementStyle"));
+        require(opening_style && opening_style->isVisible(),
+                "Window uses the shared hosted-opening style chooser");
+        require(opening_style->currentData().toString() == QStringLiteral("svg-v2-10_windows-window-fixed-1200"),
+                "Window shortcut and catalog use the same fixed-window preset");
+        const auto sliding_index = opening_style->findData(QStringLiteral("svg-v2-10_windows-window-sliding"));
+        require(sliding_index >= 0, "window styles are available before placement");
+        opening_style->setCurrentIndex(sliding_index);
+        require(std::abs(sketch::parse_quantity(field("openingDrawWidth")->text().toStdString(), sketch::Unit::metre).metres - 1.6) < 1e-10,
+                "switching hosted window style loads its physical opening width");
         click(hosted_window_point);
         require(window.document().revision() == revision, "overlapping opening fails admission without mutation");
         QKeyEvent escape(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);

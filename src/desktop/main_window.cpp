@@ -1519,6 +1519,8 @@ QByteArray load_symbol_svg(const SymbolSvgAsset& asset) {
 }
 
 QString symbol_category_label(const std::string& category) {
+    if (category == "09_doors") return QStringLiteral("Doors (wall openings)");
+    if (category == "10_windows") return QStringLiteral("Windows (wall openings)");
     auto label = QString::fromStdString(category);
     label.remove(QRegularExpression(QStringLiteral("^\\d+[_ -]+")));
     label.replace(QLatin1Char('_'), QLatin1Char(' '));
@@ -19869,10 +19871,14 @@ public:
                     : QStringLiteral("Nominal size: %1 × %2 m")
                           .arg(QString::number(definition->width_metres, 'g', 4))
                           .arg(QString::number(definition->depth_metres, 'g', 4));
-            entry->setToolTip(QStringLiteral("%1\n%2\n%3\nDrag onto the plan, or double-click then click to place.")
+            const auto placement = is_hosted_opening_symbol(*definition)
+                ? QStringLiteral("Wall opening: drag onto a wall, or double-click then click a wall. Cuts the host wall.")
+                : QStringLiteral("Drag onto the plan, or double-click then click to place.");
+            entry->setToolTip(QStringLiteral("%1\n%2\n%3\n%4")
                                   .arg(label)
                                   .arg(size_description)
-                                  .arg(symbol_category_label(definition->category)));
+                                  .arg(symbol_category_label(definition->category))
+                                  .arg(placement));
             if (entry->data(symbol_family_role).toString() == previous_family)
                 m_symbol_list->setCurrentItem(entry);
         }
@@ -19932,6 +19938,42 @@ public:
         populateSymbolLibrary();
     }
 
+    bool prepareHostedOpening(const SymbolDefinition& definition, double scale = 1.0) {
+        if (!is_hosted_opening_symbol(definition)) return false;
+        const auto width = catalog_opening_width(definition) * scale;
+        if (!std::isfinite(width) || width <= 0.0) {
+            setError(QStringLiteral("Catalog opening width is invalid."));
+            return false;
+        }
+        const bool window = definition.category == "10_windows";
+        m_pending_opening_kind = window ? QStringLiteral("window") : QStringLiteral("door");
+        m_pending_opening_symbol_id = QString::fromStdString(definition.id);
+        m_pending_opening_door_operation = catalog_hinged_door_operation(definition);
+        m_opening_draw_width->setText(QString::fromStdString(json(width).dump()) + QStringLiteral(" m"));
+        m_opening_draw_height->setText(window ? QStringLiteral("1.2 m") : QStringLiteral("2.1 m"));
+        m_opening_draw_sill->setText(window ? QStringLiteral("0.9 m") : QStringLiteral("0 m"));
+        {
+            const QSignalBlocker blocker(m_opening_style);
+            m_opening_style->clear();
+            for (const auto& candidate : desktop_placeable_symbol_catalog()) {
+                if (candidate.category != definition.category) continue;
+                m_opening_style->addItem(symbol_library_thumbnail(candidate),
+                    QString::fromStdString(candidate.name), QString::fromStdString(candidate.id));
+            }
+            m_opening_style->setCurrentIndex(m_opening_style->findData(m_pending_opening_symbol_id));
+            m_opening_style->setEnabled(true);
+        }
+        m_opening_draw_fields->show();
+        m_wall_draw_fields->hide();
+        m_architecture_hint->show();
+        m_architecture_hint->setText(QStringLiteral("%1 • click an existing wall to place. Esc cancels.")
+            .arg(QString::fromStdString(definition.name)));
+        syncToolControls();
+        clearError();
+        updateOpeningPlacement(m_last_cursor, false);
+        return true;
+    }
+
     void armSymbolPlacement(QListWidgetItem* item) {
         if (!item) return;
         const auto id = item->data(Qt::UserRole).toString();
@@ -19961,6 +20003,11 @@ public:
             setWorkspace(Workspace::measurement);
             if (m_workspace != Workspace::measurement) return;
             if (m_creation_mode != DrawingMode::wall && !setDrawingMode(DrawingMode::wall)) return;
+            setTool(CanvasTool::wall);
+            if (m_tool != CanvasTool::wall) return;
+            (void)selectEntity({}, false);
+            (void)prepareHostedOpening(*definition);
+            return;
         }
         setTool(CanvasTool::select);
         if (m_tool != CanvasTool::select) return;
@@ -20018,29 +20065,7 @@ public:
             if (m_creation_mode != DrawingMode::wall && !setDrawingMode(DrawingMode::wall)) return;
             if (m_tool != CanvasTool::wall) setTool(CanvasTool::wall);
             if (m_tool != CanvasTool::wall) return;
-            m_pending_opening_kind = definition->category == "09_doors"
-                ? QStringLiteral("door") : QStringLiteral("window");
-            m_pending_opening_symbol_id = id;
-            m_pending_opening_door_operation = catalog_hinged_door_operation(*definition);
-            const auto width = catalog_opening_width(*definition) * scale;
-            if (!std::isfinite(width) || width <= 0.0) {
-                cancelTool();
-                setError(QStringLiteral("Catalog opening width is invalid."));
-                return;
-            }
-            const bool window_opening = m_pending_opening_kind == QStringLiteral("window");
-            m_opening_draw_width->setText(QString::fromStdString(json(width).dump()) + QStringLiteral(" m"));
-            m_opening_draw_height->setText(window_opening ? QStringLiteral("1.2 m")
-                                                         : QStringLiteral("2.1 m"));
-            m_opening_draw_sill->setText(window_opening ? QStringLiteral("0.9 m")
-                                                       : QStringLiteral("0 m"));
-            m_opening_draw_fields->show();
-            m_wall_draw_fields->hide();
-            m_architecture_hint->show();
-            m_architecture_hint->setText(QStringLiteral("Hosted %1 • %2 wide. Click a wall to place; Esc cancels.")
-                .arg(QString::fromStdString(definition->name), format_length(width, m_metric_units)));
-            syncToolControls();
-            clearError();
+            if (!prepareHostedOpening(*definition, scale)) return;
             updateOpeningPlacement(point, true);
             if (!m_pending_opening_kind.isEmpty()) {
                 const auto detail = lastError();
@@ -22673,6 +22698,9 @@ private:
         for (const auto& kind : {QStringLiteral("Wall"), QStringLiteral("Doorway"), QStringLiteral("Door"), QStringLiteral("Window")}) {
             auto* button = new QPushButton(kind, architecture_palette);
             button->setObjectName(QStringLiteral("library") + kind);
+            button->setToolTip(kind == QStringLiteral("Wall")
+                ? QStringLiteral("Draw a physical wall by clicking its start and end")
+                : QStringLiteral("Place a %1 in an existing wall; choose its style and dimensions below").arg(kind.toLower()));
             architecture_buttons->addWidget(button);
             QObject::connect(button, &QPushButton::clicked, owner, [this, kind] {
                 if (m_boundary_session) {
@@ -22695,12 +22723,28 @@ private:
                 if (m_creation_mode != DrawingMode::wall && !setDrawingMode(DrawingMode::wall)) return;
                 if (m_tool != CanvasTool::wall) setTool(CanvasTool::wall);
                 if (m_tool != CanvasTool::wall) return;
+                if (kind == QStringLiteral("Door") || kind == QStringLiteral("Window")) {
+                    const auto preset = kind == QStringLiteral("Window")
+                        ? "svg-v2-10_windows-window-fixed-1200" : "svg-v2-09_doors-door-hinged-910-left";
+                    const auto& catalog = desktop_placeable_symbol_catalog();
+                    const auto definition = std::find_if(catalog.begin(), catalog.end(),
+                        [&](const auto& candidate) { return candidate.id == preset; });
+                    if (definition != catalog.end()) {
+                        (void)selectEntity({}, false);
+                        (void)prepareHostedOpening(*definition);
+                        return;
+                    }
+                }
                 if (kind != QStringLiteral("Wall")) {
                     m_pending_opening_kind = kind == QStringLiteral("Doorway") ? QStringLiteral("opening") : kind.toLower();
                     const bool window = kind == QStringLiteral("Window");
                     m_opening_draw_width->setText(window ? QStringLiteral("1.2 m") : QStringLiteral("0.9 m"));
                     m_opening_draw_height->setText(window ? QStringLiteral("1.2 m") : QStringLiteral("2.1 m"));
                     m_opening_draw_sill->setText(window ? QStringLiteral("0.9 m") : QStringLiteral("0 m"));
+                    const QSignalBlocker blocker(m_opening_style);
+                    m_opening_style->clear();
+                    m_opening_style->addItem(QStringLiteral("Bare doorway"));
+                    m_opening_style->setEnabled(false);
                 }
                 m_opening_draw_fields->setVisible(!m_pending_opening_kind.isEmpty());
                 m_wall_draw_fields->setVisible(m_pending_opening_kind.isEmpty());
@@ -22734,6 +22778,18 @@ private:
         auto* opening_form = new QFormLayout(m_opening_draw_fields);
         opening_form->setContentsMargins(0, 0, 0, 0);
         opening_form->setVerticalSpacing(3);
+        m_opening_style = new QComboBox(m_opening_draw_fields);
+        m_opening_style->setObjectName(QStringLiteral("openingPlacementStyle"));
+        m_opening_style->setAccessibleName(QStringLiteral("Wall opening style"));
+        opening_form->addRow(QStringLiteral("Style"), m_opening_style);
+        QObject::connect(m_opening_style, &QComboBox::currentIndexChanged, owner, [this](int index) {
+            if (index < 0 || m_pending_opening_kind.isEmpty()) return;
+            const auto id = m_opening_style->itemData(index).toString().toStdString();
+            const auto& catalog = desktop_placeable_symbol_catalog();
+            const auto definition = std::find_if(catalog.begin(), catalog.end(),
+                [&](const auto& candidate) { return candidate.id == id; });
+            if (definition != catalog.end()) (void)prepareHostedOpening(*definition);
+        });
         m_opening_draw_width = dimension_field(opening_form, QStringLiteral("Width"), "openingDrawWidth", QStringLiteral("0.9 m"));
         m_opening_draw_height = dimension_field(opening_form, QStringLiteral("Height"), "openingDrawHeight", QStringLiteral("2.1 m"));
         m_opening_draw_sill = dimension_field(opening_form, QStringLiteral("Sill"), "openingDrawSill", QStringLiteral("0 m"));
@@ -22750,7 +22806,7 @@ private:
         auto* components_header_layout = new QHBoxLayout(components_header);
         components_header_layout->setContentsMargins(0, 4, 0, 0);
         components_header_layout->setSpacing(4);
-        auto* components_heading = new QLabel(QStringLiteral("Symbols & labels"), components_header);
+        auto* components_heading = new QLabel(QStringLiteral("Components"), components_header);
         m_component_library_heading = components_heading;
         components_heading->setAccessibleName(QStringLiteral("Active layer symbol and label library"));
         components_heading->setObjectName(QStringLiteral("componentLibraryHeading"));
@@ -23944,6 +24000,11 @@ private:
         canvas->setSymbolDropped([this](QString id, double scale, Vec2 point) {
             cancelSymbolPlacement();
             placeLibrarySymbol(id, scale, point);
+        }, [](const QString& id) {
+            const auto& catalog = desktop_placeable_symbol_catalog();
+            const auto definition = std::find_if(catalog.begin(), catalog.end(),
+                [&](const auto& candidate) { return candidate.id == id.toStdString(); });
+            return definition != catalog.end() && is_hosted_opening_symbol(*definition);
         });
         canvas->setEntitiesSelected([this](QStringList ids, bool additive) {
             if (!m_pending_symbol_id.isEmpty()) {
@@ -28342,9 +28403,13 @@ private:
         }
         m_measurementCanvas->setTool(m_tool);
         m_architecturalCanvas->setTool(m_tool);
+        // Opening placement projects onto its physical host. Grid rounding
+        // before that projection can push a click outside a thin diagonal wall.
+        m_measurementCanvas->setRawPointInput(world_xy && !m_pending_opening_kind.isEmpty());
+        m_architecturalCanvas->setRawPointInput(false);
         const bool geometry_snapping = world_xy &&
             m_pending_opening_kind.isEmpty() && m_pending_symbol_id.isEmpty() &&
-            (m_tool == CanvasTool::select || m_tool == CanvasTool::wall ||
+            (m_tool == CanvasTool::select || m_tool == CanvasTool::wall || m_tool == CanvasTool::sloped_wall ||
              m_tool == CanvasTool::boundary);
         m_measurementCanvas->setWallSnapEnabled(geometry_snapping);
         m_architecturalCanvas->setWallSnapEnabled(false);
@@ -29948,6 +30013,7 @@ private:
     QLineEdit* m_opening_draw_width{};
     QLineEdit* m_opening_draw_height{};
     QLineEdit* m_opening_draw_sill{};
+    QComboBox* m_opening_style{};
     QLabel* m_architecture_hint{};
     BuildingViewKind m_architectural_view_kind{BuildingViewKind::plan};
     QString m_active_named_view;
