@@ -684,15 +684,19 @@ void test_context_change_discards_draft_without_mutating_document() {
 }
 
 void drive_boundary_modal(MainWindow& window, PlanCanvas& drawing, int key,
-                          const std::function<void(QDialog*)>& respond) {
+                          const std::function<void(QDialog*)>& respond,
+                          std::string_view failure = "keyboard command must reach its bounded native modal",
+                          Qt::KeyboardModifiers modifiers = Qt::NoModifier) {
     bool responded = false;
     bool expired = false;
+    bool precision_modal = false;
     QTimer poll;
     poll.setInterval(1);
     QObject::connect(&poll, &QTimer::timeout, &window, [&] {
         auto* dialog = qobject_cast<QDialog*>(QApplication::activeModalWidget());
         if (!dialog || responded) return;
         responded = true;
+        precision_modal=dynamic_cast<sketch::desktop::BoundaryInputDialog*>(dialog)!=nullptr;
         respond(dialog);
     });
     QTimer deadline;
@@ -703,10 +707,130 @@ void drive_boundary_modal(MainWindow& window, PlanCanvas& drawing, int key,
     });
     poll.start();
     deadline.start(5000);
-    send_key(drawing, key);
+    send_key(drawing, key,modifiers);
     poll.stop();
     deadline.stop();
-    require(responded && !expired, "keyboard command must reach its bounded native modal");
+    require(responded && !expired, failure);
+    if (precision_modal)
+        require(window.focusWidget()==&drawing,"precision form must restore stored focus to its invoking canvas");
+    // The offscreen platform has no window manager to reactivate the parent
+    // after a modal closes. Reactivation must use the product's stored target;
+    // the fixture deliberately does not call drawing.setFocus() here.
+    QApplication::setActiveWindow(&window);
+    process_events();
+}
+
+void test_keyboard_only_boundary_authoring() {
+    const auto accept_by_keyboard=[](sketch::desktop::BoundaryInputDialog* input) {
+        QKeyEvent enter(QEvent::KeyPress,Qt::Key_Return,Qt::NoModifier);
+        QApplication::sendEvent(input,&enter);
+        require(input->result()==QDialog::Accepted && input->candidate(),"Enter must accept the valid native precision form");
+    };
+    for (const auto mode : {BoundaryAuthoringMode::draw_first,BoundaryAuthoringMode::define_first}) {
+        MainWindow window; prepare_window(window); window.setMetricUnits(false);
+        QApplication::setActiveWindow(&window); process_events();
+        auto* drawing=canvas(window,QStringLiteral("measurementPlanCanvas"));
+        const auto before=window.document().snapshot();
+        if (mode==BoundaryAuthoringMode::draw_first) {
+            drive_boundary_modal(window,*drawing,Qt::Key_K,[&](QDialog* modal) {
+                require(modal->windowTitle()=="Command search","Ctrl+K must open command search");
+                auto* search=modal->findChild<QLineEdit*>(); require(search,"command search field missing");
+                search->setText("Start measured boundary with point input");
+                QKeyEvent enter(QEvent::KeyPress,Qt::Key_Return,Qt::NoModifier);
+                QApplication::sendEvent(search,&enter);
+            },"Ctrl+K must expose the actual Draw First start command",Qt::ControlModifier);
+        } else {
+            drive_boundary_modal(window,*drawing,Qt::Key_D,[&](QDialog* modal) {
+                auto* classification=qobject_cast<QInputDialog*>(modal);
+                require(classification,"Define First shortcut must request classification");
+                classification->setTextValue("living"); classification->accept();
+            },"Ctrl+Shift+D must start Define First through actual keyboard UI",Qt::ControlModifier|Qt::ShiftModifier);
+        }
+        drive_boundary_modal(window,*drawing,Qt::Key_D,[&](QDialog* modal) {
+            auto* input=dynamic_cast<sketch::desktop::BoundaryInputDialog*>(modal);
+            require(input!=nullptr,"D must open native keyboard anchor form");
+            auto* x=input->findChild<QLineEdit*>("boundaryInputEndX");
+            auto* y=input->findChild<QLineEdit*>("boundaryInputEndY");
+            require(x && y,"keyboard anchor must expose unit-aware coordinates");
+            x->setText("invalid"); y->setText("0 ft");
+            require(!input->submit() && !input->candidate(),"invalid keyboard anchor must remain atomic");
+            x->setText("0 ft"); accept_by_keyboard(input);
+        },"D must allow an exact keyboard anchor without pointer input");
+        require(drawing->hasFocus(),"accepted precision input must restore focus to its canvas");
+        require(preview(*drawing).segments.empty(),"keyboard anchor must not create an edge");
+        const std::array<const char*,3> lengths{"12 ft","8 ft","12 ft"};
+        const std::array<const char*,3> headings{"0 deg","90 deg","180 deg"};
+        const auto place_dimension=[&](const char* x,const char* y) {
+            drive_boundary_modal(window,*drawing,Qt::Key_D,[&](QDialog* modal) {
+                auto* input=dynamic_cast<sketch::desktop::BoundaryInputDialog*>(modal);
+                require(input!=nullptr,"D must open pending dimension placement");
+                input->findChild<QLineEdit*>("boundaryInputEndX")->setText(x);
+                input->findChild<QLineEdit*>("boundaryInputEndY")->setText(y);
+                accept_by_keyboard(input);
+            });
+        };
+        for (std::size_t index=0;index<lengths.size();++index) {
+            drive_boundary_modal(window,*drawing,Qt::Key_D,[&](QDialog* modal) {
+                auto* input=dynamic_cast<sketch::desktop::BoundaryInputDialog*>(modal);
+                require(input!=nullptr,"D must open analytical segment form");
+                if (index>0) require(input->findChild<QLineEdit*>("boundaryInputLength")->text()==lengths[index-1],
+                    "successful precision input must remain available on re-entry");
+                input->findChild<QLineEdit*>("boundaryInputLength")->setText(lengths[index]);
+                input->findChild<QLineEdit*>("boundaryInputHeading")->setText(headings[index]);
+                accept_by_keyboard(input);
+            });
+            require(preview(*drawing).segments.size()==index+1,"keyboard edge count differs");
+            if (index==0) {
+                send_key(*drawing,Qt::Key_Z,Qt::ControlModifier);
+                require(preview(*drawing).segments.empty(),"keyboard draft undo must remove edge without committing");
+                send_key(*drawing,Qt::Key_Y,Qt::ControlModifier);
+                require(preview(*drawing).segments.size()==1,"keyboard draft redo must restore edge");
+            }
+            if (mode==BoundaryAuthoringMode::define_first)
+                place_dimension(index==1 ? "13 ft" : "6 ft",index==0 ? "-1 ft" : "9 ft");
+            if (index==0) {
+                const auto draft=preview(*drawing);
+                drive_boundary_modal(window,*drawing,Qt::Key_D,[&](QDialog* modal) {
+                    auto* input=dynamic_cast<sketch::desktop::BoundaryInputDialog*>(modal);
+                    input->findChild<QLineEdit*>("boundaryInputLength")->setText("999 ft");
+                    QKeyEvent escape(QEvent::KeyPress,Qt::Key_Escape,Qt::NoModifier);
+                    QApplication::sendEvent(input,&escape);
+                });
+                require(same_boundary(preview(*drawing).segments,draft.segments),"cancelled precision dialog changed draft");
+                require(drawing->hasFocus(),"Escape must restore focus to the same canvas");
+                window.setMetricUnits(true);
+                drive_boundary_modal(window,*drawing,Qt::Key_D,[&](QDialog* modal) {
+                    auto* input=dynamic_cast<sketch::desktop::BoundaryInputDialog*>(modal);
+                    require(input->findChild<QLineEdit*>("boundaryInputLength")->text()=="1 m",
+                        "unit change must reset retained measurements instead of reinterpreting them");
+                    input->reject();
+                });
+                window.setMetricUnits(false);
+            }
+        }
+        require_same_document(before,window.document().snapshot(),"keyboard draft operations changed Document");
+        if (mode==BoundaryAuthoringMode::draw_first) {
+            drive_boundary_modal(window,*drawing,Qt::Key_Return,[&](QDialog* modal) {
+                auto* classification=qobject_cast<QInputDialog*>(modal); require(classification,"Draw First finish must classify area");
+                classification->setTextValue("living"); classification->accept();
+            });
+        } else send_key(*drawing,Qt::Key_Return);
+        if (mode==BoundaryAuthoringMode::define_first) {
+            place_dimension("-1 ft","4 ft"); send_key(*drawing,Qt::Key_Return);
+        }
+        const auto after=window.document().snapshot();
+        const auto owner=committed_boundary(after);
+        const auto geometry=sketch::boundary_geometry(sketch::decode_identified_boundary_entity(owner));
+        require(geometry.size()==4 && std::abs(std::abs(sketch::signed_area(geometry))-96*0.3048*0.3048)<1e-8,
+            "keyboard-only rectangle must calculate exactly 96 square feet");
+        require(after.revision()==before.revision()+1,"keyboard boundary must publish one command");
+        require(window.undoCommand() && window.document().snapshot().entities()==before.entities() &&
+            window.redoCommand() && window.document().snapshot().entities()==after.entities(),"keyboard commit must undo and redo once");
+        QTemporaryDir directory; require(directory.isValid(),"keyboard fixture directory unavailable");
+        const auto path=directory.filePath("keyboard-boundary.bldproj");
+        require(window.saveProjectAs(path) && window.openProject(path) &&
+            window.document().snapshot().entities()==after.entities(),"keyboard authored receipt must save and reopen");
+    }
 }
 
 void test_precision_and_draw_first_classification_modals() {
@@ -1683,6 +1807,9 @@ int main(int argc, char** argv) {
     QApplication application(argc, argv);
     try {
         install_test_font();
+        if (application.arguments().contains(QStringLiteral("--keyboard-authoring-only"))) {
+            test_keyboard_only_boundary_authoring(); return 0;
+        }
         if (application.arguments().contains(QStringLiteral("--saved-draft-only"))) {
             test_saved_boundary_draft_resumes_without_unsaved_warning();
             return 0;
@@ -1700,6 +1827,7 @@ int main(int argc, char** argv) {
         test_escape_cancels_without_document_mutation();
         test_context_change_discards_draft_without_mutating_document();
         test_precision_and_draw_first_classification_modals();
+        test_keyboard_only_boundary_authoring();
         test_saved_boundary_draft_resumes_without_unsaved_warning();
         test_off_grid_snap_cursor_rubberband_and_point_receipt_in_both_canvases();
         test_off_grid_define_first_pending_dimension_preview_and_placement();

@@ -106,8 +106,10 @@ bool has_explicit_angle_unit(const QString& value) {
 class BoundaryInputDialog::Impl {
 public:
     Impl(BoundaryInputDialog* owner, const BoundaryAuthoringSession& source,
-         bool metric_units)
-        : owner(owner), source(source), metric(metric_units) {
+         bool metric_units,const BoundaryInputPreferences& preferences)
+        : owner(owner), source(source), metric(metric_units),
+          preferences(preferences.metric_units && *preferences.metric_units!=metric_units ? BoundaryInputPreferences{} : preferences) {
+        phase=source.phase();
         owner->setObjectName(QStringLiteral("boundaryInputDialog"));
         owner->setWindowTitle(QStringLiteral("Add precise boundary segment"));
         owner->setMinimumWidth(500);
@@ -123,6 +125,13 @@ public:
             owner);
         heading->setWordWrap(true);
         root->addWidget(heading);
+        if (phase==BoundaryAuthoringPhase::awaiting_anchor) {
+            owner->setWindowTitle(QStringLiteral("Boundary start point"));
+            heading->setText(QStringLiteral("Enter the starting point, then choose Place start point."));
+        } else if (phase==BoundaryAuthoringPhase::awaiting_dimension) {
+            owner->setWindowTitle(QStringLiteral("Place precise edge dimension"));
+            heading->setText(QStringLiteral("Enter the pending dimension's text position, then choose Place dimension."));
+        }
 
         form = new QFormLayout;
         form->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
@@ -192,7 +201,9 @@ public:
 
         buttons = new QDialogButtonBox(QDialogButtonBox::Cancel, owner);
         buttons->setObjectName(QStringLiteral("boundaryInputButtons"));
-        add_button = buttons->addButton(QStringLiteral("Add segment"),
+        const auto action_text=phase==BoundaryAuthoringPhase::awaiting_anchor ? QStringLiteral("Place start point") :
+            phase==BoundaryAuthoringPhase::awaiting_dimension ? QStringLiteral("Place dimension") : QStringLiteral("Add segment");
+        add_button = buttons->addButton(action_text,
                                          QDialogButtonBox::AcceptRole);
         add_button->setObjectName(QStringLiteral("boundaryInputAdd"));
         add_button->setDefault(true);
@@ -229,7 +240,7 @@ public:
                          [this] { (void)submit(); });
         QObject::connect(buttons, &QDialogButtonBox::rejected, owner, &QDialog::reject);
         QObject::connect(owner, &QDialog::rejected, owner,
-                         [this] { accepted_candidate.reset(); });
+                         [this] { accepted_candidate.reset(); accepted_preferences.reset(); });
 
         QWidget::setTabOrder(method, length);
         QWidget::setTabOrder(length, heading_angle);
@@ -247,19 +258,35 @@ public:
 
         loading = false;
         configure();
+        if (phase!=BoundaryAuthoringPhase::drawing) owner->adjustSize();
+        if (phase!=BoundaryAuthoringPhase::drawing) end_x->setFocus();
+        else if (method_from(*method)==InputMethod::rise_run) rise->setFocus();
+        else if (method_from(*method)==InputMethod::arc_start_tangent) tangent->setFocus();
+        else if (length->isHidden()) end_x->setFocus();
+        else length->setFocus();
     }
 
     std::optional<BoundaryAuthoringSession> candidate() const {
         return accepted_candidate;
     }
+    std::optional<BoundaryInputPreferences> acceptedPreferences() const { return accepted_preferences; }
 
     QString last_error() const { return error_message; }
 
     bool submit() {
         accepted_candidate.reset();
+        accepted_preferences.reset();
         try {
             auto value = make_candidate();
             accepted_candidate = value;
+            accepted_preferences=preferences;
+            if (phase==BoundaryAuthoringPhase::drawing) {
+                accepted_preferences->metric_units=metric;
+                accepted_preferences->method_index=method->currentIndex();
+                accepted_preferences->clockwise=clockwise->isChecked();
+                for (auto* field : {length,heading_angle,rise,run,turn,sweep,height,arc_length,tangent})
+                    accepted_preferences->expressions[field->objectName().toStdString()]=field->text();
+            }
             error_message.clear();
             error->clear();
             error->setVisible(false);
@@ -315,10 +342,45 @@ private:
         arc_length->setText(QStringLiteral("2") + unit);
         tangent->setText(QStringLiteral("0 deg"));
         clockwise->setChecked(false);
+        if (preferences.method_index>=0 && preferences.method_index<method->count())
+            method->setCurrentIndex(preferences.method_index);
+        for (auto* field : {length,heading_angle,rise,run,turn,sweep,height,arc_length,tangent}) {
+            const auto value=preferences.expressions.find(field->objectName().toStdString());
+            if (value!=preferences.expressions.end()) field->setText(value->second);
+        }
+        clockwise->setChecked(preferences.clockwise);
+        const auto state=source.view();
+        auto position=state.pointer.value_or(state.anchor.value_or(Vec2{}));
+        if (state.active_chain && !state.active_chain->segments.empty()) {
+            const auto& segment=state.active_chain->segments.back().segment;
+            if (phase==BoundaryAuthoringPhase::awaiting_dimension && !state.pointer)
+                position={(segment.start.x+segment.end.x)*0.5,(segment.start.y+segment.end.y)*0.5};
+            else if (phase==BoundaryAuthoringPhase::drawing &&
+                (!state.pointer || (position.x==segment.end.x && position.y==segment.end.y)))
+                position={segment.end.x+1.0,segment.end.y};
+        } else if (phase==BoundaryAuthoringPhase::drawing &&
+            (!state.pointer || !state.anchor || (position.x==state.anchor->x && position.y==state.anchor->y)))
+            position.x+=1.0;
+        // Explicit model metres round-trip the contextual coordinates without
+        // interpreting a converted decimal in the current default input unit.
+        end_x->setText(QString::number(position.x,'g',17)+QStringLiteral(" m"));
+        end_y->setText(QString::number(position.y,'g',17)+QStringLiteral(" m"));
     }
 
     void configure() {
         const auto selected = method_from(*method);
+        if (phase!=BoundaryAuthoringPhase::drawing) {
+            form->setRowVisible(method,false);
+            for (auto* field : {length,heading_angle,rise,run,turn,sweep,height,arc_length,tangent})
+                form->setRowVisible(field,false);
+            form->setRowVisible(clockwise,false);
+            form->setRowVisible(end_x,true); form->setRowVisible(end_y,true);
+            const auto prefix=phase==BoundaryAuthoringPhase::awaiting_anchor ? QStringLiteral("Anchor world ") : QStringLiteral("Dimension world ");
+            if (auto* label=qobject_cast<QLabel*>(form->labelForField(end_x))) label->setText(prefix+QStringLiteral("X"));
+            if (auto* label=qobject_cast<QLabel*>(form->labelForField(end_y))) label->setText(prefix+QStringLiteral("Y"));
+            if (!loading) refresh_validation();
+            return;
+        }
         form->setRowVisible(length, selected == InputMethod::length_heading ||
                                       selected == InputMethod::relative_turn);
         form->setRowVisible(heading_angle, selected == InputMethod::length_heading);
@@ -387,6 +449,10 @@ private:
 
     BoundaryAuthoringSession make_candidate() const {
         auto value = source;
+        if (phase==BoundaryAuthoringPhase::awaiting_anchor) { (void)value.anchor(read_coordinate()); return value; }
+        if (phase==BoundaryAuthoringPhase::awaiting_dimension) { (void)value.place_manual_dimension(read_coordinate()); return value; }
+        if (phase!=BoundaryAuthoringPhase::drawing)
+            throw std::invalid_argument("This drawing is not awaiting an anchor, edge or dimension position");
         const auto selected = method_from(*method);
         switch (selected) {
             case InputMethod::length_heading:
@@ -433,7 +499,30 @@ private:
         return number_text(value) + (metric ? QStringLiteral(" m") : QStringLiteral(" ft"));
     }
 
+    QString display_coordinate(double metres) const {
+        auto value=metric ? metres : metres/0.3048;
+        if (std::abs(value)<0.0005) value=0.0;
+        auto text=QString::number(value,'f',3);
+        while (text.endsWith(QLatin1Char('0'))) text.chop(1);
+        if (text.endsWith(QLatin1Char('.'))) text.chop(1);
+        return text+(metric ? QStringLiteral(" m") : QStringLiteral(" ft"));
+    }
+
     void update_preview(const BoundaryAuthoringSession& value) {
+        if (phase==BoundaryAuthoringPhase::awaiting_anchor) {
+            const auto anchor=value.view().anchor.value();
+            preview->setText(QStringLiteral("Start point preview: X %1, Y %2").arg(display_coordinate(anchor.x),display_coordinate(anchor.y)));
+            preview->setToolTip(QStringLiteral("Coordinate preview is rounded to three decimals. Entered positions are preserved."));
+            status->setText(QStringLiteral("Ready to place the anchor. Press D on the drawing to enter the first edge."));
+            return;
+        }
+        if (phase==BoundaryAuthoringPhase::awaiting_dimension) {
+            const auto position=read_coordinate();
+            preview->setText(QStringLiteral("Dimension position preview: X %1, Y %2").arg(display_coordinate(position.x),display_coordinate(position.y)));
+            preview->setToolTip(QStringLiteral("Coordinate preview is rounded to three decimals. Entered positions are preserved."));
+            status->setText(QStringLiteral("Ready to place the dimension. Press D on the drawing to continue."));
+            return;
+        }
         const auto chain = value.active_chain();
         if (!chain.has_value() || chain->segments.empty()) {
             preview->setText(QStringLiteral("No edge has been entered yet."));
@@ -463,8 +552,8 @@ private:
         error->setText(error_message);
         error->setVisible(true);
         add_button->setEnabled(false);
-        status->setText(QStringLiteral("Enter a valid %1 to continue.")
-                            .arg(method_name(method_from(*method))));
+        status->setText(phase==BoundaryAuthoringPhase::drawing ? QStringLiteral("Enter a valid %1 to continue.")
+                            .arg(method_name(method_from(*method))) : QStringLiteral("Enter valid world X and Y coordinates to continue."));
     }
 
     void refresh_validation() {
@@ -472,6 +561,7 @@ private:
             return;
         }
         accepted_candidate.reset();
+        accepted_preferences.reset();
         validation_candidate.reset();
         error_message.clear();
         error->clear();
@@ -488,7 +578,10 @@ private:
 
     BoundaryInputDialog* owner{};
     BoundaryAuthoringSession source;
+    BoundaryAuthoringPhase phase{};
     bool metric{};
+    BoundaryInputPreferences preferences;
+    std::optional<BoundaryInputPreferences> accepted_preferences;
     bool loading{true};
     std::optional<BoundaryAuthoringSession> validation_candidate;
     std::optional<BoundaryAuthoringSession> accepted_candidate;
@@ -504,13 +597,17 @@ private:
 };
 
 BoundaryInputDialog::BoundaryInputDialog(const BoundaryAuthoringSession& source,
-                                         bool metricUnits, QWidget* parent)
-    : QDialog(parent), m_impl(std::make_unique<Impl>(this, source, metricUnits)) {}
+                                         bool metricUnits, QWidget* parent,
+                                         const BoundaryInputPreferences& preferences)
+    : QDialog(parent), m_impl(std::make_unique<Impl>(this, source, metricUnits,preferences)) {}
 
 BoundaryInputDialog::~BoundaryInputDialog() = default;
 
 std::optional<BoundaryAuthoringSession> BoundaryInputDialog::candidate() const {
     return m_impl->candidate();
+}
+std::optional<BoundaryInputPreferences> BoundaryInputDialog::acceptedPreferences() const {
+    return m_impl->acceptedPreferences();
 }
 
 bool BoundaryInputDialog::submit() { return m_impl->submit(); }

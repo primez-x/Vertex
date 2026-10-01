@@ -166,6 +166,16 @@ undo removes the boundary and its dimensions together. Replacing the document
 or context invalidates a captured commit preview and must resolve unfinished
 work explicitly through preservation, completion or confirmed discard.
 
+The native precision form follows the same phase machine. `D` accepts an exact
+start point while awaiting an anchor, an analytical edge while drawing, and
+an exact dimension-text position while awaiting manual placement. The form
+validates a detached session; cancellation, invalid input and a changed modal
+context cannot publish a candidate. Successful submissions return focus to
+the originating active canvas. Only accepted edge methods and non-coordinate
+expressions repeat within the current session. Coordinate defaults follow the
+current context, and a changed default unit basis resets effective preferences
+instead of interpreting a previously implicit measurement in the new units.
+
 Transient boundaries, wall previews, cursor lines, markers and draft labels
 must be excluded from print and export. Screen rendering must still display
 analytical curves and keep labels readable at different display scales.
@@ -212,3 +222,21 @@ is implemented.
 
 These are internal construction gates within the unchanged full production
 scope. No gate or current helper is Apex parity certification.
+
+## Keyboard creation verification, 2026-09-30
+
+The native keyboard-only fixture failed against the baseline with
+`D must allow an exact keyboard anchor without pointer input`. After integration,
+`boundary_workflow_tests --keyboard-authoring-only` passed in 1.67 seconds. It
+starts Draw First through Ctrl+K and Define First through Ctrl+Shift+D, creates
+12-by-8-foot rooms, places manual dimensions, checks cancelled/invalid inputs,
+unit changes, draft history, atomic commit, and save/reopen. The hidden-window
+fixture checks the product's stored canvas focus before simulating parent
+reactivation; it does not supply the canvas focus on the product's behalf.
+
+The integrated Release build and ten focused checks passed in 25.24 seconds,
+including native input/workflow, session admission, return safety, receipts,
+commit and selection rotation. Root inspected the compact coordinate form
+captures under `artifacts/keyboard-boundary-20260930/dialogs-final`. Complete
+keyboard-only editing and physical Apex shortcut qualification remain open;
+APX-KEY-001 consequently remains in progress.

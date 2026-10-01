@@ -219,8 +219,17 @@ drawing, and drag anywhere outside the selected object to pan. In the Measuremen
 workspace each empty click places a measured-boundary node and clicking the first
 node closes the area. In the Architectural workspace two empty clicks create a
 straight wall. Ctrl-drag creates a selection marquee, while middle-drag and
-Space-left-drag also pan. Enter closes an active boundary and
-`D` opens distance/direction input such as `10 ft @ 90 deg`. **Draw curved wall**
+Space-left-drag also pan. Enter closes an active boundary. During measured
+boundary drawing, `D` opens the input needed for the current step: starting X/Y
+coordinates, an analytical edge, or a pending Define First dimension's X/Y
+position. Coordinates accept explicit imperial or metric units. To start without
+a pointer, use Ctrl+K and **Start measured boundary with point input**, or
+Ctrl+Shift+D for Define First, then press `D` to place the start point. Accepted
+edge methods and expressions repeat within that drawing session; absolute
+coordinates use the current drawing context. Cancelled or invalid entries do not
+change the draft or accepted defaults. Changing the default unit system resets
+effective edge defaults so an implicit feet expression cannot become metres.
+Closing the input form returns focus to the same active canvas. **Draw curved wall**
 opens a compact endpoint and construction editor with sweep-angle, arc-length,
 and arc-height modes. Entries such as `90 deg`, `5 ft`, and `1 ft` are retained
 beside the analytical arc; a signed arc length selects clockwise orientation.

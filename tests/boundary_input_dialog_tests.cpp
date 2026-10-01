@@ -120,7 +120,7 @@ void capture(BoundaryInputDialog& dialog, const QString& name, double scale) {
     const auto previous_size = dialog.size();
     const auto was_visible = dialog.isVisible();
     dialog.setAttribute(Qt::WA_DontShowOnScreen, true);
-    dialog.resize(static_cast<int>(560.0 * scale), static_cast<int>(340.0 * scale));
+    dialog.resize(static_cast<int>(previous_size.width() * scale), static_cast<int>(previous_size.height() * scale));
     dialog.show();
     QCoreApplication::processEvents();
     const auto path = QDir(directory).filePath(name + QStringLiteral(".png"));
@@ -345,6 +345,74 @@ void test_keyboard_tab_reaches_next_control() {
     require(heading->hasFocus(), "Tab should advance from length to heading");
 }
 
+void test_coordinate_phases_and_accepted_preferences() {
+    BoundaryAuthoringOptions options; options.automatic_dimension_placement=false;
+    BoundaryAuthoringSession source(BoundaryAuthoringMode::define_first,options);
+    source.set_classification("garage");
+    source.set_pointer({1.25,-0.5});
+    const auto before=source.view();
+    sketch::desktop::BoundaryInputPreferences preferences;
+    preferences.method_index=1;
+    preferences.expressions["boundaryInputRise"]="8 ft";
+    preferences.expressions["boundaryInputRun"]="12 ft";
+    BoundaryInputDialog anchor(source,false,nullptr,preferences);
+    require(field(anchor,"boundaryInputEndX").text()=="1.25 m" && field(anchor,"boundaryInputEndY").text()=="-0.5 m",
+        "start point must use current contextual coordinates with explicit units");
+    require(!method(anchor).isVisible() && anchor.windowTitle().contains("start point"),
+        "start point must have a phase-specific coordinate form");
+    capture(anchor,QStringLiteral("start-point-normal"),1.0);
+    set_field(anchor,"boundaryInputEndX","invalid");
+    require(!anchor.submit() && !anchor.candidate() && !anchor.acceptedPreferences() && source.view()==before,
+        "invalid anchor published source state or preferences");
+    set_field(anchor,"boundaryInputEndX","0 ft"); set_field(anchor,"boundaryInputEndY","0 ft");
+    require(anchor.submit() && anchor.candidate()->phase()==BoundaryAuthoringPhase::drawing &&
+        anchor.acceptedPreferences()==preferences && source.view()==before,"accepted anchor changed source or drawing preferences");
+    auto drawing=*anchor.candidate();
+    BoundaryInputDialog edge(drawing,false,nullptr,preferences);
+    require(method(edge).currentIndex()==1 && field(edge,"boundaryInputRise").text()=="8 ft" &&
+        field(edge,"boundaryInputRun").text()=="12 ft","accepted method and original measurements did not reappear");
+    set_field(edge,"boundaryInputRise","0 ft");
+    require(edge.submit(),"retained rise/run form rejected");
+    const auto retained=*edge.acceptedPreferences();
+    require(retained.expressions.at("boundaryInputRun")=="12 ft" &&
+        !retained.expressions.contains("boundaryInputEndX") && !retained.expressions.contains("boundaryInputEndY"),
+        "preferences lost original expression or retained absolute coordinates");
+    auto pending=*edge.candidate(); const auto pending_before=pending.view();
+    BoundaryInputDialog dimension(pending,false,nullptr,retained);
+    require(dimension.windowTitle().contains("dimension"),"pending dimension needs clear phase title");
+    capture(dimension,QStringLiteral("dimension-position-normal"),1.0);
+    set_field(dimension,"boundaryInputEndX","6 ft"); set_field(dimension,"boundaryInputEndY","-1 ft");
+    require(dimension.submit() && dimension.acceptedPreferences()==retained && pending.view()==pending_before,
+        "manual placement changed drawing preferences or source");
+    const auto placed=*dimension.candidate();
+    require(placed.phase()==BoundaryAuthoringPhase::drawing && placed.active_chain()->dimensions.back().placement==BoundaryDimensionPlacement::manual &&
+        std::abs(placed.active_chain()->dimensions.back().text_position.x-6*0.3048)<1e-12,
+        "keyboard manual placement did not retain exact entered position");
+    BoundaryInputDialog cancelled(placed,false,nullptr,retained);
+    set_field(cancelled,"boundaryInputRun","999 ft"); cancelled.reject();
+    require(!cancelled.candidate() && !cancelled.acceptedPreferences(),"cancelled form published preferences");
+    BoundaryInputDialog repeat(placed,false,nullptr,retained);
+    require(field(repeat,"boundaryInputRun").text()=="12 ft","cancellation changed accepted measurement default");
+    auto implicit=retained;
+    implicit.method_index=0;
+    implicit.expressions["boundaryInputLength"]="12";
+    implicit.expressions["boundaryInputHeading"]="0 deg";
+    BoundaryInputDialog imperial(placed,false,nullptr,implicit);
+    require(field(imperial,"boundaryInputLength").text()=="12","same units lost implicit accepted expression");
+    BoundaryInputDialog metric(placed,true,nullptr,implicit);
+    require(field(metric,"boundaryInputLength").text()=="1 m" && !metric.acceptedPreferences(),
+        "unit change silently reinterpreted retained feet as metres");
+    select_method(repeat,3);
+    require(parse_quantity(field(repeat,"boundaryInputEndX").text().toStdString()).metres==placed.view().pointer->x &&
+        parse_quantity(field(repeat,"boundaryInputEndY").text().toStdString()).metres==placed.view().pointer->y,
+        "absolute-coordinate method did not use current context instead of repeating old coordinates");
+    auto automatic=source_session(BoundaryAuthoringMode::draw_first);
+    BoundaryInputDialog focused(automatic,true);
+    focused.setAttribute(Qt::WA_DontShowOnScreen,true); focused.show(); QApplication::setActiveWindow(&focused);
+    QCoreApplication::processEvents();
+    require(field(focused,"boundaryInputLength").hasFocus(),"edge form must focus its first measurement");
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -374,6 +442,7 @@ int main(int argc, char** argv) {
         test_define_first_reports_pending_dimension();
         test_escape_cancels_without_candidate();
         test_keyboard_tab_reaches_next_control();
+        test_coordinate_phases_and_accepted_preferences();
         std::cout << "Boundary input dialog workflows passed\n";
         return 0;
     } catch (const std::exception& exception) {

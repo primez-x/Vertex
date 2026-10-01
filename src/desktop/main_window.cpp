@@ -22671,8 +22671,8 @@ private:
         canvas->setCancelRequested([this] {
             cancelTool();
         });
-        canvas->setPreciseInputRequested([this] {
-            preciseBoundaryInput();
+        canvas->setPreciseInputRequested([this,canvas] {
+            preciseBoundaryInput(canvas);
         });
         canvas->setDraftUndoRequested([this] {
             (void)undoCommand();
@@ -26042,8 +26042,13 @@ private:
     void refreshBoundaryPreview() {
         if (m_drawing_measurement_button) {
             m_drawing_measurement_button->setVisible(m_tool == CanvasTool::boundary && m_boundary_session.has_value());
-            m_drawing_measurement_button->setEnabled(m_boundary_session &&
-                m_boundary_session->phase() == BoundaryAuthoringPhase::drawing);
+            m_drawing_measurement_button->setEnabled(boundaryPrecisionReady());
+            const auto phase=m_boundary_session ? m_boundary_session->phase() : BoundaryAuthoringPhase::drawing;
+            m_drawing_measurement_button->setText(phase==BoundaryAuthoringPhase::awaiting_anchor ? QStringLiteral("Start point…") :
+                phase==BoundaryAuthoringPhase::awaiting_dimension ? QStringLiteral("Place dimension…") : QStringLiteral("Measure…"));
+            m_drawing_measurement_button->setToolTip(phase==BoundaryAuthoringPhase::awaiting_anchor ? QStringLiteral("Enter the exact start point (D)") :
+                phase==BoundaryAuthoringPhase::awaiting_dimension ? QStringLiteral("Enter the pending dimension's exact position (D)") :
+                QStringLiteral("Enter the next segment's exact length, angle or curve (D)"));
         }
         if (!m_boundary_session) {
             m_measurementCanvas->setBoundaryDraftPreview(std::nullopt);
@@ -26532,26 +26537,41 @@ private:
         setTool(CanvasTool::select);
     }
 
-    void preciseBoundaryInput() {
-        if (m_tool != CanvasTool::boundary || !m_boundary_session ||
-            m_boundary_session->phase() != BoundaryAuthoringPhase::drawing) {
-            setError(QStringLiteral("Anchor the drawing and place any pending dimension before entering a segment."));
+    bool boundaryPrecisionReady() const {
+        if (!m_boundary_session) return false;
+        const auto phase=m_boundary_session->phase();
+        return phase==BoundaryAuthoringPhase::awaiting_anchor || phase==BoundaryAuthoringPhase::drawing ||
+            phase==BoundaryAuthoringPhase::awaiting_dimension;
+    }
+
+    void preciseBoundaryInput(PlanCanvas* source_canvas = nullptr) {
+        if (m_tool != CanvasTool::boundary || !boundaryPrecisionReady()) {
+            setError(QStringLiteral("Start a boundary drawing before entering a precise point or segment."));
             return;
         }
         const auto context = captureModalContext();
         const auto state = m_boundary_session->view();
+        if (m_boundary_input_namespace!=state.identity_namespace) {
+            m_boundary_input_preferences={}; m_boundary_input_namespace=state.identity_namespace;
+        }
+        const QPointer<PlanCanvas> return_canvas=source_canvas ? source_canvas :
+            (m_workspace==Workspace::measurement ? m_measurementCanvas : m_architecturalCanvas);
         try {
-            BoundaryInputDialog dialog(*m_boundary_session, m_metric_units, owner);
-            if (dialog.exec() != QDialog::Accepted) return;
+            BoundaryInputDialog dialog(*m_boundary_session, m_metric_units, owner,m_boundary_input_preferences);
+            const auto result=dialog.exec();
+            const auto* active_canvas=m_workspace==Workspace::measurement ? m_measurementCanvas : m_architecturalCanvas;
+            if (return_canvas && return_canvas.data()==active_canvas) return_canvas->setFocus(Qt::OtherFocusReason);
+            if (result != QDialog::Accepted) return;
             if (!modalContextUnchanged(context) || !m_boundary_session ||
                 !(m_boundary_session->view() == state)) return;
             const auto candidate = dialog.candidate();
             if (!candidate) return;
             m_boundary_session = *candidate;
+            if (const auto preferences=dialog.acceptedPreferences()) m_boundary_input_preferences=*preferences;
             clearError();
             boundaryDraftChanged();
         } catch (const std::exception& error) {
-            setError(QStringLiteral("Precise segment: %1").arg(QString::fromUtf8(error.what())));
+            setError(QStringLiteral("Precise drawing input: %1").arg(QString::fromUtf8(error.what())));
         }
     }
 
@@ -26574,8 +26594,7 @@ private:
     void syncToolControls() {
         if (m_drawing_measurement_button) {
             m_drawing_measurement_button->setVisible(m_tool == CanvasTool::boundary && m_boundary_session.has_value());
-            m_drawing_measurement_button->setEnabled(m_boundary_session &&
-                m_boundary_session->phase() == BoundaryAuthoringPhase::drawing);
+            m_drawing_measurement_button->setEnabled(boundaryPrecisionReady());
         }
         m_measurementCanvas->setTool(m_tool);
         m_architecturalCanvas->setTool(m_tool);
@@ -26620,6 +26639,8 @@ private:
         m_measurementCanvas->clearPreview();
         m_architecturalCanvas->clearPreview();
         m_boundary_session.reset();
+        m_boundary_input_preferences={};
+        m_boundary_input_namespace.clear();
         m_boundary_source.reset();
         m_boundary_context.reset();
         m_boundary_document.reset();
@@ -27992,6 +28013,8 @@ private:
         m_coordinated_view_entities;
     Vec2 m_last_cursor{};
     std::optional<BoundaryAuthoringSession> m_boundary_session;
+    BoundaryInputPreferences m_boundary_input_preferences;
+    std::string m_boundary_input_namespace;
     std::optional<DocumentSnapshot> m_boundary_source;
     std::optional<DrawingContext> m_boundary_context;
     std::shared_ptr<Document> m_boundary_document;

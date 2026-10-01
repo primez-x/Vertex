@@ -1040,20 +1040,21 @@
       "requirement": "Support keyboard distance-and-direction entry with predictable focus, commit, cancel, and repeat behavior.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "verified",
+      "implementation_status": "in_progress",
       "acceptance": "Recorded keyboard fixtures create and edit geometry without pointer input and reproduce the documented endpoint and heading results.",
       "package": 4,
       "blocker": null,
       "implementation_sources": [
         "src/desktop/boundary_input_dialog.cpp",
         "tests/boundary_input_dialog_tests.cpp",
+        "tests/boundary_workflow_tests.cpp",
         "src/desktop/main_window.cpp",
         "tests/desktop_smoke.cpp",
         "docs/boundary-authoring.md",
         "scripts/generate_workflow_acceptance_evidence.py",
         "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "Precision entry forms, retained fields, units, invalid-input rejection, Escape, and Tab focus are implemented; complete keyboard-only creation/edit/repeat fixtures remain open. Deterministic Debug/Release workflow evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
+      "implementation_note": "Native D entry supports start coordinates, analytical edges and pending Define First dimension positions. Accepted non-coordinate methods and exact expressions repeat within the unfinished session; changing implicit unit basis resets effective defaults, and cancellation or invalid input preserves accepted state. Keyboard-only Draw First/Define First creation fixtures cover actual start commands, exact 12-by-8-foot geometry, dimension placement, focus, cancellation, draft undo/redo, one-command commit and save/reopen. Complete keyboard-only editing, physical-input and Apex shortcut qualification remain open. Deterministic workflow evidence retains its named-source qualification boundary."
     },
     {
       "id": "APX-KEY-002",

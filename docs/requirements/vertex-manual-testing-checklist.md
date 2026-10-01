@@ -247,7 +247,8 @@ Start with the workspace, draw a room, close it with the mouse, drag-select it, 
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U041 — Draw a room using keyboard distance and direction**
-  - Expected: Lengths and directions match the entered measurements.
+  - Steps: Press Ctrl+K, choose **Start measured boundary with point input**, then press D. Enter start X `0 ft`, Y `0 ft` and press Enter. Use D for each edge: `12 ft` at `0 deg`, `8 ft` at `90 deg`, and `12 ft` at `180 deg`. Press Enter to close and choose the area classification. Repeat using Ctrl+Shift+D for Define First and choose the classification before placing the start. After each edge, use D to enter its dimension position. Press Enter to add the closing edge, use D to place its dimension, then press Enter to finish.
+  - Expected: A 12-by-8-foot room with an area of 96 square feet. No mouse click is needed to place the starting point, edges or dimensions. Reopening D retains the last accepted edge inputs; Escape leaves the drawing unchanged and returns focus to the canvas. Undo removes the finished room in one step, Redo restores it, and saving/reopening preserves it.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 

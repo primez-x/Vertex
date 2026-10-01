@@ -88,3 +88,17 @@ Current development executable: `build/windows-release/vertex.exe`, SHA-256
 `7994bc257bb719e47112e607b544f7b4cb101b8a405bdd797ae013167ce39bd9`.
 The earlier installed checkpoint remains separate; this recheck did not replace
 that installer or certify the full production application.
+
+## Integrated keyboard-authoring rebuild
+
+The next integrated Release build retained the same rotation implementation.
+`symbol_transform_desktop` passed in 14.74 seconds and `axis_canvas_controls`
+in 0.15 seconds; ten focused checks passed in 25.24 seconds. Root inspected
+`artifacts/rotation-keyboard-build-20260930-final/rotation-live-90.png`, confirming
+the rotated pin, clear frame and live 90.0-degree readout.
+
+Development executable SHA-256:
+`c6a9a271853d394a8cf73e4233307251e9c2d3738466fd7e703fb611472626b3`.
+Launch it with `scripts/run.ps1 -Configuration Release` to supply the process-local
+DLL/plugin paths. This verification does not identify the user's previously
+launched executable or replace the earlier installed checkpoint.
