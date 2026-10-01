@@ -123,6 +123,7 @@
 #include <QBuffer>
 #include <QRegularExpression>
 #include <QPainter>
+#include <QPainterPath>
 #include <QPdfDocument>
 #include <QPdfWriter>
 #include <QPrintDialog>
@@ -1572,10 +1573,14 @@ double catalog_opening_width(const SymbolDefinition& definition) {
     return definition.width_metres;
 }
 
-std::optional<DoorOperation> catalog_hinged_door_operation(
+std::optional<DoorOperation> catalog_door_operation(
     const SymbolDefinition& definition) {
     if (definition.category != "09_doors") return std::nullopt;
     const auto& id = definition.id;
+    if (id == "svg-v2-09_doors-door-double")
+        return DoorOperation{false, true, 90.0, DoorOperationKind::double_hinged};
+    if (id == "svg-v2-09_doors-door-sliding-glass")
+        return DoorOperation{false, true, 90.0, DoorOperationKind::sliding};
     if (!id.starts_with("svg-v2-09_doors-door-hinged-") ||
         (!id.ends_with("-left") && !id.ends_with("-right"))) return std::nullopt;
     DoorOperation operation;
@@ -3675,10 +3680,17 @@ public:
                 rebase_wall_length_receipt(entity, baseline);
                 const auto geometry = segment_json(baseline);
                 for (const auto& [key, value] : geometry.items()) entity.properties["baseline"][key] = value;
-            } else if (reflected && entity.properties.contains("door_operation")) {
-                auto operation = decode_door_operation(entity.properties.at("door_operation"));
-                operation.swing_left = !operation.swing_left;
-                entity.properties["door_operation"] = encode_door_operation(operation);
+            } else if (reflected) {
+                if (entity.properties.contains("door_operation")) {
+                    auto operation = decode_door_operation(entity.properties.at("door_operation"));
+                    operation.swing_left = !operation.swing_left;
+                    entity.properties["door_operation"] = encode_door_operation(operation);
+                }
+                if (entity.properties.contains("opening_assembly")) {
+                    auto assembly = parse_opening_assembly(entity.properties.at("opening_assembly"));
+                    assembly.inset_m = -assembly.inset_m;
+                    entity.properties["opening_assembly"] = opening_assembly_json(assembly);
+                }
             }
             if (clone) {
                 entity.id = identities.at(entity.id);
@@ -6174,13 +6186,24 @@ public:
                     wall_preview.stroke_segments = plan.strokes;
                     geometry.push_back(std::move(wall_preview));
                     for (const auto* opening : openings) {
-                        if (opening->properties.value("opening_kind", std::string{}) != "door" ||
-                            !opening->properties.contains("door_operation")) continue;
                         const auto found = std::find_if(wall.openings.begin(), wall.openings.end(),
                             [&](const auto& item) { return item.id == opening->id; });
-                        geometry.push_back({id_from(opening->id), "opening",
-                            door_plan_symbol(wall.baseline, found->offset, found->width,
-                                decode_door_operation(opening->properties.at("door_operation"))), 0, selected});
+                        if (found == wall.openings.end()) throw std::invalid_argument("Opening lost its preview host.");
+                        const auto kind = opening->properties.value("opening_kind", std::string{});
+                        std::optional<DoorOperation> operation;
+                        if (kind == "door" && opening->properties.contains("door_operation"))
+                            operation = decode_door_operation(opening->properties.at("door_operation"));
+                        if (opening->properties.contains("opening_assembly")) {
+                            const auto assembly = parse_opening_assembly(opening->properties.at("opening_assembly"));
+                            geometry.push_back({id_from(opening->id), "opening",
+                                project_hosted_opening_plan(wall, *found, assembly, operation), 0, selected});
+                        } else if (operation) {
+                            geometry.push_back({id_from(opening->id), "opening",
+                                door_plan_symbol(wall.baseline, found->offset, found->width, *operation), 0, selected});
+                        } else if (kind == "window") {
+                            geometry.push_back({id_from(opening->id), "window",
+                                window_plan_symbol(wall.baseline, found->offset, found->width, wall.thickness), 0, selected});
+                        }
                     }
                 };
                 add_graph(source, original->id, false);
@@ -12323,30 +12346,7 @@ public:
                 return {};
             }
 
-            const auto snapshot = m_document->snapshot();
-            std::vector<HostedOpening> openings;
-            for (const auto& [id, entity] : snapshot.entities()) {
-                if (entity.type != "opening") {
-                    continue;
-                }
-                const auto existing_wall_id = read_string(entity.properties, "wall_id");
-                if (!existing_wall_id.has_value() || existing_wall_id.value() != wall_entity->id) {
-                    continue;
-                }
-                QString opening_error;
-                const auto opening = read_hosted_opening(entity, &opening_error);
-                if (!opening.has_value()) {
-                    setError(QStringLiteral("Opening preview rejected: %1").arg(opening_error));
-                    return {};
-                }
-                openings.push_back(*opening);
-            }
             const auto entity_id = new_id("opening");
-            openings.push_back(HostedOpening{entity_id, offset, width, sill, height});
-            if (!previewWall(*wall_entity, openings, QStringLiteral("Opening preview"))) {
-                return {};
-            }
-
             auto properties = json{{"wall_id", wall_entity->id},
                                          {"offset_m", offset},
                                          {"width_m", width},
@@ -12355,16 +12355,19 @@ public:
                                          {"opening_kind", normalized_kind.toStdString()},
                                          {"classification", normalized_kind.toStdString()}};
             if (normalized_kind != QStringLiteral("opening")) {
-                properties["opening_assembly"] = opening_assembly_json(
-                    default_opening_assembly(normalized_kind == QStringLiteral("door")
-                                                 ? OpeningAssemblyKind::door
-                                                 : OpeningAssemblyKind::window));
+                auto assembly = default_opening_assembly(normalized_kind == QStringLiteral("door")
+                    ? OpeningAssemblyKind::door : OpeningAssemblyKind::window);
+                if (catalog_symbol_id == QStringLiteral("svg-v2-09_doors-door-sliding-glass"))
+                    assembly.glazing_thickness_m = 0.012;
+                properties["opening_assembly"] = opening_assembly_json(assembly);
             }
             if (normalized_kind == QStringLiteral("door") && door_operation)
                 properties["door_operation"] = encode_door_operation(*door_operation);
             if (!catalog_symbol_id.trimmed().isEmpty())
                 properties["catalog_symbol_id"] = catalog_symbol_id.trimmed().toStdString();
-            if (!applyEntity(Entity{entity_id, "opening", properties, false, json::object()},
+            const Entity candidate{entity_id, "opening", properties, false, json::object()};
+            if (!previewOpening(candidate, properties)) return {};
+            if (!applyEntity(candidate,
                              "create hosted opening", revision)) {
                 return {};
             }
@@ -16075,46 +16078,8 @@ public:
             if (!previewOpening(*entity, properties)) {
                 return false;
             }
-            // The wall-cut preview above protects sibling openings. Run the
-            // same native assembly builder as the 3D view as a second gate so
-            // frame depth/inset and clear panel dimensions are validated before
-            // the profile reaches Document history.
-            const auto snapshot = m_document->snapshot();
-            const auto wall_id = read_string(properties, "wall_id");
-            if (!wall_id.has_value()) {
-                throw std::invalid_argument("Opening assembly requires a host wall.");
-            }
-            const auto wall = snapshot.entities().find(*wall_id);
-            if (wall == snapshot.entities().end() || wall->second.type != "wall") {
-                throw std::invalid_argument("Opening assembly host wall does not exist.");
-            }
-            Entity candidate_entity = *entity;
-            candidate_entity.properties = properties;
-            std::vector<const Entity*> sibling_entities;
-            for (const auto& [id, sibling] : snapshot.entities()) {
-                if (sibling.type != "opening" ||
-                    read_string(sibling.properties, "wall_id").value_or("") != *wall_id) {
-                    continue;
-                }
-                sibling_entities.push_back(id == entity->id ? &candidate_entity : &sibling);
-            }
-            std::string wall_error;
-            Wall host;
-            if (!read_document_wall(wall->second, sibling_entities, host, wall_error)) {
-                throw std::invalid_argument(wall_error);
-            }
-            QString opening_error;
-            const auto hosted = read_hosted_opening(candidate_entity, &opening_error);
-            if (!hosted.has_value()) {
-                throw std::invalid_argument(opening_error.toStdString());
-            }
-            std::optional<DoorOperation> operation;
-            if (assembly.kind == OpeningAssemblyKind::door &&
-                candidate_entity.properties.contains("door_operation")) {
-                operation = decode_door_operation(candidate_entity.properties.at("door_operation"));
-            }
-            (void)make_opening_assembly(host, *hosted, assembly, operation);
-            auto candidate = std::move(candidate_entity);
+            auto candidate = *entity;
+            candidate.properties = std::move(properties);
             applyDocumentCommand(ApplyEntityChanges{
                 revision, {EntityChange::upsert(std::move(candidate))}, {},
                 "edit opening assembly"});
@@ -19948,7 +19913,15 @@ public:
         const bool window = definition.category == "10_windows";
         m_pending_opening_kind = window ? QStringLiteral("window") : QStringLiteral("door");
         m_pending_opening_symbol_id = QString::fromStdString(definition.id);
-        m_pending_opening_door_operation = catalog_hinged_door_operation(definition);
+        m_pending_opening_door_operation = catalog_door_operation(definition);
+        const bool sliding = m_pending_opening_door_operation &&
+            m_pending_opening_door_operation->kind == DoorOperationKind::sliding;
+        {
+            const QSignalBlocker blocker(m_opening_draw_travel);
+            m_opening_draw_travel->setValue(0.0);
+        }
+        m_opening_draw_travel->setVisible(sliding);
+        m_opening_draw_travel_label->setVisible(sliding);
         m_opening_draw_width->setText(QString::fromStdString(json(width).dump()) + QStringLiteral(" m"));
         m_opening_draw_height->setText(window ? QStringLiteral("1.2 m") : QStringLiteral("2.1 m"));
         m_opening_draw_sill->setText(window ? QStringLiteral("0.9 m") : QStringLiteral("0 m"));
@@ -21279,7 +21252,33 @@ private:
             }
             openings.push_back(*opening);
         }
-        return previewWall(wall->second, openings, QStringLiteral("Opening preview"));
+        if (!previewWall(wall->second, openings, QStringLiteral("Opening preview"))) return false;
+        if (!candidate_properties.contains("opening_assembly")) return true;
+        try {
+            Entity candidate = opening_entity;
+            candidate.properties = candidate_properties;
+            std::vector<const Entity*> siblings;
+            for (const auto& [id, entity] : entities)
+                if (entity.type == "opening" && read_string(entity.properties, "wall_id").value_or("") == *wall_id &&
+                    id != candidate.id) siblings.push_back(&entity);
+            siblings.push_back(&candidate);
+            Wall checked;
+            std::string error;
+            const auto resolved = resolve_vertical_placement(snapshot, wall->second);
+            if (!read_document_wall(resolved, siblings, checked, error)) throw std::invalid_argument(error);
+            const auto hosted = std::find_if(checked.openings.begin(), checked.openings.end(),
+                [&](const auto& item) { return item.id == candidate.id; });
+            if (hosted == checked.openings.end()) throw std::invalid_argument("Opening lost its host.");
+            const auto assembly = parse_opening_assembly(candidate.properties.at("opening_assembly"));
+            std::optional<DoorOperation> operation;
+            if (assembly.kind == OpeningAssemblyKind::door && candidate.properties.contains("door_operation"))
+                operation = decode_door_operation(candidate.properties.at("door_operation"));
+            (void)make_opening_assembly(checked, *hosted, assembly, operation);
+            return true;
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Opening assembly rejected: %1").arg(QString::fromUtf8(error.what())));
+            return false;
+        }
     }
 
     bool previewSlab(const Entity& slab_entity, const json& properties) {
@@ -22737,6 +22736,8 @@ private:
                 }
                 if (kind != QStringLiteral("Wall")) {
                     m_pending_opening_kind = kind == QStringLiteral("Doorway") ? QStringLiteral("opening") : kind.toLower();
+                    m_opening_draw_travel->hide();
+                    m_opening_draw_travel_label->hide();
                     const bool window = kind == QStringLiteral("Window");
                     m_opening_draw_width->setText(window ? QStringLiteral("1.2 m") : QStringLiteral("0.9 m"));
                     m_opening_draw_height->setText(window ? QStringLiteral("1.2 m") : QStringLiteral("2.1 m"));
@@ -22793,6 +22794,22 @@ private:
         m_opening_draw_width = dimension_field(opening_form, QStringLiteral("Width"), "openingDrawWidth", QStringLiteral("0.9 m"));
         m_opening_draw_height = dimension_field(opening_form, QStringLiteral("Height"), "openingDrawHeight", QStringLiteral("2.1 m"));
         m_opening_draw_sill = dimension_field(opening_form, QStringLiteral("Sill"), "openingDrawSill", QStringLiteral("0 m"));
+        m_opening_draw_travel = new QDoubleSpinBox(m_opening_draw_fields);
+        m_opening_draw_travel->setObjectName(QStringLiteral("openingDrawTravel"));
+        m_opening_draw_travel->setRange(0.0, 100.0);
+        m_opening_draw_travel->setDecimals(2);
+        m_opening_draw_travel->setSingleStep(5.0);
+        m_opening_draw_travel->setSuffix(QStringLiteral("%"));
+        m_opening_draw_travel->setToolTip(QStringLiteral("Travel of the movable sliding panel; 100% stacks it behind the fixed panel."));
+        m_opening_draw_travel_label = new QLabel(QStringLiteral("Open"), m_opening_draw_fields);
+        opening_form->addRow(m_opening_draw_travel_label, m_opening_draw_travel);
+        m_opening_draw_travel->hide();
+        m_opening_draw_travel_label->hide();
+        QObject::connect(m_opening_draw_travel, &QDoubleSpinBox::valueChanged, owner, [this](double value) {
+            if (!m_pending_opening_door_operation || m_pending_opening_door_operation->kind != DoorOperationKind::sliding) return;
+            m_pending_opening_door_operation->slide_fraction = value / 100.0;
+            updateOpeningPlacement(m_last_cursor, false);
+        });
         architecture_layout->addWidget(m_opening_draw_fields);
         m_opening_draw_fields->hide();
         m_architecture_hint = new QLabel(QStringLiteral("Draw real walls in 2D. Dimensions accept mm, m, in or ft."), architecture_palette);
@@ -23223,7 +23240,7 @@ private:
         m_material_error->setWordWrap(true);
         material_layout->addWidget(m_material_error);
         inspector_layout->addWidget(m_material_group);
-        m_door_swing_button = new QPushButton("Door swing…", inspector_body);
+        m_door_swing_button = new QPushButton("Door operation…", inspector_body);
         m_door_swing_button->setObjectName("editDoorSwing");
         inspector_layout->addWidget(m_door_swing_button);
         QObject::connect(m_door_swing_button, &QPushButton::clicked, owner, [this] { showDoorSwingEditor(); });
@@ -24307,6 +24324,20 @@ private:
         std::vector<CanvasReferenceGrid> reference_grids;
         all_geometry.reserve(snapshot.entities().size());
         const auto wall_plans = document_wall_plan_geometry(snapshot.entities());
+        std::map<std::string, QPainterPath, std::less<>> exterior_label_regions;
+        for (const auto& [id, entity] : snapshot.entities()) {
+            (void)id;
+            if (!entity.properties.contains("wall_measurement_source") ||
+                !wall_measurement_source_current(snapshot, entity)) continue;
+            const auto boundary = read_boundary(entity.properties);
+            if (boundary.empty()) continue;
+            QPainterPath region;
+            region.moveTo(boundary.front().start.x, boundary.front().start.y);
+            for (const auto& edge : boundary) region.lineTo(edge.end.x, edge.end.y);
+            region.closeSubpath();
+            for (const auto& wall : entity.properties.at("wall_measurement_source").at("walls"))
+                exterior_label_regions.try_emplace(wall.at("id").get<std::string>(), region);
+        }
         const auto append_geometry_error = [&](const QString& message) {
             if (!m_plan_geometry_error.isEmpty()) {
                 m_plan_geometry_error += QLatin1Char('\n');
@@ -24614,17 +24645,30 @@ private:
                         const auto dx = baseline->end.x - baseline->start.x;
                         const auto dy = baseline->end.y - baseline->start.y;
                         const auto chord = std::hypot(dx, dy);
-                        const Vec2 normal = chord > 1e-9
+                        Vec2 normal = chord > 1e-9
                             ? Vec2{-dy / chord, dx / chord} : Vec2{0.0, 1.0};
+                        const auto clearance = *thickness * 0.5 + 0.14;
+                        if (const auto exterior = exterior_label_regions.find(id); exterior != exterior_label_regions.end()) {
+                            const auto positive = exterior->second.contains(QPointF(midpoint->x + normal.x * clearance,
+                                                                                   midpoint->y + normal.y * clearance));
+                            const auto negative = exterior->second.contains(QPointF(midpoint->x - normal.x * clearance,
+                                                                                   midpoint->y - normal.y * clearance));
+                            if (positive && !negative) normal = {-normal.x, -normal.y};
+                        }
                         CanvasLabel wall_length{id_from(id),
-                            {midpoint->x + normal.x * (*thickness * 0.5 + 0.14),
-                             midpoint->y + normal.y * (*thickness * 0.5 + 0.14)},
+                            {midpoint->x + normal.x * clearance,
+                             midpoint->y + normal.y * clearance},
                             format_length(segment_length(*baseline), m_metric_units),
                             id_from(id) == m_selected_id};
                         wall_length.text_height_metres = 0.15;
                         wall_length.paper_height_mm = 3.5;
                         wall_length.show_background = false;
                         wall_length.plan_only = true;
+                        auto angle = std::atan2(dy, dx);
+                        while (angle > std::numbers::pi / 2) angle -= std::numbers::pi;
+                        while (angle <= -std::numbers::pi / 2) angle += std::numbers::pi;
+                        wall_length.rotation_radians = angle;
+                        wall_length.automatic_linear_placement = CanvasLinearLabelPlacement{*baseline, normal, clearance};
                         all_labels.push_back(std::move(wall_length));
                     }
                 } catch (const std::exception& error) {
@@ -28042,11 +28086,39 @@ private:
                 const Vec2 a1{a.x + normal.x, a.y + normal.y}, a2{a.x - normal.x, a.y - normal.y};
                 const Vec2 b1{b.x + normal.x, b.y + normal.y}, b2{b.x - normal.x, b.y - normal.y};
                 preview.segments = {{a1, b1, 0}, {b1, b2, 0}, {b2, a2, 0}, {a2, a1, 0}};
-                if (m_pending_opening_kind == QStringLiteral("door") &&
-                    (m_pending_opening_symbol_id.isEmpty() || m_pending_opening_door_operation)) {
-                    const auto swing = door_plan_symbol(host.baseline, offset, width,
-                        m_pending_opening_door_operation.value_or(DoorOperation{}));
-                    preview.segments.insert(preview.segments.end(), swing.begin(), swing.end());
+                if (m_pending_opening_kind != QStringLiteral("opening")) {
+                    auto assembly = default_opening_assembly(m_pending_opening_kind == QStringLiteral("door")
+                        ? OpeningAssemblyKind::door : OpeningAssemblyKind::window);
+                    if (m_pending_opening_symbol_id == QStringLiteral("svg-v2-09_doors-door-sliding-glass"))
+                        assembly.glazing_thickness_m = 0.012;
+                    const auto operation = m_pending_opening_kind == QStringLiteral("door")
+                        ? m_pending_opening_symbol_id.isEmpty() ? std::optional<DoorOperation>{DoorOperation{}}
+                                                              : m_pending_opening_door_operation
+                        : std::nullopt;
+                    const auto& opening = host.openings.back();
+                    if (host.baseline.sweep_radians == 0.0) {
+                        // A straight-host placement is a rigid copy of one
+                        // admitted local assembly, so pointer motion needs no
+                        // solid rebuild and shows the actual leaf/track geometry.
+                        const auto key = json{{"width", width}, {"height", height}, {"sill", sill},
+                            {"thickness", host.thickness}, {"assembly", opening_assembly_json(assembly)},
+                            {"operation", operation ? encode_door_operation(*operation) : json{}}}.dump();
+                        if (m_opening_preview_profile_cache.first != key) {
+                            HostedOpening local_opening{"placement", 1.0, width, sill, height};
+                            Wall local_host{"placement-host", {{0,0}, {width+2.0,0}, 0.0}, host.thickness,
+                                std::max(host.height, sill+height+1.0), 0.0, {local_opening}};
+                            auto local = project_hosted_opening_plan(local_host, local_opening, assembly, operation);
+                            m_opening_preview_profile_cache = {key, std::move(local)};
+                        }
+                        const double angle = std::atan2(b.y-a.y, b.x-a.x);
+                        const PlanarTransform transform{{}, angle, false, false,
+                            {a.x-std::cos(angle), a.y-std::sin(angle)}};
+                        preview.segments.clear();
+                        for (const auto& edge : m_opening_preview_profile_cache.second)
+                            preview.segments.push_back(transform_segment(edge, transform));
+                    } else {
+                        preview.segments = project_hosted_opening_plan(host, opening, assembly, operation);
+                    }
                 }
                 preview.instruction = QStringLiteral("Click to place %1 • offset %2").arg(m_pending_opening_kind, format_length(offset, m_metric_units));
                 if (commit) {
@@ -29708,9 +29780,12 @@ private:
             const auto prior = source->properties.value("door_operation",json{});
             const auto operation = prior.is_null() ? DoorOperation{} : decode_door_operation(prior);
             QDialog dialog(owner);
-            dialog.setObjectName("doorSwingDialog"); dialog.setWindowTitle("Door swing");
+            dialog.setObjectName("doorSwingDialog"); dialog.setWindowTitle("Door operation");
             auto* layout = new QVBoxLayout(&dialog);
             auto* form = new QFormLayout;
+            auto* mechanism = new QComboBox(&dialog); mechanism->setObjectName("editDoorMechanism");
+            mechanism->addItems({"Hinged", "Double hinged", "Sliding"});
+            mechanism->setCurrentIndex(static_cast<int>(operation.kind));
             auto* hinge = new QComboBox(&dialog); hinge->setObjectName("editDoorHinge");
             hinge->addItems({"None","Start jamb","End jamb"});
             hinge->setCurrentIndex(prior.is_null()?0:(operation.hinge_at_end?2:1));
@@ -29720,10 +29795,25 @@ private:
             auto* angle = new QDoubleSpinBox(&dialog); angle->setObjectName("editDoorAngle");
             angle->setRange(0.01,180); angle->setDecimals(2); angle->setSuffix("°"); angle->setValue(operation.angle_degrees);
             const auto displayed_angle = angle->value();
-            form->addRow("Hinge",hinge); form->addRow("Swing",side); form->addRow("Angle",angle);
+            auto* travel = new QDoubleSpinBox(&dialog); travel->setObjectName("editDoorTravel");
+            travel->setRange(0.0, 100.0); travel->setDecimals(2); travel->setSuffix("%");
+            travel->setValue(operation.slide_fraction * 100.0);
+            const auto displayed_travel = travel->value();
+            form->addRow("Mechanism",mechanism); form->addRow("Jamb / moving half",hinge);
+            form->addRow("Swing / track side",side); form->addRow("Angle",angle); form->addRow("Open",travel);
             layout->addLayout(form);
-            auto sync=[&]{side->setEnabled(hinge->currentIndex()!=0);angle->setEnabled(hinge->currentIndex()!=0);};
+            auto sync=[&]{
+                const bool family_requires_operation = mechanism->currentIndex()!=static_cast<int>(DoorOperationKind::hinged);
+                if (family_requires_operation && hinge->currentIndex()==0) hinge->setCurrentIndex(1);
+                hinge->setItemData(0, family_requires_operation ? 0 : int(Qt::ItemIsEnabled | Qt::ItemIsSelectable),
+                                   Qt::UserRole-1);
+                const bool enabled = hinge->currentIndex()!=0;
+                const bool sliding = mechanism->currentIndex()==static_cast<int>(DoorOperationKind::sliding);
+                side->setEnabled(enabled); angle->setEnabled(enabled && !sliding);
+                travel->setEnabled(enabled && sliding);
+            };
             sync(); QObject::connect(hinge,&QComboBox::currentIndexChanged,&dialog,[&]{sync();});
+            QObject::connect(mechanism,&QComboBox::currentIndexChanged,&dialog,[&]{sync();});
             auto* buttons = new QDialogButtonBox(QDialogButtonBox::Save|QDialogButtonBox::Cancel,&dialog);
             layout->addWidget(buttons);
             QObject::connect(buttons,&QDialogButtonBox::accepted,&dialog,&QDialog::accept);
@@ -29731,11 +29821,19 @@ private:
             if(dialog.exec()!=QDialog::Accepted || !modalContextUnchanged(context)) return;
             auto candidate = *source;
             if(hinge->currentIndex()==0) candidate.properties.erase("door_operation");
-            else candidate.properties["door_operation"] = encode_door_operation(
-                DoorOperation{hinge->currentIndex()==2,side->currentIndex()==0,
-                    angle->value()==displayed_angle ? operation.angle_degrees : angle->value()});
+            else {
+                auto edited = operation;
+                edited.hinge_at_end = hinge->currentIndex()==2;
+                edited.swing_left = side->currentIndex()==0;
+                edited.angle_degrees = angle->value()==displayed_angle ? operation.angle_degrees : angle->value();
+                edited.kind = static_cast<DoorOperationKind>(mechanism->currentIndex());
+                edited.slide_fraction = edited.kind == DoorOperationKind::sliding
+                    ? travel->value()==displayed_travel ? operation.slide_fraction : travel->value()/100.0 : 0.0;
+                candidate.properties["door_operation"] = encode_door_operation(edited);
+            }
             if(candidate.properties==source->properties) return;
-            applyDocumentCommand(ApplyEntityChanges{context.revision,{EntityChange::upsert(candidate)},{},"edit door swing"});
+            if (!previewOpening(candidate, candidate.properties)) return;
+            applyDocumentCommand(ApplyEntityChanges{context.revision,{EntityChange::upsert(candidate)},{},"edit door operation"});
             clearError(); refresh();
         } catch(const std::exception& error) { setError(QString::fromUtf8(error.what())); }
     }
@@ -30006,6 +30104,7 @@ private:
     QString m_pending_opening_kind;
     QString m_pending_opening_symbol_id;
     std::optional<DoorOperation> m_pending_opening_door_operation;
+    std::pair<std::string, Boundary> m_opening_preview_profile_cache;
     QWidget* m_wall_draw_fields{};
     QWidget* m_opening_draw_fields{};
     QLineEdit* m_wall_draw_thickness{};
@@ -30014,6 +30113,8 @@ private:
     QLineEdit* m_opening_draw_height{};
     QLineEdit* m_opening_draw_sill{};
     QComboBox* m_opening_style{};
+    QDoubleSpinBox* m_opening_draw_travel{};
+    QLabel* m_opening_draw_travel_label{};
     QLabel* m_architecture_hint{};
     BuildingViewKind m_architectural_view_kind{BuildingViewKind::plan};
     QString m_active_named_view;

@@ -27,7 +27,7 @@ Boundary project_hosted_opening_plan(const Wall& wall, const HostedOpening& open
     BuildingViewFrame frame;
     frame.origin.z = wall.elevation + opening.sill + opening.height * 0.5;
     auto result = project_shape_view(geometry.shape, BuildingViewKind::section, frame);
-    if (geometry.door_swing) result.push_back(*geometry.door_swing);
+    result.insert(result.end(), geometry.door_swings.begin(), geometry.door_swings.end());
     return result;
 }
 

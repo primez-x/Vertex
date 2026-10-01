@@ -251,6 +251,38 @@ void desktop_hosted_worker_protocol() {
     }
 }
 
+void native_door_mechanisms() {
+    using namespace sketch;
+    for (const auto kind : {DoorOperationKind::double_hinged, DoorOperationKind::sliding}) {
+        auto wall = make_document().snapshot().entities().at("wall-1");
+        auto opening = make_document().snapshot().entities().at("opening-1");
+        opening.properties["opening_kind"] = "door";
+        opening.properties["opening_assembly"] = opening_assembly_json(default_opening_assembly(OpeningAssemblyKind::door));
+        opening.properties["door_operation"] = encode_door_operation(
+            DoorOperation{false, true, 90.0, kind, kind == DoorOperationKind::sliding ? 0.5 : 0.0});
+        const auto exported = export_project_ifc(Document::create({wall, opening}).snapshot());
+        bool found = false;
+        for (const auto& [id, record] : records(exported.step)) {
+            (void)id;
+            if (record.type != "IFCDOOR") continue;
+            found = true;
+            check(record.fields[11] == (kind == DoorOperationKind::double_hinged
+                ? ".DOUBLE_DOOR_SINGLE_SWING." : ".USERDEFINED."),
+                "IFC mechanism must match manufactured multi-panel door");
+            check(kind != DoorOperationKind::sliding || record.fields[12].find("fixed panel") != std::string::npos,
+                "two-track fixed/moving door needs an accurate user-defined IFC description");
+        }
+        check(found, "multi-panel door emits an IFC fill");
+        const auto imported = import_project_ifc(exported.step);
+        const auto restored = std::find_if(imported.entities.begin(), imported.entities.end(),
+            [](const Entity& entity) { return entity.type == "opening"; });
+        check(restored != imported.entities.end() && restored->extensions.contains("ifc_fill_source") &&
+                  restored->properties.at("door_operation") ==
+                  opening.properties.at("door_operation"),
+              "IFC verifies manufactured geometry and restores the full mechanism");
+    }
+}
+
 void native_assemblies() {
     using namespace sketch;
     for (const double sweep : {0.0, 1.0, -1.0}) {
@@ -954,6 +986,7 @@ void run() {
     catch (const std::invalid_argument&) { rejected = true; }
     check(rejected, "malformed IFC must fail closed");
 #ifdef SKETCH_IFC_NATIVE_GEOMETRY
+    native_door_mechanisms();
     native_assemblies();
     closed_leaf_without_operation();
     desktop_hosted_worker_protocol();

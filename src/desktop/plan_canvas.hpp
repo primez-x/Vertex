@@ -18,6 +18,7 @@
 #include <QWidget>
 
 #include <functional>
+#include <array>
 #include <cstdint>
 #include <optional>
 #include <utility>
@@ -141,6 +142,12 @@ struct CanvasEntity {
 // A retained document annotation. Unlike BoundaryDraftPreview, labels are
 // part of the committed drawing and therefore render in both screen and
 // fit-to-content output.
+struct CanvasLinearLabelPlacement {
+    Segment anchor;
+    Vec2 outward_normal{};
+    double clearance_metres{};
+};
+
 struct CanvasLabel {
     QString id;
     Vec2 position{};
@@ -175,6 +182,8 @@ struct CanvasLabel {
     // Label-only semantic entities (for example an area dimension) have no
     // line CanvasEntity from which category picking could infer their type.
     QString selection_type;
+    // Derived wall measurements only. Authored annotations keep their anchor.
+    std::optional<CanvasLinearLabelPlacement> automatic_linear_placement;
 };
 
 // Exact geometric totals from the candidate document, used only while editing.
@@ -468,6 +477,9 @@ private:
         const CanvasEntity& entity) const;
     [[nodiscard]] std::optional<CanvasSelectionFrame> selectionAxes() const;
     [[nodiscard]] CanvasLabel presentedLabel(const CanvasLabel& label, bool output) const;
+    [[nodiscard]] const std::vector<CanvasLabel>& positionedLabels(
+        const QFont& base_font, const QPaintDevice* device, double scale,
+        double dpi, bool output) const;
     [[nodiscard]] QTransform selectionControlTransform(const QRectF& viewport) const;
     [[nodiscard]] QRectF selectionControlRect(const QRectF& viewport) const;
     [[nodiscard]] QPointF selectionRotationPoint(const QRectF& viewport) const;
@@ -546,6 +558,12 @@ private:
 
     std::vector<CanvasEntity> m_entities;
     std::vector<CanvasLabel> m_labels;
+    struct LabelPlacementCache {
+        QByteArray key;
+        std::vector<CanvasLabel> labels;
+    };
+    // Keep interactive picking warm while a separate output device is used.
+    mutable std::array<LabelPlacementCache, 2> m_label_placement_cache;
     std::vector<CanvasReference> m_references;
     std::vector<CanvasReferenceGrid> m_reference_grids;
     mutable QHash<QString, QSharedPointer<QSvgRenderer>> m_svg_renderers;

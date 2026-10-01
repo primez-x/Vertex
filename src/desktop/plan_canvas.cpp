@@ -2,6 +2,7 @@
 #include "sketch/hosted_opening_geometry.hpp"
 
 #include <QApplication>
+#include <QDataStream>
 #include <QDialog>
 #include <QDragEnterEvent>
 #include <QDragMoveEvent>
@@ -2047,16 +2048,10 @@ std::optional<QRectF> PlanCanvas::selectionBounds(const QRectF& viewport) const 
                         .normalized().adjusted(-padding, -padding, padding, padding));
         }
     }
-    for (const auto& retained_label : m_labels) {
-        const auto label = presentedLabel(retained_label,false);
+    for (const auto& label : positionedLabels(font(), this, m_scale, logicalDpiY(), false)) {
         if (!label.selected || !drawable_label(label)) continue;
         const auto layout = label_layout(label, font(), this, m_scale, logicalDpiY());
-        auto position = label.position;
-        if (m_move_preview_delta && !m_move_preview_exact && m_move_ids.contains(label.id)) {
-            position.x += m_move_preview_delta->x;
-            position.y += m_move_preview_delta->y;
-        }
-        include(label_transform(label, toScreen(position, viewport)).mapRect(layout.bounds));
+        include(label_transform(label, toScreen(label.position, viewport)).mapRect(layout.bounds));
     }
     for (const auto& reference : m_references) {
         if (!reference.selected || !reference.visible || reference.image.isNull()) continue;
@@ -2140,8 +2135,7 @@ std::optional<CanvasSelectionFrame> PlanCanvas::selectionAxes() const {
         return CanvasSelectionFrame{reference.position, reference.rotation_degrees*pi/180,
             reference.image.width()*unit, reference.image.height()*unit};
     }
-    for (const auto& retained_label : m_labels) {
-        const auto label = presentedLabel(retained_label,false);
+    for (const auto& label : positionedLabels(font(), this, m_scale, logicalDpiY(), false)) {
         if (!label.selected || !drawable_label(label) || !std::isfinite(label.rotation_radians)) continue;
         const auto layout = label_layout(label,font(),this,m_scale,logicalDpiY());
         return CanvasSelectionFrame{label.position,label.rotation_radians,
@@ -2168,6 +2162,207 @@ CanvasLabel PlanCanvas::presentedLabel(const CanvasLabel& label, bool output) co
         presented.scale *= m_transform_scale_preview;
     }
     return presented;
+}
+
+const std::vector<CanvasLabel>& PlanCanvas::positionedLabels(
+    const QFont& base_font, const QPaintDevice* device, double scale,
+    double dpi, bool output) const {
+    auto& cache = m_label_placement_cache[output ? 1 : 0];
+    std::vector<CanvasLabel> labels;
+    labels.reserve(m_labels.size());
+    QByteArray key;
+    QDataStream signature(&key, QIODevice::WriteOnly);
+    signature << base_font << font() << scale << dpi << output << quint64(m_labels.size())
+              << device->logicalDpiX() << device->logicalDpiY()
+              << device->devicePixelRatioF() << device->devType();
+    const auto point_key = [&](Vec2 p) { signature << p.x << p.y; };
+    for (const auto& retained : m_labels) {
+        auto label = presentedLabel(retained, output);
+        if (!output && m_move_preview_delta && !m_move_preview_exact && m_move_ids.contains(label.id)) {
+            const auto delta = *m_move_preview_delta;
+            label.position = label.position + delta;
+            if (label.automatic_linear_placement) {
+                label.automatic_linear_placement->anchor.start =
+                    label.automatic_linear_placement->anchor.start + delta;
+                label.automatic_linear_placement->anchor.end =
+                    label.automatic_linear_placement->anchor.end + delta;
+            }
+        }
+        signature << label.id << label.text << label.selected << label.rotation_radians
+                  << label.scale << label.text_height_metres << label.paper_height_mm
+                  << label.color << label.bold << label.italic << label.fill_color
+                  << label.fill_pattern << label.show_background << label.avoid_components
+                  << label.plan_only << label.selection_type;
+        point_key(label.position);
+        signature << label.automatic_linear_placement.has_value();
+        if (label.automatic_linear_placement) {
+            const auto& automatic = *label.automatic_linear_placement;
+            point_key(automatic.anchor.start);
+            point_key(automatic.anchor.end);
+            signature << automatic.anchor.sweep_radians << automatic.clearance_metres;
+            point_key(automatic.outward_normal);
+        }
+        labels.push_back(std::move(label));
+    }
+    // Reference-grid callouts are rendered labels too, with their own font.
+    signature << quint64(m_reference_grids.size());
+    for (const auto& grid : m_reference_grids) {
+        signature << grid.id << grid.visible << grid.x_label << grid.y_label;
+        signature << quint64(grid.lines.size());
+        for (const auto& line : grid.lines) {
+            point_key(line.start);
+            point_key(line.end);
+            signature << line.index << static_cast<int>(line.axis);
+        }
+    }
+    if (cache.key == key) return cache.labels;
+
+    if (!(scale > 0) || !std::isfinite(scale) || !(dpi > 0) || !std::isfinite(dpi)) {
+        cache.key = std::move(key);
+        cache.labels = std::move(labels);
+        return cache.labels;
+    }
+    const auto model_screen = [&](Vec2 p) { return QPointF(p.x * scale, -p.y * scale); };
+    std::vector<QRectF> footprints(labels.size());
+    std::vector<QRectF> obstacles;
+    std::vector<std::size_t> automatic_labels;
+    const auto finite_rect = [](const QRectF& bounds) {
+        return std::isfinite(bounds.left()) && std::isfinite(bounds.right()) &&
+               std::isfinite(bounds.top()) && std::isfinite(bounds.bottom());
+    };
+    const auto valid_automatic = [](const CanvasLinearLabelPlacement& placement) {
+        const auto& anchor = placement.anchor;
+        const auto chord = distance(anchor.start, anchor.end);
+        const auto normal_length = std::hypot(placement.outward_normal.x, placement.outward_normal.y);
+        if (!std::isfinite(anchor.start.x) || !std::isfinite(anchor.start.y) ||
+            !std::isfinite(anchor.end.x) || !std::isfinite(anchor.end.y) ||
+            !std::isfinite(anchor.sweep_radians) || !std::isfinite(chord) || chord <= 1e-9 ||
+            !std::isfinite(normal_length) || normal_length <= 1e-9 ||
+            !std::isfinite(placement.clearance_metres) || placement.clearance_metres < 0) return false;
+        // The opt-in normal must identify one of the host's two sides.
+        const auto cross = (anchor.end.x-anchor.start.x)*placement.outward_normal.y -
+                           (anchor.end.y-anchor.start.y)*placement.outward_normal.x;
+        return std::isfinite(cross) && std::abs(cross) > chord*normal_length*1e-8 &&
+               (anchor.sweep_radians == 0 || arc_info(anchor).has_value());
+    };
+    for (std::size_t i = 0; i < labels.size(); ++i) {
+        const auto& label = labels[i];
+        if (!drawable_label(label)) continue;
+        auto label_font = label.paper_height_mm > 0 && std::isfinite(label.paper_height_mm)
+            ? font() : base_font;
+        if (output) { label_font.setFeature("calt", 0); label_font.setFeature("case", 0); }
+        const auto layout = label_layout(label, label_font, device, scale, dpi);
+        footprints[i] = label_transform(label, {}).mapRect(layout.bounds);
+        const auto bounds = footprints[i].translated(model_screen(label.position));
+        if (!finite_rect(bounds)) continue;
+        if (label.automatic_linear_placement && valid_automatic(*label.automatic_linear_placement))
+            automatic_labels.push_back(i);
+        else obstacles.push_back(bounds);
+    }
+    QFont grid_font = base_font;
+    grid_font.setPixelSize(output ? static_cast<int>(std::clamp(std::lround(
+        std::min(2.5*dpi/25.4, 48.0)), 8L, 48L)) : 11);
+    grid_font.setWeight(QFont::DemiBold);
+    const QFontMetricsF grid_metrics(grid_font, device);
+    for (const auto& grid : m_reference_grids) {
+        if (!grid.visible) continue;
+        for (const auto& line : grid.lines) {
+            const auto& prefix = line.axis == ReferenceGridAxis::x ? grid.x_label : grid.y_label;
+            const auto start = model_screen(line.start), end = model_screen(line.end);
+            const auto outward = line.axis == ReferenceGridAxis::x ? end-start : start-end;
+            const auto length = std::hypot(outward.x(), outward.y());
+            if (prefix.isEmpty() || !(length > 0) || !std::isfinite(length)) continue;
+            auto bounds = grid_metrics.boundingRect(prefix + QString::number(line.index));
+            bounds.moveCenter((line.axis == ReferenceGridAxis::x ? end : start) + outward*(6.0/length));
+            bounds.adjust(-4, -2, 4, 2);
+            if (finite_rect(bounds)) obstacles.push_back(bounds);
+        }
+    }
+    std::stable_sort(automatic_labels.begin(), automatic_labels.end(), [&](auto a, auto b) {
+        return labels[a].id < labels[b].id;
+    });
+    // Millimetres converted through the actual paper/device scale, including
+    // high-DPI and fitted-sheet output. Padded rotated rectangles are a
+    // conservative footprint: their glyphs/backgrounds cannot overlap.
+    const double gap = std::max(3.0, dpi / 25.4);
+    for (const auto i : automatic_labels) {
+        auto& label = labels[i];
+        const auto& placement = *label.automatic_linear_placement;
+        const auto& anchor = placement.anchor;
+        const auto chord = distance(anchor.start, anchor.end);
+        const auto arc = arc_info(anchor);
+        const auto point_at = [&](double t) {
+            return arc ? arc_point(anchor, *arc, t) : anchor.start + (anchor.end-anchor.start)*t;
+        };
+        const Vec2 left{-(anchor.end.y-anchor.start.y)/chord,
+                        (anchor.end.x-anchor.start.x)/chord};
+        const auto side = left.x*placement.outward_normal.x + left.y*placement.outward_normal.y >= 0 ? 1.0 : -1.0;
+        const auto normal_at = [&](double t) {
+            if (!arc) return left * side;
+            const auto tangent_angle = arc->start_angle + anchor.sweep_radians*t +
+                (anchor.sweep_radians > 0 ? pi/2 : -pi/2);
+            return Vec2{-std::sin(tangent_angle)*side, std::cos(tangent_angle)*side};
+        };
+        const auto midpoint = point_at(.5);
+        const auto normal = normal_at(.5);
+        const QPointF screen_normal(normal.x, -normal.y);
+        const QPointF screen_tangent(normal.y, normal.x);
+        const auto footprint = footprints[i];
+        const auto extent = [&](QPointF axis) {
+            double result = 0;
+            for (const auto corner : {footprint.topLeft(), footprint.topRight(),
+                                      footprint.bottomLeft(), footprint.bottomRight()})
+                result = std::max(result, std::abs(QPointF::dotProduct(corner, axis)));
+            return result;
+        };
+        const auto outward_extent = extent(screen_normal);
+        const auto length = arc ? arc->radius*std::abs(anchor.sweep_radians) : chord;
+        if (!std::isfinite(length) || !(length > 0)) continue;
+        const auto margin = std::min(.5, extent(screen_tangent)/(scale*length));
+        const auto preferred_distance = (label.position.x-midpoint.x)*normal.x +
+                                        (label.position.y-midpoint.y)*normal.y;
+        const auto baseline_distance = std::max({placement.clearance_metres, preferred_distance,
+                                                 (outward_extent+gap)/scale});
+        const auto lane_step = (2*outward_extent+gap)/scale;
+        bool placed = false;
+        const auto attempt = [&](double station, double offset) {
+            const auto t = std::clamp(station, margin, 1-margin);
+            const auto position = point_at(t) + normal_at(t)*offset;
+            const auto bounds = footprint.translated(model_screen(position));
+            if (!std::isfinite(position.x) || !std::isfinite(position.y) || !finite_rect(bounds)) return false;
+            const auto padded = bounds.adjusted(-gap, -gap, gap, gap);
+            if (std::any_of(obstacles.begin(), obstacles.end(), [&](const auto& other) {
+                return padded.intersects(other);
+            })) return false;
+            label.position = position;
+            obstacles.push_back(bounds);
+            return true;
+        };
+        for (int lane = 0; lane < 16 && !placed; ++lane) {
+            for (const auto station : {.5, .25, .75, .125, .875, .375, .625}) {
+                if (attempt(station, baseline_distance+lane*lane_step)) { placed = true; break; }
+            }
+        }
+        if (!placed) {
+            // A dense plan must keep every measurement. Jump beyond every
+            // obstacle in the midpoint normal, rather than unbounded retries.
+            double offset_pixels = baseline_distance*scale;
+            const auto origin = model_screen(midpoint);
+            for (const auto& other : obstacles)
+                for (const auto corner : {other.topLeft(), other.topRight(), other.bottomLeft(), other.bottomRight()})
+                    offset_pixels = std::max(offset_pixels,
+                        QPointF::dotProduct(corner-origin, screen_normal)+outward_extent+gap+1);
+            if (!attempt(.5, offset_pixels/scale)) {
+                // Overflowing metadata is presentation-invalid; retain the
+                // finite source anchor and reserve its footprint for others.
+                const auto bounds = footprint.translated(model_screen(label.position));
+                if (finite_rect(bounds)) obstacles.push_back(bounds);
+            }
+        }
+    }
+    cache.key = std::move(key);
+    cache.labels = std::move(labels);
+    return cache.labels;
 }
 
 QRectF PlanCanvas::selectionControlRect(const QRectF& viewport) const {
@@ -2208,7 +2403,13 @@ QTransform PlanCanvas::selectionControlTransform(const QRectF& viewport) const {
                 [](const CanvasLabel& label) { return label.selected; });
             if (!label_selection) axes->rotation_radians += m_transform_rotation_preview;
         }
-        if (m_move_preview_delta && !m_move_preview_exact && m_move_ids.contains(selectedIds().front())) {
+        // Same-ID wall measurements are selected with their geometry. Only
+        // label-only axes have already incorporated the move delta.
+        const bool selected_label =
+            std::none_of(m_entities.begin(), m_entities.end(), [](const auto& entity) { return entity.selected; }) &&
+            std::none_of(m_references.begin(), m_references.end(), [](const auto& reference) { return reference.selected; }) &&
+            std::any_of(m_labels.begin(), m_labels.end(), [](const auto& label) { return label.selected; });
+        if (!selected_label && m_move_preview_delta && !m_move_preview_exact && m_move_ids.contains(selectedIds().front())) {
             axes->center.x += m_move_preview_delta->x;
             axes->center.y += m_move_preview_delta->y;
         }
@@ -2754,7 +2955,7 @@ void PlanCanvas::drawSelectionDimensions(QPainter& painter, const QRectF& viewpo
                 }
             }
         }
-        if (m_move_preview_delta && !m_move_preview_exact && m_move_ids.contains(id)) {
+        if (!sizes_presented && m_move_preview_delta && !m_move_preview_exact && m_move_ids.contains(id)) {
             center.x += m_move_preview_delta->x;
             center.y += m_move_preview_delta->y;
         }
@@ -2812,8 +3013,7 @@ void PlanCanvas::drawSelectionDimensions(QPainter& painter, const QRectF& viewpo
         draw({reference.position, reference.rotation_degrees*pi/180,
               reference.image.width()*unit, reference.image.height()*unit},reference.id);
     }
-    for (const auto& retained_label : m_labels) {
-        const auto label = presentedLabel(retained_label,false);
+    for (const auto& label : positionedLabels(font(), this, m_scale, logicalDpiY(), false)) {
         if (!label.selected || !drawable_label(label)) continue;
         const auto layout = label_layout(label,font(),this,m_scale,logicalDpiY());
         draw({label.position,label.rotation_radians,layout.bounds.width()/m_scale,
@@ -3199,8 +3399,7 @@ QStringList PlanCanvas::rectangleHits(const QRectF& rectangle, bool crossing) co
         }
         if (matches(screen_path)) add(entity.id);
     }
-    for (const auto& retained_label : m_labels) {
-        const auto label = presentedLabel(retained_label,false);
+    for (const auto& label : positionedLabels(font(), this, m_scale, logicalDpiY(), false)) {
         if (!matchesSelectionFilter(label.id)) continue;
         if (!drawable_label(label)) continue;
         QPainterPath path;
@@ -3330,8 +3529,7 @@ QString PlanCanvas::hitTest(QPointF point, bool filtered) const {
     }
     // Measure the same font and padded rotated rectangle as interactive paint.
     // Retain the geometry selection tolerance outside that painted rectangle.
-    for (const auto& retained_label : m_labels) {
-        const auto label = presentedLabel(retained_label,false);
+    for (const auto& label : positionedLabels(font(), this, m_scale, logicalDpiY(), false)) {
         if (filtered && !matchesSelectionFilter(label.id)) continue;
         if (!drawable_label(label)) continue;
         const auto screen = toScreen(label.position, rect());
@@ -3887,8 +4085,7 @@ void PlanCanvas::drawLabels(QPainter& painter, const QRectF& viewport, double sc
         // differ from device DPI. Model scale remains independent of this.
         dpi = *paper_pixels_per_mm * 25.4;
     }
-    for (const auto& retained_label : m_labels) {
-        const auto label = presentedLabel(retained_label,output);
+    for (const auto& label : positionedLabels(legacy_font, metrics_device, scale, dpi, output)) {
         if (!drawable_label(label)) continue;
         const auto paper = std::isfinite(label.paper_height_mm) && label.paper_height_mm > 0.0;
         auto base_font = paper ? font() : legacy_font;
@@ -3903,12 +4100,7 @@ void PlanCanvas::drawLabels(QPainter& painter, const QRectF& viewport, double sc
                                           metrics_device, scale, dpi);
         painter.setFont(layout.font);
         const auto& bounds = layout.bounds;
-        auto position = label.position;
-        if (!output && m_move_preview_delta && !m_move_preview_exact && m_move_ids.contains(label.id)) {
-            position.x += m_move_preview_delta->x;
-            position.y += m_move_preview_delta->y;
-        }
-        const auto center = to_screen(position);
+        const auto center = to_screen(label.position);
         painter.save();
         painter.setTransform(label_transform(label, center), true);
         if (!output && label.selected) {

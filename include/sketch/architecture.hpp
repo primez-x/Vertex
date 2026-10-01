@@ -70,6 +70,9 @@ struct RoomVolume {
 struct OpeningAssemblyGeometry {
     TopoDS_Shape shape;
     std::optional<Segment> door_swing;
+    // Physical clear-leaf arcs for every hinged leaf. door_swing remains the
+    // legacy single-hinged convenience value; sliding operations have no arcs.
+    std::vector<Segment> door_swings;
 };
 [[nodiscard]] OpeningAssemblyGeometry make_opening_assembly_geometry(
     const Wall& wall, const HostedOpening& opening,

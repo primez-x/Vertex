@@ -1,11 +1,14 @@
 #include "sketch/architecture.hpp"
 #include "sketch/document.hpp"
 #include "sketch/hosted_opening_geometry.hpp"
+#include "sketch/hosted_opening_plan.hpp"
 
 #include <BRepAdaptor_Curve.hxx>
 #include <BRepAlgoAPI_Common.hxx>
 #include <BRepBuilderAPI_Transform.hxx>
 #include <BRepCheck_Analyzer.hxx>
+#include <BRepGProp.hxx>
+#include <GProp_GProps.hxx>
 #include <BRep_Tool.hxx>
 #include <TopExp_Explorer.hxx>
 #include <TopoDS.hxx>
@@ -170,6 +173,141 @@ double intersection_volume(const TopoDS_Shape& first, const TopoDS_Shape& second
     return sketch::solid_volume(common.Shape());
 }
 
+gp_Pnt mass_centre(const TopoDS_Shape& shape) {
+    GProp_GProps properties;
+    BRepGProp::VolumeProperties(shape, properties);
+    return properties.CentreOfMass();
+}
+
+void check_multi_leaf_doors() {
+    using namespace sketch;
+    const auto host=wall();
+    const auto hosted=opening();
+    const auto assembly=default_opening_assembly(OpeningAssemblyKind::door);
+    for(bool end:{false,true}) for(bool left:{false,true}) {
+        const DoorOperation operation{end,left,70,DoorOperationKind::double_hinged};
+        const auto geometry=make_opening_assembly_geometry(host,hosted,assembly,operation);
+        const auto parts=parts_of(geometry.shape);
+        require(parts.size()==5 && geometry.door_swings.size()==2 && !geometry.door_swing,
+                "double door requires two physical leaves and two clear-leaf arcs");
+        near(solid_volume(geometry.shape),0.134336,"double leaf factory changed assembly material volume");
+        for(std::size_t i=0;i<2;++i) {
+            const bool jamb=i==0?end:!end;
+            const double hinge=jamb?2.12:1.08;
+            const double direction=jamb?-1.0:1.0;
+            const double pivot_offset=0.10+2.0*default_geometry_tolerance_metres;
+            const auto centre=mass_centre(parts[3+i]);
+            near(solid_volume(parts[3+i]),0.042016,"double leaf is not half clear width");
+            near(centre.X(),hinge+direction*(0.26*std::cos(70*std::numbers::pi/180)+pivot_offset*std::sin(70*std::numbers::pi/180)),"double leaf hinge or rotation is wrong");
+            near(centre.Y(),(left?1:-1)*(pivot_offset*(1-std::cos(70*std::numbers::pi/180))+0.26*std::sin(70*std::numbers::pi/180)),"double leaves swing to inconsistent sides");
+            near(segment_length(geometry.door_swings[i]),std::hypot(0.52,pivot_offset)*70*std::numbers::pi/180,"double clear-leaf arc has wrong offset-pivot radius");
+            near(geometry.door_swings[i].start.x,1.6,"double arc does not start at the meeting edge");
+        }
+        near(intersection_volume(parts[3],parts[4]),0,"double leaves overlap physically");
+        for(std::size_t leaf=3;leaf<5;++leaf) for(std::size_t frame_part=0;frame_part<3;++frame_part)
+            near(intersection_volume(parts[leaf],parts[frame_part]),0,"double leaf intersects manufactured frame");
+        auto wide_angle=operation;wide_angle.angle_degrees=180;
+        const auto outward=parts_of(make_opening_assembly(host,hosted,assembly,wide_angle));
+        near(intersection_volume(outward[3],outward[4]),0,"180-degree double leaves overlap physically");
+        auto right_angle=operation;right_angle.angle_degrees=90;
+        const auto right=parts_of(make_opening_assembly(host,hosted,assembly,right_angle));
+        for(const auto* pose:{&outward,&right}) for(std::size_t leaf=3;leaf<5;++leaf)
+            for(std::size_t frame_part=0;frame_part<3;++frame_part)
+                near(intersection_volume((*pose)[leaf],(*pose)[frame_part]),0,"double leaf intersects frame at 90 or 180 degrees");
+        auto cut_host=host;cut_host.openings.push_back(hosted);
+        const auto host_solid=make_wall(cut_host);
+        for(const auto* pose:{&parts,&outward,&right}) for(std::size_t leaf=3;leaf<5;++leaf)
+            near(intersection_volume((*pose)[leaf],host_solid),0,"double leaf intersects physical host wall");
+        const auto plan=project_hosted_opening_plan(host,hosted,assembly,operation);
+        require(std::count_if(plan.begin(),plan.end(),[](const auto& segment){return segment.sweep_radians!=0;})==2,
+                "manufactured double door projection must retain both analytical arcs");
+
+        const DoorOperation slide{end,left,70,DoorOperationKind::sliding,0.5};
+        const auto slid=make_opening_assembly_geometry(host,hosted,assembly,slide);
+        const auto panels=parts_of(slid.shape);
+        require(panels.size()==5 && slid.door_swings.empty() && !slid.door_swing,
+                "sliding assembly must contain two actual panels without swing arcs");
+        near(solid_volume(slid.shape),0.134336,"sliding travel changes assembly material volume");
+        near(solid_volume(panels[3]),0.042016,"sliding movable panel width is wrong");
+        near(mass_centre(panels[3]).X(),1.6,"sliding movable panel travel is wrong");
+        near(mass_centre(panels[4]).X(),end?1.34:1.86,"sliding fixed panel moved");
+        near(mass_centre(panels[3]).Y(),(left?1:-1)*(0.02+default_geometry_tolerance_metres),"sliding track side is wrong");
+        near(mass_centre(panels[4]).Y(),(left?-1:1)*(0.02+default_geometry_tolerance_metres),"fixed and moving tracks are not separated");
+        near(intersection_volume(panels[3],panels[4]),0,"sliding panels physically overlap");
+        auto other_angle=slide;other_angle.angle_degrees=170;
+        const auto unchanged=parts_of(make_opening_assembly(host,hosted,assembly,other_angle));
+        near(intersection_volume(panels[3],unchanged[3]),0.042016,"sliding panel accidentally swung with angle");
+        auto fully_open=slide;fully_open.slide_fraction=1;
+        const auto stacked=parts_of(make_opening_assembly(host,hosted,assembly,fully_open));
+        near(mass_centre(stacked[3]).X(),end?1.34:1.86,"fully open slider did not stack over fixed panel");
+        near(intersection_volume(stacked[3],stacked[4]),0,"stacked sliding panels share solid material");
+        const auto sliding_plan=project_hosted_opening_plan(host,hosted,assembly,slide);
+        require(std::none_of(sliding_plan.begin(),sliding_plan.end(),[](const auto& segment){return segment.sweep_radians!=0;}),
+                "sliding plan projection gained a swing arc");
+    }
+    rejects([&]{(void)make_opening_assembly(host,hosted,assembly,DoorOperation{false,true,1,DoorOperationKind::double_hinged});},
+            "double door accepted colliding finite-thickness leaves");
+    auto tiny=hosted;tiny.width=0.17;
+    rejects([&]{(void)make_opening_assembly(host,tiny,assembly,DoorOperation{false,true,160,DoorOperationKind::double_hinged});},
+            "thick narrow double leaves crossed the centre plane beyond 90 degrees");
+    auto shallow=assembly;shallow.frame_depth_m=0.06;
+    rejects([&]{(void)make_opening_assembly(host,hosted,shallow,DoorOperation{false,true,90,DoorOperationKind::sliding});},
+            "sliding tracks escaped shallow frame depth");
+    auto thick_host=host;thick_host.thickness=0.40;thick_host.openings.push_back(hosted);
+    auto recessed=assembly;recessed.frame_depth_m=0.08;recessed.inset_m=0.035;
+    const auto thick_solid=make_wall(thick_host);
+    for(bool left:{false,true}) for(double angle:{70.0,90.0,180.0}) {
+        const auto clear=parts_of(make_opening_assembly(thick_host,hosted,recessed,
+            DoorOperation{false,left,angle,DoorOperationKind::double_hinged}));
+        for(std::size_t leaf=3;leaf<5;++leaf) {
+            near(intersection_volume(clear[leaf],thick_solid),0,"recessed double leaf intersects thick host wall");
+            for(std::size_t frame_part=0;frame_part<3;++frame_part)
+                near(intersection_volume(clear[leaf],clear[frame_part]),0,"recessed double leaf intersects frame");
+        }
+    }
+    const auto curve=curved_wall(std::numbers::pi/2,0.63,{7,-4});
+    const HostedOpening narrow{"curved-double",0.65,0.8,0,2.1};
+    const auto curved=make_opening_assembly_geometry(curve,narrow,assembly,
+        DoorOperation{false,true,70,DoorOperationKind::double_hinged});
+    const auto halves=parts_of(curved.shape);
+    require(BRepCheck_Analyzer(curved.shape).IsValid() && halves.size()==5 && curved.door_swings.size()==2,
+            "fitted curved double leaf solids or arcs are invalid");
+    near(intersection_volume(halves[3],halves[4]),0,"curved double leaves overlap");
+    const double beta=0.64/6.0;
+    const double fitted_half_width=(3.0*std::cos(beta)-0.02)*std::tan(beta)-2.0*default_geometry_tolerance_metres;
+    const double chord_apothem=3.0*std::cos(beta);
+    const double inner_pivot=chord_apothem-2.90*std::cos(0.8/6.0)+2.0*default_geometry_tolerance_metres;
+    for(std::size_t i=0;i<2;++i) {
+        near(solid_volume(halves[3+i]),fitted_half_width*0.04*2.02,"curved double leaf has wrong fitted chord volume");
+        near(segment_length(curved.door_swings[i]),std::hypot(fitted_half_width,inner_pivot)*70*std::numbers::pi/180,
+            "curved double arc has wrong fitted half-leaf radius");
+    }
+    for(double sweep:{std::numbers::pi/2,-std::numbers::pi/2}) for(bool left:{false,true})
+        for(double angle:{70.0,90.0,180.0}) {
+            const auto curved_host=curved_wall(sweep,0.63,{7,-4});
+            auto inset_assembly=assembly;inset_assembly.inset_m=0.025;
+            const auto clear=parts_of(make_opening_assembly(curved_host,narrow,inset_assembly,
+                DoorOperation{false,left,angle,DoorOperationKind::double_hinged}));
+            for(std::size_t leaf=3;leaf<5;++leaf) for(std::size_t frame_part=0;frame_part<3;++frame_part)
+                near(intersection_volume(clear[leaf],clear[frame_part]),0,"curved double leaf intersects annular frame");
+            near(intersection_volume(clear[3],clear[4]),0,"offset-pivot curved double leaves overlap");
+            auto cut_host=curved_host;cut_host.openings.push_back(narrow);
+            const auto host_solid=make_wall(cut_host);
+            for(std::size_t leaf=3;leaf<5;++leaf)
+                near(intersection_volume(clear[leaf],host_solid),0,"curved double leaf intersects actual host wall");
+        }
+    rejects([&]{(void)make_opening_assembly(curve,narrow,assembly,
+        DoorOperation{false,true,90,DoorOperationKind::sliding});},"curved sliding tracks were silently accepted");
+    auto glazed=assembly;glazed.glazing_thickness_m=0.02;
+    for(const auto kind:{DoorOperationKind::double_hinged,DoorOperationKind::sliding}) {
+        const auto parts=parts_of(make_opening_assembly(host,hosted,glazed,DoorOperation{false,true,90,kind}));
+        require(parts.size()==7,"two glazed leaves must have separate material and pane solids");
+        near(solid_volume(parts[3]),0.042016*(1-0.65*0.65),"multi-leaf glazing aperture removed wrong volume");
+        near(intersection_volume(parts[3],parts[4]),0,"multi-leaf pane overlaps its leaf material");
+        near(intersection_volume(parts[5],parts[6]),0,"second pane overlaps its leaf material");
+    }
+}
+
 void check_curved_door(double sweep, double rotation, sketch::Vec2 origin) {
     using namespace sketch;
     const auto host = curved_wall(sweep, rotation, origin);
@@ -253,6 +391,7 @@ int main() {
         using namespace sketch;
         const auto door = default_opening_assembly(OpeningAssemblyKind::door);
         const auto window = default_opening_assembly(OpeningAssemblyKind::window);
+        check_multi_leaf_doors();
         require(parse_opening_assembly_kind("door") == OpeningAssemblyKind::door,
                 "door assembly kind codec failed");
         require(parse_opening_assembly_kind("window") == OpeningAssemblyKind::window,

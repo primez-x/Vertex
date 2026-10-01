@@ -118,9 +118,13 @@ void add_opening(const Entity& entity, std::vector<ScheduleRecord>& records,
     record.properties.emplace("height", ScheduleQuantity{*height, ScheduleUnit::metre});
     if(*opening_kind == "door" && entity.properties.contains("door_operation")) {
         const auto operation = decode_door_operation(entity.properties.at("door_operation"));
+        record.properties.emplace("mechanism", std::string(operation.kind == DoorOperationKind::double_hinged
+            ? "Double hinged" : operation.kind == DoorOperationKind::sliding ? "Sliding" : "Hinged"));
         record.properties.emplace("hinge", std::string(operation.hinge_at_end?"end":"start"));
         record.properties.emplace("swing_side", std::string(operation.swing_left?"left":"right"));
-        record.properties.emplace("swing_angle_degrees", operation.angle_degrees);
+        if (operation.kind == DoorOperationKind::sliding)
+            record.properties.emplace("open_percent", operation.slide_fraction * 100.0);
+        else record.properties.emplace("swing_angle_degrees", operation.angle_degrees);
     }
     for (const auto [name, unit] : {std::pair{"sill", ScheduleUnit::metre},
                                     std::pair{"offset", ScheduleUnit::metre}}) {
@@ -356,7 +360,7 @@ DocumentScheduleProjection project_schedules(
         // but the schedule editor only authorizes room names and marks.
         for (auto& row : result.snapshot.rows) {
             if(row.kind == ScheduleRowKind::door) {
-                for(const auto* key : {"hinge","swing_side","swing_angle_degrees"}) {
+                for(const auto* key : {"mechanism","hinge","swing_side","swing_angle_degrees","open_percent"}) {
                     const auto cell = row.cells.find(key);
                     if(cell == row.cells.end()) continue;
                     cell->second.editable = false;

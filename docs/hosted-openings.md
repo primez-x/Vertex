@@ -25,13 +25,39 @@ checks. `modal_authoring_tests` intervenes with project replacement, selection,
 layer, units, and revision changes while the new editor is open.
 
 Door creation optionally enables a 90-degree swing. The door inspector's
-**Door swing** editor changes the start/end jamb, left/right side, and angle
+**Door operation** editor changes the mechanism, start/end jamb, left/right side, and angle
 (greater than zero, at most 180 degrees), or removes the symbol. Jamb order and
 swing side are relative to the host wall's drawing direction. The optional
 `door_operation` property stores `version: 1`, `hinge: "start" | "end"`,
 `side: "left" | "right"`, and numeric `angle_degrees`. Unknown versions, invalid
 fields, and invalid angles are rejected by Document validation. Unspecified
 existing openings receive no inferred swing.
+Version 2 contains exactly six fields: `version`, `kind`, `hinge`, `side`,
+`angle_degrees`, and `slide_fraction`. `kind` accepts `hinged`, `double_hinged`,
+or `sliding`. `slide_fraction` is finite in [0,1] and must be zero for both
+hinged kinds. Angles remain finite in (0,180], including the retained angle of
+a slider; sliders do not rotate. Ordinary hinged operations are canonically
+encoded as the original four-field version 1, preserving existing records.
+
+The **Double** catalog door creates two physical half-width leaves and two
+analytic swings. The first leaf's jamb follows `hinge`; the second uses the
+opposite jamb. Pivots clear the selected wall and frame faces. Admission checks
+the posed full leaf envelopes against the actual cut host, frame and other
+leaf, and rejects an angle that crosses the meeting plane or creates a clash.
+This applies to straight and fitted curved hosts. It checks the requested
+pose; it is not a continuous motion or mechanical hardware certification.
+
+**Sliding glass** creates a movable half-panel and a fixed half-panel on
+separate tracks, with real glazing apertures. `hinge` identifies the movable
+panel's starting jamb; `side` selects its wall-normal track side. Fraction zero
+is closed; one stacks the movable panel behind the fixed panel. The editor's
+**Open** percentage controls this travel. Frame depth must accommodate both
+panel thicknesses and their clearance. Curved sliding assemblies are rejected
+before a history entry. Library placement, dimension edits, undo/redo,
+reflection, save/reopen, plans and 3D retain the stored mechanism and travel.
+The Jamb selector's **None** option is available only for ordinary hinged
+doors. Double and sliding doors always keep an operation; a slider closes with
+Open at 0%, without losing its panel family.
 Doors without swing data retain visible jamb and threshold linework in the
 plan and support the same straight-wall width handles; editing them does not
 create hinge or swing metadata.
@@ -39,7 +65,9 @@ create hinge or swing metadata.
 Plan output uses a straight leaf and an analytic circular arc, sharing geometry
 between the canvas and printed/exported plan scene. On curved walls, the closed
 leaf follows the chord between jambs. Schedules expose read-only hinge, side, and
-angle with source provenance. Ordinary dimension edits preserve operation data;
+angle with source provenance. Double doors also expose their mechanism;
+sliders expose mechanism and open percentage without a fictitious swing-angle
+cell. Ordinary dimension edits preserve operation data;
 conversion to a window retains it as dormant metadata and suppresses its symbol
 and schedule cells. Undo or conversion back to a door restores its use.
 
@@ -56,7 +84,9 @@ chord sagitta must fit the frame head; insufficient depth rejects with a fit
 error rather than changing the specified frame dimensions. The pivot uses the
 fitted leaf endpoint. Door glazing replaces an aperture in the leaf, avoiding
 overlapping solid material. Handing rotates the leaf and pane together;
-collision-free clearance at arbitrary swing angles is not certified.
+Legacy single-hinged poses retain their established geometry; collision-free
+clearance at arbitrary angles is not certified for those poses. Newly authored
+double doors use the stricter pose admission described above.
 Legacy openings without the
 profile remain valid and continue to render as wall cuts, which keeps import
 lossless while a user upgrades selected instances.
@@ -86,6 +116,10 @@ OverallWidth is the opening body's local-X envelope; native width remains the
 host-arc station distance. A closed leaf with no specified operation carries a
 user-defined description instead of invented handing.
 This is a bounded IFC4 subset, not Reference View certification.
+Double doors use `DOUBLE_DOOR_SINGLE_SWING`. The slider uses `USERDEFINED`
+with "Two-track sliding door; one fixed panel", because IFC4's
+`DOUBLE_DOOR_SLIDING` describes two movable panels. See the
+[official IFC4 operation definitions](https://standards.buildingsmart.org/IFC/RELEASE/IFC4/ADD2_TC1/HTML/schema/ifcsharedbldgelements/lexical/ifcdoortypeoperationenum.htm).
 
 DXF exports exact 2D wall footprints and manufactured mid-height sections of
 door/window frames, panels and glazing, with analytic door swing geometry.

@@ -3,6 +3,7 @@
 #include "sketch/document.hpp"
 #include "sketch/document_solid.hpp"
 #include "sketch/document_schedule_adapter.hpp"
+#include "sketch/hosted_opening_plan.hpp"
 #include "sketch/quantity.hpp"
 #include "../src/desktop/plan_canvas.hpp"
 #include "support/noninteractive_errors.hpp"
@@ -20,6 +21,8 @@
 #include <QLineEdit>
 #include <QMouseEvent>
 #include <QDropEvent>
+#include <QDialog>
+#include <QDoubleSpinBox>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QMimeData>
@@ -53,6 +56,43 @@ static sketch::Wall read_wall(const sketch::Entity& entity) {
     require(sketch::read_document_wall(entity, openings, wall, error),
             "semantic wall baseline decodes");
     return wall;
+}
+
+static sketch::Boundary opening_plan(const sketch::DocumentSnapshot& snapshot, const std::string& id) {
+    const auto& source = snapshot.entities().at(id);
+    const auto wall_id = source.properties.at("wall_id").get<std::string>();
+    std::vector<const sketch::Entity*> children;
+    for (const auto& [child_id, child] : snapshot.entities()) {
+        (void)child_id;
+        if (child.type=="opening" && child.properties.at("wall_id")==wall_id) children.push_back(&child);
+    }
+    sketch::Wall wall;
+    std::string error;
+    require(sketch::read_document_wall(snapshot.entities().at(wall_id), children, wall, error),
+            "manufactured reflection host decodes");
+    const auto opening = std::find_if(wall.openings.begin(), wall.openings.end(),
+        [&](const auto& candidate) { return candidate.id==id; });
+    require(opening!=wall.openings.end(), "manufactured opening retains host identity");
+    return sketch::project_hosted_opening_plan(wall, *opening,
+        sketch::parse_opening_assembly(source.properties.at("opening_assembly")),
+        sketch::decode_door_operation(source.properties.at("door_operation")));
+}
+
+static std::vector<sketch::Vec2> projection_samples(const sketch::Boundary& plan) {
+    std::vector<sketch::Vec2> points;
+    for (const auto& segment : plan) {
+        points.push_back(segment.start); points.push_back(segment.end);
+        const auto dx=segment.end.x-segment.start.x, dy=segment.end.y-segment.start.y;
+        if (segment.sweep_radians==0) points.push_back({segment.start.x+dx/2,segment.start.y+dy/2});
+        else {
+            const auto k=0.5/std::tan(segment.sweep_radians/2);
+            const sketch::Vec2 center{segment.start.x+dx/2-dy*k,segment.start.y+dy/2+dx*k};
+            const auto c=std::cos(segment.sweep_radians/2),s=std::sin(segment.sweep_radians/2);
+            points.push_back({center.x+(segment.start.x-center.x)*c-(segment.start.y-center.y)*s,
+                              center.y+(segment.start.x-center.x)*s+(segment.start.y-center.y)*c});
+        }
+    }
+    return points;
 }
 
 static std::vector<std::string> wall_ids(const sketch::DocumentSnapshot& snapshot) {
@@ -165,6 +205,106 @@ int main(int argc, char** argv) {
             require(dropped_opening != dropped.entities().end() && dropped_opening->second.type == "opening" &&
                         dropped_opening->second.properties.at("wall_id") == wall.toStdString(),
                     "Snap-on catalog drop accepts an exact point on the off-grid diagonal host");
+        }
+        for (const auto& [catalog_id, mechanism] : {
+                 std::pair{"svg-v2-09_doors-door-double", "double_hinged"},
+                 std::pair{"svg-v2-09_doors-door-sliding-glass", "sliding"}}) {
+            sketch::desktop::MainWindow variant;
+            variant.resize(1200, 800);
+            variant.setMetricUnits(true);
+            variant.show();
+            const auto host = variant.createStraightWall({-4, 0}, {4, 0});
+            require(!host.isEmpty(), "variant host exists");
+            QApplication::processEvents();
+            auto* target = dynamic_cast<sketch::desktop::PlanCanvas*>(
+                variant.findChild<QWidget*>(QStringLiteral("measurementPlanCanvas")));
+            require(target != nullptr, "variant canvas exists");
+            const auto center = target->viewCenter();
+            const auto viewport = QRectF(target->rect());
+            const QPointF point{viewport.center().x() - center.x * target->viewScale(),
+                                viewport.center().y() + center.y * target->viewScale()};
+            QMimeData payload;
+            payload.setData("application/x-vertex-symbol", QJsonDocument(QJsonObject{
+                {QStringLiteral("id"), QString::fromLatin1(catalog_id)},
+                {QStringLiteral("scale"), 1.0}}).toJson(QJsonDocument::Compact));
+            QDragEnterEvent enter(point.toPoint(), Qt::CopyAction, &payload, Qt::LeftButton, Qt::NoModifier);
+            QApplication::sendEvent(target, &enter);
+            QDropEvent drop(point, Qt::CopyAction, &payload, Qt::LeftButton, Qt::NoModifier);
+            QApplication::sendEvent(target, &drop);
+            const auto snapshot = variant.document().snapshot();
+            const auto created = snapshot.entities().find(variant.selectedEntityId().toStdString());
+            require(created != snapshot.entities().end() && created->second.type == "opening",
+                    "variant catalog drop creates a hosted opening");
+            require(created->second.properties.contains("door_operation") &&
+                        created->second.properties.at("door_operation").value("kind", std::string{}) == mechanism,
+                    "catalog double/sliding doors retain their actual mechanism");
+            require(variant.undoCommand() && variant.redoCommand(), "variant mechanism supports undo/redo");
+            require(variant.document().snapshot().entities().at(created->first).properties.at("door_operation") ==
+                        created->second.properties.at("door_operation"),
+                    "history preserves the complete door mechanism");
+            const auto opening_id = QString::fromStdString(created->first);
+            require(variant.selectEntity(opening_id), "select variant for editing");
+            require(variant.editSelectedLength(QStringLiteral("1.8 m")), "variant width can be edited");
+            require(variant.document().snapshot().entities().at(created->first).properties.at("door_operation") ==
+                        created->second.properties.at("door_operation"), "width edits preserve mechanism");
+            auto* editor = variant.findChild<QPushButton*>(QStringLiteral("editDoorSwing"));
+            require(editor != nullptr, "door operation editor exists");
+            bool edited = false;
+            QTimer::singleShot(0, &variant, [&] {
+                for (auto* widget : QApplication::topLevelWidgets()) {
+                    auto* dialog = qobject_cast<QDialog*>(widget);
+                    if (!dialog || dialog->objectName() != QStringLiteral("doorSwingDialog")) continue;
+                    auto* selector = dialog->findChild<QComboBox*>(QStringLiteral("editDoorMechanism"));
+                    auto* travel = dialog->findChild<QDoubleSpinBox*>(QStringLiteral("editDoorTravel"));
+                    auto* angle = dialog->findChild<QDoubleSpinBox*>(QStringLiteral("editDoorAngle"));
+                    auto* jamb = dialog->findChild<QComboBox*>(QStringLiteral("editDoorHinge"));
+                    edited = selector && travel && angle && jamb &&
+                        selector->currentIndex() == (std::string(mechanism) == "sliding" ? 2 : 1);
+                    if (jamb) {
+                        jamb->setCurrentIndex(0);
+                        edited = edited && jamb->currentIndex()==1 &&
+                            !(jamb->model()->flags(jamb->model()->index(0,0)) & Qt::ItemIsEnabled);
+                    }
+                    if (std::string(mechanism) == "sliding") {
+                        edited = edited && travel->isEnabled() && !angle->isEnabled();
+                        travel->setValue(50.0);
+                    } else {
+                        edited = edited && angle->isEnabled() && !travel->isEnabled();
+                        angle->setValue(70.0);
+                    }
+                    dialog->accept();
+                }
+            });
+            editor->click();
+            require(edited && variant.lastError().isEmpty(), "operation dialog exposes the correct mechanism controls");
+            const auto edited_operation = variant.document().snapshot().entities().at(created->first).properties.at("door_operation");
+            require(edited_operation.at(std::string(mechanism) == "sliding" ? "slide_fraction" : "angle_degrees") ==
+                        (std::string(mechanism) == "sliding" ? 0.5 : 70.0), "operation dialog commits physical travel or angle");
+            require(variant.selectEntity(host) && variant.editSelectedThickness(QStringLiteral("0.2 m")),
+                    "thicker wall admits a recessed profile");
+            require(variant.selectEntity(opening_id) && variant.editSelectedOpeningAssembly(
+                        "0.08 m", "0.12 m", "0.035 m", std::string(mechanism) == "sliding" ? "0.012 m" : "0 m", "0.02 m"),
+                    "variant profile accepts signed nonzero inset");
+            const auto original_projection=projection_samples(opening_plan(variant.document().snapshot(), created->first));
+            require(variant.selectEntity(host) && variant.transformSelectedBoundary("0", true, false, "0 m", "0 m", false),
+                    "wall reflection regenerates hosted variants");
+            const auto reflected = variant.document().snapshot().entities().at(created->first);
+            require(std::abs(reflected.properties.at("opening_assembly").at("inset_m").get<double>() + 0.02) < 1e-10,
+                    "reflection reverses wall-relative inset to preserve physical side");
+            require(reflected.properties.at("door_operation").at("side") != edited_operation.at("side"),
+                    "reflection preserves physical operation by reversing wall-relative side");
+            const auto reflected_projection=projection_samples(opening_plan(variant.document().snapshot(), created->first));
+            require(original_projection.size()==reflected_projection.size(), "reflection retains all manufactured strokes and arcs");
+            for (const auto original_point : original_projection)
+                require(std::any_of(reflected_projection.begin(), reflected_projection.end(),
+                    [&](const auto candidate) { return same_point({-original_point.x,original_point.y},candidate,1e-6); }),
+                    "manufactured panels, frames, glazing and arcs match the rigid physical reflection");
+            QTemporaryDir variant_directory;
+            const auto variant_path = variant_directory.filePath(QStringLiteral("door-variant.bldproj"));
+            require(variant_directory.isValid() && variant.saveProjectAs(variant_path) && variant.openProject(variant_path),
+                    "variant saves and reopens through the native archive");
+            require(variant.document().snapshot().entities().at(created->first).properties == reflected.properties,
+                    "save/reopen preserves variant dimensions, profile and operation");
         }
         sketch::desktop::MainWindow window;
         window.resize(1500, 950);

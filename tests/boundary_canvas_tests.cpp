@@ -589,6 +589,149 @@ QRect red_text_bounds(const QImage& image) {
     return result;
 }
 
+void test_automatic_wall_label_collision_layout() {
+    PlanCanvas canvas;
+    canvas.resize(800, 600);
+    canvas.setGridEnabled(false);
+    canvas.setOverviewMapEnabled(false);
+    CanvasLabel wall{QStringLiteral("wall-label"), {0, .25}, QStringLiteral("2.00 m")};
+    wall.paper_height_mm = 4;
+    wall.color = QColor(220, 20, 20);
+    wall.show_background = false;
+    wall.selection_type = QStringLiteral("wall");
+    wall.automatic_linear_placement = sketch::desktop::CanvasLinearLabelPlacement{
+        {{-1, 0}, {1, 0}, 0}, {0, 1}, .25};
+    CanvasLabel retained{QStringLiteral("retained-dimension"), {0, .25}, QStringLiteral("2.00 m")};
+    retained.paper_height_mm = 4;
+    retained.color = QColor(20, 20, 220);
+    retained.show_background = false;
+    const auto blue_bounds = [](const QImage& image) {
+        QRect result;
+        for (int y = 0; y < image.height(); ++y)
+            for (int x = 0; x < image.width(); ++x) {
+                const auto color = image.pixelColor(x, y);
+                if (color.blue() > 120 && color.red() < 100 && color.green() < 100)
+                    result = result.united(QRect(x, y, 1, 1));
+            }
+        return result;
+    };
+    const auto capture = [&](double scale, int dpi, std::optional<double> paper, bool screen) {
+        QImage image(canvas.size(), QImage::Format_ARGB32_Premultiplied);
+        image.setDotsPerMeterX(qRound(dpi / .0254));
+        image.setDotsPerMeterY(qRound(dpi / .0254));
+        QPainter painter(&image);
+        if (screen) canvas.renderScene(painter, image.rect(), false, Qt::white);
+        else canvas.renderSceneAt(painter, image.rect(), scale, {}, Qt::white, paper);
+        painter.end();
+        return image;
+    };
+    for (const auto scale : {40.0, 80.0, 160.0}) {
+        for (const auto dpi : {96, 192}) {
+            for (const auto paper : {std::optional<double>{}, std::optional<double>{4.0},
+                                     std::optional<double>{8.0}}) {
+                canvas.setLabels({retained});
+                const auto authored = blue_bounds(capture(scale, dpi, paper, false));
+                canvas.setLabels({wall, retained});
+                const auto image = capture(scale, dpi, paper, false);
+                const auto automatic = red_text_bounds(image);
+                require(!automatic.isEmpty() && blue_bounds(image) == authored,
+                    "automatic wall and retained dimension measurements must both remain fully visible");
+                require(!automatic.adjusted(-3, -3, 3, 3).intersects(authored),
+                    "automatic wall measurement must clear the retained label pixels at every output scale");
+                require(automatic.bottom() < image.height()/2 &&
+                        std::abs(automatic.center().x()-image.width()/2) <= scale + 2,
+                    "automatic wall label must stay on its exterior side and within the wall span");
+            }
+        }
+    }
+    for (const auto zoom : {1.0, 2.0}) {
+        canvas.zoomBy(zoom, QRectF(canvas.rect()).center());
+        canvas.setLabels({wall, retained});
+        const auto image = capture(0, 192, {}, true);
+        const auto shifted = red_text_bounds(image);
+        require(!shifted.isEmpty() && !shifted.adjusted(-3,-3,3,3).intersects(blue_bounds(image)),
+                "screen wall and authored dimension labels must remain separated after zoom");
+        QString picked;
+        canvas.setEntityClicked([&](QString id) { picked = id; });
+        const QPointF point(shifted.center());
+        QMouseEvent press(QEvent::MouseButtonPress, point, point, Qt::LeftButton,
+                          Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(&canvas, &press);
+        QMouseEvent release(QEvent::MouseButtonRelease, point, point, Qt::LeftButton,
+                            Qt::NoButton, Qt::NoModifier);
+        QApplication::sendEvent(&canvas, &release);
+        require(picked == wall.id, "shifted automatic label must pick its wall owner");
+        require(canvas.labels()[0].position.x == 0 && canvas.labels()[0].position.y == .25 &&
+                canvas.labels()[1].position.y == .25,
+                "collision layout must preserve retained document anchors");
+        wall.selected = true;
+        canvas.setLabels({wall, retained});
+        const auto selection = canvas.selectionBounds();
+        require(selection && selection->contains(shifted.center()),
+                "automatic label selection frame must contain its shifted glyphs");
+        wall.selected = false;
+    }
+
+    auto second = wall;
+    second.id = QStringLiteral("wall-label-second");
+    second.color = QColor(20, 180, 20);
+    canvas.setLabels({wall, retained, second});
+    const auto ordered = capture(80, 96, 4.0, false);
+    canvas.setLabels({second, retained, wall});
+    require(images_equal(ordered, capture(80, 96, 4.0, false)),
+            "automatic label layout must use stable owner ordering independent of scene enumeration");
+    const auto green_bounds = [](const QImage& image) {
+        QRect result;
+        for (int y = 0; y < image.height(); ++y)
+            for (int x = 0; x < image.width(); ++x) {
+                const auto color = image.pixelColor(x, y);
+                if (color.green() > 120 && color.red() < 100 && color.blue() < 100)
+                    result = result.united(QRect(x, y, 1, 1));
+            }
+        return result;
+    };
+    require(!green_bounds(ordered).isEmpty() && !red_text_bounds(ordered).isEmpty() &&
+            !green_bounds(ordered).adjusted(-3,-3,3,3).intersects(red_text_bounds(ordered)) &&
+            !green_bounds(ordered).adjusted(-3,-3,3,3).intersects(blue_bounds(ordered)),
+            "automatic measurements must avoid both retained dimensions and other automatic labels");
+    auto source_only = wall;
+    source_only.automatic_linear_placement.reset();
+    canvas.setLabels({source_only, retained});
+    const auto source_image = capture(80, 96, {}, false);
+    for (int invalid = 0; invalid < 5; ++invalid) {
+        auto bad = wall;
+        if (invalid == 0) bad.automatic_linear_placement->outward_normal = {};
+        if (invalid == 1) bad.automatic_linear_placement->anchor.start.x = std::numeric_limits<double>::quiet_NaN();
+        if (invalid == 2) bad.automatic_linear_placement->clearance_metres = -1;
+        if (invalid == 3) bad.automatic_linear_placement->anchor.sweep_radians = std::numeric_limits<double>::infinity();
+        if (invalid == 4) bad.automatic_linear_placement->clearance_metres = 1e308;
+        canvas.setLabels({bad, retained});
+        require(images_equal(source_image, capture(80, 96, {}, false)),
+                "invalid automatic metadata must keep finite authored label presentation");
+    }
+    canvas.setLabels({wall, retained});
+    QTemporaryDir directory;
+    require(directory.isValid(), "wall-label PDF fixture needs a private directory");
+    const auto path = directory.filePath(QStringLiteral("wall-label-collision.pdf"));
+    {
+        QPdfWriter writer(path);
+        writer.setPageSize(QPageSize(QSizeF(210, 148), QPageSize::Millimeter));
+        writer.setResolution(96);
+        QPainter painter(&writer);
+        require(painter.isActive(), "wall-label PDF writer must start");
+        painter.setFont(QApplication::font());
+        canvas.renderSceneAt(painter, QRectF(0,0,writer.width(),writer.height()), 80, {}, Qt::white, 4.0);
+    }
+    QPdfDocument pdf;
+    require(pdf.load(path) == QPdfDocument::Error::None && pdf.pageCount() == 1,
+            "wall-label output must reopen as one PDF page");
+    const auto pdf_image = pdf.render(0, QSize(840, 592));
+    require(!red_text_bounds(pdf_image).isEmpty() && !blue_bounds(pdf_image).isEmpty() &&
+            !red_text_bounds(pdf_image).adjusted(-3,-3,3,3).intersects(blue_bounds(pdf_image)) &&
+            pdf.getAllText(0).text().simplified().count(QStringLiteral("2.00 m")) == 2,
+            "actual PDF must preserve both complete measurements with separated glyphs");
+}
+
 void test_paper_label_style_and_hit_testing() {
     PlanCanvas canvas;
     canvas.resize(800, 600);
@@ -2834,6 +2977,11 @@ int main(int argc, char** argv) {
             test_canvas_label_pdf_preserves_authored_text();
             return 0;
         }
+        if (application.arguments().contains(QStringLiteral("--wall-label-only"))) {
+            test_automatic_wall_label_collision_layout();
+            return 0;
+        }
+        test_automatic_wall_label_collision_layout();
         test_dimension_ticks_are_paper_space();
         test_dimension_ticks_respect_angular_geometry();
         test_dark_canvas_semantic_strokes_and_overrides();

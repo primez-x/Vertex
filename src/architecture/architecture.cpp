@@ -513,6 +513,10 @@ OpeningAssemblyGeometry make_opening_assembly_geometry(const Wall& wall, const H
         throw std::invalid_argument("Opening assembly frame leaves no clear opening width");
     }
     const bool window = assembly.kind == OpeningAssemblyKind::window;
+    if (door_operation) {
+        (void)encode_door_operation(*door_operation);
+        if (window) throw std::invalid_argument("Window assembly cannot carry a door operation");
+    }
     const double clear_height = opening.height - (window ? 2.0 : 1.0) * assembly.frame_width_m;
     if (!std::isfinite(clear_height) || clear_height <= tolerance) {
         throw std::invalid_argument("Opening assembly frame leaves no clear opening height");
@@ -528,6 +532,7 @@ OpeningAssemblyGeometry make_opening_assembly_geometry(const Wall& wall, const H
     const double frame_width = assembly.frame_width_m;
     const double clear_width = opening.width - 2.0 * frame_width;
     std::optional<Segment> door_swing;
+    std::vector<Segment> door_swings;
 
     TopoDS_Compound compound;
     BRep_Builder builder;
@@ -536,7 +541,22 @@ OpeningAssemblyGeometry make_opening_assembly_geometry(const Wall& wall, const H
         if (part.IsNull()) throw std::invalid_argument("Opening assembly contains an empty part");
         builder.Add(compound, part);
     };
+    std::vector<TopoDS_Shape> frame_parts;
+    const auto add_frame = [&](const TopoDS_Shape& part) {
+        frame_parts.push_back(part);
+        add(part);
+    };
     const bool curved = wall.baseline.sweep_radians != 0.0;
+    const bool sliding = door_operation && door_operation->kind == DoorOperationKind::sliding;
+    if (sliding) {
+        // Parallel straight tracks cannot follow an annular frame. Admit only
+        // straight hosts until a fitted track profile is available.
+        if (curved) throw std::invalid_argument("Sliding door tracks require a straight host");
+        const double track_depth = 2.0 * assembly.panel_thickness_m + 2.0 * tolerance;
+        if (track_depth > assembly.frame_depth_m + tolerance ||
+            std::abs(assembly.inset_m) + track_depth * 0.5 > wall.thickness * 0.5 + tolerance)
+            throw std::invalid_argument("Sliding door tracks do not fit the frame and wall thickness");
+    }
     const auto fitted_part = [&](double along, double across, double length,
                                  double depth, double height, double elevation,
                                  const char* message) -> TopoDS_Shape {
@@ -553,13 +573,13 @@ OpeningAssemblyGeometry make_opening_assembly_geometry(const Wall& wall, const H
             throw std::invalid_argument(std::string(message) + ": " + error.what());
         }
     };
-    add(fitted_part(0.0, frame_across, frame_width,
+    add_frame(fitted_part(0.0, frame_across, frame_width,
                    assembly.frame_depth_m, opening.height, base_elevation,
                    "Opening assembly jamb construction failed"));
-    add(fitted_part(opening.width - frame_width, frame_across, frame_width,
+    add_frame(fitted_part(opening.width - frame_width, frame_across, frame_width,
                    assembly.frame_depth_m, opening.height, base_elevation,
                    "Opening assembly jamb construction failed"));
-    add(fitted_part(frame_width, frame_across, clear_width,
+    add_frame(fitted_part(frame_width, frame_across, clear_width,
                    assembly.frame_depth_m, frame_width,
                    base_elevation + opening.height - frame_width,
                    "Opening assembly head construction failed"));
@@ -575,7 +595,12 @@ OpeningAssemblyGeometry make_opening_assembly_geometry(const Wall& wall, const H
         double leaf_start = frame_width;
         double leaf_width = clear_width;
         double leaf_across = panel_across;
-        double glazing_across = assembly.inset_m - assembly.glazing_thickness_m * 0.5;
+        const bool doubled = door_operation && door_operation->kind == DoorOperationKind::double_hinged;
+        const double swing_side = door_operation && !door_operation->swing_left ? -1.0 : 1.0;
+        const double selected_frame_face = assembly.inset_m + swing_side * assembly.frame_depth_m * 0.5;
+        const double selected_wall_face = swing_side * wall.thickness * 0.5;
+        double double_hinge_across = (swing_side > 0.0 ? std::max(selected_frame_face, selected_wall_face)
+                                                     : std::min(selected_frame_face, selected_wall_face)) + swing_side * 2.0 * tolerance;
         if (curved) {
             const auto origin = centre(wall.baseline);
             const double radius = std::hypot(wall.baseline.start.x - origin.x,
@@ -610,65 +635,130 @@ OpeningAssemblyGeometry make_opening_assembly_geometry(const Wall& wall, const H
             leaf_start = 0.0;
             leaf_width = 2.0 * half_leaf;
             leaf_across = -panel_depth * 0.5;
-            glazing_across = -assembly.glazing_thickness_m * 0.5;
+            // Bound the annular frame and local wall faces in the chord's
+            // signed normal. A pivot beyond both gives both jambs the same
+            // physical clearance contract for either curve and swing side.
+            const double opening_half_angle = opening.width / (2.0 * radius);
+            const double end_cosine = std::cos(opening_half_angle);
+            const bool inward = direction * swing_side > 0.0;
+            const double projected_frame_radius = inward
+                ? (inset_radius + (end_cosine >= 0.0 ? -1.0 : 1.0) * assembly.frame_depth_m * 0.5) * end_cosine
+                : inset_radius + assembly.frame_depth_m * 0.5;
+            const double projected_wall_radius = inward
+                ? (radius + (end_cosine >= 0.0 ? -1.0 : 1.0) * wall.thickness * 0.5) * end_cosine
+                : radius + wall.thickness * 0.5;
+            const double projected_radius = inward ? std::min(projected_frame_radius, projected_wall_radius)
+                                                   : std::max(projected_frame_radius, projected_wall_radius);
+            double_hinge_across = direction * (apothem - projected_radius) + swing_side * 2.0 * tolerance;
         }
-        auto leaf = opening_box(leaf_frame, leaf_start, leaf_across, leaf_width,
-                                panel_depth, clear_height, base_elevation,
-                                "Opening assembly panel construction failed");
-        std::optional<TopoDS_Shape> glazing;
-        if (assembly.glazing_thickness_m > tolerance) {
-            const double glazing_width = leaf_width * 0.65;
-            const double glazing_height = clear_height * 0.65;
-            const double glazing_start = leaf_start + leaf_width * 0.175;
-            const double glazing_elevation = base_elevation + clear_height * 0.175;
-            // The pane replaces leaf material rather than overlapping it.
-            // Extend well past the leaf faces: a tolerance-sized overrun can
-            // make OCCT treat the tool face as coincident and retain its vertices.
-            const double aperture_overrun = std::max(panel_depth, 100.0 * tolerance);
-            const auto aperture = opening_box(leaf_frame, glazing_start,
-                leaf_across - aperture_overrun, glazing_width,
-                panel_depth + 2.0 * aperture_overrun,
-                glazing_height, glazing_elevation,
-                "Door assembly glazing aperture construction failed");
-            leaf = cut(leaf, aperture);
-            glazing = opening_box(leaf_frame, glazing_start, glazing_across,
-                                   glazing_width, assembly.glazing_thickness_m,
-                                   glazing_height, glazing_elevation,
-                                   "Door assembly glazing construction failed");
+        const int leaf_count = doubled || sliding ? 2 : 1;
+        if (doubled) {
+            // Keep each complete rectangle in its own jamb half-plane. With
+            // an offset pivot its inward reach includes the pivot offset as
+            // well as half the panel thickness. Past 90 degrees the hinge
+            // corners, rather than the far corners, determine that reach.
+            // This admits only the requested static pose, not continuous
+            // motion from the closed pose through all intermediate angles.
+            const double angle = door_operation->angle_degrees * std::numbers::pi / 180.0;
+            const double pivot_offset = std::abs(double_hinge_across - (leaf_across + panel_depth * 0.5));
+            if (leaf_width * (1.0 - std::max(0.0, std::cos(angle))) + tolerance <
+                (2.0 * pivot_offset + panel_depth) * std::sin(angle))
+                throw std::invalid_argument("Double door leaves cross their meeting clearance at the requested angle");
         }
-        std::optional<gp_Pnt> hinge;
-        double swing_angle = 0.0;
-        if (door_operation.has_value()) {
-            // Reuse the analytical operation's validation so a native solid
-            // can never silently accept a different handing contract.
-            (void)door_plan_symbol(wall.baseline, opening.offset, opening.width,
-                                   *door_operation);
-            const double hinge_along = door_operation->hinge_at_end
-                                           ? leaf_start + leaf_width
-                                           : leaf_start;
-            hinge = opening_point(leaf_frame, hinge_along, leaf_across + panel_depth * 0.5,
-                                  base_elevation);
-            swing_angle = door_operation->angle_degrees * std::numbers::pi / 180.0 *
-                          (door_operation->swing_left ? 1.0 : -1.0) *
-                          (door_operation->hinge_at_end ? -1.0 : 1.0);
-            const double far_along = door_operation->hinge_at_end ? leaf_start : leaf_start + leaf_width;
-            const auto closed = opening_point(leaf_frame, far_along,
-                leaf_across + panel_depth * 0.5, base_elevation);
-            const double dx = closed.X() - hinge->X(), dy = closed.Y() - hinge->Y();
-            const Vec2 opened{hinge->X() + dx * std::cos(swing_angle) - dy * std::sin(swing_angle),
-                              hinge->Y() + dx * std::sin(swing_angle) + dy * std::cos(swing_angle)};
-            if (std::abs(swing_angle) > tolerance)
-                door_swing = arc_from_chord_angle({closed.X(), closed.Y()}, opened, swing_angle);
-            leaf = rotate_opening_part(leaf, *hinge, swing_angle,
-                                       "Opening assembly leaf rotation failed");
-        }
-        add(leaf);
-        if (glazing.has_value()) {
-            if (hinge.has_value()) {
-                *glazing = rotate_opening_part(*glazing, *hinge, swing_angle,
-                                              "Door assembly glazing rotation failed");
+        std::vector<TopoDS_Shape> posed_leaf_envelopes;
+        // Use the admitted cut host, including material layers and slope, so a
+        // recessed frame never permits its leaf to enter real wall material.
+        const auto cut_host = doubled ? make_wall(checked) : TopoDS_Shape{};
+        const auto require_clear = [&](const TopoDS_Shape& first, const TopoDS_Shape& second, const char* message) {
+            try {
+                BRepAlgoAPI_Common common(first, second);
+                common.Build();
+                if (!common.IsDone() || common.HasErrors())
+                    throw std::invalid_argument("Double door clearance computation failed");
+                if (solid_volume(common.Shape()) > tolerance * tolerance * std::max(1.0, clear_height))
+                    throw std::invalid_argument(message);
+            } catch (const Standard_Failure& error) {
+                throw std::invalid_argument(std::string("Double door clearance failed: ") + error.what());
             }
-            add(*glazing);
+        };
+        for (int index = 0; index < leaf_count; ++index) {
+            const bool at_end = door_operation && (index == 0 ? door_operation->hinge_at_end
+                                                             : !door_operation->hinge_at_end);
+            const double part_width = leaf_width / leaf_count;
+            double part_start = leaf_start + (leaf_count == 2 && at_end ? part_width : 0.0);
+            double part_across = leaf_across;
+            if (sliding) {
+                const double track_side = (door_operation->swing_left ? 1.0 : -1.0) * (index == 0 ? 1.0 : -1.0);
+                part_across += track_side * (panel_depth * 0.5 + tolerance);
+                if (index == 0) part_start += (at_end ? -1.0 : 1.0) * part_width * door_operation->slide_fraction;
+            }
+            auto leaf = opening_box(leaf_frame, part_start, part_across, part_width,
+                                    panel_depth, clear_height, base_elevation,
+                                    "Opening assembly panel construction failed");
+            auto leaf_envelope = leaf;
+            std::optional<TopoDS_Shape> glazing;
+            if (assembly.glazing_thickness_m > tolerance) {
+                const double glazing_width = part_width * 0.65;
+                const double glazing_height = clear_height * 0.65;
+                const double glazing_start = part_start + part_width * 0.175;
+                const double glazing_elevation = base_elevation + clear_height * 0.175;
+                // The pane replaces leaf material rather than overlapping it.
+                // Extend well past the leaf faces: a tolerance-sized overrun can
+                // make OCCT treat the tool face as coincident and retain its vertices.
+                const double aperture_overrun = std::max(panel_depth, 100.0 * tolerance);
+                const auto aperture = opening_box(leaf_frame, glazing_start,
+                    part_across - aperture_overrun, glazing_width,
+                    panel_depth + 2.0 * aperture_overrun,
+                    glazing_height, glazing_elevation,
+                    "Door assembly glazing aperture construction failed");
+                leaf = cut(leaf, aperture);
+                glazing = opening_box(leaf_frame, glazing_start,
+                                       part_across + (panel_depth - assembly.glazing_thickness_m) * 0.5,
+                                       glazing_width, assembly.glazing_thickness_m,
+                                       glazing_height, glazing_elevation,
+                                       "Door assembly glazing construction failed");
+            }
+            std::optional<gp_Pnt> hinge;
+            double swing_angle = 0.0;
+            if (door_operation && !sliding) {
+                const double hinge_along = at_end ? part_start + part_width : part_start;
+                hinge = opening_point(leaf_frame, hinge_along,
+                                      doubled ? double_hinge_across : part_across + panel_depth * 0.5,
+                                      base_elevation);
+                swing_angle = door_operation->angle_degrees * std::numbers::pi / 180.0 *
+                              (door_operation->swing_left ? 1.0 : -1.0) *
+                              (at_end ? -1.0 : 1.0);
+                const double far_along = at_end ? part_start : part_start + part_width;
+                const auto closed = opening_point(leaf_frame, far_along,
+                    part_across + panel_depth * 0.5, base_elevation);
+                const double dx = closed.X() - hinge->X(), dy = closed.Y() - hinge->Y();
+                const Vec2 opened{hinge->X() + dx * std::cos(swing_angle) - dy * std::sin(swing_angle),
+                                  hinge->Y() + dx * std::sin(swing_angle) + dy * std::cos(swing_angle)};
+                if (std::abs(swing_angle) > tolerance) {
+                    door_swings.push_back(arc_from_chord_angle({closed.X(), closed.Y()}, opened, swing_angle));
+                    if (!doubled) door_swing = door_swings.back();
+                }
+                leaf = rotate_opening_part(leaf, *hinge, swing_angle,
+                                           "Opening assembly leaf rotation failed");
+                if (doubled) {
+                    leaf_envelope = rotate_opening_part(leaf_envelope, *hinge, swing_angle,
+                                                       "Double door clearance rotation failed");
+                    for (const auto& frame_part : frame_parts)
+                        require_clear(leaf_envelope, frame_part, "Double door leaf intersects its frame");
+                    require_clear(leaf_envelope, cut_host, "Double door leaf intersects its host wall");
+                    for (const auto& other_leaf : posed_leaf_envelopes)
+                        require_clear(leaf_envelope, other_leaf, "Double door leaves collide at the requested swing angle");
+                    posed_leaf_envelopes.push_back(std::move(leaf_envelope));
+                }
+            }
+            add(leaf);
+            if (glazing.has_value()) {
+                if (hinge.has_value()) {
+                    *glazing = rotate_opening_part(*glazing, *hinge, swing_angle,
+                                                  "Door assembly glazing rotation failed");
+                }
+                add(*glazing);
+            }
         }
     } else {
         const double sash_bar = std::min(frame_width * 0.6, clear_width * 0.2);
@@ -701,7 +791,7 @@ OpeningAssemblyGeometry make_opening_assembly_geometry(const Wall& wall, const H
         solid_volume(compound) <= tolerance * tolerance * tolerance) {
         throw std::invalid_argument("Opening assembly did not produce valid solids");
     }
-    return {compound, door_swing};
+    return {compound, door_swing, std::move(door_swings)};
 }
 
 TopoDS_Shape make_opening_assembly(const Wall& wall, const HostedOpening& opening,

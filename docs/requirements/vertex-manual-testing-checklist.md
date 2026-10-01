@@ -1,6 +1,6 @@
 # Vertex user testing checklist
 
-295 practical tasks, grouped by how you use the app. This replaces the earlier engineering-oriented checklist. The old 130-item list is preserved separately as engineering-requirements-checklist.md.
+298 practical tasks, grouped by how you use the app. This replaces the earlier engineering-oriented checklist. The old 130-item list is preserved separately as engineering-requirements-checklist.md.
 
 This is a user acceptance list for the intended app, not a claim that every listed action is implemented or working in the current preview. If you cannot find a control, or a feature is absent, mark **Blocked / missing** and describe it. Specialized sections can be skipped if you do not use them or lack the device or sample files.
 
@@ -1667,6 +1667,26 @@ drawing; switching modes does not change existing geometry.
   - Steps: Draw a closed rectangular wall layout. Add a partition from the middle of one side into the room, and another wall across the room. Select the interior partition, right-click, and choose **Measure exterior from walls…**. Cancel once, then reopen the review and create the area. Repeat after selecting all the walls with Ctrl-click.
   - Expected: The preview traces the outside perimeter and reports how many candidate walls it excluded. The partitions do not increase or decrease the exterior area. Selecting the same layout again finds the existing area instead of counting it twice. The walls remain editable.
   - Also try: Change an exterior wall's thickness, refresh the area, and verify its square footage changes. Move or resize an interior partition and verify it does not change the exterior measurement. Save and reopen; the same measurement remains. Select walls from two separate buildings together; the app must request a single exterior rather than silently choosing one.
+  - Result: Not tested
+  - Notes: ______________________________
+
+## Door mechanisms and readable wall dimensions
+
+- [ ] **U295 — Place and edit a double door**
+  - Steps: In Library, choose Door, then the Double style. Click a straight wall to place it. Double-click the door, open **Door operation**, change the angle to 70 degrees, and apply. Resize its width, undo, redo, save and reopen. Inspect the same door in 3D.
+  - Expected: Two separate leaves and two swings appear. The leaves, wall cut and frame follow the edited dimensions and angle. Reopening retains the double mechanism. An angle that intersects its frame, wall or other leaf is refused without changing the project.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **U296 — Slide a glass door open**
+  - Steps: Choose the Sliding glass Door style and place it in a straight wall. Open **Door operation**, set Open to 50%, then 100%. Change the movable jamb and track side. Resize the width, undo, redo, save and reopen; compare the plan and 3D.
+  - Expected: One half-panel moves along a separate track; the other stays fixed. At 100% the movable panel stacks behind the fixed panel. There is no swing arc. The glass, opening, travel and mechanism survive reopening. A curved host explains that this sliding construction requires a straight wall and leaves the drawing unchanged.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **U297 — Read wall lengths beside exterior dimensions**
+  - Steps: Draw a closed rectangular wall layout with a partition. Create its exterior measurement area. Zoom in and out, select a wall by its length label, then export and print preview the plan. Also try a diagonal wall and rotate the drawing.
+  - Expected: Each wall length remains readable beside the exterior dimensions. Automatic wall labels avoid other measurement text and follow their wall's orientation. Existing manually placed dimensions stay where you placed them. Selection and the PDF agree with the visible labels.
   - Result: Not tested
   - Notes: ______________________________
 

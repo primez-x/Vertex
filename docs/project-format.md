@@ -351,6 +351,21 @@ an instance presentation contract: the wall cut, hosted dimensions, and
 handing remain the source of truth, while frame, leaf/sash, and glazing solids
 are derived for coordinated views.
 
+An opening may also carry `properties.door_operation`. Version 1 has exactly
+`version: 1`, `hinge: "start" | "end"`, `side: "left" | "right"`, and a finite
+`angle_degrees` in (0,180]. Version 2 adds exactly `kind` (`hinged`,
+`double_hinged`, or `sliding`) and numeric `slide_fraction` in [0,1]. Only a
+slider may have nonzero travel. Ordinary hinged operations serialize in the
+original version-1 form. Unknown, missing and extra fields are rejected.
+The slider's hinge identifies the movable half-panel's jamb, side chooses its
+track, and fraction one stacks it behind the fixed half-panel. A profiled
+slider requires a straight host and sufficient frame depth for two tracks.
+Double doors retain two opposing jamb leaves and two analytic swings. Profiled
+double admission rejects leaf/frame/host intersections at the requested pose.
+These records remain dormant when the opening is classified as a window;
+reclassifying it as a door restores their use. Detailed physical and legacy
+limits are documented in [hosted openings](hosted-openings.md).
+
 A `roof_join` is a version-1 architectural relationship that preserves the
 source roof entities while providing one derived fused solid for coordinated
 views. Its properties contain exactly `version: 1`, `style: "fused"`, and a
