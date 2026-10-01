@@ -34,4 +34,29 @@ namespace sketch {
 [[nodiscard]] Boundary wall_plan_footprint(const Segment& host,
     const std::vector<HostedOpening>& openings, double wall_thickness_metres);
 
+struct WallPlanJunction {
+    bool at_start{};
+    Segment neighbor;
+    double neighbor_thickness{};
+};
+
+struct WallPlanGeometry {
+    // Complete closed wall-interval polygons for fill and hit testing.
+    Boundary footprint;
+    // Visible plan edges, with only successfully joined endpoint caps omitted.
+    Boundary strokes;
+    // True only when the corresponding host endpoint cap was successfully joined.
+    bool joined_start{};
+    bool joined_end{};
+};
+
+// Straight wall endpoints can be joined to one unambiguous straight neighbor
+// each. Successful unequal-angle joins miter the actual face endpoints and
+// preserve closed footprint polygons while omitting their shared cap strokes.
+// Curves, openings at the joined endpoint, ambiguous neighbors, and unsafe
+// miters retain the established butt-capped wall geometry.
+[[nodiscard]] WallPlanGeometry joined_wall_plan_geometry(const Segment& host,
+    const std::vector<HostedOpening>& openings, double wall_thickness_metres,
+    const std::vector<WallPlanJunction>& junctions);
+
 } // namespace sketch

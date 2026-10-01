@@ -132,6 +132,10 @@ struct CanvasEntity {
     // endpoints must be retained separately from the painted outline.
     std::vector<Vec2> snap_points;
     Boundary snap_segments;
+    // Complete segments retain physical fill and picking geometry. Joined
+    // walls omit only their internal corner seams from this derived stroke
+    // path, shared by interactive painting and fitted print/export output.
+    std::optional<Boundary> stroke_segments;
 };
 
 // A retained document annotation. Unlike BoundaryDraftPreview, labels are
@@ -362,6 +366,12 @@ public:
     // serials, even when their parameters match. Completion never persists.
     [[nodiscard]] std::uint64_t openingWidthPreviewSerial() const noexcept {
         return m_opening_width_preview_serial;
+    }
+    [[nodiscard]] bool openingWidthPreviewPending() const noexcept {
+        return m_opening_width_preview_pending;
+    }
+    [[nodiscard]] const std::vector<CanvasEntity>& openingWidthPreviewEntities() const noexcept {
+        return m_opening_width_entities_preview;
     }
     bool markOpeningWidthPreviewPending(std::uint64_t serial);
     bool completeOpeningWidthPreview(std::uint64_t serial,

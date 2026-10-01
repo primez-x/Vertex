@@ -2155,6 +2155,10 @@
     },
     {
       "category": "docs",
+      "path": "docs/superpowers/plans/2026-10-01-wall-plan-corners.md"
+    },
+    {
+      "category": "docs",
       "path": "docs/superpowers/plans/2026-10-01-wall-workflow-repair.md"
     },
     {
@@ -2256,6 +2260,10 @@
     {
       "category": "docs",
       "path": "docs/verification/wall-measurement-2026-10-01.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/verification/wall-plan-corners-2026-10-01.md"
     },
     {
       "category": "docs",
@@ -2500,6 +2508,10 @@
     {
       "category": "source",
       "path": "include/sketch/document_wall.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/document_wall_plan.hpp"
     },
     {
       "category": "source",
@@ -3239,6 +3251,10 @@
     },
     {
       "category": "source",
+      "path": "src/core/document_wall_plan.cpp"
+    },
+    {
+      "category": "source",
       "path": "src/core/door_operation.cpp"
     },
     {
@@ -3839,6 +3855,10 @@
     },
     {
       "category": "source",
+      "path": "tests/document_wall_plan_tests.cpp"
+    },
+    {
+      "category": "source",
       "path": "tests/door_operation_tests.cpp"
     },
     {
@@ -4328,6 +4348,10 @@
     {
       "category": "source",
       "path": "tests/wall_chain_connection_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/wall_corner_canvas_tests.cpp"
     },
     {
       "category": "source",

@@ -38,6 +38,7 @@
 #include "sketch/plan_axis_resize.hpp"
 #include "sketch/hosted_opening_resize.hpp"
 #include "sketch/hosted_opening_geometry.hpp"
+#include "sketch/document_wall_plan.hpp"
 #include "sketch/survey_boundary_update.hpp"
 #include "sketch/model_phases.hpp"
 #include "sketch/room_relationships.hpp"
@@ -2572,6 +2573,7 @@ bool clip_plan_entity(CanvasEntity& entity, const Bounds2& crop) {
         return clip_boundary_to_bounds(path, crop);
     };
     entity.segments = clip(entity.segments);
+    if (entity.stroke_segments) entity.stroke_segments = clip(*entity.stroke_segments);
     for (auto& hole : entity.holes) hole = clip(hole);
     std::erase_if(entity.holes, [](const auto& hole) { return hole.empty(); });
     if (clipped) {
@@ -6163,8 +6165,12 @@ public:
                     if (!read_document_wall(snapshot.entities().at(root), openings, wall, error))
                         throw std::invalid_argument(error);
                     validate_wall_semantics(wall);
-                    geometry.push_back({id_from(root), selected ? "wall" : "source",
-                        wall_plan_footprint(wall.baseline, wall.openings, wall.thickness), wall.thickness, selected});
+                    const auto plans = document_wall_plan_geometry(snapshot.entities());
+                    const auto& plan = plans.at(root);
+                    CanvasEntity wall_preview{id_from(root), selected ? "wall" : "source",
+                        plan.footprint, wall.thickness, selected};
+                    wall_preview.stroke_segments = plan.strokes;
+                    geometry.push_back(std::move(wall_preview));
                     for (const auto* opening : openings) {
                         if (opening->properties.value("opening_kind", std::string{}) != "door" ||
                             !opening->properties.contains("door_operation")) continue;
@@ -12923,10 +12929,29 @@ public:
         const std::optional<ArchitecturalViewContext>& view_context) {
         try {
             const bool shape_projection = view_context &&
-                !analytical_plan_context(BuildingViewKind::plan, *view_context);
+                !analytical_plan_context(BuildingViewKind::plan, *view_context) &&
+                !(horizontal_plan_frame(view_context->frame) && std::isinf(view_context->depth.far_depth_m));
             std::map<std::string,Wall,std::less<>> changed_walls;
+            const auto candidate_plans = document_wall_plan_geometry(candidate);
+            const auto source_plans = document_wall_plan_geometry(source.entities());
+            const auto same_path = [](const Boundary& first, const Boundary& second) {
+                if (first.size() != second.size()) return false;
+                for (std::size_t index = 0; index < first.size(); ++index) {
+                    const auto& a = first[index]; const auto& b = second[index];
+                    if (a.start.x != b.start.x || a.start.y != b.start.y ||
+                        a.end.x != b.end.x || a.end.y != b.end.y ||
+                        a.sweep_radians != b.sweep_radians) return false;
+                }
+                return true;
+            };
             for (const auto& [id,entity] : candidate) {
-                if (entity.type!="wall" || entity==source.entities().at(id)) continue;
+                if (entity.type != "wall") continue;
+                const auto before = source_plans.find(id), after = candidate_plans.find(id);
+                const bool changed_corner = !shape_projection && after != candidate_plans.end() &&
+                    (before == source_plans.end() ||
+                     !same_path(before->second.footprint, after->second.footprint) ||
+                     !same_path(before->second.strokes, after->second.strokes));
+                if (entity == source.entities().at(id) && !changed_corner) continue;
                 std::vector<const Entity*> openings;
                 for (const auto& [child_id,child] : candidate) {
                     (void)child_id;
@@ -12980,10 +13005,15 @@ public:
                     if (view_context) for (auto& point : proposed.snap_points)
                         point=project_plan_point(point,view_context->frame);
                     if (shape_projection) {
+                        proposed.stroke_segments.reset();
                         proposed.segments = project_architectural_view_shape(make_wall(wall->second),
                             BuildingViewKind::plan, *view_context).value_or(Boundary{});
                         world_paths = false;
-                    } else proposed.segments=wall_plan_footprint(wall->second.baseline,wall->second.openings,wall->second.thickness);
+                    } else {
+                        const auto& plan = candidate_plans.at(entity.id);
+                        proposed.segments = plan.footprint;
+                        proposed.stroke_segments = plan.strokes;
+                    }
                     proposed.holes.clear();
                     proposed.resize_frame.reset();
                     if (!shape_projection && wall->second.baseline.sweep_radians==0)
@@ -13027,6 +13057,8 @@ public:
                 } else continue;
                 if (view_context && world_paths) {
                     proposed.segments = project_plan_path(std::move(proposed.segments), view_context->frame);
+                    if (proposed.stroke_segments)
+                        proposed.stroke_segments = project_plan_path(std::move(*proposed.stroke_segments), view_context->frame);
                     for (auto& hole : proposed.holes)
                         hole = project_plan_path(std::move(hole), view_context->frame);
                     for (auto& handle : proposed.vertex_handles)
@@ -13393,7 +13425,8 @@ public:
         const auto host_id=entity.properties.at("wall_id").get<std::string>();
         std::vector<CanvasEntity> retained;
         for (const auto& item:canvas->entities())
-            if (item.id==requested_id || item.id.toStdString()==host_id) retained.push_back(item);
+            if (item.id==requested_id || item.id.toStdString()==host_id ||
+                (item.type==QStringLiteral("wall") && item.stroke_segments)) retained.push_back(item);
         const auto serial=canvas->openingWidthPreviewSerial();
         if (!canvas->markOpeningWidthPreviewPending(serial)) return std::nullopt;
         PendingOpeningPreview request{canvas, serial, m_document, m_opening_preview_source,
@@ -13467,10 +13500,28 @@ public:
                     return std::nullopt;
             }
             std::vector<CanvasEntity> result;
+            const auto wall_plans = document_wall_plan_geometry(source.entities(), {{wall_id, wall}});
+            const auto original_plans = document_wall_plan_geometry(source.entities());
+            const auto same_path = [](const Boundary& first, const Boundary& second) {
+                if (first.size() != second.size()) return false;
+                for (std::size_t index = 0; index < first.size(); ++index) {
+                    const auto& a = first[index]; const auto& b = second[index];
+                    if (a.start.x != b.start.x || a.start.y != b.start.y ||
+                        a.end.x != b.end.x || a.end.y != b.end.y ||
+                        a.sweep_radians != b.sweep_radians) return false;
+                }
+                return true;
+            };
             for (const auto& retained : retained_scene) {
-                if (retained.id.toStdString() == wall_id) {
+                const auto plan = wall_plans.find(retained.id.toStdString());
+                const auto before = original_plans.find(retained.id.toStdString());
+                if (plan != wall_plans.end() &&
+                    (retained.id.toStdString() == wall_id || before == original_plans.end() ||
+                     !same_path(before->second.footprint, plan->second.footprint) ||
+                     !same_path(before->second.strokes, plan->second.strokes))) {
                     auto preview = retained;
-                    preview.segments = wall_plan_footprint(wall.baseline, wall.openings, wall.thickness);
+                    preview.segments = plan->second.footprint;
+                    preview.stroke_segments = plan->second.strokes;
                     result.push_back(std::move(preview));
                 } else if (retained.id == requested_id && retained.opening_width_controls) {
                     auto preview = retained;
@@ -24114,6 +24165,7 @@ private:
         std::vector<CanvasReference> reference_underlays;
         std::vector<CanvasReferenceGrid> reference_grids;
         all_geometry.reserve(snapshot.entities().size());
+        const auto wall_plans = document_wall_plan_geometry(snapshot.entities());
         const auto append_geometry_error = [&](const QString& message) {
             if (!m_plan_geometry_error.isEmpty()) {
                 m_plan_geometry_error += QLatin1Char('\n');
@@ -24441,7 +24493,12 @@ private:
                 }
                 // Retain the physical footprint in 2D as well as coordinated views.
                 // A thick baseline stroke has round caps and conceals the true jambs.
-                segments = wall_plan_footprint(segments.front(), openings_by_wall[id], *thickness);
+                const auto plan = wall_plans.find(id);
+                if (plan == wall_plans.end()) {
+                    append_geometry_error(QStringLiteral("Wall %1: plan geometry is unavailable").arg(id_from(id)));
+                    continue;
+                }
+                segments = plan->second.footprint;
             } else if (entity.type == "slab") {
                 const auto boundary = read_required_boundary(geometry_entity.properties, "boundary");
                 if (!boundary.has_value()) {
@@ -24573,6 +24630,7 @@ private:
                 canvas_entity.filled = true;
                 canvas_entity.output_stroke_width_mm = 0.30;
             } else if (entity.type == "wall") {
+                canvas_entity.stroke_segments = wall_plans.at(id).strokes;
                 canvas_entity.stroke_color = QColor(35, 77, 113);
                 canvas_entity.dark_stroke_color = QColor(143, 198, 245);
             }
@@ -25115,6 +25173,22 @@ private:
                             wall.slope_rise = slope->get<double>();
                         }
                         validate_wall_semantics(wall);
+                        if (kind == BuildingViewKind::plan && horizontal_plan_frame(frame) &&
+                            std::isinf(depth.far_depth_m)) {
+                            const auto& plan = wall_plans.at(id);
+                            CanvasEntity retained{id_from(id), QStringLiteral("wall"),
+                                project_plan_path(plan.footprint, frame), *thickness,
+                                id_from(id) == m_selected_id};
+                            retained.stroke_segments = project_plan_path(plan.strokes, frame);
+                            if (view_context.crop) {
+                                const auto& crop = *view_context.crop;
+                                clip_plan_entity(retained, {{crop.min_horizontal_m, crop.min_vertical_m},
+                                                           {crop.max_horizontal_m, crop.max_vertical_m}});
+                            }
+                            if (!retained.segments.empty())
+                                result.push_back(decorate_projection(std::move(retained)));
+                            continue;
+                        }
                         const auto projection = cached_projection(id, [&] { return make_wall(wall); });
                         if (!projection) continue;
                         result.push_back(decorate_projection(CanvasEntity{

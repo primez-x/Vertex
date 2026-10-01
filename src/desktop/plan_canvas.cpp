@@ -1153,7 +1153,7 @@ void PlanCanvas::drawOverviewMap(QPainter& painter) const {
                 }
             }
         };
-        draw_boundary(entity.segments);
+        draw_boundary(entity.stroke_segments ? *entity.stroke_segments : entity.segments);
         for (const auto& hole : entity.holes) draw_boundary(hole);
     }
     const auto visible_width = width() / std::max(m_scale, minimum_scale);
@@ -3793,7 +3793,7 @@ void PlanCanvas::drawEntity(QPainter& painter, const CanvasEntity& entity, bool 
     QPainterPath path;
     // Start every semantic segment independently so hosted-opening gaps and
     // unrelated paths never acquire synthetic connector strokes.
-    append_boundary_strokes(path, entity.segments);
+    append_boundary_strokes(path, entity.stroke_segments ? *entity.stroke_segments : entity.segments);
     for (const auto& hole : entity.holes) append_boundary_strokes(path, hole);
     if (!entity.segments.empty() || !entity.holes.empty()) {
         painter.drawPath(path);

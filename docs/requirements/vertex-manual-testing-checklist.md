@@ -1,6 +1,6 @@
 # Vertex user testing checklist
 
-292 practical tasks, grouped by how you use the app. This replaces the earlier engineering-oriented checklist. The old 130-item list is preserved separately as engineering-requirements-checklist.md.
+293 practical tasks, grouped by how you use the app. This replaces the earlier engineering-oriented checklist. The old 130-item list is preserved separately as engineering-requirements-checklist.md.
 
 This is a user acceptance list for the intended app, not a claim that every listed action is implemented or working in the current preview. If you cannot find a control, or a feature is absent, mark **Blocked / missing** and describe it. Specialized sections can be skipped if you do not use them or lack the device or sample files.
 
@@ -1645,6 +1645,14 @@ drawing; switching modes does not change existing geometry.
 - [ ] **U291 — Keep a locked wall from moving**
   - Steps: Lock a wall endpoint with a fixed-anchor relationship in its constraint editor. Select the wall and drag away from that point.
   - Expected: The move is refused with an explanation. Neither the selected wall, its neighbors nor its openings change. Canceling the failed drag leaves the drawing usable.
+  - Result: Not tested
+  - Notes / steps to reproduce: ____________________
+
+## Wall corners
+
+- [ ] **U292 — Draw a clean wall corner and keep its window cut**
+  - Steps: Draw two walls meeting at a right angle. Set different wall thicknesses. Place a window away from the corner. Select and move a wall, undo, then export a plan PDF.
+  - Expected: The inside and outside wall faces meet cleanly at the corner. There is no diagonal line or overlapping end cap through the joint. The window remains a real opening at its stored position and width. Wall lengths and exterior appraisal calculations use the stored geometry. The PDF shows the same joined corner.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
