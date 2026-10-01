@@ -287,9 +287,24 @@ int main(int argc, char** argv) {
     try {
         if (argc == 3 && std::string_view(argv[1]) == "--emit-fixtures") {
             const std::filesystem::path directory(argv[2]); std::filesystem::create_directories(directory);
-            for (const auto role : {ArchiveRole::ordinary, ArchiveRole::recovery_copy})
-                (void)ProjectStore::save_archive(directory / (role == ArchiveRole::ordinary ? "ordinary-v4.bldproj" : "recovery-v4.bldproj"),
-                    fixture(BoundaryAuthoringMode::draw_first, role));
+            const auto ordinary = fixture(BoundaryAuthoringMode::draw_first, ArchiveRole::ordinary);
+            const auto recovery = fixture(BoundaryAuthoringMode::draw_first, ArchiveRole::recovery_copy);
+            (void)ProjectStore::save_archive(directory / "ordinary-v4.bldproj", ordinary);
+            (void)ProjectStore::save_archive(directory / "recovery-v4.bldproj", recovery);
+            (void)ProjectStore::save_archive(directory / "ordinary-v6.bldproj",
+                fixture(BoundaryAuthoringMode::draw_first, ArchiveRole::ordinary, true, true, true));
+
+            const auto opaque_path = directory / "opaque-v4.bldproj";
+            (void)ProjectStore::save_archive(opaque_path, ordinary);
+            auto unknown_rows = ordinary.recovery();
+            unknown_rows.push_back({"future-record", "future_kind",
+                                    {{"version", 2}, {"future", Json::array({nullptr, true, "preserve"})}}});
+            replace_rows(opaque_path, ordinary.document(), unknown_rows);
+
+            const auto corrupt_path = directory / "corrupt-v4.bldproj";
+            (void)ProjectStore::save_archive(corrupt_path, ordinary);
+            { Database db(corrupt_path);
+              db.execute("UPDATE project_recovery_records SET envelope_json='{' WHERE record_id='z-history'"); }
             return 0;
         }
         for (const auto mode : {BoundaryAuthoringMode::draw_first, BoundaryAuthoringMode::define_first})

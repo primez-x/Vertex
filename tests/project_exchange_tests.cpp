@@ -1,5 +1,6 @@
 #include "sketch/project_exchange.hpp"
 #include "sketch/project_store.hpp"
+#include "sketch/project_workspace.hpp"
 #include "sketch/boundary_entity.hpp"
 #include "sketch/boundary_receipt.hpp"
 #include "sketch/boundary_translation.hpp"
@@ -489,6 +490,101 @@ void test_rigid_curve_archive_exchange_v11(const std::filesystem::path& root) {
   document.apply(sketch::ApplyEntityChanges{document.revision(), {sketch::EntityChange::erase(source.id)}, {}, "Delete rigid curve"});
   (void)extract(document.snapshot(), "rigid-curve-deleted-v11");
 }
+
+void test_archive_extraction(const std::filesystem::path& root) {
+  for (const auto role : {sketch::ArchiveRole::ordinary,
+                          sketch::ArchiveRole::recovery_copy}) {
+    auto document = sketch::Document::create();
+    sketch::ProjectWorkspace workspace(document.snapshot());
+    const auto captured = workspace.capture();
+    auto history = sketch::capture_workspace_history_record(captured);
+    history.extensions = {{"preserve", nlohmann::json::array({nullptr, 1, "raw"})}};
+    sketch::RecoveryLedger recovery{{
+        "z-history", "workspace_history",
+        sketch::encode_workspace_history_record(captured.document(), history,
+                                                 captured.active_boundary())}};
+    if (role == sketch::ArchiveRole::recovery_copy) {
+      sketch::RecoveryCopyRecord copy;
+      copy.archive_id = "archive-exchange-copy";
+      copy.owner_token = "archive-exchange-owner";
+      copy.document_id = captured.document().document_id();
+      copy.workspace_epoch = history.workspace_epoch;
+      copy.edited_generation = history.edited_generation;
+      copy.checkpoint_generation = history.checkpoint_generation;
+      copy.explicitly_saved_document_revision =
+          captured.document().saved_revision_optional();
+      recovery.push_back({"m-copy", "recovery_copy",
+                          sketch::encode_recovery_copy_record(copy)});
+    }
+    const sketch::ProjectArchiveSnapshot source(captured.document(), recovery,
+                                                 role);
+    const auto archive_path = root / (role == sketch::ArchiveRole::ordinary
+                                          ? "exchange-ordinary.bldproj"
+                                          : "exchange-recovery.bldproj");
+    (void)sketch::ProjectStore::save_archive(archive_path, source);
+    const auto loaded = sketch::ProjectStore::load_archive(archive_path, role);
+    check(loaded.supported() && loaded.archive.has_value(),
+          "archive extraction fixture must reopen in its recorded role");
+
+    const auto destination = root / (role == sketch::ArchiveRole::ordinary
+                                         ? "exchange-ordinary"
+                                         : "exchange-recovery");
+    sketch::extract_project_archive(*loaded.archive, destination);
+    std::ifstream input(destination / "project.json");
+    const auto exported = nlohmann::json::parse(input);
+    check(exported.at("exchange_version") == 12,
+          "archive extraction must advertise the recovery-aware interchange version");
+    check(exported.at("archive_role") ==
+              (role == sketch::ArchiveRole::ordinary ? "ordinary" : "recovery_copy"),
+          "archive extraction must retain its role");
+    auto expected = nlohmann::json::array();
+    for (const auto& record : loaded.archive->recovery())
+      expected.push_back({{"record_id", record.record_id},
+                          {"record_kind", record.record_kind},
+                          {"envelope", record.envelope}});
+    check(exported.at("recovery_records") == expected,
+          "archive extraction must retain every raw recovery record");
+    nlohmann::json history_envelope;
+    for (const auto& record : exported.at("recovery_records"))
+      if (record.at("record_id") == "z-history")
+        history_envelope = record.at("envelope");
+    check(history_envelope.at("extensions").at("preserve") ==
+              nlohmann::json::array({nullptr, 1, "raw"}),
+          "archive extraction must retain unknown recovery envelope fields");
+    check(exported.at("revisions").size() ==
+              loaded.archive->document().history().size(),
+          "archive extraction must retain complete document revision history");
+
+    input.close();
+    std::ifstream raw_input(destination / "project.json", std::ios::binary);
+    const std::string original((std::istreambuf_iterator<char>(raw_input)), {});
+    bool refused = false;
+    try {
+      sketch::extract_project_archive(*loaded.archive, destination);
+    } catch (const std::exception&) {
+      refused = true;
+    }
+    check(refused, "archive extraction must refuse an existing destination");
+    std::ifstream after_input(destination / "project.json", std::ios::binary);
+    const std::string after((std::istreambuf_iterator<char>(after_input)), {});
+    check(after == original,
+          "refused archive extraction must preserve target bytes");
+
+    auto unsupported_records = loaded.archive->recovery();
+    unsupported_records.front().record_kind = "future_workspace_history";
+    const sketch::ProjectArchiveSnapshot unsupported(
+        loaded.archive->document(), unsupported_records, role);
+    const auto unsupported_destination = destination.string() + "-unsupported";
+    refused = false;
+    try {
+      sketch::extract_project_archive(unsupported, unsupported_destination);
+    } catch (const std::exception&) {
+      refused = true;
+    }
+    check(refused && !std::filesystem::exists(unsupported_destination),
+          "direct archive extraction must refuse unsupported recovery before publishing");
+  }
+}
 } // namespace
 int main() {
   sketch::testing::noninteractive_errors();
@@ -499,6 +595,7 @@ int main() {
     test_physical_curve_length_exchange_v9(root);
     test_direct_curve_length_exchange_v10(root);
     test_rigid_curve_archive_exchange_v11(root);
+    test_archive_extraction(root);
     test_straight_wall_only_authoring_exchange_v8(root);
     test_safe_curved_wall_history_exchange_replays(root);
     const std::vector<std::byte> bytes{std::byte{1}, std::byte{2}, std::byte{0},

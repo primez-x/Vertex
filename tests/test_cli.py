@@ -55,6 +55,7 @@ def main():
         exported = json.loads((extracted / "project.json").read_text(encoding="utf-8"))
         assert exported["document"]["document_id"] == created["document_id"]
         assert exported["revisions"]
+        assert "archive_role" not in exported and "recovery_records" not in exported
         migrated = root / "migrated.bldproj"
         migration = invoke("migrate", project, migrated)
         assert migration["migrated_from"].endswith(project.name)
@@ -70,6 +71,109 @@ def main():
         corrupt = root / "broken.bldproj"
         corrupt.write_bytes(b"not a database")
         invoke("validate", corrupt, success=False)
+
+        # The archive executable emits independent, valid v4/v6 fixtures plus
+        # opaque and corrupt cases for end-to-end CLI coverage.
+        if len(sys.argv) > 2:
+            archive_emitter = pathlib.Path(sys.argv[2]).resolve()
+            archive_fixtures = root / "archive-fixtures"
+            archive_fixtures.mkdir()
+            emitted = subprocess.run(
+                [str(archive_emitter), "--emit-fixtures", str(archive_fixtures)],
+                capture_output=True, text=True, encoding="utf-8", timeout=30,
+                creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0)
+            if emitted.returncode != 0:
+                raise AssertionError(f"Archive fixture emission failed: {emitted.stdout} {emitted.stderr}")
+
+            def archive_manifest(directory):
+                return json.loads((directory / "project.json").read_text(encoding="utf-8"))
+
+            def archive_payload_bytes(directory):
+                return {str(path.relative_to(directory)): path.read_bytes()
+                        for path in sorted(directory.rglob("*")) if path.is_file()}
+
+            for fixture_name, expected_role in (
+                    ("ordinary-v4.bldproj", "ordinary"),
+                    ("recovery-v4.bldproj", "recovery_copy"),
+                    ("ordinary-v6.bldproj", "ordinary")):
+                source = archive_fixtures / fixture_name
+                source_bytes = source.read_bytes()
+                source_hash = hashlib.sha256(source_bytes).hexdigest()
+                inspected_archive = invoke("inspect", source)
+                assert inspected_archive["archive_role"] == expected_role
+                assert inspected_archive["editable"] is True
+                assert inspected_archive["validation_complete"] is True
+                assert inspected_archive["recovery_summary"]["status"] == "supported"
+                assert inspected_archive["recovery_summary"]["record_count"] >= 2
+                assert "workspace_history" in inspected_archive["recovery_summary"]["record_kinds"]
+                validated_archive = invoke("validate", source)
+                assert validated_archive["archive_role"] == expected_role
+                assert validated_archive["storage_integrity"] == "valid"
+                assert validated_archive["validation_complete"] is True
+
+                extracted_source = root / (fixture_name + "-extracted")
+                invoke("extract", source, extracted_source)
+                source_manifest = archive_manifest(extracted_source)
+                assert source_manifest["archive_role"] == expected_role
+                assert source_manifest["exchange_version"] == 12
+                assert source_manifest["recovery_records"]
+
+                destination = root / (fixture_name + "-migrated.bldproj")
+                migration = invoke("migrate", source, destination)
+                with closing(sqlite3.connect(destination)) as database:
+                    stored_version = database.execute("PRAGMA user_version").fetchone()[0]
+                assert migration["format_version"] == stored_version
+                assert migration["archive_role"] == expected_role
+                assert migration["source_file_sha256"] == source_hash
+                assert migration["source_preserved"] is True
+                assert source.read_bytes() == source_bytes
+                migrated_info = invoke("inspect", destination)
+                assert migrated_info["archive_role"] == expected_role
+                assert migrated_info["recovery_summary"] == inspected_archive["recovery_summary"]
+
+                extracted_migrated = root / (fixture_name + "-migrated-extracted")
+                invoke("extract", destination, extracted_migrated)
+                migrated_manifest = archive_manifest(extracted_migrated)
+                for key in ("document", "revisions", "archive_role", "recovery_records"):
+                    assert migrated_manifest[key] == source_manifest[key], key
+                assert archive_payload_bytes(extracted_migrated) == archive_payload_bytes(extracted_source)
+
+                destination_bytes = destination.read_bytes()
+                invoke("migrate", source, destination, success=False)
+                assert destination.read_bytes() == destination_bytes
+                extracted_metadata = (extracted_source / "project.json").read_bytes()
+                invoke("extract", source, extracted_source, success=False)
+                assert (extracted_source / "project.json").read_bytes() == extracted_metadata
+                assert source.read_bytes() == source_bytes
+
+            opaque_archive = archive_fixtures / "opaque-v4.bldproj"
+            opaque_info = invoke("inspect", opaque_archive)
+            assert opaque_info["file_sha256"] == hashlib.sha256(opaque_archive.read_bytes()).hexdigest()
+            assert opaque_info["archive_role"] == "unknown"
+            assert opaque_info["editable"] is False
+            assert opaque_info["validation_complete"] is False
+            assert opaque_info["recovery_summary"]["status"] == "opaque"
+            assert opaque_info["recovery_summary"]["record_count"] == 3
+            assert opaque_info["recovery_summary"]["diagnostic"]
+            opaque_migration = root / "opaque-migrated.bldproj"
+            opaque_extraction = root / "opaque-extracted"
+            opaque_validation = invoke("validate", opaque_archive, success=False)
+            assert opaque_validation.stdout == ""
+            opaque_migration_result = invoke("migrate", opaque_archive, opaque_migration, success=False)
+            opaque_extraction_result = invoke("extract", opaque_archive, opaque_extraction, success=False)
+            assert opaque_migration_result.stdout == "" and opaque_extraction_result.stdout == ""
+            assert not opaque_migration.exists() and not opaque_extraction.exists()
+
+            corrupt_archive = archive_fixtures / "corrupt-v4.bldproj"
+            corrupt_migration = root / "corrupt-migrated.bldproj"
+            corrupt_extraction = root / "corrupt-extracted"
+            for command, arguments in (
+                    ("inspect", (corrupt_archive,)),
+                    ("validate", (corrupt_archive,)),
+                    ("migrate", (corrupt_archive, corrupt_migration)),
+                    ("extract", (corrupt_archive, corrupt_extraction))):
+                assert invoke(command, *arguments, success=False).stdout == ""
+            assert not corrupt_migration.exists() and not corrupt_extraction.exists()
 
         # The resource command is the application-level registration seam for
         # templates/profiles/documentation restored from a local project

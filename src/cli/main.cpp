@@ -13,9 +13,12 @@
 #include <Windows.h>
 
 #include <filesystem>
+#include <algorithm>
 #include <cwchar>
+#include <exception>
 #include <iostream>
 #include <map>
+#include <optional>
 #include <string>
 
 namespace {
@@ -50,6 +53,112 @@ Json describe(const sketch::DocumentSnapshot& snapshot) {
             {"asset_count", snapshot.assets().size()}, {"history_records", snapshot.history().size()},
             {"named_revisions", snapshot.named_revisions()}, {"editable", snapshot.is_editable()},
             {"read_only_reason", snapshot.read_only_reason()}};
+}
+
+const char* archive_role_name(sketch::ArchiveRole role) {
+    return role == sketch::ArchiveRole::ordinary ? "ordinary" : "recovery_copy";
+}
+
+Json recovery_summary(const sketch::RecoveryLedger& ledger,
+                      const std::string& status,
+                      const std::string& diagnostic) {
+    std::map<std::string, std::size_t> kinds;
+    for (const auto& record : ledger) ++kinds[record.record_kind];
+    return {{"status", status}, {"record_count", ledger.size()},
+            {"record_kinds", kinds}, {"diagnostic", diagnostic}};
+}
+
+struct LoadedProject {
+    std::optional<sketch::LoadResult> document;
+    std::optional<sketch::ArchiveLoadResult> archive;
+
+    [[nodiscard]] bool is_archive() const noexcept {
+        return archive && archive->supported();
+    }
+    [[nodiscard]] bool opaque() const noexcept {
+        return archive && archive->opaque();
+    }
+    [[nodiscard]] sketch::DocumentSnapshot snapshot() const {
+        return is_archive() ? archive->archive->document()
+                           : document->document.snapshot();
+    }
+    [[nodiscard]] const std::string& file_sha256() const {
+        return archive ? archive->file_sha256 : document->file_sha256;
+    }
+    [[nodiscard]] const sketch::RecoveryLedger& ledger() const {
+        if (is_archive()) return archive->archive->recovery();
+        static const sketch::RecoveryLedger empty;
+        if (opaque() && archive->recovery.original_ledger)
+            return *archive->recovery.original_ledger;
+        return empty;
+    }
+    [[nodiscard]] sketch::ArchiveRole role() const {
+        return archive->archive->role();
+    }
+    [[nodiscard]] std::string recovery_diagnostic() const {
+        return archive ? archive->recovery.diagnostic : std::string{};
+    }
+};
+
+LoadedProject load_project(const std::filesystem::path& file) {
+    std::exception_ptr document_error;
+    try {
+        LoadedProject result;
+        result.document.emplace(sketch::ProjectStore::load(file));
+        return result;
+    } catch (const sketch::StorageError& error) {
+        if (error.code() != sketch::StorageErrorCode::unsupported_format) throw;
+        document_error = std::current_exception();
+    }
+
+    std::optional<sketch::ArchiveLoadResult> opaque;
+    for (const auto role : {sketch::ArchiveRole::ordinary,
+                            sketch::ArchiveRole::recovery_copy}) {
+        try {
+            auto loaded = sketch::ProjectStore::load_archive(file, role);
+            if (loaded.supported()) {
+                LoadedProject result;
+                result.archive.emplace(std::move(loaded));
+                return result;
+            }
+            if (!opaque && loaded.opaque()) opaque.emplace(std::move(loaded));
+        } catch (const sketch::StorageError& error) {
+            if (error.code() != sketch::StorageErrorCode::unsupported_format) throw;
+        }
+    }
+    if (opaque) {
+        LoadedProject result;
+        result.archive.emplace(std::move(*opaque));
+        return result;
+    }
+    std::rethrow_exception(document_error);
+}
+
+void require_supported(const LoadedProject& loaded) {
+    if (loaded.opaque()) {
+        throw std::runtime_error("Opaque recovery archive cannot be validated, migrated, or extracted: " +
+                                 loaded.recovery_diagnostic());
+    }
+}
+
+Json describe_loaded(const LoadedProject& loaded) {
+    if (loaded.opaque()) {
+        return {{"file_sha256", loaded.file_sha256()},
+                {"archive_role", "unknown"},
+                {"editable", false},
+                {"read_only_reason", loaded.recovery_diagnostic()},
+                {"validation_complete", false},
+                {"recovery_summary", recovery_summary(loaded.ledger(), "opaque",
+                                                       loaded.recovery_diagnostic())}};
+    }
+    auto info = describe(loaded.snapshot());
+    info["file_sha256"] = loaded.file_sha256();
+    if (loaded.is_archive()) {
+        info["archive_role"] = archive_role_name(loaded.role());
+        info["validation_complete"] = true;
+        info["recovery_summary"] = recovery_summary(loaded.ledger(), "supported", {});
+    }
+    return info;
 }
 
 
@@ -93,12 +202,14 @@ int run(int argc, wchar_t** argv) {
         return 0;
     }
     if ((command == L"inspect" || command == L"validate") && argc == 3) {
-        const auto loaded = sketch::ProjectStore::load(file);
-        auto info = describe(loaded.document.snapshot());
-        info["file_sha256"] = loaded.file_sha256;
+        const auto loaded = load_project(file);
+        if (command == L"validate") require_supported(loaded);
+        auto info = describe_loaded(loaded);
         if (command == L"validate") {
             info["storage_integrity"] = "valid";
-            info["validation_scope"] = "format, revision history, structural references, logical digest and asset bytes";
+            info["validation_scope"] = loaded.is_archive()
+                ? "format, revision history, structural references, logical digest, asset bytes and recovery ledger"
+                : "format, revision history, structural references, logical digest and asset bytes";
             info["production_or_geometry_certification"] = false;
         }
         std::cout << info.dump(2) << '\n';
@@ -106,32 +217,45 @@ int run(int argc, wchar_t** argv) {
     }
     if (command == L"migrate" && argc == 4) {
         const auto destination = std::filesystem::absolute(argv[3]);
-        const auto loaded = sketch::ProjectStore::load(file);
-        const auto source_hash = loaded.file_sha256;
-        const auto source_revision = loaded.document.revision();
-        const auto required_format = sketch::ProjectStore::required_format_version(
-            loaded.document.snapshot());
-        // ProjectStore::save is copy based: it refuses an existing destination,
-        // validates the complete snapshot, and leaves the source untouched.
-        const auto receipt = sketch::ProjectStore::save(destination,
-                                                         loaded.document.snapshot());
-        std::cout << Json({{"migrated_from", utf8(file)},
-                           {"migrated_to", utf8(destination)},
-                           {"source_file_sha256", source_hash},
-                           {"destination_file_sha256", receipt.file_sha256},
-                           {"source_revision", source_revision},
-                           {"destination_revision", receipt.revision},
-                           {"format_version", required_format},
-                           {"source_preserved", sketch::ProjectStore::file_sha256(file) == source_hash}})
-                     .dump(2)
-                  << '\n';
+        const auto loaded = load_project(file);
+        require_supported(loaded);
+        const auto source_hash = loaded.file_sha256();
+        const auto source_revision = loaded.snapshot().revision();
+        const auto required_format = std::max(
+            loaded.is_archive() ? 4U : 1U,
+            sketch::ProjectStore::required_format_version(loaded.snapshot()));
+        // Both save routes refuse an existing destination and leave the source
+        // untouched; the archive route carries its ledger and role forward.
+        const auto receipt = loaded.is_archive()
+            ? sketch::ProjectStore::save_archive(destination, *loaded.archive->archive)
+            : sketch::ProjectStore::save(destination, loaded.snapshot());
+        Json result = {{"migrated_from", utf8(file)},
+                       {"migrated_to", utf8(destination)},
+                       {"source_file_sha256", source_hash},
+                       {"destination_file_sha256", receipt.file_sha256},
+                       {"source_revision", source_revision},
+                       {"destination_revision", receipt.revision},
+                       {"format_version", required_format},
+                       {"source_preserved", sketch::ProjectStore::file_sha256(file) == source_hash}};
+        if (loaded.is_archive()) {
+            result["archive_role"] = archive_role_name(loaded.role());
+            result["recovery_summary"] = recovery_summary(loaded.ledger(), "supported", {});
+        }
+        std::cout << result.dump(2) << '\n';
         return 0;
     }
     if (command == L"extract" && argc == 4) {
-        const auto loaded = sketch::ProjectStore::load(file);
+        const auto loaded = load_project(file);
+        require_supported(loaded);
         const auto destination = std::filesystem::absolute(argv[3]);
-        sketch::extract_project(loaded.document.snapshot(), destination);
-        std::cout << Json({{"extracted_to", utf8(destination)}, {"revision", loaded.document.revision()}}).dump() << '\n';
+        if (loaded.is_archive())
+            sketch::extract_project_archive(*loaded.archive->archive, destination);
+        else
+            sketch::extract_project(loaded.snapshot(), destination);
+        Json result = {{"extracted_to", utf8(destination)},
+                       {"revision", loaded.snapshot().revision()}};
+        if (loaded.is_archive()) result["archive_role"] = archive_role_name(loaded.role());
+        std::cout << result.dump() << '\n';
         return 0;
     }
     if (command == L"resources" && argc == 3) {

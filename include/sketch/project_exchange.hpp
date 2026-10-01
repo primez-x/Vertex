@@ -9,6 +9,8 @@
 
 namespace sketch {
 
+class ProjectArchiveSnapshot;
+
 enum class ExtractFaultStage {
   none,
   after_assets,
@@ -51,5 +53,12 @@ private:
 void extract_project(const DocumentSnapshot &snapshot,
                      const std::filesystem::path &destination,
                      const ExtractOptions &options = {});
+
+// Archive extraction retains the complete recovery ledger and its role in the
+// interchange manifest while using the same guarded staging and publication
+// path as document-only extraction.
+void extract_project_archive(const ProjectArchiveSnapshot &archive,
+                             const std::filesystem::path &destination,
+                             const ExtractOptions &options = {});
 
 } // namespace sketch

@@ -1,5 +1,6 @@
 #include "sketch/project_exchange.hpp"
 #include "sketch/project_store.hpp"
+#include "sketch/recovery_ledger.hpp"
 #include "sketch/boundary_translation.hpp"
 #include "sketch/boundary_transform.hpp"
 #include "sketch/boundary_edit.hpp"
@@ -534,9 +535,11 @@ Json entity_json(const Entity &entity) {
 }
 } // namespace
 
-void extract_project(const DocumentSnapshot &snapshot,
-                     const std::filesystem::path &requested,
-                     const ExtractOptions &options) {
+namespace {
+void extract_project_impl(const DocumentSnapshot &snapshot,
+                          const ProjectArchiveSnapshot *archive,
+                          const std::filesystem::path &requested,
+                          const ExtractOptions &options) {
   auto destination = std::filesystem::absolute(requested).lexically_normal();
   if (requested.empty() || destination.filename().empty() ||
       destination.filename() == "." || destination.filename() == ".." ||
@@ -563,6 +566,19 @@ void extract_project(const DocumentSnapshot &snapshot,
                    {"exchange_version", required_format >= 14 ? 11 : required_format >= 13 ? 10 : required_format >= 12 ? 9 : required_format >= 11 ? 8 : required_format >= 10 ? 7 : 1},
                    {"document", std::move(document)},
                    {"revisions", Json::array()}};
+    if (archive) {
+      result["exchange_version"] = 12;
+      result["archive_role"] = archive->role() == ArchiveRole::ordinary
+                                   ? "ordinary"
+                                   : "recovery_copy";
+      result["recovery_records"] = Json::array();
+      for (const auto &record : archive->recovery()) {
+        result["recovery_records"].push_back(
+            {{"record_id", record.record_id},
+             {"record_kind", record.record_kind},
+             {"envelope", record.envelope}});
+      }
+    }
     std::set<std::string> written_assets;
     for (const auto &revision : snapshot.history()) {
       Json row = {{"revision", revision.revision},
@@ -642,5 +658,24 @@ void extract_project(const DocumentSnapshot &snapshot,
     }
     std::rethrow_exception(original);
   }
+}
+} // namespace
+
+void extract_project(const DocumentSnapshot &snapshot,
+                     const std::filesystem::path &destination,
+                     const ExtractOptions &options) {
+  extract_project_impl(snapshot, nullptr, destination, options);
+}
+
+void extract_project_archive(const ProjectArchiveSnapshot &archive,
+                             const std::filesystem::path &destination,
+                             const ExtractOptions &options) {
+  const auto checked = decode_recovery_ledger(
+      archive.document(), archive.recovery(), archive.role());
+  if (!checked.supported()) {
+    throw std::invalid_argument(
+        "Cannot extract an unsupported recovery archive: " + checked.diagnostic);
+  }
+  extract_project_impl(archive.document(), &archive, destination, options);
 }
 } // namespace sketch

@@ -1456,7 +1456,7 @@ if(BUILD_TESTING)
   add_executable(project_exchange_tests tests/project_exchange_tests.cpp)
   target_link_libraries(project_exchange_tests PRIVATE sketch_exchange)
   add_test(NAME project_exchange COMMAND project_exchange_tests)
-  add_test(NAME project_cli COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tests/test_cli.py" "$<TARGET_FILE:vertex-cli>")
+  add_test(NAME project_cli COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tests/test_cli.py" "$<TARGET_FILE:vertex-cli>" "$<TARGET_FILE:project_archive_tests>")
 
   # A test failure must never require dismissing a CRT or Windows dialog on
   # the developer's desktop. Object linkage retains the initializer even when

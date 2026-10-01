@@ -5,6 +5,17 @@ and content-addressed `assets/<sha256>.bin` files. It exports all retained
 revisions and deduplicates identical asset bytes. It never replaces an existing
 destination, including one created concurrently before publication.
 
+`extract_project_archive` uses the same publication transaction for supported
+recovery-bearing projects. Exchange version 12 adds `archive_role` (`ordinary`
+or `recovery_copy`) and `recovery_records`, containing each complete
+`record_id`, `record_kind` and raw `envelope`. The document, all retained
+revisions, command proofs and assets remain in the same package. These fields
+are included before `project.json` is published; extraction never drops a
+recovery ledger or appends it after publication. Document-only extraction keeps
+its existing exchange-version rules. Unknown recovery envelopes cannot be
+extracted as editable document state. This export does not constitute a JSON
+project importer.
+
 Windows directory reservation uses `NtCreateFile` with `FILE_CREATE` and
 `FILE_DIRECTORY_FILE`, relative to a retained parent directory handle. Creation
 and handle acquisition are one operation. The parent and root handles remain

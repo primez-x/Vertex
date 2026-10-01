@@ -56,6 +56,21 @@ an existing destination, reports source and destination SHA-256 fingerprints, an
 the source hash is unchanged. A failed migration leaves the source and any existing destination
 untouched.
 
+These CLI operations also recognize supported ordinary and recovery-copy
+archives. Inspection reports their role and recovery record counts; validation
+checks the archive and its replayable recovery state. Migration preserves the
+complete ledger and its role through `save_archive`, rather than saving only
+the document. Extraction writes exchange version 12 with the complete raw
+recovery records alongside document history and assets. The SQLite format
+version has a v4 minimum for recovery-bearing archives; retained document
+proofs can require a higher version.
+
+An unknown recovery kind or version can be inspected only as an opaque archive:
+the CLI reports its source fingerprint, diagnostic and record metadata with
+`editable: false` and `validation_complete: false`. It does not expose a
+forkable document snapshot. Validate, migrate and extract refuse that state
+before creating an output. Damaged storage or a failed digest remains an error.
+
 Retained typed `ApplyBoundaryConstraintChanges` endpoint commands replay through the same analytical
 topology checks used by interactive authoring. A matching command/result pair
 and recomputed logical digest cannot authorize new undeclared wall contacts,
