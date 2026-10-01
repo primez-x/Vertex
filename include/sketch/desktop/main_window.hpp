@@ -251,6 +251,13 @@ public:
     [[nodiscard]] QStringList detectRoomBoundariesFromExistingWalls(
         QString classification = QStringLiteral("room"),
         std::optional<Revision> expected_revision = std::nullopt);
+    // Derives a distinct appraisal boundary from a selected closed wall loop,
+    // measuring the exterior faces using each wall's physical thickness.
+    [[nodiscard]] QString createMeasurementBoundaryFromSelectedWalls(
+        QString classification = QStringLiteral("measurement"),
+        std::optional<Revision> expected_revision = std::nullopt);
+    [[nodiscard]] bool refreshSelectedWallMeasurement(
+        std::optional<Revision> expected_revision = std::nullopt);
     [[nodiscard]] QString createStraightWall(
         Vec2 start,
         Vec2 end,

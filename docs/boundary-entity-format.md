@@ -1,5 +1,37 @@
 # Identified analytical boundary entities
 
+An exterior measurement derived from physical walls additionally stores
+`properties.wall_measurement_source`:
+
+```json
+{
+  "version": 1,
+  "basis": "exterior",
+  "walls": [
+    {"id": "wall-1", "context": {"floor_id": "floor-1", "layer_id": "layer-1"}}
+  ]
+}
+```
+
+The example shows one record; a supported source has 3–2048 unique straight
+walls forming one simple closed loop. Records are sorted by wall ID and context
+may also retain declared property, building and phase IDs. The geometry remains
+in the boundary's identified segments. Source coordinates and thickness are
+read from the referenced walls; freshness rederives exterior faces and compares
+the actual outline and context, independently of winding or segment ordering.
+Source records do not store a second geometry truth. Document history retains
+the original source revisions. Missing walls, malformed or unknown sources,
+edited outlines and source walls excluded by the semantic phase prevent
+qualified appraisal totals. Hosted opening cuts do not subtract exterior area.
+
+Version 1 offsets each straight baseline by half its stored thickness to the
+outside and intersects adjacent offset lines at mitered corners. Equal-offset
+collinear continuations are supported; ambiguous parallel corners, curved
+walls and invalid/self-intersecting offsets are refused. Output uses positive
+winding and the lowest-ID source wall as its stable first edge. Refresh uses
+the typed boundary redefinition command, retaining the same boundary and child
+IDs when topology is unchanged. Declared appraisal facts remain separate.
+
 The strict codec recognizes `boundary`, `measurement_boundary` and
 `room_boundary`. An identified entity has `properties.boundary_model_version: 1`
 and a canonical `properties.segments` array. Each segment contains:

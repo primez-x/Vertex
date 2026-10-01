@@ -1596,6 +1596,17 @@ drawing; switching modes does not change existing geometry.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
+## Measure a physical wall layout
+
+- [ ] **U284 — Calculate exterior area from walls**
+  - Steps: Draw a closed rectangular wall layout, finish it with Escape, then select a wall. Right-click and choose **Measure exterior from walls…**. Check the blue exterior outline and area in the preview, cancel once, then reopen and create it. For a layout with interior branches, Ctrl-click only the exterior perimeter walls before opening the command.
+  - Expected: Cancellation changes nothing. Creation adds one measurement area and keeps the physical walls. The area includes half the stored wall thickness outside each baseline. Repeating the command with the same walls selects the existing measurement instead of creating a duplicate.
+  - Appraisal check: Select the area, use the Appraisal workflow, and enter the observed property/floor/area facts with **Edit appraisal facts…**. Check its category and net square feet on the plan and in the totals. Add a contained garage deduction and check the living total decreases while the garage remains separately classified.
+
+- [ ] **U285 — Refresh area after changing wall thickness**
+  - Steps: Name the exterior measurement, change its appearance, and add an area dimension. Change a source wall's thickness. Select the area, right-click and choose **Refresh exterior measurement…**; review and apply. Undo, redo, save, and reopen.
+  - Expected: Before refresh, the old outline is marked stale and qualified appraisal totals are withheld. Refresh changes the exterior outline and area while keeping its name, appearance, facts, deduction links and dimension bindings. Undo restores the previous outline; redo restores the refreshed area. An open perimeter, missing source wall or read-only project is refused without a partial change.
+
 ## Issue report template
 
 - Task ID(s):

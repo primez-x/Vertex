@@ -1,5 +1,6 @@
 #include "sketch/appraisal_document.hpp"
 #include "sketch/boundary_entity.hpp"
+#include "sketch/wall_measurement.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -194,6 +195,22 @@ bool visible(const std::set<std::string, std::less<>>* ids, const std::string& i
     return ids == nullptr || ids->contains(id);
 }
 
+bool wall_measurement_sources_visible(
+    const Entity& boundary, const std::set<std::string, std::less<>>* visible_entity_ids) {
+    if (visible_entity_ids == nullptr) return true;
+    const auto source = boundary.properties.find("wall_measurement_source");
+    if (source == boundary.properties.end()) return true;
+    if (!source->is_object() || !source->contains("walls") || !source->at("walls").is_array() ||
+        source->at("walls").empty())
+        return false;
+    for (const auto& record : source->at("walls")) {
+        if (!record.is_object() || !record.contains("id") || !record.at("id").is_string() ||
+            !visible_entity_ids->contains(record.at("id").get<std::string>()))
+            return false;
+    }
+    return true;
+}
+
 struct Context {
     const Entity* floor{};
     const Entity* building{};
@@ -337,6 +354,22 @@ AppraisalDocumentReport build_appraisal_document_report(
             const auto building_id = owner.building->id;
             const auto declared = declarations(property->second, *owner.floor, *entity);
             result.policy = declared.policy;
+            if (!wall_measurement_source_current(document, *entity) ||
+                !wall_measurement_sources_visible(*entity, visible_entity_ids)) {
+                auto qualification = derive_appraisal_category(declared.facts, declared.policy);
+                for (const auto& missing : declared.missing)
+                    qualification.issues.push_back({"undeclared", missing});
+                qualification.qualified = false;
+                qualification.derived_category.reset();
+                qualification.issues.push_back({
+                    "stale_measurement_source",
+                    "Exterior measurement is stale; refresh exterior measurement from source walls before producing appraisal totals."});
+                const bool exclusion = declared.facts.role != BoundaryRole::measured_area;
+                result.boundaries.push_back({entity->id, exclusion, std::move(qualification)});
+                result.issues.push_back(entity->id +
+                    ": Exterior measurement is stale; refresh exterior measurement from source walls before producing appraisal totals.");
+                continue;
+            }
             std::vector<AreaDeduction> deductions;
             for (const auto& deduction_id : deduction_ids(*entity)) {
                 const auto deduction = document.entities().find(deduction_id);

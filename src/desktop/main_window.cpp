@@ -46,6 +46,7 @@
 #include "sketch/sheet_output_scene.hpp"
 #include "sketch/calculations.hpp"
 #include "sketch/appraisal_document.hpp"
+#include "sketch/wall_measurement.hpp"
 #include "sketch/project_store.hpp"
 #include "sketch/project_resource_catalog.hpp"
 #include "sketch/project_ownership.hpp"
@@ -10988,6 +10989,240 @@ public:
         }
     }
 
+    static bool sameWallMeasurementSource(json candidate, const json& expected) {
+        try {
+            if (!candidate.is_object() || !candidate.contains("walls") || !candidate.at("walls").is_array() ||
+                candidate.at("walls").size() != expected.at("walls").size()) return false;
+            for (const auto& record : candidate.at("walls"))
+                if (!record.is_object() || !record.contains("id") || !record.at("id").is_string()) return false;
+            auto& walls = candidate.at("walls");
+            std::sort(walls.begin(),walls.end(),[](const auto& a, const auto& b) {
+                return a.at("id").template get_ref<const std::string&>() <
+                       b.at("id").template get_ref<const std::string&>();
+            });
+            return candidate == expected;
+        } catch (const json::exception&) { return false; }
+    }
+
+    std::vector<std::string> selectedWallMeasurementSources(const DocumentSnapshot& source) const {
+        if (m_selected_ids.isEmpty())
+            throw std::invalid_argument("Select the perimeter walls first.");
+        const auto eligible = visible_project_entities_with_phase(source, ProjectViewFilter{});
+        std::vector<std::string> ids;
+        for (const auto& selected : m_selected_ids) {
+            const auto id = selected.toStdString();
+            const auto found = source.entities().find(id);
+            if (found == source.entities().end() || found->second.type != "wall" || !eligible.contains(id))
+                throw std::invalid_argument("Select only walls in the current design phase.");
+            ids.push_back(id);
+        }
+        if (ids.size() == 1) {
+            const auto& seed = source.entities().at(ids.front());
+            const auto touches = [](const Segment& a, const Segment& b) {
+                const auto same = [](Vec2 p, Vec2 q) { return p.x == q.x && p.y == q.y; };
+                return same(a.start,b.start) || same(a.start,b.end) ||
+                       same(a.end,b.start) || same(a.end,b.end);
+            };
+            for (std::size_t cursor = 0; cursor < ids.size(); ++cursor) {
+                const auto baseline = read_required_segment(source.entities().at(ids[cursor]).properties, "baseline");
+                if (!baseline) throw std::invalid_argument("A source wall has no valid baseline.");
+                for (const auto& [id, wall] : source.entities()) {
+                    if (wall.type != "wall" || !eligible.contains(id) ||
+                        read_string(wall.properties,"floor_id") != read_string(seed.properties,"floor_id") ||
+                        read_string(wall.properties,"layer_id") != read_string(seed.properties,"layer_id") ||
+                        std::find(ids.begin(),ids.end(),id) != ids.end()) continue;
+                    const auto candidate = read_required_segment(wall.properties,"baseline");
+                    if (candidate && touches(*baseline,*candidate)) ids.push_back(id);
+                }
+            }
+        }
+        std::sort(ids.begin(),ids.end());
+        return ids;
+    }
+
+    QString createMeasurementBoundaryFromSelectedWalls(const QString& classification,
+                                                        std::optional<Revision> expected_revision) {
+        try {
+            if (!m_document->is_editable()) throw std::invalid_argument("This project is read-only.");
+            if (m_boundary_session || m_pending_wall_start)
+                throw std::invalid_argument("Finish the drawing before measuring the exterior walls.");
+            const auto source = authoringSnapshot();
+            if (expected_revision && *expected_revision != source.revision())
+                throw std::invalid_argument("The project changed. Select the walls again.");
+            const auto ids = selectedWallMeasurementSources(source);
+            const auto derived = derive_exterior_wall_measurement(source,ids);
+            const auto name = classification.trimmed();
+            if (name.isEmpty()) throw std::invalid_argument("Measurement classification cannot be empty.");
+            // Reuse a measured owner instead of counting the same shell twice.
+            for (const auto& [id, entity] : source.entities()) {
+                if (entity.type != "measurement_boundary" ||
+                    !entity.properties.contains("wall_measurement_source") ||
+                    !sameWallMeasurementSource(entity.properties.at("wall_measurement_source"),derived.source)) continue;
+                (void)selectEntity(id_from(id));
+                if (!wall_measurement_source_current(source,entity) &&
+                    !refreshSelectedWallMeasurement(source.revision())) return {};
+                clearError();
+                return id_from(id);
+            }
+            const auto& wall = source.entities().at(ids.front());
+            const auto layer_id = read_string(wall.properties,"layer_id");
+            const auto context = layer_id ? organize_project(source).drawing_context(*layer_id) : std::nullopt;
+            if (!context || read_string(wall.properties,"floor_id") != std::optional{context->floor_id})
+                throw std::invalid_argument("The source walls have no resolved floor and drawing layer.");
+            BoundaryAuthoringOptions options;
+            options.automatic_dimension_placement = true;
+            options.automatic_placement_version = 2;
+            BoundaryAuthoringSession authoring(BoundaryAuthoringMode::draw_first,options);
+            (void)authoring.anchor(derived.boundary.front().start);
+            for (const auto& edge : derived.boundary) (void)authoring.add_line_to(edge.end);
+            authoring.classify_current_chain(name.toStdString());
+            const auto accepted = authoring.close_chain();
+            auto entity = encode_identified_boundary_entity(accepted.boundary);
+            const auto metadata = json{{"property_id",context->property_id},{"building_id",context->building_id},
+                     {"floor_id",context->floor_id},{"layer_id",context->layer_id},
+                     {"classification",name.toStdString()},
+                     {"measurement_classification",name.toStdString()},{"name","Exterior measurement"},
+                     {"factor",1.0},{"factor_expression","1"},{"factor_numerator",1},{"factor_denominator",1},
+                     {"wall_measurement_source",derived.source},
+                     {"boundary_authoring",boundary_construction_envelope(accepted,options)}};
+            entity.properties.update(metadata);
+            const auto id = id_from(entity.id);
+            std::vector<EntityChange> changes{EntityChange::upsert(entity)};
+            for (const auto& dimension : accepted.dimensions) {
+                auto encoded = encode_boundary_dimension_entity(dimension);
+                for (const auto* key : {"property_id","building_id","floor_id","layer_id"})
+                    encoded.properties[key] = metadata.at(key);
+                changes.push_back(EntityChange::upsert(std::move(encoded)));
+            }
+            const ApplyEntityChanges command{source.revision(),std::move(changes), {},
+                                             "Measure exterior from walls"};
+            (void)Document::preview_command(source,command);
+            applyDocumentCommand(command);
+            (void)selectEntity(id);
+            clearError();
+            refresh();
+            return id;
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Exterior measurement: %1\nFor a branched layout, Ctrl-select only the perimeter walls.")
+                .arg(QString::fromUtf8(error.what())));
+            return {};
+        }
+    }
+
+    bool refreshSelectedWallMeasurement(std::optional<Revision> expected_revision) {
+        try {
+            if (!m_document->is_editable()) throw std::invalid_argument("This project is read-only.");
+            if (m_boundary_session || m_pending_wall_start)
+                throw std::invalid_argument("Finish the drawing before refreshing its exterior measurement.");
+            const auto source = authoringSnapshot();
+            if (expected_revision && *expected_revision != source.revision())
+                throw std::invalid_argument("The project changed. Select the measurement again.");
+            const auto selected = selectedEntity();
+            if (!selected || m_selected_ids.size() != 1 || selected->type != "measurement_boundary" ||
+                !selected->properties.contains("wall_measurement_source"))
+                throw std::invalid_argument("Select one exterior measurement derived from walls.");
+            const auto& provenance = selected->properties.at("wall_measurement_source");
+            if (!provenance.is_object() || provenance.value("version",0) != 1 ||
+                provenance.value("basis",std::string{}) != "exterior" || !provenance.contains("walls"))
+                throw std::invalid_argument("The measurement has an unsupported wall source.");
+            std::vector<std::string> ids;
+            for (const auto& item : provenance.at("walls")) ids.push_back(item.at("id").get<std::string>());
+            const auto eligible = visible_project_entities_with_phase(source,ProjectViewFilter{});
+            for (const auto& id : ids)
+                if (!eligible.contains(id)) throw std::invalid_argument("A source wall is absent from the current design phase.");
+            const auto derived = derive_exterior_wall_measurement(source,ids);
+            if (!sameWallMeasurementSource(provenance,derived.source))
+                throw std::invalid_argument("The source walls changed drawing context. Create a measurement in the new layer.");
+            if (wall_measurement_source_current(source,*selected)) { clearError(); return true; }
+            auto command = boundaryRedefinitionCommand(source,derived.boundary,{});
+            (void)Document::preview_command(source,command);
+            applyDocumentCommand(command);
+            clearError();
+            refresh();
+            return true;
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Refresh exterior measurement: %1").arg(QString::fromUtf8(error.what())));
+            return false;
+        }
+    }
+
+    void showWallMeasurementReview(bool refreshing = false) {
+        const auto context = captureModalContext();
+        try {
+            const auto source = authoringSnapshot();
+            std::vector<std::string> ids;
+            const auto selected = selectedEntity();
+            if (refreshing) {
+                if (!selected || selected->type != "measurement_boundary" ||
+                    !selected->properties.contains("wall_measurement_source"))
+                    throw std::invalid_argument("Select an exterior measurement derived from walls.");
+                for (const auto& item : selected->properties.at("wall_measurement_source").at("walls"))
+                    ids.push_back(item.at("id").get<std::string>());
+            } else ids = selectedWallMeasurementSources(source);
+            const auto proposed = derive_exterior_wall_measurement(source,ids);
+            QDialog dialog(owner);
+            styleDialog(dialog);
+            dialog.setObjectName(QStringLiteral("wallMeasurementReview"));
+            dialog.setWindowTitle(refreshing ? QStringLiteral("Refresh exterior measurement")
+                                            : QStringLiteral("Measure exterior from walls"));
+            dialog.resize(620,520);
+            auto* layout = new QVBoxLayout(&dialog);
+            auto* summary = new QLabel(QStringLiteral("Exterior faces · %1 walls · %2")
+                .arg(ids.size()).arg(format_dimension_area(std::abs(signed_area(proposed.boundary)),m_metric_units)),&dialog);
+            summary->setObjectName(QStringLiteral("wallMeasurementArea"));
+            layout->addWidget(summary);
+            auto* preview = new PlanCanvas(&dialog);
+            preview->setObjectName(QStringLiteral("wallMeasurementPreview"));
+            preview->setGridEnabled(false);
+            preview->setSnapEnabled(false);
+            preview->setOverviewMapEnabled(false);
+            preview->setSelectionTransformEnabled(false,false);
+            preview->setMinimumHeight(280);
+            std::vector<CanvasEntity> shapes;
+            for (const auto& id : ids) {
+                const auto baseline = read_required_segment(source.entities().at(id).properties,"baseline");
+                if (!baseline) throw std::invalid_argument("A source wall has no valid baseline.");
+                CanvasEntity shape;
+                shape.id = id_from(id);
+                shape.type = QStringLiteral("line");
+                shape.segments = {*baseline};
+                shape.stroke_color = QColor(145,154,170);
+                shapes.push_back(std::move(shape));
+            }
+            CanvasEntity shape;
+            shape.id = QStringLiteral("exterior-preview");
+            shape.type = QStringLiteral("measurement_boundary");
+            shape.segments = proposed.boundary;
+            shape.stroke_color = QColor(40,102,245);
+            shape.filled = true;
+            shape.fill_color = QColor(40,102,245,18);
+            shapes.push_back(std::move(shape));
+            preview->setEntities(std::move(shapes));
+            preview->fitView();
+            layout->addWidget(preview,1);
+            auto* basis = new QLabel(QStringLiteral(
+                "Blue: exterior measurement. Gray: wall baselines.\n"
+                "Each wall contributes half its thickness outside the baseline.\n"
+                "Appraisal totals use the declared property, floor and area facts."),&dialog);
+            basis->setWordWrap(true);
+            layout->addWidget(basis);
+            auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel,&dialog);
+            buttons->button(QDialogButtonBox::Ok)->setText(refreshing ? QStringLiteral("Refresh measurement")
+                                                                    : QStringLiteral("Create measurement"));
+            layout->addWidget(buttons);
+            QObject::connect(buttons,&QDialogButtonBox::accepted,&dialog,&QDialog::accept);
+            QObject::connect(buttons,&QDialogButtonBox::rejected,&dialog,&QDialog::reject);
+            if (dialog.exec() != QDialog::Accepted || !modalContextUnchanged(context)) return;
+            const bool applied = refreshing ? refreshSelectedWallMeasurement(context.revision)
+                : !createMeasurementBoundaryFromSelectedWalls(QStringLiteral("measurement"),context.revision).isEmpty();
+            if (applied) owner->statusBar()->showMessage(QStringLiteral("Exterior measurement: %1")
+                .arg(format_dimension_area(std::abs(signed_area(proposed.boundary)),m_metric_units)),6000);
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Exterior measurement: %1\nCtrl-select the perimeter walls for a branched layout.")
+                .arg(QString::fromUtf8(error.what())));
+        }
+    }
+
     QStringList detectRoomBoundariesFromExistingWalls(
         const QString& classification, std::optional<Revision> expected_revision = std::nullopt) {
         const auto revision = expected_revision.value_or(m_document->revision());
@@ -20158,6 +20393,8 @@ public:
             {QStringLiteral("Auto close active boundary"), [this] { autoCloseBoundaryDraft(); }},
             {QStringLiteral("Redefine boundary"), [this] { showBoundaryRedefinition(); }},
             {QStringLiteral("Detect closed areas from walls"), [this] { showAutomaticAreaDetection(); }},
+            {QStringLiteral("Measure exterior from walls"), [this] { showWallMeasurementReview(); }},
+            {QStringLiteral("Refresh exterior measurement"), [this] { showWallMeasurementReview(true); }},
             {QStringLiteral("Add building"), [this] { showOrganizationDialog("building"); }},
             {QStringLiteral("Add floor"), [this] { showOrganizationDialog("floor"); }},
             {QStringLiteral("Add drawing layer"), [this] { showOrganizationDialog("layer"); }},
@@ -21606,6 +21843,16 @@ private:
         m_redefine_action->setObjectName(QStringLiteral("boundaryRedefinition"));
         m_detect_areas_action = new QAction(QStringLiteral("Detect closed areas…"), owner);
         m_detect_areas_action->setObjectName(QStringLiteral("detectClosedAreas"));
+        auto* measure_exterior = new QAction(QStringLiteral("Measure exterior from walls…"),owner);
+        measure_exterior->setObjectName(QStringLiteral("measureExteriorFromWalls"));
+        auto* refresh_exterior = new QAction(QStringLiteral("Refresh exterior measurement…"),owner);
+        refresh_exterior->setObjectName(QStringLiteral("refreshExteriorMeasurement"));
+        owner->addAction(measure_exterior);
+        owner->addAction(refresh_exterior);
+        more_menu->addAction(measure_exterior);
+        more_menu->addAction(refresh_exterior);
+        QObject::connect(measure_exterior,&QAction::triggered,owner,[this] { showWallMeasurementReview(); });
+        QObject::connect(refresh_exterior,&QAction::triggered,owner,[this] { showWallMeasurementReview(true); });
         m_terrain_action = new QAction(QStringLiteral("Create terrain surface…"), owner);
         m_terrain_action->setObjectName(QStringLiteral("createTerrainSurface"));
         m_architectural_actions = {curved_wall_action, sloped_wall_action, m_view_action, m_remodel_action,
@@ -23408,6 +23655,11 @@ private:
                     }
                 }
                 const auto selected = selectedEntity();
+                if (selected && selected->type == "wall")
+                    menu.addAction(owner->findChild<QAction*>(QStringLiteral("measureExteriorFromWalls")));
+                if (m_selected_ids.size() == 1 && selected && selected->type == "measurement_boundary" &&
+                    selected->properties.contains("wall_measurement_source"))
+                    menu.addAction(owner->findChild<QAction*>(QStringLiteral("refreshExteriorMeasurement")));
                 if (m_selected_ids.size()==1 && selected &&
                     (selected->type=="measurement_boundary" || selected->type=="boundary"))
                     menu.addAction(m_auto_subtract_action);
@@ -25685,6 +25937,8 @@ private:
                 if (!phase_visible_ids.contains(id)) {
                     continue;
                 }
+                if (!declared && !wall_measurement_source_current(snapshot,entity))
+                    throw std::invalid_argument("Exterior measurement is stale; refresh it from its source walls.");
                 auto entity_classification = area_classification_for_workflow(
                     entity.properties, calculation_workflow);
                 if (!declared && referenced_deductions.contains(id) &&
@@ -25813,8 +26067,12 @@ private:
                     m_appraisal_derived_value->setText(QStringLiteral("%1\nPhysical: %2\nAdjusted: %3")
                         .arg(q.derived_category ? QString::fromUtf8(appraisal_category_name(*q.derived_category).data())
                                                : (q.qualified ? QStringLiteral("Excluded — no standalone contribution") : QStringLiteral("Unqualified")),
-                             format_display_area(display_area(q.physical_square_metres.value_or(0), display_profile)),
-                             format_display_area(display_area(q.adjusted_square_metres.value_or(0), display_profile))));
+                             q.physical_square_metres
+                                 ? format_display_area(display_area(*q.physical_square_metres, display_profile))
+                                 : QStringLiteral("—"),
+                             q.adjusted_square_metres
+                                 ? format_display_area(display_area(*q.adjusted_square_metres, display_profile))
+                                 : QStringLiteral("—")));
                 }
                 if (!all_qualified) {
                     m_calculation_status->setText(QStringLiteral("Unqualified — automatic totals withheld"));
@@ -29642,6 +29900,14 @@ void MainWindow::showRoomVolumeDimensions() {
 QStringList MainWindow::detectRoomBoundariesFromExistingWalls(
     QString classification, std::optional<Revision> revision) {
     return m_impl->detectRoomBoundariesFromExistingWalls(std::move(classification), revision);
+}
+
+QString MainWindow::createMeasurementBoundaryFromSelectedWalls(QString classification, std::optional<Revision> revision) {
+    return m_impl->createMeasurementBoundaryFromSelectedWalls(classification,revision);
+}
+
+bool MainWindow::refreshSelectedWallMeasurement(std::optional<Revision> revision) {
+    return m_impl->refreshSelectedWallMeasurement(revision);
 }
 
 QString MainWindow::createStraightWall(Vec2 start, Vec2 end, QString classification,

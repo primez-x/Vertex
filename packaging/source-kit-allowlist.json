@@ -2147,6 +2147,10 @@
     },
     {
       "category": "docs",
+      "path": "docs/superpowers/plans/2026-10-01-wall-measurement.md"
+    },
+    {
+      "category": "docs",
       "path": "docs/survey-georeferencing-contracts.md"
     },
     {
@@ -2236,6 +2240,10 @@
     {
       "category": "docs",
       "path": "docs/verification/touch-navigation-and-legacy-upgrade-2026-09-30.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/verification/wall-measurement-2026-10-01.md"
     },
     {
       "category": "docs",
@@ -2712,6 +2720,10 @@
     {
       "category": "source",
       "path": "include/sketch/visualization/native_model_view.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/wall_measurement.hpp"
     },
     {
       "category": "source",
@@ -3420,6 +3432,10 @@
     {
       "category": "source",
       "path": "src/core/vertical_levels.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/wall_measurement.cpp"
     },
     {
       "category": "source",
@@ -4292,6 +4308,14 @@
     {
       "category": "source",
       "path": "tests/wall_join_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/wall_measurement_desktop_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/wall_measurement_tests.cpp"
     },
     {
       "category": "source",
