@@ -189,8 +189,9 @@ segment and follows the selected display units; display formatting does not
 change its stored source or placement.
 
 Cursor status, rubber-band endpoints and pending dimension labels use the same
-effective canvas point as a click: quarter-metre grid snapping when enabled,
-raw model coordinates when disabled. Changing snapping recomputes the last
+effective canvas point as a click: the displayed grid interval for the current
+zoom and units when snapping is enabled, raw model coordinates when disabled.
+Changing snapping recomputes the last
 pointer position without requiring mouse motion. Only the active workspace
 updates the shared draft pointer when both canvases receive the setting change.
 

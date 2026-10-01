@@ -483,12 +483,14 @@ drawing; switching modes does not change existing geometry.
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U081 — Toggle grid display**
-  - Expected: The grid visibly appears or disappears without changing geometry.
+  - Steps: Toggle Grid off and on. With Imperial selected, zoom in until the grid cue shows inches or fractions, then zoom out to feet. Repeat in Metric, moving between centimetres and metres. Pan across the origin and compare existing objects before and after changing units and zoom.
+  - Expected: The grid and its scale cue appear or disappear together. Divisions use readable units at each zoom. Panning preserves their world positions; saved geometry and exact dimensions remain unchanged.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U082 — Toggle magnet/grid snap**
-  - Expected: New points snap when enabled and can be placed freely when disabled.
+  - Steps: With Snap on, place nodes near minor grid intersections at several zoom levels in Imperial and Metric. Compare the cursor preview with the committed point. Turn Snap off and place a point between intersections. Hide Grid while leaving Snap on and repeat.
+  - Expected: Grid snapping follows the displayed interval at each zoom and unit setting. The preview and placed point agree. Snap off permits free placement; hiding the grid preserves the snap preference. Existing geometry is not rounded when the interval changes.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 

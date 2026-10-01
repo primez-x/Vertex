@@ -319,6 +319,8 @@ public:
     [[nodiscard]] QRectF overviewMapRect() const noexcept;
     [[nodiscard]] Vec2 viewCenter() const noexcept { return m_view_center; }
     [[nodiscard]] double viewScale() const noexcept { return m_scale; }
+    // Current screen grid increment, shared by painting and interactive snap.
+    [[nodiscard]] double gridSpacingMetres() const noexcept;
     void renderScene(QPainter& painter, const QRectF& viewport) const;
     void renderScene(QPainter& painter, const QRectF& viewport, bool fit_to_content,
                      QColor background) const;

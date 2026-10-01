@@ -23107,7 +23107,7 @@ private:
         m_snap_button->setIconSize(QSize(16, 16));
         m_snap_button->setToolButtonStyle(Qt::ToolButtonIconOnly);
         m_snap_button->setAccessibleName(QStringLiteral("Snap"));
-        m_snap_button->setToolTip(QStringLiteral("Snap points to a 0.25 m grid"));
+        m_snap_button->setToolTip(QStringLiteral("Snap to the displayed grid and nearby geometry. Grid spacing follows zoom and units."));
         m_snap_button->setObjectName(QStringLiteral("snapTool"));
         m_snap_button->setCheckable(true);
         m_snap_button->setChecked(true);

@@ -1,5 +1,22 @@
 # Reference grids
 
+## Workspace measurement grid
+
+The canvas background grid adapts to the active measurement units and zoom.
+Imperial intervals use feet, inches and inch fractions; metric intervals use
+the 1, 2 and 5 progression in metres, centimetres and millimetres. Zooming in
+reveals finer intervals, while zooming out selects larger readable intervals.
+The small scale cue shows one minor grid interval. Grid snapping uses that
+same interval, anchored to the model origin; panning never relocates it.
+
+The grid is a placement aid. Changing zoom or units does not round saved
+geometry or measurements entered numerically. Nearby geometric endpoints and
+wall alignment retain precedence over grid snapping. Turning off Snap permits
+free point placement; hiding Grid affects display only. This workspace grid
+and its scale cue do not appear in print or export.
+
+## Persisted reference grids
+
 Reference grids are persisted presentation entities that share the document's
 model-space coordinates. They are useful for residential and light-commercial
 floor plans, structural coordination, and field alignment without changing the

@@ -44,6 +44,57 @@ constexpr double maximum_scale = 4000.0;
 constexpr double output_minimum_scale = minimum_scale;
 constexpr double pi = std::numbers::pi;
 
+struct GridSpacing {
+    double minor;
+    double major;
+};
+
+GridSpacing grid_spacing(double scale, bool metric) noexcept {
+    const auto safe_scale = std::isfinite(scale) && scale > 0.0
+        ? std::clamp(scale, minimum_scale, maximum_scale) : 80.0;
+    const auto minimum_minor = 14.0 / safe_scale;
+    const auto minimum_major = 64.0 / safe_scale;
+    GridSpacing result{};
+    const auto consider = [&](double metres) {
+        if (result.minor == 0.0 && metres >= minimum_minor) result.minor = metres;
+        if (result.minor == 0.0 || result.major != 0.0 || metres < minimum_major) return;
+        const auto multiple = metres / result.minor;
+        if (std::abs(multiple - std::round(multiple)) < 1e-8)
+            result.major = metres;
+    };
+    if (!metric) {
+        // Inch fractions and common construction increments, then a 1/2/5
+        // foot ladder. Every emphasized interval is also a real ladder entry.
+        for (const auto inches : {1.0/16.0, 1.0/8.0, 1.0/4.0, 1.0/2.0,
+                                   1.0, 2.0, 3.0, 6.0})
+            consider(inches * 0.0254);
+    }
+    double decade = metric ? 0.001 : 0.3048;
+    // This covers the full supported zoom range with ample room for a major
+    // interval; the bounded ladder cannot loop on invalid view values.
+    for (int exponent = 0; exponent < 13; ++exponent, decade *= 10.0) {
+        for (const auto multiple : {1.0, 2.0, 5.0}) consider(decade * multiple);
+        if (result.major > 0.0) break;
+    }
+    return result;
+}
+
+QString grid_spacing_label(double metres, bool metric) {
+    if (metric) {
+        const auto unit = metres < 0.01 ? QStringLiteral("mm")
+            : metres < 1.0 ? QStringLiteral("cm") : QStringLiteral("m");
+        const auto value = metres < 0.01 ? metres * 1000.0
+            : metres < 1.0 ? metres * 100.0 : metres;
+        return QStringLiteral("%1 %2").arg(value, 0, 'g', 6).arg(unit);
+    }
+    const auto inches = metres / 0.0254;
+    if (inches < 1.0)
+        return QStringLiteral("1/%1 in").arg(qRound(1.0 / inches));
+    if (inches < 12.0)
+        return QStringLiteral("%1 in").arg(inches, 0, 'g', 6);
+    return QStringLiteral("%1 ft").arg(metres / 0.3048, 0, 'g', 6);
+}
+
 double paper_stroke_pixels(const CanvasEntity& entity, double pixels_per_mm) {
     if (!std::isfinite(entity.output_stroke_width_mm) || entity.output_stroke_width_mm <= 0.0 ||
         !std::isfinite(pixels_per_mm) || pixels_per_mm <= 0.0) return 0.0;
@@ -450,7 +501,9 @@ void PlanCanvas::setOverviewMapEnabled(bool enabled) {
 }
 
 void PlanCanvas::setMetricUnits(bool metric) {
+    if (m_metric_units == metric) return;
     m_metric_units = metric;
+    if (m_last_mouse_position) updateCursor(*m_last_mouse_position);
     update();
 }
 
@@ -1021,6 +1074,30 @@ void PlanCanvas::renderSceneWithTransform(QPainter& painter, const QRectF& viewp
     drawLabels(painter, viewport, scale, view_center, output, background, paper_pixels_per_mm);
 
     if (!output) {
+        if (m_grid_enabled) {
+            painter.save();
+            painter.setRenderHint(QPainter::TextAntialiasing, true);
+            const auto spacing = grid_spacing(scale, m_metric_units).minor;
+            const auto label = grid_spacing_label(spacing, m_metric_units);
+            const QFontMetricsF metrics(painter.font());
+            const auto length = spacing * scale;
+            const auto width = std::max(length, metrics.horizontalAdvance(label));
+            const auto left = viewport.left() + 12.0;
+            const auto bottom = viewport.bottom() - 12.0;
+            const QRectF backing(left - 6.0, bottom - metrics.height() - 15.0,
+                                 width + 12.0, metrics.height() + 21.0);
+            painter.setPen(Qt::NoPen);
+            painter.setBrush(background.lightnessF() > 0.5
+                                 ? QColor(255, 255, 255, 230) : QColor(20, 25, 34, 230));
+            painter.drawRoundedRect(backing, 3.0, 3.0);
+            painter.setPen(background.lightnessF() > 0.5
+                               ? QColor(86, 102, 124) : QColor(190, 201, 219));
+            painter.drawText(QPointF(left, bottom - 10.0), label);
+            painter.drawLine(QLineF(left, bottom, left + length, bottom));
+            for (const auto x : {left, left + length})
+                painter.drawLine(QLineF(x, bottom - 3.0, x, bottom + 3.0));
+            painter.restore();
+        }
         drawSelectionFrame(painter, viewport);
         drawVertexHandles(painter, viewport);
         drawSelectionDimensions(painter, viewport);
@@ -3209,11 +3286,15 @@ Vec2 PlanCanvas::toModel(QPointF point, const QRectF& viewport) const {
             m_view_center.y - (point.y() - viewport.center().y()) / m_scale};
 }
 
+double PlanCanvas::gridSpacingMetres() const noexcept {
+    return grid_spacing(m_scale, m_metric_units).minor;
+}
+
 Vec2 PlanCanvas::snapped(Vec2 point) const {
     if (!m_snap_enabled) {
         return point;
     }
-    constexpr double grid = 0.25;
+    const auto grid = gridSpacingMetres();
     return {std::round(point.x / grid) * grid, std::round(point.y / grid) * grid};
 }
 
@@ -3704,28 +3785,30 @@ void PlanCanvas::drawGrid(QPainter& painter, const QRectF& viewport, double scal
     const auto min_y = std::min(top_left.y, bottom_right.y);
     const auto max_y = std::max(top_left.y, bottom_right.y);
 
-    // Fine graph-paper subdivisions make small rooms and fixtures easier to
-    // judge without allowing the grid to collapse into visual noise. Every
-    // fourth adaptive subdivision is emphasized as the major construction
-    // grid, keeping the hierarchy stable through zooming.
-    double step = 0.125;
-    const auto desired_world_spacing = 14.0 / scale;
-    while (step < desired_world_spacing) {
-        step *= 2.0;
-    }
+    const auto spacing = grid_spacing(scale, m_metric_units);
+    const auto step = spacing.minor;
     const bool light_surface = m_canvas_background.lightnessF() > 0.5;
     QPen minor(light_surface ? QColor(232, 237, 243) : QColor(43, 51, 62), 0.0);
     QPen major(light_surface ? QColor(207, 217, 229) : QColor(58, 68, 82), 0.0);
     const auto first_x = std::floor(min_x / step) * step;
     const auto first_y = std::floor(min_y / step) * step;
-    for (auto x = first_x; x <= max_x + step; x += step) {
-        const auto index = std::round(x / step);
-        painter.setPen(std::fmod(std::abs(index), 4.0) < 0.001 ? major : minor);
+    const auto major_multiple = std::round(spacing.major / step);
+    const auto pen_for = [&](double coordinate) {
+        const auto index = std::round(coordinate / step);
+        return std::fmod(std::abs(index), major_multiple) < 0.001 ? major : minor;
+    };
+    // Count from device extents instead of incrementing world coordinates:
+    // rounding at distant centers must never create a nonprogressing loop.
+    const auto columns = std::ceil(viewport.width() / (step * scale)) + 2.0;
+    const auto rows = std::ceil(viewport.height() / (step * scale)) + 2.0;
+    for (double index = 0; index < columns; ++index) {
+        const auto x = first_x + index * step;
+        painter.setPen(pen_for(x));
         painter.drawLine(QLineF(x, min_y, x, max_y));
     }
-    for (auto y = first_y; y <= max_y + step; y += step) {
-        const auto index = std::round(y / step);
-        painter.setPen(std::fmod(std::abs(index), 4.0) < 0.001 ? major : minor);
+    for (double index = 0; index < rows; ++index) {
+        const auto y = first_y + index * step;
+        painter.setPen(pen_for(y));
         painter.drawLine(QLineF(min_x, y, max_x, y));
     }
 }

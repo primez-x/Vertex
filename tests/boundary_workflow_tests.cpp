@@ -119,24 +119,23 @@ void prepare_window(MainWindow& window) {
 }
 
 QPoint model_to_canvas(const PlanCanvas& canvas, Vec2 model) {
-    // Every workflow fixture calls MainWindow::fitView while the canvases are
-    // empty. PlanCanvas then has its documented origin-centred 80 px/metre
-    // transform. Snapping makes the integer event coordinates exact on the
-    // quarter-metre grid even when a canvas has an odd pixel dimension.
     const QRectF viewport(canvas.rect());
-    return QPointF(viewport.center().x() + model.x * 80.0,
-                   viewport.center().y() - model.y * 80.0)
+    const auto center = canvas.viewCenter();
+    return QPointF(viewport.center().x() + (model.x - center.x) * canvas.viewScale(),
+                   viewport.center().y() - (model.y - center.y) * canvas.viewScale())
         .toPoint();
 }
 
 Vec2 canvas_to_model(const PlanCanvas& canvas, QPoint point) {
     const QRectF viewport(canvas.rect());
-    return {(static_cast<double>(point.x()) - viewport.center().x()) / 80.0,
-            (viewport.center().y() - static_cast<double>(point.y())) / 80.0};
+    const auto center = canvas.viewCenter();
+    return {center.x + (static_cast<double>(point.x()) - viewport.center().x()) / canvas.viewScale(),
+            center.y + (viewport.center().y() - static_cast<double>(point.y())) / canvas.viewScale()};
 }
 
-Vec2 quarter_snap(Vec2 point) {
-    constexpr double grid = 0.25;
+Vec2 snap_to_known_grid(Vec2 point, double grid) {
+    // Independent fixture oracle: at the empty-view 80 px/metre zoom the
+    // metric minor grid is 20 cm and the imperial minor grid is one foot.
     return {std::round(point.x / grid) * grid, std::round(point.y / grid) * grid};
 }
 
@@ -390,6 +389,7 @@ void require_both_canvas_labels(MainWindow& window, std::size_t count) {
 void test_draw_first_events_commit_receipts_labels_and_visibility() {
     MainWindow window;
     prepare_window(window);
+    window.setMetricUnits(true); // The exact two-metre rectangle lies on the 20 cm grid.
     auto* measurement = canvas(window, QStringLiteral("measurementPlanCanvas"));
     const auto before = window.document().snapshot();
     require(window.beginBoundaryDrawing(BoundaryAuthoringMode::draw_first,
@@ -433,6 +433,8 @@ void test_draw_first_events_commit_receipts_labels_and_visibility() {
             "committed boundary must become the selected entity");
     require_both_canvas_labels(window, 4);
 
+    window.setMetricUnits(false);
+    process_events();
     const auto imperial_labels = straight_dimension_label_texts(*measurement);
     window.setMetricUnits(true);
     process_events();
@@ -493,6 +495,7 @@ void test_draw_first_events_commit_receipts_labels_and_visibility() {
 void test_define_first_events_place_manual_dimensions_and_close() {
     MainWindow window;
     prepare_window(window);
+    window.setMetricUnits(true); // The exact two-metre rectangle lies on the 20 cm grid.
     auto* measurement = canvas(window, QStringLiteral("measurementPlanCanvas"));
     const auto before = window.document().snapshot();
     require(window.beginBoundaryDrawing(BoundaryAuthoringMode::define_first,
@@ -540,6 +543,7 @@ void test_define_first_events_place_manual_dimensions_and_close() {
 void test_workspace_switch_preserves_draft_and_uses_architectural_events() {
     MainWindow window;
     prepare_window(window);
+    window.setMetricUnits(true); // The exact two-metre rectangle lies on the 20 cm grid.
     auto* measurement = canvas(window, QStringLiteral("measurementPlanCanvas"));
     auto* architectural = canvas(window, QStringLiteral("architecturalPlanCanvas"));
     const auto before = window.document().snapshot();
@@ -1097,9 +1101,10 @@ void test_off_grid_snap_cursor_rubberband_and_point_receipt_in_both_canvases() {
     const auto anchor_screen = model_to_canvas(*measurement, {0.0, 0.0});
     const auto measurement_screen = anchor_screen + QPoint(37, 0);
     const auto measurement_raw = canvas_to_model(*measurement, measurement_screen);
-    const auto measurement_snapped = quarter_snap(measurement_raw);
+    require(measurement->viewScale() == 80.0, "metric cursor fixture must use the known empty-view zoom");
+    const auto measurement_snapped = snap_to_known_grid(measurement_raw, 0.2);
     require(!same_point(measurement_raw, measurement_snapped),
-            "measurement off-grid cursor fixture must differ from its quarter-grid snap");
+            "measurement off-grid cursor fixture must differ from its 20 cm grid snap");
 
     send_move_at_screen(*measurement, measurement_screen);
     auto snapped_draft = preview(*measurement);
@@ -1111,7 +1116,7 @@ void test_off_grid_snap_cursor_rubberband_and_point_receipt_in_both_canvases() {
             "snap-enabled Draw First rubber band must use the effective snapped cursor");
     const auto snapped_status = window.statusBar()->currentMessage();
     require(snapped_status.contains(QStringLiteral("Cursor")) &&
-                snapped_status.contains(QStringLiteral("500.0 mm")),
+                snapped_status.contains(QStringLiteral("400.0 mm")),
             "snap-enabled cursor status must report the snapped measurement coordinate");
 
     measurement->setSnapEnabled(false);
@@ -1139,9 +1144,10 @@ void test_off_grid_snap_cursor_rubberband_and_point_receipt_in_both_canvases() {
     const auto architectural_anchor_screen = model_to_canvas(*architectural, {0.0, 0.0});
     const auto architectural_screen = architectural_anchor_screen + QPoint(-31, -29);
     const auto architectural_raw = canvas_to_model(*architectural, architectural_screen);
-    const auto architectural_snapped = quarter_snap(architectural_raw);
+    require(architectural->viewScale() == 80.0, "architectural cursor fixture must use the known empty-view zoom");
+    const auto architectural_snapped = snap_to_known_grid(architectural_raw, 0.2);
     require(!same_point(architectural_raw, architectural_snapped),
-            "architectural off-grid cursor fixture must differ from its quarter-grid snap");
+            "architectural off-grid cursor fixture must differ from its 20 cm grid snap");
     send_move_at_screen(*architectural, architectural_screen);
     const auto architectural_draft = preview(*architectural);
     require(architectural_draft.rubber_band.has_value() &&
@@ -1215,9 +1221,10 @@ void test_off_grid_define_first_pending_dimension_preview_and_placement() {
             send_click_at_screen(*active_canvas, anchor_screen);
             const auto edge_screen = anchor_screen + QPoint(37, 0);
             const auto edge_raw = canvas_to_model(*active_canvas, edge_screen);
-            const auto edge_snapped = quarter_snap(edge_raw);
+            require(active_canvas->viewScale() == 80.0, "dimension cursor fixture must use the known empty-view zoom");
+            const auto edge_snapped = snap_to_known_grid(edge_raw, 0.2);
             require(!same_point(edge_raw, edge_snapped),
-                    "Define First edge fixture must differ from its quarter-grid snap");
+                    "Define First edge fixture must differ from its 20 cm grid snap");
 
             // The first move is still the endpoint rubber band. Clicking that point
             // records the edge and enters the explicit per-edge dimension phase.
@@ -1238,9 +1245,9 @@ void test_off_grid_define_first_pending_dimension_preview_and_placement() {
             // second move event.
             const auto dimension_screen = anchor_screen + QPoint(49, -31);
             const auto dimension_raw = canvas_to_model(*active_canvas, dimension_screen);
-            const auto dimension_snapped = quarter_snap(dimension_raw);
+            const auto dimension_snapped = snap_to_known_grid(dimension_raw, 0.2);
             require(!same_point(dimension_raw, dimension_snapped),
-                    "Define First dimension fixture must differ from its quarter-grid snap");
+                    "Define First dimension fixture must differ from its 20 cm grid snap");
             send_move_at_screen(*active_canvas, dimension_screen);
             const auto moved_pending = preview(*active_canvas);
             require(moved_pending.segments.size() == 1 && moved_pending.labels.size() == 1 &&
@@ -1293,7 +1300,8 @@ void test_off_grid_snapped_commit_in_each_workspace() {
                 "snapped receipt fixture must start Draw First");
         const auto origin = model_to_canvas(*target, {0.0, 0.0});
         const auto endpoint = origin + QPoint(37, 0);
-        const auto expected = quarter_snap(canvas_to_model(*target, endpoint));
+        require(target->viewScale() == 80.0, "imperial receipt fixture must use the known empty-view zoom");
+        const auto expected = snap_to_known_grid(canvas_to_model(*target, endpoint), 0.3048);
         send_click_at_screen(*target, origin);
         send_move_at_screen(*target, endpoint);
         require(preview(*target).rubber_band &&
@@ -1460,6 +1468,10 @@ void test_unified_pointer_clicks_to_draw_and_drags_to_pan() {
     {
         MainWindow window;
         prepare_window(window);
+        window.setMetricUnits(true); // The exact two-metre click fixture lies on the 20 cm grid.
+        auto* drawing_mode = window.findChild<QComboBox*>(QStringLiteral("drawingMode"));
+        require(drawing_mode != nullptr, "unified measured-area fixture needs the draw mode selector");
+        drawing_mode->setCurrentIndex(drawing_mode->findData(QStringLiteral("measurement")));
         auto* measurement = canvas(window, QStringLiteral("measurementPlanCanvas"));
         require(window.findChild<QWidget*>(QStringLiteral("selectTool")) == nullptr &&
                     window.findChild<QWidget*>(QStringLiteral("drawFirstBoundary")) == nullptr &&
@@ -1506,15 +1518,17 @@ void test_unified_pointer_clicks_to_draw_and_drags_to_pan() {
     {
         MainWindow window;
         prepare_window(window);
-        window.setWorkspace(Workspace::architectural);
+        window.setWorkspace(Workspace::measurement);
         process_events();
-        auto* architectural = canvas(window, QStringLiteral("architecturalPlanCanvas"));
+        // Physical architectural walls are authored on the conventional 2D
+        // world-XY surface. The architectural workspace displays 3D/views.
+        auto* wall_canvas = canvas(window, QStringLiteral("measurementPlanCanvas"));
         const auto wall_before = window.document().snapshot();
-        send_click(*architectural, {-2.0, -1.0});
-        send_click(*architectural, {2.0, -1.0});
+        send_click(*wall_canvas, {-2.0, -1.0});
+        send_click(*wall_canvas, {2.0, -1.0});
         const auto wall_after = window.document().snapshot();
         require(wall_after.revision() == wall_before.revision() + 1,
-                "two empty-canvas clicks in the architectural workspace must commit one wall command");
+                "two empty-canvas clicks in the 2D workspace must commit one wall command");
         const auto wall_count = static_cast<std::size_t>(std::count_if(
             wall_after.entities().begin(), wall_after.entities().end(), [](const auto& entry) {
                 return entry.second.type == "wall";
@@ -1613,6 +1627,7 @@ void test_dimension_presentation_editing() {
 void test_semantic_angle_and_area_dimension_creation() {
     MainWindow window;
     prepare_window(window);
+    window.setMetricUnits(true); // Preserve the exact four-square-metre area fixture.
     auto* target = canvas(window, QStringLiteral("measurementPlanCanvas"));
     require(window.beginBoundaryDrawing(BoundaryAuthoringMode::draw_first, "living"),
             "start semantic dimension fixture");
@@ -1799,6 +1814,47 @@ void install_test_font() {
     QApplication::setFont(QFont(families.front(), 10));
 }
 
+void test_adaptive_grid_boundary_commit() {
+    MainWindow window;
+    prepare_window(window);
+    window.setMetricUnits(true);
+    auto* drawing = canvas(window, QStringLiteral("measurementPlanCanvas"));
+    auto* views = canvas(window, QStringLiteral("architecturalPlanCanvas"));
+    require(std::abs(drawing->gridSpacingMetres() - 0.2) < 1e-12 &&
+                std::abs(views->gridSpacingMetres() - 0.2) < 1e-12,
+            "both workspaces must receive the metric measurement grid");
+    require(window.beginBoundaryDrawing(BoundaryAuthoringMode::draw_first, "living"),
+            "adaptive-grid workflow must start a measured area");
+    send_click(*drawing, {0, 0});
+    send_move_at_screen(*drawing, model_to_canvas(*drawing, {0.37, 0.01}));
+    require(preview(*drawing).rubber_band &&
+                same_point(preview(*drawing).rubber_band->end, {0.4, 0}),
+            "metric cursor must preview a 20 cm grid point");
+    send_click(*drawing, {0.37, 0.01});
+    drawing->zoomBy(10.0, QRectF(drawing->rect()).center());
+    require(std::abs(drawing->gridSpacingMetres() - 0.02) < 1e-12 &&
+                same_point(preview(*drawing).segments.front().end, {0.4, 0}),
+            "closer zoom must refine the grid without rounding an existing draft edge");
+    send_click(*drawing, {0.435, 0.235});
+    require(same_point(preview(*drawing).segments.back().end, {0.44, 0.24}),
+            "closer metric node placement must use the displayed 2 cm interval");
+    window.setMetricUnits(false);
+    require(std::abs(drawing->gridSpacingMetres() - 0.0254) < 1e-12 &&
+                std::abs(views->gridSpacingMetres() - 0.3048) < 1e-12 &&
+                same_point(preview(*drawing).segments.back().end, {0.44, 0.24}),
+            "unit changes must update both zooms without changing measured draft geometry");
+    send_click(*drawing, {0, 0.23});
+    send_key(*drawing, Qt::Key_Return);
+    require(!drawing->boundaryDraftPreview(), "adaptive-grid measured area must close and commit");
+    const auto boundary = sketch::decode_identified_boundary_entity(
+        committed_boundary(window.document().snapshot()));
+    require(boundary.segments.size() == 4 &&
+                same_point(boundary.segments[0].segment.end, {0.4, 0}) &&
+                same_point(boundary.segments[1].segment.end, {0.44, 0.24}) &&
+                same_point(boundary.segments[2].segment.end, {0, 0.2286}),
+            "committed point receipts must retain the actual grid coordinates at each zoom and unit");
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -1807,6 +1863,13 @@ int main(int argc, char** argv) {
     QApplication application(argc, argv);
     try {
         install_test_font();
+        if (application.arguments().contains(QStringLiteral("--adaptive-grid-only"))) {
+            test_adaptive_grid_boundary_commit();
+            test_keyboard_only_boundary_authoring();
+            std::cout << "Adaptive grid boundary workflows passed\n";
+            return 0;
+        }
+        test_adaptive_grid_boundary_commit();
         if (application.arguments().contains(QStringLiteral("--keyboard-authoring-only"))) {
             test_keyboard_only_boundary_authoring(); return 0;
         }
@@ -1820,25 +1883,32 @@ int main(int argc, char** argv) {
             test_room_label_avoids_components_and_omits_unplaceable_names();
             return 0;
         }
-        test_unified_pointer_clicks_to_draw_and_drags_to_pan();
-        test_draw_first_events_commit_receipts_labels_and_visibility();
-        test_define_first_events_place_manual_dimensions_and_close();
-        test_workspace_switch_preserves_draft_and_uses_architectural_events();
-        test_escape_cancels_without_document_mutation();
-        test_context_change_discards_draft_without_mutating_document();
-        test_precision_and_draw_first_classification_modals();
-        test_keyboard_only_boundary_authoring();
-        test_saved_boundary_draft_resumes_without_unsaved_warning();
-        test_off_grid_snap_cursor_rubberband_and_point_receipt_in_both_canvases();
-        test_off_grid_define_first_pending_dimension_preview_and_placement();
-        test_off_grid_snapped_commit_in_each_workspace();
-        test_receipt_boundary_offset_copy();
-        test_dimension_presentation_editing();
-        test_semantic_angle_and_area_dimension_creation();
-        test_appraisal_draw_category_survives_workflow_switches();
-        test_concave_room_label_stays_inside_room();
-        test_long_room_label_footprint_avoids_narrow_notch();
-        test_room_label_avoids_components_and_omits_unplaceable_names();
+        const auto run_test = [](const char* name, void (*test)()) {
+            try {
+                test();
+            } catch (const std::exception& error) {
+                throw std::runtime_error(std::string(name) + ": " + error.what());
+            }
+        };
+        run_test("unified_pointer_clicks_to_draw_and_drags_to_pan", test_unified_pointer_clicks_to_draw_and_drags_to_pan);
+        run_test("draw_first_events_commit_receipts_labels_and_visibility", test_draw_first_events_commit_receipts_labels_and_visibility);
+        run_test("define_first_events_place_manual_dimensions_and_close", test_define_first_events_place_manual_dimensions_and_close);
+        run_test("workspace_switch_preserves_draft_and_uses_architectural_events", test_workspace_switch_preserves_draft_and_uses_architectural_events);
+        run_test("escape_cancels_without_document_mutation", test_escape_cancels_without_document_mutation);
+        run_test("context_change_discards_draft_without_mutating_document", test_context_change_discards_draft_without_mutating_document);
+        run_test("precision_and_draw_first_classification_modals", test_precision_and_draw_first_classification_modals);
+        run_test("keyboard_only_boundary_authoring", test_keyboard_only_boundary_authoring);
+        run_test("saved_boundary_draft_resumes_without_unsaved_warning", test_saved_boundary_draft_resumes_without_unsaved_warning);
+        run_test("off_grid_snap_cursor_rubberband_and_point_receipt_in_both_canvases", test_off_grid_snap_cursor_rubberband_and_point_receipt_in_both_canvases);
+        run_test("off_grid_define_first_pending_dimension_preview_and_placement", test_off_grid_define_first_pending_dimension_preview_and_placement);
+        run_test("off_grid_snapped_commit_in_each_workspace", test_off_grid_snapped_commit_in_each_workspace);
+        run_test("receipt_boundary_offset_copy", test_receipt_boundary_offset_copy);
+        run_test("dimension_presentation_editing", test_dimension_presentation_editing);
+        run_test("semantic_angle_and_area_dimension_creation", test_semantic_angle_and_area_dimension_creation);
+        run_test("appraisal_draw_category_survives_workflow_switches", test_appraisal_draw_category_survives_workflow_switches);
+        run_test("concave_room_label_stays_inside_room", test_concave_room_label_stays_inside_room);
+        run_test("long_room_label_footprint_avoids_narrow_notch", test_long_room_label_footprint_avoids_narrow_notch);
+        run_test("room_label_avoids_components_and_omits_unplaceable_names", test_room_label_avoids_components_and_omits_unplaceable_names);
         std::cout << "Boundary workflow event tests passed\n";
         return 0;
     } catch (const std::exception& error) {

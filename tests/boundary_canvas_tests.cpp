@@ -360,6 +360,175 @@ void test_boundary_draft_rendering_and_history() {
     require(canvas.labels().empty(), "committed-label clear must leave an empty label set");
 }
 
+void test_unit_aware_adaptive_grid() {
+    // Fixed metric snapping, unit-blind paint spacing, or a zoom-independent
+    // increment all fail these hand-derived pointer and pixel expectations.
+    struct Example { bool metric; double scale; double spacing; double major; };
+    for (const auto example : {Example{false, 80.0, 0.3048, 1.524},
+                               Example{true, 80.0, 0.2, 1.0},
+                               Example{false, 800.0, 0.0254, 0.1524},
+                               Example{true, 800.0, 0.02, 0.1},
+                               Example{false, 4000.0, 0.00635, 0.0254},
+                               Example{true, 4000.0, 0.005, 0.02},
+                               Example{false, 0.0001, 152400.0, 1524000.0},
+                               Example{true, 0.0001, 200000.0, 1000000.0}}) {
+        PlanCanvas canvas;
+        canvas.resize(640, 480);
+        canvas.setOverviewMapEnabled(false);
+        canvas.setCanvasBackground(background);
+        canvas.setTool(CanvasTool::boundary);
+        if (example.metric) canvas.setMetricUnits(true);
+        const auto center = QRectF(canvas.rect()).center();
+        canvas.zoomBy(example.scale / canvas.viewScale(), center);
+        const auto scene = render(canvas, false);
+        const auto cell_pixels = example.spacing * canvas.viewScale();
+        require(std::abs(canvas.gridSpacingMetres() - example.spacing) < example.spacing * 1e-9,
+                "reported grid increment must describe the selected units and current zoom");
+        require(std::isfinite(cell_pixels) && cell_pixels >= 14.0 && cell_pixels <= 35.0,
+                "grid must remain readable and bounded over the navigation zoom range");
+        for (const auto sign : {-1.0, 1.0}) {
+            const auto x = qRound(center.x() + sign * cell_pixels);
+            bool visible_line = false;
+            for (int offset = -1; offset <= 1; ++offset)
+                visible_line |= scene.pixelColor(x + offset, 37) != background;
+            require(visible_line, "unit-aware snapped cell must correspond to an actual painted grid line");
+        }
+        const auto line_brightness = [&](double world_x) {
+            const auto x = qRound(center.x() + world_x * canvas.viewScale());
+            double result = 0.0;
+            // Integrate full antialiasing coverage: fractional inch positions
+            // can split one strong line across pixels while a minor is centered.
+            // Several rows also average the horizontal grid crossings.
+            for (int y = 60; y < 90; ++y)
+                for (int offset = -1; offset <= 1; ++offset)
+                    result += scene.pixelColor(x + offset, y).lightnessF() - background.lightnessF();
+            return result;
+        };
+        const auto major_brightness = line_brightness(example.major);
+        const auto minor_brightness = line_brightness(example.spacing);
+        if (major_brightness <= minor_brightness + 0.75)
+            std::cerr << "Grid emphasis metric=" << example.metric << " scale=" << example.scale
+                      << " minor=" << minor_brightness << " major=" << major_brightness << '\n';
+        require(major_brightness > minor_brightness + 0.75,
+                "meaningful whole-unit major intervals must be visually stronger than minor cells");
+        std::optional<Vec2> preview, placed;
+        canvas.setCursorMoved([&](Vec2 point) { preview = point; });
+        canvas.setPointClicked([&](Vec2 point) { placed = point; });
+        const auto pointer = center + QPointF(cell_pixels * 1.3, cell_pixels * 1.3);
+        QMouseEvent move(QEvent::MouseMove, pointer, pointer, Qt::NoButton,
+                         Qt::NoButton, Qt::NoModifier);
+        QApplication::sendEvent(&canvas, &move);
+        require(preview && std::abs(preview->x - example.spacing) < example.spacing * 1e-9 &&
+                    std::abs(preview->y + example.spacing) < example.spacing * 1e-9,
+                "cursor must snap to the selected unit's visible adaptive grid on signed coordinates");
+        QMouseEvent press(QEvent::MouseButtonPress, pointer, pointer, Qt::LeftButton,
+                          Qt::LeftButton, Qt::NoModifier);
+        QMouseEvent release(QEvent::MouseButtonRelease, pointer, pointer, Qt::LeftButton,
+                            Qt::NoButton, Qt::NoModifier);
+        QApplication::sendEvent(&canvas, &press);
+        QApplication::sendEvent(&canvas, &release);
+        require(placed && preview && placed->x == preview->x && placed->y == preview->y,
+                "click and preview must share the painted adaptive interval");
+    }
+}
+
+void test_adaptive_grid_preserves_anchors_and_exact_geometry() {
+    PlanCanvas canvas;
+    canvas.resize(640, 480);
+    canvas.setOverviewMapEnabled(false);
+    canvas.setTool(CanvasTool::boundary);
+    const auto center = QRectF(canvas.rect()).center();
+    std::optional<Vec2> preview;
+    canvas.setCursorMoved([&](Vec2 point) { preview = point; });
+    const auto mouse = [&](QEvent::Type type, QPointF p, Qt::MouseButton button,
+                           Qt::MouseButtons buttons) {
+        QMouseEvent event(type, p, p, button, buttons, Qt::NoModifier);
+        QApplication::sendEvent(&canvas, &event);
+    };
+    const auto pointer = center + QPointF(27, 31);
+    mouse(QEvent::MouseMove, pointer, Qt::NoButton, Qt::NoButton);
+    canvas.setMetricUnits(true);
+    require(preview && std::abs(preview->x - 0.4) < 1e-9 &&
+                std::abs(preview->y + 0.4) < 1e-9,
+            "unit changes must refresh a stationary cursor to the new visible grid");
+    const auto increment = canvas.gridSpacingMetres();
+    mouse(QEvent::MouseButtonPress, center, Qt::MiddleButton, Qt::MiddleButton);
+    mouse(QEvent::MouseMove, center + QPointF(37, -23), Qt::NoButton, Qt::MiddleButton);
+    mouse(QEvent::MouseButtonRelease, center + QPointF(37, -23), Qt::MiddleButton, Qt::NoButton);
+    require(canvas.gridSpacingMetres() == increment,
+            "panning must retain the zoom-selected grid increment");
+    const Vec2 target{-0.4, 0.2};
+    const auto target_pixel = center + QPointF(
+        (target.x - canvas.viewCenter().x) * canvas.viewScale(),
+        -(target.y - canvas.viewCenter().y) * canvas.viewScale());
+    mouse(QEvent::MouseMove, target_pixel + QPointF(3, 2), Qt::NoButton, Qt::NoButton);
+    require(preview && std::abs(preview->x - target.x) < 1e-9 &&
+                std::abs(preview->y - target.y) < 1e-9,
+            "panned grid snapping must remain anchored to the signed world origin");
+    canvas.setSnapEnabled(false);
+    require(preview && std::abs(preview->x - (target.x + 3.0/80.0)) < 1e-9 &&
+                std::abs(preview->y - (target.y - 2.0/80.0)) < 1e-9,
+            "disabled snapping must retain raw pointer coordinates at the same zoom");
+    const auto painted = render(canvas, false);
+    const auto cue_bright = [&](int x, int y) {
+        for (int dx = -1; dx <= 1; ++dx)
+            for (int dy = -1; dy <= 1; ++dy)
+                if (painted.pixelColor(x + dx, y + dy).lightnessF() > 0.4) return true;
+        return false;
+    };
+    const auto cue_y = canvas.height() - 12;
+    const auto cue_end = qRound(12 + increment * canvas.viewScale());
+    require(cue_bright((12 + cue_end)/2, cue_y) && cue_bright(12, cue_y - 3) &&
+                cue_bright(cue_end, cue_y - 3),
+            "screen scale cue must contain a bright one-cell segment and two end ticks");
+    const auto output = render(canvas, true);
+    QImage explicit_output(canvas.size(), QImage::Format_ARGB32_Premultiplied);
+    {
+        QPainter painter(&explicit_output);
+        canvas.renderSceneAt(painter, explicit_output.rect(), 80.0, {}, background);
+    }
+    canvas.setGridEnabled(false);
+    require(differing_pixels(painted, render(canvas, false), QRect(6, 420, 140, 60)) > 40,
+            "adaptive grid and the one-cell scale cue must be present at bottom left");
+    canvas.setMetricUnits(false);
+    canvas.zoomBy(4.0, center);
+    require(images_equal(output, render(canvas, true)),
+            "interactive grid and unit changes must stay out of fitted output");
+    QImage explicit_without_grid(canvas.size(), QImage::Format_ARGB32_Premultiplied);
+    {
+        QPainter painter(&explicit_without_grid);
+        canvas.renderSceneAt(painter, explicit_without_grid.rect(), 80.0, {}, background);
+    }
+    require(images_equal(explicit_output, explicit_without_grid),
+            "explicit output must omit the editing grid and scale cue");
+
+    CanvasEntity exact{"exact-host", "wall", {{{0.12345, -0.23456}, {1.87654, 0.34567}, 0.0}}};
+    exact.snap_points = {exact.segments.front().start, exact.segments.front().end};
+    exact.snap_segments = exact.segments;
+    canvas.setEntities({exact});
+    canvas.setSnapEnabled(true);
+    canvas.setWallSnapEnabled(true);
+    const auto endpoint = exact.segments.front().start;
+    const auto endpoint_pixel = center + QPointF(
+        (endpoint.x - canvas.viewCenter().x) * canvas.viewScale(),
+        -(endpoint.y - canvas.viewCenter().y) * canvas.viewScale());
+    mouse(QEvent::MouseMove, endpoint_pixel + QPointF(2, 1), Qt::NoButton, Qt::NoButton);
+    require(preview && preview->x == endpoint.x && preview->y == endpoint.y,
+            "exact host endpoints must retain precedence over adaptive grid rounding");
+    canvas.setRawPointInput(true);
+    mouse(QEvent::MouseMove, endpoint_pixel + QPointF(2, 1), Qt::NoButton, Qt::NoButton);
+    require(preview && std::abs(preview->x - (endpoint.x + 2.0/canvas.viewScale())) < 1e-9 &&
+                std::abs(preview->y - (endpoint.y - 1.0/canvas.viewScale())) < 1e-9,
+            "host-projecting tools must receive raw coordinates despite retained snapping");
+    canvas.setMetricUnits(true);
+    canvas.zoomBy(2.0, center);
+    require(canvas.entities().front().segments.front().start.x == endpoint.x &&
+                canvas.entities().front().segments.front().start.y == endpoint.y &&
+                canvas.entities().front().segments.front().end.x == exact.segments.front().end.x &&
+                canvas.entities().front().segments.front().end.y == exact.segments.front().end.y,
+            "adaptive grid navigation must never quantize retained exact geometry");
+}
+
 void test_effective_cursor_matches_click() {
     PlanCanvas canvas;
     canvas.resize(640, 480);
@@ -375,7 +544,7 @@ void test_effective_cursor_matches_click() {
     QMouseEvent move(QEvent::MouseMove, position, position, Qt::NoButton,
                      Qt::NoButton, Qt::NoModifier);
     QApplication::sendEvent(&canvas, &move);
-    require(preview && preview->x == 0.25 && preview->y == -0.5,
+    require(preview && std::abs(preview->x - 0.3048) < 1e-9 && std::abs(preview->y + 0.3048) < 1e-9,
             "off-grid cursor must preview the snapped point");
     const auto click = [&] {
         placed.reset();
@@ -395,7 +564,7 @@ void test_effective_cursor_matches_click() {
             "disabling snap must refresh the stationary cursor to raw coordinates");
     click();
     canvas.setSnapEnabled(true);
-    require(preview && preview->x == 0.25 && preview->y == -0.5,
+    require(preview && std::abs(preview->x - 0.3048) < 1e-9 && std::abs(preview->y + 0.3048) < 1e-9,
             "enabling snap must refresh the stationary cursor");
     click();
     // A click can arrive without an intervening move (for example pen input).
@@ -414,7 +583,7 @@ void test_effective_cursor_matches_click() {
     QMouseEvent next_release(QEvent::MouseButtonRelease, next_position, next_position,
                              Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
     QApplication::sendEvent(&canvas, &next_release);
-    require(placed && placed->x == -0.5 && placed->y == 0.75,
+    require(placed && std::abs(placed->x + 0.6096) < 1e-9 && std::abs(placed->y - 0.6096) < 1e-9,
             "release without preceding motion must use its own snapped coordinates");
 }
 
@@ -2981,6 +3150,14 @@ int main(int argc, char** argv) {
             test_automatic_wall_label_collision_layout();
             return 0;
         }
+        if (application.arguments().contains(QStringLiteral("--adaptive-grid-only"))) {
+            test_unit_aware_adaptive_grid();
+            test_adaptive_grid_preserves_anchors_and_exact_geometry();
+            test_effective_cursor_matches_click();
+            return 0;
+        }
+        test_unit_aware_adaptive_grid();
+        test_adaptive_grid_preserves_anchors_and_exact_geometry();
         test_automatic_wall_label_collision_layout();
         test_dimension_ticks_are_paper_space();
         test_dimension_ticks_respect_angular_geometry();
