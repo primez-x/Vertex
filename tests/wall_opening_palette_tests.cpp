@@ -233,6 +233,12 @@ int main(int argc, char** argv) {
         require(same_point(second_wall.baseline.start, second_preview.start) &&
                     same_point(second_wall.baseline.end, second_preview.end),
                 "second committed wall matches its preview geometry");
+        const auto aligned_corner = sketch::Vec2{first_wall.baseline.start.x,
+                                                  second_wall.baseline.end.y};
+        mouse(QEvent::MouseMove, model_to_canvas(aligned_corner) + QPointF(8, -3),
+              Qt::NoButton, Qt::NoButton);
+        require(canvas->wallPreview() && same_point(canvas->wallPreview()->end, aligned_corner),
+                "a rectangle corner resolves both endpoint alignment and the current wall axis");
         const QPointF third_target = second_target + QPointF(140, 0);
         const auto before_third = window.document().snapshot();
         mouse(QEvent::MouseMove, third_target, Qt::NoButton, Qt::NoButton);

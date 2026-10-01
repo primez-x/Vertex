@@ -24,7 +24,8 @@ The Wall, Door, Window and Doorway actions use this same wall/opening model.
 - Release application and affected desktop targets built successfully.
 - `boundary_canvas`, `drawing_set_output` and `coordinated_view_output`
   passed 3/3 in 31.16 seconds. The expanded `wall_opening_palette` check
-  passed separately in 7.02 seconds after correcting hinged-door opening width.
+  passed separately after correcting hinged-door opening width. The later
+  corner-alignment and boundary checks passed 2/2 in 7.96 seconds.
 - Actual Qt mouse events exercised the default idle surface, chained endpoints,
   endpoint priority, on-wall projection, preview/commit equality, wall selection
   by its body, selected-wall movement, deselect-first behavior, canvas pan and
@@ -36,6 +37,10 @@ The Wall, Door, Window and Doorway actions use this same wall/opening model.
 - Capture review removed duplicate preview lengths and separate selection
   controls on derived wall labels. Captures are saved locally under
   `artifacts/wall-workflow-20261001/`.
+- Direct desktop clicks exposed a horizontal/perpendicular guide taking
+  precedence over a nearby corner's second axis. A regression failed with that
+  resolver; resolving both axes together makes it pass while retaining
+  endpoint and on-wall priority.
 
 This is a correction build, not full production or Apex compatibility
 certification. Numeric completed-boundary vertex input, richer catalog door

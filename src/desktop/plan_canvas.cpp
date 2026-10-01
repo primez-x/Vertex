@@ -2937,7 +2937,7 @@ PlanCanvas::SnapResult PlanCanvas::snapResult(QPointF screen_point) const {
         SnapResult result;
         double distance{std::numeric_limits<double>::infinity()};
     };
-    Candidate endpoint, on_wall, perpendicular, alignment;
+    Candidate endpoint, on_wall, axis_intersection, perpendicular, alignment;
     const auto consider = [&](Candidate& best, Vec2 candidate, SnapKind kind,
                               std::optional<Vec2> anchor = std::nullopt,
                               std::optional<Segment> guide = std::nullopt) {
@@ -2985,6 +2985,16 @@ PlanCanvas::SnapResult PlanCanvas::snapResult(QPointF screen_point) const {
         const auto snap_radius = snap_radius_pixels / std::max(m_scale, 1e-9);
         for (const auto& entity : m_entities) {
             for (const auto endpoint_point : entity.snap_points) {
+                // Resolve both axes together before choosing a single guide.
+                // Otherwise a perfectly horizontal run can miss the nearby
+                // x-coordinate of its starting corner and skew the last wall.
+                for (const auto corner : {Vec2{endpoint_point.x, anchor.y},
+                                          Vec2{anchor.x, endpoint_point.y}}) {
+                    if (std::hypot(corner.x - anchor.x, corner.y - anchor.y) <= snap_radius)
+                        continue;
+                    consider(axis_intersection, corner, SnapKind::alignment, endpoint_point,
+                             Segment{endpoint_point, corner, 0.0});
+                }
                 for (const auto direction : {Vec2{1.0, 0.0}, Vec2{0.0, 1.0}}) {
                     const auto amount = (raw.x - endpoint_point.x) * direction.x +
                                         (raw.y - endpoint_point.y) * direction.y;
@@ -3023,6 +3033,7 @@ PlanCanvas::SnapResult PlanCanvas::snapResult(QPointF screen_point) const {
                      Segment{anchor, projected, 0.0});
         }
     }
+    if (std::isfinite(axis_intersection.distance)) return axis_intersection.result;
     if (std::isfinite(perpendicular.distance)) return perpendicular.result;
     if (std::isfinite(alignment.distance)) return alignment.result;
     return grid_result;
