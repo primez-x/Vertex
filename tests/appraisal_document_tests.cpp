@@ -100,6 +100,35 @@ void deductions_partition_categories_without_double_counting() {
          "garage must contribute exactly once to its category");
 }
 
+void explicit_void_roles_do_not_require_dwelling_facts() {
+    for (const auto* role : {"open_to_below","stair_footprint","other_void"}) {
+        auto entities=fixture_entities();
+        entities.back().properties["deduction_ids"]=std::vector<std::string>{"void-1"};
+        entities.push_back(entity("void-1","measurement_boundary",
+            {{"property_id","property-1"},{"building_id","building-1"},{"floor_id","floor-1"},{"layer_id","layer-1"},
+             {"boundary",square(1,1,1)},{"appraisal_facts",{{"boundary_role",role}}}}));
+        auto document=sketch::Document::create(entities);
+        auto report=sketch::build_appraisal_document_report(document.snapshot(),"property-1");
+        require(report.qualified && report.calculation && report.boundaries.size()==2,
+            "explicit linked void must qualify without fabricated dwelling facts");
+        near(report.calculation->property.gla().total.square_metres,8.290304,1e-8,
+            "role-only void must subtract physical area without a standalone contribution");
+        entities.back().properties["appraisal_facts"]["boundary_role"]="measured_area";
+        document=sketch::Document::create(entities);
+        report=sketch::build_appraisal_document_report(document.snapshot(),"property-1");
+        require(!report.qualified && !report.calculation,"measured areas still require their declared dwelling facts");
+        entities.back().properties["appraisal_facts"].erase("boundary_role");
+        document=sketch::Document::create(entities);
+        report=sketch::build_appraisal_document_report(document.snapshot(),"property-1");
+        require(!report.qualified && !report.calculation,"a missing void role must not qualify implicitly");
+        entities.back().properties["appraisal_facts"]["boundary_role"]=role;
+        entities.back().properties["appraisal_facts"]["finish"]="bad-token";
+        document=sketch::Document::create(entities);
+        report=sketch::build_appraisal_document_report(document.snapshot(),"property-1");
+        require(!report.qualified && !report.calculation,"supplied malformed void facts must remain invalid");
+    }
+}
+
 void incomplete_or_hidden_facts_withhold_totals() {
     auto entities = fixture_entities();
     entities[2].properties.erase("appraisal_facts");
@@ -176,6 +205,7 @@ int main() {
     try {
         qualified_document_recalculates_from_geometry();
         deductions_partition_categories_without_double_counting();
+        explicit_void_roles_do_not_require_dwelling_facts();
         incomplete_or_hidden_facts_withhold_totals();
         inconsistent_container_identity_withholds_totals();
         malformed_projection_data_withholds_totals();

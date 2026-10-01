@@ -3,6 +3,8 @@
 #include "sketch/boundary_construction.hpp"
 #include "sketch/boundary_dimension.hpp"
 #include "sketch/boundary_entity.hpp"
+#include "sketch/area_subtraction.hpp"
+#include "sketch/calculations.hpp"
 #include "sketch/document_digest.hpp"
 
 #include <cstddef>
@@ -52,11 +54,31 @@ void add_context(Json& properties, const DrawingContext& context) {
 
 Entity encode_boundary(const AcceptedBoundaryChain& chain,
                        const BoundaryAuthoringOptions& options,
-                       const DrawingContext& context) {
+                       const DrawingContext& context, const DocumentSnapshot& snapshot,
+                       bool normalize_classification) {
     auto result = encode_identified_boundary_entity(chain.boundary);
     auto& properties = result.properties;
     add_context(properties, context);
     properties["classification"] = chain.classification;
+    // Historical active-v1 finishes reconstruct this exact classification-only
+    // payload. Normalization belongs exclusively to the explicit v2 adjustment.
+    if (normalize_classification) properties["measurement_classification"] = chain.classification;
+    const auto& property = snapshot.entities().at(context.property_id);
+    if (normalize_classification && property.properties.value("calculation_workflow", std::string{"measurement"}) == "appraisal") {
+        if (chain.classification.starts_with("role:")) {
+            const auto role = parse_boundary_role(chain.classification.substr(5));
+            if (!role || *role == BoundaryRole::measured_area) invalid("boundary commit requires a known exclusion TYPE");
+            properties["classification"] = "measurement";
+            properties["measurement_classification"] = "measurement";
+            properties["appraisal_facts"] = {{"boundary_role", boundary_role_name(*role)}};
+        }
+        const auto category = parse_appraisal_category(chain.classification);
+        if (category && *category != AppraisalAreaCategory::none) {
+            properties["classification"] = "measurement";
+            properties["measurement_classification"] = "measurement";
+            properties["appraisal_category"] = chain.classification;
+        }
+    }
     // These fields intentionally match MainWindow::createBoundary exactly.
     properties["factor"] = 1.0;
     properties["factor_expression"] = "1";
@@ -95,6 +117,8 @@ std::vector<Entity> encode_new_entities(const DocumentSnapshot& snapshot,
                                         const BoundaryCommitIntent& intent,
                                         std::vector<std::string>& created_boundary_ids) {
     if (intent.chains.empty()) invalid("boundary commit requires at least one accepted chain");
+    if (intent.auto_subtract_target_id && (intent.auto_subtract_target_id->empty() || intent.chains.size() != 1))
+        invalid("Auto-Subtract commit requires one created area and a nonempty target");
     require_context(snapshot, intent.context);
 
     std::set<std::string, std::less<>> created_entity_ids;
@@ -129,13 +153,18 @@ std::vector<Entity> encode_new_entities(const DocumentSnapshot& snapshot,
             }
         }
 
-        result.push_back(encode_boundary(chain, intent.options, intent.context));
+        result.push_back(encode_boundary(chain, intent.options, intent.context, snapshot,
+            intent.auto_subtract_target_id.has_value()));
         for (const auto& dimension : chain.dimensions) {
             require_new_entity_id(snapshot.entities(), created_entity_ids,
                                   dimension.id, "dimension");
             created_entity_ids.insert(dimension.id);
             result.push_back(encode_dimension(dimension, intent.context));
         }
+    }
+    if (intent.auto_subtract_target_id) {
+        const auto source = result.front();
+        result.push_back(prepare_area_subtraction_target(snapshot, source, *intent.auto_subtract_target_id));
     }
     return result;
 }
@@ -183,9 +212,7 @@ public:
                 snapshot, result.normalized_intent_, created_boundary_ids);
             auto candidate = snapshot.entities();
             for (const auto& entity : created) {
-                if (!candidate.emplace(entity.id, entity).second) {
-                    invalid("boundary commit created duplicate entity ID: " + entity.id);
-                }
+                candidate.insert_or_assign(entity.id, entity);
             }
 
             const auto command = command_for(snapshot, result.normalized_intent_, created);
@@ -272,7 +299,8 @@ Revision apply_boundary_commit(Document& document,
     std::vector<Entity> created;
     created.reserve(recomputed.candidate_entities_.size() - current.entities().size());
     for (const auto& [id, entity] : recomputed.candidate_entities_) {
-        if (!current.entities().contains(id)) created.push_back(entity);
+        const auto previous = current.entities().find(id);
+        if (previous == current.entities().end() || previous->second != entity) created.push_back(entity);
     }
     if (created.empty()) {
         throw DocumentError(DocumentErrorCode::invalid_entity,

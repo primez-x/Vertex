@@ -44,7 +44,7 @@ void identifier(std::string_view value) {
             invalid("invalid UTF-8 scalar");
     }
 }
-bool future(const Json& value) {
+bool future(const Json& value, std::uint64_t supported_version = 1) {
     if (!value.is_object()) invalid("known envelope must be an object");
     bool result = false;
     for (const auto* field : {"version", "replay_version"}) {
@@ -56,7 +56,7 @@ bool future(const Json& value) {
             number = static_cast<std::uint64_t>(v.get<std::int64_t>());
         else invalid("version discriminator must be a positive integer");
         if (!number) invalid("version discriminator must be positive");
-        result = result || number != 1;
+        result = result || number > (std::string_view(field) == "version" ? supported_version : 1);
     }
     return result;
 }
@@ -65,7 +65,7 @@ const Json& array(const Json& value) {
     return value;
 }
 bool scan_input_versions(const Json& value) {
-    if (future(value)) return true;
+    if (future(value, 2)) return true;
     return future(value.at("checkpoint"));
 }
 bool scan_history_versions(const Json& history) {
@@ -155,7 +155,7 @@ RecoveryLedgerDecodeResult decode_recovery_ledger(const DocumentSnapshot& docume
             else { unsupported = true; continue; }
             if (*slot) invalid("duplicate known record kind");
             *slot = &row.envelope;
-            const bool outer_future = future(row.envelope);
+            const bool outer_future = future(row.envelope, slot == &active ? 2 : 1);
             unsupported = unsupported || outer_future;
             if (!outer_future) {
                 if (slot == &active) {

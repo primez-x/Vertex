@@ -474,7 +474,7 @@ Build/version tested: ____________________  Date: ____________________
 
 - [ ] **052 — APX-AREA-004**: Make every total inspectable through boundary, deduction, classification, factor, rounding, and provenance details, including documented Auto-Subtract behavior.
 
-  **Expected result / acceptance:** The calculation inspector identifies every contributing object and applies the same-type Auto-Subtract rule from the compatibility fixture, with no hidden deduction.
+  **Expected result / acceptance:** The calculation inspector identifies every contributing object. Draw First and Define First Auto-Subtract choose a compatible parent instance, reject equal area TYPEs and retain atomic history. Representative Apex fixtures still require compatibility certification.
 
   **Your result:** Not tested
 

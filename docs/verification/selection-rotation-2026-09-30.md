@@ -102,3 +102,17 @@ Development executable SHA-256:
 Launch it with `scripts/run.ps1 -Configuration Release` to supply the process-local
 DLL/plugin paths. This verification does not identify the user's previously
 launched executable or replace the earlier installed checkpoint.
+
+## Explicit-subtraction integration recheck
+
+The integrated Release `symbol_transform_desktop` check passed in 14.11 seconds;
+16 focused checks passed in 36.02 seconds. The frame/pin retention, common-angle
+snaps, Shift fine adjustment, live readout and history/reopen behavior remain
+covered. No additional canvas patch was needed. The inspected
+`artifacts/rotation-subtract-20260930/rotation-live-90.png` retains the rotated
+pin and readable 90.0-degree value.
+
+Development executable SHA-256:
+`515570e5d0b30124c02ad836c6bed917df545efd032e749f9839d9fa8925ad92`.
+Use `scripts/run.ps1 -Configuration Release`. The installed checkpoint remains
+separate; this is controlled offscreen verification, not user-observed resolution.

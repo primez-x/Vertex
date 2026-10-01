@@ -24,6 +24,7 @@
 #include "sketch/desktop/boundary_input_dialog.hpp"
 #include "sketch/desktop/sheet_layout_dialog.hpp"
 #include "sketch/boundary_commit.hpp"
+#include "sketch/area_subtraction.hpp"
 #include "sketch/boundary_construction.hpp"
 #include "sketch/boundary_dimension.hpp"
 #include "sketch/boundary_receipt.hpp"
@@ -1575,6 +1576,10 @@ DeclaredAppraisal read_appraisal_declarations(const json& property, const json& 
     token(area, "ceiling_eligibility", parse_ceiling_eligibility, result.facts.ceiling);
     token(area, "area_use", parse_area_use, result.facts.use);
     token(area, "boundary_role", parse_boundary_role, result.facts.role);
+    if (area.contains("boundary_role") && result.facts.role != BoundaryRole::measured_area) {
+        for (const auto* key : {"grade", "finish", "access", "ceiling_eligibility", "area_use"})
+            result.missing.removeAll(QStringLiteral("Declare %1.").arg(QString::fromLatin1(key)));
+    }
     return result;
 }
 
@@ -10056,7 +10061,8 @@ public:
         }
     }
 
-    bool beginBoundaryDrawing(BoundaryAuthoringMode mode, QString classification) {
+    bool beginBoundaryDrawing(BoundaryAuthoringMode mode, QString classification,
+                              QString subtract_target = {}) {
         if (!m_document->is_editable()) {
             setError(QStringLiteral("This project is read-only."));
             return false;
@@ -10074,7 +10080,7 @@ public:
             ? std::optional{m_boundary_session->view()} : std::nullopt;
         try {
             if (mode == BoundaryAuthoringMode::define_first && classification.trimmed().isEmpty()) {
-                const auto selected = chooseBoundaryClassification(*context);
+                const auto selected = chooseBoundaryClassification(*context, !subtract_target.isEmpty());
                 if (!selected) return false;
                 classification = *selected;
                 if (!modalContextUnchanged(modal_context)) return false;
@@ -10083,6 +10089,23 @@ public:
                     setError(QStringLiteral("The unfinished boundary changed while choosing its classification. Start the command again."));
                     return false;
                 }
+            }
+            if (!subtract_target.isEmpty()) {
+                if (mode != BoundaryAuthoringMode::define_first)
+                    throw std::invalid_argument("Choose a subtraction target before a Define First drawing.");
+                const auto snapshot=authoringSnapshot();
+                const auto target=snapshot.entities().find(subtract_target.toStdString());
+                if (target==snapshot.entities().end()) throw std::invalid_argument("The subtraction target is unavailable.");
+                const auto target_context=organize_project(snapshot).drawing_context(target->first);
+                if (!target_context || target_context->property_id!=context->property_id ||
+                    target_context->building_id!=context->building_id || target_context->floor_id!=context->floor_id)
+                    throw std::invalid_argument("Choose a parent area on the drawing's floor.");
+                const Entity proposed{"pending-subtractor","measurement_boundary",
+                    {{"property_id",context->property_id},{"building_id",context->building_id},
+                     {"floor_id",context->floor_id},{"layer_id",context->layer_id},
+                     {"classification",classification.toStdString()}},false,json::object()};
+                if (area_subtraction_type(snapshot,proposed)==area_subtraction_type(snapshot,target->second))
+                    throw std::invalid_argument("Auto-Subtract requires different area types.");
             }
             BoundaryAuthoringOptions options;
             options.automatic_dimension_placement = mode == BoundaryAuthoringMode::draw_first;
@@ -10094,6 +10117,7 @@ public:
             m_boundary_source = m_document->snapshot();
             m_boundary_context = *context;
             m_boundary_document = m_document;
+            if (!subtract_target.isEmpty()) m_boundary_subtract_target=subtract_target;
             m_tool = CanvasTool::boundary;
             syncToolControls();
             clearError();
@@ -10101,6 +10125,31 @@ public:
         } catch (const std::exception& error) {
             setError(QStringLiteral("Start boundary: %1").arg(QString::fromUtf8(error.what())));
             return false;
+        }
+    }
+
+    bool beginAutoSubtractBoundary(const QString& target_id,QString classification) {
+        if (target_id.trimmed().isEmpty()) { setError(QStringLiteral("Choose a parent area to subtract from.")); return false; }
+        return beginBoundaryDrawing(BoundaryAuthoringMode::define_first,std::move(classification),target_id.trimmed());
+    }
+
+    bool applySelectedAutoSubtract(const QString& target_id,bool remove,
+                                   std::optional<Revision> expected_revision) {
+        try {
+            if (!m_document->is_editable()) throw std::invalid_argument("This document is read-only.");
+            if (m_boundary_session) throw std::invalid_argument("Finish or cancel the current drawing before adjusting an area.");
+            const auto snapshot=authoringSnapshot();
+            if (expected_revision && *expected_revision!=snapshot.revision())
+                throw std::invalid_argument("The project changed while choosing a parent area. Start again.");
+            const auto source=selectedEntity();
+            if (!source || m_selected_ids.size()!=1) throw std::invalid_argument("Select one closed area to subtract.");
+            const auto target=prepare_area_subtraction_target(snapshot,*source,target_id.trimmed().toStdString(),remove);
+            if (target==snapshot.entities().at(target.id)) { clearError(); return true; }
+            applyDocumentCommand(ApplyEntityChanges{snapshot.revision(),{EntityChange::upsert(target)}, {},
+                remove ? "Remove area subtraction" : "Subtract selected area"});
+            clearError(); refresh(); return true;
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Auto-Subtract: %1").arg(QString::fromUtf8(error.what()))); return false;
         }
     }
 
@@ -15642,6 +15691,8 @@ public:
                 m_boundary_context = candidate_active->source.context;
                 m_boundary_document = m_document;
                 m_redefine_boundary_id = candidate_redefine;
+                if (candidate_active->auto_subtract_target_id)
+                    m_boundary_subtract_target=QString::fromStdString(*candidate_active->auto_subtract_target_id);
                 m_tool = CanvasTool::boundary;
                 refreshBoundaryPreview();
             }
@@ -19048,6 +19099,14 @@ public:
         QObject::connect(define, &QAction::triggered, owner, [this] {
             (void)beginBoundaryDrawing(BoundaryAuthoringMode::define_first, {});
         });
+        m_auto_subtract_action=new QAction(QStringLiteral("Subtract from area…"),owner);
+        m_auto_subtract_action->setObjectName(QStringLiteral("autoSubtract"));
+        owner->addAction(m_auto_subtract_action);
+        QObject::connect(m_auto_subtract_action,&QAction::triggered,owner,[this] { showAutoSubtractDialog(); });
+        m_draw_subtract_action=new QAction(QStringLiteral("Define area and subtract from…"),owner);
+        m_draw_subtract_action->setObjectName(QStringLiteral("drawSubtractingArea"));
+        owner->addAction(m_draw_subtract_action);
+        QObject::connect(m_draw_subtract_action,&QAction::triggered,owner,[this] { showAutoSubtractDialog(true); });
         add(QStringLiteral("define-area"), define, "Ctrl+Shift+D", "F4");
         for (const auto& binding : m_shortcuts) binding.action->setShortcut(binding.standard);
 
@@ -19570,6 +19629,8 @@ public:
              [this] { setTool(CanvasTool::boundary); }},
             {QStringLiteral("Start Define First measured boundary"),
              [this] { (void)beginBoundaryDrawing(BoundaryAuthoringMode::define_first, {}); }},
+            {QStringLiteral("Subtract selected area from another area"),[this] { showAutoSubtractDialog(); }},
+            {QStringLiteral("Define area and subtract from another area"),[this] { showAutoSubtractDialog(true); }},
             {QStringLiteral("Start straight wall with two-point input"),
              [this] { setTool(CanvasTool::wall); }},
             {QStringLiteral("Draw curved wall"), [this] { showCurvedWallDialog(); }},
@@ -20114,6 +20175,22 @@ private:
             for (const auto& change : changes->entity_changes)
                 if (change.kind == EntityChangeKind::erase) removed_ids.insert(change.entity_id);
             if (!removed_ids.empty()) {
+                for (const auto& [id,original] : source.entities()) {
+                    if (removed_ids.contains(id) || !is_closed_boundary_entity(original.type)) continue;
+                    auto updated=original;
+                    for (const auto& change : changes->entity_changes)
+                        if (change.kind==EntityChangeKind::upsert && change.entity.id==id) updated=change.entity;
+                    auto deductions=read_deduction_ids(updated.properties);
+                    const auto previous_size=deductions.size();
+                    std::erase_if(deductions,[&](const auto& child) { return removed_ids.contains(child); });
+                    if (deductions.size()==previous_size) continue;
+                    if (deductions.empty()) updated.properties.erase("deduction_ids");
+                    else updated.properties["deduction_ids"]=deductions;
+                    std::erase_if(changes->entity_changes,[&](const auto& change) {
+                        return change.kind==EntityChangeKind::upsert && change.entity.id==id;
+                    });
+                    changes->entity_changes.push_back(EntityChange::upsert(std::move(updated)));
+                }
                 for (const auto& [id, original] : source.entities()) {
                     if (original.type != kSheetViewEntityType || removed_ids.contains(id)) continue;
                     auto updated = original;
@@ -22619,6 +22696,9 @@ private:
                     }
                 }
                 const auto selected = selectedEntity();
+                if (m_selected_ids.size()==1 && selected &&
+                    (selected->type=="measurement_boundary" || selected->type=="boundary"))
+                    menu.addAction(m_auto_subtract_action);
                 if (m_selected_ids.size() == 1 && selected && is_closed_boundary_entity(selected->type) &&
                     inspect_boundary_entity_version(*selected).format == BoundaryEntityFormat::anonymous_legacy)
                     menu.addAction(m_upgrade_boundary_identities_action);
@@ -25762,6 +25842,11 @@ private:
                                  (projectDirty() || hasUnsavedBoundaryDraftChanges()));
         m_save_as_action->setEnabled(m_document->is_editable());
         m_object_button->setEnabled(m_document->is_editable());
+        const auto selected=selectedEntity();
+        if (m_auto_subtract_action) m_auto_subtract_action->setEnabled(m_document->is_editable() &&
+            !m_boundary_session && m_selected_ids.size()==1 && selected &&
+            (selected->type=="measurement_boundary" || selected->type=="boundary"));
+        if (m_draw_subtract_action) m_draw_subtract_action->setEnabled(m_document->is_editable() && !m_boundary_session);
     }
 
     void positionContextEditor() {
@@ -26016,7 +26101,7 @@ private:
         return true;
     }
 
-    std::optional<QString> chooseBoundaryClassification(const DrawingContext& context) {
+    std::optional<QString> chooseBoundaryClassification(const DrawingContext& context, bool allow_exclusions=false) {
         const auto snapshot = m_document->snapshot();
         const auto property = snapshot.entities().find(context.property_id);
         if (property == snapshot.entities().end()) throw std::invalid_argument("drawing property is missing");
@@ -26026,16 +26111,33 @@ private:
             (void)rule;
             choices.push_back(QString::fromStdString(name));
         }
+        const bool declared_appraisal = allow_exclusions && calculation_workflow_name(property->second.properties) == "appraisal" &&
+            property->second.properties.contains("appraisal_policy");
+        const std::map<QString, QString> exclusions{
+            {QStringLiteral("Open to below"), QStringLiteral("role:open_to_below")},
+            {QStringLiteral("Stair footprint"), QStringLiteral("role:stair_footprint")},
+            {QStringLiteral("Other void"), QStringLiteral("role:other_void")}};
+        if (declared_appraisal)
+            for (const auto& [label, role] : exclusions) {
+                (void)role;
+                choices.push_back(label);
+            }
         QInputDialog dialog(owner);
         dialog.setObjectName(QStringLiteral("boundaryClassificationDialog"));
         dialog.setWindowTitle(QStringLiteral("Define area"));
         dialog.setLabelText(QStringLiteral("Area classification (controls area totals):"));
         dialog.setComboBoxItems(choices);
         dialog.setComboBoxEditable(true);
-        dialog.setTextValue(m_last_boundary_classification);
+        auto initial = m_last_boundary_classification;
+        if (!allow_exclusions && initial.startsWith(QStringLiteral("role:"))) initial = QStringLiteral("measurement");
+        if (declared_appraisal)
+            for (const auto& [label, role] : exclusions)
+                if (initial == role) initial = label;
+        dialog.setTextValue(initial);
         if (dialog.exec() != QDialog::Accepted) return std::nullopt;
         const auto selected = dialog.textValue().trimmed();
         if (selected.isEmpty()) throw std::invalid_argument("choose a nonempty area classification");
+        if (declared_appraisal && exclusions.contains(selected)) return exclusions.at(selected);
         return selected;
     }
 
@@ -26102,6 +26204,13 @@ private:
             preview.instruction = mode + QStringLiteral("  •  Enter defines and adds the area  •  Ctrl+Z revises it"); break;
         case BoundaryAuthoringPhase::cancelled: break;
         }
+        if (m_boundary_subtract_target) {
+            const auto snapshot = m_document->snapshot();
+            const auto target = snapshot.entities().find(m_boundary_subtract_target->toStdString());
+            const auto name = target == snapshot.entities().end() ? *m_boundary_subtract_target :
+                QString::fromStdString(read_string(target->second.properties, "name").value_or("Area"));
+            preview.instruction += QStringLiteral("  •  Subtract from: %1").arg(name);
+        }
         m_measurementCanvas->setBoundaryDraftPreview(preview);
         m_architecturalCanvas->setBoundaryDraftPreview(std::move(preview));
     }
@@ -26142,6 +26251,8 @@ private:
             inspect_boundary_recovery_source(m_project_workspace->snapshot(), active->source) ==
                 BoundaryRecoverySourceStatus::current) {
             m_redefine_boundary_id = boundaryRecoveryTarget(*active, m_project_workspace->snapshot());
+            if (active->auto_subtract_target_id)
+                m_boundary_subtract_target=QString::fromStdString(*active->auto_subtract_target_id);
             m_boundary_session = BoundaryAuthoringSession::from_recovery_checkpoint(active->checkpoint);
             m_boundary_source = m_document->snapshot();
             m_boundary_context = active->source.context;
@@ -26166,6 +26277,7 @@ private:
         BoundaryActiveRecovery active{
             capture_boundary_recovery_source(*m_boundary_source, *m_boundary_context),
             m_boundary_session->recovery_checkpoint()};
+        if (m_boundary_subtract_target) active.auto_subtract_target_id=m_boundary_subtract_target->toStdString();
         const auto previous = m_project_workspace->active_boundary();
         if (previous) {
             if (previous->checkpoint.identity_namespace != active.checkpoint.identity_namespace)
@@ -26461,6 +26573,7 @@ private:
             }
             BoundaryCommitIntent intent{m_boundary_session->options(), m_boundary_session->accepted_chains(),
                 *m_boundary_context, commit_message.toStdString()};
+            if (m_boundary_subtract_target) intent.auto_subtract_target_id=m_boundary_subtract_target->toStdString();
             if (document_snapshot_digest(*m_boundary_source) != document_snapshot_digest(m_document->snapshot()))
                 throw std::invalid_argument("the document changed after boundary drawing started");
             const auto preview = preview_boundary_commit(authoringSnapshot(), intent);
@@ -26639,6 +26752,7 @@ private:
         m_measurementCanvas->clearPreview();
         m_architecturalCanvas->clearPreview();
         m_boundary_session.reset();
+        m_boundary_subtract_target.reset();
         m_boundary_input_preferences={};
         m_boundary_input_namespace.clear();
         m_boundary_source.reset();
@@ -26742,6 +26856,112 @@ private:
     }
 
 public:
+    void showAutoSubtractDialog(bool before_drawing=false) {
+        try {
+            if (!m_document->is_editable() || m_boundary_session)
+                throw std::invalid_argument("Finish or cancel the current drawing before adjusting an area.");
+            const auto context=captureModalContext();
+            const auto drawing_context=before_drawing ? requireDrawingContext() : std::optional<DrawingContext>{};
+            if (before_drawing && !drawing_context) return;
+            QString classification;
+            auto source=selectedEntity();
+            if (before_drawing) {
+                const auto chosen=chooseBoundaryClassification(*drawing_context, true);
+                if (!chosen || !modalContextUnchanged(context)) return;
+                classification=*chosen;
+                source=Entity{"pending-subtractor","measurement_boundary",
+                    {{"property_id",drawing_context->property_id},{"building_id",drawing_context->building_id},
+                     {"floor_id",drawing_context->floor_id},{"layer_id",drawing_context->layer_id},
+                     {"classification",classification.toStdString()}},false,json::object()};
+            } else if (!source || m_selected_ids.size()!=1 || !is_closed_boundary_entity(source->type)) {
+                throw std::invalid_argument("Select one closed area to subtract.");
+            }
+            const auto snapshot=authoringSnapshot();
+            const auto organization=organize_project(snapshot);
+            const auto source_context=before_drawing ? drawing_context : organization.drawing_context(source->id);
+            QDialog dialog(owner);
+            dialog.setObjectName(QStringLiteral("autoSubtractDialog"));
+            styleDialog(dialog);
+            dialog.setWindowTitle(before_drawing ? QStringLiteral("Define subtracting area") : QStringLiteral("Subtract selected area"));
+            dialog.setMinimumWidth(420);
+            auto* layout=new QVBoxLayout(&dialog);
+            auto* form=new QFormLayout;
+            auto* target=new QComboBox(&dialog);
+            target->setObjectName(QStringLiteral("autoSubtractTarget"));
+            target->setAccessibleName(QStringLiteral("Parent area to subtract from"));
+            for (const auto& [id,parent] : snapshot.entities()) {
+                if (id==source->id || (parent.type!="measurement_boundary" && parent.type!="boundary")) continue;
+                bool linked=false,eligible=false;
+                try {
+                    const auto deductions=read_deduction_ids(parent.properties);
+                    linked=std::find(deductions.begin(),deductions.end(),source->id)!=deductions.end();
+                } catch (const std::exception&) { continue; }
+                const auto placement=organization.drawing_context(id);
+                const bool same_context=placement && source_context &&
+                    placement->property_id==source_context->property_id &&
+                    placement->building_id==source_context->building_id && placement->floor_id==source_context->floor_id;
+                if (!same_context && (before_drawing || !linked)) continue;
+                QString area_type;
+                try {
+                    area_type=QString::fromStdString(area_subtraction_type(snapshot,parent));
+                    if (before_drawing) eligible=area_subtraction_type(snapshot,*source)!=area_type.toStdString();
+                    else { (void)prepare_area_subtraction_target(snapshot,*source,id); eligible=true; }
+                } catch (const std::exception&) { /* Existing links remain removable after invalid edits. */ }
+                if (!eligible && (before_drawing || !linked)) continue;
+                auto name=QString::fromStdString(read_string(parent.properties,"name").value_or("Area"));
+                if (name.trimmed().isEmpty()) name=QStringLiteral("Area");
+                area_type.replace(QLatin1Char('_'),QLatin1Char(' '));
+                QString net;
+                try {
+                    if (!placement) throw std::invalid_argument("Unresolved parent floor");
+                    std::vector<AreaDeduction> deductions;
+                    for (const auto& child : read_deduction_ids(parent.properties))
+                        deductions.push_back({child,read_boundary(snapshot.entities().at(child).properties)});
+                    const CalculationProfile profile{"vertex-physical-target-preview",1,
+                        m_metric_units ? AreaUnit::square_metre : AreaUnit::square_foot,2,{{"physical",{false,false}}}};
+                    const auto calculated=calculate_area(MeasurementArea{id,placement->building_id,placement->floor_id,"physical",
+                        read_boundary(parent.properties),deductions,read_stored_factor(parent.properties).rational},profile);
+                    net=QString::fromStdString(display_area(calculated.factored_square_metres,profile).text)+
+                        (m_metric_units ? QStringLiteral(" m²") : QStringLiteral(" ft²"));
+                } catch (const std::exception&) {
+                    net=QStringLiteral("Area unresolved");
+                    if (before_drawing) eligible=false;
+                }
+                if (!eligible && (before_drawing || !linked)) continue;
+                target->addItem(QStringLiteral("%1 · %2 · %3 · %4%5").arg(name,area_type,net,QString::fromStdString(id).right(8),
+                    linked ? QStringLiteral(" (linked)") : QString{}),QString::fromStdString(id));
+                const auto row=target->count()-1;
+                target->setItemData(row,QString::fromStdString(id),Qt::ToolTipRole);
+                target->setItemData(row,eligible,Qt::UserRole+1);
+                target->setItemData(row,linked,Qt::UserRole+2);
+            }
+            form->addRow(QStringLiteral("Parent area"),target); layout->addLayout(form);
+            auto* error=new QLabel(&dialog); error->setWordWrap(true); layout->addWidget(error);
+            if (target->count()==0) error->setText(QStringLiteral("No compatible parent area is available on this floor. The source and parent must have different area types."));
+            auto* buttons=new QDialogButtonBox(QDialogButtonBox::Apply|QDialogButtonBox::Cancel,&dialog);
+            buttons->setObjectName(QStringLiteral("autoSubtractButtons"));
+            auto* remove=buttons->addButton(QStringLiteral("Remove deduction"),QDialogButtonBox::ActionRole);
+            remove->setObjectName(QStringLiteral("removeAutoSubtract")); remove->setVisible(!before_drawing);
+            layout->addWidget(buttons);
+            const auto refresh_buttons=[&] {
+                buttons->button(QDialogButtonBox::Apply)->setEnabled(target->currentIndex()>=0 && target->currentData(Qt::UserRole+1).toBool());
+                remove->setEnabled(target->currentIndex()>=0 && target->currentData(Qt::UserRole+2).toBool());
+            };
+            QObject::connect(target,&QComboBox::currentIndexChanged,&dialog,[&] { refresh_buttons(); });
+            const auto apply=[&](bool removing) {
+                if (!modalContextUnchanged(context) || m_boundary_session) { error->setText(lastError()); return; }
+                const auto id=target->currentData().toString();
+                const bool success=before_drawing ? beginAutoSubtractBoundary(id,classification) :
+                    applySelectedAutoSubtract(id,removing,context.revision);
+                if (success) dialog.accept(); else error->setText(lastError());
+            };
+            QObject::connect(buttons->button(QDialogButtonBox::Apply),&QPushButton::clicked,&dialog,[&] { apply(false); });
+            QObject::connect(remove,&QPushButton::clicked,&dialog,[&] { apply(true); });
+            QObject::connect(buttons,&QDialogButtonBox::rejected,&dialog,&QDialog::reject);
+            refresh_buttons(); dialog.exec();
+        } catch (const std::exception& error) { setError(QStringLiteral("Auto-Subtract: %1").arg(QString::fromUtf8(error.what()))); }
+    }
+
     void showDeductionEditor() {
         const auto selected = selectedEntity();
         if (!selected || !is_closed_boundary_entity(selected->type)) {
@@ -28013,6 +28233,9 @@ private:
         m_coordinated_view_entities;
     Vec2 m_last_cursor{};
     std::optional<BoundaryAuthoringSession> m_boundary_session;
+    std::optional<QString> m_boundary_subtract_target;
+    QAction* m_auto_subtract_action{};
+    QAction* m_draw_subtract_action{};
     BoundaryInputPreferences m_boundary_input_preferences;
     std::string m_boundary_input_namespace;
     std::optional<DocumentSnapshot> m_boundary_source;
@@ -28410,6 +28633,13 @@ bool MainWindow::renameOrganizationEntity(const QString& id, const QString& name
 
 bool MainWindow::beginBoundaryDrawing(BoundaryAuthoringMode mode, QString classification) {
     return m_impl->beginBoundaryDrawing(mode, std::move(classification));
+}
+bool MainWindow::beginAutoSubtractBoundary(const QString& target_id,QString classification) {
+    return m_impl->beginAutoSubtractBoundary(target_id,std::move(classification));
+}
+bool MainWindow::applySelectedAutoSubtract(const QString& target_id,bool remove,
+                                         std::optional<Revision> expected_revision) {
+    return m_impl->applySelectedAutoSubtract(target_id,remove,expected_revision);
 }
 
 QString MainWindow::createBoundary(const Boundary& boundary, QString classification,

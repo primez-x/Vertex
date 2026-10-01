@@ -331,10 +331,145 @@ void check_rejected_archived_redraw_plans() {
         "empty reference plans must retain the legacy version one archive contract");
     validate_workspace_finish_deltas(old.snapshot(), old.capture().lifecycle_history());
 }
+void check_legacy_classification_only_finished_archive() {
+    auto original = Document::create({{"p", "property", {{"name", "Legacy appraisal"}, {"calculation_workflow", "appraisal"}}},
+        {"b", "building", {{"property_id", "p"}}}, {"f", "floor", {{"building_id", "b"}}},
+        {"l", "layer", {{"floor_id", "f"}}}});
+    BoundaryAuthoringOptions options; options.automatic_dimension_placement = true;
+    BoundaryAuthoringSession session(BoundaryAuthoringMode::draw_first, options);
+    session.set_classification("garage"); (void)session.anchor({0, 0});
+    (void)session.add_line_to({4, 0}); (void)session.add_line_to({4, 3});
+    (void)session.add_line_to({0, 3}); (void)session.add_closing_segment();
+    const auto chain = session.close_chain();
+    BoundaryActiveRecovery active{capture_boundary_recovery_source(original.snapshot(), {"p", "b", "f", "l"}),
+        session.recovery_checkpoint()};
+    require(encode_boundary_active_recovery(active).at("version") == 1,
+        "legacy fixture must retain the ordinary active-v1 discriminator");
+
+    // Assemble the historic committed payload independently of the commit
+    // encoder. It predates classification normalization even in Appraisal.
+    const auto add_context = [](Entity& entity) {
+        entity.properties["property_id"] = "p"; entity.properties["building_id"] = "b";
+        entity.properties["floor_id"] = "f"; entity.properties["layer_id"] = "l";
+    };
+    auto legacy_boundary = encode_identified_boundary_entity(chain.boundary);
+    add_context(legacy_boundary);
+    legacy_boundary.properties["classification"] = "garage";
+    legacy_boundary.properties["factor"] = 1.0;
+    legacy_boundary.properties["factor_expression"] = "1";
+    legacy_boundary.properties["factor_numerator"] = 1;
+    legacy_boundary.properties["factor_denominator"] = 1;
+    legacy_boundary.properties["boundary_authoring"] = boundary_construction_envelope(chain, options);
+    std::vector<EntityChange> legacy_changes{EntityChange::upsert(legacy_boundary)};
+    for (const auto& dimension : chain.dimensions) {
+        auto entity = encode_boundary_dimension_entity(dimension); add_context(entity);
+        legacy_changes.push_back(EntityChange::upsert(entity));
+    }
+    auto legacy = Document::fork(original.snapshot());
+    legacy.apply(ApplyEntityChanges{legacy.revision(), legacy_changes, {}, "Finish boundary"});
+    const auto legacy_head = legacy.snapshot();
+    require(!legacy_head.entities().at(chain.boundary.id).properties.contains("measurement_classification") &&
+            !legacy_head.entities().at(chain.boundary.id).properties.contains("appraisal_category"),
+        "legacy fixture must encode classification-only entity state, not the new normalizer result");
+
+    // Lifecycle metadata names the original v1 input; the archived entity state
+    // is supplied by the independent legacy command above.
+    ProjectWorkspace layout(original.snapshot());
+    auto ticket = layout.prepare_boundary_checkpoint(active); (void)layout.commit(ticket);
+    ticket = layout.prepare_finish_boundary(); (void)layout.commit(ticket);
+    const auto captured = layout.capture();
+    const auto wire = encode_workspace_history_record(captured.document(),
+        capture_workspace_history_record(captured), std::nullopt);
+    require(decode_workspace_history_record(legacy_head, wire, std::nullopt).supported(),
+        "classification-only legacy finished history must replay against its original v1 input");
+    const auto path = std::filesystem::temp_directory_path() / ("workspace-legacy-finish-" + make_stable_id() + ".bldproj");
+    struct Cleanup { std::filesystem::path path; ~Cleanup() { std::error_code error; std::filesystem::remove(path, error); } } cleanup{path};
+    RecoveryLedger ledger{{"history", "workspace_history", wire}};
+    (void)ProjectStore::save_archive(path, {legacy_head, ledger, ArchiveRole::ordinary});
+    const auto loaded = ProjectStore::load_archive(path, ArchiveRole::ordinary);
+    require(loaded.supported(), "legacy v1 finished archive must load as supported");
+    auto restored = ProjectWorkspace::restore_archive(*loaded.archive, *loaded.recovery.decoded);
+    require(restored->snapshot().entities() == legacy_head.entities(), "legacy archive reopen must preserve exact old payloads");
+    ticket = restored->prepare_undo(); (void)restored->commit(ticket);
+    require(restored->snapshot().entities() == original.snapshot().entities(), "legacy finish undo must restore its exact source");
+    ticket = restored->prepare_redo(); (void)restored->commit(ticket);
+    require(restored->snapshot().entities() == legacy_head.entities(), "legacy finish redo must retain classification-only payloads");
+}
+
+void check_subtraction_recovery_finish_and_revise() {
+    auto document = Document::create({{"p", "property", {{"name", "Property"}}},
+        {"b", "building", {{"property_id", "p"}}}, {"f", "floor", {{"building_id", "b"}}},
+        {"l", "layer", {{"floor_id", "f"}}},
+        {"parent", "measurement_boundary", {{"floor_id", "f"}, {"layer_id", "l"}, {"classification", "garage"},
+            {"segments", nlohmann::json::array({{{"start", {-1, -1}}, {"end", {6, -1}}, {"sweep_radians", 0}},
+                {{"start", {6, -1}}, {"end", {6, 5}}, {"sweep_radians", 0}}, {{"start", {6, 5}}, {"end", {-1, 5}}, {"sweep_radians", 0}},
+                {{"start", {-1, 5}}, {"end", {-1, -1}}, {"sweep_radians", 0}}})}}}});
+    ProjectWorkspace workspace(document.snapshot());
+    BoundaryAuthoringOptions options; options.automatic_dimension_placement = true;
+    BoundaryAuthoringSession session(BoundaryAuthoringMode::draw_first, options);
+    session.set_classification("living_area"); (void)session.anchor({0, 0});
+    BoundaryActiveRecovery active{capture_boundary_recovery_source(workspace.snapshot(), {"p", "b", "f", "l"}),
+        session.recovery_checkpoint(), nlohmann::json::object(), "parent"};
+    auto ticket = workspace.prepare_boundary_checkpoint(active); (void)workspace.commit(ticket);
+    const auto path = std::filesystem::temp_directory_path() / ("workspace-subtraction-" + make_stable_id() + ".bldproj");
+    struct Cleanup { std::filesystem::path path; ~Cleanup() { std::error_code error; std::filesystem::remove(path, error); } } cleanup{path};
+    const auto save = [&](const ProjectWorkspaceSnapshot& snapshot) {
+        RecoveryLedger ledger{{"history", "workspace_history", encode_workspace_history_record(snapshot.document(),
+            capture_workspace_history_record(snapshot), snapshot.active_boundary())}};
+        if (snapshot.active_boundary()) ledger.push_back({"active", "boundary_active", encode_boundary_active_recovery(*snapshot.active_boundary())});
+        SaveOptions save_options;
+        if (std::filesystem::exists(path)) save_options.expected_destination_sha256 = ProjectStore::file_sha256(path);
+        (void)ProjectStore::save_archive(path, {snapshot.document(), ledger, ArchiveRole::ordinary}, save_options);
+    };
+    save(workspace.capture());
+    auto loaded = ProjectStore::load_archive(path, ArchiveRole::ordinary);
+    require(loaded.supported(), "unfinished subtraction workspace must save and reopen supported");
+    auto restored = ProjectWorkspace::restore_archive(*loaded.archive, *loaded.recovery.decoded);
+    require(restored->active_boundary()->auto_subtract_target_id == "parent", "saved unfinished target must remain exact");
+    (void)session.add_line_to({4, 0}); (void)session.add_line_to({4, 3});
+    (void)session.add_line_to({0, 3}); (void)session.add_closing_segment(); (void)session.close_chain();
+    active.checkpoint = session.recovery_checkpoint();
+    ticket = restored->prepare_boundary_checkpoint(active); (void)restored->commit(ticket);
+    ticket = restored->prepare_finish_boundary(); (void)restored->commit(ticket);
+    const auto finished = restored->capture();
+    require(finished.document().entities().at("parent").properties.at("deduction_ids") ==
+        nlohmann::json::array({session.accepted_chains().front().boundary.id}), "finish must publish its retained target link");
+    validate_workspace_finish_deltas(finished.document(), finished.lifecycle_history());
+    auto forged = finished.lifecycle_history(); auto bad_input = *forged.back().input->value;
+    bad_input.auto_subtract_target_id = "missing-parent";
+    forged.back().input->value = std::make_shared<const BoundaryActiveRecovery>(bad_input);
+    rejected([&] { validate_workspace_finish_deltas(finished.document(), forged); });
+    ticket = restored->prepare_undo(); (void)restored->commit(ticket);
+    require(restored->snapshot().entities() == document.snapshot().entities(), "recovered subtraction undo must restore source and parent");
+    ticket = restored->prepare_redo(); (void)restored->commit(ticket);
+    require(restored->snapshot().entities() == finished.document().entities(), "recovered subtraction redo must restore exact target and source");
+    save(restored->capture());
+    for (const auto fault : {"deleted", "same-type", "foreign-floor"}) {
+        loaded = ProjectStore::load_archive(path, ArchiveRole::ordinary);
+        auto changed = ProjectWorkspace::restore_archive(*loaded.archive, *loaded.recovery.decoded);
+        std::vector<EntityChange> changes;
+        if (std::string_view(fault) == "deleted") changes.push_back(EntityChange::erase("parent"));
+        else {
+            auto parent = changed->snapshot().entities().at("parent");
+            if (std::string_view(fault) == "same-type") parent.properties["classification"] = "living_area";
+            else {
+                changes.push_back(EntityChange::upsert({"f2", "floor", {{"building_id", "b"}}}));
+                changes.push_back(EntityChange::upsert({"l2", "layer", {{"floor_id", "f2"}}}));
+                parent.properties["floor_id"] = "f2"; parent.properties["layer_id"] = "l2";
+            }
+            changes.push_back(EntityChange::upsert(parent));
+        }
+        ticket = changed->prepare(ApplyEntityChanges{changed->snapshot().revision(), changes}); (void)changed->commit(ticket);
+        const auto before = document_snapshot_digest(changed->snapshot());
+        rejected([&] { (void)changed->prepare_revise_boundary(session.recovery_checkpoint().identity_namespace); });
+        require(document_snapshot_digest(changed->snapshot()) == before, "failed target revalidation must not mutate workspace");
+    }
+}
 }
 int main() {
     sketch::testing::noninteractive_errors();
-    try { check_publication(); check_rejections(); check_checkpoint_policy();
+    try { check_legacy_classification_only_finished_archive(); check_subtraction_recovery_finish_and_revise();
+          check_publication(); check_rejections(); check_checkpoint_policy();
           check_archived_redraw_reference_plan(); check_reviewed_geometry_identity_binding(); check_rejected_archived_redraw_plans(); }
     catch (const std::exception& e) { std::cerr << e.what() << '\n'; return 1; }
     return 0;

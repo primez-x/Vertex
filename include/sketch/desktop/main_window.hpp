@@ -170,6 +170,10 @@ public:
     // classification if none is supplied; Draw First classifies after closure.
     [[nodiscard]] bool beginBoundaryDrawing(BoundaryAuthoringMode mode,
                                             QString classification = {});
+    [[nodiscard]] bool beginAutoSubtractBoundary(const QString& target_id,
+                                                 QString classification = {});
+    [[nodiscard]] bool applySelectedAutoSubtract(const QString& target_id,
+        bool remove = false, std::optional<Revision> expected_revision = std::nullopt);
     // Explicit geometry creation remains available to adapters and smoke tests.
     // Interactive boundary tools use the receipt-bearing authoring session.
     [[nodiscard]] QString createBoundary(

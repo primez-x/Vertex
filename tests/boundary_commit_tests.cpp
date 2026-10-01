@@ -1,4 +1,5 @@
 #include "sketch/boundary_commit.hpp"
+#include "sketch/area_subtraction.hpp"
 
 #include "sketch/boundary_entity.hpp"
 #include "sketch/document_digest.hpp"
@@ -6,6 +7,7 @@
 
 #include <functional>
 #include <iostream>
+#include <numbers>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -141,6 +143,9 @@ void test_both_modes_encode_geometry_dimensions_and_factor_defaults() {
         require_exact_context_fields(boundary, context());
         require(boundary.properties.at("classification") == chain.classification,
                 "commit must preserve boundary classification");
+        require(!boundary.properties.contains("measurement_classification") &&
+                !boundary.properties.contains("appraisal_category"),
+                "ordinary active-v1 finish must preserve its historical classification-only payload");
         require(boundary.properties.at("factor") == 1.0 &&
                     boundary.properties.at("factor_expression") == "1" &&
                     boundary.properties.at("factor_numerator") == 1 &&
@@ -334,11 +339,110 @@ void test_foreign_stale_altered_source_and_retired_id_reject() {
             "candidate redo must not alter its source document");
 }
 
+void test_explicit_area_subtraction_atomic_commit() {
+    auto document = make_document();
+    auto target = entity("subtraction-target", "measurement_boundary", {
+        {"floor_id", "floor-1"}, {"layer_id", "layer-1"}, {"classification", "garage"},
+        {"segments", json::array({
+            {{"start", {-1, -1}}, {"end", {5, -1}}, {"sweep_radians", 0}},
+            {{"start", {5, -1}}, {"end", {5, 6}}, {"sweep_radians", 0}},
+            {{"start", {5, 6}}, {"end", {-1, 6}}, {"sweep_radians", 0}},
+            {{"start", {-1, 6}}, {"end", {-1, -1}}, {"sweep_radians", 0}}})}});
+    target.extensions["vendor"] = {{"keep", 1.0}};
+    document.apply(sketch::ApplyEntityChanges{document.revision(), {sketch::EntityChange::upsert(target)}});
+    const auto before = document.snapshot();
+    const auto options = options_for(BoundaryAuthoringMode::define_first);
+    const auto chain = rectangle(BoundaryAuthoringMode::define_first, options);
+    auto intent = intent_for(chain, options); intent.auto_subtract_target_id = target.id;
+    auto preview = sketch::preview_boundary_commit(before, intent);
+    require(preview.accepted(), "DefineFirst subtraction must accept new source absent from organization");
+    require(preview.candidate_entities().at(target.id).properties.at("deduction_ids") == json::array({chain.boundary.id}),
+        "atomic subtraction preview must include the changed existing target");
+    auto tampered = preview;
+    const_cast<std::map<std::string, Entity, std::less<>>&>(tampered.candidate_entities())
+        .at(target.id).properties["deduction_ids"] = json::array();
+    expect_document_unchanged(document, [&] { (void)sketch::apply_boundary_commit(document, tampered); },
+        "tampered existing target display must not authorize a commit");
+    (void)sketch::apply_boundary_commit(document, preview);
+    const auto after = document.snapshot();
+    require(after.entities() == preview.candidate_entities() && after.revision() == before.revision() + 1,
+        "source, dimensions and existing target must publish as one command");
+    require(after.entities().at(target.id).extensions == target.extensions, "subtraction must preserve unknown target metadata");
+    auto curved_tool = entity("curved-subtractor", "measurement_boundary", {{"floor_id", "floor-1"},
+        {"classification", "bay"}, {"segments", json::array({
+            {{"start", {0, 0}}, {"end", {2, 0}}, {"sweep_radians", std::numbers::pi}},
+            {{"start", {2, 0}}, {"end", {0, 0}}, {"sweep_radians", 0}}})}});
+    const auto curved_target = sketch::prepare_area_subtraction_target(after, curved_tool, target.id);
+    require(curved_target.properties.at("deduction_ids").size() == 2,
+        "analytical curved subtractor touching its target must use the physical union calculation");
+    curved_tool.properties["deduction_ids"] = json::array({chain.boundary.id});
+    expect_document_unchanged(document, [&] { (void)sketch::prepare_area_subtraction_target(after, curved_tool, target.id); },
+        "nested subtraction must reject");
+    const auto& source = after.entities().at(chain.boundary.id);
+    require(source.properties.at("measurement_classification") == chain.classification,
+        "explicit active-v2 adjustment must normalize its authored measurement TYPE");
+    require(sketch::prepare_area_subtraction_target(after, source, target.id) == after.entities().at(target.id),
+        "adding the same valid subtraction must be idempotent");
+    auto same = source; same.properties["classification"] = "garage"; same.properties["measurement_classification"] = "garage";
+    expect_document_unchanged(document, [&] { (void)sketch::prepare_area_subtraction_target(after, same, target.id); },
+        "same TYPE subtraction must reject");
+    auto outside = source;
+    auto identified = sketch::decode_identified_boundary_entity(outside);
+    for (auto& edge : identified.segments) { edge.segment.start.x += 100; edge.segment.end.x += 100; }
+    outside = sketch::encode_identified_boundary_entity(identified);
+    outside.properties["floor_id"] = "floor-1";
+    outside.properties["classification"] = "living_area";
+    expect_document_unchanged(document, [&] { (void)sketch::prepare_area_subtraction_target(after, outside, target.id); },
+        "outside subtraction must reject");
+    auto stale_type = source; stale_type.properties["classification"] = ""; stale_type.properties["measurement_classification"] = "";
+    const auto removed = sketch::prepare_area_subtraction_target(after, stale_type, target.id, true);
+    require(!removed.properties.contains("deduction_ids"), "remove must repair an existing link without valid TYPE facts");
+    auto unrelated_wrapper = stale_type; unrelated_wrapper.id = "property-1";
+    expect_document_unchanged(document, [&] { (void)sketch::prepare_area_subtraction_target(after, unrelated_wrapper, target.id, true); },
+        "remove must require the stored identity to belong to a measurement boundary");
+    document.undo(document.revision());
+    require(document.snapshot().entities() == before.entities(), "subtraction must undo source and target atomically");
+    document.redo(document.revision());
+    require(document.snapshot().entities() == after.entities(), "subtraction must redo all exact identities and target links");
+    auto property = document.snapshot().entities().at("property-1");
+    property.properties["calculation_workflow"] = "appraisal";
+    property.properties["appraisal_policy"] = {{"version", 1}};
+    auto parent = document.snapshot().entities().at(target.id);
+    parent.properties.erase("deduction_ids"); parent.properties["appraisal_category"] = "above_grade_finished";
+    document.apply(sketch::ApplyEntityChanges{document.revision(),
+        {sketch::EntityChange::upsert(property), sketch::EntityChange::upsert(parent)}});
+    const auto void_options = options_for(BoundaryAuthoringMode::draw_first);
+    BoundaryAuthoringSession void_session(BoundaryAuthoringMode::draw_first, void_options);
+    void_session.set_classification("role:open_to_below"); (void)void_session.anchor({0, 0});
+    (void)void_session.add_line_to({3, 0}); (void)void_session.add_line_to({3, 4});
+    (void)void_session.add_line_to({0, 4}); (void)void_session.add_closing_segment();
+    const auto exclusion = void_session.close_chain();
+    auto exclusion_intent = intent_for(exclusion, void_options); exclusion_intent.auto_subtract_target_id = target.id;
+    const auto void_preview = sketch::preview_boundary_commit(document.snapshot(), exclusion_intent);
+    require(void_preview.accepted(), "explicit exclusion TYPE must commit without invented dwelling facts");
+    const auto& void_area = void_preview.candidate_entities().at(exclusion.boundary.id);
+    require(void_area.properties.at("classification") == "measurement" &&
+        void_area.properties.at("appraisal_facts") == json{{"boundary_role", "open_to_below"}} &&
+        !void_area.properties.contains("appraisal_category") &&
+        sketch::area_subtraction_type(document.snapshot(), void_area) == "role:open_to_below",
+        "normalized exclusion TYPE must agree with its declared role without a manual category");
+    auto categorized = exclusion; categorized.classification = "garage";
+    auto category_intent = intent_for(categorized, void_options); category_intent.auto_subtract_target_id = target.id;
+    const auto category_preview = sketch::preview_boundary_commit(document.snapshot(), category_intent);
+    require(category_preview.accepted(), "explicit appraisal adjustment must retain category normalization");
+    const auto& category_area = category_preview.candidate_entities().at(categorized.boundary.id);
+    require(category_area.properties.at("classification") == "measurement" &&
+        category_area.properties.at("measurement_classification") == "measurement" &&
+        category_area.properties.at("appraisal_category") == "garage",
+        "active-v2 appraisal adjustment must split its category from measurement classification");
+}
+
 }  // namespace
 
 int main() {
     sketch::testing::noninteractive_errors();
     try {
+        test_explicit_area_subtraction_atomic_commit();
         test_both_modes_encode_geometry_dimensions_and_factor_defaults();
         test_preview_is_deterministic_and_owns_a_copy_of_intent();
         test_invalid_input_rejects_without_source_mutation();

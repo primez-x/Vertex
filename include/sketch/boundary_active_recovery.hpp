@@ -15,6 +15,7 @@ struct BoundaryActiveRecovery {
     BoundaryRecoverySource source;
     BoundaryAuthoringCheckpoint checkpoint;
     nlohmann::json extensions = nlohmann::json::object();
+    std::optional<std::string> auto_subtract_target_id;
     bool operator==(const BoundaryActiveRecovery&) const = default;
 };
 

@@ -39,11 +39,11 @@ std::uint64_t integer(const Json& v) {
     if (!v.is_number_integer() || v.get<std::int64_t>() < 0) invalid("expected unsigned integer");
     return static_cast<std::uint64_t>(v.get<std::int64_t>());
 }
-bool future(const Json& v) {
+bool future(const Json& v, std::uint64_t supported_version = 1) {
     if (!v.is_object() || !v.contains("version")) invalid("missing version discriminator");
     const auto version = integer(v.at("version"));
     if (!version) invalid("version must be positive");
-    if (version != 1) return true;
+    if (version > supported_version) return true;
     if (!v.contains("replay_version")) invalid("missing replay version");
     const auto replay = integer(v.at("replay_version"));
     if (!replay) invalid("replay version must be positive");
@@ -338,7 +338,7 @@ WorkspaceHistoryDecodeResult decode_workspace_history_record(const DocumentSnaps
             if (!input.is_object() || !input.contains("value")) invalid("missing input value");
             const auto& value = input.at("value");
             if (value.is_null()) continue;
-            if (future(value)) return opaque();
+            if (future(value, 2)) return opaque();
             if (!value.contains("checkpoint")) invalid("missing checkpoint");
             if (future(value.at("checkpoint"))) return opaque();
         }

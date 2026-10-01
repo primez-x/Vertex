@@ -2175,6 +2175,10 @@
     },
     {
       "category": "docs",
+      "path": "docs/verification/explicit-area-subtraction-2026-09-30.md"
+    },
+    {
+      "category": "docs",
       "path": "docs/verification/grouped-plan-movement-2026-09-30.md"
     },
     {
@@ -2268,6 +2272,10 @@
     {
       "category": "source",
       "path": "include/sketch/architecture.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/area_subtraction.hpp"
     },
     {
       "category": "source",
@@ -3068,6 +3076,10 @@
     {
       "category": "source",
       "path": "src/core/architectural_workflow_contract.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/area_subtraction.cpp"
     },
     {
       "category": "source",

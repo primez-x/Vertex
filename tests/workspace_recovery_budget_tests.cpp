@@ -54,7 +54,7 @@ void check_raw_preallocation() {
     checkpoint.actions.front().classification = std::string(1'000'000, 'x');
     rejects_without_large_copy([&] { (void)detail::measure_authoring_checkpoint_raw(checkpoint, policy); });
 }
-void run() {
+void run(bool subtraction = false) {
     auto doc = Document::create({{"p", "property", {{"name", "Property"}}},
         {"b", "building", {{"property_id", "p"}}}, {"f", "floor", {{"building_id", "b"}}},
         {"l", "layer", {{"floor_id", "f"}}}});
@@ -62,6 +62,7 @@ void run() {
     (void)session.anchor({0, 0}); (void)session.add_line_to({5, 0});
     BoundaryActiveRecovery a{capture_boundary_recovery_source(w.snapshot(), {"p", "b", "f", "l"}),
         session.recovery_checkpoint()};
+    if (subtraction) a.auto_subtract_target_id = "chosen-parent";
     auto activate = w.prepare_boundary_checkpoint(a); (void)w.commit(activate);
     auto discard = w.prepare_discard_boundary(); (void)w.commit(discard);
     const auto first = w.capture();
@@ -70,6 +71,15 @@ void run() {
             s.active_boundary(), s.retired_boundaries(), s.resource_policy(), limits);
     };
     const auto first_usage = preflight(first);
+    if (subtraction) {
+        ProjectWorkspace ordinary(doc.snapshot()); auto plain = a; plain.auto_subtract_target_id.reset();
+        auto ticket = ordinary.prepare_boundary_checkpoint(plain); (void)ordinary.commit(ticket);
+        auto discard_plain = ordinary.prepare_discard_boundary(); (void)ordinary.commit(discard_plain);
+        const auto plain_usage = preflight(ordinary.capture());
+        require(first_usage.string_bytes >= plain_usage.string_bytes + a.auto_subtract_target_id->size() &&
+            first_usage.json_values >= plain_usage.json_values + 2,
+            "retained target identifier must be charged to aggregate recovery budgets");
+    }
     for (int i = 0; i < 4; ++i) {
         auto undo = w.prepare_undo(); (void)w.commit(undo);
         auto redo = w.prepare_redo(); (void)w.commit(redo);
@@ -123,6 +133,6 @@ void run() {
 }
 int main() {
     sketch::testing::noninteractive_errors();
-    try { run(); check_raw_preallocation(); } catch (const std::exception& e) { std::cerr << e.what() << '\n'; return 1; }
+    try { run(); run(true); check_raw_preallocation(); } catch (const std::exception& e) { std::cerr << e.what() << '\n'; return 1; }
     return 0;
 }

@@ -181,6 +181,12 @@ Declarations declarations(const Entity& property, const Entity& floor,
     token(area, "ceiling_eligibility", parse_ceiling_eligibility, result.facts.ceiling);
     token(area, "area_use", parse_area_use, result.facts.use);
     token(area, "boundary_role", parse_boundary_role, result.facts.role);
+    if (area.contains("boundary_role") && result.facts.role != BoundaryRole::measured_area) {
+        // Voids have no dwelling finish/access/use to declare. Supplied values
+        // were still parsed above, so malformed declarations remain errors.
+        for (const auto* key : {"grade", "finish", "access", "ceiling_eligibility", "area_use"})
+            std::erase(result.missing, std::string("Declare ") + key + '.');
+    }
     return result;
 }
 

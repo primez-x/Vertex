@@ -20,7 +20,7 @@ void same_opaque(const RecoveryLedgerDecodeResult& decoded, const RecoveryLedger
             actual.envelope.dump() == source[i].envelope.dump(), "opaque ledger must preserve row order and exact JSON values");
     }
 }
-void run(BoundaryAuthoringMode mode) {
+void run(BoundaryAuthoringMode mode, bool subtraction = false) {
     auto document = Document::create({{"p", "property", {{"name", "Property"}}}, {"b", "building", {{"property_id", "p"}}},
         {"f", "floor", {{"building_id", "b"}}}, {"l", "layer", {{"floor_id", "f"}}}});
     ProjectWorkspace workspace(document.snapshot());
@@ -28,6 +28,7 @@ void run(BoundaryAuthoringMode mode) {
     (void)session.anchor({0, 0});
     BoundaryActiveRecovery active{capture_boundary_recovery_source(workspace.snapshot(), {"p", "b", "f", "l"}),
         session.recovery_checkpoint()};
+    if (subtraction) active.auto_subtract_target_id = "chosen-target";
     auto activation = workspace.prepare_boundary_checkpoint(active); (void)workspace.commit(activation);
     const auto snapshot = workspace.capture();
     auto history = capture_workspace_history_record(snapshot);
@@ -36,6 +37,8 @@ void run(BoundaryAuthoringMode mode) {
     auto decoded = decode_recovery_ledger(snapshot.document(), ledger, ArchiveRole::ordinary);
     require(decoded.supported() && decoded.decoded->active && decoded.decoded->history && !decoded.decoded->recovery_copy,
         "ordinary active workspace must decode as one aggregate");
+    if (subtraction) require(decoded.decoded->active->auto_subtract_target_id == "chosen-target",
+        "unfinished target must remain authoritative inside aggregate recovery");
     RecoveryCopyRecord copy; copy.archive_id = "archive"; copy.owner_token = "owner";
     copy.document_id = snapshot.document().document_id();
     copy.workspace_epoch = history.workspace_epoch; copy.edited_generation = history.edited_generation;
@@ -96,7 +99,8 @@ void run(BoundaryAuthoringMode mode) {
 }
 int main() {
     sketch::testing::noninteractive_errors();
-    try { run(BoundaryAuthoringMode::draw_first); run(BoundaryAuthoringMode::define_first); }
+    try { run(BoundaryAuthoringMode::draw_first); run(BoundaryAuthoringMode::define_first);
+          run(BoundaryAuthoringMode::define_first, true); }
     catch (const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }
     return 0;
 }

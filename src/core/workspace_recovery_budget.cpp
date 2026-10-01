@@ -66,6 +66,11 @@ WorkspaceRecoveryUsage preflight_workspace_recovery(const DocumentSnapshot& docu
         add(u.encoded_bytes, 1024, limits.max_encoded_bytes);
         add(u.json_values, 64, limits.max_json_values);
         source(value->source);
+        if (value->auto_subtract_target_id) {
+            text(*value->auto_subtract_target_id);
+            add(u.encoded_bytes, 32, limits.max_encoded_bytes);
+            add(u.json_values, 2, limits.max_json_values);
+        }
         wire(detail::measure_authoring_recovery_json(value->extensions, policy));
         const auto usage = detail::measure_authoring_checkpoint_raw(value->checkpoint, policy);
         wire(usage);

@@ -4,6 +4,7 @@
 #include "sketch/boundary_commit.hpp"
 #include "sketch/boundary_construction.hpp"
 #include "sketch/boundary_entity.hpp"
+#include "sketch/area_subtraction.hpp"
 #include "sketch/calculations.hpp"
 
 #include <limits>
@@ -30,6 +31,7 @@ bool same_semantics(const BoundaryActiveRecovery& left, const BoundaryActiveReco
     // JSON numeric equality intentionally equates integer 1 and float 1.0.
     // Opaque extension representation must survive archival input sharing.
     return left.source == right.source && left.extensions.dump() == right.extensions.dump() &&
+        left.auto_subtract_target_id == right.auto_subtract_target_id &&
         a.version == b.version && a.replay_version == b.replay_version && a.mode == b.mode &&
         a.identity_namespace == b.identity_namespace && a.options == b.options &&
         a.actions == b.actions && a.history_position == b.history_position &&
@@ -302,6 +304,36 @@ PreparedWorkspaceEdit ProjectWorkspace::prepare_revise_boundary(std::string_view
     const auto found = state_->retired.find(identity_namespace);
     if (found == state_->retired.end()) throw std::invalid_argument("retired boundary input is missing");
     auto revised = *retired_boundary(identity_namespace);
+    if (revised.auto_subtract_target_id) {
+        const auto old_session = BoundaryAuthoringSession::from_recovery_checkpoint(revised.checkpoint, resource_policy_);
+        if (old_session.phase() != BoundaryAuthoringPhase::completed || old_session.accepted_chains().size() != 1)
+            throw std::invalid_argument("Auto-Subtract revise requires one completed area");
+        auto source_area = encode_identified_boundary_entity(old_session.accepted_chains().front().boundary);
+        const auto& context = revised.source.context;
+        source_area.properties["property_id"] = context.property_id;
+        source_area.properties["building_id"] = context.building_id;
+        source_area.properties["floor_id"] = context.floor_id;
+        source_area.properties["layer_id"] = context.layer_id;
+        const auto& classification = old_session.accepted_chains().front().classification;
+        source_area.properties["classification"] = classification;
+        source_area.properties["measurement_classification"] = classification;
+        const auto snapshot = state_->document->snapshot();
+        const auto& property = snapshot.entities().at(context.property_id);
+        if (property.properties.value("calculation_workflow", std::string{"measurement"}) == "appraisal") {
+            if (classification.starts_with("role:")) {
+                const auto role = parse_boundary_role(classification.substr(5));
+                if (!role || *role == BoundaryRole::measured_area) throw std::invalid_argument("Unknown revised exclusion TYPE");
+                source_area.properties["classification"] = "measurement";
+                source_area.properties["measurement_classification"] = "measurement";
+                source_area.properties["appraisal_facts"] = {{"boundary_role", boundary_role_name(*role)}};
+            } else if (parse_appraisal_category(classification)) {
+                source_area.properties["classification"] = "measurement";
+                source_area.properties["measurement_classification"] = "measurement";
+                source_area.properties["appraisal_category"] = classification;
+            }
+        }
+        (void)prepare_area_subtraction_target(snapshot, source_area, *revised.auto_subtract_target_id);
+    }
     revised.checkpoint = BoundaryAuthoringSession::revise_recovery_checkpoint(
         revised.checkpoint, resource_policy_).recovery_checkpoint();
     revised.source = capture_boundary_recovery_source(state_->document->snapshot(), revised.source.context);
@@ -404,6 +436,8 @@ PreparedWorkspaceEdit ProjectWorkspace::prepare_finish_boundary_impl(const EditB
         state_->active->checkpoint, resource_policy_);
     if (session.phase() != BoundaryAuthoringPhase::completed || session.accepted_chains().empty())
         throw std::invalid_argument("finish requires a completed boundary checkpoint");
+    if (state_->active->auto_subtract_target_id && state_->active->extensions.contains("desktop_operation"))
+        throw std::invalid_argument("redraw and Auto-Subtract cannot be combined");
     if (replacement) {
         validate_workspace_boundary_redefinition_input(source, *state_->active, *replacement, resource_policy_);
     } else if (state_->active->extensions.contains("desktop_operation")) {
@@ -412,7 +446,7 @@ PreparedWorkspaceEdit ProjectWorkspace::prepare_finish_boundary_impl(const EditB
     auto state = prepare_state();
     auto& candidate = *state->candidate;
     const BoundaryCommitIntent intent{session.options(), session.accepted_chains(),
-        candidate.active->source.context, "Finish boundary"};
+        candidate.active->source.context, "Finish boundary", candidate.active->auto_subtract_target_id};
     const auto preview = replacement ? std::optional<BoundaryCommitPreview>{} :
         std::optional{preview_boundary_commit(candidate.document->snapshot(), intent)};
     if (preview && !preview->accepted())

@@ -106,6 +106,30 @@ void check_schema() {
     require(decode_boundary_active_recovery(encode_boundary_active_recovery(boundary)).supported(),
             "zero source revision is valid");
 }
+void check_subtraction_schema() {
+    BoundaryAuthoringSession session(BoundaryAuthoringMode::define_first);
+    auto active = record(session);
+    const auto ordinary = encode_boundary_active_recovery(active);
+    require(ordinary.at("version") == 1 && ordinary.size() == 5, "ordinary active wire shape must remain v1");
+    active.auto_subtract_target_id = "parent-area";
+    const auto wire = encode_boundary_active_recovery(active);
+    require(wire.at("version") == 2 && wire.at("replay_version") == 1 &&
+        wire.at("auto_subtract_target_id") == "parent-area" && wire.at("checkpoint").at("version") == 1,
+        "subtraction target must use only the active v2 envelope");
+    require(*decode_boundary_active_recovery(wire).active == active, "unfinished subtraction target must round trip exactly");
+    for (const Json value : {Json(""), Json(nullptr), Json(42), Json(std::string("parent\0target", 13))}) {
+        auto bad = wire; bad["auto_subtract_target_id"] = value;
+        rejected([&] { (void)decode_boundary_active_recovery(bad); });
+    }
+    auto bad = wire; bad.erase("auto_subtract_target_id");
+    rejected([&] { (void)decode_boundary_active_recovery(bad); });
+    bad = wire; bad["version"] = 2.0;
+    rejected([&] { (void)decode_boundary_active_recovery(bad); });
+    bad = wire; bad["version"] = 3;
+    require(decode_boundary_active_recovery(bad).opaque(), "future active v3 target must remain opaque");
+    active.extensions["desktop_operation"] = {{"kind", "redefine_boundary"}};
+    rejected([&] { (void)encode_boundary_active_recovery(active); });
+}
 void check_opaque_and_budgets() {
     BoundaryAuthoringSession session(BoundaryAuthoringMode::draw_first);
     const auto wire = encode_boundary_active_recovery(record(session));
@@ -144,7 +168,7 @@ void check_opaque_and_budgets() {
 }
 int main() {
     sketch::testing::noninteractive_errors();
-    try { check_sessions(); check_schema(); check_opaque_and_budgets(); }
+    try { check_sessions(); check_schema(); check_subtraction_schema(); check_opaque_and_budgets(); }
     catch (const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }
     return 0;
 }

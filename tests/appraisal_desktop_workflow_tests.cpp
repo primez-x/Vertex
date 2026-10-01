@@ -1,9 +1,14 @@
 #include "sketch/desktop/main_window.hpp"
 #include "sketch/model_phases.hpp"
 #include "sketch/sheet_view_entity_codec.hpp"
+#include "sketch/project_store.hpp"
+#include "sketch/boundary_dimension.hpp"
+#include "sketch/desktop/boundary_input_dialog.hpp"
+#include "../src/desktop/plan_canvas.hpp"
 #include "support/noninteractive_errors.hpp"
 
 #include <QApplication>
+#include <QAction>
 #include <QComboBox>
 #include <QGroupBox>
 #include <QImage>
@@ -15,9 +20,20 @@
 #include <QPushButton>
 #include <QPdfDocument>
 #include <QTimer>
+#include <QInputDialog>
+#include <QLineEdit>
+#include <QKeyEvent>
+#include <QEventLoop>
+#include <QDir>
+#include <QFile>
+#include <QFont>
+#include <QFontDatabase>
+#include <QLayout>
 
 #include <algorithm>
 #include <cmath>
+#include <filesystem>
+#include <functional>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -37,6 +53,172 @@ sketch::Boundary square(double x, double y, double size) {
             {{x + size, y}, {x + size, y + size}, 0.0},
             {{x + size, y + size}, {x, y + size}, 0.0},
             {{x, y + size}, {x, y}, 0.0}};
+}
+
+void auto_subtract_selected_area_workflow() {
+    using sketch::desktop::MainWindow;
+    MainWindow window;
+    const auto parent=window.createBoundary(square(0,0,3.048));
+    auto* workflow=window.findChild<QComboBox*>(QStringLiteral("calculationWorkflow"));
+    workflow->setCurrentIndex(workflow->findData(QStringLiteral("appraisal")));
+    require(window.editSelectedClassification(QStringLiteral("above_grade_finished")),"classify Auto-Subtract parent");
+    const auto garage=window.createBoundary(square(0.5,0.5,1.524),QStringLiteral("garage"));
+    require(!parent.isEmpty() && !garage.isEmpty(),"create Auto-Subtract geometry");
+    auto* action=window.findChild<QAction*>(QStringLiteral("autoSubtract"));
+    require(action && action->isEnabled(),"selected subtractor must expose its Auto-Subtract action");
+    const auto before=window.document().snapshot();
+    bool accepted=false;
+    QTimer::singleShot(0,&window,[&] {
+        auto* dialog=window.findChild<QDialog*>(QStringLiteral("autoSubtractDialog"));
+        require(dialog,"Auto-Subtract must open a parent chooser");
+        auto* target=dialog->findChild<QComboBox*>(QStringLiteral("autoSubtractTarget"));
+        auto* buttons=dialog->findChild<QDialogButtonBox*>(QStringLiteral("autoSubtractButtons"));
+        require(target && buttons && target->findData(parent)>=0,"specific parent must be offered");
+        target->setCurrentIndex(target->findData(parent));
+        buttons->button(QDialogButtonBox::Apply)->click();
+        accepted=dialog->result()==QDialog::Accepted;
+        if (!accepted) dialog->reject();
+    });
+    action->trigger();
+    const auto after=window.document().snapshot();
+    require(accepted && after.revision()==before.revision()+1 &&
+        after.entities().at(parent.toStdString()).properties.at("deduction_ids")==std::vector<std::string>{garage.toStdString()} &&
+        after.entities().at(garage.toStdString())==before.entities().at(garage.toStdString()),
+        "selected garage must subtract from its chosen parent in one command without source changes");
+    require(window.findChild<QLabel*>(QStringLiteral("appraisalGlaTotal"))->text().contains("75.00"),
+        "Auto-Subtract must update the 100-square-foot parent to 75 square feet GLA");
+    require(window.undoCommand() && window.document().snapshot().entities()==before.entities() &&
+        window.redoCommand() && window.document().snapshot().entities()==after.entities(),"Auto-Subtract must undo and redo atomically");
+    QTemporaryDir directory;
+    require(directory.isValid() && window.saveProjectAs(directory.filePath("auto-subtract.bldproj")) &&
+        window.openProject(directory.filePath("auto-subtract.bldproj")) &&
+        window.document().snapshot().entities()==after.entities(),"Auto-Subtract must survive save/reopen");
+    require(window.selectEntity(garage),"reselect subtractor after reopening");
+    const auto unchanged=window.document().snapshot();
+    require(window.applySelectedAutoSubtract(parent) && window.document().revision()==unchanged.revision() &&
+        window.document().snapshot().entities()==unchanged.entities(),"adding an existing link must be idempotent");
+    require(!window.applySelectedAutoSubtract(parent,false,unchanged.revision()-1) &&
+        window.document().snapshot().entities()==unchanged.entities(),"stale subtraction must refuse atomically");
+    QTimer::singleShot(0,&window,[&] {
+        auto* dialog=window.findChild<QDialog*>("autoSubtractDialog"); require(dialog,"cancel must open target selector");
+        dialog->reject();
+    });
+    action->trigger();
+    require(window.document().revision()==unchanged.revision() && window.document().snapshot().entities()==unchanged.entities(),
+        "cancelled target selector must not change links");
+    require(window.editSelectedClassification("above_grade_finished"),"type-change repair fixture must edit source");
+    const auto invalid_link=window.document().snapshot();
+    require(!window.applySelectedAutoSubtract(parent) && window.document().snapshot().entities()==invalid_link.entities(),
+        "same-type add must refuse without discarding the existing link");
+    bool removed=false;
+    QTimer::singleShot(0,&window,[&] {
+        auto* dialog=window.findChild<QDialog*>("autoSubtractDialog"); require(dialog,"repair removal must open selector");
+        auto* target=dialog->findChild<QComboBox*>("autoSubtractTarget");
+        require(target && target->findData(parent)>=0,"invalid existing target must remain listed for removal");
+        target->setCurrentIndex(target->findData(parent));
+        auto* remove=dialog->findChild<QPushButton*>("removeAutoSubtract"); require(remove && remove->isEnabled(),"existing invalid link must expose removal");
+        remove->click(); removed=dialog->result()==QDialog::Accepted; if (!removed) dialog->reject();
+    });
+    action->trigger();
+    require(removed,"existing invalid link must remain removable after source type changes");
+    require(window.editSelectedClassification("garage") && window.applySelectedAutoSubtract(parent),"repaired link must be addable again");
+    const auto linked=window.document().snapshot();
+    require(window.deleteSelection() && !window.document().snapshot().entities().contains(garage.toStdString()) &&
+        window.document().snapshot().entities().at(parent.toStdString()).properties.value("deduction_ids",std::vector<std::string>{}).empty() &&
+        window.document().revision()==linked.revision()+1,"deleting source must clean parent links in the same command");
+    require(window.undoCommand() && window.document().snapshot().entities()==linked.entities(),"delete undo must restore source and links exactly");
+    const auto same=window.createBoundary(square(0.7,0.7,0.3),"above_grade_finished");
+    const auto same_before=window.document().snapshot();
+    require(!same.isEmpty() && !window.applySelectedAutoSubtract(parent) &&
+        window.document().revision()==same_before.revision() && window.document().snapshot().entities()==same_before.entities(),
+        "different owner with same area type must not subtract");
+    const auto outside=window.createBoundary(square(10,10,1),"garage");
+    const auto outside_before=window.document().snapshot();
+    require(!outside.isEmpty() && !window.applySelectedAutoSubtract(parent) &&
+        window.document().revision()==outside_before.revision() && window.document().snapshot().entities()==outside_before.entities(),
+        "outside subtraction must refuse without a partial link");
+}
+
+void auto_subtract_context_repair_workflow() {
+    sketch::desktop::MainWindow window;
+    const auto parent = window.createBoundary(square(0, 0, 3.048));
+    auto* workflow = window.findChild<QComboBox*>(QStringLiteral("calculationWorkflow"));
+    require(workflow, "context repair fixture needs the appraisal workflow selector");
+    workflow->setCurrentIndex(workflow->findData(QStringLiteral("appraisal")));
+    require(window.editSelectedClassification(QStringLiteral("above_grade_finished")),
+            "context repair parent must have an appraisal type");
+    const auto unrelated = window.createBoundary(square(10, 0, 3.048), QStringLiteral("above_grade_finished"));
+    const auto source = window.createBoundary(square(0.5, 0.5, 1.524), QStringLiteral("garage"));
+    require(!parent.isEmpty() && !unrelated.isEmpty() && !source.isEmpty() &&
+                window.applySelectedAutoSubtract(parent),
+            "context repair fixture must begin with an explicit parent link");
+
+    const auto original = window.document().snapshot();
+    const auto& source_entity = original.entities().at(source.toStdString());
+    const auto old_floor = source_entity.properties.at("floor_id").get<std::string>();
+    const auto building = original.entities().at(old_floor).properties.at("building_id").get<std::string>();
+    const auto new_floor = window.createFloor(QString::fromStdString(building), QStringLiteral("Repair floor"));
+    const auto new_layer = window.activeLayerId();
+    require(!new_floor.isEmpty() && new_floor.toStdString() != old_floor && !new_layer.isEmpty(),
+            "context repair fixture needs another valid floor and layer");
+    const auto organized = window.document().snapshot();
+    require(organized.entities().at(new_layer.toStdString()).properties.at("floor_id") == new_floor.toStdString(),
+            "context repair destination layer must belong to its new floor");
+    auto moved_source = organized.entities().at(source.toStdString());
+    moved_source.properties["floor_id"] = new_floor.toStdString();
+    moved_source.properties["layer_id"] = new_layer.toStdString();
+    window.document().apply(sketch::ApplyEntityChanges{
+        organized.revision(), {sketch::EntityChange::upsert(moved_source)}, {},
+        "Move subtractor to another floor for native link repair"});
+    require(window.selectEntity(source), "moved source must remain selectable for link repair");
+    const auto before_remove = window.document().snapshot();
+    require(before_remove.entities().at(parent.toStdString()).properties.at("deduction_ids") ==
+                std::vector<std::string>{source.toStdString()} &&
+                before_remove.entities().at(parent.toStdString()).properties.at("floor_id") !=
+                    moved_source.properties.at("floor_id"),
+            "context repair must retain an explicit link whose floors no longer match");
+    require(!window.applySelectedAutoSubtract(parent) &&
+                window.document().revision() == before_remove.revision() &&
+                window.document().snapshot().entities() == before_remove.entities(),
+            "context mismatch must refuse a new add without discarding the existing link");
+
+    auto* action = window.findChild<QAction*>(QStringLiteral("autoSubtract"));
+    require(action && action->isEnabled(), "moved subtractor must expose its native repair action");
+    bool removed = false;
+    QTimer::singleShot(0, &window, [&] {
+        auto* dialog = window.findChild<QDialog*>(QStringLiteral("autoSubtractDialog"));
+        require(dialog, "context repair must open the native parent selector");
+        auto* target = dialog->findChild<QComboBox*>(QStringLiteral("autoSubtractTarget"));
+        auto* buttons = dialog->findChild<QDialogButtonBox*>(QStringLiteral("autoSubtractButtons"));
+        auto* remove = dialog->findChild<QPushButton*>(QStringLiteral("removeAutoSubtract"));
+        require(target && buttons && remove && target->findData(parent) >= 0,
+                "linked parent must remain listed after the source moves to another floor");
+        target->setCurrentIndex(target->findData(parent));
+        require(remove->isEnabled() && !buttons->button(QDialogButtonBox::Apply)->isEnabled(),
+                "cross-floor linked parent must offer Remove while disabling Apply");
+        remove->click();
+        removed = dialog->result() == QDialog::Accepted;
+        if (!removed) dialog->reject();
+    });
+    action->trigger();
+    const auto after_remove = window.document().snapshot();
+    require(removed && after_remove.revision() == before_remove.revision() + 1 &&
+                after_remove.entities().at(parent.toStdString()).properties
+                    .value("deduction_ids", std::vector<std::string>{}).empty(),
+            "cross-floor repair must remove the explicit link in one command");
+    for (const auto& [id, entity] : before_remove.entities()) {
+        if (id != parent.toStdString()) {
+            require(after_remove.entities().at(id) == entity,
+                    "link repair must preserve the source, organization and unrelated parents");
+        }
+    }
+    auto expected_parent = before_remove.entities().at(parent.toStdString());
+    auto repaired_parent = after_remove.entities().at(parent.toStdString());
+    expected_parent.properties.erase("deduction_ids");
+    repaired_parent.properties.erase("deduction_ids");
+    require(repaired_parent == expected_parent && window.undoCommand() &&
+                window.document().snapshot().entities() == before_remove.entities(),
+            "cross-floor repair must change only the link and undo it exactly");
 }
 
 void appraisal_workflow_is_automatic_and_persistent() {
@@ -175,6 +357,133 @@ QString declarations(const char* kind = "residential_declared", const char* use 
     return QStringLiteral(R"({"appraisal_policy":{"policy_kind":"%1","version":1,"property_kind":"%2","measurement_basis":"exterior"},"grade":"%3","appraisal_facts":{"finish":"finished","access":"direct_interior","ceiling_eligibility":"standard","area_use":"%4","boundary_role":"%5"}})")
         .arg(QString::fromLatin1(kind), QString::fromLatin1(std::string_view(kind) == "residential_declared" ? "detached_single_family" : "light_commercial"),
              QString::fromLatin1(grade), QString::fromLatin1(use), QString::fromLatin1(role));
+}
+
+void auto_subtract_define_first_keyboard_and_recovery() {
+    using sketch::desktop::MainWindow;
+    using sketch::desktop::PlanCanvas;
+    MainWindow window;
+    window.setAttribute(Qt::WA_DontShowOnScreen,true); window.resize(1200,800); window.show();
+    QApplication::setActiveWindow(&window); QCoreApplication::processEvents();
+    window.setMetricUnits(false);
+    const auto parent=window.createBoundary(square(0,0,3.048));
+    auto* workflow=window.findChild<QComboBox*>("calculationWorkflow");
+    workflow->setCurrentIndex(workflow->findData(QStringLiteral("appraisal")));
+    require(window.editSelectedAppraisalFacts(declarations()),"declare qualified Auto-Subtract parent");
+    auto* drawing=dynamic_cast<PlanCanvas*>(window.findChild<QWidget*>("measurementPlanCanvas"));
+    auto* action=window.findChild<QAction*>("drawSubtractingArea");
+    require(drawing && action && action->isEnabled(),"Define First subtraction needs actual native entry");
+    const auto source=window.document().snapshot();
+    bool classification_seen=false,target_seen=false,expired=false;
+    QTimer poll; poll.setInterval(1);
+    QObject::connect(&poll,&QTimer::timeout,&window,[&] {
+        auto* modal=qobject_cast<QDialog*>(QApplication::activeModalWidget()); if (!modal) return;
+        if (modal->objectName()=="boundaryClassificationDialog" && !classification_seen) {
+            classification_seen=true;
+            auto* classification=qobject_cast<QInputDialog*>(modal); require(classification,"classification must be native input dialog");
+            classification->setTextValue("Open to below"); classification->accept();
+        } else if (modal->objectName()=="autoSubtractDialog" && !target_seen) {
+            target_seen=true;
+            auto* target=modal->findChild<QComboBox*>("autoSubtractTarget");
+            require(target && target->findData(parent)>=0,"pre-draw selector must offer qualified parent by stable ID");
+            target->setCurrentIndex(target->findData(parent));
+            const auto captures=qEnvironmentVariable("VERTEX_TEST_CAPTURE_DIR");
+            if (!captures.isEmpty()) {
+                if (modal->layout()) modal->layout()->activate();
+                modal->adjustSize();
+                QApplication::processEvents();
+                require(QDir().mkpath(captures) && modal->grab().save(QDir(captures).filePath("auto-subtract-define-target.png")),
+                    "target selector capture must save");
+            }
+            modal->findChild<QDialogButtonBox*>("autoSubtractButtons")->button(QDialogButtonBox::Apply)->click();
+        }
+    });
+    QTimer deadline; deadline.setSingleShot(true);
+    QObject::connect(&deadline,&QTimer::timeout,&window,[&] {
+        expired=true; if (auto* modal=qobject_cast<QDialog*>(QApplication::activeModalWidget())) modal->reject();
+    });
+    poll.start(); deadline.start(5000); action->trigger(); poll.stop(); deadline.stop();
+    require(classification_seen && target_seen && !expired && drawing->boundaryDraftPreview(),"native Define First subtraction must start an unfinished draft");
+    require(window.document().snapshot().entities()==source.entities() && window.document().revision()==source.revision(),
+        "choosing subtractor type and parent must not publish model changes");
+    const auto key=[&](int code) {
+        QKeyEvent event(QEvent::KeyPress,code,Qt::NoModifier); QApplication::sendEvent(drawing,&event);
+        QCoreApplication::processEvents(QEventLoop::AllEvents,100);
+    };
+    const auto precision=[&](const std::function<void(sketch::desktop::BoundaryInputDialog&)>& fill) {
+        bool seen=false,timed_out=false;
+        QTimer responder; responder.setInterval(1);
+        QObject::connect(&responder,&QTimer::timeout,&window,[&] {
+            auto* input=dynamic_cast<sketch::desktop::BoundaryInputDialog*>(QApplication::activeModalWidget());
+            if (!input || seen) return; seen=true; fill(*input);
+            QKeyEvent enter(QEvent::KeyPress,Qt::Key_Return,Qt::NoModifier); QApplication::sendEvent(input,&enter);
+            require(input->result()==QDialog::Accepted,"valid subtractor precision form must accept Enter");
+        });
+        QTimer timeout; timeout.setSingleShot(true);
+        QObject::connect(&timeout,&QTimer::timeout,&window,[&] {
+            timed_out=true; if (auto* modal=qobject_cast<QDialog*>(QApplication::activeModalWidget())) modal->reject();
+        });
+        responder.start(); timeout.start(5000); key(Qt::Key_D); responder.stop(); timeout.stop();
+        require(seen && !timed_out,"D must support all subtraction drawing phases");
+        require(window.focusWidget()==drawing,"precision form must restore stored canvas focus");
+        // Offscreen has no window manager activation; never set canvas focus
+        // for the product while simulating the parent's return to activation.
+        QApplication::setActiveWindow(&window); QCoreApplication::processEvents();
+    };
+    const auto position=[&](const char* x,const char* y) {
+        precision([&](sketch::desktop::BoundaryInputDialog& input) {
+            input.findChild<QLineEdit*>("boundaryInputEndX")->setText(x);
+            input.findChild<QLineEdit*>("boundaryInputEndY")->setText(y);
+        });
+    };
+    const auto edge=[&](const char* heading) {
+        precision([&](sketch::desktop::BoundaryInputDialog& input) {
+            input.findChild<QLineEdit*>("boundaryInputLength")->setText("5 ft");
+            input.findChild<QLineEdit*>("boundaryInputHeading")->setText(heading);
+        });
+    };
+    position("2 ft","2 ft"); edge("0 deg"); position("4.5 ft","1 ft");
+    QTemporaryDir directory; require(directory.isValid(),"subtraction recovery fixture needs directory");
+    const auto path=directory.filePath("unfinished-subtraction.bldproj");
+    require(window.saveProjectAs(path),"save unfinished subtracting area");
+    const auto captures=qEnvironmentVariable("VERTEX_TEST_CAPTURE_DIR");
+    if (!captures.isEmpty()) require(QFile::copy(path,QDir(captures).filePath("unfinished-subtraction.bldproj")),
+        "retain unfinished subtraction fixture for previous-reader verification");
+    const auto archive=sketch::ProjectStore::load_archive(std::filesystem::path(path.toStdWString()),sketch::ArchiveRole::ordinary);
+    require(archive.supported() && archive.recovery.decoded && archive.recovery.decoded->active &&
+        archive.recovery.decoded->active->auto_subtract_target_id==parent.toStdString(),"saved unfinished draft must retain explicit parent identity");
+    require(window.createNewProject() && window.openProject(path) && drawing->boundaryDraftPreview() &&
+        drawing->boundaryDraftPreview()->segments.size()==1,"reopen unfinished subtraction through ordinary workflow");
+    const auto before_finish=window.document().snapshot();
+    edge("90 deg"); position("8 ft","4.5 ft"); edge("180 deg"); position("4.5 ft","8 ft");
+    key(Qt::Key_Return); position("1 ft","4.5 ft"); key(Qt::Key_Return);
+    const auto after=window.document().snapshot();
+    const auto subtractor=window.selectedEntityId();
+    require(!subtractor.isEmpty() && subtractor!=parent && after.revision()==before_finish.revision()+1 &&
+        after.entities().size()==before_finish.entities().size()+5 &&
+        after.entities().at(parent.toStdString()).properties.at("deduction_ids")==std::vector<std::string>{subtractor.toStdString()},
+        "source, manual dimensions and retained parent link must commit together once");
+    const auto& child=after.entities().at(subtractor.toStdString());
+    std::size_t manual_dimensions=0;
+    for (const auto& [id,entity] : after.entities()) {
+        (void)id;
+        if (!sketch::can_recognize_boundary_dimension_entity_type(entity.type)) continue;
+        const auto dimension=sketch::decode_boundary_dimension_entity(entity);
+        if (dimension.dimension && dimension.dimension->boundary_id==subtractor.toStdString() &&
+            dimension.dimension->placement==sketch::BoundaryDimensionPlacement::manual) ++manual_dimensions;
+    }
+    require(manual_dimensions==4,"Define First subtraction must persist all four manual dimensions");
+    require(child.properties.at("classification")=="measurement" &&
+        child.properties.at("appraisal_facts")==nlohmann::json{{"boundary_role","open_to_below"}} &&
+        !child.properties.contains("appraisal_category"),"void drawing must record only its declared role, never fabricated qualifying facts");
+    require(window.findChild<QLabel*>("appraisalQualification")->text().startsWith("Qualified") &&
+        window.findChild<QLabel*>("appraisalGlaTotal")->text().contains("75.00"),"qualified parent net must decrease by the linked 25 square foot void");
+    require(window.undoCommand() && window.document().snapshot().entities()==before_finish.entities() &&
+        window.redoCommand() && window.document().snapshot().entities()==after.entities(),"pre-draw subtraction must undo and redo complete linked state");
+    require(window.saveProject() && window.openProject(path) && window.document().snapshot().entities()==after.entities(),
+        "completed subtraction must save/reopen exact source, dimensions and parent link");
+    if (!captures.isEmpty()) require(QFile::copy(path,QDir(captures).filePath("completed-subtraction.bldproj")),
+        "retain completed subtraction fixture for previous-reader verification");
 }
 
 void declared_appraisal_qualifies_without_manual_categories() {
@@ -681,6 +990,20 @@ int main(int argc, char** argv) {
     sketch::testing::noninteractive_errors();
     QApplication app(argc, argv);
     try {
+        const auto font_id = QFontDatabase::addApplicationFont(QStringLiteral(":/fonts/Inter.ttf"));
+        require(font_id >= 0, "bundled appraisal workflow font must load");
+        const auto families = QFontDatabase::applicationFontFamilies(font_id);
+        require(!families.isEmpty(), "bundled appraisal workflow font must expose its family");
+        app.setFont(QFont(families.front(), 10));
+        if (app.arguments().contains(QStringLiteral("--auto-subtract-only"))) {
+            auto_subtract_selected_area_workflow();
+            auto_subtract_context_repair_workflow();
+            auto_subtract_define_first_keyboard_and_recovery();
+            return 0;
+        }
+        auto_subtract_selected_area_workflow();
+        auto_subtract_context_repair_workflow();
+        auto_subtract_define_first_keyboard_and_recovery();
         appraisal_workflow_is_automatic_and_persistent();
         appraisal_redefinition_updates_the_active_category();
         declared_appraisal_qualifies_without_manual_categories();

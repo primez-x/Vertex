@@ -576,8 +576,15 @@ Start with the workspace, draw a room, close it with the mouse, drag-select it, 
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
-- [ ] **U100 — Use automatic subtraction for an overlapping area**
-  - Expected: The deducted region is clear and totals match the chosen rule.
+- [ ] **U100 — Subtract a drawn area from a chosen parent**
+  - Steps: Draw a 10-by-10-foot finished area and a contained 5-by-5-foot garage. Select the garage, right-click, choose Subtract from area, choose the finished parent and apply. Reopen this action and remove the deduction. Undo and redo each change.
+  - Expected: The parent net changes from 100 to 75 square feet and back to 100. The garage remains independently selectable and contributes once to its garage category in Appraisal. Equal area types cannot be linked by this action. Cancel changes nothing.
+  - Result: Not tested
+  - Notes / steps to reproduce: ____________________
+
+- [ ] **U100a — Choose a parent before drawing a subtracting area**
+  - Steps: In declared Appraisal, draw and qualify a 10-by-10-foot parent. Open Commands, choose Define area and subtract from, choose Open to below and the parent. Draw a contained 5-by-5-foot void. Also try saving and reopening before completing it.
+  - Expected: The drawing hint names the chosen parent. Finishing reduces its net to 75 square feet without adding the void to a living-area category. One undo removes the new area, its dimensions and the parent deduction together. Save/reopen retains the parent choice; canceling leaves the parent unchanged.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 

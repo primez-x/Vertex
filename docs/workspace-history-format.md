@@ -1,5 +1,12 @@
 # Workspace history record, version 1
 
+Embedded active recovery inputs may use version 2 for an explicit
+`auto_subtract_target_id`; checkpoint/replay versions remain 1. The input's target
+is part of semantic equality and the validated finish delta. A retired input is
+rechecked against the current parent before revision can resume. Future active
+versions make the entire owning history opaque; current active v2 support does
+not introduce history v2 support.
+
 This describes the internal `workspace_history` record codec, now used by the
 recovery-aware SQLite v4/v5/v6 save/load routes (v5 when document history includes
 qualified boundary translations, v6 for qualified boundary transforms). Core workspace restoration consumes

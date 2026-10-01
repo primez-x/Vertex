@@ -1,5 +1,19 @@
 # Vertex project formats v1 through v14
 
+## Unfinished Auto-Subtract drawing
+
+An unfinished drawing with an explicit parent uses active recovery envelope
+version 2, replay version 1. It adds the required nonempty
+`auto_subtract_target_id` to `version`, `replay_version`, `source`, `checkpoint`
+and `extensions`. The checkpoint and workspace-history schemas remain version 1.
+Ordinary drawings retain their exact five-field active version 1 envelope.
+Auto-Subtract and the desktop redraw operation cannot be combined. The chosen
+parent participates in lifecycle/finish replay, retired-input validation and
+resource accounting; it is not an inferred parent or a desktop-only annotation.
+Unknown positive active versions remain opaque and make the owning recovery
+history read-only. Completed areas use the existing parent `deduction_ids` field;
+the final commit includes both new entities and the changed existing parent.
+
 ## Circular column selection orientation
 
 Circular columns retain an optional finite `rotation_rad` property in radians.

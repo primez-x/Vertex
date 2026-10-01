@@ -18,8 +18,17 @@ Document fixture() {
         {"b", "building", {{"property_id", "p"}}}, {"f", "floor", {{"building_id", "b"}}},
         {"l", "layer", {{"floor_id", "f"}}}});
 }
-void run(BoundaryAuthoringMode mode) {
-    auto doc = fixture(); ProjectWorkspace w(doc.snapshot());
+void run(BoundaryAuthoringMode mode, bool subtraction = false) {
+    auto doc = fixture();
+    if (subtraction) {
+        Entity parent{"parent", "measurement_boundary", {{"floor_id", "f"}, {"layer_id", "l"}, {"classification", "garage"},
+            {"segments", Json::array({{{"start", {-1, -1}}, {"end", {6, -1}}, {"sweep_radians", 0}},
+                {{"start", {6, -1}}, {"end", {6, 5}}, {"sweep_radians", 0}}, {{"start", {6, 5}}, {"end", {-1, 5}}, {"sweep_radians", 0}},
+                {{"start", {-1, 5}}, {"end", {-1, -1}}, {"sweep_radians", 0}}})}}};
+        auto other = parent; other.id = "other-parent";
+        doc.apply(ApplyEntityChanges{doc.revision(), {EntityChange::upsert(parent), EntityChange::upsert(other)}});
+    }
+    ProjectWorkspace w(doc.snapshot());
     BoundaryAuthoringSession session(mode);
     session.set_classification("living_area"); (void)session.anchor({0, 0});
     const auto dimension = [&] { if (mode == BoundaryAuthoringMode::define_first)
@@ -30,12 +39,15 @@ void run(BoundaryAuthoringMode mode) {
     (void)session.add_closing_segment(); dimension(); (void)session.close_chain();
     BoundaryActiveRecovery active{capture_boundary_recovery_source(w.snapshot(), {"p", "b", "f", "l"}),
         session.recovery_checkpoint(), {{"opaque_number", 1.0}}};
+    if (subtraction) active.auto_subtract_target_id = "parent";
     commit(w, w.prepare_boundary_checkpoint(active));
     // Active input is a separate record, but required for complete validation.
     auto s = w.capture(); auto r = capture_workspace_history_record(s);
     auto wire = encode_workspace_history_record(s.document(), r, s.active_boundary());
     auto decoded = decode_workspace_history_record(s.document(), wire, s.active_boundary());
     require(decoded.supported(), "active-only history must round trip");
+    if (subtraction) require(s.active_boundary() && s.active_boundary()->auto_subtract_target_id == "parent",
+        "active history validation must admit its separate retained Auto-Subtract target");
     rejects([&] { (void)decode_workspace_history_record(s.document(), wire, std::nullopt); });
     commit(w, w.prepare_discard_boundary()); commit(w, w.prepare_undo());
     active.checkpoint.pointer = Vec2{9, 8}; commit(w, w.prepare_boundary_checkpoint(active));
@@ -54,6 +66,19 @@ void run(BoundaryAuthoringMode mode) {
             "retired history and full-width counters must round trip");
     require(encode_workspace_history_record(s.document(), *decoded.record, s.active_boundary()).dump() == wire.dump(),
             "canonical re-encoding must preserve references and opaque number representation");
+    if (subtraction) {
+        require(decoded.record->retired.begin()->second.value->auto_subtract_target_id == "parent",
+            "finished and undone retired owner must retain its Auto-Subtract target");
+        auto forged = wire;
+        for (auto& e : forged["events"]) if (!e["input"].is_null() && !e["input"]["value"].is_null())
+            e["input"]["value"]["auto_subtract_target_id"] = "other-parent";
+        rejects([&] { (void)decode_workspace_history_record(s.document(), forged, s.active_boundary()); });
+        auto future_target = wire;
+        for (auto& e : future_target["events"]) if (!e["input"].is_null() && !e["input"]["value"].is_null())
+            e["input"]["value"]["version"] = 3;
+        require(decode_workspace_history_record(s.document(), future_target, s.active_boundary()).opaque(),
+            "future active owner must keep the containing history opaque");
+    }
     const BoundaryActiveRecovery* owner = nullptr;
     for (const auto& e : decoded.record->events) if (e.input) {
         if (!owner) owner = e.input->value.get();
@@ -137,7 +162,8 @@ void admission_symmetry() {
 }
 int main() {
     sketch::testing::noninteractive_errors();
-    try { run(BoundaryAuthoringMode::draw_first); run(BoundaryAuthoringMode::define_first); admission_symmetry(); }
+    try { run(BoundaryAuthoringMode::draw_first); run(BoundaryAuthoringMode::define_first);
+          run(BoundaryAuthoringMode::define_first, true); admission_symmetry(); }
     catch (const std::exception& e) { std::cerr << e.what() << '\n'; return 1; }
     return 0;
 }

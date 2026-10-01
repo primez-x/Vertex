@@ -5,6 +5,7 @@
 #include "sketch/project_organization.hpp"
 
 #include <map>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -20,6 +21,7 @@ struct BoundaryCommitIntent {
     std::vector<AcceptedBoundaryChain> chains;
     DrawingContext context;
     std::string message{"Commit boundary authoring"};
+    std::optional<std::string> auto_subtract_target_id;
 };
 
 // A preview is a sealed, copyable display value. Its public candidate map and

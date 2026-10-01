@@ -153,11 +153,50 @@ after containment, uniqueness, same-floor, and non-nested checks pass. The
 calculation result lists each deduction with its requested and marginally
 applied amounts. Measurement deductions and unclassified appraisal voids are
 excluded from top-level aggregation. The editor is deterministic and offline;
-documented Apex same-type Auto-Subtract behavior still needs compatibility
-fixtures and certification. In Appraisal, an explicitly categorized deduction
+full Apex compatibility still needs native fixtures and certification. In
+Appraisal, an explicitly categorized deduction
 remains a first-class contribution: an internal garage is subtracted from its
 enclosing finished area while its own square footage appears once in the garage
 bucket.
+
+## Explicit Auto-Subtract workflows
+
+For an already drawn measurement area, select it, right-click and choose
+**Subtract from area…** (also available in Commands). Choose the specific parent
+area on the same property, building and floor. **Apply** links the selected
+subtractor through the parent's `deduction_ids`; **Remove deduction** removes
+that chosen link. The original boundaries remain independently editable.
+An identical valid link is a no-op. Removing a link remains possible when an
+edit has made the linked area incompatible; it does not silently choose another
+parent or erase links from other areas.
+
+For Define First, choose **Define area and subtract from…** in Commands, choose
+the area type and then its parent, and draw the smaller area. The drawing hint
+names the chosen parent. Closing and accepting commits the new area, its manual
+dimensions and the existing parent's deduction together. Canceling creates no
+area or deduction. Saving an unfinished drawing preserves the explicit parent;
+reopening and finishing uses the same choice. Undo/redo preserves the complete
+operation and stable identities. Deleting a subtractor removes its surviving
+parent links in the same undoable command.
+
+New Auto-Subtract links reject equal area types, architectural room boundaries,
+cross-floor/context links, outside geometry and nested deductions. Containment
+uses analytical lines/arcs and permits touching edges; overlapping deductions
+remove their union once. Types come from the active measurement classifications
+or appraisal categories/declared roles, independently of display names and
+report qualification. The existing explicit deduction editor retains its
+separate manual workflow.
+
+In declared Appraisal, **Open to below**, **Stair footprint** and **Other void**
+are available before drawing. These store only the explicitly chosen exclusion
+role, without inventing dwelling finish, access, ceiling or use declarations.
+A linked nonmeasured role requires the property policy and measurement basis,
+valid geometry/context, unity factor and an explicit parent link. It does not
+require irrelevant dwelling facts or floor grade. Supplied malformed tokens
+still reject; measured areas retain all their declaration requirements. A void
+reduces its parent's physical area and has no standalone category contribution.
+These behaviors are implemented Vertex policy, not standards or Apex native
+compatibility certification.
 
 `calculation_tests` checks curved area/perimeter, reversed winding, large
 translations, overlapping/full/outside deductions, invalid geometry, factors,
