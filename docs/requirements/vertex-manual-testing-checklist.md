@@ -1,6 +1,6 @@
 # Vertex user testing checklist
 
-298 practical tasks, grouped by how you use the app. This replaces the earlier engineering-oriented checklist. The old 130-item list is preserved separately as engineering-requirements-checklist.md.
+301 practical tasks, grouped by how you use the app. This replaces the earlier engineering-oriented checklist. The old 130-item list is preserved separately as engineering-requirements-checklist.md.
 
 This is a user acceptance list for the intended app, not a claim that every listed action is implemented or working in the current preview. If you cannot find a control, or a feature is absent, mark **Blocked / missing** and describe it. Specialized sections can be skipped if you do not use them or lack the device or sample files.
 
@@ -1687,6 +1687,26 @@ drawing; switching modes does not change existing geometry.
 - [ ] **U297 — Read wall lengths beside exterior dimensions**
   - Steps: Draw a closed rectangular wall layout with a partition. Create its exterior measurement area. Zoom in and out, select a wall by its length label, then export and print preview the plan. Also try a diagonal wall and rotate the drawing.
   - Expected: Each wall length remains readable beside the exterior dimensions. Automatic wall labels avoid other measurement text and follow their wall's orientation. Existing manually placed dimensions stay where you placed them. Selection and the PDF agree with the visible labels.
+  - Result: Not tested
+  - Notes: ______________________________
+
+## Window layouts and opening controls
+
+- [ ] **U298 — Place double and triple windows**
+  - Steps: Choose Window in Library, then the Double or Triple style, and click a straight wall. Resize the opening width. Open **Opening assembly**, switch between single, double and triple pane layouts, undo, redo, save and reopen. Inspect the same window in 3D and export the plan.
+  - Expected: Double and triple layouts have two or three distinct framed glass panes separated by mullions. The wall cut follows the opening width. The panes, frame and layout survive edits and reopening; plan output and 3D agree.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **U299 — Open and close a casement window**
+  - Steps: Choose the Casement Window style. Set Angle to 70 degrees and place it on a straight wall. Double-click it and open **Opening assembly**. Change the hinge jamb, opening side and angle; set angle to zero to close it. Undo, redo, reflect its host wall, save and reopen.
+  - Expected: The glazed sash rotates about its actual jamb attachment while the frame stays in place. Angle zero closes it. The plan and 3D show the same sash. A pose that intersects its host or frame is refused without changing the project. A curved host explains the straight-wall requirement.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **U300 — Slide a window open**
+  - Steps: Choose the Sliding Window style and set Open to 50%. Place it on a straight wall. In **Opening assembly**, try 0%, 50% and 100%, change the moving half and track side, then resize its width. Undo, redo, save and reopen. Compare plan, 3D, DXF and IFC output.
+  - Expected: One framed sash moves on a separate track; the other remains fixed. At 100% the moving sash stacks behind the fixed one, leaving half the aperture open. There is no hinged swing. Reopening and exported native geometry retain the window layout and travel.
   - Result: Not tested
   - Notes: ______________________________
 

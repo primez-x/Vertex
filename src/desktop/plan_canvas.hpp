@@ -137,6 +137,9 @@ struct CanvasEntity {
     // walls omit only their internal corner seams from this derived stroke
     // path, shared by interactive painting and fitted print/export output.
     std::optional<Boundary> stroke_segments;
+    // Interaction-only geometry, such as the analytical span through an open
+    // casement. It remains pickable without painting a false closed pane.
+    Boundary hit_segments;
 };
 
 // A retained document annotation. Unlike BoundaryDraftPreview, labels are

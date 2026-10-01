@@ -516,6 +516,101 @@ void test_manufactured_native_depiction() {
     }
 }
 
+void test_window_layout_native_correspondence() {
+#ifdef SKETCH_DXF_NATIVE_GEOMETRY
+    using namespace sketch;
+    // This fixture has a rotated straight host, so moving profiles must retain
+    // their world-space placement as well as their persisted operation.
+    const auto source = native_hosted_document(false, true).snapshot();
+    const auto window_block = [](DxfDrawing& drawing) -> DxfBlock& {
+        const auto found = std::find_if(drawing.blocks.begin(), drawing.blocks.end(), [](const auto& block) {
+            return !block.vertex_entity_json.empty() &&
+                nlohmann::json::parse(block.vertex_entity_json).at("id") == "native-window";
+        });
+        check(found != drawing.blocks.end(), "window layout must export a native block");
+        return *found;
+    };
+    const auto geometry_bytes = [](DxfBlock block) {
+        block.vertex_entity_json.clear();
+        DxfDrawing probe;
+        probe.blocks.push_back(std::move(block));
+        return export_dxf_ascii(probe);
+    };
+    auto fixed = export_project_dxf(source).drawing;
+    const auto fixed_geometry = geometry_bytes(window_block(fixed));
+    std::vector<std::string> layout_geometry;
+    for (const auto layout : {WindowLayoutKind::double_fixed, WindowLayoutKind::triple_fixed,
+                              WindowLayoutKind::casement, WindowLayoutKind::sliding}) {
+        auto profile = default_opening_assembly(OpeningAssemblyKind::window);
+        profile.window_layout = layout;
+        if (layout == WindowLayoutKind::casement) {
+            profile.window_hinge_at_end = true;
+            profile.window_open_left = false;
+            profile.window_angle_degrees = 70.0;
+        }
+        if (layout == WindowLayoutKind::sliding) {
+            profile.window_hinge_at_end = true;
+            profile.window_open_left = false;
+            profile.window_slide_fraction = 0.5;
+        }
+        auto entities = source.entities();
+        entities.at("native-window").properties["opening_assembly"] = opening_assembly_json(profile);
+        std::vector<Entity> fixture;
+        for (const auto& [id, entity] : entities) { (void)id; fixture.push_back(entity); }
+        auto exported = export_project_dxf(Document::create(std::move(fixture)).snapshot());
+        check(exported.diagnostics.empty(), "supported window layout must export without semantic loss");
+        auto& block = window_block(exported.drawing);
+        const auto geometry = geometry_bytes(block);
+        check(geometry != fixed_geometry &&
+                  std::find(layout_geometry.begin(), layout_geometry.end(), geometry) == layout_geometry.end(),
+              "split and moving window layouts must each change actual DXF primitives");
+        layout_geometry.push_back(geometry);
+        const auto imported = import_project_dxf(export_dxf_ascii(exported.drawing));
+        check(imported.complete() && imported.entities.size() == 4,
+              "matching layout geometry must activate the complete native host graph");
+        const auto window = std::find_if(imported.entities.begin(), imported.entities.end(), [](const auto& entity) {
+            return entity.type == "opening" &&
+                entity.extensions.at("vertex_dxf_source").at("id") == "native-window";
+        });
+        const auto host = std::find_if(imported.entities.begin(), imported.entities.end(), [](const auto& entity) {
+            return entity.type == "wall";
+        });
+        check(host != imported.entities.end(), "matching window layout must restore its native host");
+        auto expected_properties = entities.at("native-window").properties;
+        expected_properties["wall_id"] = host->id;
+        check(window != imported.entities.end() && window->type == "opening" &&
+                  window->properties == expected_properties &&
+                  parse_opening_assembly(window->properties.at("opening_assembly")) == profile,
+              "window layout and operation must remain editable only after geometry correspondence");
+        const auto reject_false_model = [](const DxfDrawing& drawing) {
+            const auto result = import_project_dxf(export_dxf_ascii(drawing));
+            check(result.source_retention_required &&
+                      std::none_of(result.entities.begin(), result.entities.end(), [](const auto& entity) {
+                          return entity.type == "wall" || entity.type == "opening";
+                      }),
+                  "tampered window layout must never activate an editable native host graph");
+        };
+        auto metadata_tamper = exported.drawing;
+        auto& metadata_block = window_block(metadata_tamper);
+        auto payload = nlohmann::json::parse(metadata_block.vertex_entity_json);
+        auto false_profile = profile;
+        false_profile.window_layout = WindowLayoutKind::fixed;
+        false_profile.window_hinge_at_end = false;
+        false_profile.window_open_left = true;
+        false_profile.window_angle_degrees = 90.0;
+        false_profile.window_slide_fraction = 0.0;
+        payload["properties"]["opening_assembly"] = opening_assembly_json(false_profile);
+        metadata_block.vertex_entity_json = payload.dump();
+        reject_false_model(metadata_tamper);
+        auto stroke_tamper = exported.drawing;
+        auto& stroke_block = window_block(stroke_tamper);
+        check(!stroke_block.lines.empty(), "rotated window layout must contain physical profile strokes");
+        stroke_block.lines.front().end.x += 0.025;
+        reject_false_model(stroke_tamper);
+    }
+#endif
+}
+
 void test_native_hosted_roundtrip_and_fallback() {
     using namespace sketch;
     for (const bool curved : {false, true}) {
@@ -647,6 +742,7 @@ int main() {
         test_hidden_linear_dimensions_stay_hidden_in_dxf_output();
         test_native_hosted_roundtrip_and_fallback();
         test_manufactured_native_depiction();
+        test_window_layout_native_correspondence();
         test_legacy_native_wall_candidates_are_canonical();
         test_native_architectural_sources_are_bounded();
         std::cout << "DXF project exchange tests passed\n";

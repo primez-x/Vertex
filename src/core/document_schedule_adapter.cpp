@@ -157,6 +157,20 @@ void add_opening(const Entity& entity, std::vector<ScheduleRecord>& records,
                                       ScheduleQuantity{assembly.glazing_thickness_m, ScheduleUnit::metre});
             record.properties.emplace("inset",
                                       ScheduleQuantity{assembly.inset_m, ScheduleUnit::metre});
+            if (assembly.kind == OpeningAssemblyKind::window) {
+                record.properties.emplace("window_layout", std::string(window_layout_kind_name(assembly.window_layout)));
+                record.properties.emplace("mechanism", std::string(assembly.window_layout == WindowLayoutKind::casement
+                    ? "Casement" : assembly.window_layout == WindowLayoutKind::sliding ? "Sliding" : "Fixed"));
+                record.properties.emplace("panel_count", std::int64_t{assembly.window_layout == WindowLayoutKind::triple_fixed
+                    ? 3 : assembly.window_layout == WindowLayoutKind::double_fixed || assembly.window_layout == WindowLayoutKind::sliding ? 2 : 1});
+                if (assembly.window_layout == WindowLayoutKind::casement) {
+                    record.properties.emplace("hinge", std::string(assembly.window_hinge_at_end ? "end" : "start"));
+                    record.properties.emplace("swing_side", std::string(assembly.window_open_left ? "left" : "right"));
+                    record.properties.emplace("swing_angle_degrees", assembly.window_angle_degrees);
+                } else if (assembly.window_layout == WindowLayoutKind::sliding) {
+                    record.properties.emplace("open_percent", assembly.window_slide_fraction * 100.0);
+                }
+            }
         } catch (const std::exception& error) {
             diagnostic(diagnostics, entity,
                        std::string("opening_assembly is invalid: ") + error.what());
@@ -359,6 +373,25 @@ DocumentScheduleProjection project_schedules(
         // Stored room measurements are primitive provenance for gross_area,
         // but the schedule editor only authorizes room names and marks.
         for (auto& row : result.snapshot.rows) {
+            if (row.kind == ScheduleRowKind::door || row.kind == ScheduleRowKind::window) {
+                for (const auto* key : {"assembly_kind", "frame_width", "frame_depth", "panel_thickness", "glazing_thickness", "inset",
+                                       "window_layout", "panel_count"}) {
+                    const auto cell = row.cells.find(key);
+                    if (cell == row.cells.end()) continue;
+                    cell->second.editable = false;
+                    cell->second.sources = {{row.object_id, "opening_assembly"}};
+                    cell->second.explanation = "Manufactured opening assembly profile";
+                }
+            }
+            if (row.kind == ScheduleRowKind::window) {
+                for (const auto* key : {"mechanism", "hinge", "swing_side", "swing_angle_degrees", "open_percent"}) {
+                    const auto cell = row.cells.find(key);
+                    if (cell == row.cells.end()) continue;
+                    cell->second.editable = false;
+                    cell->second.sources = {{row.object_id, "opening_assembly"}};
+                    cell->second.explanation = "Window movement relative to the host wall direction";
+                }
+            }
             if(row.kind == ScheduleRowKind::door) {
                 for(const auto* key : {"mechanism","hinge","swing_side","swing_angle_degrees","open_percent"}) {
                     const auto cell = row.cells.find(key);

@@ -283,6 +283,125 @@ void native_door_mechanisms() {
     }
 }
 
+void native_window_layouts() {
+    using namespace sketch;
+    const auto replace_record = [](std::string bytes, const std::string& id, const Record& record) {
+        const auto start = bytes.find(id + "="), end = bytes.find(';', start);
+        std::string row = id + "=" + record.type + "(";
+        for (const auto& value : record.fields) { if (row.back() != '(') row += ','; row += value; }
+        row += ");";
+        bytes.replace(start, end - start + 1, row);
+        return bytes;
+    };
+    const auto inactive = [](const std::string& bytes) {
+        const auto imported = import_project_ifc(bytes);
+        check(imported.source_retention_required && std::none_of(imported.entities.begin(), imported.entities.end(),
+            [](const Entity& entity) { return entity.type == "opening" && entity.properties.contains("opening_assembly"); }),
+            "contradictory window partition or fill geometry must not activate a native profile");
+    };
+    for (const auto layout : {WindowLayoutKind::fixed, WindowLayoutKind::double_fixed,
+            WindowLayoutKind::triple_fixed, WindowLayoutKind::casement, WindowLayoutKind::sliding}) {
+        auto wall = make_document().snapshot().entities().at("wall-1");
+        auto opening = make_document().snapshot().entities().at("opening-1");
+        opening.properties["opening_kind"] = "window";
+        auto profile = default_opening_assembly(OpeningAssemblyKind::window);
+        profile.window_layout = layout;
+        if (layout == WindowLayoutKind::casement) {
+            profile.window_hinge_at_end = true;
+            profile.window_open_left = false;
+            profile.window_angle_degrees = 37.0;
+        }
+        if (layout == WindowLayoutKind::sliding) profile.window_slide_fraction = 0.35;
+        opening.properties["opening_assembly"] = opening_assembly_json(profile);
+        const auto exported = export_project_ifc(Document::create({wall, opening}).snapshot());
+        const auto graph = records(exported.step);
+        std::string fill_id;
+        for (const auto& [id, record] : graph) if (record.type == "IFCWINDOW") fill_id = id;
+        check(!fill_id.empty(), "each window layout must export a physical fill");
+        const auto& fill = graph.at(fill_id);
+        check(fill.fields[11] == (layout == WindowLayoutKind::triple_fixed ? ".TRIPLE_PANEL_VERTICAL." :
+            layout == WindowLayoutKind::double_fixed || layout == WindowLayoutKind::sliding
+            ? ".DOUBLE_PANEL_VERTICAL." : ".SINGLE_PANEL."),
+            "IFC partition must describe actual side-by-side panel arrangement");
+        const auto imported = import_project_ifc(exported.step);
+        verify_worker_candidate(imported);
+        const auto restored = std::find_if(imported.entities.begin(), imported.entities.end(), [](const Entity& entity) {
+            return entity.type == "opening" && entity.properties.contains("opening_assembly");
+        });
+        check(restored != imported.entities.end() && restored->extensions.contains("ifc_fill_source") &&
+            restored->properties.at("opening_assembly") == opening.properties.at("opening_assembly"),
+            "native IFC must verify actual fill mesh and preserve complete window profile");
+        auto wrong_partition = fill;
+        wrong_partition.fields[11] = layout == WindowLayoutKind::triple_fixed
+            ? ".SINGLE_PANEL." : ".TRIPLE_PANEL_VERTICAL.";
+        inactive(replace_record(exported.step, fill_id, wrong_partition));
+        if (layout != WindowLayoutKind::fixed) {
+            wrong_partition.fields[11] = ".NOTDEFINED.";
+            inactive(replace_record(exported.step, fill_id, wrong_partition));
+        }
+        const auto& shape = graph.at(fill.fields[6]);
+        const auto& representation = graph.at(list(shape.fields[2])[0]);
+        const auto& mesh = graph.at(list(representation.fields[3]).back());
+        const auto points_id = mesh.fields[0];
+        auto points = graph.at(points_id);
+        const auto vertex_end = points.fields[0].find(',', 2);
+        points.fields[0].replace(2, vertex_end - 2, "0.123456");
+        inactive(replace_record(exported.step, points_id, points));
+        if (layout == WindowLayoutKind::casement || layout == WindowLayoutKind::sliding) {
+            // Both metadata copies agree, but the physical mesh still represents the original movement.
+            const std::string key = layout == WindowLayoutKind::casement ? "window_angle_degrees" : "window_slide_fraction";
+            const std::string original = "\"" + key + "\":" + opening.properties.at("opening_assembly").at(key).dump();
+            const std::string replacement = "\"" + key + "\":" + nlohmann::json(layout == WindowLayoutKind::casement ? 63.0 : 0.65).dump();
+            auto altered = exported.step;
+            std::size_t count = 0, position = 0;
+            while ((position = altered.find(original, position)) != std::string::npos) {
+                altered.replace(position, original.size(), replacement);
+                position += replacement.size();
+                ++count;
+            }
+            check(count >= 2, "moving profile tamper must update both fill and void metadata copies");
+            inactive(altered);
+        }
+        if (layout == WindowLayoutKind::fixed) {
+            // Previous native exports used NOTDEFINED with the exact v1 fixed profile.
+            auto legacy_profile = opening.properties.at("opening_assembly");
+            legacy_profile["version"] = 1;
+            for (const auto* key : {"window_layout", "window_hinge_at_end", "window_open_left", "window_angle_degrees", "window_slide_fraction"})
+                legacy_profile.erase(key);
+            opening.properties["opening_assembly"] = legacy_profile;
+            const auto legacy_export = export_project_ifc(Document::create({wall, opening}).snapshot());
+            const auto legacy_graph = records(legacy_export.step);
+            std::string legacy_id;
+            for (const auto& [id, record] : legacy_graph) if (record.type == "IFCWINDOW") legacy_id = id;
+            auto legacy_fill = legacy_graph.at(legacy_id);
+            legacy_fill.fields[11] = ".NOTDEFINED.";
+            const auto legacy_import = import_project_ifc(replace_record(legacy_export.step, legacy_id, legacy_fill));
+            check(std::any_of(legacy_import.entities.begin(), legacy_import.entities.end(), [&](const Entity& entity) {
+                return entity.type == "opening" && entity.properties.contains("opening_assembly") &&
+                    entity.properties.at("opening_assembly") == legacy_profile;
+            }), "proven legacy v1 fixed window must remain editable after import");
+        }
+    }
+}
+
+void native_historic_fixed_windows() {
+    using namespace sketch;
+    for (const auto* name : {"straight.ifc", "curved-cw.ifc", "curved-ccw.ifc"}) {
+        const auto path = std::filesystem::path(VERTEX_IFC_LEGACY_WINDOW_FIXTURES) / name;
+        std::ifstream input(path, std::ios::binary);
+        check(input.good(), "unchanged historic window IFC fixture must be readable");
+        const std::string bytes((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
+        const auto imported = import_project_ifc(bytes);
+        verify_worker_candidate(imported);
+        check(std::count_if(imported.entities.begin(), imported.entities.end(), [](const Entity& entity) {
+            return entity.type == "opening" && entity.extensions.contains("ifc_fill_source") &&
+                entity.properties.contains("opening_assembly") &&
+                entity.properties.at("opening_assembly").at("version") == 1 &&
+                entity.properties.at("opening_assembly").at("kind") == "window";
+        }) == 1, "unchanged pre-layout IFC window must restore an editable verified native assembly");
+    }
+}
+
 void native_assemblies() {
     using namespace sketch;
     for (const double sweep : {0.0, 1.0, -1.0}) {
@@ -987,6 +1106,8 @@ void run() {
     check(rejected, "malformed IFC must fail closed");
 #ifdef SKETCH_IFC_NATIVE_GEOMETRY
     native_door_mechanisms();
+        native_window_layouts();
+        native_historic_fixed_windows();
     native_assemblies();
     closed_leaf_without_operation();
     desktop_hosted_worker_protocol();

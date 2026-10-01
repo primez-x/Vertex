@@ -351,6 +351,20 @@ an instance presentation contract: the wall cut, hosted dimensions, and
 handing remain the source of truth, while frame, leaf/sash, and glazing solids
 are derived for coordinated views.
 
+For windows, profile version 2 contains those same seven fields and exactly
+five additional fields: `window_layout` (`fixed`, `double_fixed`, `triple_fixed`,
+`casement`, or `sliding`), boolean `window_hinge_at_end`, boolean
+`window_open_left`, numeric `window_angle_degrees` in [0,180], and numeric
+`window_slide_fraction` in [0,1]. Casement uses the jamb, side and angle; sliding
+uses the moving half, track side and fraction. Casement requires zero slide
+fraction; sliding requires the canonical angle 90. Fixed layouts require the
+canonical movement fields (`false`, `true`, `90`, `0`). Canonical single-pane
+profiles serialize as version 1. Version 2 is window-only. Missing or extra
+fields, unsupported layouts and dormant conflicting movement values reject.
+Both moving layouts currently require a straight host. Split fixed panes
+preserve curved-host geometry. Their manufactured parts, plans and exchange
+derive from this profile; the original hosted wall cut remains authoritative.
+
 An opening may also carry `properties.door_operation`. Version 1 has exactly
 `version: 1`, `hinge: "start" | "end"`, `side: "left" | "right"`, and a finite
 `angle_degrees` in (0,180]. Version 2 adds exactly `kind` (`hinged`,

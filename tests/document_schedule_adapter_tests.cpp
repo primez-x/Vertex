@@ -1,5 +1,6 @@
 #include "sketch/document_schedule_adapter.hpp"
 #include "sketch/assembly_model.hpp"
+#include "sketch/opening_assembly.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -37,6 +38,54 @@ void test_revision_and_opening_schedule() {
                 area.explanation == "Width multiplied by height",
             "calculated opening area must expose read-only source provenance");
     require(!projection.diagnostics.empty(), "missing window mark must remain visible as a diagnostic");
+}
+
+void test_window_profile_schedule() {
+    using namespace sketch;
+    for (const auto layout : {WindowLayoutKind::fixed, WindowLayoutKind::double_fixed,
+            WindowLayoutKind::triple_fixed, WindowLayoutKind::casement, WindowLayoutKind::sliding}) {
+        auto profile = default_opening_assembly(OpeningAssemblyKind::window);
+        profile.window_layout = layout;
+        if (layout == WindowLayoutKind::casement) {
+            profile.window_hinge_at_end = true;
+            profile.window_open_left = false;
+            profile.window_angle_degrees = 37.0;
+        }
+        if (layout == WindowLayoutKind::sliding) profile.window_slide_fraction = 0.35;
+        const auto document = Document::create({entity("window", "opening", {
+            {"mark", "W1"}, {"opening_kind", "window"}, {"width_m", 1.2}, {"height_m", 1.0},
+            {"opening_assembly", opening_assembly_json(profile)}})});
+        const auto projection = build_document_schedules(document.snapshot());
+        require(projection.diagnostics.empty() && projection.snapshot.rows.size() == 1,
+                "valid window layout must project a complete schedule row");
+        const auto& cells = projection.snapshot.rows.front().cells;
+        require(std::get<std::string>(cells.at("window_layout").value) == window_layout_kind_name(layout) &&
+                std::get<std::int64_t>(cells.at("panel_count").value) ==
+                (layout == WindowLayoutKind::triple_fixed ? 3 :
+                 layout == WindowLayoutKind::double_fixed || layout == WindowLayoutKind::sliding ? 2 : 1),
+                "schedule must identify actual window panel arrangement");
+        const bool casement = layout == WindowLayoutKind::casement;
+        require(cells.contains("hinge") == casement && cells.contains("swing_side") == casement &&
+                cells.contains("swing_angle_degrees") == casement &&
+                cells.contains("open_percent") == (layout == WindowLayoutKind::sliding),
+                "window schedule must expose only movement values relevant to its mechanism");
+        if (casement) require(std::get<std::string>(cells.at("hinge").value) == "end" &&
+                std::get<std::string>(cells.at("swing_side").value) == "right" &&
+                std::get<double>(cells.at("swing_angle_degrees").value) == 37.0,
+                "casement schedule must retain actual handing and angle");
+        if (layout == WindowLayoutKind::sliding)
+            require(std::get<double>(cells.at("open_percent").value) == 35.0,
+                    "slider schedule must retain actual open percentage");
+        for (const auto& [key, cell] : cells) {
+            if (key == "mark" || key == "width" || key == "height" || key == "area") continue;
+            require(!cell.editable && cell.sources == std::vector<ScheduleSourceRef>{{"window", "opening_assembly"}},
+                    "every assembly schedule value must point to the read-only JSON profile");
+            bool rejected = false;
+            try { (void)make_schedule_edit(projection.snapshot, "window", key, cell.value); }
+            catch (const std::invalid_argument&) { rejected = true; }
+            require(rejected, "profile schedule edits must fail through the standard edit guard");
+        }
+    }
 }
 
 void test_room_area_and_invalid_rows_are_explicit() {
@@ -322,6 +371,7 @@ void test_assigned_material_schedule() {
 int main() {
     try {
         test_revision_and_opening_schedule();
+        test_window_profile_schedule();
         test_assigned_material_schedule();
         test_room_area_and_invalid_rows_are_explicit();
         test_room_volume_schedule_uses_analytical_boundary();

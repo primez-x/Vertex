@@ -676,6 +676,17 @@ std::string door_operation_enum(const std::optional<DoorOperation>& operation) {
         ? ".SINGLE_SWING_RIGHT." : ".SINGLE_SWING_LEFT.";
 }
 
+std::string window_partition_enum(const OpeningAssembly& profile) {
+    // IFC partition describes panel arrangement, independently of panel operation.
+    switch (profile.window_layout) {
+    case WindowLayoutKind::double_fixed: case WindowLayoutKind::sliding:
+        return ".DOUBLE_PANEL_VERTICAL.";
+    case WindowLayoutKind::triple_fixed: return ".TRIPLE_PANEL_VERTICAL.";
+    case WindowLayoutKind::fixed: case WindowLayoutKind::casement: return ".SINGLE_PANEL.";
+    }
+    throw std::invalid_argument("Unknown window layout");
+}
+
 std::string door_operation_label(const std::optional<DoorOperation>& operation,
                                  const IfcExchangeLimits& limits) {
     // IFC4 permits this label only with USERDEFINED. NOTDEFINED would describe
@@ -798,7 +809,7 @@ void export_fill(const DocumentSnapshot& document, const Entity& entity, int voi
         context.root("fill:" + entity.id, entity.id + " fill") + ",$," + ref(placement) +
         "," + ref(shape) + ",$," + real_text(opening.height) + "," + real_text(fill_overall_width(wall, opening, frame)) +
         (door ? ",.DOOR.," + door_operation_enum(operation) + "," + door_operation_label(operation, context.limits)
-              : ",.WINDOW.,.NOTDEFINED.,$"));
+              : ",.WINDOW.," + window_partition_enum(profile) + ",$"));
     context.builder.add("IFCRELFILLSELEMENT", context.root("fills:" + entity.id, "") +
         "," + ref(void_id) + "," + ref(fill));
     context.contained_products.push_back(fill);
@@ -2059,11 +2070,14 @@ IfcProjectImportResult import_project_ifc(std::string_view bytes,
             const auto* fill_record = find_record(parsed, fill_id);
             const auto fields = split_top_level(fill_record->args, argument_count, limits);
             const auto frame = product_frame(parsed, fields, argument_count, limits);
+            const bool legacy_fixed_window = !door && profile.window_layout == WindowLayoutKind::fixed &&
+                metadata.at("opening_assembly").value("version", 0) == 1;
             if (fields.size() != 13 || (door ? fill_record->type != "IFCDOOR" : fill_record->type != "IFCWINDOW") ||
                 metadata.value("opening_kind", "") != opening_assembly_kind_name(profile.kind) ||
                 void_metadata.value("opening_kind", "") != opening_assembly_kind_name(profile.kind) ||
                 (!door && operation) || fields[10] != (door ? ".DOOR." : ".WINDOW.") ||
-                fields[11] != (door ? door_operation_enum(operation) : ".NOTDEFINED.") ||
+                (fields[11] != (door ? door_operation_enum(operation) : window_partition_enum(profile)) &&
+                 !(legacy_fixed_window && fields[11] == ".NOTDEFINED.")) ||
                 fields[12] != (door ? door_operation_label(operation, limits) : "$") ||
                 std::abs(number<double>(fields[8]) - opening.properties.at("height_m").get<double>()) > kTolerance ||
                 !frame || !same_frame(*frame, fill_frame(native_wall(*host), checked_opening, operation)) ||

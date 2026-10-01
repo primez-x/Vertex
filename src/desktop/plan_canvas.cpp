@@ -3506,6 +3506,7 @@ QString PlanCanvas::hitTest(QPointF point, bool filtered) const {
         };
         test_boundary(entity.segments);
         for (const auto& hole : entity.holes) test_boundary(hole);
+        test_boundary(entity.hit_segments);
         if (entity.filled || entity.type == QStringLiteral("wall")) {
             if (const auto fill = closed_entity_path(entity)) {
                 QTransform model_to_screen;

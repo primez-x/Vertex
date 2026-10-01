@@ -1591,6 +1591,24 @@ std::optional<DoorOperation> catalog_door_operation(
     return operation;
 }
 
+OpeningAssembly catalog_opening_assembly(const QString& kind, const QString& symbol_id) {
+    auto profile = default_opening_assembly(kind == QStringLiteral("door")
+        ? OpeningAssemblyKind::door : OpeningAssemblyKind::window);
+    if (symbol_id == QStringLiteral("svg-v2-09_doors-door-sliding-glass"))
+        profile.glazing_thickness_m = 0.012;
+    if (profile.kind == OpeningAssemblyKind::window) {
+        if (symbol_id == QStringLiteral("svg-v2-10_windows-window-double"))
+            profile.window_layout = WindowLayoutKind::double_fixed;
+        else if (symbol_id == QStringLiteral("svg-v2-10_windows-window-triple"))
+            profile.window_layout = WindowLayoutKind::triple_fixed;
+        else if (symbol_id == QStringLiteral("svg-v2-10_windows-window-casement"))
+            profile.window_layout = WindowLayoutKind::casement;
+        else if (symbol_id == QStringLiteral("svg-v2-10_windows-window-sliding"))
+            profile.window_layout = WindowLayoutKind::sliding;
+    }
+    return profile;
+}
+
 QIcon symbol_library_thumbnail(const SymbolDefinition& definition) {
     static QHash<QString, QIcon> cache;
     const auto cache_key = QString::fromStdString(definition.id);
@@ -3689,6 +3707,9 @@ public:
                 if (entity.properties.contains("opening_assembly")) {
                     auto assembly = parse_opening_assembly(entity.properties.at("opening_assembly"));
                     assembly.inset_m = -assembly.inset_m;
+                    if (assembly.window_layout == WindowLayoutKind::casement ||
+                        assembly.window_layout == WindowLayoutKind::sliding)
+                        assembly.window_open_left = !assembly.window_open_left;
                     entity.properties["opening_assembly"] = opening_assembly_json(assembly);
                 }
             }
@@ -12305,7 +12326,8 @@ public:
                                 const QString& height_expression,
                                 std::optional<Revision> expected_revision = std::nullopt,
                                 std::optional<DoorOperation> door_operation = std::nullopt,
-                                QString catalog_symbol_id = {}) {
+                                QString catalog_symbol_id = {},
+                                std::optional<OpeningAssembly> placement_profile = std::nullopt) {
         const auto revision = expected_revision.value_or(m_document->revision());
         if (revision != m_document->revision()) {
             setError(QStringLiteral("The project changed while the opening was being entered. Start the opening again."));
@@ -12355,10 +12377,10 @@ public:
                                          {"opening_kind", normalized_kind.toStdString()},
                                          {"classification", normalized_kind.toStdString()}};
             if (normalized_kind != QStringLiteral("opening")) {
-                auto assembly = default_opening_assembly(normalized_kind == QStringLiteral("door")
-                    ? OpeningAssemblyKind::door : OpeningAssemblyKind::window);
-                if (catalog_symbol_id == QStringLiteral("svg-v2-09_doors-door-sliding-glass"))
-                    assembly.glazing_thickness_m = 0.012;
+                const auto assembly = placement_profile.value_or(
+                    catalog_opening_assembly(normalized_kind, catalog_symbol_id));
+                if (opening_assembly_kind_name(assembly.kind) != normalized_kind.toStdString())
+                    throw std::invalid_argument("Opening profile does not match its kind.");
                 properties["opening_assembly"] = opening_assembly_json(assembly);
             }
             if (normalized_kind == QStringLiteral("door") && door_operation)
@@ -16000,6 +16022,13 @@ public:
                     auto assembly = parse_opening_assembly(properties.at("opening_assembly"));
                     assembly.kind = value == QStringLiteral("door")
                         ? OpeningAssemblyKind::door : OpeningAssemblyKind::window;
+                    if (assembly.kind == OpeningAssemblyKind::door) {
+                        assembly.window_layout = WindowLayoutKind::fixed;
+                        assembly.window_hinge_at_end = false;
+                        assembly.window_open_left = true;
+                        assembly.window_angle_degrees = 90.0;
+                        assembly.window_slide_fraction = 0.0;
+                    }
                     if (assembly.kind == OpeningAssemblyKind::window &&
                         assembly.glazing_thickness_m <= default_geometry_tolerance_metres) {
                         assembly.glazing_thickness_m = std::min(0.02, assembly.panel_thickness_m);
@@ -16016,7 +16045,8 @@ public:
                                      const QString& panel_thickness_expression,
                                      const QString& glazing_thickness_expression,
                                      const QString& inset_expression,
-                                     std::optional<Revision> expected_revision = std::nullopt) {
+                                     std::optional<Revision> expected_revision = std::nullopt,
+                                     std::optional<OpeningAssembly> edited_profile = std::nullopt) {
         const auto entity = selectedEntity();
         if (!entity.has_value() || entity->type != "opening") {
             setError(QStringLiteral("Select a hosted door or window to edit its assembly."));
@@ -16039,9 +16069,11 @@ public:
             if (!kind.has_value()) {
                 throw std::invalid_argument("Opening kind must be Door or Window.");
             }
-            OpeningAssembly assembly = entity->properties.contains("opening_assembly")
+            OpeningAssembly assembly = edited_profile.value_or(entity->properties.contains("opening_assembly")
                 ? parse_opening_assembly(entity->properties.at("opening_assembly"))
-                : default_opening_assembly(*kind);
+                : default_opening_assembly(*kind));
+            if (edited_profile && edited_profile->kind != *kind)
+                throw std::invalid_argument("Edited opening profile does not match its kind.");
             assembly.kind = *kind;
             const auto unit = m_metric_units ? Unit::metre : Unit::foot;
             const auto read_dimension = [&](const QString& expression, const char* label,
@@ -19903,6 +19935,16 @@ public:
         populateSymbolLibrary();
     }
 
+    void resetOpeningPlacementHover() {
+        if (m_pending_opening_kind.isEmpty()) return;
+        BoundaryDraftPreview preview;
+        preview.instruction = QStringLiteral("Move onto a wall to place the %1").arg(m_pending_opening_kind);
+        m_measurementCanvas->setBoundaryDraftPreview(preview);
+        m_architecturalCanvas->setBoundaryDraftPreview(preview);
+        m_architecture_hint->setText(QStringLiteral("%1 • click an existing wall to place. Esc cancels.")
+            .arg(m_opening_style->currentText()));
+    }
+
     bool prepareHostedOpening(const SymbolDefinition& definition, double scale = 1.0) {
         if (!is_hosted_opening_symbol(definition)) return false;
         const auto width = catalog_opening_width(definition) * scale;
@@ -19914,14 +19956,23 @@ public:
         m_pending_opening_kind = window ? QStringLiteral("window") : QStringLiteral("door");
         m_pending_opening_symbol_id = QString::fromStdString(definition.id);
         m_pending_opening_door_operation = catalog_door_operation(definition);
-        const bool sliding = m_pending_opening_door_operation &&
-            m_pending_opening_door_operation->kind == DoorOperationKind::sliding;
+        m_pending_opening_profile = catalog_opening_assembly(m_pending_opening_kind, m_pending_opening_symbol_id);
+        const bool sliding = (m_pending_opening_door_operation &&
+            m_pending_opening_door_operation->kind == DoorOperationKind::sliding) ||
+            (window && m_pending_opening_profile->window_layout == WindowLayoutKind::sliding);
+        const bool casement = window && m_pending_opening_profile->window_layout == WindowLayoutKind::casement;
         {
             const QSignalBlocker blocker(m_opening_draw_travel);
             m_opening_draw_travel->setValue(0.0);
         }
         m_opening_draw_travel->setVisible(sliding);
         m_opening_draw_travel_label->setVisible(sliding);
+        {
+            const QSignalBlocker blocker(m_opening_draw_angle);
+            m_opening_draw_angle->setValue(m_pending_opening_profile->window_angle_degrees);
+        }
+        m_opening_draw_angle->setVisible(casement);
+        m_opening_draw_angle_label->setVisible(casement);
         m_opening_draw_width->setText(QString::fromStdString(json(width).dump()) + QStringLiteral(" m"));
         m_opening_draw_height->setText(window ? QStringLiteral("1.2 m") : QStringLiteral("2.1 m"));
         m_opening_draw_sill->setText(window ? QStringLiteral("0.9 m") : QStringLiteral("0 m"));
@@ -19943,7 +19994,10 @@ public:
             .arg(QString::fromStdString(definition.name)));
         syncToolControls();
         clearError();
-        updateOpeningPlacement(m_last_cursor, false);
+        // Changing a preset from the sidebar has no current canvas target.
+        // Clear its old hover instead of reporting an overlap at the last
+        // opening the user placed. The next pointer event supplies a target.
+        resetOpeningPlacementHover();
         return true;
     }
 
@@ -22738,6 +22792,9 @@ private:
                     m_pending_opening_kind = kind == QStringLiteral("Doorway") ? QStringLiteral("opening") : kind.toLower();
                     m_opening_draw_travel->hide();
                     m_opening_draw_travel_label->hide();
+                    m_opening_draw_angle->hide();
+                    m_opening_draw_angle_label->hide();
+                    m_pending_opening_profile.reset();
                     const bool window = kind == QStringLiteral("Window");
                     m_opening_draw_width->setText(window ? QStringLiteral("1.2 m") : QStringLiteral("0.9 m"));
                     m_opening_draw_height->setText(window ? QStringLiteral("1.2 m") : QStringLiteral("2.1 m"));
@@ -22806,9 +22863,27 @@ private:
         m_opening_draw_travel->hide();
         m_opening_draw_travel_label->hide();
         QObject::connect(m_opening_draw_travel, &QDoubleSpinBox::valueChanged, owner, [this](double value) {
-            if (!m_pending_opening_door_operation || m_pending_opening_door_operation->kind != DoorOperationKind::sliding) return;
-            m_pending_opening_door_operation->slide_fraction = value / 100.0;
-            updateOpeningPlacement(m_last_cursor, false);
+            if (m_pending_opening_door_operation && m_pending_opening_door_operation->kind == DoorOperationKind::sliding)
+                m_pending_opening_door_operation->slide_fraction = value / 100.0;
+            else if (m_pending_opening_profile && m_pending_opening_profile->window_layout == WindowLayoutKind::sliding)
+                m_pending_opening_profile->window_slide_fraction = value / 100.0;
+            else return;
+            resetOpeningPlacementHover();
+        });
+        m_opening_draw_angle = new QDoubleSpinBox(m_opening_draw_fields);
+        m_opening_draw_angle->setObjectName(QStringLiteral("openingDrawAngle"));
+        m_opening_draw_angle->setRange(0.0, 180.0);
+        m_opening_draw_angle->setDecimals(2);
+        m_opening_draw_angle->setSingleStep(5.0);
+        m_opening_draw_angle->setSuffix(QStringLiteral("°"));
+        m_opening_draw_angle_label = new QLabel(QStringLiteral("Angle"), m_opening_draw_fields);
+        opening_form->addRow(m_opening_draw_angle_label, m_opening_draw_angle);
+        m_opening_draw_angle->hide();
+        m_opening_draw_angle_label->hide();
+        QObject::connect(m_opening_draw_angle, &QDoubleSpinBox::valueChanged, owner, [this](double value) {
+            if (!m_pending_opening_profile || m_pending_opening_profile->window_layout != WindowLayoutKind::casement) return;
+            m_pending_opening_profile->window_angle_degrees = value;
+            resetOpeningPlacementHover();
         });
         architecture_layout->addWidget(m_opening_draw_fields);
         m_opening_draw_fields->hide();
@@ -24520,6 +24595,9 @@ private:
                         window.output_stroke_width_mm = 0.22;
                         all_geometry.push_back(std::move(window));
                     }
+                    if (!all_geometry.empty() && all_geometry.back().id == id_from(id))
+                        all_geometry.back().hit_segments = {
+                            hosted_opening_span(*baseline, opening->offset, opening->width)};
                     if (snapshot.is_editable() && !all_geometry.empty() && all_geometry.back().id == id_from(id)) {
                         try {
                             const auto frame = hosted_opening_resize_frame(snapshot, id);
@@ -27685,8 +27763,10 @@ private:
         if (m_architectural_view_control_action) m_architectural_view_control_action->setVisible(architectural);
         if (m_object_button) m_object_button->setVisible(architectural);
         if (!architectural && m_inspector) {
-            for (QWidget* widget : {m_material_group, static_cast<QWidget*>(m_door_swing_button),
-                    static_cast<QWidget*>(m_opening_assembly_button), static_cast<QWidget*>(m_edit_object_button),
+            // Hosted doors/windows are authored in the 2D workspace too.
+            // Their plan mechanisms and frame controls remain accessible;
+            // only model-specific controls are suppressed here.
+            for (QWidget* widget : {m_material_group, static_cast<QWidget*>(m_edit_object_button),
                     static_cast<QWidget*>(m_edit_layers_button),
                     static_cast<QWidget*>(m_roof_properties_group), static_cast<QWidget*>(m_building_properties_group)})
                 if (widget) widget->hide();
@@ -28087,10 +28167,8 @@ private:
                 const Vec2 b1{b.x + normal.x, b.y + normal.y}, b2{b.x - normal.x, b.y - normal.y};
                 preview.segments = {{a1, b1, 0}, {b1, b2, 0}, {b2, a2, 0}, {a2, a1, 0}};
                 if (m_pending_opening_kind != QStringLiteral("opening")) {
-                    auto assembly = default_opening_assembly(m_pending_opening_kind == QStringLiteral("door")
-                        ? OpeningAssemblyKind::door : OpeningAssemblyKind::window);
-                    if (m_pending_opening_symbol_id == QStringLiteral("svg-v2-09_doors-door-sliding-glass"))
-                        assembly.glazing_thickness_m = 0.012;
+                    const auto assembly = m_pending_opening_profile.value_or(
+                        catalog_opening_assembly(m_pending_opening_kind, m_pending_opening_symbol_id));
                     const auto operation = m_pending_opening_kind == QStringLiteral("door")
                         ? m_pending_opening_symbol_id.isEmpty() ? std::optional<DoorOperation>{DoorOperation{}}
                                                               : m_pending_opening_door_operation
@@ -28133,7 +28211,7 @@ private:
                     const auto id = createHostedOpening(m_pending_opening_kind,
                         QString::number(offset, 'g', 17) + QStringLiteral(" m"),
                         m_opening_draw_width->text(), m_opening_draw_sill->text(), m_opening_draw_height->text(),
-                        snapshot.revision(), door_operation, m_pending_opening_symbol_id);
+                        snapshot.revision(), door_operation, m_pending_opening_symbol_id, m_pending_opening_profile);
                     if (id.isEmpty()) m_selected_id = previous;
                     else {
                         setTool(CanvasTool::select);
@@ -28512,6 +28590,7 @@ private:
         m_pending_opening_kind.clear();
         m_pending_opening_symbol_id.clear();
         m_pending_opening_door_operation.reset();
+        m_pending_opening_profile.reset();
         if (m_architecture_hint) m_architecture_hint->hide();
         if (m_opening_draw_fields) m_opening_draw_fields->hide();
         if (m_wall_draw_fields) m_wall_draw_fields->show();
@@ -29738,6 +29817,59 @@ private:
             form->addRow(QStringLiteral("Panel / sash depth"), panel);
             form->addRow(QStringLiteral("Glazing depth"), glazing);
             form->addRow(QStringLiteral("Inset"), inset);
+            QComboBox* window_layout = nullptr;
+            QComboBox* window_jamb = nullptr;
+            QComboBox* window_side = nullptr;
+            QDoubleSpinBox* window_angle = nullptr;
+            QDoubleSpinBox* window_travel = nullptr;
+            double displayed_window_angle = assembly.window_angle_degrees;
+            double displayed_window_travel = assembly.window_slide_fraction * 100.0;
+            if (assembly.kind == OpeningAssemblyKind::window) {
+                window_layout = new QComboBox(&dialog);
+                window_layout->setObjectName(QStringLiteral("openingWindowLayout"));
+                window_layout->addItems({QStringLiteral("Fixed single pane"), QStringLiteral("Fixed double pane"),
+                    QStringLiteral("Fixed triple pane"), QStringLiteral("Casement"), QStringLiteral("Sliding")});
+                window_layout->setCurrentIndex(static_cast<int>(assembly.window_layout));
+                window_jamb = new QComboBox(&dialog);
+                window_jamb->setObjectName(QStringLiteral("openingWindowJamb"));
+                window_jamb->addItems({QStringLiteral("Start jamb"), QStringLiteral("End jamb")});
+                window_jamb->setCurrentIndex(assembly.window_hinge_at_end ? 1 : 0);
+                window_jamb->setToolTip(QStringLiteral("Jamb order follows the host wall's drawing direction. For a slider this chooses the movable half."));
+                window_side = new QComboBox(&dialog);
+                window_side->setObjectName(QStringLiteral("openingWindowSide"));
+                window_side->addItems({QStringLiteral("Left of wall"), QStringLiteral("Right of wall")});
+                window_side->setCurrentIndex(assembly.window_open_left ? 0 : 1);
+                window_angle = new QDoubleSpinBox(&dialog);
+                window_angle->setObjectName(QStringLiteral("openingWindowAngle"));
+                window_angle->setRange(0.0, 180.0);
+                window_angle->setDecimals(2);
+                window_angle->setSuffix(QStringLiteral("°"));
+                window_angle->setValue(assembly.window_angle_degrees);
+                displayed_window_angle = window_angle->value();
+                window_travel = new QDoubleSpinBox(&dialog);
+                window_travel->setObjectName(QStringLiteral("openingWindowTravel"));
+                window_travel->setRange(0.0, 100.0);
+                window_travel->setDecimals(2);
+                window_travel->setSuffix(QStringLiteral("%"));
+                window_travel->setValue(assembly.window_slide_fraction * 100.0);
+                displayed_window_travel = window_travel->value();
+                form->addRow(QStringLiteral("Window layout"), window_layout);
+                form->addRow(QStringLiteral("Hinge / moving half"), window_jamb);
+                form->addRow(QStringLiteral("Opening / track side"), window_side);
+                form->addRow(QStringLiteral("Angle"), window_angle);
+                form->addRow(QStringLiteral("Open"), window_travel);
+                const auto sync_window_fields = [=] {
+                    const auto choice = static_cast<WindowLayoutKind>(window_layout->currentIndex());
+                    const bool casement = choice == WindowLayoutKind::casement;
+                    const bool sliding = choice == WindowLayoutKind::sliding;
+                    form->setRowVisible(window_jamb, casement || sliding);
+                    form->setRowVisible(window_side, casement || sliding);
+                    form->setRowVisible(window_angle, casement);
+                    form->setRowVisible(window_travel, sliding);
+                };
+                QObject::connect(window_layout, &QComboBox::currentIndexChanged, &dialog, sync_window_fields);
+                sync_window_fields();
+            }
             layout->addLayout(form);
             auto* status = new QLabel(&dialog);
             status->setObjectName(QStringLiteral("openingAssemblyError"));
@@ -29757,9 +29889,30 @@ private:
                     status->show();
                     return;
                 }
-                if (editSelectedOpeningAssembly(frame_width->text(), frame_depth->text(),
-                                                 panel->text(), glazing->text(), inset->text(),
-                                                 context.revision)) {
+                auto edited = assembly;
+                if (window_layout) {
+                    edited.window_layout = static_cast<WindowLayoutKind>(window_layout->currentIndex());
+                    const bool casement = edited.window_layout == WindowLayoutKind::casement;
+                    const bool sliding = edited.window_layout == WindowLayoutKind::sliding;
+                    edited.window_hinge_at_end = (casement || sliding) && window_jamb->currentIndex() == 1;
+                    edited.window_open_left = !(casement || sliding) || window_side->currentIndex() == 0;
+                    edited.window_angle_degrees = casement
+                        ? window_angle->value() == displayed_window_angle ? assembly.window_angle_degrees : window_angle->value()
+                        : 90.0;
+                    edited.window_slide_fraction = sliding
+                        ? window_travel->value() == displayed_window_travel ? assembly.window_slide_fraction : window_travel->value() / 100.0
+                        : 0.0;
+                }
+                const auto exact_if_unchanged = [&](QLineEdit* field, double original) {
+                    return field->text() == format_length(original, m_metric_units)
+                        ? QString::fromStdString(json(original).dump()) + QStringLiteral(" m") : field->text();
+                };
+                if (editSelectedOpeningAssembly(exact_if_unchanged(frame_width, assembly.frame_width_m),
+                                                 exact_if_unchanged(frame_depth, assembly.frame_depth_m),
+                                                 exact_if_unchanged(panel, assembly.panel_thickness_m),
+                                                 exact_if_unchanged(glazing, assembly.glazing_thickness_m),
+                                                 exact_if_unchanged(inset, assembly.inset_m),
+                                                 context.revision, edited)) {
                     dialog.accept();
                     return;
                 }
@@ -30104,6 +30257,7 @@ private:
     QString m_pending_opening_kind;
     QString m_pending_opening_symbol_id;
     std::optional<DoorOperation> m_pending_opening_door_operation;
+    std::optional<OpeningAssembly> m_pending_opening_profile;
     std::pair<std::string, Boundary> m_opening_preview_profile_cache;
     QWidget* m_wall_draw_fields{};
     QWidget* m_opening_draw_fields{};
@@ -30115,6 +30269,8 @@ private:
     QComboBox* m_opening_style{};
     QDoubleSpinBox* m_opening_draw_travel{};
     QLabel* m_opening_draw_travel_label{};
+    QDoubleSpinBox* m_opening_draw_angle{};
+    QLabel* m_opening_draw_angle_label{};
     QLabel* m_architecture_hint{};
     BuildingViewKind m_architectural_view_kind{BuildingViewKind::plan};
     QString m_active_named_view;

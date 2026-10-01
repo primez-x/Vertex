@@ -3923,6 +3923,22 @@
     },
     {
       "category": "fixtures",
+      "path": "tests/fixtures/ifc-window-v1/curved-ccw.ifc"
+    },
+    {
+      "category": "fixtures",
+      "path": "tests/fixtures/ifc-window-v1/curved-cw.ifc"
+    },
+    {
+      "category": "fixtures",
+      "path": "tests/fixtures/ifc-window-v1/README.md"
+    },
+    {
+      "category": "fixtures",
+      "path": "tests/fixtures/ifc-window-v1/straight.ifc"
+    },
+    {
+      "category": "fixtures",
       "path": "tests/fixtures/README.md"
     },
     {

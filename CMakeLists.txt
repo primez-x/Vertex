@@ -1331,6 +1331,8 @@ if(BUILD_TESTING)
   add_test(NAME dxf_project_exchange COMMAND dxf_project_exchange_tests)
   add_executable(ifc_project_exchange_tests tests/ifc_project_exchange_tests.cpp)
   target_link_libraries(ifc_project_exchange_tests PRIVATE sketch_ifc_project_exchange)
+  target_compile_definitions(ifc_project_exchange_tests PRIVATE
+    VERTEX_IFC_LEGACY_WINDOW_FIXTURES="${CMAKE_SOURCE_DIR}/tests/fixtures/ifc-window-v1")
   add_test(NAME ifc_project_exchange COMMAND ifc_project_exchange_tests)
   if(SKETCH_BUILD_ARCHITECTURE OR SKETCH_BUILD_DESKTOP)
     set_tests_properties(ifc_project_exchange dxf_project_exchange PROPERTIES ENVIRONMENT_MODIFICATION

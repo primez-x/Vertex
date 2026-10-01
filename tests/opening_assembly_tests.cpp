@@ -16,11 +16,13 @@
 #include <gp_Ax1.hxx>
 #include <gp_Dir.hxx>
 #include <gp_Trsf.hxx>
+#include <gp_Vec.hxx>
 
 #include <algorithm>
 #include <cmath>
 #include <iostream>
 #include <iomanip>
+#include <limits>
 #include <numbers>
 #include <sstream>
 #include <stdexcept>
@@ -177,6 +179,257 @@ gp_Pnt mass_centre(const TopoDS_Shape& shape) {
     GProp_GProps properties;
     BRepGProp::VolumeProperties(shape, properties);
     return properties.CentreOfMass();
+}
+
+gp_Pnt attached_hinge_vertex(const std::vector<TopoDS_Shape>& parts, bool end, bool left) {
+    // Obtain the attachment from the actual closed sash, independently of the
+    // factory's axis calculation. Its outward corner must lie on the jamb's
+    // clear face and remain a vertex of the posed sash.
+    std::vector<gp_Pnt> sash_vertices;
+    for (TopExp_Explorer vertices(parts[end ? 5 : 4], TopAbs_VERTEX); vertices.More(); vertices.Next())
+        sash_vertices.push_back(BRep_Tool::Pnt(TopoDS::Vertex(vertices.Current())));
+    require(!sash_vertices.empty(), "closed casement lost hinge-side sash vertices");
+    const auto preferred = [&](const gp_Pnt& first, const gp_Pnt& second) {
+        if (std::abs(first.X() - second.X()) > 1e-7) return end ? first.X() > second.X() : first.X() < second.X();
+        if (std::abs(first.Y() - second.Y()) > 1e-7) return left ? first.Y() > second.Y() : first.Y() < second.Y();
+        return first.Z() < second.Z();
+    };
+    const auto pivot = *std::min_element(sash_vertices.begin(), sash_vertices.end(), preferred);
+    double minimum_x = std::numeric_limits<double>::infinity(), maximum_x = -minimum_x;
+    double minimum_y = minimum_x, maximum_y = maximum_x;
+    double minimum_z = minimum_x, maximum_z = maximum_x;
+    for (TopExp_Explorer vertices(parts[end ? 1 : 0], TopAbs_VERTEX); vertices.More(); vertices.Next()) {
+        const auto point = BRep_Tool::Pnt(TopoDS::Vertex(vertices.Current()));
+        minimum_x = std::min(minimum_x, point.X()); maximum_x = std::max(maximum_x, point.X());
+        minimum_y = std::min(minimum_y, point.Y()); maximum_y = std::max(maximum_y, point.Y());
+        minimum_z = std::min(minimum_z, point.Z()); maximum_z = std::max(maximum_z, point.Z());
+    }
+    near(pivot.X(), end ? minimum_x : maximum_x, "closed sash hinge edge is detached from jamb face");
+    require(pivot.Y() >= minimum_y - 1e-7 && pivot.Y() <= maximum_y + 1e-7 &&
+            pivot.Z() >= minimum_z - 1e-7 && pivot.Z() <= maximum_z + 1e-7,
+            "closed sash hinge vertex is outside the real jamb face");
+    return pivot;
+}
+
+bool has_vertex_at(const TopoDS_Shape& shape, const gp_Pnt& point) {
+    for (TopExp_Explorer vertices(shape, TopAbs_VERTEX); vertices.More(); vertices.Next())
+        if (BRep_Tool::Pnt(TopoDS::Vertex(vertices.Current())).Distance(point) < 1e-7) return true;
+    return false;
+}
+
+void check_window_descriptors() {
+    using namespace sketch;
+    const auto canonical = default_opening_assembly(OpeningAssemblyKind::window);
+    const auto legacy = opening_assembly_json(canonical);
+    require(legacy.size() == 7 && legacy.at("version") == 1,
+            "canonical window descriptor changed legacy persistence");
+    auto canonical_v2_door = legacy;
+    canonical_v2_door["version"] = 2;
+    canonical_v2_door["kind"] = "door";
+    canonical_v2_door["window_layout"] = "fixed";
+    canonical_v2_door["window_hinge_at_end"] = false;
+    canonical_v2_door["window_open_left"] = true;
+    canonical_v2_door["window_angle_degrees"] = 90.0;
+    canonical_v2_door["window_slide_fraction"] = 0.0;
+    rejects([&] { (void)parse_opening_assembly(canonical_v2_door); },
+            "a canonical v2 door accepted a window-only descriptor");
+    for (const auto layout : {WindowLayoutKind::double_fixed, WindowLayoutKind::triple_fixed,
+                              WindowLayoutKind::casement, WindowLayoutKind::sliding}) {
+        auto value = canonical;
+        value.window_layout = layout;
+        if (layout == WindowLayoutKind::casement) {
+            value.window_hinge_at_end = true;
+            value.window_open_left = false;
+            value.window_angle_degrees = 0;
+        }
+        if (layout == WindowLayoutKind::sliding) value.window_slide_fraction = 0.75;
+        const auto json = opening_assembly_json(value);
+        require(json.size() == 12 && json.at("version") == 2,
+                "window descriptor did not emit complete v2 schema");
+        require(parse_opening_assembly(json) == value, "v2 window descriptor round trip failed");
+        auto invalid = json; invalid["unknown"] = 1;
+        rejects([&]{ (void)parse_opening_assembly(invalid); }, "unknown descriptor key accepted");
+        invalid = json; invalid["window_hinge_at_end"] = 1;
+        rejects([&]{ (void)parse_opening_assembly(invalid); }, "nonboolean window handing accepted");
+        invalid = json; invalid["window_angle_degrees"] = "90";
+        rejects([&]{ (void)parse_opening_assembly(invalid); }, "nonnumeric angle accepted");
+        invalid = json; invalid.erase("window_open_left");
+        rejects([&]{ (void)parse_opening_assembly(invalid); }, "incomplete v2 schema accepted");
+        invalid = json; invalid["version"] = 3;
+        rejects([&]{ (void)parse_opening_assembly(invalid); }, "unknown descriptor version accepted");
+        invalid = json; invalid["version"] = 2.0;
+        rejects([&]{ (void)parse_opening_assembly(invalid); }, "floating descriptor version accepted");
+        invalid = json; invalid["window_layout"] = "awning";
+        rejects([&]{ (void)parse_opening_assembly(invalid); }, "unknown window layout accepted");
+        invalid = json; invalid["window_slide_fraction"] = nullptr;
+        rejects([&]{ (void)parse_opening_assembly(invalid); }, "null window travel accepted");
+        invalid = json; invalid["kind"] = "door";
+        rejects([&]{ (void)parse_opening_assembly(invalid); }, "door admitted window mechanism");
+    }
+    auto value = canonical;
+    value.window_hinge_at_end = true;
+    rejects([&]{ validate_opening_assembly(value); }, "fixed layout admitted dormant handing");
+    value = canonical; value.window_layout = WindowLayoutKind::casement;
+    value.window_slide_fraction = 0.1;
+    rejects([&]{ validate_opening_assembly(value); }, "casement admitted dormant sliding travel");
+    value.window_slide_fraction = 0; value.window_angle_degrees = 181;
+    rejects([&]{ validate_opening_assembly(value); }, "casement angle exceeded 180 degrees");
+    value.window_angle_degrees = -1;
+    rejects([&]{ validate_opening_assembly(value); }, "negative casement angle accepted");
+    value.window_angle_degrees = std::numeric_limits<double>::infinity();
+    rejects([&]{ validate_opening_assembly(value); }, "nonfinite window angle accepted");
+    value = canonical; value.window_layout = WindowLayoutKind::sliding;
+    value.window_slide_fraction = 1.01;
+    rejects([&]{ validate_opening_assembly(value); }, "slider travel exceeded panel width");
+    value.window_slide_fraction = 0; value.window_angle_degrees = 0;
+    rejects([&]{ validate_opening_assembly(value); }, "slider admitted dormant swing angle");
+    value.window_angle_degrees = 90; value.window_slide_fraction = -0.1;
+    rejects([&]{ validate_opening_assembly(value); }, "negative slider travel accepted");
+    value.window_slide_fraction = std::numeric_limits<double>::quiet_NaN();
+    rejects([&]{ validate_opening_assembly(value); }, "nonfinite slider travel accepted");
+}
+
+void check_window_layout_geometry() {
+    using namespace sketch;
+    const auto host = wall();
+    const auto hosted = opening();
+    const auto canonical = default_opening_assembly(OpeningAssemblyKind::window);
+    const double clear_width = hosted.width - 2 * canonical.frame_width_m;
+    const double clear_height = hosted.height - 2 * canonical.frame_width_m;
+    for (const int count : {2, 3}) {
+        auto profile = canonical;
+        profile.window_layout = count == 2 ? WindowLayoutKind::double_fixed : WindowLayoutKind::triple_fixed;
+        const auto parts = parts_of(make_opening_assembly(host, hosted, profile));
+        require(parts.size() == static_cast<std::size_t>(4 + count - 1 + 5 * count),
+                "split window lost distinct mullions, sashes, or panes");
+        const double width = (clear_width - (count - 1) * profile.frame_width_m) / count;
+        const double bar = std::min(profile.frame_width_m * 0.6, width * 0.2);
+        for (int pane = 0; pane < count; ++pane) {
+            const std::size_t first = 4 + count - 1 + 5 * pane;
+            near(solid_volume(parts[first + 4]), (width - 2 * bar) * (clear_height - 2 * bar) * profile.glazing_thickness_m,
+                 "split window pane volume is wrong");
+            for (std::size_t part = 0; part < parts.size(); ++part)
+                if (part != first + 4) near(intersection_volume(parts[first + 4], parts[part]), 0,
+                                           "split glazing overlaps sash, frame, or sibling");
+        }
+        const auto curve = curved_wall(-std::numbers::pi / 2, 0.63, {7, -4});
+        const auto curved = make_opening_assembly(curve, hosted, profile);
+        require(BRepCheck_Analyzer(curved).IsValid() && parts_of(curved).size() == parts.size(),
+                "split window lost fitted curved geometry");
+        auto tiny = hosted; tiny.width = 2 * profile.frame_width_m + (count - 1) * profile.frame_width_m;
+        rejects([&]{ (void)make_opening_assembly(host, tiny, profile); }, "split panes admitted zero clear width");
+    }
+    auto cut_host = host; cut_host.openings.push_back(hosted);
+    const auto wall_solid = make_wall(cut_host);
+    for (bool end : {false, true}) for (bool left : {false, true}) {
+        auto profile = canonical;
+        profile.window_layout = WindowLayoutKind::casement;
+        profile.window_hinge_at_end = end; profile.window_open_left = left;
+        profile.window_angle_degrees = 0;
+        const auto closed = parts_of(make_opening_assembly(host, hosted, profile));
+        const auto fixed = parts_of(make_opening_assembly(host, hosted, canonical));
+        near(intersection_volume(closed[8], fixed[8]), solid_volume(fixed[8]), "zero-angle casement did not remain closed");
+        const auto attachment = attached_hinge_vertex(closed, end, left);
+        for (double angle : {70.0, 90.0}) {
+            profile.window_angle_degrees = angle;
+            const auto opened = parts_of(make_opening_assembly(host, hosted, profile));
+            require(opened.size() == 9, "casement lost real sash parts or glazing");
+            const double side = left ? 1.0 : -1.0;
+            gp_Trsf transform;
+            transform.SetRotation(gp_Ax1(attachment, gp_Dir(0, 0, 1)),
+                angle * std::numbers::pi / 180 * side * (end ? -1 : 1));
+            require(has_vertex_at(opened[end ? 5 : 4], attachment),
+                    "opened casement hinge edge detached from its actual jamb attachment");
+            for (std::size_t part = 4; part < 9; ++part) {
+                const auto expected = BRepBuilderAPI_Transform(closed[part], transform, true).Shape();
+                near(intersection_volume(expected, opened[part]), solid_volume(expected), "casement sash or pane rotated about wrong jamb");
+                near(intersection_volume(opened[part], wall_solid), 0, "casement intersects actual host");
+                for (std::size_t frame_part = 0; frame_part < 4; ++frame_part)
+                    near(intersection_volume(opened[part], opened[frame_part]), 0, "casement intersects frame or sill");
+            }
+            for (std::size_t part = 4; part < 8; ++part)
+                near(intersection_volume(opened[part], opened[8]), 0, "posed casement glazing overlaps sash material");
+            near(solid_volume(make_opening_assembly(host, hosted, profile)), 0.10617728,
+                 "casement rotation changed material volume");
+            const auto plan = project_hosted_opening_plan(host, hosted, profile);
+            require(std::any_of(plan.begin(), plan.end(), [&](const auto& segment) {
+                return std::max(std::abs(segment.start.y), std::abs(segment.end.y)) > host.thickness * 0.5 + 1e-7;
+            }), "casement plan retained only the closed frame footprint");
+            const auto geometry = make_opening_assembly_geometry(host, hosted, profile);
+            require(!geometry.door_swing && geometry.door_swings.empty(), "casement gained misleading door operations");
+        }
+        profile.window_angle_degrees = 180;
+        rejects([&]{ (void)make_opening_assembly(host, hosted, profile); },
+                "recessed casement admitted a 180-degree pose through its jamb");
+        profile.window_angle_degrees = 1;
+        rejects([&]{ (void)make_opening_assembly(host, hosted, profile); },
+                "small-angle casement admitted finite-depth collision with opposite jamb");
+        profile.window_layout = WindowLayoutKind::sliding; profile.window_angle_degrees = 90;
+        for (double travel : {0.0, 0.5, 1.0}) {
+            profile.window_slide_fraction = travel;
+            const auto parts = parts_of(make_opening_assembly(host, hosted, profile));
+            require(parts.size() == 14, "slider requires two separately framed glazed sashes");
+            const double half = clear_width / 2;
+            near(mass_centre(parts[8]).X(), hosted.offset + profile.frame_width_m + (end ? 1.5 : 0.5) * half + (end ? -1 : 1) * half * travel,
+                 "slider movable pane has wrong bounded travel");
+            near(mass_centre(parts[13]).X(), hosted.offset + profile.frame_width_m + (end ? 0.5 : 1.5) * half,
+                 "slider stationary pane moved");
+            near(mass_centre(parts[8]).Y(), (left ? 1 : -1) * (profile.panel_thickness_m * 0.5 + default_geometry_tolerance_metres),
+                 "slider track side is wrong");
+            for (std::size_t pane : {std::size_t{8}, std::size_t{13}}) {
+                near(intersection_volume(parts[pane], wall_solid), 0, "slider pane entered host wall");
+                for (std::size_t frame_part = 0; frame_part < 4; ++frame_part)
+                    near(intersection_volume(parts[pane], parts[frame_part]), 0, "slider pane entered frame");
+            }
+            for (std::size_t first = 4; first < 9; ++first) for (std::size_t second = 9; second < 14; ++second)
+                near(intersection_volume(parts[first], parts[second]), 0, "sliding sashes share physical material");
+            const auto plan = project_hosted_opening_plan(host, hosted, profile);
+            require(!plan.empty() && std::none_of(plan.begin(), plan.end(), [](const auto& segment) {
+                return segment.sweep_radians != 0;
+            }), "straight sliding plan gained a schematic swing arc");
+        }
+    }
+    for (auto layout : {WindowLayoutKind::casement, WindowLayoutKind::sliding}) {
+        auto profile = canonical; profile.window_layout = layout;
+        const auto curve = curved_wall(std::numbers::pi / 2, 0.63, {7, -4});
+        rejects([&]{ (void)make_opening_assembly(curve, hosted, profile); }, "curved moving window silently became fixed");
+    }
+    auto shallow = canonical; shallow.window_layout = WindowLayoutKind::sliding; shallow.frame_depth_m = 0.06;
+    rejects([&]{ (void)make_opening_assembly(host, hosted, shallow); }, "window slider tracks escaped frame depth");
+    const double rotation = 0.63;
+    const Vec2 origin{7, -4};
+    auto rotated_host = host;
+    rotated_host.baseline.start = origin;
+    rotated_host.baseline.end = {origin.x + 5 * std::cos(rotation), origin.y + 5 * std::sin(rotation)};
+    gp_Trsf rotate, translate;
+    rotate.SetRotation(gp_Ax1(gp_Pnt(0, 0, 0), gp_Dir(0, 0, 1)), rotation);
+    translate.SetTranslation(gp_Vec(origin.x, origin.y, 0));
+    translate.Multiply(rotate);
+    for (auto layout : {WindowLayoutKind::double_fixed, WindowLayoutKind::triple_fixed,
+                        WindowLayoutKind::casement, WindowLayoutKind::sliding}) {
+        for (bool end : {false, true}) for (bool left : {false, true}) {
+            auto profile = canonical; profile.window_layout = layout; profile.inset_m = 0.025;
+            if (layout == WindowLayoutKind::casement || layout == WindowLayoutKind::sliding) {
+                profile.window_hinge_at_end = end; profile.window_open_left = left;
+            }
+            if (layout == WindowLayoutKind::sliding) profile.window_slide_fraction = 0.5;
+            const auto expected = BRepBuilderAPI_Transform(make_opening_assembly(host, hosted, profile), translate, true).Shape();
+            const auto actual = make_opening_assembly(rotated_host, hosted, profile);
+            near(intersection_volume(expected, actual), solid_volume(expected),
+                 "window geometry lost its signed inset or operation on a rotated host");
+        }
+    }
+    auto thick_host = host; thick_host.thickness = 0.4;
+    auto recessed = canonical; recessed.window_layout = WindowLayoutKind::casement;
+    recessed.inset_m = 0.035; recessed.frame_depth_m = 0.08;
+    for (bool end : {false, true}) for (bool left : {false, true}) {
+        recessed.window_hinge_at_end = end; recessed.window_open_left = left;
+        thick_host.openings = {hosted};
+        const auto parts = parts_of(make_opening_assembly(thick_host, hosted, recessed));
+        const auto solid = make_wall(thick_host);
+        for (std::size_t part = 4; part < 9; ++part)
+            near(intersection_volume(parts[part], solid), 0, "recessed casement intersects thick actual host");
+    }
 }
 
 void check_multi_leaf_doors() {
@@ -391,6 +644,8 @@ int main() {
         using namespace sketch;
         const auto door = default_opening_assembly(OpeningAssemblyKind::door);
         const auto window = default_opening_assembly(OpeningAssemblyKind::window);
+        check_window_descriptors();
+        check_window_layout_geometry();
         check_multi_leaf_doors();
         require(parse_opening_assembly_kind("door") == OpeningAssemblyKind::door,
                 "door assembly kind codec failed");
@@ -467,6 +722,19 @@ int main() {
         require(document.snapshot().entities().at(hosted.id).properties
                     .at("opening_assembly").at("kind") == "door",
                 "document did not retain opening assembly profile");
+
+        for (const auto layout : {WindowLayoutKind::double_fixed, WindowLayoutKind::triple_fixed,
+                                  WindowLayoutKind::casement, WindowLayoutKind::sliding}) {
+            auto profile = window; profile.window_layout = layout;
+            if (layout == WindowLayoutKind::casement) profile.window_angle_degrees = 0;
+            if (layout == WindowLayoutKind::sliding) profile.window_slide_fraction = 0.5;
+            auto persisted = opening_entity;
+            persisted.properties["opening_kind"] = "window";
+            persisted.properties["opening_assembly"] = opening_assembly_json(profile);
+            const auto saved = Document::create({wall_entity, persisted});
+            require(parse_opening_assembly(saved.snapshot().entities().at(hosted.id).properties.at("opening_assembly")) == profile,
+                    "document lost v2 window descriptor");
+        }
 
         auto mismatched = opening_entity;
         mismatched.properties["opening_kind"] = "window";

@@ -548,6 +548,16 @@ OpeningAssemblyGeometry make_opening_assembly_geometry(const Wall& wall, const H
     };
     const bool curved = wall.baseline.sweep_radians != 0.0;
     const bool sliding = door_operation && door_operation->kind == DoorOperationKind::sliding;
+    const bool window_sliding = window && assembly.window_layout == WindowLayoutKind::sliding;
+    const bool window_casement = window && assembly.window_layout == WindowLayoutKind::casement;
+    if (curved && (window_sliding || window_casement))
+        throw std::invalid_argument("Moving window mechanisms require a straight host");
+    if (window_sliding) {
+        const double track_depth = 2.0 * assembly.panel_thickness_m + 2.0 * tolerance;
+        if (track_depth > assembly.frame_depth_m + tolerance ||
+            std::abs(assembly.inset_m) + track_depth * 0.5 > wall.thickness * 0.5 + tolerance)
+            throw std::invalid_argument("Sliding window tracks do not fit the frame and wall thickness");
+    }
     if (sliding) {
         // Parallel straight tracks cannot follow an annular frame. Admit only
         // straight hosts until a fitted track profile is available.
@@ -584,7 +594,7 @@ OpeningAssemblyGeometry make_opening_assembly_geometry(const Wall& wall, const H
                    base_elevation + opening.height - frame_width,
                    "Opening assembly head construction failed"));
     if (window) {
-        add(fitted_part(frame_width, frame_across, clear_width,
+        add_frame(fitted_part(frame_width, frame_across, clear_width,
                        assembly.frame_depth_m, frame_width, base_elevation,
                        "Window assembly sill construction failed"));
     }
@@ -760,7 +770,9 @@ OpeningAssemblyGeometry make_opening_assembly_geometry(const Wall& wall, const H
                 add(*glazing);
             }
         }
-    } else {
+    } else if (assembly.window_layout == WindowLayoutKind::fixed) {
+        // Keep the v1 construction arithmetic and operation order unchanged:
+        // existing IFC native-profile admission compares the exact mesh.
         const double sash_bar = std::min(frame_width * 0.6, clear_width * 0.2);
         if (sash_bar <= tolerance || clear_height - 2.0 * sash_bar <= tolerance) {
             throw std::invalid_argument("Window assembly leaves no clear glazing pane");
@@ -785,6 +797,98 @@ OpeningAssemblyGeometry make_opening_assembly_geometry(const Wall& wall, const H
                         clear_height - 2.0 * sash_bar,
                         base_elevation + frame_width + sash_bar,
                         "Window assembly glazing construction failed"));
+    } else {
+        const int fixed_count = assembly.window_layout == WindowLayoutKind::double_fixed ? 2
+                              : assembly.window_layout == WindowLayoutKind::triple_fixed ? 3 : 1;
+        const int sash_count = window_sliding ? 2 : fixed_count;
+        const double mullion_width = fixed_count > 1 ? frame_width : 0.0;
+        const double sash_width = (clear_width - (fixed_count - 1) * mullion_width) / sash_count;
+        const double sash_bar = std::min(frame_width * 0.6, sash_width * 0.2);
+        if (!std::isfinite(sash_width) || sash_width <= tolerance || sash_bar <= tolerance ||
+            sash_width - 2.0 * sash_bar <= tolerance || clear_height - 2.0 * sash_bar <= tolerance)
+            throw std::invalid_argument("Window assembly leaves no clear glazing pane");
+        for (int index = 1; index < fixed_count; ++index) {
+            add_frame(fitted_part(frame_width + index * sash_width + (index - 1) * mullion_width,
+                frame_across, mullion_width, assembly.frame_depth_m, clear_height,
+                base_elevation + frame_width, "Window assembly mullion construction failed"));
+        }
+
+        // Admit the actual requested pose against the original cut host, frame,
+        // sill and sibling sash envelopes. This is a static clearance test; it
+        // does not promise that every intermediate swing angle is clear.
+        const auto cut_host = window_casement || window_sliding ? make_wall(checked) : TopoDS_Shape{};
+        const auto require_clear = [&](const TopoDS_Shape& first, const TopoDS_Shape& second,
+                                       const char* message) {
+            try {
+                BRepAlgoAPI_Common common(first, second);
+                common.Build();
+                if (!common.IsDone() || common.HasErrors())
+                    throw std::invalid_argument("Window clearance computation failed");
+                if (solid_volume(common.Shape()) > tolerance * tolerance * std::max(1.0, clear_height))
+                    throw std::invalid_argument(message);
+            } catch (const Standard_Failure& error) {
+                throw std::invalid_argument(std::string("Window clearance failed: ") + error.what());
+            }
+        };
+        std::vector<TopoDS_Shape> posed_sash_envelopes;
+        for (int index = 0; index < sash_count; ++index) {
+            double sash_start = frame_width + index * (sash_width + mullion_width);
+            double sash_across = panel_across;
+            if (window_sliding) {
+                const bool at_end = index == 0 ? assembly.window_hinge_at_end : !assembly.window_hinge_at_end;
+                sash_start = frame_width + (at_end ? sash_width : 0.0);
+                const double track_side = (assembly.window_open_left ? 1.0 : -1.0) * (index == 0 ? 1.0 : -1.0);
+                sash_across += track_side * (panel_depth * 0.5 + tolerance);
+                if (index == 0)
+                    sash_start += (at_end ? -1.0 : 1.0) * sash_width * assembly.window_slide_fraction;
+            }
+            std::optional<gp_Pnt> hinge;
+            double angle = 0.0;
+            if (window_casement) {
+                const double side = assembly.window_open_left ? 1.0 : -1.0;
+                // The axis passes through the outward sash corner on the
+                // clear jamb face. This keeps its physical attachment fixed
+                // during rotation; an inset sash cannot use a remote wall-face
+                // pivot to escape a genuinely colliding requested pose.
+                const double pivot_across = assembly.inset_m + side * panel_depth * 0.5;
+                hinge = opening_point(frame, assembly.window_hinge_at_end ? sash_start + sash_width : sash_start,
+                                      pivot_across, base_elevation + frame_width);
+                angle = assembly.window_angle_degrees * std::numbers::pi / 180.0 * side *
+                        (assembly.window_hinge_at_end ? -1.0 : 1.0);
+            }
+            const auto pose = [&](const TopoDS_Shape& part) {
+                return hinge ? rotate_opening_part(part, *hinge, angle,
+                    "Window assembly sash rotation failed") : part;
+            };
+            if (window_casement || window_sliding) {
+                const auto envelope = pose(fitted_part(sash_start, sash_across, sash_width, panel_depth,
+                    clear_height, base_elevation + frame_width, "Window sash envelope construction failed"));
+                for (const auto& frame_part : frame_parts)
+                    require_clear(envelope, frame_part, "Window sash intersects its frame or sill");
+                require_clear(envelope, cut_host, "Window sash intersects its host wall");
+                for (const auto& sibling : posed_sash_envelopes)
+                    require_clear(envelope, sibling, "Window sashes collide at the requested pose");
+                posed_sash_envelopes.push_back(envelope);
+            }
+            // Four nonoverlapping bars form the sash aperture. The real pane
+            // fills that removed region, never the sash's material volume.
+            add(pose(fitted_part(sash_start, sash_across, sash_bar, panel_depth,
+                clear_height, base_elevation + frame_width, "Window assembly sash construction failed")));
+            add(pose(fitted_part(sash_start + sash_width - sash_bar, sash_across,
+                sash_bar, panel_depth, clear_height, base_elevation + frame_width,
+                "Window assembly sash construction failed")));
+            add(pose(fitted_part(sash_start + sash_bar, sash_across, sash_width - 2.0 * sash_bar,
+                panel_depth, sash_bar, base_elevation + frame_width,
+                "Window assembly sash construction failed")));
+            add(pose(fitted_part(sash_start + sash_bar, sash_across, sash_width - 2.0 * sash_bar,
+                panel_depth, sash_bar, base_elevation + opening.height - frame_width - sash_bar,
+                "Window assembly sash construction failed")));
+            add(pose(fitted_part(sash_start + sash_bar,
+                sash_across + (panel_depth - assembly.glazing_thickness_m) * 0.5,
+                sash_width - 2.0 * sash_bar, assembly.glazing_thickness_m,
+                clear_height - 2.0 * sash_bar, base_elevation + frame_width + sash_bar,
+                "Window assembly glazing construction failed")));
+        }
     }
 
     if (compound.IsNull() || !BRepCheck_Analyzer(compound).IsValid() ||

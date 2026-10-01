@@ -77,7 +77,18 @@ stores frame width/depth, panel thickness, glazing thickness, and signed inset
 in metres. The host wall cut remains authoritative; the native 3D view adds a
 derived frame, leaf or sash, and glazing compound inside that cut. A door leaf
 and its optional glazing follow the persisted handed swing. Window profiles
-produce a four-bar sash and a real glazing pane. Curved windows use concentric
+produce actual framed glazing panes. Fixed single, double and triple layouts
+have one, two or three panes; split layouts include physical mullions. Casements
+rotate a glazed sash about its selected jamb. Sliding windows have one fixed
+and one movable framed sash on separate tracks; Open ranges from 0% to 100%.
+Their layout, handing, angle and travel remain editable in **Opening assembly**.
+Double-click the opening to reveal this command in 2D or 3D quick properties.
+An open sash remains selectable through its wall aperture without adding a
+false closed-pane line to the drawing or exported plan.
+Casement angle zero closes the sash. Both moving mechanisms require a straight
+host and validate the selected pose against the cut host, frame, sill and other
+sash. Continuous motion and clearances to unrelated objects are not certified.
+Curved fixed windows use concentric
 annular frame, sash and pane solids with signed wall-normal inset. Curved doors
 use radial frame parts and a fitted planar chord leaf. Its finite thickness and
 chord sagitta must fit the frame head; insufficient depth rejects with a fit
@@ -92,7 +103,8 @@ profile remain valid and continue to render as wall cuts, which keeps import
 lossless while a user upgrades selected instances.
 
 Schedules expose the profile kind and dimensions as read-only source-backed
-properties. The profile is strict schema version 1: unknown versions, missing
+properties. Canonical profiles retain strict schema version 1. Version 2 adds
+the window layout and its exact movement fields; unknown versions, missing
 fields, kind mismatches, impossible panel/depth relationships, and assemblies
 that do not fit the host wall are rejected before a Document mutation.
 The opening inspector's **Opening assembly…** command edits all five profile

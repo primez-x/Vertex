@@ -39,3 +39,16 @@ The corrected extent also exposed a first-fit camera using the pre-layout
 aspect. Defer that initial fit until layout settles, and drain it before the
 first navigation gesture. Subsequent resize and show cycles must retain the
 camera. Verify both the first framed model and preserved navigation.
+
+Continue with the window families that currently all manufacture one sash.
+The geometry worker owns the existing opening profile codec, manufactured
+solids and core regressions. The adapter worker owns schedules and IFC
+exchange. Root owns catalog mapping, placement controls, revision-checked
+editing, reflection, native verification, documentation, builds and Git.
+Persist fixed, double/triple fixed-pane, casement and sliding layouts in a
+strict versioned profile. Existing v1 single-pane profiles retain their exact
+schema. Plan drawing, hover preview, 3D and exchange derive from the same
+physical parts. Edits must preserve the layout and use the existing source
+revision, geometry admission and undo safeguards. Test catalog placement,
+opening edits, reflected geometry, archive round trips and exchange against
+the real profile. Bay windows and roof-hosted skylights remain open work.

@@ -13,6 +13,7 @@ namespace sketch {
 // door leaf thickness or the window sash depth, while a positive glazing
 // thickness adds a real pane to either family.
 enum class OpeningAssemblyKind { door, window };
+enum class WindowLayoutKind { fixed, double_fixed, triple_fixed, casement, sliding };
 
 struct OpeningAssembly {
     OpeningAssemblyKind kind{OpeningAssemblyKind::door};
@@ -22,6 +23,14 @@ struct OpeningAssembly {
     double glazing_thickness_m{0.0};
     // Signed offset from the wall centreline toward its left-hand normal.
     double inset_m{0.0};
+    // Window-only descriptor. A sliding window's hinge flag selects the
+    // moving end half, and open_left selects its positive-normal track.
+    // Canonical defaults retain the legacy v1 persistence representation.
+    WindowLayoutKind window_layout{WindowLayoutKind::fixed};
+    bool window_hinge_at_end{false};
+    bool window_open_left{true};
+    double window_angle_degrees{90.0};
+    double window_slide_fraction{0.0};
 
     bool operator==(const OpeningAssembly&) const = default;
 };
@@ -30,6 +39,9 @@ void validate_opening_assembly(const OpeningAssembly& value);
 [[nodiscard]] std::string_view opening_assembly_kind_name(OpeningAssemblyKind kind) noexcept;
 [[nodiscard]] std::optional<OpeningAssemblyKind>
 parse_opening_assembly_kind(std::string_view value) noexcept;
+[[nodiscard]] std::string_view window_layout_kind_name(WindowLayoutKind kind) noexcept;
+[[nodiscard]] std::optional<WindowLayoutKind>
+parse_window_layout_kind(std::string_view value) noexcept;
 [[nodiscard]] OpeningAssembly default_opening_assembly(OpeningAssemblyKind kind);
 [[nodiscard]] OpeningAssembly parse_opening_assembly(const nlohmann::json& value);
 [[nodiscard]] nlohmann::json opening_assembly_json(const OpeningAssembly& value);

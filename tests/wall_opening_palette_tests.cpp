@@ -22,6 +22,7 @@
 #include <QMouseEvent>
 #include <QDropEvent>
 #include <QDialog>
+#include <QDialogButtonBox>
 #include <QDoubleSpinBox>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -73,9 +74,11 @@ static sketch::Boundary opening_plan(const sketch::DocumentSnapshot& snapshot, c
     const auto opening = std::find_if(wall.openings.begin(), wall.openings.end(),
         [&](const auto& candidate) { return candidate.id==id; });
     require(opening!=wall.openings.end(), "manufactured opening retains host identity");
+    std::optional<sketch::DoorOperation> operation;
+    if (source.properties.contains("door_operation"))
+        operation = sketch::decode_door_operation(source.properties.at("door_operation"));
     return sketch::project_hosted_opening_plan(wall, *opening,
-        sketch::parse_opening_assembly(source.properties.at("opening_assembly")),
-        sketch::decode_door_operation(source.properties.at("door_operation")));
+        sketch::parse_opening_assembly(source.properties.at("opening_assembly")), operation);
 }
 
 static std::vector<sketch::Vec2> projection_samples(const sketch::Boundary& plan) {
@@ -205,6 +208,113 @@ int main(int argc, char** argv) {
             require(dropped_opening != dropped.entities().end() && dropped_opening->second.type == "opening" &&
                         dropped_opening->second.properties.at("wall_id") == wall.toStdString(),
                     "Snap-on catalog drop accepts an exact point on the off-grid diagonal host");
+        }
+        for (const auto& [catalog_id, layout] : {
+                 std::pair{"svg-v2-10_windows-window-casement", "casement"},
+                 std::pair{"svg-v2-10_windows-window-sliding", "sliding"},
+                 std::pair{"svg-v2-10_windows-window-double", "double_fixed"},
+                 std::pair{"svg-v2-10_windows-window-triple", "triple_fixed"}}) {
+            sketch::desktop::MainWindow variant;
+            variant.resize(1200, 800);
+            variant.setMetricUnits(true);
+            variant.show();
+            const auto host = variant.createStraightWall({-4, 0}, {4, 0});
+            require(!host.isEmpty(), "window variant host exists");
+            QApplication::processEvents();
+            auto* target = dynamic_cast<sketch::desktop::PlanCanvas*>(
+                variant.findChild<QWidget*>(QStringLiteral("measurementPlanCanvas")));
+            require(target != nullptr, "window variant canvas exists");
+            const auto center = target->viewCenter();
+            const auto viewport = QRectF(target->rect());
+            const QPointF point{viewport.center().x() - center.x * target->viewScale(),
+                                viewport.center().y() + center.y * target->viewScale()};
+            QMimeData payload;
+            payload.setData("application/x-vertex-symbol", QJsonDocument(QJsonObject{
+                {QStringLiteral("id"), QString::fromLatin1(catalog_id)},
+                {QStringLiteral("scale"), 1.0}}).toJson(QJsonDocument::Compact));
+            QDragEnterEvent enter(point.toPoint(), Qt::CopyAction, &payload, Qt::LeftButton, Qt::NoModifier);
+            QApplication::sendEvent(target, &enter);
+            QDropEvent drop(point, Qt::CopyAction, &payload, Qt::LeftButton, Qt::NoModifier);
+            QApplication::sendEvent(target, &drop);
+            const auto snapshot = variant.document().snapshot();
+            const auto created = snapshot.entities().find(variant.selectedEntityId().toStdString());
+            require(created != snapshot.entities().end() && created->second.type == "opening",
+                    "window variant drop creates a hosted opening");
+            const auto profile = created->second.properties.at("opening_assembly");
+            require(profile.value("window_layout", std::string{}) == layout,
+                    "catalog windows retain their actual panel layout and mechanism");
+            require(variant.undoCommand() && variant.redoCommand(), "window layout supports undo/redo");
+            const auto opening_id = QString::fromStdString(created->first);
+            require(variant.selectEntity(opening_id) && variant.editSelectedLength("1.8 m"),
+                    "window variant width can be edited");
+            require(variant.document().snapshot().entities().at(created->first).properties.at("opening_assembly") == profile,
+                    "width edits retain window layout");
+            require(variant.editSelectedOpeningAssembly("0.050123456789 m", "0.100123456789 m",
+                        "0.012345678901 m", "0.012123456789 m", "0.000123456789 m"),
+                    "window editor admits dimensions more precise than display rounding");
+            const auto precise_profile = variant.document().snapshot().entities().at(created->first).properties.at("opening_assembly");
+            bool editor_changed = false;
+            auto* editor = variant.findChild<QPushButton*>(QStringLiteral("editOpeningAssembly"));
+            require(editor != nullptr, "window assembly editor exists");
+            require(variant.workspace() == sketch::desktop::Workspace::measurement && !editor->isHidden(),
+                    "2D quick properties expose the physical window assembly editor");
+            QTimer::singleShot(0, &variant, [&] {
+                for (auto* widget : QApplication::topLevelWidgets()) {
+                    auto* dialog = qobject_cast<QDialog*>(widget);
+                    if (!dialog || dialog->objectName() != QStringLiteral("openingAssemblyDialog")) continue;
+                    auto* selector = dialog->findChild<QComboBox*>(QStringLiteral("openingWindowLayout"));
+                    auto* angle = dialog->findChild<QDoubleSpinBox*>(QStringLiteral("openingWindowAngle"));
+                    auto* travel = dialog->findChild<QDoubleSpinBox*>(QStringLiteral("openingWindowTravel"));
+                    auto* buttons = dialog->findChild<QDialogButtonBox*>();
+                    editor_changed = selector && angle && travel && buttons;
+                    if (editor_changed) {
+                        if (std::string(layout) == "casement") angle->setValue(70.0);
+                        if (std::string(layout) == "sliding") travel->setValue(50.0);
+                        buttons->button(QDialogButtonBox::Save)->click();
+                    } else dialog->reject();
+                }
+            });
+            editor->click();
+            require(editor_changed && variant.lastError().isEmpty(),
+                    "window editor exposes layout and commits its physical opening controls");
+            const auto edited_profile = variant.document().snapshot().entities().at(created->first).properties.at("opening_assembly");
+            for (const auto* key : {"frame_width_m", "frame_depth_m", "panel_thickness_m", "glazing_thickness_m", "inset_m"})
+                require(edited_profile.at(key) == precise_profile.at(key),
+                        "saving window movement preserves unchanged exact dimensions despite display rounding");
+            if (std::string(layout) == "casement") require(edited_profile.at("window_angle_degrees") == 70.0,
+                    "casement editor changes the physical sash angle");
+            if (std::string(layout) == "sliding") require(edited_profile.at("window_slide_fraction") == 0.5,
+                    "sliding editor changes the physical sash travel");
+            const auto before_reflection = projection_samples(opening_plan(variant.document().snapshot(), created->first));
+            require(variant.selectEntity(host) && variant.transformSelectedBoundary("0", true, false, "0 m", "0 m", false),
+                    "host reflection preserves the window mechanism");
+            const auto after_reflection = projection_samples(opening_plan(variant.document().snapshot(), created->first));
+            require(before_reflection.size() == after_reflection.size(), "window reflection retains all projected physical parts");
+            for (const auto point_before : before_reflection)
+                require(std::any_of(after_reflection.begin(), after_reflection.end(),
+                    [&](const auto candidate) { return same_point({-point_before.x, point_before.y}, candidate, 1e-6); }),
+                    "window sashes, tracks, mullions and glazing match a rigid reflection");
+            QTemporaryDir directory;
+            const auto path = directory.filePath("window-variant.bldproj");
+            const auto saved = variant.document().snapshot().entities().at(created->first);
+            require(directory.isValid() && variant.saveProjectAs(path) && variant.openProject(path),
+                    "window variant saves and reopens as a native project");
+            require(variant.document().snapshot().entities().at(created->first).properties == saved.properties,
+                    "native archive retains the complete window profile");
+            const auto revision_before_preset = variant.document().revision();
+            auto* place_window = variant.findChild<QPushButton*>(QStringLiteral("libraryWindow"));
+            auto* placement_style = variant.findChild<QComboBox*>(QStringLiteral("openingPlacementStyle"));
+            require(place_window && placement_style, "shared window placement controls exist");
+            place_window->click();
+            placement_style->setCurrentIndex(placement_style->findData(QString::fromLatin1(catalog_id)));
+            if (std::string(layout) == "casement")
+                variant.findChild<QDoubleSpinBox*>(QStringLiteral("openingDrawAngle"))->setValue(65.0);
+            if (std::string(layout) == "sliding")
+                variant.findChild<QDoubleSpinBox*>(QStringLiteral("openingDrawTravel"))->setValue(25.0);
+            require(target->boundaryDraftPreview() && target->boundaryDraftPreview()->segments.empty() &&
+                        target->boundaryDraftPreview()->instruction.contains(QStringLiteral("place the window")) &&
+                        variant.lastError().isEmpty() && variant.document().revision() == revision_before_preset,
+                    "sidebar preset edits await a real canvas target without stale overlap errors or wall instructions");
         }
         for (const auto& [catalog_id, mechanism] : {
                  std::pair{"svg-v2-09_doors-door-double", "double_hinged"},
