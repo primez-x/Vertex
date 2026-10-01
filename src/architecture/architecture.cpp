@@ -1,5 +1,6 @@
 #include "sketch/architecture.hpp"
 #include "sketch/hosted_opening_geometry.hpp"
+#include "sketch/wall_plan_junctions.hpp"
 
 #include <BRepAlgoAPI_Common.hxx>
 #include <BRepAlgoAPI_Cut.hxx>
@@ -743,7 +744,7 @@ TopoDS_Shape make_wall_join(const WallJoin& join, std::span<const Wall> walls) {
             const auto& right = *resolved[second];
             const std::array<Vec2, 2> left_endpoints{left.baseline.start, left.baseline.end};
             const std::array<Vec2, 2> right_endpoints{right.baseline.start, right.baseline.end};
-            bool touches = false;
+            bool touches = wall_baselines_have_interior_contact(left.baseline, right.baseline);
             for (const auto& left_endpoint : left_endpoints) {
                 for (const auto& right_endpoint : right_endpoints) {
                     if (endpoint_distance(left_endpoint, right_endpoint) <= tolerance) {
@@ -754,7 +755,8 @@ TopoDS_Shape make_wall_join(const WallJoin& join, std::span<const Wall> walls) {
             return touches && shapes_touch(wall_shapes[first], wall_shapes[second]);
         });
     if (!connected) {
-        throw std::invalid_argument("Wall join walls must share connected endpoints");
+        throw std::invalid_argument(
+            "Wall join walls must have connected baseline junctions with physical solid contact");
     }
 
     try {

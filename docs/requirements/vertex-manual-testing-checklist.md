@@ -1,6 +1,6 @@
 # Vertex user testing checklist
 
-293 practical tasks, grouped by how you use the app. This replaces the earlier engineering-oriented checklist. The old 130-item list is preserved separately as engineering-requirements-checklist.md.
+294 practical tasks, grouped by how you use the app. This replaces the earlier engineering-oriented checklist. The old 130-item list is preserved separately as engineering-requirements-checklist.md.
 
 This is a user acceptance list for the intended app, not a claim that every listed action is implemented or working in the current preview. If you cannot find a control, or a feature is absent, mark **Blocked / missing** and describe it. Specialized sections can be skipped if you do not use them or lack the device or sample files.
 
@@ -1655,6 +1655,13 @@ drawing; switching modes does not change existing geometry.
   - Expected: The inside and outside wall faces meet cleanly at the corner. There is no diagonal line or overlapping end cap through the joint. The window remains a real opening at its stored position and width. Wall lengths and exterior appraisal calculations use the stored geometry. The PDF shows the same joined corner.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
+
+- [ ] **U293 — Join a partition to the middle of a wall**
+  - Steps: Draw a long wall. Draw a second wall from its midpoint at a right angle, then press Escape to finish. Select each wall, change their thicknesses, and export a plan PDF. Also try drawing a partition across the long wall.
+  - Expected: The partition meets the host face cleanly. No wall end cap or host-face line crosses the solid junction. The exterior face stays continuous, each wall remains selectable, and the PDF has the same outline. Wall lengths remain the lengths you entered.
+  - Also try: Place a window across the meeting point. A partition ending inside that opening has an exposed end; the app must not draw wall material through the opening. Walls on separate floors must keep their own outlines.
+  - Result: Not tested
+  - Notes: ______________________________
 
 ## Issue report template
 

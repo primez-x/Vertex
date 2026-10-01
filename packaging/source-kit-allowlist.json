@@ -2155,6 +2155,10 @@
     },
     {
       "category": "docs",
+      "path": "docs/superpowers/plans/2026-10-01-wall-partition-junctions.md"
+    },
+    {
+      "category": "docs",
       "path": "docs/superpowers/plans/2026-10-01-wall-plan-corners.md"
     },
     {
@@ -2260,6 +2264,10 @@
     {
       "category": "docs",
       "path": "docs/verification/wall-measurement-2026-10-01.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/verification/wall-partition-junctions-2026-10-01.md"
     },
     {
       "category": "docs",
@@ -2752,6 +2760,10 @@
     {
       "category": "source",
       "path": "include/sketch/wall_measurement.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/wall_plan_junctions.hpp"
     },
     {
       "category": "source",
@@ -3468,6 +3480,10 @@
     {
       "category": "source",
       "path": "src/core/wall_measurement.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/wall_plan_junctions.cpp"
     },
     {
       "category": "source",
@@ -4368,6 +4384,10 @@
     {
       "category": "source",
       "path": "tests/wall_opening_palette_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/wall_plan_junctions_tests.cpp"
     },
     {
       "category": "source",

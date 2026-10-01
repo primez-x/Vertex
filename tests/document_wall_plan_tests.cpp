@@ -167,7 +167,7 @@ void test_context_and_elevation_mismatches_keep_endpoint_caps() {
     require_capped_source(different_elevation, "wall-a", "wall-b");
 }
 
-void test_three_way_junction_remains_capped_as_ambiguous() {
+void test_three_way_junction_retains_footprints_and_removes_internal_strokes() {
     auto entities = corner_entities({{0, 0}, {4, 0}, 0}, .2,
                                     {{4, 0}, {4, 3}, 0}, .4);
     entities.emplace("wall-c", wall_entity("wall-c", {{4, 0}, {5, 1}, 0}, .3));
@@ -185,9 +185,54 @@ void test_three_way_junction_remains_capped_as_ambiguous() {
             host, {}, properties.at("thickness_m").get<double>());
         require_boundary(result.at(id).footprint, original,
                          "a three-way endpoint must retain the complete capped footprint");
-        require_boundary(result.at(id).strokes, original,
-                         "an ambiguous endpoint must retain its cap stroke");
+        require(!closed(result.at(id).strokes),
+                "multi-way junction outlines omit internal material boundaries");
     }
+}
+
+void test_interior_partition_joins_keep_openings_and_contexts() {
+    Entities entities;
+    entities.emplace("host", wall_entity("host", {{0, 0}, {4, 0}, 0}, .2));
+    entities.emplace("branch", wall_entity("branch", {{2, 0}, {2, 3}, 0}, .4));
+    const auto original = entities;
+    const auto result = document_wall_plan_geometry(entities);
+    require(contains_segment(result.at("host").strokes, {{0, .1}, {1.8, .1}, 0}) &&
+            contains_segment(result.at("host").strokes, {{2.2, .1}, {4, .1}, 0}),
+            "host inside face splits only across the real partition thickness");
+    require(contains_segment(result.at("host").strokes, {{4, -.1}, {0, -.1}, 0}),
+            "the exterior host face stays continuous");
+    require(contains_segment(result.at("branch").strokes, {{1.8, .1}, {1.8, 3}, 0}) &&
+            contains_segment(result.at("branch").strokes, {{2.2, 3}, {2.2, .1}, 0}),
+            "partition faces begin at the host face without an internal cap");
+    require_boundary(result.at("branch").footprint,
+        wall_plan_footprint({{2,0},{2,3},0},{},.4), "closed partition picking geometry is preserved");
+    require(entities == original, "derived partitions do not change baselines or appraisal source geometry");
+    entities.at("branch").properties["floor_id"] = "floor-b";
+    const auto different_floor = document_wall_plan_geometry(entities);
+    require_boundary(different_floor.at("host").strokes, different_floor.at("host").footprint,
+        "another floor cannot remove the host outline");
+    entities = original;
+    entities.emplace("host-opening", opening_entity("host-opening", "host", 1.5, 1.0));
+    const auto void_result = document_wall_plan_geometry(entities);
+    require_boundary(void_result.at("branch").strokes, void_result.at("branch").footprint,
+        "a partition ending inside an opening remains visibly capped");
+}
+
+void test_partition_near_mitered_corner_uses_both_wall_materials() {
+    auto entities = corner_entities({{0, 0}, {4, 0}, 0}, .2,
+                                    {{4, 0}, {4, 3}, 0}, .2);
+    entities.emplace("partition", wall_entity("partition", {{3.95, 0}, {3.95, -3}, 0}, .2));
+    const auto result = document_wall_plan_geometry(entities);
+    const auto& strokes = result.at("partition").strokes;
+    require(!contains_segment(strokes, {{4.0,0},{4.05,0},0}) &&
+            !contains_segment(strokes, {{4.05,0},{4.05,-.05},0}),
+        "a partition near a mitered corner removes strokes buried inside either qualified corner partner");
+    require(contains_segment(strokes, {{4.05,-.1},{4.05,-3},0}) &&
+            contains_segment(strokes, {{3.85,-3},{3.85,-.1},0}),
+        "near-corner partition retains its two real exterior faces");
+    require_boundary(result.at("partition").footprint,
+        wall_plan_footprint({{3.95,0},{3.95,-3},0},{},.2),
+        "combined corner and T clipping preserves the closed partition polygon");
 }
 
 void test_curved_endpoint_neighbor_keeps_both_walls_capped() {
@@ -331,7 +376,9 @@ int main() {
     try {
         test_unequal_thickness_corner_miters_both_endpoint_orientations();
         test_context_and_elevation_mismatches_keep_endpoint_caps();
-        test_three_way_junction_remains_capped_as_ambiguous();
+        test_three_way_junction_retains_footprints_and_removes_internal_strokes();
+        test_interior_partition_joins_keep_openings_and_contexts();
+        test_partition_near_mitered_corner_uses_both_wall_materials();
         test_curved_endpoint_neighbor_keeps_both_walls_capped();
         test_neighbor_flush_opening_does_not_create_a_join();
         test_fully_cut_neighbor_does_not_create_a_join();

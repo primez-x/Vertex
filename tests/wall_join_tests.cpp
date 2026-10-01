@@ -4,6 +4,7 @@
 
 #include <cmath>
 #include <iostream>
+#include <numbers>
 #include <stdexcept>
 #include <string_view>
 #include <vector>
@@ -47,6 +48,37 @@ Entity wall_entity(const Wall& value) {
 
 Json join_properties(std::vector<std::string> ids) {
     return {{"version", 1}, {"style", "fused"}, {"wall_ids", std::move(ids)}};
+}
+
+bool same_wall_record(const Wall& first, const Wall& second) {
+    return first.id == second.id &&
+           first.baseline.start.x == second.baseline.start.x &&
+           first.baseline.start.y == second.baseline.start.y &&
+           first.baseline.end.x == second.baseline.end.x &&
+           first.baseline.end.y == second.baseline.end.y &&
+           first.baseline.sweep_radians == second.baseline.sweep_radians &&
+           first.thickness == second.thickness && first.height == second.height &&
+           first.elevation == second.elevation && first.openings == second.openings &&
+           first.layers == second.layers && first.slope_rise == second.slope_rise;
+}
+
+void require_interior_join_volume(const Wall& first, const Wall& second,
+                                  double required_overlap_volume,
+                                  std::string_view join_id) {
+    std::vector<Wall> sources{first, second};
+    const auto original_sources = sources;
+    const WallJoin join{std::string(join_id), {first.id, second.id}, WallJoinStyle::fused};
+    const auto shape = sketch::make_wall_join(join, sources);
+    const auto joined_volume = sketch::solid_volume(shape);
+    const auto source_volume = sketch::solid_volume(sketch::make_wall(first)) +
+                               sketch::solid_volume(sketch::make_wall(second));
+    require(!shape.IsNull() && std::isfinite(joined_volume) && joined_volume > 0.0,
+            "interior baseline contact must produce a valid fused solid");
+    require(joined_volume <= source_volume - required_overlap_volume + 1e-6,
+            "fused solid must remove the known shared volume at an interior contact");
+    require(same_wall_record(sources[0], original_sources[0]) &&
+                same_wall_record(sources[1], original_sources[1]),
+            "building a fused wall join must leave source wall records unchanged");
 }
 
 void test_join_codec_is_versioned_and_lossless() {
@@ -118,6 +150,60 @@ void test_join_accepts_chain_in_nonadjacent_order() {
             "transitively connected wall chain must produce a solid regardless of member order");
 }
 
+void test_join_accepts_straight_t_intersection_and_removes_overlap() {
+    const auto host = wall("wall-host", 0.0, 0.0, 4.0, 0.0);
+    const auto branch = wall("wall-branch", 2.0, 0.0, 2.0, 3.0);
+    require_interior_join_volume(host, branch, 0.02 * 3.0, "join-t");
+}
+
+void test_join_accepts_straight_x_intersection_and_removes_overlap() {
+    const auto horizontal = wall("wall-horizontal", 0.0, 0.0, 4.0, 0.0);
+    const auto vertical = wall("wall-vertical", 2.0, -2.0, 2.0, 2.0);
+    require_interior_join_volume(horizontal, vertical, 0.04 * 3.0, "join-x");
+}
+
+void test_interior_baseline_contact_still_requires_solid_contact() {
+    const auto host = wall("wall-host", 0.0, 0.0, 4.0, 0.0);
+    auto raised_branch = wall("wall-raised", 2.0, 0.0, 2.0, 3.0);
+    raised_branch.elevation = 4.0;
+    rejected([&] {
+        (void)sketch::make_wall_join(
+            WallJoin{"join-raised", {host.id, raised_branch.id}, WallJoinStyle::fused},
+            std::vector<Wall>{host, raised_branch});
+    }, "crossing wall baselines at disjoint elevations must not form a join");
+
+    auto opened_host = host;
+    opened_host.openings.push_back({"opening-through-contact", 1.7, 0.6, 0.0, 3.0});
+    const auto branch = wall("wall-through-opening", 2.0, 0.0, 2.0, 3.0);
+    rejected([&] {
+        (void)sketch::make_wall_join(
+            WallJoin{"join-opening", {opened_host.id, branch.id}, WallJoinStyle::fused},
+            std::vector<Wall>{opened_host, branch});
+    }, "an opening that removes solid at a baseline contact must prevent the join");
+}
+
+void test_join_rejects_malformed_source_wall() {
+    auto malformed = wall("wall-malformed", 0.0, 0.0, 4.0, 0.0);
+    malformed.thickness = 0.0;
+    const auto neighbor = wall("wall-neighbor", 4.0, 0.0, 4.0, 3.0);
+    rejected([&] {
+        (void)sketch::make_wall_join(
+            WallJoin{"join-malformed", {malformed.id, neighbor.id}, WallJoinStyle::fused},
+            std::vector<Wall>{malformed, neighbor});
+    }, "malformed source walls must still be rejected before joining");
+}
+
+void test_curved_endpoint_join_remains_supported() {
+    auto arc = wall("wall-arc", 0.0, 0.0, 1.0, 1.0);
+    arc.baseline.sweep_radians = std::numbers::pi / 2.0;
+    const auto tangent = wall("wall-tangent", 1.0, 1.0, 1.0, 4.0);
+    const auto shape = sketch::make_wall_join(
+        WallJoin{"join-curved-endpoint", {arc.id, tangent.id}, WallJoinStyle::fused},
+        std::vector<Wall>{arc, tangent});
+    require(!shape.IsNull() && sketch::solid_volume(shape) > 0.0,
+            "existing curved endpoint contact must remain joinable");
+}
+
 void test_sloped_join_requires_contact_at_the_shared_endpoint() {
     auto sloped = wall("wall-sloped", 0.0, 0.0, 4.0, 0.0);
     sloped.height = 1.0;
@@ -169,6 +255,11 @@ int main() {
         test_join_codec_is_versioned_and_lossless();
         test_fused_join_requires_connected_walls_and_returns_real_solid();
         test_join_accepts_chain_in_nonadjacent_order();
+        test_join_accepts_straight_t_intersection_and_removes_overlap();
+        test_join_accepts_straight_x_intersection_and_removes_overlap();
+        test_interior_baseline_contact_still_requires_solid_contact();
+        test_join_rejects_malformed_source_wall();
+        test_curved_endpoint_join_remains_supported();
         test_join_rejects_two_disconnected_pairs();
         test_sloped_join_requires_contact_at_the_shared_endpoint();
         test_document_validates_join_references_and_persists_record();

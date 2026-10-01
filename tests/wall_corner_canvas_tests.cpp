@@ -97,6 +97,42 @@ void test_opening_preview_updates_neighbor_when_corner_becomes_unsafe() {
     require(canvas->openingWidthPreviewEntities().empty() &&
         window.document().snapshot().entities() == source.entities(), "cancel clears neighbor preview without committing");
 }
+void test_partition_junction_output_and_opening_void() {
+    MainWindow window;
+    window.resize(1200, 800);
+    window.setMetricUnits(true);
+    window.setWorkspace(Workspace::measurement);
+    window.show();
+    const auto host = window.createStraightWall({0, 0}, {4, 0});
+    const auto partition = window.createStraightWall({2, 0}, {2, 3});
+    auto* canvas = dynamic_cast<PlanCanvas*>(window.findChild<QWidget*>(QStringLiteral("measurementPlanCanvas")));
+    require(canvas && !host.isEmpty() && !partition.isEmpty(), "physical partition creates");
+    const auto& host_plan = find_wall(*canvas, host);
+    const auto& branch_plan = find_wall(*canvas, partition);
+    require(host_plan.segments.size() == 4 && branch_plan.segments.size() == 4,
+        "T junction retains both closed wall polygons for physical picking");
+    require(host_plan.stroke_segments->size() == 5 && branch_plan.stroke_segments->size() == 3,
+        "T junction removes the branch cap and splits the host face at actual wall thickness");
+    auto geometry = std::vector<CanvasEntity>{host_plan, branch_plan};
+    for (auto& entity : geometry) entity.selected = false;
+    const auto output = output_image(geometry);
+    require(dark_pixels(output, {475, 540}) == 0 && dark_pixels(output, {475, 561}) > 0,
+        "printable T junction removes only its interior seam and retains the exterior host face");
+    const auto source = window.document().snapshot();
+    require(window.selectEntity(host) && window.selectEntity(partition, true), "both T walls select");
+    const auto join = window.joinSelectedWalls();
+    require(!join.isEmpty() && window.document().snapshot().entities().at(join.toStdString()).type == "wall_join",
+        "the desktop join command admits the real T solid instead of requiring shared endpoints");
+    require(window.document().snapshot().entities().at(host.toStdString()) == source.entities().at(host.toStdString()) &&
+            window.document().snapshot().entities().at(partition.toStdString()) == source.entities().at(partition.toStdString()),
+        "the joined solid preserves both authoritative wall records");
+    require(window.selectEntity(host), "partition host selects");
+    const auto opening = window.createHostedOpening("window", "1.5 m", "1 m", "0.8 m", "1.2 m");
+    require(!opening.isEmpty(), "opening across the partition station creates");
+    const auto& exposed = find_wall(*canvas, partition);
+    require(exposed.stroke_segments->size() == 4,
+        "a partition ending inside a window void retains its exposed end cap");
+}
 void test_corner_retains_physical_picking_and_omits_output_seam() {
     MainWindow window;
     window.resize(1200, 800);
@@ -149,6 +185,7 @@ int main(int argc, char** argv) {
     try {
         test_corner_retains_physical_picking_and_omits_output_seam();
         test_opening_preview_updates_neighbor_when_corner_becomes_unsafe();
+        test_partition_junction_output_and_opening_void();
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
         return 1;

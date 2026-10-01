@@ -43,7 +43,8 @@ struct WallPlanJunction {
 struct WallPlanGeometry {
     // Complete closed wall-interval polygons for fill and hit testing.
     Boundary footprint;
-    // Visible plan edges, with only successfully joined endpoint caps omitted.
+    // Visible plan edges. Endpoint miters omit shared caps; the document
+    // projection can also subtract internal material strokes at T/X junctions.
     Boundary strokes;
     // True only when the corresponding host endpoint cap was successfully joined.
     bool joined_start{};
