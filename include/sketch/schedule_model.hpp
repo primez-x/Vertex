@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <map>
+#include <optional>
 #include <string>
 #include <variant>
 #include <vector>
@@ -50,6 +51,8 @@ struct ScheduleCell {
     bool editable{};
     std::vector<ScheduleSourceRef> sources;
     std::string explanation;
+    // Derived presentation metadata; value remains canonical SI and unrounded.
+    std::optional<unsigned> display_decimal_places;
     bool operator==(const ScheduleCell&) const = default;
 };
 struct ScheduleRow {

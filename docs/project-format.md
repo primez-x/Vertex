@@ -227,6 +227,21 @@ profile; a prior measurement profile is retained separately as
 workflow or appraisal-category fields migrate to measurement and `none`, which
 prevents an older project from silently acquiring GLA classifications.
 
+Appraisal display uses only `calculation_profile.decimal_places` (integer 0–6,
+default 2) and the current workspace unit. Its saved `version` is a positive local
+display-configuration revision, separate from the fixed appraisal policy version.
+An Area display edit updates only `decimal_places` and `version` when the profile
+object exists, retaining other fields and extension metadata verbatim. New
+configuration objects use the built-in profile defaults. This uses existing
+property metadata; no SQLite format migration is required. Malformed decimal
+settings visibly withhold numeric appraisal reports. A malformed or exhausted
+configuration revision prevents a display edit without changing geometry or
+qualifying/withholding a report that has valid decimal settings.
+
+Generated appraisal schedule cells carry optional `display_decimal_places`
+presentation metadata. Their `ScheduleQuantity` values remain unrounded SI;
+the metadata is rebuilt from the property and is not a stored schedule format.
+
 Closed area entities retain workflow-specific meanings independently.
 `measurement_classification` stores the user-selected measurement rule and
 `appraisal_category` stores the explicit appraisal category. `classification`

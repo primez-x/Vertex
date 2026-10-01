@@ -32,6 +32,22 @@ away from zero. Each display result includes its unrounded value, rounded value,
 rounding delta and locale-independent decimal text. Display precision never
 changes a boundary or its stored measurement.
 
+The Appraisal workflow exposes **Tools > Area display** with decimal places from
+0 through 6. The project stores this in `calculation_profile.decimal_places`;
+missing settings retain two places. The local display revision advances on a
+real saved change and participates in Undo/Redo and save/reopen. It does not
+change the built-in appraisal policy's ID, version or eligibility rules.
+Workspace Imperial/Metric units remain authoritative for display.
+
+`appraisal_display_profile()` resolves only this precision and the caller's
+unit. Hidden legacy profile IDs, units and classification metadata cannot alter
+or block appraisal eligibility; display edits preserve them verbatim. The
+inspector, the Appraisal schedules available in the 2D workspace, and the sheet
+renderer use the same `display_area()` rounding. Schedule quantities remain
+unrounded square metres; each generated area cell carries separate derived
+precision metadata. Invalid decimal settings withhold numeric totals and
+explain the problem. They are never silently clamped or repaired.
+
 ## Appraisal category report
 
 `ClassificationRule::appraisal_category` explicitly selects an

@@ -948,12 +948,14 @@ QString format_dimension_area(double square_metres, bool metric) {
         .arg(square_metres / square_metres_per_square_foot, 0, 'f', 1);
 }
 
-QString format_appraisal_area(double square_metres, bool metric) {
+QString format_appraisal_area(double square_metres, bool metric, unsigned decimal_places = 2) {
     if (!std::isfinite(square_metres)) return QStringLiteral("—");
-    if (metric) return QStringLiteral("%1 m²").arg(square_metres, 0, 'f', 2);
-    constexpr double square_metres_per_square_foot = 0.09290304;
-    return QStringLiteral("%1 ft²")
-        .arg(square_metres / square_metres_per_square_foot, 0, 'f', 2);
+    auto profile = builtin_appraisal_profile();
+    profile.display_unit = metric ? AreaUnit::square_metre : AreaUnit::square_foot;
+    profile.decimal_places = decimal_places;
+    const auto display = display_area(square_metres, profile);
+    return QString::fromStdString(display.text) +
+        (metric ? QStringLiteral(" m²") : QStringLiteral(" ft²"));
 }
 
 std::optional<Vec2> dimension_tangent_at_vertex(const IdentifiedSegment& identified,
@@ -1065,6 +1067,20 @@ QSizeF plan_area_label_footprint(const CanvasLabel& label,QFont base_font,const 
     auto footprint = QFontMetricsF(font, device).boundingRect(label.text);
     footprint.adjust(-5.0, -3.0, 5.0, 3.0);
     return footprint.size()/layout_scale;
+}
+
+QFont sheet_text_font(double point_size, double pixels_per_mm) {
+    QFont font(QStringLiteral("Inter"));
+    // Sheet geometry already uses the output's millimetre-to-pixel scale.
+    // Pixel-sized text avoids applying the printer DPI a second time.
+    font.setPixelSize(std::max(1, static_cast<int>(std::lround(
+        point_size * (25.4 / 72.0) * pixels_per_mm))));
+    // Inter's contextual punctuation alternates have private-use cmap entries.
+    // Qt's PDF subset maps those glyphs to PUA characters on copy/extraction.
+    // Keep ordinary punctuation glyphs while retaining normal text shaping.
+    font.setFeature("calt", 0);
+    font.setFeature("case", 0);
+    return font;
 }
 
 CanvasLabel place_plan_area_label(CanvasLabel label,const Boundary& boundary,
@@ -1677,7 +1693,8 @@ CalculationProfile read_calculation_profile(const json& properties) {
         profile.id = *id;
     }
     if (value.contains("version")) {
-        if (!value.at("version").is_number_unsigned()) {
+        if (!value.at("version").is_number_unsigned() ||
+            value.at("version").get<std::uint64_t>() > std::numeric_limits<unsigned>::max()) {
             throw std::invalid_argument("Calculation profile version must be positive");
         }
         profile.version = value.at("version").get<unsigned>();
@@ -1688,15 +1705,7 @@ CalculationProfile read_calculation_profile(const json& properties) {
     if (value.contains("display_unit")) {
         profile.display_unit = parse_area_unit(value.at("display_unit"));
     }
-    if (value.contains("decimal_places")) {
-        if (!value.at("decimal_places").is_number_unsigned()) {
-            throw std::invalid_argument("Calculation profile decimal_places must be unsigned");
-        }
-        profile.decimal_places = value.at("decimal_places").get<unsigned>();
-    }
-    if (profile.decimal_places > 6) {
-        throw std::invalid_argument("Calculation profile decimal_places must be 0-6");
-    }
+    profile.decimal_places = appraisal_display_profile(properties).decimal_places;
     if (value.contains("classifications")) {
         if (!value.at("classifications").is_object()) {
             throw std::invalid_argument("Calculation profile classifications must be an object");
@@ -1728,6 +1737,21 @@ CalculationProfile read_calculation_profile(const json& properties) {
                                          appraisal_category});
         }
     }
+    return profile;
+}
+
+CalculationProfile read_appraisal_display_configuration(const json& properties) {
+    auto profile = appraisal_display_profile(properties);
+    const auto configuration = properties.find("calculation_profile");
+    if (configuration == properties.end() || !configuration->contains("version")) return profile;
+    const auto& version = configuration->at("version");
+    if (!version.is_number_integer() ||
+        (!version.is_number_unsigned() && version.get<std::int64_t>() <= 0))
+        throw std::invalid_argument("Area display revision must be a positive integer");
+    const auto revision = version.get<std::uint64_t>();
+    if (revision == 0 || revision > std::numeric_limits<unsigned>::max())
+        throw std::invalid_argument("Area display revision is out of range");
+    profile.version = static_cast<unsigned>(revision);
     return profile;
 }
 
@@ -1891,7 +1915,8 @@ ScheduleRow appraisal_area_row(const AppraisalDocumentReport& report, std::strin
     row.kind = ScheduleRowKind::appraisal;
     row.cells.emplace("area", ScheduleCell{
         ScheduleQuantity{square_metres, ScheduleUnit::square_metre}, false, sources,
-        "Automatic area from authoritative boundary geometry, deductions and declared facts"});
+        "Automatic area from authoritative boundary geometry, deductions and declared facts",
+        report.display_decimal_places});
     row.cells.emplace("label", ScheduleCell{std::move(label), false, std::move(sources),
         "Appraisal scope/category label"});
     return row;
@@ -4765,15 +4790,11 @@ public:
             setError(QStringLiteral("This document is read-only."));
             return;
         }
+        bool appraisal_editor = false;
         try {
             const auto property = propertyEntity();
-            if (property.has_value() &&
-                calculation_workflow_name(property->properties) == "appraisal") {
-                setError(QStringLiteral(
-                    "The built-in appraisal profile is versioned and read-only. "
-                    "Switch to Measurement to edit a custom profile."));
-                return;
-            }
+            appraisal_editor = property.has_value() &&
+                calculation_workflow_name(property->properties) == "appraisal";
         } catch (const std::exception& error) {
             setError(QStringLiteral("Calculation profile: %1")
                          .arg(QString::fromUtf8(error.what())));
@@ -4782,12 +4803,15 @@ public:
         QDialog dialog(owner);
         styleDialog(dialog);
         dialog.setObjectName(QStringLiteral("calculationProfileDialog"));
-        dialog.setWindowTitle(QStringLiteral("Calculation profile"));
+        dialog.setWindowTitle(appraisal_editor ? QStringLiteral("Area display")
+                                              : QStringLiteral("Calculation profile"));
         dialog.setModal(true);
-        dialog.resize(680, 520);
+        dialog.resize(appraisal_editor ? 420 : 680, appraisal_editor ? 210 : 520);
 
         auto* layout = new QVBoxLayout(&dialog);
-        auto* help = new QLabel(QStringLiteral(
+        auto* help = new QLabel(appraisal_editor ? QStringLiteral(
+            "Decimal places affect displayed totals only. Units follow the workspace. "
+            "Appraisal eligibility rules remain fixed.") : QStringLiteral(
             "Profiles are stored in the project and versioned with every change. "
             "A classification rule controls building and living totals. Its appraisal category is "
             "explicit; Vertex never guesses GLA from a label."),
@@ -4811,7 +4835,8 @@ public:
         decimal_places->setRange(0, 6);
         decimal_places->setSuffix(QStringLiteral(" decimals"));
         profile_form->addRow(QStringLiteral("Profile ID"), profile_id);
-        profile_form->addRow(QStringLiteral("Version"), profile_version);
+        profile_form->addRow(appraisal_editor ? QStringLiteral("Display revision")
+                                             : QStringLiteral("Version"), profile_version);
         profile_form->addRow(QStringLiteral("Display unit"), display_unit);
         profile_form->addRow(QStringLiteral("Precision"), decimal_places);
         layout->addLayout(profile_form);
@@ -4840,6 +4865,13 @@ public:
         class_actions->addWidget(remove_classification);
         class_actions->addStretch(1);
         layout->addLayout(class_actions);
+        if (appraisal_editor) {
+            profile_form->setRowVisible(profile_id, false);
+            profile_form->setRowVisible(display_unit, false);
+            classifications->hide();
+            add_classification->hide();
+            remove_classification->hide();
+        }
 
         auto* status = new QLabel(&dialog);
         status->setObjectName(QStringLiteral("calculationProfileEditorStatus"));
@@ -4854,12 +4886,15 @@ public:
 
         CalculationProfile persisted;
         Revision record_revision{};
+        auto record_context = captureModalContext();
         try {
             const auto source = authoringSnapshot();
             const auto property = propertyEntity();
             if (!property.has_value()) throw std::invalid_argument("The project property is unavailable.");
-            persisted = read_calculation_profile(property->properties);
+            persisted = appraisal_editor ? read_appraisal_display_configuration(property->properties)
+                                         : read_calculation_profile(property->properties);
             record_revision = source.revision();
+            record_context = captureModalContext();
         } catch (const std::exception& error) {
             status->setText(QStringLiteral("Profile cannot be edited: %1")
                                 .arg(QString::fromUtf8(error.what())));
@@ -4872,7 +4907,8 @@ public:
         };
         const auto populate = [&] {
             profile_id->setText(QString::fromStdString(persisted.id));
-            profile_version->setText(QStringLiteral("%1  (next saved edit becomes %2)")
+            profile_version->setText(appraisal_editor ? QString::number(persisted.version)
+                : QStringLiteral("%1  (next saved edit becomes %2)")
                                          .arg(persisted.version)
                                          .arg(persisted.version == std::numeric_limits<unsigned>::max()
                                                   ? QStringLiteral("unavailable")
@@ -4932,23 +4968,25 @@ public:
         QObject::connect(buttons->button(QDialogButtonBox::Save), &QPushButton::clicked, &dialog, [&] {
             try {
                 const auto source = authoringSnapshot();
-                if (source.revision() != record_revision) {
+                if (!modalContextUnchanged(record_context) || source.revision() != record_revision) {
                     status->setText(QStringLiteral(
                         "The project changed while the profile editor was open. Close and reopen the editor before saving."));
                     return;
                 }
                 const auto property = propertyEntity();
                 if (!property.has_value()) throw std::invalid_argument("The project property is unavailable.");
-                const auto id = profile_id->text().trimmed().toStdString();
-                if (id.empty() || id.size() > 128 || id.find('\0') != std::string::npos)
-                    throw std::invalid_argument("Profile ID must contain 1-128 characters.");
-                CalculationProfile next;
-                next.id = id;
-                next.version = persisted.version;
-                const auto unit = display_unit->currentData().toString().toStdString();
-                next.display_unit = parse_area_unit(json(unit));
+                CalculationProfile next = appraisal_editor ? persisted : CalculationProfile{};
+                if (!appraisal_editor) {
+                    const auto id = profile_id->text().trimmed().toStdString();
+                    if (id.empty() || id.size() > 128 || id.find('\0') != std::string::npos)
+                        throw std::invalid_argument("Profile ID must contain 1-128 characters.");
+                    next.id = id;
+                    next.version = persisted.version;
+                    const auto unit = display_unit->currentData().toString().toStdString();
+                    next.display_unit = parse_area_unit(json(unit));
+                }
                 next.decimal_places = static_cast<unsigned>(decimal_places->value());
-                for (int row = 0; row < classifications->rowCount(); ++row) {
+                for (int row = 0; !appraisal_editor && row < classifications->rowCount(); ++row) {
                     const auto* name_item = classifications->item(row, 0);
                     const auto* building_item = classifications->item(row, 1);
                     const auto* living_item = classifications->item(row, 2);
@@ -4989,14 +5027,24 @@ public:
                     throw std::invalid_argument("Calculation profile version cannot advance further.");
                 next.version = persisted.version + 1;
                 auto updated = *property;
-                updated.properties["calculation_profile"] = calculation_profile_json(next);
-                if (!applyEntity(std::move(updated), "edit calculation profile", source.revision()))
+                if (appraisal_editor && updated.properties.contains("calculation_profile")) {
+                    // Display edits preserve stored rules and extension metadata.
+                    updated.properties["calculation_profile"]["decimal_places"] = next.decimal_places;
+                    updated.properties["calculation_profile"]["version"] = next.version;
+                } else {
+                    updated.properties["calculation_profile"] = calculation_profile_json(next);
+                }
+                if (!applyEntity(std::move(updated), "edit calculation profile", source.revision())) {
+                    status->setText(lastError());
                     return;
+                }
                 persisted = std::move(next);
                 record_revision = authoringSnapshot().revision();
                 refresh();
-                status->setText(QStringLiteral("Profile saved as version %1 through document history.")
-                                    .arg(persisted.version));
+                record_context = captureModalContext();
+                status->setText(appraisal_editor ? QStringLiteral("Area display saved.")
+                    : QStringLiteral("Profile saved as version %1 through document history.")
+                        .arg(persisted.version));
                 populate();
             } catch (const std::exception& error) {
                 status->setText(QStringLiteral("Profile: %1").arg(QString::fromUtf8(error.what())));
@@ -15194,14 +15242,16 @@ public:
             }
             auto classification = area_classification_for_workflow(
                 entity->properties, workflow);
-            auto profile = read_calculation_profile(property->properties);
+            auto profile = declared_appraisal
+                ? CalculationProfile{"vertex-physical-deductions", 1, AreaUnit::square_metre,
+                                     2, {{"physical", {false, false}}}}
+                : workflow == "appraisal" ? appraisal_display_profile(property->properties)
+                                          : read_calculation_profile(property->properties);
             if (declared_appraisal) {
                 // Deduction links edit physical geometry. Qualification and
                 // category derivation remain the report's responsibility, so
                 // incomplete facts cannot prevent correcting those links.
                 classification = "physical";
-                profile = CalculationProfile{"vertex-physical-deductions", 1,
-                    AreaUnit::square_metre, 2, {{"physical", {false, false}}}};
             } else if (!classification.has_value() || classification->empty()) {
                 throw std::invalid_argument(
                     workflow == "appraisal"
@@ -15867,8 +15917,7 @@ public:
                     ? QString::fromLatin1(architectural_view_name(view_kind)).toUpper()
                     : QString::fromStdString(view->name).trimmed().toUpper();
                 painter.setPen(QColor(45, 52, 60));
-                painter.setFont(QFont(QStringLiteral("Inter"),
-                                      std::max(6, static_cast<int>(8.0 * paper_scale))));
+                painter.setFont(sheet_text_font(8.0, paper_scale));
                 painter.drawText(viewport_rect.adjusted(4.0 * paper_scale,
                                                         3.0 * paper_scale,
                                                         -4.0 * paper_scale,
@@ -15923,8 +15972,7 @@ public:
                                         schedule_rect.width(), header_height),
                                  QColor(229, 235, 241));
                 painter.setPen(QColor(35, 41, 48));
-                painter.setFont(QFont(QStringLiteral("Inter"),
-                                      std::max(6, static_cast<int>(8.0 * paper_scale))));
+                painter.setFont(sheet_text_font(8.0, paper_scale));
                 const auto row_height = std::max(10.0, 14.0 * paper_scale);
                 const auto available_rows = std::max(0, static_cast<int>(
                     std::floor((schedule_rect.height() - header_height) / row_height)));
@@ -15966,7 +16014,8 @@ public:
                                 std::holds_alternative<ScheduleQuantity>(area->second.value)) {
                                 const auto quantity = std::get<ScheduleQuantity>(area->second.value);
                                 text += QStringLiteral("  %1")
-                                            .arg(format_appraisal_area(quantity.value, m_metric_units));
+                                            .arg(format_appraisal_area(quantity.value, m_metric_units,
+                                                area->second.display_decimal_places.value_or(2)));
                             } else if (status != cells.end()) {
                                 text += QStringLiteral("  %1").arg(schedule_value_text(status->second.value));
                             }
@@ -15997,8 +16046,7 @@ public:
                     painter.setPen(QPen(QColor(151, 94, 18),
                                         std::max(1.0, paper_scale * 0.35)));
                     painter.drawLine(overflow_rect.bottomLeft(), overflow_rect.bottomRight());
-                    painter.setFont(QFont(QStringLiteral("Inter"),
-                                          std::max(6, static_cast<int>(7.0 * paper_scale))));
+                    painter.setFont(sheet_text_font(7.0, paper_scale));
                     painter.drawText(overflow_rect.adjusted(4.0 * paper_scale, 0.0,
                                                              -4.0 * paper_scale, 0.0),
                                      Qt::AlignLeft | Qt::AlignVCenter | Qt::TextWordWrap,
@@ -16030,8 +16078,7 @@ public:
                 painter.setBrush(QColor(224, 242, 254));
                 painter.drawEllipse(anchor, radius, radius);
                 painter.setPen(QColor(17, 73, 109));
-                painter.setFont(QFont(QStringLiteral("Inter"),
-                                      std::max(6, static_cast<int>(8.0 * paper_scale))));
+                painter.setFont(sheet_text_font(8.0, paper_scale));
                 painter.drawText(QRectF(anchor.x() + radius + 3.0 * paper_scale,
                                        anchor.y() - radius,
                                        std::max(40.0, 170.0 * paper_scale),
@@ -16064,8 +16111,7 @@ public:
                                             revision_rect.width(), header_height),
                                      QColor(229, 235, 241));
                     painter.setPen(QColor(35, 41, 48));
-                    painter.setFont(QFont(QStringLiteral("Inter"),
-                                          std::max(6, static_cast<int>(7.5 * paper_scale))));
+                    painter.setFont(sheet_text_font(7.5, paper_scale));
                     painter.drawText(revision_rect.adjusted(4.0 * paper_scale, 0.0,
                                                             -4.0 * paper_scale,
                                                             -static_cast<double>(max_rows) * row_height),
@@ -16098,7 +16144,7 @@ public:
             painter.setPen(QPen(QColor(45, 52, 60), std::max(1.0, paper_scale * 0.6)));
             painter.drawRect(title_rect);
             painter.setPen(QColor(35, 41, 48));
-            painter.setFont(QFont(QStringLiteral("Inter"), std::max(7, static_cast<int>(9.0 * paper_scale))));
+            painter.setFont(sheet_text_font(9.0, paper_scale));
             const auto& title = sheet.title_block;
             painter.drawText(title_rect.adjusted(8.0 * paper_scale, 4.0 * paper_scale,
                                                  -8.0 * paper_scale, -4.0 * paper_scale),
@@ -16928,7 +16974,7 @@ public:
                 return false;
             }
             painter.setPen(QColor(150, 50, 50));
-            painter.setFont(QFont(QStringLiteral("Inter"), 16));
+            painter.setFont(sheet_text_font(16.0, painter.device()->logicalDpiY() / 25.4));
             painter.drawText(QRectF(30.0, 30.0, width - 60.0, 80.0),
                              Qt::TextWordWrap | Qt::AlignRight | Qt::AlignTop,
                              draftOutputStamp());
@@ -17695,7 +17741,12 @@ public:
                 } else if (column == "mark") {
                     text = QString::fromStdString(row.mark);
                 } else if (const auto cell = row.cells.find(column); cell != row.cells.end()) {
-                    text = schedule_value_text(cell->second.value);
+                    const auto* quantity = std::get_if<ScheduleQuantity>(&cell->second.value);
+                    text = row.kind == ScheduleRowKind::appraisal && quantity &&
+                           quantity->unit == ScheduleUnit::square_metre
+                        ? format_appraisal_area(quantity->value, m_metric_units,
+                            cell->second.display_decimal_places.value_or(2))
+                        : schedule_value_text(cell->second.value);
                     if (!cell->second.editable) {
                         tooltip = QStringLiteral("Calculated: %1")
                                       .arg(QString::fromStdString(cell->second.explanation));
@@ -24571,6 +24622,18 @@ private:
     }
 
     void refreshCalculationInspector(const std::optional<EntityValue>& selected) {
+        if (m_calculation_profile_action) {
+            try {
+                const auto property = propertyEntity();
+                const bool appraisal = property.has_value() &&
+                    calculation_workflow_name(property->properties) == "appraisal";
+                m_calculation_profile_action->setText(appraisal ? QStringLiteral("Area display…")
+                                                              : QStringLiteral("Calculation profile…"));
+                m_calculation_profile_action->setEnabled(m_document->is_editable() && property.has_value());
+            } catch (const std::exception&) {
+                m_calculation_profile_action->setEnabled(false);
+            }
+        }
         m_appraisal_qualification_value->setText(QStringLiteral("Unqualified — declare appraisal policy and facts."));
         m_appraisal_derived_value->setText(QStringLiteral("—"));
         m_appraisal_commercial_value->setText(QStringLiteral("—"));
@@ -24655,8 +24718,10 @@ private:
         CalculationProfile persisted_profile;
         std::string calculation_workflow;
         try {
-            persisted_profile = read_calculation_profile(property->properties);
             calculation_workflow = calculation_workflow_name(property->properties);
+            persisted_profile = calculation_workflow == "appraisal"
+                ? appraisal_display_profile(property->properties)
+                : read_calculation_profile(property->properties);
         } catch (const std::exception& error) {
             clear_controls();
             set_calculation_error(QStringLiteral("profile is invalid: %1")
@@ -24736,7 +24801,7 @@ private:
 
         m_calculation_profile_version->setText(
             appraisal_workflow
-                ? QStringLiteral("Built-in appraisal profile · version %1")
+                ? QStringLiteral("Appraisal rules v%1")
                       .arg(persisted_profile.version)
                 : QStringLiteral("Profile version %1").arg(persisted_profile.version));
         m_calculation_profile_version->setToolTip(QString::fromStdString(persisted_profile.id));
@@ -24767,12 +24832,14 @@ private:
         m_factor_edit->setEnabled(editable);
         m_include_building_check->setVisible(!appraisal_workflow);
         m_include_living_check->setVisible(!appraisal_workflow);
-        m_edit_calculation_profile_button->setVisible(!appraisal_workflow);
+        m_edit_calculation_profile_button->setVisible(true);
+        m_edit_calculation_profile_button->setText(appraisal_workflow ? QStringLiteral("Area display…")
+                                                                   : QStringLiteral("Edit calculation profile…"));
         m_include_building_check->setEnabled(editable && !appraisal_workflow);
         m_include_living_check->setEnabled(editable && !appraisal_workflow);
-        m_edit_calculation_profile_button->setEnabled(editable && !appraisal_workflow);
+        m_edit_calculation_profile_button->setEnabled(editable);
         if (m_calculation_profile_action)
-            m_calculation_profile_action->setEnabled(editable && !appraisal_workflow);
+            m_calculation_profile_action->setEnabled(editable);
 
         try {
             const auto& entities = snapshot.entities();
@@ -24868,8 +24935,8 @@ private:
             std::optional<MeasurementArea> selected_exclusion;
             std::optional<MeasurementArea> selected_site_area;
             if (declared) {
-                display_profile = builtin_appraisal_profile();
-                display_profile.display_unit = m_metric_units ? AreaUnit::square_metre : AreaUnit::square_foot;
+                display_profile = appraisal_display_profile(property->properties,
+                    m_metric_units ? AreaUnit::square_metre : AreaUnit::square_foot);
                 display_profile.classifications["unqualified"] = {false, false, AppraisalAreaCategory::none};
             }
             areas.reserve(entities.size());
@@ -26012,6 +26079,18 @@ private:
         if (m_model_phase_combo) m_model_phase_combo->setVisible(architectural);
         if (m_manage_phases_button) m_manage_phases_button->setVisible(architectural);
         for (auto* action : m_architectural_actions) action->setVisible(architectural);
+        // The same schedule projection includes 2D appraisal area summaries.
+        if (m_schedule_action) {
+            bool appraisal = false;
+            try {
+                const auto property = propertyEntity();
+                appraisal = property.has_value() &&
+                    calculation_workflow_name(property->properties) == "appraisal";
+            } catch (const std::exception&) {
+                // Invalid workflow metadata must not expose misleading area totals.
+            }
+            m_schedule_action->setVisible(architectural || appraisal);
+        }
         if (m_architectural_view_control_action) m_architectural_view_control_action->setVisible(architectural);
         if (m_object_button) m_object_button->setVisible(architectural);
         if (!architectural && m_inspector) {
@@ -26105,7 +26184,9 @@ private:
         const auto snapshot = m_document->snapshot();
         const auto property = snapshot.entities().find(context.property_id);
         if (property == snapshot.entities().end()) throw std::invalid_argument("drawing property is missing");
-        const auto profile = read_calculation_profile(property->second.properties);
+        const auto profile = calculation_workflow_name(property->second.properties) == "appraisal"
+            ? appraisal_display_profile(property->second.properties)
+            : read_calculation_profile(property->second.properties);
         QStringList choices;
         for (const auto& [name, rule] : profile.classifications) {
             (void)rule;

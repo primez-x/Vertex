@@ -231,6 +231,32 @@ Context context(const DocumentSnapshot& document, const Entity& boundary,
 
 } // namespace
 
+CalculationProfile appraisal_display_profile(
+    const nlohmann::json& property_properties, AreaUnit display_unit) {
+    auto profile = builtin_appraisal_profile();
+    profile.display_unit = display_unit;
+    const auto configuration = property_properties.find("calculation_profile");
+    if (configuration == property_properties.end()) return profile;
+    if (!configuration->is_object())
+        throw std::invalid_argument("calculation_profile must be an object");
+    const auto precision = configuration->find("decimal_places");
+    if (precision == configuration->end()) return profile;
+    if (precision->is_number_unsigned()) {
+        const auto value = precision->get<std::uint64_t>();
+        if (value <= 6) {
+            profile.decimal_places = static_cast<unsigned>(value);
+            return profile;
+        }
+    } else if (precision->is_number_integer()) {
+        const auto value = precision->get<std::int64_t>();
+        if (value >= 0 && value <= 6) {
+            profile.decimal_places = static_cast<unsigned>(value);
+            return profile;
+        }
+    }
+    throw std::invalid_argument("calculation_profile.decimal_places must be an integer from 0 to 6");
+}
+
 AppraisalDocumentReport build_appraisal_document_report(
     const DocumentSnapshot& document, const std::string& property_id,
     AreaUnit display_unit,
@@ -246,6 +272,14 @@ AppraisalDocumentReport build_appraisal_document_report(
         throw std::invalid_argument("calculation_workflow must be measurement or appraisal");
     result.configured = workflow == "appraisal";
     if (!result.configured) return result;
+    CalculationProfile profile;
+    try {
+        profile = appraisal_display_profile(property->second.properties, display_unit);
+        result.display_decimal_places = profile.decimal_places;
+    } catch (const std::invalid_argument& error) {
+        result.issues.push_back(std::string("Area display: ") + error.what());
+        return result;
+    }
     if (!property->second.properties.contains("appraisal_policy")) {
         result.issues.push_back("Declare an appraisal policy before producing automatic totals.");
         return result;
@@ -293,8 +327,6 @@ AppraisalDocumentReport build_appraisal_document_report(
         }
     }
 
-    auto profile = builtin_appraisal_profile();
-    profile.display_unit = display_unit;
     profile.classifications["unqualified"] = {false, false, AppraisalAreaCategory::none};
     std::vector<MeasurementArea> areas;
     for (const auto* entity : candidates) {

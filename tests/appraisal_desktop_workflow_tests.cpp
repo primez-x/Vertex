@@ -3,6 +3,7 @@
 #include "sketch/sheet_view_entity_codec.hpp"
 #include "sketch/project_store.hpp"
 #include "sketch/boundary_dimension.hpp"
+#include "sketch/appraisal_document.hpp"
 #include "sketch/desktop/boundary_input_dialog.hpp"
 #include "../src/desktop/plan_canvas.hpp"
 #include "support/noninteractive_errors.hpp"
@@ -29,12 +30,17 @@
 #include <QFont>
 #include <QFontDatabase>
 #include <QLayout>
+#include <QSpinBox>
+#include <QTableWidget>
+#include <QPdfSelection>
+#include <QRegularExpression>
 
 #include <algorithm>
 #include <cmath>
 #include <filesystem>
 #include <functional>
 #include <iostream>
+#include <map>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -912,6 +918,283 @@ void malformed_appraisal_projection_prints_withheld_status() {
             "malformed appraisal data must print an unqualified status and no area values");
 }
 
+void appraisal_area_display_precision_workflow() {
+    sketch::desktop::MainWindow window;
+    window.setMetricUnits(false);
+    const auto side = std::sqrt(1.51 * 0.09290304);
+    const auto first = window.createBoundary(square(0, 0, side));
+    auto* workflow = window.findChild<QComboBox*>(QStringLiteral("calculationWorkflow"));
+    require(workflow, "area display fixture needs the appraisal workflow selector");
+    workflow->setCurrentIndex(workflow->findData(QStringLiteral("appraisal")));
+    require(!first.isEmpty() && window.editSelectedAppraisalFacts(declarations()),
+            "area display fixture must qualify its first 1.51 square foot room");
+    const auto second = window.createBoundary(square(2, 0, side));
+    require(!second.isEmpty() && window.editSelectedAppraisalFacts(declarations()),
+            "area display fixture must qualify its second nonoverlapping room");
+    auto* gla = window.findChild<QLabel*>(QStringLiteral("appraisalGlaTotal"));
+    require(gla && gla->text().contains(QStringLiteral("3.02")),
+            "area display fixture must start with the exact aggregate shown at two decimals");
+    auto* action = window.findChild<QAction*>(QStringLiteral("calculationProfile"));
+    require(action && action->isEnabled(),
+            "qualified Appraisal must offer its Area display dialog");
+
+    // Opaque profile and entity metadata must survive a display-only edit.
+    auto seeded = window.document().snapshot();
+    auto property = seeded.entities().at("property-1");
+    property.properties["calculation_profile"]["vendor_rounding_note"] = {{"original", "retain verbatim"}};
+    property.properties["calculation_profile"]["classifications"]["above_grade_finished"]["vendor_rule"] = "retain";
+    // Hidden legacy Measurement fields cannot override or block Appraisal policy.
+    property.properties["calculation_profile"]["id"] = nullptr;
+    property.properties["calculation_profile"]["display_unit"] = "unknown-legacy-unit";
+    property.properties["calculation_profile"]["classifications"]["garage"] = "opaque legacy rule";
+    property.extensions["vendor_area_display"] = {{"value", 17}};
+    window.document().apply(sketch::ApplyEntityChanges{
+        seeded.revision(), {sketch::EntityChange::upsert(property)}, {}, "Seed opaque area display metadata"});
+    require(window.selectEntity(second) && gla->text() == QStringLiteral("3.02 ft²") && action->isEnabled(),
+            "hidden legacy profile metadata must not block qualified Appraisal totals or display editing");
+    const auto original = window.document().snapshot();
+    const auto physical_report = sketch::build_appraisal_document_report(original, "property-1");
+    require(physical_report.qualified && physical_report.calculation &&
+                std::abs(physical_report.calculation->property.gla().total.square_metres - 3.02 * 0.09290304) < 1e-12,
+            "area display source must independently contain the unrounded aggregate in SI");
+    const auto quantities = [&](const sketch::DocumentScheduleProjection& projection) {
+        std::map<std::string, sketch::ScheduleQuantity> result;
+        for (const auto& row : projection.snapshot.rows) {
+            const auto cell = row.cells.find("area");
+            if (row.kind == sketch::ScheduleRowKind::appraisal && cell != row.cells.end()) {
+                require(std::holds_alternative<sketch::ScheduleQuantity>(cell->second.value),
+                        "appraisal area schedule cells must retain typed quantities");
+                result.emplace(row.object_id, std::get<sketch::ScheduleQuantity>(cell->second.value));
+            }
+        }
+        require(!result.empty(), "area display fixture needs generated appraisal quantities");
+        return result;
+    };
+    const auto original_quantities = quantities(window.scheduleSnapshot());
+    const auto edit_precision = [&](int precision, bool save, bool tamper_policy = false,
+                                    const std::function<void()>& while_open = {}) {
+        bool seen = false;
+        QTimer::singleShot(0, &window, [&] {
+            auto* dialog = window.findChild<QDialog*>(QStringLiteral("calculationProfileDialog"));
+            require(dialog && dialog->windowTitle() == QStringLiteral("Area display"),
+                    "Appraisal must open its phase-specific Area display dialog");
+            seen = true;
+            auto* decimals = dialog->findChild<QSpinBox*>(QStringLiteral("calculationProfileDecimals"));
+            require(decimals && decimals->minimum() == 0 && decimals->maximum() == 6 && decimals->isVisibleTo(dialog),
+                    "Area display must expose only a bounded decimal precision input");
+            for (const auto* name : {"calculationProfileId", "calculationProfileDisplayUnit",
+                                    "calculationProfileClassifications", "addCalculationClassification",
+                                    "removeCalculationClassification"}) {
+                auto* control = dialog->findChild<QWidget*>(QString::fromLatin1(name));
+                require(!control || !control->isVisibleTo(dialog),
+                        "built-in appraisal identity, units and classification rules must stay hidden");
+            }
+            if (tamper_policy) {
+                if (auto* id = dialog->findChild<QLineEdit*>(QStringLiteral("calculationProfileId")))
+                    id->setText(QStringLiteral("must-not-replace-appraisal-policy"));
+                if (auto* unit = dialog->findChild<QComboBox*>(QStringLiteral("calculationProfileDisplayUnit")))
+                    unit->setCurrentIndex(unit->findData(QStringLiteral("acre")));
+                if (auto* classes = dialog->findChild<QTableWidget*>(QStringLiteral("calculationProfileClassifications"));
+                    classes && classes->rowCount() > 0 && classes->item(0, 0))
+                    classes->item(0, 0)->setText(QStringLiteral("must-not-replace-fixed-rule"));
+            }
+            decimals->setValue(precision);
+            if (while_open) while_open();
+            const auto captures = qEnvironmentVariable("VERTEX_TEST_CAPTURE_DIR");
+            if (tamper_policy && !captures.isEmpty()) {
+                if (dialog->layout()) dialog->layout()->activate();
+                dialog->adjustSize();
+                QApplication::processEvents();
+                require(QDir().mkpath(captures) && dialog->grab().save(QDir(captures).filePath("appraisal-area-display.png")),
+                        "compact Area display capture must save");
+            }
+            auto* button = dialog->findChild<QPushButton*>(save ? QStringLiteral("saveCalculationProfile")
+                                                               : QStringLiteral("cancelCalculationProfile"));
+            require(button && button->isEnabled(), "Area display must expose its enabled native action");
+            button->click();
+            // The custom Measurement editor keeps Save open; either modal
+            // closing policy is compatible with a successful display edit.
+            if (dialog->isVisible()) dialog->reject();
+        });
+        action->trigger();
+        require(seen, "Area display action must invoke the actual modal settings workflow");
+    };
+    const auto check_precision = [&](unsigned precision, const QString& displayed) {
+        require(gla->text() == displayed + QStringLiteral(" ft²"),
+                "inspector must round the unrounded aggregate once using selected decimal places");
+        const auto report = sketch::build_appraisal_document_report(window.document().snapshot(), "property-1");
+        require(report.qualified && report.calculation && report.display_decimal_places == precision &&
+                    report.calculation->property.gla().total.square_metres ==
+                        physical_report.calculation->property.gla().total.square_metres,
+                "display settings must change report precision without changing physical totals");
+        const auto schedule = window.scheduleSnapshot();
+        require(quantities(schedule) == original_quantities,
+                "display settings must leave every canonical appraisal schedule quantity unchanged");
+        for (const auto& row : schedule.snapshot.rows) {
+            if (row.kind == sketch::ScheduleRowKind::appraisal && row.cells.contains("area"))
+                require(row.cells.at("area").display_decimal_places == precision,
+                        "generated appraisal area cells must carry selected display precision");
+        }
+    };
+
+    edit_precision(0, true, true);
+    const auto zero = window.document().snapshot();
+    auto expected_property = original.entities().at("property-1");
+    auto& expected_profile = expected_property.properties["calculation_profile"];
+    expected_profile["decimal_places"] = 0U;
+    expected_profile["version"] = expected_profile.at("version").get<unsigned>() + 1U;
+    require(zero.revision() == original.revision() + 1 && zero.entities().size() == original.entities().size() &&
+                zero.entities().at("property-1") == expected_property,
+            "precision save must change only decimals/version and preserve exact fixed policy and opaque metadata");
+    for (const auto& [id, entity] : original.entities()) {
+        if (id != "property-1") require(zero.entities().at(id) == entity,
+                                      "Area display must never rewrite geometry, annotations or organization");
+    }
+    check_precision(0, QStringLiteral("3"));
+    require(window.undoCommand() && window.document().snapshot().entities() == original.entities() &&
+                window.redoCommand() && window.document().snapshot().entities() == zero.entities(),
+            "Area display must undo and redo its one atomic settings command");
+
+    const auto show_schedule = [&](const QString& displayed) {
+        QAction* schedules = nullptr;
+        for (auto* candidate : window.findChildren<QAction*>())
+            if (candidate->text() == QStringLiteral("Schedules")) schedules = candidate;
+        require(schedules && schedules->isEnabled(), "native schedules action must be available");
+        const auto projection = window.scheduleSnapshot();
+        const auto row = std::find_if(projection.snapshot.rows.begin(), projection.snapshot.rows.end(), [](const auto& item) {
+            return item.kind == sketch::ScheduleRowKind::appraisal && item.object_id.ends_with(":category:above_grade_finished");
+        });
+        require(row != projection.snapshot.rows.end(), "native schedule fixture needs its GLA row");
+        bool seen = false;
+        QTimer::singleShot(0, &window, [&] {
+            auto* dialog = qobject_cast<QDialog*>(QApplication::activeModalWidget());
+            auto* table = dialog ? dialog->findChild<QTableWidget*>(QStringLiteral("scheduleTable")) : nullptr;
+            require(table, "Schedules action must open the actual native table");
+            int area_column = -1;
+            for (int column = 0; column < table->columnCount(); ++column)
+                if (table->horizontalHeaderItem(column)->text() == QStringLiteral("area")) area_column = column;
+            const auto row_index = static_cast<int>(std::distance(projection.snapshot.rows.begin(), row));
+            require(area_column >= 0 && table->item(row_index, area_column) &&
+                        table->item(row_index, area_column)->text() == displayed + QStringLiteral(" ft²"),
+                    "native schedule table must honor workspace units and selected area precision");
+            seen = true;
+            dialog->reject();
+        });
+        schedules->trigger();
+        require(seen, "native schedule precision must be observed through its actual dialog");
+    };
+    show_schedule(QStringLiteral("3"));
+    edit_precision(1, true);
+    check_precision(1, QStringLiteral("3.0"));
+    show_schedule(QStringLiteral("3.0"));
+    edit_precision(6, true);
+    check_precision(6, QStringLiteral("3.020000"));
+    show_schedule(QStringLiteral("3.020000"));
+    const auto six = window.document().snapshot();
+    edit_precision(0, false);
+    edit_precision(6, true);
+    require(window.document().revision() == six.revision() && window.document().snapshot().entities() == six.entities(),
+            "Cancel and no-op Save must preserve display configuration and command history");
+
+    QTemporaryDir directory;
+    require(directory.isValid() && window.saveProjectAs(directory.filePath(QStringLiteral("area-display.bldproj"))) &&
+                window.openProject(directory.filePath(QStringLiteral("area-display.bldproj"))) &&
+                window.document().snapshot().entities() == six.entities() && window.selectEntity(second),
+            "Area display configuration and exact quantities must survive ordinary save/reopen");
+    check_precision(6, QStringLiteral("3.020000"));
+
+    auto sheet_snapshot = window.document().snapshot();
+    const auto sheet_entity = std::find_if(sheet_snapshot.entities().begin(), sheet_snapshot.entities().end(), [](const auto& item) {
+        return item.second.type == sketch::kSheetViewEntityType;
+    });
+    require(sheet_entity != sheet_snapshot.entities().end(), "Area display export needs a sheet model");
+    auto model = sketch::decode_sheet_view_entity(sheet_entity->second);
+    sketch::DrawingSheet report_sheet;
+    report_sheet.id = "sheet-area-display";
+    report_sheet.number = "A-901";
+    report_sheet.width_mm = 420;
+    report_sheet.height_mm = 297;
+    report_sheet.title_block = {"Area display fixture", "Appraisal area summary", "", ""};
+    report_sheet.schedules.push_back({"area-display-summary", "appraisal-areas", {10, 10, 400, 250}});
+    const auto old_sheet = model.sheets().front().id;
+    model = model.with_added_sheet(std::move(report_sheet)).with_removed_sheet(old_sheet);
+    window.document().apply(sketch::ApplyEntityChanges{sheet_snapshot.revision(),
+        {sketch::EntityChange::upsert(sketch::make_sheet_view_entity(sheet_entity->first, model))}, {},
+        "Add native Area display export sheet"});
+    const auto export_precision = [&](const QString& expected, const QString& file) {
+        const auto path = directory.filePath(file);
+        require(window.exportDrawingSetPdf(path), "Area display appraisal sheet must export through the normal PDF workflow");
+        const auto captures = qEnvironmentVariable("VERTEX_TEST_CAPTURE_DIR");
+        if (!captures.isEmpty()) require(QFile::copy(path, QDir(captures).filePath(file)),
+            "retain the actual area display PDF for inspection");
+        QPdfDocument pdf;
+        require(pdf.load(path) == QPdfDocument::Error::None && pdf.pageCount() == 1,
+                "Area display PDF must reopen as its single report sheet");
+        const auto raw_text = pdf.getAllText(0).text();
+        const auto text = raw_text.simplified();
+        if (!text.contains(QStringLiteral("Above-grade finished (GLA)")) ||
+            !text.contains(expected + QStringLiteral(" ft²")))
+            throw std::runtime_error((QStringLiteral("Actual PDF must show %1 ft²; extracted text: %2")
+                .arg(expected, text)).toStdString());
+        require(text.contains(QStringLiteral("A-901")) &&
+                !text.contains(QRegularExpression(QStringLiteral("[\\x{E000}-\\x{F8FF}]"))),
+                "sheet PDF punctuation must copy as authored Unicode rather than private-use glyphs");
+        const auto amount_index = raw_text.indexOf(expected);
+        const auto amount = pdf.getSelectionAtIndex(0, amount_index, expected.size());
+        require(amount_index >= 0 && amount.isValid() && amount.boundingRectangle().height() > 0 &&
+                amount.boundingRectangle().height() <= 12.0,
+                "sheet body text must remain near its 8pt physical size at export resolution");
+        return text;
+    };
+    export_precision(QStringLiteral("3.020000"), QStringLiteral("area-display-six.pdf"));
+    edit_precision(0, true);
+    const auto whole_text = export_precision(QStringLiteral("3"), QStringLiteral("area-display-zero.pdf"));
+    require(!whole_text.contains(QStringLiteral("3.02")) && !whole_text.contains(QStringLiteral("4 ft²")),
+            "whole-number PDF totals must sum exact room quantities before rounding once");
+    check_precision(0, QStringLiteral("3"));
+
+    sketch::DocumentSnapshot externally_changed = window.document().snapshot();
+    edit_precision(1, true, false, [&] {
+        const auto source = window.document().snapshot();
+        auto changed = source.entities().at("property-1");
+        changed.properties["name"] = "Changed while Area display was open";
+        window.document().apply(sketch::ApplyEntityChanges{source.revision(), {sketch::EntityChange::upsert(changed)}, {},
+            "External modal revision fixture"});
+        externally_changed = window.document().snapshot();
+    });
+    require(window.document().revision() == externally_changed.revision() &&
+                window.document().snapshot().entities() == externally_changed.entities(),
+            "stale modal Save must not overwrite a newer project revision");
+
+    auto valid = window.document().snapshot();
+    auto malformed_property = valid.entities().at("property-1");
+    malformed_property.properties["calculation_profile"]["decimal_places"] = 7U;
+    window.document().apply(sketch::ApplyEntityChanges{valid.revision(), {sketch::EntityChange::upsert(malformed_property)}, {},
+        "Malformed display precision fixture"});
+    const auto malformed = window.document().snapshot();
+    require(window.selectEntity(second), "malformed display fixture must refresh the selected area");
+    auto* qualification = window.findChild<QLabel*>(QStringLiteral("appraisalQualification"));
+    const auto malformed_report = sketch::build_appraisal_document_report(malformed, "property-1");
+    const auto malformed_schedule = window.scheduleSnapshot();
+    require(qualification && qualification->text().contains(QStringLiteral("Unqualified")) &&
+                !gla->text().contains(QRegularExpression(QStringLiteral("\\d"))) &&
+                !malformed_report.qualified && !malformed_report.calculation &&
+                std::none_of(malformed_schedule.snapshot.rows.begin(), malformed_schedule.snapshot.rows.end(), [](const auto& row) {
+                    return row.kind == sketch::ScheduleRowKind::appraisal && row.cells.contains("area");
+                }) && window.document().revision() == malformed.revision(),
+            "invalid display precision must withhold inspector/report/schedule totals without repairing the source");
+    window.document().apply(sketch::ApplyEntityChanges{malformed.revision(),
+        {sketch::EntityChange::upsert(valid.entities().at("property-1"))}, {}, "Restore valid display fixture"});
+    window.document().mark_read_only("Area display read-only fixture");
+    require(window.selectEntity(second) && !action->isEnabled(),
+            "read-only Appraisal must disable the Area display editing action");
+    const auto read_only = window.document().snapshot();
+    action->trigger();
+    require(window.document().revision() == read_only.revision() && window.document().snapshot().entities() == read_only.entities() &&
+                !window.findChild<QDialog*>(QStringLiteral("calculationProfileDialog")),
+            "read-only Area display invocation must not open a writable dialog or mutate the project");
+}
+
 void appraisal_summary_prints_from_the_automatic_report() {
     sketch::desktop::MainWindow window;
     require(!window.createBoundary(square(0, 0, 3.048)).isEmpty(),
@@ -995,6 +1278,10 @@ int main(int argc, char** argv) {
         const auto families = QFontDatabase::applicationFontFamilies(font_id);
         require(!families.isEmpty(), "bundled appraisal workflow font must expose its family");
         app.setFont(QFont(families.front(), 10));
+        if (app.arguments().contains(QStringLiteral("--area-display-only"))) {
+            appraisal_area_display_precision_workflow();
+            return 0;
+        }
         if (app.arguments().contains(QStringLiteral("--auto-subtract-only"))) {
             auto_subtract_selected_area_workflow();
             auto_subtract_context_repair_workflow();
@@ -1013,6 +1300,7 @@ int main(int argc, char** argv) {
         declared_appraisal_reports_selected_building_floor_and_property();
         contradictory_appraisal_ownership_withholds_inspector_and_schedule_totals();
         appraisal_declarations_reject_read_only_documents();
+        appraisal_area_display_precision_workflow();
         malformed_appraisal_projection_prints_withheld_status();
         appraisal_summary_prints_from_the_automatic_report();
         std::cout << "appraisal_desktop_workflow_tests passed\n";

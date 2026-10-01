@@ -2,10 +2,13 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <iostream>
+#include <limits>
 #include <set>
 #include <stdexcept>
 #include <string_view>
+#include <tuple>
 
 namespace {
 
@@ -79,6 +82,138 @@ void qualified_document_recalculates_from_geometry() {
                 report.calculation->property.gla().area_ids ==
                     std::vector<std::string>{"area-1"},
             "automatic GLA must retain square-foot output and source provenance");
+    require(report.display_decimal_places == 2,
+            "legacy appraisal properties must retain two display decimals");
+}
+
+void display_precision_rounds_aggregate_from_physical_amounts() {
+    constexpr double square_foot_metres = 0.09290304;
+    const double side = std::sqrt(1.51 * square_foot_metres);
+    for (const auto& [precision, area_text, total_text] :
+         std::vector<std::tuple<unsigned, std::string, std::string>>{
+             {0, "2", "3"}, {1, "1.5", "3.0"}, {6, "1.510000", "3.020000"}}) {
+        auto entities = fixture_entities();
+        entities.front().properties["calculation_profile"] = {{"decimal_places", precision}};
+        entities.back().properties["boundary"] = square(0, 0, side);
+        auto second = entities.back();
+        second.id = "area-2";
+        second.properties["boundary"] = square(2, 0, side);
+        entities.push_back(std::move(second));
+        const auto document = sketch::Document::create(std::move(entities));
+        const auto before = document.snapshot();
+        const auto report = sketch::build_appraisal_document_report(before, "property-1");
+        require(report.qualified && report.calculation && report.calculation->calculation.areas.size() == 2,
+                "display precision must retain two qualified physical areas");
+        const auto& total = report.calculation->property.gla().total;
+        near(total.square_metres, 3.02 * square_foot_metres, 1e-10,
+             "display precision must preserve the aggregate SI quantity");
+        near(total.display.unrounded, 3.02, 1e-9,
+             "aggregate must use the unrounded physical areas");
+        require(total.display.text == total_text,
+                "appraisal totals must honor persisted precision and round the aggregate once");
+        require(report.display_decimal_places == precision,
+                "report presentation metadata must expose the resolved property precision");
+        for (const auto& area : report.calculation->calculation.areas) {
+            near(area.net_square_metres, 1.51 * square_foot_metres, 1e-10,
+                 "display precision must preserve each physical area");
+            require(area.display.text == area_text,
+                    "individual appraisal areas must use the same display precision");
+        }
+        require(document.snapshot().entities() == before.entities() &&
+                    document.snapshot().revision() == before.revision(),
+                "reporting must leave the exact document snapshot unchanged");
+    }
+}
+
+void display_profile_preserves_fixed_appraisal_semantics() {
+    require(sketch::appraisal_display_profile(json::object()).decimal_places == 2 &&
+                sketch::appraisal_display_profile({{"calculation_profile", json::object()}})
+                    .decimal_places == 2,
+            "absent decimal settings must retain the legacy default");
+    const auto builtin = sketch::builtin_appraisal_profile();
+    for (const auto& value : std::vector<json>{0, 1, 6, std::uint64_t{0}, std::uint64_t{6}}) {
+        const json properties = {{"calculation_profile",
+            {{"decimal_places", value}, {"id", "custom"}, {"version", 42},
+             {"display_unit", "acre"}, {"classifications", {{"garage", "living"}}}}},
+            {"vendor_data", {{"untouched", true}}}};
+        const auto before = properties;
+        const auto profile = sketch::appraisal_display_profile(properties, sketch::AreaUnit::square_metre);
+        require(profile.decimal_places == value.get<unsigned>() &&
+                    profile.display_unit == sketch::AreaUnit::square_metre &&
+                    profile.id == builtin.id && profile.version == builtin.version &&
+                    profile.classifications.size() == builtin.classifications.size(),
+                "appraisal display settings may change only precision and the caller's display unit");
+        for (const auto& [name, rule] : builtin.classifications) {
+            const auto& actual = profile.classifications.at(name);
+            require(actual.building_total == rule.building_total &&
+                        actual.living_total == rule.living_total &&
+                        actual.appraisal_category == rule.appraisal_category,
+                    "stored profile rules must not override appraisal eligibility");
+        }
+        require(properties == before, "resolving display settings must preserve source metadata");
+    }
+}
+
+void display_precision_cannot_qualify_facts_or_change_eligibility() {
+    for (const unsigned precision : {0u, 1u, 6u}) {
+        auto entities = fixture_entities();
+        entities.front().properties["calculation_profile"] =
+            {{"decimal_places", precision}, {"id", "custom"}, {"version", 42},
+             {"classifications", {{"garage", {{"living_total", true}}}}}};
+        entities.back().properties["appraisal_facts"] = facts("garage");
+        auto document = sketch::Document::create(entities);
+        auto report = sketch::build_appraisal_document_report(document.snapshot(), "property-1");
+        require(report.qualified && report.calculation && report.boundaries.size() == 1 &&
+                    report.boundaries.front().qualification.derived_category ==
+                        sketch::AppraisalAreaCategory::garage &&
+                    report.calculation->calculation.profile_id == "vertex-appraisal" &&
+                    report.calculation->calculation.profile_version == 1,
+                "precision must retain fixed appraisal category and policy provenance");
+        near(report.calculation->property.gla().total.square_metres, 0.0, 1e-10,
+             "a display profile must not count garage area as GLA");
+        near(report.calculation->property.by_category.at(sketch::AppraisalAreaCategory::garage)
+                 .total.square_metres, 9.290304, 1e-8,
+             "precision must preserve the physical garage contribution");
+        entities.back().properties["appraisal_facts"].erase("finish");
+        document = sketch::Document::create(std::move(entities));
+        report = sketch::build_appraisal_document_report(document.snapshot(), "property-1");
+        require(report.configured && !report.qualified && !report.calculation &&
+                    report.display_decimal_places == precision &&
+                    std::any_of(report.issues.begin(), report.issues.end(), [](const auto& issue) {
+                        return issue.find("Declare finish") != std::string::npos;
+                    }),
+                "valid display precision must not qualify undeclared appraisal facts");
+    }
+}
+
+void malformed_display_configuration_withholds_totals() {
+    std::vector<json> configurations;
+    for (const auto& value : std::vector<json>{0.0, 2.0, 1.5, true, false, nullptr, -1, 7,
+             std::numeric_limits<std::int64_t>::max(), std::numeric_limits<std::uint64_t>::max(), "2"})
+        configurations.push_back({{"decimal_places", value}});
+    for (const auto& value : std::vector<json>{nullptr, false, 2, "profile", json::array()})
+        configurations.push_back(value);
+    for (const auto& configuration : configurations) {
+        auto entities = fixture_entities();
+        entities.front().properties["calculation_profile"] = configuration;
+        bool rejected = false;
+        try {
+            (void)sketch::appraisal_display_profile(entities.front().properties);
+        } catch (const std::invalid_argument&) {
+            rejected = true;
+        }
+        require(rejected, "malformed display settings must throw invalid_argument at the helper boundary");
+        const auto document = sketch::Document::create(std::move(entities));
+        const auto before = document.snapshot();
+        const auto report = sketch::build_appraisal_document_report(before, "property-1");
+        require(report.configured && !report.qualified && !report.calculation &&
+                    std::any_of(report.issues.begin(), report.issues.end(), [](const auto& issue) {
+                        return issue.find("Area display") != std::string::npos;
+                    }),
+                "malformed display settings must visibly withhold appraisal totals without fallback");
+        require(document.snapshot().entities() == before.entities(),
+                "malformed settings must not mutate the source document");
+    }
 }
 
 void deductions_partition_categories_without_double_counting() {
@@ -204,6 +339,10 @@ void malformed_projection_data_withholds_totals() {
 int main() {
     try {
         qualified_document_recalculates_from_geometry();
+        display_precision_rounds_aggregate_from_physical_amounts();
+        display_profile_preserves_fixed_appraisal_semantics();
+        display_precision_cannot_qualify_facts_or_change_eligibility();
+        malformed_display_configuration_withholds_totals();
         deductions_partition_categories_without_double_counting();
         explicit_void_roles_do_not_require_dwelling_facts();
         incomplete_or_hidden_facts_withhold_totals();

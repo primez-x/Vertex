@@ -604,7 +604,9 @@ Start with the workspace, draw a room, close it with the mouse, drag-select it, 
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U104 — Change display precision or rounding**
-  - Expected: Only the displayed precision changes, not the physical geometry.
+  - Steps: With qualified Appraisal areas, open **Tools > Area display**. Save with 0, 1 and 6 decimal places in turn. Compare the selected area, property total, **Tools > Schedules**, and an Appraisal area summary on a PDF sheet. Cancel an edit, try saving the unchanged value, then Undo/Redo, save and reopen.
+  - Also try: Two separate rooms each measuring 10 ft by 10.251 ft. At zero decimal places each rounds to 103 ft², but their combined total must be 205 ft² (205.02 rounded once), not 206 ft².
+  - Expected: Appraisal inspector, schedule and PDF summary totals use the chosen precision and workspace units. Dimensions and geometry remain unchanged. Cancel and unchanged Save create no edit; Undo/Redo and reopening retain the saved setting. Changing decimal places does not change a garage or basement into living area or qualify missing appraisal declarations.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
