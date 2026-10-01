@@ -61,13 +61,46 @@ production and numerical-domain limits remain open.
 
 Numeric curves without original measured construction provenance can reflect
 after a direct length input; the physical receipt rebases its signed baseline
-while retaining exact arc length. Original measured curve construction
-provenance still does not support reflection. Such a transform rejects without
-changing the document. Scaling a wall with an exact entry remains unsupported
+while retaining exact arc length. The shared endpoint provenance helper rejects
+reflection without changing the document. The native transform editor has a
+separate reconstruction path that preserves an existing original-input archive;
+its reflection/clone/reopen regression passes. A fresh unarchived measured
+curve currently has its active input replaced with a reflected angle without
+first archiving the original measurement. That preservation gap and a reusable
+rigid-transform provenance helper remain open. Scaling a wall with an exact entry remains unsupported
 instead of rewriting measurement evidence. Full numerical-domain, pen/touch,
 performance, clean-machine/offline, Apex compatibility and production
 qualification are not established by these focused checks.
 
-Installed-runtime evidence will be recorded after the corresponding bundle is
-staged and exercised. This document is an internal implementation checkpoint,
-not certification of the full production replacement.
+## Installed checkpoint
+
+Source checkpoint `562f9d0a10aa2921b41d16d7d8202ce7dc3205ba` is included in
+`artifacts/packages/vertex-offline-20260930-direct-curve-length`: 3763 declared
+files, including 2645 runtime files, 1111 source-kit files and 65 notice files.
+The static import inspection covered 113 component binaries with zero unresolved
+imports. The tracked source-kit check matched all 1111 required files.
+
+The offline installer completed at
+`artifacts/installed/vertex-20260930-direct-curve-length`. The executable is
+`bin/vertex.exe`, SHA-256
+`c5f136facfca7790b7ba077e01b22172608731ada65ed4d787c3973b42c5ed1f`.
+The installed runtime was then launched with developer search paths removed,
+private profiles and app-local module inspection:
+
+- Six launches covered Measurement residential and Architectural residential /
+  light-commercial save/reopen pairs. Project, canvas and applicable native-3D
+  hashes matched. The report is
+  `artifacts/installed-runtime-20260930-direct-curve-length/run-20260930-195902-091c2690/report.json`.
+- Two additional installed launches opened the actual format-13 physical-input
+  workspace fixture, saved and reopened it, and matched project/canvas hashes.
+  The report is `artifacts/direct-curve-length-20260930/installed-curve/report.json`.
+  Root inspected its reopened canvas. This deliberately minimal fixture has
+  only one wall and no property hierarchy; its unresolved tree is not a normal
+  organized authoring example.
+
+Both reports explicitly record `network_denied: false`, `clean_machine: false`
+and `production_qualified: false`. Stable hashes prove sampled round-trip
+consistency, not general output fidelity or full acceptance. The source package
+still has dependency/source licensing qualification work outstanding. This is
+an internal implementation checkpoint, not certification of the full production
+replacement.

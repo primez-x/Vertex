@@ -885,7 +885,10 @@ checks recognized receipts even when imported without originating history.
 Rigid moves and rotations rebase the receipt; they preserve physical length
 and signed sweep. Reflection rebases the receipt's signed sweep while preserving
 its magnitude and physical length. Existing measured construction provenance
-has separate validation and does not yet support reflection. Subsequent typed
+has separate validation: the native transform editor preserves an existing
+archive on reflection, but preserving a fresh measured input before its first
+reflection and supporting reflection through the shared helper remain gaps.
+Subsequent typed
 endpoint deformation clears a stale known
 receipt unless another explicit length was entered. Unknown nested metadata is
 preserved on explicit resize and cannot be silently discarded. Future optional
