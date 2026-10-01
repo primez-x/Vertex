@@ -111,6 +111,7 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QKeySequenceEdit>
+#include <QKeyEvent>
 #include <QListView>
 #include <QListWidget>
 #include <QDrag>
@@ -31281,6 +31282,22 @@ void MainWindow::fitView() {
 
 QString MainWindow::lastError() const {
     return m_impl->lastError();
+}
+
+void MainWindow::keyPressEvent(QKeyEvent* event) {
+    // Child editors and canvases consume their own history keys first. Only
+    // keys they leave unhandled reach this window-level document fallback.
+    if (event->matches(QKeySequence::Undo)) {
+        (void)undoCommand();
+        event->accept();
+        return;
+    }
+    if (event->matches(QKeySequence::Redo)) {
+        (void)redoCommand();
+        event->accept();
+        return;
+    }
+    QMainWindow::keyPressEvent(event);
 }
 
 void MainWindow::closeEvent(QCloseEvent* event) {

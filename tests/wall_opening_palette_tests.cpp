@@ -285,6 +285,44 @@ int main(int argc, char** argv) {
                     "casement editor changes the physical sash angle");
             if (std::string(layout) == "sliding") require(edited_profile.at("window_slide_fraction") == 0.5,
                     "sliding editor changes the physical sash travel");
+            if (std::string(layout) == "casement") {
+                QTimer::singleShot(0, &variant, [&] {
+                    for (auto* widget : QApplication::topLevelWidgets()) {
+                        auto* dialog = qobject_cast<QDialog*>(widget);
+                        if (!dialog || dialog->objectName() != QStringLiteral("openingAssemblyDialog")) continue;
+                        dialog->findChild<QDoubleSpinBox*>(QStringLiteral("openingWindowAngle"))->setValue(0.0);
+                        dialog->findChild<QDialogButtonBox*>()->button(QDialogButtonBox::Save)->click();
+                    }
+                });
+                editor->click();
+                const auto closed_profile = variant.document().snapshot().entities().at(created->first).properties.at("opening_assembly");
+                require(closed_profile.at("window_angle_degrees") == 0.0, "casement editor closes the sash");
+                variant.findChild<QWidget*>(QStringLiteral("contextEditor"))->show();
+                variant.activateWindow();
+                QApplication::processEvents();
+                editor->setFocus();
+                QApplication::processEvents();
+                require(QApplication::focusWidget() == editor, "opening properties button holds keyboard focus");
+                QKeyEvent undo(QEvent::KeyPress, Qt::Key_Z, Qt::ControlModifier);
+                QApplication::sendEvent(QApplication::focusWidget(), &undo);
+                require(variant.document().snapshot().entities().at(created->first).properties.at("opening_assembly") == edited_profile,
+                        "button-focused keyboard undo restores the complete open sash profile");
+                QKeyEvent redo(QEvent::KeyPress, Qt::Key_Y, Qt::ControlModifier);
+                QApplication::sendEvent(QApplication::focusWidget(), &redo);
+                require(variant.document().snapshot().entities().at(created->first).properties.at("opening_assembly") == closed_profile,
+                        "button-focused keyboard redo reapplies the complete closed sash profile");
+                QLineEdit local_text(&variant);
+                local_text.show();
+                local_text.setText(QStringLiteral("local"));
+                local_text.setFocus();
+                local_text.insert(QStringLiteral(" edit"));
+                const auto document_revision = variant.document().revision();
+                QKeyEvent text_undo(QEvent::KeyPress, Qt::Key_Z, Qt::ControlModifier);
+                QApplication::sendEvent(&local_text, &text_undo);
+                require(local_text.text() == QStringLiteral("local") && variant.document().revision() == document_revision,
+                        "line edit consumes local undo without changing document history");
+                require(variant.undoCommand(), "restore open sash for subsequent projection checks");
+            }
             const auto before_reflection = projection_samples(opening_plan(variant.document().snapshot(), created->first));
             require(variant.selectEntity(host) && variant.transformSelectedBoundary("0", true, false, "0 m", "0 m", false),
                     "host reflection preserves the window mechanism");

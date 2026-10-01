@@ -52,3 +52,10 @@ physical parts. Edits must preserve the layout and use the existing source
 revision, geometry admission and undo safeguards. Test catalog placement,
 opening edits, reflected geometry, archive round trips and exchange against
 the real profile. Bay windows and roof-hosted skylights remain open work.
+
+Native interaction verification also found that keyboard Undo/Redo were handled
+only by the canvas: focus returning to a properties button after an opening
+edit left Ctrl+Z inactive. Add a main-window fallback for unhandled child key
+events, preserving local text history and the canvas's existing handling. The
+keyboard worker owns the main-window implementation/header and palette
+regression; root reviews and verifies the updated installed application.

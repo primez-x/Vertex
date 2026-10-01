@@ -675,6 +675,7 @@ public:
     [[nodiscard]] QString lastError() const;
 
 protected:
+    void keyPressEvent(QKeyEvent* event) override;
     void closeEvent(QCloseEvent* event) override;
 
 private:
