@@ -92,4 +92,27 @@ physical arc-length locks, tangency, exact Apex compatibility, clean-machine
 network-disabled execution and the other production acceptance gates remain
 open. This is an implementation checkpoint, not the completed replacement.
 
-Fresh bundled installation and installed-runtime evidence are pending.
+## Installed checkpoint
+
+The source checkpoint is `13b5541febfd4ecde03a42f21f992dd0697e1518`, pushed
+to `main` with remote-ref equality verified. Source-kit coverage and requirement
+schema contracts passed 2/2 in 0.36 seconds; all 1,108 required tracked files
+are explicitly allowlisted. A clean Release build with desktop and architecture
+disabled passed organization, document, storage and exchange checks 4/4 in
+4.43 seconds (`core-only-ctest.log`), confirming solver-free admission.
+
+Static inspection reported 113 component binaries and zero unresolved imports.
+The fresh bundle contains 3,760 declared files and 1,108 source-kit files.
+Installation verified all 2,645 runtime files in
+`artifacts/installed/vertex-20260930-topology/`. Its `bin/vertex.exe` SHA-256 is
+`87643ce8e32dc813acd0fc362544b26ac39e934da2769db8ad7e6a5b9c8c7ecb`, matching
+the built executable.
+
+Installed-runtime checks passed all six launches: source/reopen pairs for
+residential measurement, residential architecture and light-commercial
+architecture. Project and sampled screenshot/native-3D hashes matched across
+reopen. The report is
+`artifacts/installed-runtime-20260930-topology/run-20260930-184040-90af69aa/report.json`.
+It records a developer-machine sample with network denial, clean-machine
+qualification and production qualification all false. These observations do
+not extend the scope of the remaining qualification above.

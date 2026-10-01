@@ -34,7 +34,7 @@ and original curve measurements remain intact.
 - [x] Straight wall-only authoring retains typed endpoint-edit intent and
       minimum reader versions throughout save, undo and exported history.
 - [x] Focused runtime checks, integrated review and whitespace checks pass.
-- [ ] Scoped commit, push and remote reference agree.
+- [x] Scoped commit, push and remote reference agree.
 
 This work closes one integrity gap within the production goal. It does not
 complete physical arc-length locks, tangency, exact Apex compatibility or the
