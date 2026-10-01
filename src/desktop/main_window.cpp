@@ -11022,37 +11022,102 @@ public:
 
     std::vector<std::string> selectedWallMeasurementSources(const DocumentSnapshot& source) const {
         if (m_selected_ids.isEmpty())
-            throw std::invalid_argument("Select the perimeter walls first.");
+            throw std::invalid_argument("Select a wall in the intended exterior shell or connected interior layout.");
         const auto eligible = visible_project_entities_with_phase(source, ProjectViewFilter{});
+        const auto organization = organize_project(source);
+        const auto elevation = [&](const Entity& wall) {
+            const auto resolved = resolve_vertical_placement(source,wall);
+            const auto value = read_finite_number(resolved.properties,
+                resolved.properties.contains("elevation_m") ? "elevation_m" : "elevation");
+            if (!value) throw std::invalid_argument("A source wall has no finite resolved elevation.");
+            return *value;
+        };
         std::vector<std::string> ids;
+        std::optional<DrawingContext> shared_context;
+        std::optional<std::string> shared_phase;
+        double shared_elevation{};
+        double minimum_elevation{};
+        double maximum_elevation{};
         for (const auto& selected : m_selected_ids) {
             const auto id = selected.toStdString();
             const auto found = source.entities().find(id);
             if (found == source.entities().end() || found->second.type != "wall" || !eligible.contains(id))
                 throw std::invalid_argument("Select only walls in the current design phase.");
+            const auto context = organization.drawing_context(id);
+            if (!context || !context->complete())
+                throw std::invalid_argument("A source wall has no resolved property, building, floor and drawing layer.");
+            const auto phase = read_string(found->second.properties,"phase_id");
+            const auto wall_elevation = elevation(found->second);
+            if (ids.empty()) {
+                shared_context = context;
+                shared_phase = phase;
+                shared_elevation = wall_elevation;
+                minimum_elevation = maximum_elevation = wall_elevation;
+            } else {
+                minimum_elevation = std::min(minimum_elevation,wall_elevation);
+                maximum_elevation = std::max(maximum_elevation,wall_elevation);
+                if (context != shared_context || phase != shared_phase ||
+                    maximum_elevation-minimum_elevation > default_geometry_tolerance_metres)
+                    throw std::invalid_argument("Select walls in one drawing context, design phase and elevation.");
+            }
             ids.push_back(id);
         }
         if (ids.size() == 1) {
-            const auto& seed = source.entities().at(ids.front());
-            const auto touches = [](const Segment& a, const Segment& b) {
-                const auto same = [](Vec2 p, Vec2 q) { return p.x == q.x && p.y == q.y; };
-                return same(a.start,b.start) || same(a.start,b.end) ||
-                       same(a.end,b.start) || same(a.end,b.end);
+            struct Candidate {
+                std::string id;
+                Segment baseline;
             };
-            for (std::size_t cursor = 0; cursor < ids.size(); ++cursor) {
-                const auto baseline = read_required_segment(source.entities().at(ids[cursor]).properties, "baseline");
-                if (!baseline) throw std::invalid_argument("A source wall has no valid baseline.");
-                for (const auto& [id, wall] : source.entities()) {
-                    if (wall.type != "wall" || !eligible.contains(id) ||
-                        read_string(wall.properties,"floor_id") != read_string(seed.properties,"floor_id") ||
-                        read_string(wall.properties,"layer_id") != read_string(seed.properties,"layer_id") ||
-                        std::find(ids.begin(),ids.end(),id) != ids.end()) continue;
-                    const auto candidate = read_required_segment(wall.properties,"baseline");
-                    if (candidate && touches(*baseline,*candidate)) ids.push_back(id);
+            std::vector<Candidate> candidates;
+            std::size_t seed_index{};
+            for (const auto& [id, wall] : source.entities()) {
+                if (wall.type != "wall" || !eligible.contains(id) ||
+                    organization.drawing_context(id) != shared_context ||
+                    read_string(wall.properties,"phase_id") != shared_phase) continue;
+                const auto baseline = read_required_segment(wall.properties,"baseline");
+                if (!baseline) {
+                    if (id == ids.front()) throw std::invalid_argument("A source wall has no valid baseline.");
+                    continue;
+                }
+                if (std::abs(elevation(wall)-shared_elevation) > default_geometry_tolerance_metres) continue;
+                if (id == ids.front()) seed_index = candidates.size();
+                candidates.push_back({id,*baseline});
+            }
+            const auto bounds_overlap = [](const Segment& a, const Segment& b) {
+                // Curves are unsupported by recognition, but must reach it if
+                // connected; their arc may extend outside its endpoint bounds.
+                if (a.sweep_radians != 0.0 || b.sweep_radians != 0.0) return true;
+                const auto separated = [](double a0, double a1, double b0, double b1) {
+                    return std::max(a0,a1) + default_geometry_tolerance_metres < std::min(b0,b1) ||
+                           std::max(b0,b1) + default_geometry_tolerance_metres < std::min(a0,a1);
+                };
+                return !separated(a.start.x,a.end.x,b.start.x,b.end.x) &&
+                       !separated(a.start.y,a.end.y,b.start.y,b.end.y);
+            };
+            std::vector<bool> included(candidates.size(),false);
+            std::vector<std::size_t> component{seed_index};
+            included.at(seed_index) = true;
+            // Follow analytical contacts, including endpoints landing on an
+            // unsplit baseline and crossings. Recognition validates the whole
+            // component and rejects overlaps or ambiguous exterior contours.
+            for (std::size_t cursor = 0; cursor < component.size(); ++cursor) {
+                const auto& baseline = candidates[component[cursor]].baseline;
+                for (std::size_t index = 0; index < candidates.size(); ++index) {
+                    if (included[index] || !bounds_overlap(baseline,candidates[index].baseline)) continue;
+                    const auto contact = segment_intersection(baseline,candidates[index].baseline);
+                    if (contact.kind == SegmentIntersectionKind::indeterminate)
+                        throw std::invalid_argument("Wall contact is numerically unresolved. Check the baseline coordinates.");
+                    if (contact.kind == SegmentIntersectionKind::none) continue;
+                    if (component.size() >= 2048)
+                        throw std::invalid_argument("Exterior measurement exceeds the supported 2048 candidate walls. Select a smaller shell.");
+                    included[index] = true;
+                    component.push_back(index);
                 }
             }
+            ids.clear();
+            for (const auto index : component) ids.push_back(candidates[index].id);
         }
         std::sort(ids.begin(),ids.end());
+        ids.erase(std::unique(ids.begin(),ids.end()),ids.end());
         return ids;
     }
 
@@ -11065,7 +11130,8 @@ public:
             const auto source = authoringSnapshot();
             if (expected_revision && *expected_revision != source.revision())
                 throw std::invalid_argument("The project changed. Select the walls again.");
-            const auto ids = selectedWallMeasurementSources(source);
+            const auto candidates = selectedWallMeasurementSources(source);
+            const auto ids = exterior_wall_measurement_sources(source,candidates);
             const auto derived = derive_exterior_wall_measurement(source,ids);
             const auto name = classification.trimmed();
             if (name.isEmpty()) throw std::invalid_argument("Measurement classification cannot be empty.");
@@ -11119,7 +11185,7 @@ public:
             refresh();
             return id;
         } catch (const std::exception& error) {
-            setError(QStringLiteral("Exterior measurement: %1\nFor a branched layout, Ctrl-select only the perimeter walls.")
+            setError(QStringLiteral("Exterior measurement: %1")
                 .arg(QString::fromUtf8(error.what())));
             return {};
         }
@@ -11165,8 +11231,12 @@ public:
     void showWallMeasurementReview(bool refreshing = false) {
         const auto context = captureModalContext();
         try {
+            if (!m_document->is_editable()) throw std::invalid_argument("This project is read-only.");
+            if (m_boundary_session || m_pending_wall_start)
+                throw std::invalid_argument("Finish the drawing before measuring the exterior walls.");
             const auto source = authoringSnapshot();
             std::vector<std::string> ids;
+            std::vector<std::string> candidates;
             const auto selected = selectedEntity();
             if (refreshing) {
                 if (!selected || selected->type != "measurement_boundary" ||
@@ -11174,7 +11244,11 @@ public:
                     throw std::invalid_argument("Select an exterior measurement derived from walls.");
                 for (const auto& item : selected->properties.at("wall_measurement_source").at("walls"))
                     ids.push_back(item.at("id").get<std::string>());
-            } else ids = selectedWallMeasurementSources(source);
+                candidates = ids;
+            } else {
+                candidates = selectedWallMeasurementSources(source);
+                ids = exterior_wall_measurement_sources(source,candidates);
+            }
             const auto proposed = derive_exterior_wall_measurement(source,ids);
             QDialog dialog(owner);
             styleDialog(dialog);
@@ -11187,6 +11261,10 @@ public:
                 .arg(ids.size()).arg(format_dimension_area(std::abs(signed_area(proposed.boundary)),m_metric_units)),&dialog);
             summary->setObjectName(QStringLiteral("wallMeasurementArea"));
             layout->addWidget(summary);
+            auto* exclusions = new QLabel(QStringLiteral("%1 excluded partitions or branches")
+                .arg(candidates.size()-ids.size()),&dialog);
+            exclusions->setObjectName(QStringLiteral("wallMeasurementExclusions"));
+            layout->addWidget(exclusions);
             auto* preview = new PlanCanvas(&dialog);
             preview->setObjectName(QStringLiteral("wallMeasurementPreview"));
             preview->setGridEnabled(false);
@@ -11195,14 +11273,15 @@ public:
             preview->setSelectionTransformEnabled(false,false);
             preview->setMinimumHeight(280);
             std::vector<CanvasEntity> shapes;
-            for (const auto& id : ids) {
+            for (const auto& id : candidates) {
                 const auto baseline = read_required_segment(source.entities().at(id).properties,"baseline");
                 if (!baseline) throw std::invalid_argument("A source wall has no valid baseline.");
                 CanvasEntity shape;
                 shape.id = id_from(id);
                 shape.type = QStringLiteral("line");
                 shape.segments = {*baseline};
-                shape.stroke_color = QColor(145,154,170);
+                const bool exterior = std::find(ids.begin(),ids.end(),id) != ids.end();
+                shape.stroke_color = exterior ? QColor(145,154,170) : QColor(190,115,35);
                 shapes.push_back(std::move(shape));
             }
             CanvasEntity shape;
@@ -11217,8 +11296,9 @@ public:
             preview->fitView();
             layout->addWidget(preview,1);
             auto* basis = new QLabel(QStringLiteral(
-                "Blue: exterior measurement. Gray: wall baselines.\n"
-                "Each wall contributes half its thickness outside the baseline.\n"
+                "Blue: exterior measurement. Gray: included perimeter baselines.\n"
+                "Amber: excluded partitions or branches; these do not change the measured area.\n"
+                "Each perimeter wall contributes half its thickness outside the baseline.\n"
                 "Appraisal totals use the declared property, floor and area facts."),&dialog);
             basis->setWordWrap(true);
             layout->addWidget(basis);
@@ -11234,7 +11314,7 @@ public:
             if (applied) owner->statusBar()->showMessage(QStringLiteral("Exterior measurement: %1")
                 .arg(format_dimension_area(std::abs(signed_area(proposed.boundary)),m_metric_units)),6000);
         } catch (const std::exception& error) {
-            setError(QStringLiteral("Exterior measurement: %1\nCtrl-select the perimeter walls for a branched layout.")
+            setError(QStringLiteral("Exterior measurement: %1")
                 .arg(QString::fromUtf8(error.what())));
         }
     }

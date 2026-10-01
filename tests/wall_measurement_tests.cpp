@@ -1,6 +1,7 @@
 #include "sketch/appraisal_document.hpp"
 #include "sketch/boundary_entity.hpp"
 #include "sketch/wall_measurement.hpp"
+#include "sketch/vertical_levels.hpp"
 
 #include <algorithm>
 #include <array>
@@ -448,6 +449,330 @@ void invalid_thickness_and_out_of_envelope_coordinates_are_rejected() {
             "wall baselines outside the model coordinate envelope must be rejected");
 }
 
+void wall_network_recognition_excludes_partitions_and_keeps_authoritative_sources() {
+    const auto outer = rectangle_walls();
+    auto expected_ids = wall_ids(outer);
+    std::sort(expected_ids.begin(), expected_ids.end());
+    const std::vector<std::vector<WallSpec>> interiors{
+        {{"t", {{2, 0}, {2, 1}, 0}, 0.1}},
+        {{"corner", {{0, 0}, {1, 1}, 0}, 0.1}},
+        {{"external-spur", {{0, 0}, {-1, -1}, 0}, 0.1}},
+        {{"isolated-interior", {{1, 1}, {2, 1}, 0}, 0.1}},
+        {{"chord", {{2, 0}, {2, 3}, 0}, 0.1}},
+        {{"vertical", {{2, 0}, {2, 3}, 0}, 0.1},
+         {"horizontal", {{0, 1.5}, {4, 1.5}, 0}, 0.1}},
+        {{"diagonal-a", {{0, 0}, {4, 3}, 0}, 0.1},
+         {"diagonal-b", {{4, 0}, {0, 3}, 0}, 0.1}},
+        {{"link", {{0, 1}, {1, 1}, 0}, 0.1},
+         {"inner-bottom", {{1, 1}, {3, 1}, 0}, 0.1},
+         {"inner-right", {{3, 1}, {3, 2}, 0}, 0.1},
+         {"inner-top", {{3, 2}, {1, 2}, 0}, 0.1},
+         {"inner-left", {{1, 2}, {1, 1}, 0}, 0.1}},
+        {{"inner-bottom", {{1, 1}, {3, 1}, 0}, 0.1},
+         {"inner-right", {{3, 1}, {3, 2}, 0}, 0.1},
+         {"inner-top", {{3, 2}, {1, 2}, 0}, 0.1},
+         {"inner-left", {{1, 2}, {1, 1}, 0}, 0.1}},
+    };
+    for (const auto& interior : interiors) {
+        auto network = outer;
+        network.insert(network.end(), interior.begin(), interior.end());
+        auto entities = base_entities(network, false, true);
+        const auto document = Document::create(entities);
+        const auto ids = exterior_wall_measurement_sources(document.snapshot(), wall_ids(network));
+        require(ids == expected_ids, "recognition must select the complete exterior and exclude partitions");
+        const auto measured = derive_exterior_wall_measurement(document.snapshot(), ids);
+        near(signed_area(measured.boundary), 13.44, 1e-10,
+             "partitions and openings must preserve the exact exterior appraisal area");
+        for (const auto& original : entities)
+            require(document.snapshot().entities().at(original.id).properties == original.properties,
+                    "recognition must never split or alter authoritative wall entities");
+        std::reverse(network.begin(), network.end());
+        for (auto& wall : network) std::swap(wall.baseline.start, wall.baseline.end);
+        const auto reversed = Document::create(base_entities(network));
+        require(exterior_wall_measurement_sources(reversed.snapshot(), wall_ids(network)) == expected_ids,
+                "network order and wall direction must not change perimeter source identity");
+    }
+}
+
+void wall_network_recognition_handles_split_hosts_concavity_and_varied_thickness() {
+    std::vector<WallSpec> split{
+        {"bottom-a", {{0, 0}, {2, 0}, 0}, 0.2},
+        {"bottom-b", {{2, 0}, {4, 0}, 0}, 0.2},
+        {"right", {{4, 0}, {4, 3}, 0}, 0.2},
+        {"top", {{4, 3}, {0, 3}, 0}, 0.2},
+        {"left", {{0, 3}, {0, 0}, 0}, 0.2},
+        {"partition", {{2, 0}, {2, 2}, 0}, 0.1},
+    };
+    const auto split_document = Document::create(base_entities(split));
+    const auto split_ids = exterior_wall_measurement_sources(split_document.snapshot(), wall_ids(split));
+    require(split_ids == std::vector<std::string>{"bottom-a", "bottom-b", "left", "right", "top"},
+            "a split T host must retain both complete collinear perimeter walls");
+    near(signed_area(derive_exterior_wall_measurement(split_document.snapshot(), split_ids).boundary),
+         13.44, 1e-10, "split hosts must preserve the exact exterior area");
+
+    const std::vector<Vec2> vertices{{0, 0}, {4, 0}, {4, 2}, {2, 2}, {2, 4}, {0, 4}};
+    std::vector<WallSpec> concave;
+    for (std::size_t i = 0; i < vertices.size(); ++i)
+        concave.push_back({"outer-" + std::to_string(i),
+            {vertices[i], vertices[(i + 1) % vertices.size()], 0}, 0.2});
+    concave.push_back({"interior", {{0, 1}, {4, 1}, 0}, 0.1});
+    const auto concave_document = Document::create(base_entities(concave));
+    const auto concave_ids = exterior_wall_measurement_sources(concave_document.snapshot(), wall_ids(concave));
+    require(concave_ids.size() == 6, "concave recognition must exclude the internal chord");
+    near(signed_area(derive_exterior_wall_measurement(concave_document.snapshot(), concave_ids).boundary),
+         13.64, 1e-10, "recognition must preserve concave exterior geometry");
+
+    auto varied = rectangle_walls(0.2, 0.4, 0.6, 0.8);
+    varied.push_back({"partition", {{2, 0}, {2, 3}, 0}, 0.1});
+    const auto varied_document = Document::create(base_entities(varied));
+    const auto varied_ids = exterior_wall_measurement_sources(varied_document.snapshot(), wall_ids(varied));
+    near(signed_area(derive_exterior_wall_measurement(varied_document.snapshot(), varied_ids).boundary),
+         15.64, 1e-10, "recognition must preserve individual source thicknesses");
+
+    auto rotated = rectangle_walls();
+    rotated.push_back({"diagonal-a", {{0, 0}, {4, 3}, 0}, 0.1});
+    rotated.push_back({"diagonal-b", {{4, 0}, {0, 3}, 0}, 0.1});
+    const auto transform = [](Vec2 point) -> Vec2 {
+        return {1000 + 0.6 * point.x - 0.8 * point.y,
+                -1000 + 0.8 * point.x + 0.6 * point.y};
+    };
+    for (auto& wall : rotated) {
+        wall.baseline.start = transform(wall.baseline.start);
+        wall.baseline.end = transform(wall.baseline.end);
+    }
+    const auto rotated_document = Document::create(base_entities(rotated));
+    const auto rotated_ids = exterior_wall_measurement_sources(rotated_document.snapshot(), wall_ids(rotated));
+    require(rotated_ids == std::vector<std::string>{"wall-bottom", "wall-left", "wall-right", "wall-top"},
+            "translated rotated crossing partitions must retain exact exterior identities");
+    near(signed_area(derive_exterior_wall_measurement(rotated_document.snapshot(), rotated_ids).boundary),
+         13.44, 1e-9, "analytical recognition must remain translation and rotation independent");
+}
+
+void wall_network_recognition_rejects_ambiguous_and_unsupported_inputs() {
+    std::vector<std::vector<WallSpec>> invalid;
+    auto open = rectangle_walls();
+    open.pop_back();
+    invalid.push_back(open);
+    auto duplicate = rectangle_walls();
+    duplicate.push_back({"duplicate", duplicate.front().baseline, 0.2});
+    invalid.push_back(duplicate);
+    auto overlap = rectangle_walls();
+    overlap.push_back({"overlap", {{1, 0}, {3, 0}, 0}, 0.2});
+    invalid.push_back(overlap);
+    auto disconnected = rectangle_walls();
+    disconnected.push_back({"isolated", {{5, 1}, {6, 1}, 0}, 0.1});
+    invalid.push_back(disconnected);
+    auto partial = rectangle_walls();
+    partial.front().baseline.start = {-1, 0};
+    invalid.push_back(partial);
+    auto curved = rectangle_walls();
+    curved.front().baseline.sweep_radians = 0.1;
+    invalid.push_back(curved);
+    auto imprecise = rectangle_walls();
+    imprecise.push_back({"near-overlap", {{1, 5e-8}, {3, 5e-8}, 0}, 0.1});
+    invalid.push_back(imprecise);
+    // Two cycles sharing a vertex have no simple containing perimeter.
+    auto kissing = rectangle_walls();
+    kissing.insert(kissing.end(), {
+        {"other-bottom", {{4, 3}, {6, 3}, 0}, 0.2},
+        {"other-right", {{6, 3}, {6, 5}, 0}, 0.2},
+        {"other-top", {{6, 5}, {4, 5}, 0}, 0.2},
+        {"other-left", {{4, 5}, {4, 3}, 0}, 0.2}});
+    invalid.push_back(kissing);
+    // A bridge between separate lobes must not make either lobe the exterior.
+    auto lobes = rectangle_walls();
+    lobes.insert(lobes.end(), {
+        {"bridge", {{4, 0}, {6, 0}, 0}, 0.1},
+        {"other-bottom", {{6, 0}, {8, 0}, 0}, 0.2},
+        {"other-right", {{8, 0}, {8, 2}, 0}, 0.2},
+        {"other-top", {{8, 2}, {6, 2}, 0}, 0.2},
+        {"other-left", {{6, 2}, {6, 0}, 0}, 0.2}});
+    invalid.push_back(lobes);
+    invalid.push_back({
+        {"a", {{0, 0}, {4, 3}, 0}, 0.2}, {"b", {{4, 3}, {0, 3}, 0}, 0.2},
+        {"c", {{0, 3}, {4, 0}, 0}, 0.2}, {"d", {{4, 0}, {0, 0}, 0}, 0.2}});
+    for (const auto& walls : invalid) {
+        const auto document = Document::create(base_entities(walls));
+        rejects([&] { (void)exterior_wall_measurement_sources(document.snapshot(), wall_ids(walls)); },
+                "ambiguous or unsupported wall networks must fail closed");
+    }
+    auto entities = base_entities(rectangle_walls());
+    for (auto& wall : entities)
+        if (wall.id == "wall-bottom") wall.properties["phase_id"] = "phase-other";
+    const auto mixed_phase = Document::create(entities);
+    rejects([&] { (void)exterior_wall_measurement_sources(mixed_phase.snapshot(), wall_ids(rectangle_walls())); },
+            "recognition must reject mixed phase context even with shared floor and layer");
+    for (const auto& field : {"property_id", "building_id", "floor_id", "layer_id"}) {
+        auto context_entities = base_entities(rectangle_walls());
+        const auto original_id = std::string(field).substr(0, std::string(field).size() - 3) + "-1";
+        const auto original = std::find_if(context_entities.begin(), context_entities.end(),
+            [&](const auto& item) { return item.id == original_id; });
+        auto other = *original;
+        other.id = "other-context";
+        context_entities.push_back(other);
+        for (auto& wall : context_entities)
+            if (wall.id == "wall-bottom") wall.properties[field] = other.id;
+        const auto context_document = Document::create(context_entities);
+        rejects([&] { (void)exterior_wall_measurement_sources(context_document.snapshot(), wall_ids(rectangle_walls())); },
+                "recognition must isolate all property, building, floor and layer contexts");
+    }
+    for (const auto elevation : {Json(0.1), Json("malformed")}) {
+        auto elevation_entities = base_entities(rectangle_walls());
+        for (auto& wall : elevation_entities)
+            if (wall.id == "wall-bottom") wall.properties["elevation_m"] = elevation;
+        const auto elevation_document = Document::create(elevation_entities);
+        rejects([&] { (void)exterior_wall_measurement_sources(elevation_document.snapshot(), wall_ids(rectangle_walls())); },
+                "recognition must reject inconsistent or malformed elevation planes");
+    }
+    auto legacy_entities = base_entities(rectangle_walls());
+    for (auto& item : legacy_entities) item.properties.erase("elevation_m");
+    const auto legacy_elevation = Document::create(legacy_entities);
+    require(exterior_wall_measurement_sources(legacy_elevation.snapshot(), wall_ids(rectangle_walls())).size() == 4,
+            "legacy walls without elevations must default to the zero plane");
+    const auto valid = Document::create(base_entities(rectangle_walls()));
+    auto duplicate_ids = wall_ids(rectangle_walls());
+    duplicate_ids.push_back(duplicate_ids.front());
+    rejects([&] { (void)exterior_wall_measurement_sources(valid.snapshot(), duplicate_ids); },
+            "recognition must reject repeated source IDs");
+    auto missing_ids = wall_ids(rectangle_walls());
+    missing_ids.front() = "missing-wall";
+    rejects([&] { (void)exterior_wall_measurement_sources(valid.snapshot(), missing_ids); },
+            "recognition must reject missing source IDs");
+    auto excessive_ids = wall_ids(rectangle_walls());
+    excessive_ids.resize(2049, "wall-bottom");
+    rejects([&] { (void)exterior_wall_measurement_sources(valid.snapshot(), excessive_ids); },
+            "recognition must bound input wall counts before constructing an arrangement");
+
+    // A modest wall count can still create a quadratic planar arrangement.
+    auto dense = rectangle_walls();
+    for (int i = 1; i <= 180; ++i) {
+        const auto x = 4.0 * i / 181.0;
+        const auto y = 3.0 * i / 181.0;
+        dense.push_back({"vertical-" + std::to_string(i), {{x, 0}, {x, 3}, 0}, 0.1});
+        dense.push_back({"horizontal-" + std::to_string(i), {{0, y}, {4, y}, 0}, 0.1});
+    }
+    const auto dense_document = Document::create(base_entities(dense));
+    rejects([&] { (void)exterior_wall_measurement_sources(dense_document.snapshot(), wall_ids(dense)); },
+            "dense wall networks must reject excessive intersections without exhausting resources");
+}
+
+void wall_network_recognition_uses_resolved_elevation_planes_without_mutation() {
+    const auto specs = rectangle_walls();
+    const auto level_entities = [&] {
+        auto entities = base_entities(specs);
+        const auto graph = VerticalLevelGraph({{"ground", 0}, {"upper", 3}},
+                                              {{"storey", "ground", "upper"}});
+        entities.push_back(entity("levels", "vertical_levels", {{"model", Json::parse(graph.serialize())}}));
+        for (auto& item : entities) {
+            if (item.id == "floor-1")
+                item.properties["vertical_level_binding"] = {
+                    {"version", 1}, {"graph_id", "levels"}, {"level_id", "upper"}};
+            if (item.type == "wall")
+                item.properties["vertical_placement"] = {
+                    {"version", 1}, {"mode", "level"}, {"offset_m", 0.0}};
+        }
+        return entities;
+    };
+    auto inconsistent_entities = level_entities();
+    for (auto& item : inconsistent_entities)
+        if (item.id == "wall-bottom") item.properties["vertical_placement"]["offset_m"] = 0.5;
+    const auto inconsistent = Document::create(inconsistent_entities);
+    rejects([&] { (void)exterior_wall_measurement_sources(inconsistent.snapshot(), wall_ids(specs)); },
+            "equal raw elevations with unequal resolved level offsets must reject");
+
+    auto consistent_entities = level_entities();
+    for (auto& item : consistent_entities) {
+        if (item.id == "wall-bottom") {
+            item.properties["elevation_m"] = 1.0;
+            item.properties["vertical_placement"]["offset_m"] = -1.0;
+        }
+    }
+    const auto consistent = Document::create(consistent_entities);
+    const auto ids = exterior_wall_measurement_sources(consistent.snapshot(), wall_ids(specs));
+    require(ids == std::vector<std::string>{"wall-bottom", "wall-left", "wall-right", "wall-top"},
+            "different raw elevations resolving to one actual plane must remain recognizable");
+    near(signed_area(derive_exterior_wall_measurement(consistent.snapshot(), ids).boundary),
+         13.44, 1e-10, "level resolution must preserve the exact planar exterior measurement");
+    for (const auto& original : consistent_entities)
+        require(consistent.snapshot().entities().at(original.id).properties == original.properties,
+                "resolved plane checks must never rewrite authoritative wall or level properties");
+
+    auto roundoff_entities = level_entities();
+    for (auto& item : roundoff_entities) {
+        if (item.type != "wall") continue;
+        item.properties["elevation_m"] = item.id == "wall-bottom" ? 0.1 : 0.2;
+        item.properties["vertical_placement"]["offset_m"] = item.id == "wall-bottom" ? -2.8 : -2.9;
+    }
+    const auto roundoff_document = Document::create(roundoff_entities);
+    require(exterior_wall_measurement_sources(roundoff_document.snapshot(), wall_ids(specs)).size() == 4,
+            "one resolved elevation plane must tolerate arithmetic roundoff in local elevation plus level offset");
+    auto chained_entities = base_entities(specs);
+    for (auto& item : chained_entities) {
+        if (item.id == "wall-right") item.properties["elevation_m"] = 0.75 * default_geometry_tolerance_metres;
+        if (item.id == "wall-top") item.properties["elevation_m"] = 1.5 * default_geometry_tolerance_metres;
+    }
+    const auto chained_document = Document::create(chained_entities);
+    rejects([&] { (void)exterior_wall_measurement_sources(chained_document.snapshot(), wall_ids(specs)); },
+            "elevation tolerance must bound the entire plane range rather than admit pairwise chained offsets");
+
+    for (const auto legacy_elevation : {Json(0.5), Json("malformed")}) {
+        auto legacy_entities = base_entities(specs);
+        for (auto& item : legacy_entities) {
+            if (item.type != "wall") continue;
+            item.properties.erase("elevation_m");
+            item.properties["elevation"] = item.id == "wall-bottom" ? legacy_elevation : Json(0.0);
+        }
+        const auto legacy = Document::create(legacy_entities);
+        rejects([&] { (void)exterior_wall_measurement_sources(legacy.snapshot(), wall_ids(specs)); },
+                "legacy elevation aliases must reject mismatched or malformed planes");
+    }
+}
+
+void appraisal_withholds_overlapping_old_and_annex_exterior_owners() {
+    const auto original_walls = rectangle_walls();
+    auto original_entities = base_entities(original_walls, true);
+    const auto original_document = Document::create(original_entities);
+    const auto original = derive_exterior_wall_measurement(original_document.snapshot(), wall_ids(original_walls));
+    auto original_owner = measurement_entity(original.boundary, original.source, true);
+    original_owner.properties["appraisal_facts"] = appraisal_facts();
+
+    auto annex_walls = original_walls;
+    annex_walls.insert(annex_walls.end(), {
+        {"annex-bottom", {{4, 0}, {6, 0}, 0}, 0.2},
+        {"annex-right", {{6, 0}, {6, 3}, 0}, 0.2},
+        {"annex-top", {{6, 3}, {4, 3}, 0}, 0.2}});
+    auto annex_entities = base_entities(annex_walls, true);
+    const auto annex_document = Document::create(annex_entities);
+    const auto new_ids = exterior_wall_measurement_sources(annex_document.snapshot(), wall_ids(annex_walls));
+    require(new_ids == std::vector<std::string>{"annex-bottom", "annex-right", "annex-top",
+                "wall-bottom", "wall-left", "wall-top"},
+            "the annex exterior must include six complete perimeter walls and exclude the old shared wall");
+    const auto expanded = derive_exterior_wall_measurement(annex_document.snapshot(), new_ids);
+    near(signed_area(expanded.boundary), 19.84, 1e-10,
+         "the annex fixture must have its independent exact expanded exterior area");
+    auto expanded_owner = measurement_entity(expanded.boundary, expanded.source, true);
+    expanded_owner.id = "area-expanded";
+    expanded_owner.properties["appraisal_facts"] = appraisal_facts();
+    annex_entities.push_back(original_owner);
+    annex_entities.push_back(expanded_owner);
+    const auto retained = Document::create(annex_entities);
+    require(wall_measurement_source_current(retained.snapshot(), retained.snapshot().entities().at("area-1")),
+            "unchanged original perimeter sources remain strictly current after an annex is added");
+    require(wall_measurement_source_current(retained.snapshot(), retained.snapshot().entities().at("area-expanded")),
+            "the expanded owner must also have current source provenance in the overlap fixture");
+    const auto report = build_appraisal_document_report(retained.snapshot(), "property-1");
+    require(!report.qualified && !report.calculation.has_value() &&
+                std::any_of(report.issues.begin(), report.issues.end(), [](const auto& issue) {
+                    return issue.find("overlap on the same floor") != std::string::npos;
+                }),
+            "same-floor overlap must withhold automatic totals even when both exterior owners remain current");
+    require(report.boundaries.size() == 2 &&
+                std::all_of(report.boundaries.begin(), report.boundaries.end(), [](const auto& boundary) {
+                    return boundary.qualification.qualified;
+                }),
+            "the overlap guard must operate on owners with valid residential facts rather than missing qualification");
+}
+
 } // namespace
 
 int main() {
@@ -462,6 +787,11 @@ int main() {
         appraisal_withholds_stale_wall_measured_totals();
         open_duplicate_crossed_and_curved_wall_loops_are_rejected();
         invalid_thickness_and_out_of_envelope_coordinates_are_rejected();
+        wall_network_recognition_excludes_partitions_and_keeps_authoritative_sources();
+        wall_network_recognition_handles_split_hosts_concavity_and_varied_thickness();
+        wall_network_recognition_rejects_ambiguous_and_unsupported_inputs();
+        wall_network_recognition_uses_resolved_elevation_planes_without_mutation();
+        appraisal_withholds_overlapping_old_and_annex_exterior_owners();
         std::cout << "wall_measurement_tests passed\n";
         return 0;
     } catch (const std::exception& error) {

@@ -13,6 +13,14 @@ struct WallMeasurementResult {
     nlohmann::json source;
 };
 
+// Recognizes the unique simple exterior in a straight wall network. Interior
+// partitions/loops and connected dangling branches are excluded. Disconnected
+// geometry must be strictly inside that exterior. Returns sorted complete wall
+// IDs; ambiguous topology, partial source walls, and unsupported geometry throw
+// std::invalid_argument. Recognition never edits the authoritative walls.
+[[nodiscard]] std::vector<std::string> exterior_wall_measurement_sources(
+    const DocumentSnapshot& document, const std::vector<std::string>& candidate_wall_ids);
+
 // Derives the exterior outline for one closed loop of straight source walls.
 // Throws std::invalid_argument when the selected walls do not form a supported
 // simple outline or exceed the supported geometry envelope.

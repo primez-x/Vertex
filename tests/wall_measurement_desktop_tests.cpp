@@ -4,6 +4,8 @@
 #include "sketch/constraint_entity.hpp"
 #include "sketch/desktop/main_window.hpp"
 #include "sketch/document_wall.hpp"
+#include "sketch/vertical_levels.hpp"
+#include "../src/desktop/plan_canvas.hpp"
 #include "support/noninteractive_errors.hpp"
 
 #include <QApplication>
@@ -44,7 +46,8 @@ void capture(QWidget& widget, const QString& name) {
     widget.grab().save(QDir(path).filePath(name + QStringLiteral(".png")));
 }
 
-void review_measurement(sketch::desktop::MainWindow& window, bool accept, bool refresh = false) {
+void review_measurement(sketch::desktop::MainWindow& window, bool accept, bool refresh = false,
+                        std::size_t included = 4, std::size_t excluded = 0) {
     auto* action = window.findChild<QAction*>(refresh ? QStringLiteral("refreshExteriorMeasurement")
                                                     : QStringLiteral("measureExteriorFromWalls"));
     if (!action) throw std::runtime_error("exterior measurement is available as a user command");
@@ -56,8 +59,21 @@ void review_measurement(sketch::desktop::MainWindow& window, bool accept, bool r
                 throw std::runtime_error("wall measurement command opens its review dialog");
             auto* area = dialog->findChild<QLabel*>(QStringLiteral("wallMeasurementArea"));
             if (!area || !area->text().contains(QStringLiteral("Exterior faces")) ||
-                !area->text().contains(QStringLiteral("4 walls")))
+                !area->text().contains(QStringLiteral("%1 walls").arg(included)))
                 throw std::runtime_error("review shows exterior basis, wall count and measured area");
+            auto* exclusions = dialog->findChild<QLabel*>(QStringLiteral("wallMeasurementExclusions"));
+            auto* preview = dynamic_cast<sketch::desktop::PlanCanvas*>(
+                dialog->findChild<QWidget*>(QStringLiteral("wallMeasurementPreview")));
+            if (!exclusions || !exclusions->text().contains(QStringLiteral("%1 excluded").arg(excluded)) ||
+                !preview || preview->entities().size() != included + excluded + 1)
+                throw std::runtime_error("review discloses excluded candidates and previews all candidate baselines");
+            if (excluded != 0) {
+                std::size_t excluded_shapes = 0;
+                for (const auto& shape : preview->entities())
+                    if (shape.stroke_color == QColor(190,115,35)) ++excluded_shapes;
+                if (excluded_shapes != excluded)
+                    throw std::runtime_error("excluded partition baselines are visually distinct in the review");
+            }
             capture(*dialog,QStringLiteral("exterior-measurement-review"));
             if (accept) dialog->accept(); else dialog->reject();
         } catch (...) {
@@ -66,6 +82,7 @@ void review_measurement(sketch::desktop::MainWindow& window, bool accept, bool r
         }
     });
     action->trigger();
+    QApplication::processEvents();
     if (failure) std::rethrow_exception(failure);
 }
 
@@ -482,6 +499,176 @@ void wall_measurement_admission_failures_are_atomic() {
             "a read-only document refuses wall measurement creation without mutation");
 }
 
+void an_unsplit_partition_selects_its_exterior_shell() {
+    sketch::desktop::MainWindow window;
+    window.setMetricUnits(true);
+    choose_appraisal_workflow(window);
+    const auto perimeter = rectangle_walls(window);
+    const auto partition = window.createStraightWall({2.0,0.0},{2.0,3.0},QStringLiteral("partition"));
+    require(!partition.isEmpty() && window.selectEntity(partition), "an unsplit interior partition is selectable");
+    const auto before = window.document().snapshot();
+    require(count_type(before,"wall") == 5, "T contacts retain the four original unsplit perimeter walls");
+    review_measurement(window,false,false,4,1);
+    require(window.document().revision() == before.revision() &&
+                window.document().snapshot().entities() == before.entities(),
+            "canceling partition-shell review preserves every source and revision");
+    review_measurement(window,true,false,4,1);
+    const auto owner_id = window.selectedEntityId();
+    const auto created = window.document().snapshot();
+    require(count_type(created,"measurement_boundary") == 1, "partition selection creates one exterior owner");
+    const auto& owner = created.entities().at(owner_id.toStdString());
+    std::set<std::string> provenance;
+    for (const auto& record : owner.properties.at("wall_measurement_source").at("walls"))
+        provenance.insert(record.at("id").get<std::string>());
+    std::set<std::string> expected;
+    for (const auto& id : perimeter) expected.insert(id.toStdString());
+    require(provenance == expected && !provenance.contains(partition.toStdString()),
+            "saved provenance contains only full exterior perimeter walls");
+    for (const auto& id : wall_ids(before))
+        require(created.entities().at(id) == before.entities().at(id), "recognition leaves all wall geometry unchanged");
+    const auto thickness = before.entities().at(perimeter.front().toStdString()).properties.at("thickness_m").get<double>();
+    const double exterior_area = (4.0+thickness)*(3.0+thickness);
+    require(std::abs(polygon_area(sketch::decode_identified_boundary_entity(owner))-exterior_area) < 1e-8,
+            "the partition does not subtract from the exterior footprint");
+    require(dimensions_for(created,owner.id).size() == 4, "exterior dimensions follow the four shell edges");
+    require(window.editSelectedAppraisalFacts(appraisal_declarations()), "the shell accepts residential declarations");
+    window.setMetricUnits(false);
+    auto* gla = window.findChild<QLabel*>(QStringLiteral("appraisalGlaTotal"));
+    require(gla && gla->text().contains(QString::number(exterior_area/(0.3048*0.3048),'f',2)) &&
+                gla->text().contains(QStringLiteral("ft²")), "appraisal square-foot totals use the full exterior footprint");
+    for (qsizetype i = 0; i < perimeter.size(); ++i)
+        require(window.selectEntity(perimeter[i],i != 0), "select explicit shell candidates");
+    require(window.selectEntity(partition,true), "include the partition in explicit candidates");
+    const auto before_duplicate = window.document().snapshot();
+    require(window.createMeasurementBoundaryFromSelectedWalls() == owner_id &&
+                window.document().revision() == before_duplicate.revision(),
+            "explicit shell and partition candidates reuse the same owner without double counting");
+    // Newly connected walls must not be imported into a retained version-1 refresh source.
+    const auto addition = window.createStraightWall({4.0,1.5},{5.0,1.5},QStringLiteral("new branch"));
+    require(!addition.isEmpty() && window.selectEntity(owner_id), "a later branch does not change the retained owner selection");
+    const auto before_refresh = window.document().snapshot();
+    review_measurement(window,true,true,4,0);
+    require(window.document().snapshot().entities() == before_refresh.entities() &&
+                window.document().revision() == before_refresh.revision(),
+            "refresh uses only retained perimeter provenance and ignores newly connected geometry");
+    QTemporaryDir output;
+    require(output.isValid(), "partition shell persistence has a temporary output directory");
+    const auto path = output.filePath(QStringLiteral("partition-shell.bldproj"));
+    require(window.saveProjectAs(path) && window.openProject(path) &&
+                window.document().snapshot().entities() == before_refresh.entities(),
+            "recognized shell and excluded partition survive save and reopen");
+}
+
+void split_perimeter_with_t_branches_and_internal_chord() {
+    sketch::desktop::MainWindow window;
+    const QStringList perimeter{
+        window.createStraightWall({0,0},{2,0}), window.createStraightWall({2,0},{4,0}),
+        window.createStraightWall({4,0},{4,3}), window.createStraightWall({4,3},{2,3}),
+        window.createStraightWall({2,3},{0,3}), window.createStraightWall({0,3},{0,0})};
+    const auto chord = window.createStraightWall({2,0},{2,3},QStringLiteral("partition"));
+    const auto branch = window.createStraightWall({2,1.5},{3,1.5},QStringLiteral("partition"));
+    const auto crossing = window.createStraightWall({1,1},{3,2},QStringLiteral("partition"));
+    require(!chord.isEmpty() && !branch.isEmpty() && !crossing.isEmpty() && window.selectEntity(crossing),
+            "a proper crossing of an internal chord can identify the split shell and its T branch");
+    const auto before = window.document().snapshot();
+    review_measurement(window,true,false,6,3);
+    const auto created = window.document().snapshot();
+    const auto& owner = created.entities().at(window.selectedEntityId().toStdString());
+    const auto& records = owner.properties.at("wall_measurement_source").at("walls");
+    require(records.size() == 6, "split shell source retains all six full perimeter IDs");
+    for (const auto& record : records)
+        require(record.at("id") != chord.toStdString() && record.at("id") != branch.toStdString() &&
+                    record.at("id") != crossing.toStdString(),
+                "T branches, proper crossings and internal chords are excluded from split-shell provenance");
+    for (const auto& id : wall_ids(before))
+        require(created.entities().at(id) == before.entities().at(id), "split-shell recognition does not alter walls");
+    const auto thickness = before.entities().at(perimeter.front().toStdString()).properties.at("thickness_m").get<double>();
+    require(std::abs(polygon_area(sketch::decode_identified_boundary_entity(owner))-(4+thickness)*(3+thickness)) < 1e-8,
+            "split-shell measurement includes the complete exterior area");
+}
+
+void automatic_candidates_respect_placement_and_phase() {
+    sketch::desktop::MainWindow window;
+    const auto perimeter = rectangle_walls(window);
+    const auto initial = window.document().snapshot();
+    const auto seed = initial.entities().at(perimeter.front().toStdString());
+    const auto floor = QString::fromStdString(seed.properties.at("floor_id").get<std::string>());
+    const auto other_layer = window.createLayer(floor,QStringLiteral("Other drawing layer"));
+    require(!other_layer.isEmpty(), "a separate layer exists for candidate isolation");
+    const auto snapshot = window.document().snapshot();
+    std::vector<sketch::EntityChange> changes;
+    for (const auto& suffix : {"elevation","phase","layer"}) {
+        auto other = seed;
+        other.id = std::string("wall-other-") + suffix;
+        other.properties["baseline"] = {{"start",{0.0,0.0}},{"end",{-1.0,0.0}},{"sweep_radians",0.0}};
+        if (std::string_view(suffix) == "elevation") other.properties["elevation_m"] = 3.0;
+        if (std::string_view(suffix) == "phase") other.properties["phase_id"] = "other-design-phase";
+        if (std::string_view(suffix) == "layer") other.properties["layer_id"] = other_layer.toStdString();
+        changes.push_back(sketch::EntityChange::upsert(std::move(other)));
+    }
+    window.document().apply(sketch::ApplyEntityChanges{snapshot.revision(),std::move(changes),{},"test other placement candidates"});
+    require(window.selectEntity(perimeter.front()), "select one shell wall with coincident foreign candidates");
+    review_measurement(window,true,false,4,0);
+    const auto owner_id = window.selectedEntityId();
+    const auto before = window.document().snapshot();
+    require(before.entities().at(owner_id.toStdString()).properties.at("wall_measurement_source").at("walls").size() == 4,
+            "automatic discovery excludes coincident walls in another layer, phase or elevation");
+    for (qsizetype i = 0; i < perimeter.size(); ++i)
+        require(window.selectEntity(perimeter[i],i != 0), "select explicit shell candidates for mixed elevation refusal");
+    require(window.selectEntity(QStringLiteral("wall-other-elevation"),true), "an explicit foreign-elevation wall is selectable");
+    require(window.createMeasurementBoundaryFromSelectedWalls().isEmpty() &&
+                window.document().revision() == before.revision() &&
+                window.document().snapshot().entities() == before.entities(),
+            "mixed-elevation explicit candidates fail without reusing or changing the owner");
+}
+
+void level_bound_walls_share_a_physical_plane_despite_arithmetic_roundoff() {
+    sketch::desktop::MainWindow window;
+    const auto perimeter = rectangle_walls(window);
+    const auto initial = window.document().snapshot();
+    const auto graph = sketch::VerticalLevelGraph({{"ground",0.0},{"upper",3.0}},
+                                                 {{"storey","ground","upper"}});
+    sketch::Entity levels{"wall-measurement-levels","vertical_levels",
+        {{"model",nlohmann::json::parse(graph.serialize())}}};
+    auto floor = initial.entities().at(initial.entities().at(perimeter.front().toStdString())
+                                         .properties.at("floor_id").get<std::string>());
+    floor.properties["vertical_level_binding"] = {
+        {"version",1},{"graph_id",levels.id},{"level_id","upper"}};
+    std::vector<sketch::EntityChange> changes{
+        sketch::EntityChange::upsert(levels),sketch::EntityChange::upsert(floor)};
+    for (qsizetype i = 0; i < perimeter.size(); ++i) {
+        auto wall = initial.entities().at(perimeter[i].toStdString());
+        wall.properties["elevation_m"] = i == 0 ? 0.1 : 0.2;
+        wall.properties["vertical_placement"] = {
+            {"version",1},{"mode","level"},{"offset_m",i == 0 ? -2.8 : -2.9}};
+        changes.push_back(sketch::EntityChange::upsert(std::move(wall)));
+    }
+    window.document().apply(sketch::ApplyEntityChanges{
+        initial.revision(),std::move(changes),{},"test mathematically coplanar level placements"});
+    const auto before = window.document().snapshot();
+    require(window.selectEntity(perimeter.front()), "one level-bound wall selects the physical shell");
+    review_measurement(window,false,false,4,0);
+    require(window.document().revision() == before.revision() &&
+                window.document().snapshot().entities() == before.entities(),
+            "coplanar level preview discovers every wall without rewriting local elevations or offsets");
+    select_walls(window,perimeter);
+    const auto owner_id = window.createMeasurementBoundaryFromSelectedWalls();
+    require(!owner_id.isEmpty(), "explicit selection accepts equal physical planes computed through different level arithmetic");
+    const auto created = window.document().snapshot();
+    require(created.entities().at(owner_id.toStdString()).properties.at("wall_measurement_source").at("walls").size() == 4,
+            "the equal-plane exterior source retains all four perimeter identities");
+    for (const auto& [id, entity] : before.entities())
+        require(created.entities().at(id) == entity, "physical plane comparison preserves every source property and level entity");
+    const auto thickness = before.entities().at(perimeter.front().toStdString()).properties.at("thickness_m").get<double>();
+    require(std::abs(polygon_area(sketch::decode_identified_boundary_entity(created.entities().at(owner_id.toStdString()))) -
+                         (4.0+thickness)*(3.0+thickness)) < 1e-8,
+            "tolerating level roundoff preserves the complete physical exterior area");
+    require(window.selectEntity(perimeter.front()), "repeat the automatic command from the original plane seed");
+    require(window.createMeasurementBoundaryFromSelectedWalls() == owner_id &&
+                window.document().revision() == created.revision(),
+            "single-wall discovery reuses the coplanar source owner without double counting");
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -497,6 +684,10 @@ int main(int argc, char** argv) {
     try {
         selected_wall_loop_creates_and_refreshes_one_exterior_appraisal_area();
         wall_measurement_admission_failures_are_atomic();
+        an_unsplit_partition_selects_its_exterior_shell();
+        split_perimeter_with_t_branches_and_internal_chord();
+        automatic_candidates_respect_placement_and_phase();
+        level_bound_walls_share_a_physical_plane_despite_arithmetic_roundoff();
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
         return 1;

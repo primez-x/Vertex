@@ -2,12 +2,14 @@
 
 #include "sketch/boundary_entity.hpp"
 #include "sketch/geometry_operations.hpp"
+#include "sketch/project_organization.hpp"
 
 #include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstddef>
 #include <map>
+#include <limits>
 #include <optional>
 #include <set>
 #include <stdexcept>
@@ -186,6 +188,288 @@ Vec2 multiply(Vec2 point, double scale) {
 
 double distance(Vec2 left, Vec2 right) {
     return std::hypot(left.x - right.x, left.y - right.y);
+}
+
+// The input count alone does not bound a planar arrangement: pairwise crossings
+// can create quadratically many fragments. Keep both storage and face walks
+// bounded, and fail closed rather than simplify authoritative geometry.
+constexpr std::size_t maximum_network_nodes = 32'768;
+constexpr std::size_t maximum_network_edges = 32'768;
+constexpr auto no_index = std::numeric_limits<std::size_t>::max();
+
+struct NetworkEdge {
+    std::size_t start{};
+    std::size_t end{};
+    std::size_t wall{};
+};
+
+struct WallNetwork {
+    std::vector<Vec2> nodes;
+    std::vector<NetworkEdge> edges;
+    std::vector<std::vector<std::size_t>> outgoing;
+    std::vector<std::size_t> component;
+    std::vector<bool> bridges;
+
+    std::size_t from(std::size_t half_edge) const {
+        const auto& edge = edges[half_edge / 2];
+        return half_edge % 2 == 0 ? edge.start : edge.end;
+    }
+    std::size_t to(std::size_t half_edge) const { return from(half_edge ^ 1); }
+};
+
+WallNetwork split_wall_network(const std::vector<SourceWall>& walls) {
+    WallNetwork graph;
+    using Cell = std::pair<long long, long long>;
+    std::map<Cell, std::vector<std::size_t>> cells;
+    double coordinate_scale = 1.0;
+    for (const auto& wall : walls)
+        coordinate_scale = std::max({coordinate_scale, std::abs(wall.baseline.start.x),
+            std::abs(wall.baseline.start.y), std::abs(wall.baseline.end.x), std::abs(wall.baseline.end.y)});
+    const auto cell_for = [](Vec2 point) -> Cell {
+        return {static_cast<long long>(std::floor(point.x / default_geometry_tolerance_metres)),
+                static_cast<long long>(std::floor(point.y / default_geometry_tolerance_metres))};
+    };
+    const auto node_for = [&](Vec2 point) {
+        if (!bounded(point.x) || !bounded(point.y)) reject("Wall intersection exceeds the geometry envelope");
+        const auto cell = cell_for(point);
+        std::optional<std::size_t> existing;
+        for (long long dx = -1; dx <= 1; ++dx) {
+            for (long long dy = -1; dy <= 1; ++dy) {
+                const auto found = cells.find({cell.first + dx, cell.second + dy});
+                if (found == cells.end()) continue;
+                for (const auto node : found->second) {
+                    const auto separation = distance(graph.nodes[node], point);
+                    if (separation > default_geometry_tolerance_metres) continue;
+                    // Only absorb arithmetic roundoff. Model-tolerance contacts
+                    // that would move distinct geometry are unsupported precision.
+                    const auto roundoff = std::min(default_geometry_tolerance_metres * 0.01,
+                        64.0 * std::numeric_limits<double>::epsilon() * coordinate_scale);
+                    if (separation > roundoff || (existing && *existing != node))
+                        reject("Wall network contacts are below supported geometric precision");
+                    existing = node;
+                }
+            }
+        }
+        if (existing) return *existing;
+        if (graph.nodes.size() >= maximum_network_nodes)
+            reject("Wall network exceeds the supported intersection node count");
+        const auto node = graph.nodes.size();
+        graph.nodes.push_back(point);
+        cells[cell].push_back(node);
+        return node;
+    };
+
+    std::vector<std::vector<std::size_t>> cuts(walls.size());
+    for (std::size_t i = 0; i < walls.size(); ++i) {
+        cuts[i].push_back(node_for(walls[i].baseline.start));
+        cuts[i].push_back(node_for(walls[i].baseline.end));
+    }
+    std::size_t cut_count = walls.size() * 2;
+    for (std::size_t i = 0; i < walls.size(); ++i) {
+        for (std::size_t j = i + 1; j < walls.size(); ++j) {
+            const auto hit = segment_intersection(walls[i].baseline, walls[j].baseline);
+            if (hit.kind == SegmentIntersectionKind::overlap)
+                reject("Duplicate or overlapping collinear source walls are not supported");
+            if (hit.kind == SegmentIntersectionKind::indeterminate)
+                reject("Wall network intersection is numerically indeterminate");
+            for (const auto point : hit.points) {
+                const auto node = node_for(point);
+                for (const auto wall : {i, j}) {
+                    if (std::find(cuts[wall].begin(), cuts[wall].end(), node) != cuts[wall].end()) continue;
+                    if (++cut_count > maximum_network_edges + walls.size())
+                        reject("Wall network exceeds the supported intersection fragment count");
+                    cuts[wall].push_back(node);
+                }
+            }
+        }
+    }
+    for (std::size_t i = 0; i < walls.size(); ++i) {
+        const auto direction = subtract(walls[i].baseline.end, walls[i].baseline.start);
+        std::sort(cuts[i].begin(), cuts[i].end(), [&](const auto left, const auto right) {
+            return dot(subtract(graph.nodes[left], walls[i].baseline.start), direction) <
+                   dot(subtract(graph.nodes[right], walls[i].baseline.start), direction);
+        });
+        for (std::size_t j = 1; j < cuts[i].size(); ++j) {
+            if (distance(graph.nodes[cuts[i][j - 1]], graph.nodes[cuts[i][j]]) <=
+                default_geometry_tolerance_metres)
+                reject("Wall network fragments are below supported geometric precision");
+            if (graph.edges.size() >= maximum_network_edges)
+                reject("Wall network exceeds the supported intersection fragment count");
+            graph.edges.push_back({cuts[i][j - 1], cuts[i][j], i});
+        }
+    }
+    graph.outgoing.resize(graph.nodes.size());
+    for (std::size_t i = 0; i < graph.edges.size(); ++i) {
+        graph.outgoing[graph.edges[i].start].push_back(2 * i);
+        graph.outgoing[graph.edges[i].end].push_back(2 * i + 1);
+    }
+    return graph;
+}
+
+void identify_network_bridges(WallNetwork& graph) {
+    // Iterative Tarjan traversal avoids a process-stack limit for long walls
+    // split by many intersections. A bridge has no enclosing face on either side.
+    std::vector<std::size_t> discovery(graph.nodes.size(), 0);
+    std::vector<std::size_t> low(graph.nodes.size(), 0);
+    std::vector<std::size_t> parent(graph.nodes.size(), no_index);
+    std::vector<std::size_t> cursor(graph.nodes.size(), 0);
+    graph.component.resize(graph.nodes.size());
+    graph.bridges.assign(graph.edges.size(), false);
+    std::size_t time = 0;
+    std::size_t component = 0;
+    std::vector<std::size_t> stack;
+    for (std::size_t seed = 0; seed < graph.nodes.size(); ++seed) {
+        if (discovery[seed] != 0) continue;
+        discovery[seed] = low[seed] = ++time;
+        graph.component[seed] = component;
+        stack.push_back(seed);
+        while (!stack.empty()) {
+            const auto node = stack.back();
+            if (cursor[node] < graph.outgoing[node].size()) {
+                const auto half = graph.outgoing[node][cursor[node]++];
+                if (parent[node] != no_index && half == (parent[node] ^ 1)) continue;
+                const auto next = graph.to(half);
+                if (discovery[next] == 0) {
+                    parent[next] = half;
+                    graph.component[next] = component;
+                    discovery[next] = low[next] = ++time;
+                    stack.push_back(next);
+                } else {
+                    low[node] = std::min(low[node], discovery[next]);
+                }
+            } else {
+                stack.pop_back();
+                if (parent[node] != no_index) {
+                    const auto previous = graph.from(parent[node]);
+                    if (low[node] > discovery[previous]) graph.bridges[parent[node] / 2] = true;
+                    low[previous] = std::min(low[previous], low[node]);
+                }
+            }
+        }
+        ++component;
+    }
+}
+
+enum class LoopLocation { outside, boundary, inside };
+
+LoopLocation locate_in_straight_loop(Vec2 point, const Boundary& loop) {
+    bool inside = false;
+    for (const auto& edge : loop) {
+        const auto direction = subtract(edge.end, edge.start);
+        const auto offset = subtract(point, edge.start);
+        const auto parameter = std::clamp(dot(offset, direction) / dot(direction, direction), 0.0, 1.0);
+        if (distance(point, add(edge.start, multiply(direction, parameter))) <=
+            default_geometry_tolerance_metres)
+            return LoopLocation::boundary;
+        if ((edge.start.y > point.y) != (edge.end.y > point.y)) {
+            const auto x = edge.start.x + (point.y - edge.start.y) * direction.x / direction.y;
+            if (x > point.x) inside = !inside;
+        }
+    }
+    return inside ? LoopLocation::inside : LoopLocation::outside;
+}
+
+std::vector<std::string> recognize_network_exterior(const std::vector<SourceWall>& walls) {
+    auto graph = split_wall_network(walls);
+    identify_network_bridges(graph);
+    std::vector<std::vector<std::size_t>> angular(graph.nodes.size());
+    std::vector<std::size_t> position(graph.edges.size() * 2, no_index);
+    for (std::size_t node = 0; node < graph.nodes.size(); ++node) {
+        for (const auto half : graph.outgoing[node])
+            if (!graph.bridges[half / 2]) angular[node].push_back(half);
+        const auto angle = [&](std::size_t half) {
+            const auto direction = subtract(graph.nodes[graph.to(half)], graph.nodes[node]);
+            return std::atan2(direction.y, direction.x);
+        };
+        std::sort(angular[node].begin(), angular[node].end(), [&](const auto left, const auto right) {
+            return angle(left) < angle(right);
+        });
+        for (std::size_t i = 0; i < angular[node].size(); ++i) position[angular[node][i]] = i;
+    }
+
+    std::vector<bool> visited(graph.edges.size() * 2, false);
+    std::optional<std::vector<std::size_t>> exterior;
+    std::size_t containment_work = 0;
+    for (std::size_t seed = 0; seed < visited.size(); ++seed) {
+        if (visited[seed] || graph.bridges[seed / 2]) continue;
+        std::vector<std::size_t> face;
+        Boundary loop;
+        auto half = seed;
+        do {
+            if (visited[half]) reject("Wall network face walk is ambiguous; close the perimeter or select one shell");
+            visited[half] = true;
+            face.push_back(half);
+            loop.push_back({graph.nodes[graph.from(half)], graph.nodes[graph.to(half)], 0.0});
+            const auto node = graph.to(half);
+            const auto& incident = angular[node];
+            const auto reverse_position = position[half ^ 1];
+            if (incident.empty() || reverse_position == no_index)
+                reject("Wall network face walk lost its reverse edge");
+            half = incident[(reverse_position + incident.size() - 1) % incident.size()];
+        } while (half != seed);
+        // Keeping the face on the left gives positive bounded faces and a
+        // negative unbounded face. We consider only these actual outer walks,
+        // never the largest room cycle or a bounding box.
+        if (signed_area(loop) >= -default_geometry_tolerance_metres) continue;
+        std::set<std::size_t> face_nodes;
+        bool simple = true;
+        for (const auto edge : face)
+            if (!face_nodes.insert(graph.from(edge)).second) simple = false;
+        if (!simple) continue;
+        // Contacts may subdivide a host wall many times. Coalesce only its
+        // recognition segments to keep validation/containment proportional to
+        // source geometry; full fragment identity remains in the face record.
+        loop.clear();
+        std::size_t previous_wall = no_index;
+        for (const auto edge : face) {
+            const auto wall = graph.edges[edge / 2].wall;
+            const Segment segment{graph.nodes[graph.from(edge)], graph.nodes[graph.to(edge)], 0.0};
+            if (wall == previous_wall) loop.back().end = segment.end;
+            else loop.push_back(segment);
+            previous_wall = wall;
+        }
+        if (loop.size() > 1 && graph.edges[face.front() / 2].wall == previous_wall) {
+            loop.front().start = loop.back().start;
+            loop.pop_back();
+        }
+        if (!validate_boundary(loop).empty()) continue;
+        const auto component = graph.component[graph.from(seed)];
+        bool contains_network = true;
+        for (std::size_t node = 0; node < graph.nodes.size(); ++node) {
+            const bool connected = graph.component[node] == component;
+            // Connected open spurs do not enclose area, even outside the loop.
+            if (connected && angular[node].empty()) continue;
+            if (containment_work > 8'000'000 - loop.size())
+                reject("Wall network exceeds the supported containment work limit");
+            containment_work += loop.size();
+            const auto location = locate_in_straight_loop(graph.nodes[node], loop);
+            if (location == LoopLocation::outside ||
+                (!connected && location != LoopLocation::inside)) {
+                contains_network = false;
+                break;
+            }
+        }
+        if (!contains_network) continue;
+        if (exterior) reject("Wall network has multiple incomparable exterior outlines; select one shell");
+        exterior = std::move(face);
+    }
+    if (!exterior)
+        reject("Wall network has no unique simple containing exterior outline; close the perimeter or select one shell");
+
+    std::vector<std::size_t> total(walls.size(), 0);
+    std::vector<std::size_t> perimeter(walls.size(), 0);
+    for (const auto& edge : graph.edges) ++total[edge.wall];
+    for (const auto half : *exterior) ++perimeter[graph.edges[half / 2].wall];
+    std::vector<std::string> result;
+    for (std::size_t wall = 0; wall < walls.size(); ++wall) {
+        if (perimeter[wall] == 0) continue;
+        if (perimeter[wall] != total[wall])
+            reject("Exterior outline uses only part of source wall: " + walls[wall].id +
+                   "; split or trim the wall at the perimeter junction");
+        result.push_back(walls[wall].id);
+    }
+    std::sort(result.begin(), result.end());
+    return result;
 }
 
 struct UnitEdge {
@@ -369,6 +653,44 @@ bool boundary_context_matches(const Entity& boundary, const Json& source) {
 }
 
 } // namespace
+
+std::vector<std::string> exterior_wall_measurement_sources(
+    const DocumentSnapshot& document, const std::vector<std::string>& candidate_wall_ids) {
+    auto walls = read_source_walls(document, candidate_wall_ids);
+    // Automatic discovery must never combine separate property, building or
+    // phase contexts merely because their projected floor/layer geometry meets.
+    for (const auto& wall : walls)
+        if (wall.context != walls.front().context)
+            reject("All candidate walls must share property, building, floor, layer and phase context");
+    std::optional<std::pair<double, double>> elevation_range;
+    for (const auto& wall : walls) {
+        // Match displayed/project geometry rather than comparing persisted
+        // local elevations. The resolver returns a copy and validates opt-in
+        // level placement without mutating walls or their provenance records.
+        const auto resolved = resolve_vertical_placement(document, document.entities().at(wall.id));
+        const auto& properties = resolved.properties;
+        auto field = properties.find("elevation_m");
+        if (field == properties.end()) field = properties.find("elevation");
+        const auto current = field == properties.end() ? 0.0 : number(*field, "Wall elevation");
+        if (!bounded(current)) reject("Wall elevation exceeds the supported geometry envelope");
+        if (!elevation_range) elevation_range = {current, current};
+        else {
+            elevation_range->first = std::min(elevation_range->first, current);
+            elevation_range->second = std::max(elevation_range->second, current);
+            if (elevation_range->second - elevation_range->first > default_geometry_tolerance_metres)
+                reject("All candidate walls must share the same elevation plane");
+        }
+    }
+    for (auto& wall : walls)
+        if (point_key(wall.baseline.end) < point_key(wall.baseline.start))
+            std::swap(wall.baseline.start, wall.baseline.end);
+    std::sort(walls.begin(), walls.end(), [](const auto& left, const auto& right) { return left.id < right.id; });
+    auto ids = recognize_network_exterior(walls);
+    // Full source baselines must still satisfy the strict v1 derivation, including
+    // bounded offset corners and thickness. The graph is recognition only.
+    (void)derive_exterior_wall_measurement(document, ids);
+    return ids;
+}
 
 WallMeasurementResult derive_exterior_wall_measurement(
     const DocumentSnapshot& document, const std::vector<std::string>& wall_ids) {

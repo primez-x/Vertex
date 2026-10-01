@@ -2151,6 +2151,10 @@
     },
     {
       "category": "docs",
+      "path": "docs/superpowers/plans/2026-10-01-exterior-wall-networks.md"
+    },
+    {
+      "category": "docs",
       "path": "docs/superpowers/plans/2026-10-01-wall-measurement.md"
     },
     {
@@ -2220,6 +2224,10 @@
     {
       "category": "docs",
       "path": "docs/verification/explicit-area-subtraction-2026-09-30.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/verification/exterior-wall-networks-2026-10-01.md"
     },
     {
       "category": "docs",

@@ -1,6 +1,6 @@
 # Vertex user testing checklist
 
-294 practical tasks, grouped by how you use the app. This replaces the earlier engineering-oriented checklist. The old 130-item list is preserved separately as engineering-requirements-checklist.md.
+295 practical tasks, grouped by how you use the app. This replaces the earlier engineering-oriented checklist. The old 130-item list is preserved separately as engineering-requirements-checklist.md.
 
 This is a user acceptance list for the intended app, not a claim that every listed action is implemented or working in the current preview. If you cannot find a control, or a feature is absent, mark **Blocked / missing** and describe it. Specialized sections can be skipped if you do not use them or lack the device or sample files.
 
@@ -1599,7 +1599,7 @@ drawing; switching modes does not change existing geometry.
 ## Measure a physical wall layout
 
 - [ ] **U284 — Calculate exterior area from walls**
-  - Steps: Draw a closed rectangular wall layout, finish it with Escape, then select a wall. Right-click and choose **Measure exterior from walls…**. Check the blue exterior outline and area in the preview, cancel once, then reopen and create it. For a layout with interior branches, Ctrl-click only the exterior perimeter walls before opening the command.
+  - Steps: Draw a closed rectangular wall layout, finish it with Escape, then select a wall. Right-click and choose **Measure exterior from walls…**. Check the blue exterior outline and area in the preview, cancel once, then reopen and create it. If there are interior partitions, check that the review excludes them from the exterior perimeter.
   - Expected: Cancellation changes nothing. Creation adds one measurement area and keeps the physical walls. The area includes half the stored wall thickness outside each baseline. Repeating the command with the same walls selects the existing measurement instead of creating a duplicate.
   - Appraisal check: Select the area, use the Appraisal workflow, and enter the observed property/floor/area facts with **Edit appraisal facts…**. Check its category and net square feet on the plan and in the totals. Add a contained garage deduction and check the living total decreases while the garage remains separately classified.
 
@@ -1660,6 +1660,13 @@ drawing; switching modes does not change existing geometry.
   - Steps: Draw a long wall. Draw a second wall from its midpoint at a right angle, then press Escape to finish. Select each wall, change their thicknesses, and export a plan PDF. Also try drawing a partition across the long wall.
   - Expected: The partition meets the host face cleanly. No wall end cap or host-face line crosses the solid junction. The exterior face stays continuous, each wall remains selectable, and the PDF has the same outline. Wall lengths remain the lengths you entered.
   - Also try: Place a window across the meeting point. A partition ending inside that opening has an exposed end; the app must not draw wall material through the opening. Walls on separate floors must keep their own outlines.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **U294 — Calculate exterior square footage with interior partitions**
+  - Steps: Draw a closed rectangular wall layout. Add a partition from the middle of one side into the room, and another wall across the room. Select the interior partition, right-click, and choose **Measure exterior from walls…**. Cancel once, then reopen the review and create the area. Repeat after selecting all the walls with Ctrl-click.
+  - Expected: The preview traces the outside perimeter and reports how many candidate walls it excluded. The partitions do not increase or decrease the exterior area. Selecting the same layout again finds the existing area instead of counting it twice. The walls remain editable.
+  - Also try: Change an exterior wall's thickness, refresh the area, and verify its square footage changes. Move or resize an interior partition and verify it does not change the exterior measurement. Save and reopen; the same measurement remains. Select walls from two separate buildings together; the app must request a single exterior rather than silently choosing one.
   - Result: Not tested
   - Notes: ______________________________
 

@@ -68,15 +68,23 @@
   perimeter, and calculation provenance. Every edit is undoable with <kbd>Ctrl</kbd>+<kbd>Z</kbd>.</p>
   <p>For a closed physical wall layout, select a wall and choose
   <strong>Measure exterior from walls…</strong> from its right-click menu or Tools.
-  If the layout includes branches, <kbd>Ctrl</kbd>+click only the perimeter walls.
-  Review the blue exterior outline and area, then create the measurement. This uses
+  Connected interior partitions are excluded from the exterior perimeter. You can
+  select a partition to find its connected shell, or <kbd>Ctrl</kbd>+click an explicit
+  set of candidate walls. Review the blue exterior outline, excluded wall count,
+  and area, then create the measurement. This uses
   each wall's thickness, rather than treating its baseline as the outside face.</p>
   <p>Declare the property's appraisal workflow and the area's observed facts in
   <strong>Edit appraisal facts…</strong> to obtain classified square-footage totals.
   After changing source walls, select the measured area and choose
   <strong>Refresh exterior measurement…</strong>. Stale outlines cannot produce
   qualified appraisal totals. Open and curved wall loops currently require a
-  separately drawn measurement boundary.</p>
+  separately drawn measurement boundary. Separate exterior shells or an ambiguous
+  outline must be measured individually; the app does not choose a shell solely
+  because it is the largest.</p>
+  <p>Refresh follows the perimeter walls recorded when the area was created.
+  An addition that changes which walls form the exterior needs a new measurement.
+  Save a revision before replacing the old area. Overlapping building measurements
+  cannot produce qualified totals.</p>
 
   <h2>Architectural objects</h2>
   <p>The Library tab offers <strong>Wall</strong>, <strong>Doorway</strong>,
