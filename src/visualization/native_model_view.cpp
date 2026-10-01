@@ -150,6 +150,7 @@ public:
     bool native_ready{};
     bool has_fit{};
     bool fit_requested{};
+    bool initial_fit_pending{};
 
     occ::handle<Aspect_DisplayConnection> display_connection;
     occ::handle<OpenGl_GraphicDriver> graphic_driver;
@@ -235,6 +236,34 @@ public:
         }
         view->FitAll(0.05, true);
         has_fit = true;
+        initial_fit_pending = false;
+    }
+
+    void complete_initial_fit() noexcept {
+        if (!initial_fit_pending || !owner->isVisible() || !native_ready ||
+            window.IsNull() || !geometry_prepared || regenerator.is_pending() || prepared_geometry) return;
+        int native_width = 0;
+        int native_height = 0;
+        window->Size(native_width, native_height);
+        if (native_width <= 0 || native_height <= 0) return;
+        try {
+            fit_all();
+        } catch (const Standard_Failure& error) {
+            show_operation_error(QStringLiteral("Initial 3D fit failed: ") + exception_text(error));
+        } catch (const std::exception& error) {
+            show_operation_error(QStringLiteral("Initial 3D fit failed: ") + exception_text(error));
+        } catch (...) {
+            show_operation_error(QStringLiteral("Initial 3D fit failed: unknown failure"));
+        }
+    }
+
+    void schedule_initial_fit() {
+        initial_fit_pending = true;
+        // showEvent precedes the shell's splitter setSizes call. Fit on the
+        // settled paint/event-loop boundary, after the HWND receives its final
+        // aspect. This one-shot fit never runs after subsequent navigation.
+        owner->update();
+        QTimer::singleShot(0, owner, [this] { complete_initial_fit(); });
     }
 
     void notify_error(const QString& text) noexcept {
@@ -356,6 +385,8 @@ public:
             }
             const bool had_solids = !solids.empty();
             const bool previously_fit = has_fit;
+            const bool previously_pending_fit = initial_fit_pending;
+            bool defer_initial_fit = false;
             // A pending edit cannot move a stale displayed object in the new
             // snapshot. Reset any preview before updating the scene.
             clear_translation_preview();
@@ -384,8 +415,12 @@ public:
                 }
                 const bool has_visible_solids = std::any_of(prepared->solids.begin(), prepared->solids.end(),
                     [](const auto& entry) { return entry.second.visible; });
-                if (has_visible_solids && (fit_requested || !has_fit || !had_solids)) fit_all();
-                else if (replacement.empty()) has_fit = false;
+                if (has_visible_solids && fit_requested) fit_all();
+                else if (has_visible_solids && (!has_fit || !had_solids)) defer_initial_fit = true;
+                else if (!has_visible_solids) {
+                    if (replacement.empty()) has_fit = false;
+                    initial_fit_pending = false;
+                }
                 viewer->Redraw();
             } catch (...) {
                 // Keep the authoritative cache until publication and redraw
@@ -409,6 +444,7 @@ public:
                     } catch (...) {}
                 }
                 has_fit = previously_fit;
+                initial_fit_pending = previously_pending_fit;
                 try { attach_manipulator(); } catch (...) {}
                 try { viewer->Redraw(); } catch (...) {}
                 throw;
@@ -420,6 +456,7 @@ public:
                 std::chrono::steady_clock::now() - publication_started).count();
             publication_metrics = metrics;
             show_status(QString());
+            if (defer_initial_fit) schedule_initial_fit();
             try {
                 attach_manipulator();
             } catch (const Standard_Failure& error) {
@@ -1025,6 +1062,7 @@ void NativeModelView::showEvent(QShowEvent* event) {
     m_impl->initialize_native_view();
     m_impl->synchronize_native_size();
     m_impl->refresh_status_label();
+    if (m_impl->initial_fit_pending) m_impl->schedule_initial_fit();
     update();
 }
 
@@ -1041,6 +1079,7 @@ void NativeModelView::paintEvent(QPaintEvent* event) {
     (void)event;
     if (m_impl->native_ready && !m_impl->view.IsNull()) {
         m_impl->synchronize_native_size();
+        m_impl->complete_initial_fit();
         m_impl->view->Redraw();
     }
 }
@@ -1050,6 +1089,7 @@ void NativeModelView::mousePressEvent(QMouseEvent* event) {
         event->ignore();
         return;
     }
+    m_impl->complete_initial_fit();
     const auto logical_point = event->position();
     const auto point = m_impl->input_point(logical_point);
     setFocus();
@@ -1275,6 +1315,7 @@ void NativeModelView::wheelEvent(QWheelEvent* event) {
         event->ignore();
         return;
     }
+    m_impl->complete_initial_fit();
     int delta = event->angleDelta().y();
     if (delta == 0) {
         delta = event->pixelDelta().y() * 8;

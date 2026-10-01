@@ -137,6 +137,21 @@ void check_native_resize(const sketch::DocumentSnapshot& snapshot, QTemporaryDir
     splitter.setSizes({600, 600});
     check_extent();
     check(view->isReady(), "Late-show resize fixture must publish native geometry");
+    // Export does not fit the camera. Checking the live extent first prevents
+    // Dump's private framebuffer from masking the native resize failure.
+    const auto first = capture(*view, temporary.filePath("late-show-first-fit.png"));
+    check(first.bounds.left() > 0 && first.bounds.top() > 0 &&
+              first.bounds.right() < first.image.width() - 1 &&
+              first.bounds.bottom() < first.image.height() - 1,
+          "The first automatic fit must contain the model after late-show layout, without explicit Fit");
+
+    const QPointF centre = first.centre / view->devicePixelRatioF();
+    mouse(*view, QEvent::MouseButtonPress, centre, Qt::MiddleButton, Qt::MiddleButton);
+    mouse(*view, QEvent::MouseMove, centre + QPointF(24, 16), Qt::NoButton, Qt::MiddleButton);
+    mouse(*view, QEvent::MouseButtonRelease, centre + QPointF(24, 16), Qt::MiddleButton, Qt::NoButton);
+    const auto navigated = capture(*view, temporary.filePath("late-show-navigated.png"));
+    check(navigated.image != first.image, "Resize fixture must exercise an actual camera pan");
+    const auto navigated_size = splitter.size();
 
     splitter.resize(1482, 934);
     splitter.setSizes({900, 580});
@@ -147,6 +162,11 @@ void check_native_resize(const sketch::DocumentSnapshot& snapshot, QTemporaryDir
     view->show();
     splitter.setSizes({700, 600});
     check_extent();
+    splitter.resize(navigated_size);
+    splitter.setSizes({600, 600});
+    check_extent();
+    check(capture(*view, temporary.filePath("late-show-restored-size.png")).image == navigated.image,
+          "Later resize and show cycles must preserve the user's navigated camera");
 
     // Preserve the normal native-render evidence after checking the live extent:
     // Dump can create its own correctly sized framebuffer and mask this defect.

@@ -34,3 +34,8 @@ before delivering this checkpoint: synchronize the actual native render size
 after layout without resetting navigation. A visualization worker owns its
 view implementation, header and focused native regression; root verifies the
 new installed application against the preserved failure screenshot.
+
+The corrected extent also exposed a first-fit camera using the pre-layout
+aspect. Defer that initial fit until layout settles, and drain it before the
+first navigation gesture. Subsequent resize and show cycles must retain the
+camera. Verify both the first framed model and preserved navigation.
