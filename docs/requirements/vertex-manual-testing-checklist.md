@@ -186,6 +186,10 @@ Start with the workspace, draw a room, close it with the mouse, drag-select it, 
 
 ## Draw rooms and measured boundaries
 
+Choose **Measurement** in the left panel before testing measured-boundary
+drawing below. **Wall** draws physical walls and is the default for a new
+drawing; switching modes does not change existing geometry.
+
 - [ ] **U029 — Draw a rectangular room using node clicks**
   - Expected: Click the four corners in order, then click the first corner; the final click closes and retains the room.
   - Result: Not tested
@@ -489,6 +493,7 @@ Start with the workspace, draw a room, close it with the mouse, drag-select it, 
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U083 — Snap a new point to an existing endpoint**
+  - Steps: In Wall mode, approach an existing wall endpoint from several directions, including slightly above and below an aligned wall. Check the endpoint cue and click. Start a second wall against the middle of an existing wall and check the on-wall cue. Toggle Snap off and repeat.
   - Expected: The points meet without a tiny unintended gap.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
@@ -897,7 +902,8 @@ Start with the workspace, draw a room, close it with the mouse, drag-select it, 
 ## Walls, doors and windows in 2D and 3D
 
 - [ ] **U156 — Draw a straight architectural wall**
-  - Expected: In the Library tab, choose Wall, enter thickness and height, then click its start and end points. Both faces of the wall appear at the entered physical thickness in 2D; 3D shows the same wall. Changing thickness later updates the footprint.
+  - Steps: Start a new project. Confirm Wall is the drawing mode without choosing a separate Draw tool. Enter thickness and height in the Library tab, then click the start and end. Click two more endpoints to extend the chain, then press Escape. Drag empty canvas to pan. Select a wall, drag inside its selection to move it, then click outside once to deselect before starting another wall. Choose Measurement and draw a closed appraisal boundary.
+  - Expected: Both wall faces appear at the entered thickness during preview and after placement, with a live length and retained wall measurements. Escape keeps completed walls. Preview and committed endpoints agree. Measurement creates an area rather than another wall. 3D shows the same physical walls. Changing thickness later updates the footprint; wall length labels agree in print/export and after save/reopen.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
@@ -922,6 +928,7 @@ Start with the workspace, draw a room, close it with the mouse, drag-select it, 
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U161 — Insert a door into a wall**
+  - Library check: Place a door from the component list on an existing wall. Confirm it becomes a hosted opening, rather than a floating furniture symbol. Try placement away from a wall; the app should explain the missing host without adding an unrelated annotation.
   - Expected: Choose Door in the Library tab, set its width and height, then move onto an existing wall. A placement preview shows the opening and swing before clicking. The door cuts that wall and remains hosted there after save/reopen.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
@@ -944,6 +951,7 @@ Start with the workspace, draw a room, close it with the mouse, drag-select it, 
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U165 — Insert a window into a wall**
+  - Library check: Repeat using a window from the component list. The library and Window action must use the same hosted placement and wall cut. Undo, redo, save and reopen the result.
   - Expected: Choose Window in the Library tab, set its width, height and sill, then click the placement preview on an existing wall. The window and opening appear in that wall in 2D, elevation and 3D.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________

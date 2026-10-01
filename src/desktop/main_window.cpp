@@ -1542,11 +1542,44 @@ const std::vector<SymbolDefinition>& desktop_placeable_symbol_catalog() {
     static const auto catalog = [] {
         auto placeable = desktop_symbol_catalog();
         std::erase_if(placeable, [](const auto& definition) {
-            return !definition.svg_asset.has_value();
+            // Legacy category entries duplicate ordinary graphic symbols for
+            // doors and windows. The named architectural v2 entries below
+            // route through hosted wall openings instead.
+            return !definition.svg_asset.has_value() || definition.category == "doors_windows";
         });
         return placeable;
     }();
     return catalog;
+}
+
+bool is_hosted_opening_symbol(const SymbolDefinition& definition) {
+    return definition.category == "09_doors" || definition.category == "10_windows";
+}
+
+double catalog_opening_width(const SymbolDefinition& definition) {
+    // The sourced hinged-door footprint includes two 60 mm jambs. Its title
+    // and leaf geometry explicitly give the opening width used by the model.
+    for (const auto& [prefix, width] : {
+             std::pair{"svg-v2-09_doors-door-hinged-760-", 0.760},
+             std::pair{"svg-v2-09_doors-door-hinged-810-", 0.810},
+             std::pair{"svg-v2-09_doors-door-hinged-910-", 0.910}}) {
+        if (definition.id.starts_with(prefix)) return width;
+    }
+    return definition.width_metres;
+}
+
+std::optional<DoorOperation> catalog_hinged_door_operation(
+    const SymbolDefinition& definition) {
+    if (definition.category != "09_doors") return std::nullopt;
+    const auto& id = definition.id;
+    if (!id.starts_with("svg-v2-09_doors-door-hinged-") ||
+        (!id.ends_with("-left") && !id.ends_with("-right"))) return std::nullopt;
+    DoorOperation operation;
+    // The catalog suffix names the hinge jamb. The SVG variants show the
+    // same opening side, so preserve the shared default swing side while
+    // mapping left/right to the start/end of the hosted wall direction.
+    operation.hinge_at_end = id.ends_with("-right");
+    return operation;
 }
 
 QIcon symbol_library_thumbnail(const SymbolDefinition& definition) {
@@ -3058,6 +3091,8 @@ std::optional<json> merged_quantity_entries(const Entity* original, const Entity
 
 class MainWindow::Impl {
     friend class MainWindow;
+
+    enum class DrawingMode { wall, measurement };
 
     struct PendingOpeningPreview {
         QPointer<PlanCanvas> canvas;
@@ -4696,12 +4731,43 @@ public:
 
     [[nodiscard]] Workspace workspace() const noexcept { return m_workspace; }
 
+    bool setDrawingMode(DrawingMode mode) {
+        if (m_boundary_session || m_pending_wall_start || !m_pending_opening_kind.isEmpty() ||
+            !m_pending_symbol_id.isEmpty()) {
+            setError(QStringLiteral("Finish or cancel the active drawing before changing modes."));
+            if (m_drawing_mode_combo) {
+                const QSignalBlocker blocker(m_drawing_mode_combo);
+                m_drawing_mode_combo->setCurrentIndex(
+                    m_creation_mode == DrawingMode::wall ? 0 : 1);
+            }
+            return false;
+        }
+        m_creation_mode = mode;
+        if (m_drawing_mode_combo) {
+            const QSignalBlocker blocker(m_drawing_mode_combo);
+            m_drawing_mode_combo->setCurrentIndex(mode == DrawingMode::wall ? 0 : 1);
+        }
+        if (m_tool != CanvasTool::select) setTool(CanvasTool::select);
+        syncToolControls();
+        clearError();
+        refreshCursorLabel(m_last_cursor);
+        return true;
+    }
+
     void setWorkspace(Workspace workspace) {
+        if (workspace != m_workspace &&
+            (m_boundary_session || m_pending_wall_start || !m_pending_opening_kind.isEmpty() ||
+             !m_pending_symbol_id.isEmpty())) {
+            setError(QStringLiteral("Finish or cancel the active drawing before changing views."));
+            return;
+        }
         m_workspace = workspace;
         if (m_workspaceTabs) {
             m_workspaceTabs->setCurrentIndex(workspace == Workspace::measurement ? 0 : 1);
         }
-        if (!m_boundary_session) setTool(CanvasTool::select);
+        if (!m_boundary_session && !m_pending_wall_start && m_pending_opening_kind.isEmpty())
+            setTool(CanvasTool::select);
+        syncToolControls();
         refreshTitle();
     }
 
@@ -11812,7 +11878,8 @@ public:
                                 const QString& sill_expression,
                                 const QString& height_expression,
                                 std::optional<Revision> expected_revision = std::nullopt,
-                                std::optional<DoorOperation> door_operation = std::nullopt) {
+                                std::optional<DoorOperation> door_operation = std::nullopt,
+                                QString catalog_symbol_id = {}) {
         const auto revision = expected_revision.value_or(m_document->revision());
         if (revision != m_document->revision()) {
             setError(QStringLiteral("The project changed while the opening was being entered. Start the opening again."));
@@ -11892,6 +11959,8 @@ public:
             }
             if (normalized_kind == QStringLiteral("door") && door_operation)
                 properties["door_operation"] = encode_door_operation(*door_operation);
+            if (!catalog_symbol_id.trimmed().isEmpty())
+                properties["catalog_symbol_id"] = catalog_symbol_id.trimmed().toStdString();
             if (!applyEntity(Entity{entity_id, "opening", properties, false, json::object()},
                              "create hosted opening", revision)) {
                 return {};
@@ -19193,7 +19262,10 @@ public:
             auto label = QStringLiteral("%1 × %2 m")
                              .arg(QString::number(definition.width_metres, 'g', 4))
                              .arg(QString::number(definition.depth_metres, 'g', 4));
-            if (definition.svg_asset.has_value() &&
+            if (is_hosted_opening_symbol(definition)) {
+                label = QStringLiteral("Opening width %1 m — adjustable")
+                    .arg(QString::number(catalog_opening_width(definition), 'g', 4));
+            } else if (definition.svg_asset.has_value() &&
                 !definition.svg_asset->dimensions_are_nominal) {
                 label += QStringLiteral(" — Default size; adjust to suit");
             } else if (definition.svg_asset.has_value()) {
@@ -19229,6 +19301,27 @@ public:
                 QStringLiteral("Finish or cancel the current boundary before placing a component."));
             return;
         }
+        const auto& catalog = desktop_placeable_symbol_catalog();
+        const auto definition = std::find_if(
+            catalog.begin(), catalog.end(),
+            [&](const auto& candidate) { return candidate.id == id.toStdString(); });
+        const bool hosted_opening = definition != catalog.end() &&
+            is_hosted_opening_symbol(*definition);
+        if (m_pending_wall_start) {
+            if (!m_wall_chain_has_segments) {
+                m_symbol_library_status->setText(
+                    QStringLiteral("Complete the first wall segment or press Esc before placing a component."));
+                return;
+            }
+            finishWallChain();
+        }
+        if (!m_pending_opening_kind.isEmpty()) cancelTool();
+        if (!m_pending_symbol_id.isEmpty()) cancelSymbolPlacement();
+        if (hosted_opening) {
+            setWorkspace(Workspace::measurement);
+            if (m_workspace != Workspace::measurement) return;
+            if (m_creation_mode != DrawingMode::wall && !setDrawingMode(DrawingMode::wall)) return;
+        }
         setTool(CanvasTool::select);
         if (m_tool != CanvasTool::select) return;
         // Placement owns the next stationary click anywhere on the plan. Clear
@@ -19261,12 +19354,72 @@ public:
     void placeLibrarySymbol(const QString& id, double scale, Vec2 point) {
         if (m_boundary_session) {
             setError(QStringLiteral("Finish or cancel the active boundary before placing a symbol."));
-        } else {
-            const auto created = createAnnotationSymbol(id, point, scale);
-            if (m_symbol_library_status)
-                m_symbol_library_status->setText(created.isEmpty() ? lastError() :
-                    QStringLiteral("Component placed. Select it to resize, rotate or move it."));
+            return;
         }
+        const auto& catalog = desktop_placeable_symbol_catalog();
+        const auto definition = std::find_if(catalog.begin(), catalog.end(),
+            [&](const auto& candidate) { return candidate.id == id.toStdString(); });
+        if (definition != catalog.end() && is_hosted_opening_symbol(*definition)) {
+            if (m_workspace != Workspace::measurement) {
+                setError(QStringLiteral("Place doors and windows from the conventional 2D world-XY canvas."));
+                if (m_symbol_library_status)
+                    m_symbol_library_status->setText(lastError());
+                return;
+            }
+            if (m_pending_wall_start) {
+                if (!m_wall_chain_has_segments) {
+                    setError(QStringLiteral("Complete the first wall segment or press Esc before placing an opening."));
+                    return;
+                }
+                finishWallChain();
+            }
+            if (!m_pending_opening_kind.isEmpty()) cancelTool();
+            if (m_creation_mode != DrawingMode::wall && !setDrawingMode(DrawingMode::wall)) return;
+            if (m_tool != CanvasTool::wall) setTool(CanvasTool::wall);
+            if (m_tool != CanvasTool::wall) return;
+            m_pending_opening_kind = definition->category == "09_doors"
+                ? QStringLiteral("door") : QStringLiteral("window");
+            m_pending_opening_symbol_id = id;
+            m_pending_opening_door_operation = catalog_hinged_door_operation(*definition);
+            const auto width = catalog_opening_width(*definition) * scale;
+            if (!std::isfinite(width) || width <= 0.0) {
+                cancelTool();
+                setError(QStringLiteral("Catalog opening width is invalid."));
+                return;
+            }
+            const bool window_opening = m_pending_opening_kind == QStringLiteral("window");
+            m_opening_draw_width->setText(QString::fromStdString(json(width).dump()) + QStringLiteral(" m"));
+            m_opening_draw_height->setText(window_opening ? QStringLiteral("1.2 m")
+                                                         : QStringLiteral("2.1 m"));
+            m_opening_draw_sill->setText(window_opening ? QStringLiteral("0.9 m")
+                                                       : QStringLiteral("0 m"));
+            m_opening_draw_fields->show();
+            m_wall_draw_fields->hide();
+            m_architecture_hint->show();
+            m_architecture_hint->setText(QStringLiteral("Hosted %1 • %2 wide. Click a wall to place; Esc cancels.")
+                .arg(QString::fromStdString(definition->name), format_length(width, m_metric_units)));
+            syncToolControls();
+            clearError();
+            updateOpeningPlacement(point, true);
+            if (!m_pending_opening_kind.isEmpty()) {
+                const auto detail = lastError();
+                cancelTool();
+                const auto message = detail.isEmpty()
+                    ? QStringLiteral("This catalog opening needs a host wall. Nothing was placed.")
+                    : QStringLiteral("Hosted opening rejected: %1").arg(detail);
+                setError(message);
+                if (m_symbol_library_status) m_symbol_library_status->setText(message);
+                return;
+            }
+            if (m_symbol_library_status)
+                m_symbol_library_status->setText(QStringLiteral("Hosted %1 placed in the wall.")
+                    .arg(QString::fromStdString(definition->name)));
+            return;
+        }
+        const auto created = createAnnotationSymbol(id, point, scale);
+        if (m_symbol_library_status)
+            m_symbol_library_status->setText(created.isEmpty() ? lastError() :
+                QStringLiteral("Component placed. Select it to resize, rotate or move it."));
     }
 
     void showDimensionCreator() {
@@ -21698,6 +21851,28 @@ private:
         auto* navigator_layout = new QVBoxLayout(navigator_panel);
         navigator_layout->setContentsMargins(10, 10, 10, 10);
         navigator_layout->setSpacing(6);
+        auto* drawing_mode_row = new QWidget(navigator_panel);
+        drawing_mode_row->setObjectName(QStringLiteral("drawingModeHeader"));
+        auto* drawing_mode_layout = new QHBoxLayout(drawing_mode_row);
+        drawing_mode_layout->setContentsMargins(0, 0, 0, 0);
+        drawing_mode_layout->setSpacing(6);
+        auto* drawing_mode_label = new QLabel(QStringLiteral("Draw"), drawing_mode_row);
+        drawing_mode_label->setObjectName(QStringLiteral("drawingModeLabel"));
+        m_drawing_mode_combo = new QComboBox(drawing_mode_row);
+        m_drawing_mode_combo->setObjectName(QStringLiteral("drawingMode"));
+        m_drawing_mode_combo->setAccessibleName(QStringLiteral("Drawing mode"));
+        m_drawing_mode_combo->setToolTip(QStringLiteral(
+            "Choose whether empty plan clicks create physical walls or measured areas. Selection and panning remain available."));
+        m_drawing_mode_combo->addItem(QStringLiteral("Wall"), QStringLiteral("wall"));
+        m_drawing_mode_combo->addItem(QStringLiteral("Measurement"), QStringLiteral("measurement"));
+        m_drawing_mode_combo->setCurrentIndex(0);
+        drawing_mode_layout->addWidget(drawing_mode_label);
+        drawing_mode_layout->addWidget(m_drawing_mode_combo, 1);
+        navigator_layout->addWidget(drawing_mode_row);
+        QObject::connect(m_drawing_mode_combo, &QComboBox::currentIndexChanged, owner,
+                         [this](int index) {
+            (void)setDrawingMode(index == 0 ? DrawingMode::wall : DrawingMode::measurement);
+        });
         auto* sidebar_tabs = new QTabWidget(navigator_panel);
         sidebar_tabs->setObjectName(QStringLiteral("sidebarTabs"));
         sidebar_tabs->setDocumentMode(true);
@@ -21831,9 +22006,25 @@ private:
             button->setObjectName(QStringLiteral("library") + kind);
             architecture_buttons->addWidget(button);
             QObject::connect(button, &QPushButton::clicked, owner, [this, kind] {
-                // Author in world XY, independent of an active elevation or rotated named view.
+                if (m_boundary_session) {
+                    setError(QStringLiteral("Finish or cancel the measurement draft before starting a wall or opening."));
+                    return;
+                }
+                if (m_pending_wall_start) {
+                    if (!m_wall_chain_has_segments) {
+                        setError(QStringLiteral("Complete the first wall segment or press Esc before switching to an opening."));
+                        return;
+                    }
+                    finishWallChain();
+                }
+                if (!m_pending_symbol_id.isEmpty()) cancelSymbolPlacement();
+                if (!m_pending_opening_kind.isEmpty()) cancelTool();
+                // The palette is a deliberate route into the conventional
+                // world-XY plan, never into an elevation/section projection.
                 setWorkspace(Workspace::measurement);
-                setTool(CanvasTool::wall);
+                if (m_workspace != Workspace::measurement) return;
+                if (m_creation_mode != DrawingMode::wall && !setDrawingMode(DrawingMode::wall)) return;
+                if (m_tool != CanvasTool::wall) setTool(CanvasTool::wall);
                 if (m_tool != CanvasTool::wall) return;
                 if (kind != QStringLiteral("Wall")) {
                     m_pending_opening_kind = kind == QStringLiteral("Doorway") ? QStringLiteral("opening") : kind.toLower();
@@ -21848,6 +22039,7 @@ private:
                 m_architecture_hint->setText(m_pending_opening_kind.isEmpty()
                     ? QStringLiteral("Click wall start and end. Esc finishes the chain.")
                     : QStringLiteral("Hover over a wall, then click to place. Esc cancels."));
+                syncToolControls();
             });
         }
         architecture_layout->addLayout(architecture_buttons);
@@ -21866,6 +22058,9 @@ private:
         m_wall_draw_thickness = dimension_field(wall_form, QStringLiteral("Thickness"), "wallDrawThickness", QStringLiteral("140 mm"));
         m_wall_draw_height = dimension_field(wall_form, QStringLiteral("Height"), "wallDrawHeight", QStringLiteral("8 ft"));
         architecture_layout->addWidget(m_wall_draw_fields);
+        QObject::connect(m_wall_draw_thickness, &QLineEdit::textChanged, owner, [this] {
+            if (m_pending_wall_start) refreshWallPreview(m_last_cursor);
+        });
         m_opening_draw_fields = new QWidget(architecture_palette);
         auto* opening_form = new QFormLayout(m_opening_draw_fields);
         opening_form->setContentsMargins(0, 0, 0, 0);
@@ -22221,9 +22416,24 @@ private:
         m_workspaceTabs->addTab(architectural_body, QStringLiteral("Architectural"));
         QObject::connect(m_workspaceTabs, &QTabWidget::currentChanged, owner,
                          [this](int index) {
-                             if (!m_pending_opening_kind.isEmpty()) setTool(CanvasTool::select);
-                             m_workspace = index == 0 ? Workspace::measurement
-                                                       : Workspace::architectural;
+                             const auto requested = index == 0 ? Workspace::measurement
+                                                                : Workspace::architectural;
+                             if (requested != m_workspace &&
+                                 (m_boundary_session || m_pending_wall_start ||
+                                  !m_pending_opening_kind.isEmpty() ||
+                                  !m_pending_symbol_id.isEmpty())) {
+                                 const QSignalBlocker blocker(m_workspaceTabs);
+                                 m_workspaceTabs->setCurrentIndex(
+                                     m_workspace == Workspace::measurement ? 0 : 1);
+                                 setError(QStringLiteral(
+                                     "Finish or cancel the active drawing before changing views."));
+                                 return;
+                             }
+                             m_workspace = requested;
+                             if (!m_boundary_session && !m_pending_wall_start &&
+                                 m_pending_opening_kind.isEmpty())
+                                 setTool(CanvasTool::select);
+                             syncToolControls();
                              if (m_inspector) refreshInspector();
                              refreshTitle();
                          });
@@ -23131,8 +23341,7 @@ private:
             }
             if (m_pending_wall_start &&
                 (m_tool == CanvasTool::wall || m_tool == CanvasTool::sloped_wall)) {
-                m_measurementCanvas->setWallPreview(std::make_pair(*m_pending_wall_start, point));
-                m_architecturalCanvas->setWallPreview(std::make_pair(*m_pending_wall_start, point));
+                refreshWallPreview(point);
             }
             if (m_inspector && m_inspector->isVisible()) positionContextEditor();
         });
@@ -23166,8 +23375,11 @@ private:
             }
             if (m_pending_wall_start) {
                 QMenu menu(owner);
-                auto* cancel = menu.addAction(QStringLiteral("Cancel wall"));
-                QObject::connect(cancel, &QAction::triggered, owner, [this] { cancelTool(); });
+                auto* finish = menu.addAction(m_wall_chain_has_segments
+                    ? QStringLiteral("Finish wall chain")
+                    : QStringLiteral("Cancel wall start"));
+                QObject::connect(finish, &QAction::triggered, owner,
+                                 [this] { finishWallChain(); });
                 menu.exec(QCursor::pos());
                 return;
             }
@@ -23629,6 +23841,24 @@ private:
                         wall.slope_rise = slope->get<double>();
                     }
                     validate_wall_semantics(wall);
+                    const auto midpoint = point_at_segment(*baseline, 0.5);
+                    if (midpoint) {
+                        const auto dx = baseline->end.x - baseline->start.x;
+                        const auto dy = baseline->end.y - baseline->start.y;
+                        const auto chord = std::hypot(dx, dy);
+                        const Vec2 normal = chord > 1e-9
+                            ? Vec2{-dy / chord, dx / chord} : Vec2{0.0, 1.0};
+                        CanvasLabel wall_length{id_from(id),
+                            {midpoint->x + normal.x * (*thickness * 0.5 + 0.14),
+                             midpoint->y + normal.y * (*thickness * 0.5 + 0.14)},
+                            format_length(segment_length(*baseline), m_metric_units),
+                            id_from(id) == m_selected_id};
+                        wall_length.text_height_metres = 0.15;
+                        wall_length.paper_height_mm = 3.5;
+                        wall_length.show_background = false;
+                        wall_length.plan_only = true;
+                        all_labels.push_back(std::move(wall_length));
+                    }
                 } catch (const std::exception& error) {
                     append_geometry_error(QStringLiteral("Wall %1: %2")
                                               .arg(id_from(id), QString::fromUtf8(error.what())));
@@ -24525,9 +24755,34 @@ private:
         std::erase_if(m_plan_visible_model_ids,[&](const auto& id) { return presentation_hidden_ids.contains(id); });
         std::array<std::vector<CanvasEntity>, 3> visible_view_geometry;
         geometry.reserve(all_geometry.size());
+        const auto active_snap_context = organization.drawing_context(m_active_layer_id.toStdString());
         for (auto& entity : all_geometry) {
             if (visible_ids.contains(entity.id.toStdString()) &&
                 !presentation_hidden_ids.contains(entity.id.toStdString())) {
+                const auto source = snapshot.entities().find(entity.id.toStdString());
+                if (source != snapshot.entities().end() && active_snap_context &&
+                    (source->second.type == "wall" || is_closed_boundary_entity(source->second.type))) {
+                    const auto context = organization.drawing_context(source->second.id);
+                    const bool same_floor = context &&
+                        context->property_id == active_snap_context->property_id &&
+                        context->building_id == active_snap_context->building_id &&
+                        context->floor_id == active_snap_context->floor_id;
+                    if (same_floor) {
+                        if (source->second.type == "wall") {
+                            const auto baseline = read_required_segment(source->second.properties, "baseline");
+                            if (baseline) {
+                                entity.snap_points = {baseline->start, baseline->end};
+                                entity.snap_segments = {*baseline};
+                            }
+                        } else {
+                            entity.snap_segments = entity.segments;
+                            for (const auto& segment : entity.segments) {
+                                entity.snap_points.push_back(segment.start);
+                                entity.snap_points.push_back(segment.end);
+                            }
+                        }
+                    }
+                }
                 geometry.push_back(std::move(entity));
             }
         }
@@ -26612,10 +26867,23 @@ private:
     }
 
     void refreshCursorLabel(Vec2 point) {
+        const auto x = format_length(point.x, m_metric_units);
+        const auto y = format_length(point.y, m_metric_units);
+        if (m_workspace == Workspace::measurement) {
+            const auto intent = !m_pending_opening_kind.isEmpty()
+                ? QStringLiteral("Place %1").arg(m_pending_opening_kind)
+                : m_creation_mode == DrawingMode::wall ? QStringLiteral("Wall mode")
+                                                       : QStringLiteral("Measurement mode");
+            owner->statusBar()->showMessage(
+                QStringLiteral("Cursor  X %1  Y %2  •  %3").arg(x, y, intent));
+            return;
+        }
+        const auto view = m_architecturalViewCombo &&
+                !m_architecturalViewCombo->currentText().isEmpty()
+            ? m_architecturalViewCombo->currentText()
+            : QString::fromLatin1(architectural_view_name(m_architectural_view_kind));
         owner->statusBar()->showMessage(
-            QStringLiteral("Cursor  X %1  Y %2  •  %3  •  %4")
-                .arg(format_length(point.x, m_metric_units), format_length(point.y, m_metric_units),
-                     workspace_name(m_workspace), tool_name(m_tool)));
+            QStringLiteral("%1 view  •  X %2  Y %3").arg(view, x, y));
     }
 
     void onNavigatorClicked(QTreeWidgetItem* item, int column) {
@@ -26974,18 +27242,26 @@ private:
                 const Vec2 a1{a.x + normal.x, a.y + normal.y}, a2{a.x - normal.x, a.y - normal.y};
                 const Vec2 b1{b.x + normal.x, b.y + normal.y}, b2{b.x - normal.x, b.y - normal.y};
                 preview.segments = {{a1, b1, 0}, {b1, b2, 0}, {b2, a2, 0}, {a2, a1, 0}};
-                if (m_pending_opening_kind == QStringLiteral("door")) {
-                    const auto swing = door_plan_symbol(host.baseline, offset, width, DoorOperation{});
+                if (m_pending_opening_kind == QStringLiteral("door") &&
+                    (m_pending_opening_symbol_id.isEmpty() || m_pending_opening_door_operation)) {
+                    const auto swing = door_plan_symbol(host.baseline, offset, width,
+                        m_pending_opening_door_operation.value_or(DoorOperation{}));
                     preview.segments.insert(preview.segments.end(), swing.begin(), swing.end());
                 }
                 preview.instruction = QStringLiteral("Click to place %1 • offset %2").arg(m_pending_opening_kind, format_length(offset, m_metric_units));
                 if (commit) {
                     const auto previous = m_selected_id;
                     m_selected_id = id_from(host_entity->id);
+                    std::optional<DoorOperation> door_operation;
+                    if (m_pending_opening_kind == QStringLiteral("door")) {
+                        door_operation = m_pending_opening_symbol_id.isEmpty()
+                            ? std::optional<DoorOperation>{DoorOperation{}}
+                            : m_pending_opening_door_operation;
+                    }
                     const auto id = createHostedOpening(m_pending_opening_kind,
                         QString::number(offset, 'g', 17) + QStringLiteral(" m"),
                         m_opening_draw_width->text(), m_opening_draw_sill->text(), m_opening_draw_height->text(),
-                        snapshot.revision(), m_pending_opening_kind == QStringLiteral("door") ? std::optional{DoorOperation{}} : std::nullopt);
+                        snapshot.revision(), door_operation, m_pending_opening_symbol_id);
                     if (id.isEmpty()) m_selected_id = previous;
                     else {
                         setTool(CanvasTool::select);
@@ -27017,7 +27293,12 @@ private:
             return;
         }
         if (m_tool == CanvasTool::select) {
-            if (m_workspace == Workspace::measurement) {
+            if (m_workspace != Workspace::measurement) {
+                owner->statusBar()->showMessage(
+                    QStringLiteral("Wall and measurement drawing uses the conventional 2D world-XY canvas."), 4000);
+                return;
+            }
+            if (m_creation_mode == DrawingMode::measurement) {
                 if (!beginBoundaryDrawing(BoundaryAuthoringMode::draw_first, {})) return;
                 (void)selectEntity({}, false);
             } else {
@@ -27063,8 +27344,8 @@ private:
         if (m_tool == CanvasTool::wall || m_tool == CanvasTool::sloped_wall) {
             if (!m_pending_wall_start.has_value()) {
                 m_pending_wall_start = point;
-                m_measurementCanvas->setWallPreview(std::make_pair(point, point));
-                m_architecturalCanvas->setWallPreview(std::make_pair(point, point));
+                m_wall_chain_has_segments = false;
+                refreshWallPreview(point);
                 owner->statusBar()->showMessage(QStringLiteral("Wall start recorded  •  click the end point"));
                 return;
             }
@@ -27089,11 +27370,15 @@ private:
                                         QStringLiteral("interior"));
             }
             if (!id.isEmpty()) {
+                // A just-created wall becomes the new chain segment, not a
+                // retained selection that would consume the next empty click
+                // as a deselect-only gesture.
+                if (m_selected_id == id) (void)selectEntity({}, false);
                 clearPreview();
                 if (m_tool == CanvasTool::wall) {
                     m_pending_wall_start = point;
-                    m_measurementCanvas->setWallPreview(std::make_pair(point, point));
-                    m_architecturalCanvas->setWallPreview(std::make_pair(point, point));
+                    m_wall_chain_has_segments = true;
+                    refreshWallPreview(point);
                     owner->statusBar()->showMessage(QStringLiteral("Click the next wall end • Esc finishes the chain"));
                 } else {
                     setTool(CanvasTool::select);
@@ -27216,6 +27501,10 @@ private:
             cancelSymbolPlacement();
             return;
         }
+        if (m_pending_wall_start) {
+            finishWallChain();
+            return;
+        }
         if (!m_boundary_session && !m_pending_wall_start &&
             m_tool == CanvasTool::select && !m_selected_id.isEmpty()) {
             (void)selectEntity({});
@@ -27266,6 +27555,12 @@ private:
     }
 
     void setTool(CanvasTool tool) {
+        if (m_pending_wall_start) {
+            if (tool == m_tool) return;
+            setError(QStringLiteral("Finish the wall chain with Esc or cancel its start before changing tools."));
+            syncToolControls();
+            return;
+        }
         cancelSymbolPlacement();
         if (tool == CanvasTool::boundary) {
             if (m_boundary_session && m_tool == tool &&
@@ -27286,8 +27581,21 @@ private:
             m_drawing_measurement_button->setVisible(m_tool == CanvasTool::boundary && m_boundary_session.has_value());
             m_drawing_measurement_button->setEnabled(boundaryPrecisionReady());
         }
+        const bool world_xy = m_workspace == Workspace::measurement;
+        if (m_drawing_mode_combo) {
+            m_drawing_mode_combo->setEnabled(world_xy);
+            m_drawing_mode_combo->setToolTip(world_xy
+                ? QStringLiteral("Choose whether empty plan clicks create physical walls or measured areas. Selection and panning remain available.")
+                : QStringLiteral("Wall and measurement authoring uses the conventional 2D world-XY canvas. Switch to the 2D workspace first."));
+        }
         m_measurementCanvas->setTool(m_tool);
         m_architecturalCanvas->setTool(m_tool);
+        const bool geometry_snapping = world_xy &&
+            m_pending_opening_kind.isEmpty() && m_pending_symbol_id.isEmpty() &&
+            (m_tool == CanvasTool::select || m_tool == CanvasTool::wall ||
+             m_tool == CanvasTool::boundary);
+        m_measurementCanvas->setWallSnapEnabled(geometry_snapping);
+        m_architecturalCanvas->setWallSnapEnabled(false);
     }
 
     void setGrid(bool enabled) {
@@ -27313,6 +27621,8 @@ private:
 
     void clearPreview(bool retire = true) {
         m_pending_opening_kind.clear();
+        m_pending_opening_symbol_id.clear();
+        m_pending_opening_door_operation.reset();
         if (m_architecture_hint) m_architecture_hint->hide();
         if (m_opening_draw_fields) m_opening_draw_fields->hide();
         if (m_wall_draw_fields) m_wall_draw_fields->show();
@@ -27336,8 +27646,50 @@ private:
         m_boundary_context.reset();
         m_boundary_document.reset();
         m_pending_wall_start.reset();
+        m_wall_chain_has_segments = false;
         m_redefine_boundary_id.reset();
         m_restored_boundary_navigation = false;
+    }
+
+    void refreshWallPreview(Vec2 end) {
+        if (!m_pending_wall_start) {
+            m_measurementCanvas->setWallPreview(std::nullopt);
+            m_architecturalCanvas->setWallPreview(std::nullopt);
+            return;
+        }
+        double thickness = 0.14;
+        try {
+            const auto unit = m_metric_units ? Unit::metre : Unit::foot;
+            const auto parsed = parse_quantity(m_wall_draw_thickness->text().toStdString(), unit).metres;
+            if (std::isfinite(parsed) && parsed > 0.0) thickness = parsed;
+        } catch (const std::exception&) {
+            // Keep the previous useful physical outline while the field is
+            // temporarily invalid; createStraightWall reports the exact input.
+        }
+        const auto length = std::hypot(end.x - m_pending_wall_start->x,
+                                       end.y - m_pending_wall_start->y);
+        WallDraftPreview preview{*m_pending_wall_start, end, thickness,
+            length > 1e-9 ? format_length(length, m_metric_units) : QString{}};
+        m_measurementCanvas->setWallPreview(preview);
+        m_architecturalCanvas->setWallPreview(std::move(preview));
+    }
+
+    void finishWallChain() {
+        if (!m_pending_wall_start) return;
+        const bool kept_segments = m_wall_chain_has_segments;
+        m_pending_wall_start.reset();
+        m_wall_chain_has_segments = false;
+        m_measurementCanvas->setWallPreview(std::nullopt);
+        m_architecturalCanvas->setWallPreview(std::nullopt);
+        if (m_tool == CanvasTool::wall || m_tool == CanvasTool::sloped_wall) {
+            m_tool = CanvasTool::select;
+            syncToolControls();
+        }
+        if (m_architecture_hint) m_architecture_hint->hide();
+        clearError();
+        owner->statusBar()->showMessage(kept_segments
+            ? QStringLiteral("Wall chain finished. Committed walls were kept.")
+            : QStringLiteral("Unfinished wall start cancelled."), 4000);
     }
 
     void openFromDialog() {
@@ -28767,6 +29119,7 @@ private:
     QStringList m_project_resource_names;
     std::unique_ptr<ProjectOwnershipSession> m_project_ownership;
     Workspace m_workspace{Workspace::measurement};
+    DrawingMode m_creation_mode{DrawingMode::wall};
     WorkspaceTheme m_theme{WorkspaceTheme::light};
     CanvasTool m_tool{CanvasTool::select};
     bool m_metric_units{false};
@@ -28776,6 +29129,7 @@ private:
     bool m_refreshing{false};
     ProjectViewFilter m_view_filter;
     QString m_active_layer_id;
+    QComboBox* m_drawing_mode_combo{};
     QComboBox* m_drawing_layer_combo{};
     QComboBox* m_model_phase_combo{};
     QComboBox* m_pageSizeCombo{};
@@ -28825,7 +29179,10 @@ private:
     AssistanceSession m_assistance_session;
     QString m_last_boundary_classification{QStringLiteral("measurement")};
     std::optional<Vec2> m_pending_wall_start;
+    bool m_wall_chain_has_segments{};
     QString m_pending_opening_kind;
+    QString m_pending_opening_symbol_id;
+    std::optional<DoorOperation> m_pending_opening_door_operation;
     QWidget* m_wall_draw_fields{};
     QWidget* m_opening_draw_fields{};
     QLineEdit* m_wall_draw_thickness{};

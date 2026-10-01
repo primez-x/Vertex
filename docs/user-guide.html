@@ -32,8 +32,18 @@
   project copy and preserves the original. The application keeps local recovery copies
   while a project is being edited.</p>
 
-  <h2>Measurement workspace</h2>
-  <p>Choose <strong>Measurement</strong> for appraisal and floor-plan work. Draw a boundary
+  <h2>Drawing in 2D</h2>
+  <p>Choose <strong>Wall</strong> to draw physical walls, or <strong>Measurement</strong>
+  to draw an appraisal boundary. Wall is the default. Click to place the start,
+  then click each next endpoint. Press <kbd>Esc</kbd> to finish a wall chain;
+  completed walls remain. Wall thickness and height are in the Library tab.</p>
+  <p>A click selects an existing object. Drag empty canvas to pan; drag inside an
+  already selected object to move it. Click empty canvas once to clear a selection
+  before starting another drawing. Use <kbd>Ctrl</kbd>+click to add selections and
+  <kbd>Ctrl</kbd>+drag for a selection window. Double-click an object to edit its
+  quick properties; right-click for its relevant actions.</p>
+  <h2>Appraisal measurements</h2>
+  <p>Choose <strong>Measurement</strong> for appraisal boundaries. Draw a boundary
   directly, or choose <strong>Define area before drawing</strong> when the classification and
   target area should be established first. Enter distances with units such as
   <code>12 ft 6 in</code>, <code>3/8 in</code>, or <code>4.2 m</code>. Snap, grid, closure,
@@ -41,11 +51,15 @@
   <p>Select a closed boundary to inspect its classification, factors, deductions, area,
   perimeter, and calculation provenance. Every edit is undoable with <kbd>Ctrl</kbd>+<kbd>Z</kbd>.</p>
 
-  <h2>Architectural workspace</h2>
-  <p>Choose <strong>Architectural</strong> to author walls, hosted doors and windows,
+  <h2>Architectural objects</h2>
+  <p>The Library tab offers <strong>Wall</strong>, <strong>Doorway</strong>,
+  <strong>Door</strong> and <strong>Window</strong>. Doors and windows belong to an
+  existing wall: hover over that wall to preview the opening, then click to place it.
+  Furniture and equipment remain freely placed, adjustable symbols.</p>
+  <p>Use building commands to author
   floors, ceilings, foundations, beams, columns, roofs, stairs, railings, assemblies,
   and levels. The same semantic objects drive plan, elevation, section, schedule, sheet,
-  and native 3D views. Use the Inspector for the selected object's dimensions and
+  and native 3D views. Double-click an object for its dimensions and
   properties; invalid edits are rejected before the document changes.</p>
   <p>Use <strong>Design phases and alternatives</strong> for existing, demolished, and
   proposed work. Use <strong>Sheets</strong> and <strong>Schedules</strong> to arrange
@@ -60,7 +74,7 @@
 
   <h2>Output</h2>
   <p>Use <strong>Print preview</strong>, <strong>Export draft PDF</strong>, or
-  <strong>Export draft SVG</strong>. Choose the paper size in the compact toolbar and
+  <strong>Export draft SVG</strong>. Choose the paper size in the sheet/output settings and
   adjust sheet viewports for independent scales. Draft output carries a visible draft
   marker and a neighboring fingerprint file that records the influencing project and
   renderer inputs.</p>

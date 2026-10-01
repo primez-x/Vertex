@@ -9,6 +9,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QMimeData>
+#include <QFontMetrics>
 #include <QFontMetricsF>
 #include <QKeyEvent>
 #include <QKeySequence>
@@ -24,6 +25,7 @@
 #include <QWheelEvent>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <limits>
 #include <numbers>
@@ -303,7 +305,19 @@ bool append_closed_boundary(QPainterPath& path, const Boundary& boundary) {
 std::optional<QPainterPath> closed_entity_path(const CanvasEntity& entity) {
     QPainterPath path;
     path.setFillRule(Qt::OddEvenFill);
-    if (!append_closed_boundary(path, entity.segments)) return std::nullopt;
+    if (entity.type == QStringLiteral("wall")) {
+        // Hosted cuts split the footprint into separate closed wall runs.
+        // Keep their gaps empty when picking the physical body of a wall.
+        Boundary run;
+        for (const auto& segment : entity.segments) {
+            run.push_back(segment);
+            if (distance(run.front().start, segment.end) <= 1e-7) {
+                if (!append_closed_boundary(path, run)) return std::nullopt;
+                run.clear();
+            }
+        }
+        if (!run.empty() || path.isEmpty()) return std::nullopt;
+    } else if (!append_closed_boundary(path, entity.segments)) return std::nullopt;
     for (const auto& hole : entity.holes) {
         if (!append_closed_boundary(path, hole)) return std::nullopt;
     }
@@ -376,6 +390,13 @@ void PlanCanvas::setGridEnabled(bool enabled) {
 void PlanCanvas::setSnapEnabled(bool enabled) {
     if (m_snap_enabled == enabled) return;
     m_snap_enabled = enabled;
+    if (m_last_mouse_position) updateCursor(*m_last_mouse_position);
+    update();
+}
+
+void PlanCanvas::setWallSnapEnabled(bool enabled) {
+    if (m_wall_snap_enabled == enabled) return;
+    m_wall_snap_enabled = enabled;
     if (m_last_mouse_position) updateCursor(*m_last_mouse_position);
     update();
 }
@@ -462,7 +483,8 @@ void PlanCanvas::setSelectedIds(const QStringList& entity_ids) {
     for (auto& entity : m_entities) {
         entity.selected = entity_ids.contains(entity.id);
     }
-    for (auto& label : m_labels) label.selected = entity_ids.contains(label.id);
+    for (auto& label : m_labels)
+        label.selected = !label.plan_only && entity_ids.contains(label.id);
     for (auto& reference : m_references) reference.selected = entity_ids.contains(reference.id);
     if (m_last_mouse_position) updatePointerCursor(*m_last_mouse_position);
     update();
@@ -496,6 +518,9 @@ void PlanCanvas::setLabels(std::vector<CanvasLabel> labels) {
     // geometry, even when a replacement retains every annotation identity.
     if (m_touch_active || m_gesture_button != Qt::NoButton || m_vertex_move_handle) resetGesture();
     resetTouchInput();
+    // Derived plan labels share their owner's ID for output filtering; they
+    // are not independent annotations with their own transform controls.
+    for (auto& label : labels) if (label.plan_only) label.selected = false;
     m_labels = std::move(labels);
     if (m_last_mouse_position) updatePointerCursor(*m_last_mouse_position);
     update();
@@ -527,7 +552,7 @@ void PlanCanvas::setBoundaryPreview(std::vector<Vec2> points) {
     update();
 }
 
-void PlanCanvas::setWallPreview(std::optional<std::pair<Vec2, Vec2>> wall) {
+void PlanCanvas::setWallPreview(std::optional<WallDraftPreview> wall) {
     m_wall_preview = std::move(wall);
     update();
 }
@@ -843,12 +868,87 @@ void PlanCanvas::renderSceneWithTransform(QPainter& painter, const QRectF& viewp
             painter.drawPath(path);
         }
         if (m_wall_preview.has_value()) {
-            QPen pen(QColor(255, 220, 126), 0.0, Qt::DashLine);
-            painter.setPen(pen);
-            QPainterPath path;
-            path.moveTo(m_wall_preview->first.x, m_wall_preview->first.y);
-            path.lineTo(m_wall_preview->second.x, m_wall_preview->second.y);
-            painter.drawPath(path);
+            const auto& wall = *m_wall_preview;
+            const auto dx = wall.end.x - wall.start.x;
+            const auto dy = wall.end.y - wall.start.y;
+            const auto length = std::hypot(dx, dy);
+            if (std::isfinite(length) && length > 1e-9 &&
+                std::isfinite(wall.thickness_metres) && wall.thickness_metres > 0.0) {
+                const Vec2 normal{-dy * wall.thickness_metres / (2.0 * length),
+                                   dx * wall.thickness_metres / (2.0 * length)};
+                const std::array<Vec2, 4> corners{{
+                    {wall.start.x + normal.x, wall.start.y + normal.y},
+                    {wall.end.x + normal.x, wall.end.y + normal.y},
+                    {wall.end.x - normal.x, wall.end.y - normal.y},
+                    {wall.start.x - normal.x, wall.start.y - normal.y}}};
+                QPainterPath footprint;
+                footprint.moveTo(corners.front().x, corners.front().y);
+                for (std::size_t index = 1; index < corners.size(); ++index)
+                    footprint.lineTo(corners[index].x, corners[index].y);
+                footprint.closeSubpath();
+                QPen outline(QColor(37, 99, 235), 1.8,
+                             Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);
+                outline.setCosmetic(true);
+                painter.setPen(outline);
+                painter.setBrush(QColor(37, 99, 235, 42));
+                painter.drawPath(footprint);
+                QPen centerline(QColor(37, 99, 235, 225), 0.0, Qt::DashLine);
+                painter.setPen(centerline);
+                painter.setBrush(Qt::NoBrush);
+                painter.drawLine(QPointF(wall.start.x, wall.start.y),
+                                 QPointF(wall.end.x, wall.end.y));
+            }
+        }
+        if (m_wall_snap_enabled && m_last_mouse_position) {
+            const auto snap = snapResult(*m_last_mouse_position);
+            if (snap.kind != SnapKind::none) {
+                const QColor color = snap.kind == SnapKind::endpoint ? QColor(57, 197, 132)
+                    : snap.kind == SnapKind::perpendicular ? QColor(85, 167, 255)
+                    : snap.kind == SnapKind::alignment ? QColor(111, 176, 245)
+                    : snap.kind == SnapKind::on_boundary ? QColor(186, 117, 255)
+                                                       : QColor(255, 196, 82);
+                if (snap.guide) {
+                    painter.setPen(QPen(color, 0.0, Qt::DashLine));
+                    painter.setBrush(Qt::NoBrush);
+                    drawSegment(painter, *snap.guide);
+                }
+                const auto radius = 7.0 / scale;
+                painter.setPen(QPen(color, 0.0));
+                painter.setBrush(Qt::NoBrush);
+                painter.drawEllipse(QPointF(snap.point.x, snap.point.y), radius, radius);
+                painter.drawLine(QPointF(snap.point.x - radius, snap.point.y),
+                                 QPointF(snap.point.x + radius, snap.point.y));
+                painter.drawLine(QPointF(snap.point.x, snap.point.y - radius),
+                                 QPointF(snap.point.x, snap.point.y + radius));
+                QString cue;
+                switch (snap.kind) {
+                case SnapKind::endpoint: cue = QStringLiteral("Endpoint"); break;
+                case SnapKind::on_wall: cue = QStringLiteral("Wall centerline"); break;
+                case SnapKind::on_boundary: cue = QStringLiteral("On boundary"); break;
+                case SnapKind::perpendicular: cue = QStringLiteral("Perpendicular"); break;
+                case SnapKind::alignment: cue = QStringLiteral("Alignment"); break;
+                case SnapKind::grid: cue = QStringLiteral("Grid"); break;
+                case SnapKind::none: break;
+                }
+                if (!cue.isEmpty()) {
+                    painter.save();
+                    painter.resetTransform();
+                    painter.setFont(QFont(QStringLiteral("Segoe UI"), 8, QFont::DemiBold));
+                    const auto cue_position = toScreen(snap.point, rect()) + QPointF(10.0, -10.0);
+                    const auto text_bounds = QFontMetrics(painter.font()).boundingRect(cue);
+                    const QRectF label_rect(cue_position.x() - 3.0, cue_position.y() - text_bounds.height() + 2.0,
+                                            text_bounds.width() + 8.0, text_bounds.height() + 5.0);
+                    const bool light_surface = m_canvas_background.lightnessF() > 0.5;
+                    painter.setPen(Qt::NoPen);
+                    painter.setBrush(light_surface ? QColor(255, 255, 255, 230)
+                                                   : QColor(17, 24, 39, 235));
+                    painter.drawRoundedRect(label_rect, 3.0, 3.0);
+                    painter.setPen(light_surface ? QColor(24, 37, 54) : QColor(237, 242, 251));
+                    painter.drawText(QPointF(label_rect.left() + 4.0,
+                                             label_rect.bottom() - 3.0), cue);
+                    painter.restore();
+                }
+            }
         }
         if (m_boundary_draft_preview.has_value()) {
             const auto& draft = *m_boundary_draft_preview;
@@ -882,6 +982,30 @@ void PlanCanvas::renderSceneWithTransform(QPainter& painter, const QRectF& viewp
         }
     }
     painter.restore();
+
+    if (!output && m_wall_preview && !m_wall_preview->dimension_text.isEmpty()) {
+        const auto center = QPointF(
+            viewport.center().x() + ((m_wall_preview->start.x + m_wall_preview->end.x) * 0.5 -
+                                     view_center.x) * scale,
+            viewport.center().y() - ((m_wall_preview->start.y + m_wall_preview->end.y) * 0.5 -
+                                     view_center.y) * scale);
+        painter.save();
+        painter.setRenderHint(QPainter::TextAntialiasing, true);
+        const QFontMetricsF metrics(painter.font());
+        auto bounds = metrics.boundingRect(m_wall_preview->dimension_text);
+        bounds.moveCenter(center);
+        bounds.adjust(-6.0, -3.0, 6.0, 3.0);
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(background.lightnessF() > 0.5
+                             ? QColor(255, 255, 255, 238)
+                             : QColor(20, 25, 34, 225));
+        painter.drawRoundedRect(bounds, 3.0, 3.0);
+        painter.setPen(background.lightnessF() > 0.5
+                           ? QColor(50, 65, 84) : QColor(255, 239, 172));
+        painter.setBrush(Qt::NoBrush);
+        painter.drawText(bounds, Qt::AlignCenter, m_wall_preview->dimension_text);
+        painter.restore();
+    }
 
     drawReferenceGridLabels(painter, viewport, scale, view_center, output, background,
                             paper_pixels_per_mm);
@@ -2792,9 +2916,121 @@ std::optional<Vec2> PlanCanvas::closingAnchor(QPointF point) const {
         ? std::optional{anchor} : std::nullopt;
 }
 
+PlanCanvas::SnapResult PlanCanvas::snapResult(QPointF screen_point) const {
+    const auto raw = toModel(screen_point, rect());
+    if (!m_snap_enabled) return {raw, SnapKind::none, {}, {}};
+    if (m_panning || m_left_dragging || m_selection_dragging || m_overview_dragging ||
+        m_touch_navigation) {
+        return {snapped(raw), SnapKind::none, {}, {}};
+    }
+    SnapResult grid_result{snapped(raw), SnapKind::grid, {}, {}};
+    if (std::hypot(grid_result.point.x - raw.x, grid_result.point.y - raw.y) * m_scale < 0.5)
+        grid_result.kind = SnapKind::none;
+    if (!m_wall_snap_enabled || m_vertex_move_handle || m_opening_width_handle)
+        return grid_result;
+
+    constexpr double snap_radius_pixels = 12.0;
+    const auto screen_distance = [&](Vec2 candidate) {
+        return QLineF(screen_point, toScreen(candidate, rect())).length();
+    };
+    struct Candidate {
+        SnapResult result;
+        double distance{std::numeric_limits<double>::infinity()};
+    };
+    Candidate endpoint, on_wall, perpendicular, alignment;
+    const auto consider = [&](Candidate& best, Vec2 candidate, SnapKind kind,
+                              std::optional<Vec2> anchor = std::nullopt,
+                              std::optional<Segment> guide = std::nullopt) {
+        if (!std::isfinite(candidate.x) || !std::isfinite(candidate.y)) return;
+        const auto distance = screen_distance(candidate);
+        if (distance <= snap_radius_pixels && distance < best.distance) {
+            best.result = {candidate, kind, anchor, guide};
+            best.distance = distance;
+        }
+    };
+
+    for (const auto& entity : m_entities) {
+        for (const auto point : entity.snap_points)
+            consider(endpoint, point, SnapKind::endpoint, point);
+    }
+    // A nearby true endpoint takes precedence over every projection. This
+    // prevents an apparently aligned point from replacing a connected corner
+    // with a nearby point that leaves a small gap.
+    if (std::isfinite(endpoint.distance)) return endpoint.result;
+
+    for (const auto& entity : m_entities) {
+        for (const auto& baseline : entity.snap_segments) {
+            try {
+                const auto length = segment_length(baseline);
+                const auto station = std::clamp(
+                    project_host_station(baseline, raw, length * 0.5), 0.0, length);
+                const auto candidate = point_at_host_station(baseline, station);
+            consider(on_wall, candidate,
+                     entity.type == QStringLiteral("wall") ? SnapKind::on_wall
+                                                           : SnapKind::on_boundary,
+                     candidate,
+                     Segment{candidate, candidate, 0.0});
+            } catch (const std::exception&) {
+                // An ambiguous or malformed baseline is not a snap target.
+            }
+        }
+    }
+    if (std::isfinite(on_wall.distance)) return on_wall.result;
+
+    // Endpoint and wall-segment alignment guides keep chained wall corners
+    // square and make common 45-degree runs easy to place without changing
+    // the snap point used by the committed segment.
+    if (m_wall_preview) {
+        const auto anchor = m_wall_preview->start;
+        const auto snap_radius = snap_radius_pixels / std::max(m_scale, 1e-9);
+        for (const auto& entity : m_entities) {
+            for (const auto endpoint_point : entity.snap_points) {
+                for (const auto direction : {Vec2{1.0, 0.0}, Vec2{0.0, 1.0}}) {
+                    const auto amount = (raw.x - endpoint_point.x) * direction.x +
+                                        (raw.y - endpoint_point.y) * direction.y;
+                    const Vec2 projected{endpoint_point.x + amount * direction.x,
+                                         endpoint_point.y + amount * direction.y};
+                    consider(alignment, projected, SnapKind::alignment, endpoint_point,
+                             Segment{endpoint_point, projected, 0.0});
+                }
+            }
+            for (const auto& segment : entity.snap_segments) {
+                const auto dx = segment.end.x - segment.start.x;
+                const auto dy = segment.end.y - segment.start.y;
+                const auto length = std::hypot(dx, dy);
+                if (!std::isfinite(length) || length <= 1e-9) continue;
+                const Vec2 tangent{dx / length, dy / length};
+                const Vec2 normal{-tangent.y, tangent.x};
+                for (const auto endpoint_point : {segment.start, segment.end}) {
+                    if (std::hypot(anchor.x - endpoint_point.x, anchor.y - endpoint_point.y) > snap_radius) continue;
+                    const auto amount = (raw.x - anchor.x) * normal.x +
+                                        (raw.y - anchor.y) * normal.y;
+                    const Vec2 projected{anchor.x + amount * normal.x,
+                                         anchor.y + amount * normal.y};
+                    consider(perpendicular, projected, SnapKind::perpendicular, endpoint_point,
+                             Segment{endpoint_point, projected, 0.0});
+                }
+            }
+        }
+        constexpr double diagonal = 0.7071067811865475244;
+        for (const Vec2 direction : {Vec2{1.0, 0.0}, Vec2{0.0, 1.0},
+                                     Vec2{diagonal, diagonal}, Vec2{diagonal, -diagonal}}) {
+            const auto amount = (raw.x - anchor.x) * direction.x +
+                                (raw.y - anchor.y) * direction.y;
+            const Vec2 projected{anchor.x + amount * direction.x,
+                                 anchor.y + amount * direction.y};
+            consider(alignment, projected, SnapKind::alignment, anchor,
+                     Segment{anchor, projected, 0.0});
+        }
+    }
+    if (std::isfinite(perpendicular.distance)) return perpendicular.result;
+    if (std::isfinite(alignment.distance)) return alignment.result;
+    return grid_result;
+}
+
 Vec2 PlanCanvas::inputPoint(QPointF point) const {
     if (const auto anchor = closingAnchor(point)) return *anchor;
-    return snapped(toModel(point, rect()));
+    return snapResult(point).point;
 }
 
 QStringList PlanCanvas::rectangleHits(const QRectF& rectangle, bool crossing) const {
@@ -2941,7 +3177,7 @@ QString PlanCanvas::hitTest(QPointF point, bool filtered) const {
         };
         test_boundary(entity.segments);
         for (const auto& hole : entity.holes) test_boundary(hole);
-        if (entity.filled) {
+        if (entity.filled || entity.type == QStringLiteral("wall")) {
             if (const auto fill = closed_entity_path(entity)) {
                 QTransform model_to_screen;
                 model_to_screen.translate(QRectF(rect()).center().x(), QRectF(rect()).center().y());

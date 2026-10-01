@@ -127,6 +127,11 @@ struct CanvasEntity {
     // Opt-in area styling uses the explicit paper width in screen pixels too.
     // Appended to retain existing aggregate initialization order.
     bool paper_stroke_width_on_screen{false};
+    // Analytical source points used by the interactive wall snap resolver.
+    // Wall footprints are offsets from their baselines, so their centerline
+    // endpoints must be retained separately from the painted outline.
+    std::vector<Vec2> snap_points;
+    Boundary snap_segments;
 };
 
 // A retained document annotation. Unlike BoundaryDraftPreview, labels are
@@ -219,6 +224,16 @@ struct BoundaryDraftPreview {
     bool can_close_on_anchor{false};
 };
 
+// Model-space geometry for a pending physical wall segment. The canvas uses
+// the actual thickness to show the footprint and its current length while the
+// document remains untouched until the click is committed.
+struct WallDraftPreview {
+    Vec2 start{};
+    Vec2 end{};
+    double thickness_metres{0.14};
+    QString dimension_text;
+};
+
 class PlanCanvas final : public QWidget {
 public:
     explicit PlanCanvas(QWidget* parent = nullptr);
@@ -237,6 +252,7 @@ public:
     [[nodiscard]] CanvasSelectionFilter selectionFilter() const noexcept { return m_selection_filter; }
     void setGridEnabled(bool enabled);
     void setSnapEnabled(bool enabled);
+    void setWallSnapEnabled(bool enabled);
     void setOverviewMapEnabled(bool enabled);
     [[nodiscard]] bool overviewMapEnabled() const noexcept { return m_overview_map_enabled; }
     void setMetricUnits(bool metric);
@@ -263,7 +279,15 @@ public:
         return m_reference_grids;
     }
     void setBoundaryPreview(std::vector<Vec2> points);
-    void setWallPreview(std::optional<std::pair<Vec2, Vec2>> wall);
+    void setWallPreview(std::optional<WallDraftPreview> wall);
+    // Compatibility for existing smoke fixtures and callers that only need
+    // the former baseline-only rubber band.
+    void setWallPreview(std::pair<Vec2, Vec2> wall) {
+        setWallPreview(WallDraftPreview{wall.first, wall.second, 0.14, {}});
+    }
+    [[nodiscard]] const std::optional<WallDraftPreview>& wallPreview() const noexcept {
+        return m_wall_preview;
+    }
     void setBoundaryDraftPreview(std::optional<BoundaryDraftPreview> preview);
     [[nodiscard]] const std::optional<BoundaryDraftPreview>& boundaryDraftPreview() const noexcept {
         return m_boundary_draft_preview;
@@ -398,6 +422,14 @@ private:
     void pointerRelease(QPointF position, Qt::MouseButton button,
                         Qt::KeyboardModifiers modifiers = Qt::NoModifier);
     void resetGesture();
+    enum class SnapKind { none, grid, endpoint, on_wall, on_boundary, alignment, perpendicular };
+    struct SnapResult {
+        Vec2 point{};
+        SnapKind kind{SnapKind::none};
+        std::optional<Vec2> anchor;
+        std::optional<Segment> guide;
+    };
+    [[nodiscard]] SnapResult snapResult(QPointF point) const;
     void handleTouchEvent(QTouchEvent& event);
     void resetTouchInput();
     [[nodiscard]] std::optional<std::pair<Vec2, Vec2>> contentBounds() const;
@@ -491,11 +523,12 @@ private:
     mutable QHash<QString, QSharedPointer<QSvgRenderer>> m_svg_renderers;
     QString m_selection_caption;
     std::vector<Vec2> m_boundary_preview;
-    std::optional<std::pair<Vec2, Vec2>> m_wall_preview;
+    std::optional<WallDraftPreview> m_wall_preview;
     std::optional<BoundaryDraftPreview> m_boundary_draft_preview;
     CanvasTool m_tool{CanvasTool::select};
     bool m_grid_enabled{true};
     bool m_snap_enabled{true};
+    bool m_wall_snap_enabled{false};
     bool m_overview_map_enabled{true};
     bool m_metric_units{false};
     QColor m_canvas_background{248, 250, 252};
