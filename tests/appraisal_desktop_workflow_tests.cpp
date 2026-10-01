@@ -3,6 +3,7 @@
 #include "sketch/sheet_view_entity_codec.hpp"
 #include "sketch/project_store.hpp"
 #include "sketch/boundary_dimension.hpp"
+#include "sketch/boundary_entity.hpp"
 #include "sketch/appraisal_document.hpp"
 #include "sketch/desktop/boundary_input_dialog.hpp"
 #include "../src/desktop/plan_canvas.hpp"
@@ -34,6 +35,8 @@
 #include <QTableWidget>
 #include <QPdfSelection>
 #include <QRegularExpression>
+#include <QMouseEvent>
+#include <QElapsedTimer>
 
 #include <algorithm>
 #include <cmath>
@@ -918,22 +921,241 @@ void malformed_appraisal_projection_prints_withheld_status() {
             "malformed appraisal data must print an unqualified status and no area values");
 }
 
+void appraisal_plan_area_labels_workflow() {
+    using sketch::desktop::PlanCanvas;
+    sketch::desktop::MainWindow window;
+    window.setMetricUnits(false);
+    const auto outer = window.createBoundary(square(0, 0, 3.048));
+    auto* workflow = window.findChild<QComboBox*>(QStringLiteral("calculationWorkflow"));
+    require(workflow, "plan labels need the actual Appraisal workflow control");
+    workflow->setCurrentIndex(workflow->findData(QStringLiteral("appraisal")));
+    require(window.editSelectedAppraisalFacts(declarations()), "declare the enclosing living area");
+    auto* canvas = dynamic_cast<PlanCanvas*>(window.findChild<QWidget*>(QStringLiteral("measurementPlanCanvas")));
+    require(canvas, "plan labels need the actual retained canvas");
+    const auto label_text = [&](const QString& id) {
+        const auto found = std::find_if(canvas->labels().begin(), canvas->labels().end(),
+            [&](const auto& label) { return label.id == id && label.plan_only && label.avoid_components; });
+        return found == canvas->labels().end() ? QString{} : found->text;
+    };
+    require(label_text(outer) == QStringLiteral("100.00 ft²"),
+            "generic area names must still show authoritative Appraisal area on the plan");
+    const auto garage = window.createBoundary(square(0.5, 0.5, 1.524));
+    require(!garage.isEmpty() && !label_text(outer).contains(QStringLiteral("ft²")),
+            "a newly unqualified participating area must withhold existing numerical plan labels");
+    require(window.editSelectedAppraisalFacts(declarations("residential_declared", "garage")) &&
+            window.applySelectedAutoSubtract(outer), "declare and subtract an internal garage");
+    const auto edit_name = [&](const QString& id, const QString& value) {
+        require(window.selectEntity(id), "select an area for its actual Name control");
+        auto* name = window.findChild<QLineEdit*>(QStringLiteral("areaName"));
+        require(name && name->isEnabled(), "area properties must offer a direct editable Name field");
+        const auto before = window.document().snapshot();
+        name->setText(value);
+        name->setModified(true);
+        require(QMetaObject::invokeMethod(name, "editingFinished", Qt::DirectConnection),
+                "commit the actual area Name control");
+        auto expected = before.entities();
+        if (value.trimmed().isEmpty()) expected.at(id.toStdString()).properties.erase("name");
+        else expected.at(id.toStdString()).properties["name"] = value.trimmed().toStdString();
+        require(window.document().revision() == before.revision() + 1 &&
+                window.document().snapshot().entities() == expected,
+                "area name editing must change only its owner's name in one history command");
+        const auto saved = window.document().snapshot();
+        name->setModified(true);
+        QMetaObject::invokeMethod(name, "editingFinished", Qt::DirectConnection);
+        require(window.document().revision() == saved.revision(), "unchanged area name must be a no-op");
+    };
+    edit_name(outer, QStringLiteral(" First floor "));
+    edit_name(garage, QStringLiteral("Garage"));
+    const auto named = window.document().snapshot();
+    require(window.undoCommand() && window.redoCommand() &&
+            window.document().snapshot().entities() == named.entities(),
+            "area Name edits must undo/redo without changing appraisal geometry or facts");
+    edit_name(garage, QStringLiteral("   "));
+    require(label_text(garage) == QStringLiteral("25.00 ft²") && window.undoCommand() &&
+            window.document().snapshot().entities() == named.entities(),
+            "clearing an area name removes only the name and undo restores it");
+    require(window.selectEntity(garage), "select the area before testing a stale Name edit");
+    auto* stale_name = window.findChild<QLineEdit*>(QStringLiteral("areaName"));
+    stale_name->setText(QStringLiteral("Stale name"));
+    stale_name->setModified(true);
+    auto external_area = window.document().snapshot().entities().at(garage.toStdString());
+    external_area.properties["external_note"] = "preserve newer data";
+    window.document().apply(sketch::ApplyEntityChanges{window.document().revision(),
+        {sketch::EntityChange::upsert(external_area)}, {}, "External area edit"});
+    const auto external = window.document().snapshot();
+    QMetaObject::invokeMethod(stale_name, "editingFinished", Qt::DirectConnection);
+    require(window.document().revision() == external.revision() &&
+            window.document().snapshot().entities() == external.entities() && window.undoCommand() &&
+            window.document().snapshot().entities() == named.entities(),
+            "stale Name edits must preserve newer area data without another command");
+    {
+        sketch::desktop::MainWindow read_only_window;
+        const auto read_only_area = read_only_window.createBoundary(square(0, 0, 3.048));
+        read_only_window.document().mark_read_only("Name field read-only fixture");
+        require(read_only_window.selectEntity(read_only_area), "select the read-only area");
+        auto* read_only_name = read_only_window.findChild<QLineEdit*>(QStringLiteral("areaName"));
+        require(read_only_name && !read_only_name->isEnabled(), "read-only areas must disable Name editing");
+        const auto before = read_only_window.document().snapshot();
+        read_only_name->setText(QStringLiteral("Cannot save"));
+        read_only_name->setModified(true);
+        QMetaObject::invokeMethod(read_only_name, "editingFinished", Qt::DirectConnection);
+        require(read_only_window.document().revision() == before.revision() &&
+                read_only_window.document().snapshot().entities() == before.entities(),
+                "programmatic Name signals must not mutate a read-only document");
+    }
+    require(window.selectEntity(outer) && label_text(outer) == QStringLiteral("First Floor\n75.00 ft²") &&
+            label_text(garage) == QStringLiteral("Garage\n25.00 ft²"),
+            "plan labels must show net parent area and the separate garage contribution exactly once");
+    const auto parent_label = std::find_if(canvas->labels().begin(), canvas->labels().end(),
+        [&](const auto& label) { return label.id == outer && label.avoid_components; });
+    require(parent_label != canvas->labels().end() &&
+            !(parent_label->position.x > 0.5 && parent_label->position.x < 2.024 &&
+              parent_label->position.y > 0.5 && parent_label->position.y < 2.024),
+            "the parent's net-area name/value must be placed outside its deducted garage");
+    const auto void_area = window.createBoundary(square(0.1, 2.2, 0.3048));
+    require(!void_area.isEmpty() &&
+            window.editSelectedAppraisalFacts(declarations("residential_declared", "dwelling", "above", "other_void")) &&
+            window.applySelectedAutoSubtract(outer) && !label_text(void_area).contains(QStringLiteral("ft²")) &&
+            label_text(outer) == QStringLiteral("First Floor\n74.00 ft²"),
+            "linked voids must reduce the parent without acquiring a standalone Appraisal area label");
+    require(window.deleteSelection() && label_text(outer) == QStringLiteral("First Floor\n75.00 ft²"),
+            "deleting a void must rebuild its remaining parent's exact net label");
+    const auto site = window.createBoundary(square(20, 20, 10), QStringLiteral("survey"));
+    require(!site.isEmpty() && !label_text(site).contains(QStringLiteral("ft²")) &&
+            label_text(outer) == QStringLiteral("First Floor\n75.00 ft²") && window.deleteSelection(),
+            "independent site outlines must not acquire numerical building Appraisal labels or change GLA");
+    const auto separate_layer = window.createLayer(QStringLiteral("floor-1"), QStringLiteral("Garage presentation"));
+    require(!separate_layer.isEmpty(), "presentation filter fixture needs a distinct layer");
+    auto source = window.document().snapshot();
+    auto relayered = source.entities().at(garage.toStdString());
+    relayered.properties["layer_id"] = separate_layer.toStdString();
+    window.document().apply(sketch::ApplyEntityChanges{source.revision(),
+        {sketch::EntityChange::upsert(relayered)}, {}, "Move garage to a presentation layer"});
+    require(window.setContainerVisible(separate_layer, false) && window.selectEntity(outer) &&
+            label_text(outer) == QStringLiteral("First Floor\n75.00 ft²") && label_text(garage).isEmpty(),
+            "hiding a deduction's layer must not alter its visible parent's numerical area");
+    require(window.setContainerVisible(separate_layer, true), "restore the garage presentation");
+    window.setMetricUnits(true);
+    require(label_text(outer) == QStringLiteral("First Floor\n6.97 m²") &&
+            label_text(garage) == QStringLiteral("Garage\n2.32 m²"),
+            "automatic labels must convert workspace units without altering geometry");
+    window.setMetricUnits(false);
+    require(window.selectEntity(garage), "select the deduction for an ordinary size edit");
+    window.resize(1100, 780);
+    window.show();
+    QApplication::processEvents();
+    require(window.selectEntity(garage), "select the displayed deduction before dragging its vertex");
+    canvas->setSnapEnabled(false);
+    canvas->setOverviewMapEnabled(false);
+    canvas->fitView();
+    const auto before_drag = window.document().snapshot();
+    const auto screen = [&](sketch::Vec2 point) {
+        return QRectF(canvas->rect()).center() + QPointF(
+            (point.x - canvas->viewCenter().x) * canvas->viewScale(),
+            -(point.y - canvas->viewCenter().y) * canvas->viewScale());
+    };
+    const auto press = screen({0.5, 0.5});
+    const auto move = screen({0.7, 0.7});
+    QMouseEvent down(QEvent::MouseButtonPress, press, canvas->mapToGlobal(press.toPoint()),
+        Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(canvas, &down);
+    QMouseEvent drag(QEvent::MouseMove, move, canvas->mapToGlobal(move.toPoint()),
+        Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(canvas, &drag);
+    QElapsedTimer preview_wait;
+    preview_wait.start();
+    while (!canvas->boundaryVertexPreviewMetrics() && preview_wait.elapsed() < 3000)
+        QApplication::processEvents(QEventLoop::AllEvents, 30);
+    if (!canvas->boundaryVertexPreviewMetrics()) {
+        const auto retained = std::find_if(canvas->entities().begin(), canvas->entities().end(),
+            [&](const auto& item) { return item.id == garage; });
+        throw std::runtime_error((QStringLiteral("Real vertex preview missing: serial %1, handles %2, selected %3, scale %4, point %5,%6; %7")
+            .arg(canvas->boundaryVertexPreviewSerial())
+            .arg(retained == canvas->entities().end() ? 0 : retained->vertex_handles.size())
+            .arg(retained != canvas->entities().end() && retained->selected)
+            .arg(canvas->viewScale()).arg(press.x()).arg(press.y()).arg(window.lastError())).toStdString());
+    }
+    for (const auto& id : {outer, garage}) {
+        const auto& labels = canvas->boundaryVertexPreviewLabels();
+        const auto proposed = std::find_if(labels.begin(), labels.end(), [&](const auto& label) { return label.id == id; });
+        require(proposed != labels.end() && !proposed->text.contains(QStringLiteral("ft²")),
+                "vertex previews must suppress stale net numbers including the unchanged deduction parent");
+    }
+    QKeyEvent escape(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+    QApplication::sendEvent(canvas, &escape);
+    require(window.document().snapshot().entities() == before_drag.entities() &&
+            label_text(outer) == QStringLiteral("First Floor\n75.00 ft²"),
+            "cancelling a vertex preview must restore committed area labels without changing geometry");
+    // Connected mode preserves the complementary 5-ft edge while changing
+    // the anchored edge to 4 ft: (4 + 5) / 2 * 5 = 22.5 ft².
+    const auto before_size = window.document().snapshot();
+    const auto boundary = sketch::decode_identified_boundary_entity(before_size.entities().at(garage.toStdString()));
+    require(window.editSelectedBoundaryEdgeLength(QString::fromStdString(boundary.segments.front().segment_id),
+        QStringLiteral("4 ft"), sketch::BoundaryFixedEndpoint::start, true),
+        "Appraisal plan labels must follow a real measured-edge edit");
+    if (label_text(outer) != QStringLiteral("First Floor\n77.50 ft²") ||
+        label_text(garage) != QStringLiteral("Garage\n22.50 ft²"))
+        throw std::runtime_error((QStringLiteral("Actual labels after measured edit: parent [%1], garage [%2]")
+            .arg(label_text(outer), label_text(garage))).toStdString());
+    require(window.undoCommand() && label_text(outer) == QStringLiteral("First Floor\n75.00 ft²") &&
+            window.redoCommand() && label_text(outer) == QStringLiteral("First Floor\n77.50 ft²"),
+            "ordinary undo/redo must rebuild derived area labels");
+    QTemporaryDir directory;
+    require(directory.isValid() && window.saveProjectAs(directory.filePath(QStringLiteral("plan-labels.bldproj"))) &&
+            window.openProject(directory.filePath(QStringLiteral("plan-labels.bldproj"))) &&
+            label_text(outer) == QStringLiteral("First Floor\n77.50 ft²"),
+            "ordinary save/reopen must rebuild exact numerical plan labels");
+    const auto pdf_path = directory.filePath(QStringLiteral("appraisal-plan-labels.pdf"));
+    require(window.exportDraftPdf(pdf_path), "the ordinary draft plan output must include calculated area labels");
+    QPdfDocument pdf;
+    require(pdf.load(pdf_path) == QPdfDocument::Error::None && pdf.pageCount() > 0,
+            "the actual Appraisal plan PDF must reopen");
+    const auto text = pdf.getAllText(0).text().simplified();
+    require(text.contains(QStringLiteral("First Floor")) && text.contains(QStringLiteral("77.50 ft²")) &&
+            text.contains(QStringLiteral("Garage")) && text.contains(QStringLiteral("22.50 ft²")),
+            "plan PDF must retain complete names and numerical labels without clipping a second line");
+    require(text.count(QStringLiteral("77.50 ft²")) == 1 && text.count(QStringLiteral("22.50 ft²")) == 1,
+            "plan-only area values must not leak into elevation or section sheet viewports");
+    const auto captures = qEnvironmentVariable("VERTEX_TEST_CAPTURE_DIR");
+    if (!captures.isEmpty()) {
+        require(QFile::copy(pdf_path, QDir(captures).filePath(QStringLiteral("appraisal-plan-labels.pdf"))) &&
+                pdf.render(0, QSize(1400, 1000)).save(QDir(captures).filePath(QStringLiteral("appraisal-plan-labels.png"))),
+                "retain the actual Appraisal plan output for visual review");
+    }
+    require(window.selectEntity(garage) &&
+            window.editSelectedAppraisalFacts(declarations("residential_declared", "garage").replace("\"finish\":\"finished\",", "")) &&
+            !label_text(outer).contains(QStringLiteral("ft²")) &&
+            label_text(outer) == QStringLiteral("First Floor"),
+            "unqualified plans retain their names and withhold numerical Appraisal assertions");
+}
+
 void appraisal_area_display_precision_workflow() {
     sketch::desktop::MainWindow window;
     window.setMetricUnits(false);
-    const auto side = std::sqrt(1.51 * 0.09290304);
+    const auto side = std::sqrt(151.51 * 0.09290304);
     const auto first = window.createBoundary(square(0, 0, side));
     auto* workflow = window.findChild<QComboBox*>(QStringLiteral("calculationWorkflow"));
     require(workflow, "area display fixture needs the appraisal workflow selector");
     workflow->setCurrentIndex(workflow->findData(QStringLiteral("appraisal")));
     require(!first.isEmpty() && window.editSelectedAppraisalFacts(declarations()),
-            "area display fixture must qualify its first 1.51 square foot room");
-    const auto second = window.createBoundary(square(2, 0, side));
+            "area display fixture must qualify its first 151.51 square foot room");
+    const auto second = window.createBoundary(square(6, 0, side));
     require(!second.isEmpty() && window.editSelectedAppraisalFacts(declarations()),
             "area display fixture must qualify its second nonoverlapping room");
     auto* gla = window.findChild<QLabel*>(QStringLiteral("appraisalGlaTotal"));
-    require(gla && gla->text().contains(QStringLiteral("3.02")),
+    require(gla && gla->text().contains(QStringLiteral("303.02")),
             "area display fixture must start with the exact aggregate shown at two decimals");
+    auto* canvas = dynamic_cast<sketch::desktop::PlanCanvas*>(
+        window.findChild<QWidget*>(QStringLiteral("measurementPlanCanvas")));
+    require(canvas, "automatic area labels need the actual measurement canvas");
+    const auto area_label = [&](const QString& id) {
+        const auto label = std::find_if(canvas->labels().begin(), canvas->labels().end(),
+            [&](const auto& item) { return item.id == id && item.plan_only && item.avoid_components; });
+        return label == canvas->labels().end() ? QString{} : label->text;
+    };
+    require(area_label(first).contains(QStringLiteral("151.51 ft²")) &&
+            area_label(second).contains(QStringLiteral("151.51 ft²")),
+            "qualified areas must automatically show their calculated square footage on the plan");
     auto* action = window.findChild<QAction*>(QStringLiteral("calculationProfile"));
     require(action && action->isEnabled(),
             "qualified Appraisal must offer its Area display dialog");
@@ -950,12 +1172,12 @@ void appraisal_area_display_precision_workflow() {
     property.extensions["vendor_area_display"] = {{"value", 17}};
     window.document().apply(sketch::ApplyEntityChanges{
         seeded.revision(), {sketch::EntityChange::upsert(property)}, {}, "Seed opaque area display metadata"});
-    require(window.selectEntity(second) && gla->text() == QStringLiteral("3.02 ft²") && action->isEnabled(),
+    require(window.selectEntity(second) && gla->text() == QStringLiteral("303.02 ft²") && action->isEnabled(),
             "hidden legacy profile metadata must not block qualified Appraisal totals or display editing");
     const auto original = window.document().snapshot();
     const auto physical_report = sketch::build_appraisal_document_report(original, "property-1");
     require(physical_report.qualified && physical_report.calculation &&
-                std::abs(physical_report.calculation->property.gla().total.square_metres - 3.02 * 0.09290304) < 1e-12,
+                std::abs(physical_report.calculation->property.gla().total.square_metres - 303.02 * 0.09290304) < 1e-12,
             "area display source must independently contain the unrounded aggregate in SI");
     const auto quantities = [&](const sketch::DocumentScheduleProjection& projection) {
         std::map<std::string, sketch::ScheduleQuantity> result;
@@ -1027,6 +1249,10 @@ void appraisal_area_display_precision_workflow() {
                     report.calculation->property.gla().total.square_metres ==
                         physical_report.calculation->property.gla().total.square_metres,
                 "display settings must change report precision without changing physical totals");
+        const auto expected_area = QString::fromStdString(
+            report.calculation->calculation.areas.front().display.text) + QStringLiteral(" ft²");
+        require(area_label(first).contains(expected_area) && area_label(second).contains(expected_area),
+                "automatic canvas area labels must follow the same persisted precision as the report");
         const auto schedule = window.scheduleSnapshot();
         require(quantities(schedule) == original_quantities,
                 "display settings must leave every canonical appraisal schedule quantity unchanged");
@@ -1050,7 +1276,7 @@ void appraisal_area_display_precision_workflow() {
         if (id != "property-1") require(zero.entities().at(id) == entity,
                                       "Area display must never rewrite geometry, annotations or organization");
     }
-    check_precision(0, QStringLiteral("3"));
+    check_precision(0, QStringLiteral("303"));
     require(window.undoCommand() && window.document().snapshot().entities() == original.entities() &&
                 window.redoCommand() && window.document().snapshot().entities() == zero.entities(),
             "Area display must undo and redo its one atomic settings command");
@@ -1083,13 +1309,13 @@ void appraisal_area_display_precision_workflow() {
         schedules->trigger();
         require(seen, "native schedule precision must be observed through its actual dialog");
     };
-    show_schedule(QStringLiteral("3"));
+    show_schedule(QStringLiteral("303"));
     edit_precision(1, true);
-    check_precision(1, QStringLiteral("3.0"));
-    show_schedule(QStringLiteral("3.0"));
+    check_precision(1, QStringLiteral("303.0"));
+    show_schedule(QStringLiteral("303.0"));
     edit_precision(6, true);
-    check_precision(6, QStringLiteral("3.020000"));
-    show_schedule(QStringLiteral("3.020000"));
+    check_precision(6, QStringLiteral("303.020000"));
+    show_schedule(QStringLiteral("303.020000"));
     const auto six = window.document().snapshot();
     edit_precision(0, false);
     edit_precision(6, true);
@@ -1101,7 +1327,7 @@ void appraisal_area_display_precision_workflow() {
                 window.openProject(directory.filePath(QStringLiteral("area-display.bldproj"))) &&
                 window.document().snapshot().entities() == six.entities() && window.selectEntity(second),
             "Area display configuration and exact quantities must survive ordinary save/reopen");
-    check_precision(6, QStringLiteral("3.020000"));
+    check_precision(6, QStringLiteral("303.020000"));
 
     auto sheet_snapshot = window.document().snapshot();
     const auto sheet_entity = std::find_if(sheet_snapshot.entities().begin(), sheet_snapshot.entities().end(), [](const auto& item) {
@@ -1146,12 +1372,12 @@ void appraisal_area_display_precision_workflow() {
                 "sheet body text must remain near its 8pt physical size at export resolution");
         return text;
     };
-    export_precision(QStringLiteral("3.020000"), QStringLiteral("area-display-six.pdf"));
+    export_precision(QStringLiteral("303.020000"), QStringLiteral("area-display-six.pdf"));
     edit_precision(0, true);
-    const auto whole_text = export_precision(QStringLiteral("3"), QStringLiteral("area-display-zero.pdf"));
-    require(!whole_text.contains(QStringLiteral("3.02")) && !whole_text.contains(QStringLiteral("4 ft²")),
+    const auto whole_text = export_precision(QStringLiteral("303"), QStringLiteral("area-display-zero.pdf"));
+    require(!whole_text.contains(QStringLiteral("303.02")) && !whole_text.contains(QStringLiteral("304 ft²")),
             "whole-number PDF totals must sum exact room quantities before rounding once");
-    check_precision(0, QStringLiteral("3"));
+    check_precision(0, QStringLiteral("303"));
 
     sketch::DocumentSnapshot externally_changed = window.document().snapshot();
     edit_precision(1, true, false, [&] {
@@ -1183,6 +1409,8 @@ void appraisal_area_display_precision_workflow() {
                     return row.kind == sketch::ScheduleRowKind::appraisal && row.cells.contains("area");
                 }) && window.document().revision() == malformed.revision(),
             "invalid display precision must withhold inspector/report/schedule totals without repairing the source");
+    require(!area_label(first).contains(QStringLiteral("ft²")) && !area_label(second).contains(QStringLiteral("ft²")),
+            "malformed appraisal settings must not leave stale automatic square footage on the plan");
     window.document().apply(sketch::ApplyEntityChanges{malformed.revision(),
         {sketch::EntityChange::upsert(valid.entities().at("property-1"))}, {}, "Restore valid display fixture"});
     window.document().mark_read_only("Area display read-only fixture");
@@ -1282,6 +1510,10 @@ int main(int argc, char** argv) {
             appraisal_area_display_precision_workflow();
             return 0;
         }
+        if (app.arguments().contains(QStringLiteral("--plan-area-labels-only"))) {
+            appraisal_plan_area_labels_workflow();
+            return 0;
+        }
         if (app.arguments().contains(QStringLiteral("--auto-subtract-only"))) {
             auto_subtract_selected_area_workflow();
             auto_subtract_context_repair_workflow();
@@ -1301,6 +1533,7 @@ int main(int argc, char** argv) {
         contradictory_appraisal_ownership_withholds_inspector_and_schedule_totals();
         appraisal_declarations_reject_read_only_documents();
         appraisal_area_display_precision_workflow();
+        appraisal_plan_area_labels_workflow();
         malformed_appraisal_projection_prints_withheld_status();
         appraisal_summary_prints_from_the_automatic_report();
         std::cout << "appraisal_desktop_workflow_tests passed\n";

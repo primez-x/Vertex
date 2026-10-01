@@ -48,6 +48,15 @@ unrounded square metres; each generated area cell carries separate derived
 precision metadata. Invalid decimal settings withhold numeric totals and
 explain the problem. They are never silently clamped or repaired.
 
+Qualified Appraisal plan labels also use this report: a meaningful area name
+appears above its net value and unit, or a generic area shows the value alone.
+Changing a deduction refreshes both its own contribution and its parent's net
+label. Presentation visibility does not change the calculation. Void/site
+outlines and unqualified properties receive no automatic building-area value.
+Numbers are derived again after history navigation and reopen, never persisted
+as separate measurement truth. Vertex previews temporarily suppress these
+numbers rather than retain stale net values.
+
 ## Appraisal category report
 
 `ClassificationRule::appraisal_category` explicitly selects an

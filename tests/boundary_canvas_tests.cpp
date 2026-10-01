@@ -14,6 +14,11 @@
 #include <QKeyEvent>
 #include <QMouseEvent>
 #include <QPainter>
+#include <QPdfDocument>
+#include <QPdfSelection>
+#include <QPdfWriter>
+#include <QPageSize>
+#include <QTemporaryDir>
 #include <QPointingDevice>
 #include <QTabletEvent>
 #include <QTouchEvent>
@@ -706,6 +711,124 @@ void test_paper_label_style_and_hit_testing() {
     canvas.setLabels({label});
     require(!images_equal(output(50, 96), output(200, 96)),
         "legacy model-height labels must continue scaling with model-to-output scale");
+}
+
+void test_two_line_area_label_rendering_and_hit_testing() {
+    PlanCanvas canvas;
+    canvas.resize(800, 600);
+    canvas.setGridEnabled(false);
+    canvas.setOverviewMapEnabled(false);
+    CanvasLabel label{QStringLiteral("garage-area-label"), {0, 0}, QStringLiteral("Garage")};
+    label.paper_height_mm = 4.0;
+    label.color = QColor(220, 20, 20);
+    label.show_background = false;
+    label.plan_only = true;
+    const auto output = [&] {
+        QImage image(canvas.size(), QImage::Format_ARGB32_Premultiplied);
+        image.fill(Qt::white);
+        QPainter painter(&image);
+        canvas.renderSceneAt(painter, image.rect(), 100, {}, Qt::white, 8.0);
+        return image;
+    };
+    canvas.setLabels({label});
+    const auto single = output();
+    const auto single_bounds = red_text_bounds(single);
+    require(!single_bounds.isEmpty(), "single-line area label control must paint visible authored ink");
+    label.text = QStringLiteral("Garage\n25.00 ft²");
+    canvas.setLabels({label});
+    const auto multiline = output();
+    const auto capture_dir = qEnvironmentVariable("VERTEX_TEST_CAPTURE_DIR");
+    save_capture(capture_dir, QStringLiteral("canvas-area-single-line.png"), single);
+    save_capture(capture_dir, QStringLiteral("canvas-area-two-line.png"), multiline);
+    const auto bounds = red_text_bounds(multiline);
+    require(bounds.height() >= single_bounds.height() * 1.6,
+            "two-line area label must provide physical height for both complete lines");
+    const auto center = QRectF(multiline.rect()).center();
+    require(std::abs(bounds.center().y() - center.y()) <= 4,
+            "two-line area label must center its whole text block on its authored position");
+    const auto red_ink = [&](QRect region) {
+        int count = 0;
+        for (int y = region.top(); y <= region.bottom(); ++y) {
+            for (int x = region.left(); x <= region.right(); ++x) {
+                const auto color = multiline.pixelColor(x, y);
+                if (color.red() > 150 && color.green() < 100 && color.blue() < 100) ++count;
+            }
+        }
+        return count;
+    };
+    require(red_ink(QRect(bounds.left(), bounds.top(), bounds.width(), bounds.height() / 2)) > 100 &&
+                red_ink(QRect(bounds.left(), bounds.center().y() + 1, bounds.width(), bounds.bottom() - bounds.center().y())) > 100,
+            "area name and square-foot line must each retain substantial visible glyph ink");
+    QImage interactive(canvas.size(), QImage::Format_ARGB32_Premultiplied);
+    interactive.fill(Qt::white);
+    {
+        QPainter painter(&interactive);
+        canvas.renderScene(painter, interactive.rect(), false, Qt::white);
+    }
+    const auto screen_bounds = red_text_bounds(interactive);
+    require(!screen_bounds.isEmpty(), "interactive two-line area label must paint its text");
+    QPoint hit;
+    double farthest = 0;
+    const auto screen_center = QRectF(canvas.rect()).center();
+    // Use actual second-line glyph pixels as the click oracle, rather than
+    // copying the font's bounding-box calculation into the test.
+    for (int y = screen_bounds.center().y() + 1; y <= screen_bounds.bottom(); ++y) {
+        for (int x = screen_bounds.left(); x <= screen_bounds.right(); ++x) {
+            const auto color = interactive.pixelColor(x, y);
+            if (color.red() <= 150 || color.green() >= 100 || color.blue() >= 100) continue;
+            const auto distance = std::hypot(x - screen_center.x(), y - screen_center.y());
+            if (distance > farthest) { farthest = distance; hit = {x, y}; }
+        }
+    }
+    require(farthest > 9, "second-line hit fixture must lie outside the legacy anchor radius");
+    QString selected;
+    canvas.setEntityClicked([&](QString id) { selected = std::move(id); });
+    QMouseEvent press(QEvent::MouseButtonPress, hit, hit, Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(&canvas, &press);
+    QMouseEvent release(QEvent::MouseButtonRelease, hit, hit, Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+    QApplication::sendEvent(&canvas, &release);
+    require(selected == label.id, "visible second-line area text must be selectable across its painted extent");
+}
+
+void test_canvas_label_pdf_preserves_authored_text() {
+    PlanCanvas canvas;
+    canvas.setGridEnabled(false);
+    canvas.setOverviewMapEnabled(false);
+    CanvasLabel label{QStringLiteral("exported-area-label"), {},
+                      QStringLiteral("Floor (GLA) A-901\n25.00 ft²")};
+    label.paper_height_mm = 4.0;
+    label.show_background = false;
+    canvas.setLabels({label});
+    QTemporaryDir directory;
+    require(directory.isValid(), "canvas label PDF fixture needs a private temporary directory");
+    const auto path = directory.filePath(QStringLiteral("canvas-label-text.pdf"));
+    {
+        QPdfWriter writer(path);
+        writer.setPageSize(QPageSize(QPageSize::A5));
+        writer.setResolution(144);
+        QPainter painter(&writer);
+        require(painter.isActive(), "canvas label PDF writer must start");
+        painter.setFont(QApplication::font());
+        canvas.renderSceneAt(painter, QRectF(0, 0, writer.width(), writer.height()), 100, {}, Qt::white);
+    }
+    QPdfDocument pdf;
+    require(pdf.load(path) == QPdfDocument::Error::None && pdf.pageCount() == 1,
+            "actual canvas label PDF must reopen as one page");
+    const auto capture_dir = qEnvironmentVariable("VERTEX_TEST_CAPTURE_DIR");
+    if (!capture_dir.isEmpty()) {
+        require(QDir().mkpath(capture_dir) && pdf.render(0, QSize(840, 1188)).save(
+                    QDir(capture_dir).filePath(QStringLiteral("canvas-area-label-pdf.png"))),
+                "canvas label PDF capture must render and save");
+    }
+    const auto text = pdf.getAllText(0).text().simplified();
+    const auto codepoints = text.toUcs4();
+    require(std::none_of(codepoints.begin(), codepoints.end(), [](auto codepoint) {
+        return (codepoint >= 0xE000 && codepoint <= 0xF8FF) ||
+               (codepoint >= 0xF0000 && codepoint <= 0xFFFFD) ||
+               (codepoint >= 0x100000 && codepoint <= 0x10FFFD);
+    }), "canvas PDF must extract authored punctuation instead of font private-use substitutions");
+    require(text.contains(QStringLiteral("Floor (GLA) A-901")) && text.contains(QStringLiteral("25.00 ft²")),
+            "canvas PDF must retain both authored label lines with standard punctuation and square-foot units");
 }
 
 void test_analytic_arc_fit_bounds() {
@@ -2461,6 +2584,15 @@ int main(int argc, char** argv) {
         for (const auto character : QStringLiteral("2.00 m Draft boundary • place the next dimension")) {
             require(metrics.inFont(character), "capture font must contain each rendered character");
         }
+        if (application.arguments().contains(QStringLiteral("--label-pdf-only"))) {
+            test_canvas_label_pdf_preserves_authored_text();
+            return 0;
+        }
+        if (application.arguments().contains(QStringLiteral("--label-output-only"))) {
+            test_two_line_area_label_rendering_and_hit_testing();
+            test_canvas_label_pdf_preserves_authored_text();
+            return 0;
+        }
         test_dimension_ticks_are_paper_space();
         test_dimension_ticks_respect_angular_geometry();
         test_dark_canvas_semantic_strokes_and_overrides();
@@ -2492,6 +2624,8 @@ int main(int argc, char** argv) {
         test_explicit_output_excludes_interactive_state();
         test_output_stroke_width_is_paper_space();
         test_paper_label_style_and_hit_testing();
+        test_two_line_area_label_rendering_and_hit_testing();
+        test_canvas_label_pdf_preserves_authored_text();
         std::cout << "Boundary canvas tests passed\n";
         return 0;
     } catch (const std::exception& error) {

@@ -1,6 +1,6 @@
 # Vertex user testing checklist
 
-281 practical tasks, grouped by how you use the app. This replaces the earlier engineering-oriented checklist. The old 130-item list is preserved separately as engineering-requirements-checklist.md.
+284 practical tasks, grouped by how you use the app. This replaces the earlier engineering-oriented checklist. The old 130-item list is preserved separately as engineering-requirements-checklist.md.
 
 This is a user acceptance list for the intended app, not a claim that every listed action is implemented or working in the current preview. If you cannot find a control, or a feature is absent, mark **Blocked / missing** and describe it. Specialized sections can be skipped if you do not use them or lack the device or sample files.
 
@@ -1552,6 +1552,13 @@ Start with the workspace, draw a room, close it with the mouse, drag-select it, 
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
+- [ ] **U283 — Show calculated square feet directly on the plan**
+  - Steps: Qualify a 10 ft by 10 ft dwelling boundary in Appraisal. Double-click the boundary and enter First floor in **Area attributes > Name**. Draw an internal 5 ft by 5 ft garage, name it Garage, declare Garage use and subtract it from the dwelling. Hide the garage's layer, restore it, change workspace units, edit the garage boundary, Undo/Redo, save/reopen and export a plan PDF.
+  - Expected: The dwelling label shows its name with 75.00 ft² and the garage shows 25.00 ft². Hiding the garage leaves the dwelling at 75.00 ft². Metric display shows 6.97 m² and 2.32 m². Editing the garage updates its value and the dwelling's net value. The plan PDF contains both names and values on readable separate lines. Void/site outlines receive no standalone building-area value. Missing declarations withhold numbers while preserving meaningful names.
+  - Also try: Change **Tools > Area display** to 0, 1 and 6 decimals. Labels follow the selected precision. During a vertex drag, automatic numbers disappear until commit or cancel; they must not show stale net values. Inspect labels in small or densely furnished areas; record any omitted or overlapping label.
+  - Result: Not tested
+  - Notes / steps to reproduce: ____________________
+
 ## Architectural joins and named views
 
 - [ ] **U279 — Join and unjoin connected walls**
@@ -1565,7 +1572,7 @@ Start with the workspace, draw a room, close it with the mouse, drag-select it, 
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U281 — Create and edit named elevations and sections**
-  - Expected: Open **Named elevations and sections...**, create at least two elevations and one vertical section with distinct names, origins, directions, depth limits and model crop extents. Confirm model geometry crossing the left/right/bottom/top crop is clipped while geometry outside it is absent; doors/windows inside or crossing the crop retain their plan detail, and plan dimensions, labels and placed component symbols remain visible. Place the views on sheets, edit one frame/crop, and confirm its other sheet references stay linked. Undo/redo and save/reopen preserve every named view and the same cropped geometry on canvas, print and export.
+  - Expected: Open **Named elevations and sections...**, create at least two elevations and one vertical section with distinct names, origins, directions, depth limits and model crop extents. Confirm model geometry crossing the left/right/bottom/top crop is clipped while geometry outside it is absent; doors/windows inside or crossing the crop retain appropriate view detail. Plan-only area labels must not appear in elevation or section sheet viewports. Place the views on sheets, edit one frame/crop, and confirm its other sheet references stay linked. Undo/redo and save/reopen preserve every named view and the same cropped geometry on canvas, print and export.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 

@@ -99,7 +99,9 @@ LabelLayout label_layout(const CanvasLabel& label, QFont base_font,
         if (label.italic) base_font.setItalic(true);
     }
     const QFontMetricsF metrics(base_font, device);
-    auto bounds = metrics.boundingRect(label.text);
+    auto bounds = label.text.contains(QLatin1Char('\n'))
+        ? metrics.boundingRect(QRectF(0, 0, 1e6, 1e6), Qt::AlignLeft | Qt::AlignTop, label.text)
+        : metrics.boundingRect(label.text);
     bounds.moveCenter(QPointF(0.0, 0.0));
     bounds.adjust(-5.0, -3.0, 5.0, 3.0);
     return {base_font, bounds};
@@ -3444,7 +3446,15 @@ void PlanCanvas::drawLabels(QPainter& painter, const QRectF& viewport, double sc
         const auto label = presentedLabel(retained_label,output);
         if (!drawable_label(label)) continue;
         const auto paper = std::isfinite(label.paper_height_mm) && label.paper_height_mm > 0.0;
-        const auto layout = label_layout(label, paper ? font() : legacy_font,
+        auto base_font = paper ? font() : legacy_font;
+        if (output) {
+            // Inter's contextual punctuation alternates map to private-use
+            // cmap entries in Qt's PDF subsets. Keep copied plan text faithful
+            // to the authored characters, as in the sheet text renderer.
+            base_font.setFeature("calt", 0);
+            base_font.setFeature("case", 0);
+        }
+        const auto layout = label_layout(label, base_font,
                                           metrics_device, scale, dpi);
         painter.setFont(layout.font);
         const auto& bounds = layout.bounds;

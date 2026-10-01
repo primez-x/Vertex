@@ -10,6 +10,7 @@ and must survive save, reopen, print, and export.
 | Fine graph-paper grid | One coarse adaptive lattice | Adaptive eighth-metre subdivisions with a stronger fourth-line construction grid |
 | Architectural line hierarchy | Bright orange walls and similarly weighted objects | Navy primary boundaries and walls, slate openings/components, lighter dimensions, and semantic draw ordering |
 | Named rooms and areas | Names appeared only when users created separate text annotations | Room and meaningful area names derive from persisted `name` and `classification` fields and render as plain plan text |
+| Calculated square footage on plans | Derived names lacked automatic area values | Qualified Appraisal areas append their calculated net area and workspace unit, using the report's precision and deductions; generic names can show the value alone |
 | Labels remain readable around furniture | Labels stayed at a fixed center point | Derived labels evaluate alternate positions within their owning boundary to avoid placed components |
 | Floor title | No plan title derived from the project hierarchy | The active floor name is anchored above the largest visible measurement area |
 | Main, exterior, and accessory-area colors | Entity type alone selected a generic color | Living areas use blue, porch/patio/deck use green, garage/carport use orange, and excluded/service areas use distinct muted palettes |
@@ -28,3 +29,11 @@ commands used by the application. It creates a residential floor with six
 rooms, porch, patio, garage, wall-hosted door and window, ten placed components,
 four exterior dimensions, and the normal property/building/floor/layer model.
 It is a repeatable rendering check, not hand-painted test artwork.
+
+Appraisal numerical labels use the full semantic phase, independently of layer
+visibility. Linked voids and site outlines do not acquire standalone building
+area labels. Net labels avoid their own deducted footprints, including hidden
+deductions. Multiline text is measured as a complete text block on screen and
+in output. Existing placement may omit a label when no readable position fits.
+During a vertex preview the affected scene's automatic numbers are suppressed
+until commit or cancel; live net-area projection remains unfinished.

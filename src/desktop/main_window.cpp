@@ -1064,7 +1064,10 @@ QSizeF plan_area_label_footprint(const CanvasLabel& label,QFont base_font,const 
         label.text_height_metres * label.scale * layout_scale, 8.0, 96.0))));
     if (label.bold) font.setBold(true);
     if (label.italic) font.setItalic(true);
-    auto footprint = QFontMetricsF(font, device).boundingRect(label.text);
+    const QFontMetricsF metrics(font, device);
+    auto footprint = label.text.contains(QLatin1Char('\n'))
+        ? metrics.boundingRect(QRectF(0, 0, 1e6, 1e6), Qt::AlignLeft | Qt::AlignTop, label.text)
+        : metrics.boundingRect(label.text);
     footprint.adjust(-5.0, -3.0, 5.0, 3.0);
     return footprint.size()/layout_scale;
 }
@@ -2335,6 +2338,34 @@ std::set<std::string, std::less<>> visible_project_entities_with_phase(
     return visible;
 }
 
+std::map<std::string, QString, std::less<>> appraisal_plan_area_values(
+    const DocumentSnapshot& snapshot, bool metric_units) {
+    std::map<std::string, QString, std::less<>> values;
+    std::set<std::string, std::less<>> semantic_visibility;
+    try {
+        semantic_visibility = visible_project_entities_with_phase(snapshot, ProjectViewFilter{});
+    } catch (const std::exception&) {
+        return values;
+    }
+    for (const auto& [id, entity] : snapshot.entities()) {
+        if (entity.type != "property") continue;
+        const auto workflow = entity.properties.find("calculation_workflow");
+        if (workflow == entity.properties.end() || !workflow->is_string() ||
+            workflow->get_ref<const std::string&>() != "appraisal") continue;
+        try {
+            const auto report = build_appraisal_document_report(snapshot, id,
+                metric_units ? AreaUnit::square_metre : AreaUnit::square_foot, &semantic_visibility);
+            if (!report.qualified || !report.calculation) continue;
+            for (const auto& area : report.calculation->calculation.areas)
+                values.emplace(area.area_id, format_display_area(area.display));
+        } catch (const std::exception&) {
+            // A malformed or unqualified property retains its meaningful names
+            // without displaying a plausible automatic numerical total.
+        }
+    }
+    return values;
+}
+
 BuildingViewFrame architectural_view_frame(BuildingViewKind kind) {
     switch (kind) {
     case BuildingViewKind::plan:
@@ -2972,6 +3003,7 @@ class MainWindow::Impl {
         std::shared_ptr<const std::vector<CanvasEntity>> retained;
         std::shared_ptr<const std::vector<CanvasEntity>> eligible;
         std::shared_ptr<const std::vector<CanvasLabel>> labels;
+        std::shared_ptr<const std::set<std::string, std::less<>>> appraisal_area_ids;
         std::shared_ptr<const std::map<QString,QSizeF>> label_footprints;
         std::shared_ptr<const std::vector<Bounds2>> component_bounds;
         bool metric_units{};
@@ -12088,6 +12120,7 @@ public:
         const DocumentSnapshot& source,const std::vector<CanvasEntity>& retained,
         const std::vector<CanvasEntity>& eligible,
         const std::vector<CanvasLabel>& labels,bool metric_units,
+        const std::set<std::string, std::less<>>& appraisal_area_ids,
         const std::map<QString,QSizeF>& label_footprints,const std::vector<Bounds2>& component_bounds,
         const QString& entity_id,const QString& vertex_id,Vec2 position,
         const std::optional<ArchitecturalViewContext>& view_context) {
@@ -12226,12 +12259,18 @@ public:
                         ? project_plan_point(projected.position,view_context->frame) : projected.position;
                     proposed.text=std::move(projected.text);
                     result.labels.push_back(std::move(proposed));
-                } else if (can_recognize_boundary_entity_type(entity.type) && entity!=source.entities().at(entity.id)) {
+                } else if (can_recognize_boundary_entity_type(entity.type) &&
+                           (entity!=source.entities().at(entity.id) || appraisal_area_ids.contains(entity.id))) {
                     auto proposed=label;
-                    if (label.avoid_components) {
+                    // The candidate can change an unchanged parent's net area
+                    // through deductions. Suppress every captured automatic
+                    // value until the refreshed scene calculates the committed
+                    // geometry, including an empty override for value-only labels.
+                    if (appraisal_area_ids.contains(entity.id)) proposed.text=plan_area_label(entity);
+                    if (label.avoid_components && entity!=source.entities().at(entity.id)) {
                         const auto footprint=label_footprints.find(label.id);
                         if (footprint==label_footprints.end()) return std::nullopt;
-                        auto world_label = label;
+                        auto world_label = proposed;
                         if (view_context)
                             world_label.position = unproject_plan_point(world_label.position,view_context->frame);
                         proposed=place_plan_area_label(world_label,boundary_geometry(decode_identified_boundary_entity(entity)),
@@ -12253,6 +12292,7 @@ public:
         const auto retained=request.retained;
         const auto eligible=request.eligible;
         const auto labels=request.labels;
+        const auto appraisal_area_ids=request.appraisal_area_ids;
         const auto metric_units=request.metric_units;
         const auto label_footprints=request.label_footprints;
         const auto component_bounds=request.component_bounds;
@@ -12262,10 +12302,10 @@ public:
         const auto position=request.position;
         const auto view_context=request.view_context;
         m_vertex_preview_sequence=m_vertex_preview_queue.enqueue(
-            [source,retained,eligible,labels,metric_units,label_footprints,component_bounds,result,id,vertex,position,view_context]
+            [source,retained,eligible,labels,appraisal_area_ids,metric_units,label_footprints,component_bounds,result,id,vertex,position,view_context]
             (const RegenerationCancellationToken& cancellation) {
                 if (!cancellation.is_cancelled())
-                    *result=computeBoundaryVertexPreview(*source,*retained,*eligible,*labels,metric_units,
+                    *result=computeBoundaryVertexPreview(*source,*retained,*eligible,*labels,metric_units,*appraisal_area_ids,
                         *label_footprints,*component_bounds,id,vertex,position,view_context);
                 return RegenerationReceipt{source->revision(),{}};
             });
@@ -12387,6 +12427,8 @@ public:
             }
             m_vertex_preview_eligible=std::move(eligible);
             m_vertex_preview_labels=std::make_shared<std::vector<CanvasLabel>>(canvas->labels());
+            m_vertex_preview_appraisal_area_ids=
+                std::make_shared<std::set<std::string, std::less<>>>(m_plan_appraisal_area_ids);
             auto footprints=std::make_shared<std::map<QString,QSizeF>>();
             for (const auto& label : canvas->labels()) if (label.avoid_components)
                 footprints->emplace(label.id,plan_area_label_footprint(label,m_measurementCanvas->font(),m_measurementCanvas));
@@ -12403,7 +12445,7 @@ public:
         if (m_vertex_preview_view_context)
             position=unproject_plan_point(position,m_vertex_preview_view_context->frame);
         PendingVertexPreview request{canvas,serial,m_document,m_vertex_preview_source,m_vertex_preview_scene,m_vertex_preview_eligible,
-            m_vertex_preview_labels,m_vertex_preview_label_footprints,m_vertex_preview_component_bounds,
+            m_vertex_preview_labels,m_vertex_preview_appraisal_area_ids,m_vertex_preview_label_footprints,m_vertex_preview_component_bounds,
             m_metric_units,id,vertex,position,m_vertex_preview_view_context,
             std::make_shared<std::optional<VertexPreviewProjection>>()};
         if (m_running_vertex_preview) {
@@ -15893,7 +15935,8 @@ public:
                 };
                 std::vector<CanvasLabel> labels;
                 for (const auto& label : m_measurementCanvas->labels())
-                    if (includes(label.id)) labels.push_back(label);
+                    if (includes(label.id) && (!label.plan_only || view_kind == BuildingViewKind::plan))
+                        labels.push_back(label);
                 if (view_kind == BuildingViewKind::plan)
                     project_plan_model_labels(labels, snapshot, architectural_view_context(*view).frame);
                 for (auto& label : section_overlay_labels(snapshot, *view, m_metric_units)) labels.push_back(std::move(label));
@@ -22498,6 +22541,34 @@ private:
         m_area_attributes_group = new QGroupBox(QStringLiteral("Area attributes"), inspector_body);
         m_area_attributes_group->setObjectName(QStringLiteral("areaAttributes"));
         auto* area_attributes_layout = new QFormLayout(m_area_attributes_group);
+        m_area_name_edit = new QLineEdit(m_area_attributes_group);
+        m_area_name_edit->setObjectName(QStringLiteral("areaName"));
+        m_area_name_edit->setMaxLength(256);
+        area_attributes_layout->addRow(QStringLiteral("Name"), m_area_name_edit);
+        QObject::connect(m_area_name_edit, &QLineEdit::editingFinished, owner, [this] {
+            if (m_refreshing || !m_area_name_edit->isModified()) return;
+            m_area_name_edit->setModified(false);
+            if (!m_area_name_edit->isEnabled() || !m_area_name_context) return;
+            if (!modalContextUnchanged(*m_area_name_context)) {
+                refresh();
+                return;
+            }
+            const auto entity = selectedEntity();
+            if (!m_document->is_editable() || !entity || !is_closed_boundary_entity(entity->type)) {
+                refresh();
+                return;
+            }
+            auto updated = *entity;
+            const auto name = m_area_name_edit->text().trimmed();
+            if (name.isEmpty()) updated.properties.erase("name");
+            else updated.properties["name"] = name.toStdString();
+            if (updated == *entity) {
+                refresh();
+                return;
+            }
+            if (applyEntity(std::move(updated), "edit area name", m_area_name_context->revision))
+                refresh();
+        });
         m_area_attributes_edit = new QPlainTextEdit(m_area_attributes_group);
         m_area_attributes_edit->setObjectName(QStringLiteral("areaAttributesJson"));
         m_area_attributes_edit->setPlaceholderText(QStringLiteral("{\"key\": \"value\"}"));
@@ -22846,6 +22917,7 @@ private:
         m_vertex_preview_scene.reset();
         m_vertex_preview_eligible.reset();
         m_vertex_preview_labels.reset();
+        m_vertex_preview_appraisal_area_ids.reset();
         m_vertex_preview_label_footprints.reset();
         m_vertex_preview_component_bounds.reset();
         m_vertex_preview_view_context.reset();
@@ -22856,6 +22928,12 @@ private:
             (void)m_vertex_preview_queue.cancel(m_vertex_preview_sequence);
         const auto snapshot = m_document->snapshot();
         const auto organization = organize_project(snapshot);
+        const auto appraisal_area_values = appraisal_plan_area_values(snapshot, m_metric_units);
+        m_plan_appraisal_area_ids.clear();
+        for (const auto& [id, value] : appraisal_area_values) {
+            (void)value;
+            m_plan_appraisal_area_ids.insert(id);
+        }
         m_plan_geometry_error.clear();
         std::erase_if(m_plan_projection_cache, [&](const auto& entry) {
             return !snapshot.entities().contains(entry.first);
@@ -23291,7 +23369,11 @@ private:
                     }
                 }
 
-                const auto label_text = plan_area_label(geometry_entity);
+                auto label_text = plan_area_label(geometry_entity);
+                if (const auto value = appraisal_area_values.find(id); value != appraisal_area_values.end()) {
+                    if (!label_text.isEmpty()) label_text += QLatin1Char('\n');
+                    label_text += value->second;
+                }
                 if (!label_text.isEmpty()) {
                     CanvasLabel area_label{id_from(id), plan_label_anchor(segments),
                                            label_text, id_from(id) == m_selected_id};
@@ -23532,7 +23614,23 @@ private:
                 [&](const auto& candidate) { return candidate.id == label.id; });
             if (label_owner == all_geometry.end() || label_owner->segments.empty()) continue;
             const auto footprint=plan_area_label_footprint(label,m_measurementCanvas->font(),m_measurementCanvas);
-            label=place_plan_area_label(label,label_owner->segments,component_bounds,footprint);
+            auto obstacles = component_bounds;
+            if (appraisal_area_values.contains(label.id.toStdString())) {
+                // A net area label belongs in the parent's remaining footprint,
+                // including when a deducted garage/void is hidden by a layer.
+                const auto& area_owner = snapshot.entities().at(label.id.toStdString());
+                for (const auto& deduction_id : read_deduction_ids(area_owner.properties)) {
+                    const auto deduction = snapshot.entities().find(deduction_id);
+                    if (deduction == snapshot.entities().end()) continue;
+                    try {
+                        obstacles.push_back(boundary_bounds(read_boundary(deduction->second.properties)));
+                    } catch (const std::invalid_argument&) {
+                        // Only the qualified report supplies numerical labels;
+                        // malformed deductions are handled by that report.
+                    }
+                }
+            }
+            label=place_plan_area_label(label,label_owner->segments,obstacles,footprint);
         }
         std::erase_if(all_labels, [](const auto& label) {
             return label.avoid_components && label.text.isEmpty();
@@ -25479,6 +25577,19 @@ private:
         m_project_details_group->setEnabled(editable && project_entity);
         m_area_attributes_group->setVisible(area_entity);
         m_area_attributes_group->setEnabled(editable && area_entity);
+        m_area_name_context.reset();
+        {
+            QSignalBlocker blocker(m_area_name_edit);
+            m_area_name_edit->setEnabled(editable && area_entity);
+            if (editable && area_entity) {
+                m_area_name_edit->setText(QString::fromStdString(
+                    read_string(entity->properties, "name").value_or("")));
+                m_area_name_context = captureModalContext();
+            } else {
+                m_area_name_edit->clear();
+            }
+            m_area_name_edit->setModified(false);
+        }
         m_reference_group->setVisible(reference_asset);
         m_reference_group->setEnabled(editable && reference_asset);
         if (reference_asset) {
@@ -28240,7 +28351,9 @@ private:
     std::shared_ptr<const std::vector<CanvasEntity>> m_vertex_preview_scene;
     std::shared_ptr<const std::vector<CanvasEntity>> m_vertex_preview_eligible;
     std::set<std::string, std::less<>> m_plan_visible_model_ids;
+    std::set<std::string, std::less<>> m_plan_appraisal_area_ids;
     std::shared_ptr<const std::vector<CanvasLabel>> m_vertex_preview_labels;
+    std::shared_ptr<const std::set<std::string, std::less<>>> m_vertex_preview_appraisal_area_ids;
     std::shared_ptr<const std::map<QString,QSizeF>> m_vertex_preview_label_footprints;
     std::shared_ptr<const std::vector<Bounds2>> m_vertex_preview_component_bounds;
     std::optional<ArchitecturalViewContext> m_vertex_preview_view_context;
@@ -28410,6 +28523,8 @@ private:
     QString m_roof_thickness_original_text;
     std::optional<ModalContext> m_roof_edit_context;
     QGroupBox* m_area_attributes_group{};
+    QLineEdit* m_area_name_edit{};
+    std::optional<ModalContext> m_area_name_context;
     QPlainTextEdit* m_area_attributes_edit{};
     QPushButton* m_apply_area_attributes_button{};
     QLabel* m_calculation_status{};
