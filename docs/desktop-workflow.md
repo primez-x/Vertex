@@ -283,9 +283,16 @@ Copy, paste, cut, and delete combine all selected roots into one graph and
 deduplicate shared children (including an opening selected alongside its wall).
 Paste selects the fresh roots in their original order. Each mutating clipboard
 operation creates one document revision and one undo/redo step. Older single-root
-clipboard payloads remain supported. Multi-root cut/delete requires selecting
-annotation groups rather than their individual labels/symbols; ordinary single
-annotation-child deletion retains its existing behavior. Selection filtering and
+clipboard payloads remain supported. Selecting individual labels or symbols
+copies only those instances; multiple selected children of one annotation group
+share one clipboard root. Cut and delete update their owners while preserving
+unselected siblings and opaque metadata. Selecting the owner explicitly still
+operates on the complete group. A mixed selection of geometry and annotation
+instances commits atomically, including owned hosted geometry. Cut publishes
+its clipboard payload only after a successful document commit.
+Pasted annotations belong to the destination active layer, as pasted geometry
+does. Copies of children use optional new containers while leaving any source
+owner protection intact. Selection filtering and
 broader linked-object ownership policies remain open qualification work.
 
 Ctrl-select compatible architectural objects, placed symbols, labels, and reference

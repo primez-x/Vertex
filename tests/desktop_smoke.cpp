@@ -1198,6 +1198,214 @@ void test_multiple_selection_clipboard_workflow() {
             "ordinary replacement and empty selection retain single-selection behavior");
 }
 
+void test_annotation_instance_clipboard_workflow() {
+    const ScenarioTiming scenario_timing(__func__);
+    using namespace sketch;
+    desktop::MainWindow window;
+    const auto wall = window.createStraightWall({0, 0}, {4, 0});
+    const auto opening = window.createHostedOpening("door", "1 ft", "3 ft", "0 ft", "7 ft");
+    require(!wall.isEmpty() && !opening.isEmpty(), "annotation clipboard fixture needs a hosted wall graph");
+    AnnotationState state;
+    for (int i = 0; i < 2; ++i) {
+        auto label = instantiate_label(default_label_templates().front(), "subset-label-" + std::to_string(i));
+        label.content = "Preserve text " + std::to_string(i);
+        label.placement = {{double(i), 2}, 0.2, 1.1, "layer-1"};
+        state.labels.push_back(label);
+        SymbolInstance symbol;
+        symbol.id = "subset-symbol-" + std::to_string(i);
+        symbol.symbol_id = default_symbol_catalog().front().id;
+        symbol.definition = default_symbol_catalog().front();
+        symbol.placement = {{double(i), 4}, 0.3, 1.2, "layer-1"};
+        symbol.width_scale = 1.3;
+        symbol.depth_scale = 0.8;
+        symbol.flip_horizontal = true;
+        symbol.style.stroke_color = "#123456";
+        state.symbols.push_back(symbol);
+    }
+    state.overrides.push_back({"object", wall.toStdString(), {}, true});
+    state.overrides.push_back({"object", "subset-symbol-0", {}, true});
+    state.overrides.back().style.stroke_color = "#654321";
+    auto owner = make_annotation_entity("subset-owner", state);
+    owner.extensions = {{"note", "subset-symbol-0"}, {"opaque", {{"retained", true}}}};
+    owner.properties["state"]["opaque_note"] = "subset-symbol-0";
+    owner.properties["state"]["labels"][0]["opaque_note"] = "preserve authored label data";
+    AnnotationState other_state;
+    auto other_label = instantiate_label(default_label_templates().front(), "other-label");
+    other_label.content = "Other group";
+    other_state.labels.push_back(other_label);
+    auto other_owner = make_annotation_entity("other-owner", other_state);
+    other_owner.extensions = {{"retained", true}};
+    window.document().apply(ApplyEntityChanges{window.document().revision(),
+        {EntityChange::upsert(owner), EntityChange::upsert(other_owner)}, {}, "Annotation subset fixture"});
+    const auto original = window.document().snapshot();
+    const auto select_subset = [&] {
+        require(window.selectEntity("subset-symbol-0") && window.selectEntity("subset-label-0", true),
+                "select one symbol and label from the same owner");
+    };
+    require(window.selectEntity("subset-symbol-0") && window.copySelection(), "copy one symbol instance");
+    auto payload = nlohmann::json::parse(QGuiApplication::clipboard()->text().toStdString());
+    auto copied = Entity{payload.at("entities")[0].at("id").get<std::string>(),
+        std::string(kAnnotationEntityType), payload.at("entities")[0].at("properties"), false,
+        payload.at("entities")[0].at("extensions")};
+    const auto copied_state = decode_annotation_entity(copied);
+    require(payload.at("entities").size() == 1 && copied_state.symbols.size() == 1 &&
+            copied_state.labels.empty() && copied_state.overrides.size() == 1 &&
+            copied_state.overrides.front().target_id == "subset-symbol-0" &&
+            copied_state.symbols.front().id == "subset-symbol-0" && copied.extensions == owner.extensions &&
+            copied.properties.at("state").at("opaque_note") == "subset-symbol-0" &&
+            window.document().snapshot().entities() == original.entities(),
+            "copying one symbol must not copy its unselected siblings or unrelated presentation overrides");
+    select_subset();
+    require(window.copySelection(), "copy the selected symbol and label together");
+    payload = nlohmann::json::parse(QGuiApplication::clipboard()->text().toStdString());
+    require(payload.at("entities").size() == 1 && payload.at("root_ids").size() == 1,
+            "same-owner annotation slices must merge into one clipboard root");
+    desktop::MainWindow target;
+    require(target.pasteSelection(), "paste selected annotations into another project");
+    const auto pasted_owner = target.document().snapshot().entities().at(target.selectedEntityId().toStdString());
+    const auto pasted_state = decode_annotation_entity(pasted_owner);
+    require(pasted_state.symbols.size() == 1 && pasted_state.labels.size() == 1 && pasted_state.overrides.size() == 1 &&
+            pasted_state.overrides.front().target_id == pasted_state.symbols.front().id &&
+            pasted_state.symbols.front().id != state.symbols.front().id &&
+            pasted_state.labels.front().id != state.labels.front().id && pasted_owner.id != owner.id &&
+            pasted_owner.extensions == owner.extensions &&
+            pasted_owner.properties.at("state").at("opaque_note") == "subset-symbol-0" &&
+            pasted_owner.properties.at("state").at("labels")[0].at("opaque_note") == "preserve authored label data",
+            "paste must create fresh identities for exactly the selected instances without rewriting opaque metadata");
+    auto expected_paste = state;
+    expected_paste.labels.resize(1); expected_paste.symbols.resize(1);
+    expected_paste.overrides.erase(expected_paste.overrides.begin());
+    expected_paste.labels[0].id = pasted_state.labels[0].id;
+    expected_paste.symbols[0].id = pasted_state.symbols[0].id;
+    expected_paste.overrides[0].target_id = pasted_state.symbols[0].id;
+    require(encode_annotation_state(pasted_state, default_symbol_catalog()) ==
+            encode_annotation_state(expected_paste, default_symbol_catalog()),
+            "clipboard must preserve symbol artwork snapshot, placement, size, rotation, style, mirroring and label text");
+    const auto pasted = target.document().snapshot();
+    require(target.undoCommand() && !target.document().snapshot().entities().contains(pasted_owner.id) &&
+            target.redoCommand() && target.document().snapshot().entities() == pasted.entities(),
+            "subset paste must undo/redo in one step");
+    select_subset();
+    require(window.cutSelection() && window.document().revision() == original.revision() + 1 &&
+            window.selectedEntityIds().isEmpty(), "cut selected annotations in one atomic command");
+    auto expected = original.entities();
+    auto& retained = expected.at(owner.id).properties["state"];
+    retained["labels"].erase(retained["labels"].begin());
+    retained["symbols"].erase(retained["symbols"].begin());
+    retained["overrides"].erase(retained["overrides"].begin() + 1);
+    require(window.document().snapshot().entities() == expected && window.undoCommand() &&
+            window.document().snapshot().entities() == original.entities() && window.redoCommand() &&
+            window.document().snapshot().entities() == expected && window.undoCommand(),
+            "cut must preserve every unselected sibling, owner extension and override through history");
+    select_subset();
+    require(window.selectEntity("other-label", true), "select annotations across two owners");
+    const auto before_multi_owner = window.document().snapshot();
+    auto multi_owner_expected = expected;
+    multi_owner_expected.at(other_owner.id).properties["state"]["labels"] = nlohmann::json::array();
+    require(window.cutSelection() && window.document().revision() == before_multi_owner.revision() + 1 &&
+            window.document().snapshot().entities() == multi_owner_expected,
+            "cut across owners must update both atomically and preserve an emptied owner's metadata");
+    payload = nlohmann::json::parse(QGuiApplication::clipboard()->text().toStdString());
+    require(payload.at("entities").size() == 2 && payload.at("root_ids").size() == 2 &&
+            window.undoCommand() && window.document().snapshot().entities() == original.entities(),
+            "cross-owner clipboard roots and one-step undo must retain the exact selected subsets");
+    select_subset();
+    require(window.selectEntity(wall, true), "mix annotation instances with a wall");
+    const auto before_delete = window.document().snapshot();
+    require(window.deleteSelection() && window.document().revision() == before_delete.revision() + 1,
+            "mixed annotation and geometry delete must commit atomically");
+    expected.erase(wall.toStdString()); expected.erase(opening.toStdString());
+    require(window.document().snapshot().entities() == expected && window.undoCommand() &&
+            window.document().snapshot().entities() == original.entities(),
+            "mixed delete removes the hosted graph but retains unselected annotations exactly");
+    select_subset();
+    require(window.selectEntity("property-1", true), "add an unsupported required entity");
+    const auto rejected = window.document().snapshot();
+    const auto clipboard_before = QGuiApplication::clipboard()->text();
+    require(!window.cutSelection() && !window.deleteSelection() &&
+            window.document().revision() == rejected.revision() &&
+            window.document().snapshot().entities() == rejected.entities() &&
+            QGuiApplication::clipboard()->text() == clipboard_before,
+            "invalid mixed selection must preserve all annotations and the clipboard");
+    require(window.selectEntity(QString::fromStdString(owner.id)) &&
+            window.selectEntity("subset-symbol-0", true) && window.copySelection(), "explicit whole-group and child copy");
+    payload = nlohmann::json::parse(QGuiApplication::clipboard()->text().toStdString());
+    require(payload.at("entities").size() == 1 && payload.at("root_ids").size() == 1 &&
+            payload.at("entities")[0].at("properties") == owner.properties,
+            "explicit owner selection must retain whole-group clipboard behavior");
+    require(window.deleteSelection() && !window.document().snapshot().entities().contains(owner.id) &&
+            window.undoCommand() && window.document().snapshot().entities() == original.entities(),
+            "explicit whole-owner selection dominates child selection during deletion without a conflicting owner update");
+    QTemporaryDir directory;
+    const auto path = directory.filePath("annotation-subset.bldproj");
+    require(target.saveProjectAs(path) && target.openProject(path) &&
+            target.document().snapshot().entities() == pasted.entities(), "subset paste must survive save/reopen exactly");
+    {
+        desktop::MainWindow layer_source;
+        desktop::MainWindow layer_target;
+        const auto custom_layer = layer_source.createLayer("floor-1", "Custom source components");
+        require(!custom_layer.isEmpty() && layer_source.setActiveLayer(custom_layer), "custom source drawing layer");
+        const auto symbol_id = layer_source.createAnnotationSymbol("svg-v2-04_living-sectional-left", {2, 3});
+        require(!symbol_id.isEmpty() && layer_source.selectEntity(symbol_id) && layer_source.copySelection() &&
+                layer_target.pasteSelection(), "copy actual pinned SVG component from a custom layer into another project");
+        const auto destination_owner = layer_target.document().snapshot().entities().at(
+            layer_target.selectedEntityId().toStdString());
+        const auto destination_symbol = decode_annotation_entity(destination_owner).symbols.front();
+        auto* destination_canvas = dynamic_cast<desktop::PlanCanvas*>(layer_target.findChild<QWidget*>(
+            QStringLiteral("measurementPlanCanvas")));
+        require(destination_symbol.placement.layer_id == layer_target.activeLayerId().toStdString() &&
+                !destination_symbol.pinned_svg.empty() && destination_canvas &&
+                std::any_of(destination_canvas->entities().begin(), destination_canvas->entities().end(),
+                    [&](const auto& item) { return item.id == QString::fromStdString(destination_symbol.id); }),
+                "pasted symbols must belong to a valid destination layer and appear on its actual canvas");
+    }
+    {
+        desktop::MainWindow protected_source;
+        desktop::MainWindow protected_target;
+        auto protected_owner = owner;
+        protected_owner.required = true;
+        protected_source.document().apply(ApplyEntityChanges{protected_source.document().revision(),
+            {EntityChange::upsert(protected_owner)}, {}, "Protected annotation owner"});
+        const auto protected_original = protected_source.document().snapshot();
+        require(protected_source.selectEntity("subset-symbol-0") && protected_source.copySelection() &&
+                protected_target.pasteSelection(),
+                "a copied child of a required owner must have a pasteable optional clipboard container");
+        const auto protected_copy = protected_target.document().snapshot().entities().at(
+            protected_target.selectedEntityId().toStdString());
+        require(!protected_copy.required && decode_annotation_entity(protected_copy).symbols.size() == 1 &&
+                protected_source.document().snapshot().entities() == protected_original.entities(),
+                "child copy must not transfer source container protection or mutate the protected source");
+        require(protected_source.selectEntity("subset-label-0", true) && protected_source.cutSelection(),
+                "cut selected children while retaining their protected owner");
+        auto protected_expected = protected_original.entities();
+        protected_expected.at(owner.id).properties["state"] = retained;
+        require(protected_source.document().snapshot().entities() == protected_expected &&
+                protected_source.document().snapshot().entities().at(owner.id).required &&
+                protected_target.pasteSelection(),
+                "child cut must preserve required source metadata and publish a pasteable subset");
+        const auto protected_after_cut = protected_source.document().snapshot();
+        const auto protected_clipboard = QGuiApplication::clipboard()->text();
+        require(protected_source.selectEntity(QString::fromStdString(owner.id)) &&
+                !protected_source.cutSelection() && !protected_source.deleteSelection() &&
+                protected_source.document().revision() == protected_after_cut.revision() &&
+                protected_source.document().snapshot().entities() == protected_after_cut.entities() &&
+                QGuiApplication::clipboard()->text() == protected_clipboard && protected_source.undoCommand() &&
+                protected_source.document().snapshot().entities() == protected_original.entities(),
+                "whole required owner removal remains refused; one undo restores its cut children exactly");
+    }
+    select_subset();
+    window.document().mark_read_only("Annotation clipboard read-only fixture");
+    const auto read_only = window.document().snapshot();
+    require(window.copySelection() && window.document().snapshot().entities() == read_only.entities(),
+            "copying a selected annotation subset must remain available in read-only projects");
+    const auto read_only_clipboard = QGuiApplication::clipboard()->text();
+    require(!window.cutSelection() && !window.deleteSelection() &&
+            window.document().revision() == read_only.revision() &&
+            window.document().snapshot().entities() == read_only.entities() &&
+            QGuiApplication::clipboard()->text() == read_only_clipboard,
+            "read-only cut/delete must preserve document and clipboard");
+}
+
 void test_selection_clipboard_workflow() {
     const ScenarioTiming scenario_timing(__func__);
     using namespace sketch;
@@ -7417,6 +7625,14 @@ int main(int argc, char** argv) {
     const auto families = QFontDatabase::applicationFontFamilies(font_id);
     require(!families.isEmpty(), "bundled Inter font must expose a family");
     application.setFont(QFont(families.front(), 10));
+    if (argc == 2 && std::string_view(argv[1]) == "--annotation-clipboard-only") {
+        test_annotation_instance_clipboard_workflow();
+        test_multiple_selection_clipboard_workflow();
+        test_selection_clipboard_workflow();
+        test_material_clipboard_transfer();
+        test_delete_selection_workflow();
+        return 0;
+    }
     if (argc == 2 && std::string_view(argv[1]) == "--named-revisions-only") {
         test_named_revisions();
         std::cout << "Named revision comparison tests passed\n";
@@ -7521,6 +7737,7 @@ int main(int argc, char** argv) {
         return 0;
     }
     if (argc == 2 && std::string_view(argv[1]) == "--selection-clipboard-only") {
+        test_annotation_instance_clipboard_workflow();
         test_multiple_selection_clipboard_workflow();
         test_selection_clipboard_workflow();
         test_material_clipboard_transfer();
@@ -7543,6 +7760,7 @@ int main(int argc, char** argv) {
     test_room_boundary_from_existing_geometry();
     test_room_volume_authoring_workflow();
     test_multiple_selection_clipboard_workflow();
+    test_annotation_instance_clipboard_workflow();
     test_selection_clipboard_workflow();
     test_wall_transform_workflow(field_ui_capture_directory);
     test_wall_group_canvas_move_workflow();

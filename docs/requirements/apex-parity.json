@@ -1151,7 +1151,7 @@
       "requirement": "Support selection and clipboard operations for geometry, areas, annotations, and architectural objects.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "verified",
+      "implementation_status": "in_progress",
       "acceptance": "Copy, cut, paste, multi-select, and selection filtering preserve semantic links and produce undoable commands.",
       "package": 4,
       "blocker": null,
@@ -1163,9 +1163,10 @@
         "src/desktop/plan_canvas.cpp",
         "tests/desktop_smoke.cpp",
         "scripts/generate_workflow_acceptance_evidence.py",
-        "tests/test_workflow_acceptance_evidence.py"
+        "tests/test_workflow_acceptance_evidence.py",
+        "docs/verification/annotation-instance-clipboard-2026-10-01.md"
       ],
-      "implementation_note": "Bounded local JSON clipboard supports copy, paste, cut, and guarded delete for supported geometry graphs. Ctrl-click toggles ordered selection roots, both plan canvases highlight the selection, and combined clipboard/delete commands deduplicate hosted dependencies in one revision and undo/redo step; paste preserves root order with fresh identities and remapped links. Canvas movement now combines compatible architectural objects, individual annotation instances, and reference images in one admitted command, retaining owner metadata and wall measurements; partial constrained-group moves reject without publishing any member. Source or selection replacement cancels captured mouse gestures. Native movement evidence covers history, save/reopen, conflicts, and stale release; the development-host reference fixture tests downstream editing after asserting isolated import rejection, not decoder acceptance. Individual annotation children retain single-selection delete behavior; multi-root cut/delete requires annotation groups. Mixed measurement-boundary movement, selection filtering, broader linked-object policies, and production qualification remain open. Current Debug/Release acceptance evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
+      "implementation_note": "Bounded local JSON clipboard supports copy, paste, cut, and guarded delete for supported geometry graphs. Ctrl-click toggles ordered selection roots, both plan canvases highlight the selection, and combined clipboard/delete commands deduplicate hosted dependencies in one revision and undo/redo step; paste preserves root order with fresh identities and remapped links. Canvas movement combines compatible architectural objects, individual annotation instances, and reference images in one admitted command, retaining owner metadata and wall measurements; partial constrained-group moves reject without publishing any member. Source or selection replacement cancels captured mouse gestures. Native movement evidence covers history, save/reopen, conflicts, and stale release; the development-host reference fixture tests downstream editing after asserting isolated import rejection, not decoder acceptance. Copy now slices selected labels/symbols, merges same-owner subsets, preserves raw artwork/transform/text/opaque metadata and carries only their targeted overrides. Individual and mixed annotation cut/delete update owners atomically while preserving unselected siblings; explicit whole-owner selection dominates child selection. Cut publishes its prepared clipboard only after document commit. Native clipboard coverage includes multiple owners, hosted geometry, fresh identities, history, save/reopen, invalid and read-only refusal. Selection filtering, broader linked-object policies and production qualification remain open. Current historical Debug/Release acceptance evidence remains hash-bound to its named sources and fixtures; this scoped checkpoint does not certify full parity."
     },
     {
       "id": "APX-EDIT-002",

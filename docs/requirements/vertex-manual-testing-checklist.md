@@ -389,12 +389,16 @@ Start with the workspace, draw a room, close it with the mouse, drag-select it, 
   - Notes / issues / screenshots: ____________________
 
 - [ ] **U066 — Copy and paste a room or object**
+  - Steps: Place two symbols and two text labels. Select one symbol and copy/paste it. Then Ctrl-select one symbol and one label and copy/paste them into another project.
   - Expected: A separate editable copy appears with the expected geometry and properties.
+  - Also check: Only the selected symbols and labels are copied. Their sizes, rotation, mirroring, artwork and text are preserved; the unselected items remain untouched. Copy a symbol from a custom layer into another project: it should appear on that project's active layer. Undo/redo and save/reopen preserve the copies.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U067 — Cut and paste an object**
+  - Steps: Ctrl-select one symbol and one label among several placed items, cut them, and paste into another project. Repeat with a selected wall and its hosted door alongside the annotations.
   - Expected: The original is removed and the pasted object is retained correctly.
+  - Also check: Unselected symbols and labels remain. One Undo restores the complete cut selection. A rejected selection or read-only project changes neither the project nor clipboard.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
@@ -420,7 +424,9 @@ Start with the workspace, draw a room, close it with the mouse, drag-select it, 
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U072 — Delete a selected object**
+  - Steps: Select one symbol and one label among other items and press Delete. Repeat with a wall and its hosted opening selected alongside those annotations.
   - Expected: Only the intended object disappears; dependent objects are handled clearly.
+  - Also check: Unselected annotations remain; deleting the wall removes its hosted opening. One Undo restores the entire selection, and Redo removes it again.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 

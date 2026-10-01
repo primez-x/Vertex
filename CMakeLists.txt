@@ -800,6 +800,7 @@ if(SKETCH_BUILD_DESKTOP)
     endif()
     add_test(NAME desktop_workflow COMMAND desktop_smoke)
     add_test(NAME drawing_set_output COMMAND desktop_smoke --drawing-set-output-only)
+    add_test(NAME annotation_clipboard_desktop COMMAND desktop_smoke --annotation-clipboard-only)
     add_test(NAME measurement_group_move COMMAND desktop_smoke --measurement-group-move-only)
     add_test(NAME project_resource_desktop COMMAND project_resource_desktop_tests)
     add_test(NAME appraisal_desktop_workflow COMMAND appraisal_desktop_workflow_tests)
@@ -844,7 +845,7 @@ if(SKETCH_BUILD_DESKTOP)
     set_tests_properties(curved_opening_resize_desktop PROPERTIES
       ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_PLUGIN_PATH=${SKETCH_QT_PREFIX}/plugins"
       ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${SKETCH_QT_BIN};PATH=path_list_prepend:${CMAKE_SOURCE_DIR}/.deps/native/x64-windows/$<IF:$<CONFIG:Debug>,debug/bin,bin>")
-    set_tests_properties(associative_section_desktop multipage_user_workflow sheet_layout_dialog reference_import desktop_workflow drawing_set_output measurement_group_move coordinated_view_output desktop_performance native_geometry_preparation native_model_preparation performance_workload project_resource_desktop appraisal_desktop_workflow symbol_svg_desktop batch_boundary_clone_desktop wall_opening_palette desktop_workspace_recovery building_object_dialog building_receipt_workflow modal_authoring constraint_dialog visibility_workflow boundary_canvas boundary_input_dialog boundary_workflow assistance_workflow dxf_desktop_workflow ifc_desktop_workflow PROPERTIES
+    set_tests_properties(associative_section_desktop multipage_user_workflow sheet_layout_dialog reference_import desktop_workflow drawing_set_output annotation_clipboard_desktop measurement_group_move coordinated_view_output desktop_performance native_geometry_preparation native_model_preparation performance_workload project_resource_desktop appraisal_desktop_workflow symbol_svg_desktop batch_boundary_clone_desktop wall_opening_palette desktop_workspace_recovery building_object_dialog building_receipt_workflow modal_authoring constraint_dialog visibility_workflow boundary_canvas boundary_input_dialog boundary_workflow assistance_workflow dxf_desktop_workflow ifc_desktop_workflow PROPERTIES
       ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_PLUGIN_PATH=${SKETCH_QT_PREFIX}/plugins"
       ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${SKETCH_QT_BIN};PATH=path_list_prepend:${CMAKE_SOURCE_DIR}/.deps/native/x64-windows/$<IF:$<CONFIG:Debug>,debug/bin,bin>")
   endif()
