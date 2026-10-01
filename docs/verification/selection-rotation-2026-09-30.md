@@ -116,3 +116,39 @@ Development executable SHA-256:
 `515570e5d0b30124c02ad836c6bed917df545efd032e749f9839d9fa8925ad92`.
 Use `scripts/run.ps1 -Configuration Release`. The installed checkpoint remains
 separate; this is controlled offscreen verification, not user-observed resolution.
+
+## Runnable rotation delivery
+
+The current Release executable was rebuilt from source checkpoint `f7da00b`.
+The requested rotation implementation was already present; this delivery prepares
+a fresh installed checkpoint rather than making another canvas patch.
+
+- `symbol_transform_desktop` passed in 14.78 seconds and `axis_canvas_controls`
+  in 0.16 seconds (2/2, 14.95 seconds total).
+- The native gesture checks cover retained frames and pins, consecutive drags,
+  nearby 45/90/180-degree snaps, Shift fine rotation, rendered degrees, restoration
+  of a nonzero initial boundary angle, undo/redo, and save/reopen.
+- Root inspected `artifacts/rotation-delivery-20260930/rotation-live-90.png`:
+  the retained pin is on the rotated side and the live callout reads 90.0 degrees.
+- A bounded independent source review found no remaining reset, persistence or
+  shortcut conflict in these paths. Angles are measured against the view axes;
+  a tilted object's starting angle need not be zero.
+- Runtime import inspection found 113 declared binaries and no unresolved imports.
+  The staged bundle is `artifacts/packages/vertex-offline-20260930-selection-rotation`:
+  3,766 declared files, 2,645 runtime files and 1,114 source-kit files. The source
+  allowlist covered all 1,114 required tracked paths at packaging time.
+- Packaged executable SHA-256:
+  `ebe57ce656770b32b7e04550876cf98be7b17da3a3c29c1654c22a1c2bf846bb`.
+- Offline bundle installation completed and verified all 2,645 runtime files.
+  Launch `artifacts/installed/vertex-20260930-selection-rotation/bin/vertex.exe`
+  directly; it carries its own DLL and plugin paths. Its executable hash matches
+  the packaged hash above.
+- The installed-runtime smoke passed all six source/reopen runs across Measurement
+  and residential/light-commercial Architectural workspaces, with developer
+  search paths removed. Evidence:
+  `artifacts/rotation-delivery-20260930/installed/run-20260930-220738-ad29a767/report.json`.
+  This is development-host execution, not a clean-machine or network-denial test.
+
+Native gesture verification is controlled desktop evidence, not confirmation of
+the user's exact gesture in their previously launched executable. The full
+production and compatibility acceptance gates remain open.
