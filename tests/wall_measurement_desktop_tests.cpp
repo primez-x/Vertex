@@ -1313,6 +1313,351 @@ void changed_same_count_sources_review_manual_references(bool metric, bool curve
         "pasted fresh-topology source proof agrees with its remapped physical walls");
 }
 
+void existing_appraisal_area_transforms_its_dependencies(bool metric, bool sourced, int mode, bool commercial) {
+    sketch::desktop::MainWindow window;
+    window.setAttribute(Qt::WA_DontShowOnScreen);
+    window.resize(1200,800);
+    window.show();
+    QApplication::processEvents();
+    window.setMetricUnits(metric);
+    choose_appraisal_workflow(window);
+    const auto declarations=[&](bool deduction) {
+        if (!commercial) return appraisal_declarations(deduction ? "garage" : "dwelling");
+        return QStringLiteral(R"({"appraisal_policy":{"policy_kind":"light_commercial_declared","version":1,"property_kind":"light_commercial","measurement_basis":"exterior"},"grade":"above","appraisal_facts":{"finish":"finished","access":"direct_interior","ceiling_eligibility":"standard","area_use":"%1","boundary_role":"measured_area"}})")
+            .arg(deduction ? "commercial_service" : "commercial_occupiable");
+    };
+    const auto unrelated=window.createStraightWall({10,-3},{14,-3});
+    require(!unrelated.isEmpty(),"group transform has an unrelated physical wall");
+    QString area;
+    if (sourced) {
+        const auto walls=rectangle_walls(window);
+        require(window.selectEntity(walls.front()),"select host for in-place transform fixture");
+        require(!window.createHostedOpening("window","1 m","0.8 m","0.8 m","1.2 m").isEmpty(),
+            "in-place transform fixture has a hosted window");
+        require(window.selectEntity(walls.at(1)) && !window.createHostedOpening("door","0.6 m","0.8 m","0 m","2.1 m").isEmpty(),
+            "in-place transform fixture has a hosted door with a retained swing");
+        select_walls(window,walls);
+        area=window.createMeasurementBoundaryFromSelectedWalls();
+    } else area=window.createBoundary({{{0,0},{4,0},0},{{4,0},{4,3},0},
+        {{4,3},{0,3},0},{{0,3},{0,0},0}},"finished");
+    require(!area.isEmpty() && window.selectEntity(area) && window.editSelectedAppraisalFacts(declarations(false)),
+        "in-place transform begins with a declared parent");
+    if (commercial) {
+        const auto layer=window.createLayer("floor-1","Service measurements");
+        require(!layer.isEmpty() && window.setActiveLayer(layer),"group transform accepts a deduction on another same-floor layer");
+    }
+    const auto garage=window.createBoundary({{{.5,.5},{1.5,.5},0},{{1.5,.5},{1.5,1.5},0},
+        {{1.5,1.5},{.5,1.5},0},{{.5,1.5},{.5,.5},0}},"garage");
+    require(!garage.isEmpty() && window.selectEntity(garage) && window.editSelectedAppraisalFacts(declarations(true)) &&
+        window.applySelectedAutoSubtract(area),"in-place transform includes a retained deduction");
+    set_area_name(window,area,"Existing appraisal transform");
+    set_area_appearance(window,area);
+    require(!window.createAnnotationLabel("bedroom","Unrelated note",{10,5}).isEmpty() &&
+        !window.createAnnotationSymbol("svg-v2-04_living-sectional-left",{10,6}).isEmpty(),
+        "in-place transform shares its annotation provider with unrelated text and furniture");
+    bool label_offset=false;
+    for (auto provider : annotation_entities(window.document().snapshot())) {
+        provider.properties.at("state")["version"]=std::max(4,provider.properties.at("state").value("version",1));
+        auto& records=provider.properties.at("state").at("overrides");
+        for (auto& record : records) if (record.at("target_id")==area.toStdString()) {
+            record["plan_label_offset_m"]={.2,.3};
+            auto unrelated_style=record;
+            unrelated_style.erase("plan_label_offset_m");
+            unrelated_style["target_kind"]="object";
+            unrelated_style["target_id"]=unrelated.toStdString();
+            records.push_back(std::move(unrelated_style));
+            sketch::validate_annotation_entity(provider);
+            window.document().apply(sketch::ApplyEntityChanges{window.document().revision(),
+                {sketch::EntityChange::upsert(provider)},{},"Mixed annotation provider fixture"});
+            label_offset=true;
+            break;
+        }
+        if (label_offset) break;
+    }
+    require(label_offset,"group transform fixture contains an editable area-label offset and unrelated override");
+    if (mode!=1) {
+        const auto model=sketch::decode_identified_boundary_entity(window.document().snapshot().entities().at(area.toStdString()));
+        const auto horizontal=std::find_if(model.segments.begin(),model.segments.end(),[](const auto& edge) {
+            return edge.segment.sweep_radians==0.0 && std::abs(edge.segment.end.y-edge.segment.start.y)<1e-10;
+        });
+        require(horizontal!=model.segments.end(),"group transform fixture has a genuinely horizontal boundary edge");
+        sketch::PersistentConstraint axis;
+        axis.id="appraisal-transform-axis";
+        axis.relation=sketch::ConstraintRelationKind::horizontal;
+        axis.bindings={{area.toStdString(),sketch::WallEndpointRole::start,horizontal->segment_id,horizontal->start_vertex_id},
+            {area.toStdString(),sketch::WallEndpointRole::end,horizontal->segment_id,horizontal->end_vertex_id}};
+        sketch::PersistentConstraint anchor;
+        anchor.id="appraisal-transform-anchor";
+        anchor.relation=sketch::ConstraintRelationKind::fixed_anchor;
+        anchor.bindings={axis.bindings.front()};
+        anchor.anchor=horizontal->segment.start;
+        window.document().apply(sketch::ApplyEntityChanges{window.document().revision(),
+            {sketch::EntityChange::upsert(sketch::encode_constraint_entity(axis)),
+             sketch::EntityChange::upsert(sketch::encode_constraint_entity(anchor))},{},"Internal appraisal axis and anchor fixture"});
+    }
+    const auto before=window.document().snapshot();
+    std::string property;
+    for (const auto& [id,entity] : before.entities()) if (entity.type=="property") property=id;
+    const auto initial=sketch::build_appraisal_document_report(before,property);
+    require(initial.qualified && initial.calculation,"in-place transform fixture has qualified totals");
+    require(window.selectEntity(area),"select only parent for group transform");
+    const auto radians=mode==0 ? std::numbers::pi/2 : mode==1 ? std::numbers::pi/4 : 0.0;
+    const sketch::PlanarTransform expected{{2,1.5},radians,mode==2,mode==3,{}};
+    if (mode==0) require(!window.transformSelectedBoundary("45",false,false,"0 m","0 m",false) &&
+        window.document().revision()==before.revision() && window.document().snapshot().entities()==before.entities(),
+        "arbitrary rotation of an explicit axis lock refuses without silently dropping locks or changing geometry");
+    if (!window.transformSelectedBoundary(mode==0 ? "90" : mode==1 ? "45" : "0",mode==2,mode==3,"0 m","0 m",false))
+        throw std::runtime_error("Existing appraisal group transform refused: "+window.lastError().toStdString());
+    const auto after=window.document().snapshot();
+    const auto result=sketch::build_appraisal_document_report(after,property);
+    require(after.entities().size()==before.entities().size() && after.revision()==before.revision()+1,
+        "in-place transform retains identities and commits one revision");
+    require(after.entities().at(garage.toStdString())!=before.entities().at(garage.toStdString()),
+        "retained deduction follows its parent rather than staying behind");
+    require(result.qualified && result.calculation && result.calculation->calculation.areas.size()==2,
+        "transformed parent and deduction retain qualified calculation traces");
+    require(after.entities().at(unrelated.toStdString())==before.entities().at(unrelated.toStdString()),
+        "in-place group transform leaves unrelated geometry untouched");
+    if (mode!=1) {
+        const auto axis=sketch::decode_constraint_entity(after.entities().at("appraisal-transform-axis"));
+        const auto anchor=sketch::decode_constraint_entity(after.entities().at("appraisal-transform-anchor"));
+        const auto prior=sketch::decode_constraint_entity(before.entities().at("appraisal-transform-anchor"));
+        const auto wanted=sketch::transform_point(*prior.constraint->anchor,expected);
+        require(axis.supported() && axis.constraint->relation==(mode==0 ? sketch::ConstraintRelationKind::vertical : sketch::ConstraintRelationKind::horizontal) &&
+            anchor.supported() && anchor.constraint->anchor && anchor.constraint->anchor->x==wanted.x && anchor.constraint->anchor->y==wanted.y &&
+            anchor.constraint->bindings==prior.constraint->bindings,
+            "internal anchors follow the group and quarter turns swap axis locks while retaining their endpoint identities");
+    }
+    for (const auto& provider : annotation_entities(before)) {
+        auto wanted=provider;
+        for (auto& record : wanted.properties.at("state").at("overrides"))
+            if (record.at("target_id")==area.toStdString() && record.contains("plan_label_offset_m")) {
+                const sketch::PlanarTransform linear{{},radians,mode==2,mode==3,{}};
+                const auto shifted=sketch::transform_point({.2,.3},linear);
+                record["plan_label_offset_m"]={shifted.x,shifted.y};
+            }
+        require(after.entities().at(provider.id)==wanted,
+            "in-place transform patches only owned label offsets and preserves the full provider including unrelated text, furniture and overrides");
+    }
+    for (const auto& id : {area.toStdString(),garage.toStdString()}) {
+        const auto original=sketch::decode_identified_boundary_entity(before.entities().at(id));
+        const auto moved=sketch::decode_identified_boundary_entity(after.entities().at(id));
+        require(original.segments.size()==moved.segments.size(),"rigid group transform preserves topology size");
+        for (std::size_t i=0;i<original.segments.size();++i) {
+            const auto& edge=original.segments[i];
+            const auto& target=moved.segments[i];
+            const auto wanted=sketch::transform_segment(edge.segment,expected);
+            require(edge.segment_id==target.segment_id && edge.start_vertex_id==target.start_vertex_id &&
+                edge.end_vertex_id==target.end_vertex_id && std::hypot(wanted.start.x-target.segment.start.x,wanted.start.y-target.segment.start.y)<1e-9 &&
+                std::hypot(wanted.end.x-target.segment.end.x,wanted.end.y-target.segment.end.y)<1e-9 &&
+                std::abs(wanted.sweep_radians-target.segment.sweep_radians)<1e-12,
+                "every retained edge uses the common parent pivot and preserves stable corner and edge identities");
+        }
+        for (const auto* key : {"name","appraisal_facts","deduction_ids","factor"})
+            if (before.entities().at(id).properties.contains(key))
+                require(after.entities().at(id).properties.at(key)==before.entities().at(id).properties.at(key),
+                    "rigid transform preserves appraisal metadata, factor and deduction references");
+    }
+    for (const auto& [category, subtotal] : initial.calculation->property.by_category)
+        require(std::abs(result.calculation->property.by_category.at(category).total.square_metres-subtotal.total.square_metres)<1e-8,
+            "rigid transform preserves automatically calculated property category totals");
+    for (const auto& trace : initial.calculation->calculation.areas) {
+        const auto found=std::find_if(result.calculation->calculation.areas.begin(),result.calculation->calculation.areas.end(),
+            [&](const auto& item){return item.area_id==trace.area_id;});
+        require(found!=result.calculation->calculation.areas.end() && std::abs(found->net_square_metres-trace.net_square_metres)<1e-8,
+            "rigid group transform preserves each unrounded net area");
+    }
+    if (sourced) require(sketch::wall_measurement_source_current(after,after.entities().at(area.toStdString())),
+        "transformed exterior retains current physical source walls");
+    for (const auto& [id,entity] : before.entities()) if (entity.type=="opening") {
+        const auto& moved=after.entities().at(id);
+        for (const auto* key : {"wall_id","offset_m","width_m","sill_m","height_m"})
+            if (entity.properties.contains(key)) require(moved.properties.at(key)==entity.properties.at(key),
+                "rigid group transforms preserve each hosted opening's identity, host and physical dimensions");
+        if (entity.properties.contains("door_operation")) {
+            auto wanted=entity.properties.at("door_operation");
+            if (mode>=2) wanted["side"]=wanted.at("side")=="left" ? "right" : "left";
+            require(moved.properties.at("door_operation")==wanted,
+                "rotation retains door handedness and a reflection mirrors it exactly once");
+        }
+    }
+    if (sourced) for (const auto& source : before.entities().at(area.toStdString()).properties.at("wall_measurement_source").at("walls")) {
+        const auto id=source.at("id").get<std::string>();
+        const auto baseline=[](const sketch::Entity& wall) {
+            const auto& value=wall.properties.at("baseline");
+            return sketch::Segment{{value.at("start").at(0).get<double>(),value.at("start").at(1).get<double>()},
+                {value.at("end").at(0).get<double>(),value.at("end").at(1).get<double>()},value.at("sweep_radians").get<double>()};
+        };
+        const auto old_wall=baseline(before.entities().at(id));
+        const auto new_wall=baseline(after.entities().at(id));
+        const auto wanted=sketch::transform_segment(old_wall,expected);
+        require(std::hypot(wanted.start.x-new_wall.start.x,wanted.start.y-new_wall.start.y)<1e-9 &&
+            std::hypot(wanted.end.x-new_wall.end.x,wanted.end.y-new_wall.end.y)<1e-9,
+            "each physical source wall follows the same analytical rigid transform");
+    }
+    capture(window,QStringLiteral("appraisal-transform-%1-%2-%3-%4")
+        .arg(metric ? "metric" : "imperial").arg(sourced ? "walls" : "drawn").arg(mode).arg(commercial ? "commercial" : "residential"));
+    require(window.undoCommand() && window.document().snapshot().entities()==before.entities() &&
+        window.redoCommand() && window.document().snapshot().entities()==after.entities(),
+        "group rotation or reflection undoes and redoes atomically");
+    QTemporaryDir directory;
+    sketch::desktop::MainWindow reopened;
+    require(directory.isValid() && window.saveProjectAs(directory.filePath("appraisal-transform.bldproj")) &&
+        reopened.openProject(directory.filePath("appraisal-transform.bldproj")) && reopened.document().snapshot().entities()==after.entities() &&
+        sketch::build_appraisal_document_report(reopened.document().snapshot(),property).qualified,
+        "in-place group transformation survives save and reopen");
+    if (mode!=0 || !metric || !commercial) return;
+    require(window.undoCommand() && window.selectEntity(area),"restore the measured group for actual canvas rotation");
+    const auto canvas_source=window.document().snapshot();
+    std::string modal_error;
+    bool modal_reviewed=false;
+    QTimer::singleShot(0,[&] {
+        auto* dialog=qobject_cast<QDialog*>(QApplication::activeModalWidget());
+        try {
+            require(dialog && dialog->objectName()=="boundaryTransformDialog","actual group transform editor opens");
+            auto* rotation=dialog->findChild<QLineEdit*>("boundaryRotationDegrees");
+            auto* preview=dynamic_cast<sketch::desktop::PlanCanvas*>(dialog->findChild<QWidget*>("wallTransformPreview"));
+            require(rotation && preview,"group transform editor has numerical controls and preview");
+            rotation->setText("90");
+            std::set<std::string> required{area.toStdString(),garage.toStdString()};
+            if (sourced) {
+                for (const auto& record : before.entities().at(area.toStdString()).properties.at("wall_measurement_source").at("walls"))
+                    required.insert(record.at("id").get<std::string>());
+                for (const auto& [id,entity] : before.entities())
+                    if (entity.type=="opening" && required.contains(entity.properties.at("wall_id").get<std::string>())) required.insert(id);
+            }
+            for (const auto& id : required)
+                require(std::any_of(preview->entities().begin(),preview->entities().end(),[&](const auto& entity) {
+                    return entity.id.toStdString()==id && entity.selected && entity.type!="source";
+                }),"modal preview shows the full proposed group, including each deduction and physical host");
+            require(window.document().snapshot().entities()==before.entities(),"numerical group preview is detached");
+            capture(*dialog,sourced ? "appraisal-wall-group-modal" : "appraisal-drawn-group-modal");
+            modal_reviewed=true;
+        } catch (const std::exception& error) {modal_error=error.what();}
+        if (dialog) dialog->reject();
+    });
+    window.showBoundaryTransformEditor();
+    if (!modal_error.empty()) throw std::runtime_error(modal_error);
+    require(modal_reviewed && window.document().snapshot().entities()==before.entities(),
+        "Cancel leaves every member of the numerically previewed group unchanged");
+    auto* canvas=dynamic_cast<sketch::desktop::PlanCanvas*>(window.findChild<QWidget*>("measurementPlanCanvas"));
+    require(canvas,"actual measured canvas is available");
+    window.fitView();
+    canvas->setSnapEnabled(false);
+    canvas->setWallSnapEnabled(false);
+    const auto frame=canvas->selectionBounds();
+    require(frame.has_value(),"measured parent exposes a transform frame");
+    const auto mouse=[&](QEvent::Type type,QPointF p) {
+        QMouseEvent event(type,p,p,type==QEvent::MouseMove ? Qt::NoButton : Qt::LeftButton,
+            type==QEvent::MouseButtonRelease ? Qt::NoButton : Qt::LeftButton,Qt::NoModifier);
+        QApplication::sendEvent(canvas,&event);
+    };
+    const auto pin=canvas->selectionRotationHandlePosition();
+    require(pin.has_value(),"dependent measured parent must expose a reachable rotation control");
+    const auto center=QRectF(canvas->rect()).center()+QPointF(
+        (expected.pivot.x-canvas->viewCenter().x)*canvas->viewScale(),
+        -(expected.pivot.y-canvas->viewCenter().y)*canvas->viewScale());
+    const auto radial=*pin-center;
+    const auto target=center+QPointF(radial.y(),-radial.x());
+    const auto wait_preview=[&] {
+        QElapsedTimer timer; timer.start();
+        while ((canvas->entityTransformPreviewPending() || canvas->entityTransformPreview().empty()) && timer.elapsed()<10000)
+            QCoreApplication::processEvents(QEventLoop::AllEvents,50);
+        if (canvas->entityTransformPreview().empty())
+            throw std::runtime_error("Canvas group rotation preview refused: "+window.lastError().toStdString());
+        require(!canvas->entityTransformPreviewPending() && window.document().snapshot().entities()==before.entities(),
+            "actual group rotation preview leaves document geometry unchanged before release");
+    };
+    mouse(QEvent::MouseButtonPress,*pin);
+    mouse(QEvent::MouseMove,target);
+    wait_preview();
+    std::set<std::string> affected{area.toStdString(),garage.toStdString()};
+    if (sourced) {
+        for (const auto& record : before.entities().at(area.toStdString()).properties.at("wall_measurement_source").at("walls"))
+            affected.insert(record.at("id").get<std::string>());
+        for (const auto& [id,entity] : before.entities())
+            if (entity.type=="opening" && affected.contains(entity.properties.at("wall_id").get<std::string>())) affected.insert(id);
+    }
+    const auto proposal=canvas->entityTransformPreview();
+    for (const auto& id : affected) {
+        const auto retained=std::find_if(canvas->entities().begin(),canvas->entities().end(),[&](const auto& entity){return entity.id.toStdString()==id;});
+        const auto preview=std::find_if(proposal.begin(),proposal.end(),[&](const auto& entity){return entity.id.toStdString()==id;});
+        require(retained!=canvas->entities().end() && preview!=proposal.end(),
+            "actual rotation preview includes every parent, deduction, supporting wall and hosted opening");
+        const auto& old_geometry=retained->type=="wall" ? retained->snap_segments : retained->segments;
+        const auto& new_geometry=preview->type=="wall" ? preview->snap_segments : preview->segments;
+        require(!old_geometry.empty() && old_geometry.size()==new_geometry.size(),"actual group preview retains analytical geometry");
+        std::vector<bool> matched(new_geometry.size(),false);
+        for (std::size_t i=0;i<old_geometry.size();++i) {
+            const auto wanted=sketch::transform_segment(old_geometry[i],expected);
+            if (before.entities().at(id).type=="opening") {
+                // Solid projection returns unbound display edges in kernel
+                // traversal order; rotation may reorder or reverse those edges.
+                // Compare every analytical edge exactly once, including sweep.
+                const auto same=[&](const sketch::Segment& edge,bool reverse) {
+                    const auto start=reverse ? edge.end : edge.start;
+                    const auto end=reverse ? edge.start : edge.end;
+                    return std::hypot(wanted.start.x-start.x,wanted.start.y-start.y)<1e-8 &&
+                        std::hypot(wanted.end.x-end.x,wanted.end.y-end.y)<1e-8 &&
+                        std::abs(wanted.sweep_radians-(reverse ? -edge.sweep_radians : edge.sweep_radians))<1e-8;
+                };
+                std::optional<std::size_t> match;
+                for (std::size_t j=0;j<new_geometry.size() && !match;++j)
+                    if (!matched[j] && (same(new_geometry[j],false) || same(new_geometry[j],true))) match=j;
+                require(match.has_value(),"every projected opening edge follows the shared rigid transform: "+id);
+                matched[*match]=true;
+                continue;
+            }
+            require(std::hypot(wanted.start.x-new_geometry[i].start.x,wanted.start.y-new_geometry[i].start.y)<1e-8 &&
+                std::hypot(wanted.end.x-new_geometry[i].end.x,wanted.end.y-new_geometry[i].end.y)<1e-8,
+                "full preview uses the same numerical rigid transform as model admission: "+id+
+                " expected start "+std::to_string(wanted.start.x)+","+std::to_string(wanted.start.y)+
+                " actual "+std::to_string(new_geometry[i].start.x)+","+std::to_string(new_geometry[i].start.y));
+        }
+    }
+    capture(window,sourced ? "appraisal-wall-group-rotation-preview" : "appraisal-drawn-group-rotation-preview");
+    QKeyEvent escape(QEvent::KeyPress,Qt::Key_Escape,Qt::NoModifier);
+    QApplication::sendEvent(canvas,&escape);
+    QCoreApplication::processEvents();
+    require(window.document().snapshot().entities()==before.entities() && !canvas->entityTransformPreviewPending(),
+        "Escape cancels an accepted full group proposal without document changes");
+    mouse(QEvent::MouseButtonPress,*pin);
+    mouse(QEvent::MouseMove,target);
+    mouse(QEvent::MouseButtonRelease,target);
+    QElapsedTimer timer; timer.start();
+    while (window.document().revision()==canvas_source.revision() && timer.elapsed()<10000)
+        QCoreApplication::processEvents(QEventLoop::AllEvents,50);
+    require(window.document().revision()==canvas_source.revision()+1 &&
+        sketch::build_appraisal_document_report(window.document().snapshot(),property).qualified,
+        "early release waits for exact projection and commits one qualified group rotation");
+    for (const auto& id : affected) {
+        const auto rendered=std::find_if(canvas->entities().begin(),canvas->entities().end(),[&](const auto& entity){return entity.id.toStdString()==id;});
+        const auto proposed=std::find_if(proposal.begin(),proposal.end(),[&](const auto& entity){return entity.id.toStdString()==id;});
+        require(rendered!=canvas->entities().end() && proposed!=proposal.end(),"committed group remains visible");
+        const auto& actual=rendered->type=="wall" ? rendered->snap_segments : rendered->segments;
+        const auto& predicted=proposed->type=="wall" ? proposed->snap_segments : proposed->segments;
+        require(actual.size()==predicted.size() && std::equal(actual.begin(),actual.end(),predicted.begin(),[](const auto& a,const auto& b) {
+            return a.start.x==b.start.x && a.start.y==b.start.y && a.end.x==b.end.x && a.end.y==b.end.y && a.sweep_radians==b.sweep_radians;
+        }),"canvas release commits exactly the full group geometry shown by its accepted proposal");
+    }
+    require(window.undoCommand() && window.document().snapshot().entities()==before.entities(),
+        "actual canvas group rotation undoes all dependencies in one step");
+    mouse(QEvent::MouseButtonPress,*pin);
+    mouse(QEvent::MouseMove,target);
+    auto external=window.document().snapshot().entities().at(unrelated.toStdString());
+    external.properties["name"]="Changed during the pending rotation";
+    window.document().apply(sketch::ApplyEntityChanges{window.document().revision(),
+        {sketch::EntityChange::upsert(external)},{},"Concurrent unrelated edit"});
+    const auto concurrent=window.document().snapshot();
+    mouse(QEvent::MouseButtonRelease,target);
+    timer.restart();
+    while (canvas->entityTransformPreviewPending() && timer.elapsed()<10000)
+        QCoreApplication::processEvents(QEventLoop::AllEvents,50);
+    require(!canvas->entityTransformPreviewPending() && window.document().revision()==concurrent.revision() &&
+        window.document().snapshot().entities()==concurrent.entities(),
+        "a stale deferred rotation cannot overwrite a newer document revision or leave a pending gesture");
+}
+
 void appraisal_area_clone_retains_its_calculation_dependencies(bool metric, bool sourced, bool commercial) {
     sketch::desktop::MainWindow window;
     window.setAttribute(Qt::WA_DontShowOnScreen);
@@ -1717,6 +2062,18 @@ int main(int argc, char** argv) {
         QStringLiteral("Vertex-wall-measurement-test-") +
         QUuid::createUuid().toString(QUuid::WithoutBraces));
     try {
+        if (app.arguments().contains("--appraisal-transform-ui-only")) {
+            for (bool sourced : {false,true})
+                existing_appraisal_area_transforms_its_dependencies(true,sourced,0,true);
+            std::cout << "Existing appraisal group transform interactions passed\n";
+            return 0;
+        }
+        if (app.arguments().contains("--appraisal-transform-only")) {
+            for (bool metric : {false,true}) for (bool sourced : {false,true}) for (int mode : {0,1,2,3}) for (bool commercial : {false,true})
+                existing_appraisal_area_transforms_its_dependencies(metric,sourced,mode,commercial);
+            std::cout << "Existing appraisal group transforms passed\n";
+            return 0;
+        }
         if (app.arguments().contains("--appraisal-copy-only")) {
             for (bool metric : {false,true}) for (bool sourced : {false,true}) for (bool commercial : {false,true})
                 appraisal_area_clone_retains_its_calculation_dependencies(metric,sourced,commercial);
@@ -1738,6 +2095,8 @@ int main(int argc, char** argv) {
             return 0;
         }
         selected_wall_loop_creates_and_refreshes_one_exterior_appraisal_area();
+        for (bool metric : {false,true}) for (bool sourced : {false,true}) for (int mode : {0,1,2,3}) for (bool commercial : {false,true})
+            existing_appraisal_area_transforms_its_dependencies(metric,sourced,mode,commercial);
         curved_d_exterior_measurement_stays_analytic_through_refresh_and_output();
         wall_measurement_admission_failures_are_atomic();
         an_unsplit_partition_selects_its_exterior_shell();

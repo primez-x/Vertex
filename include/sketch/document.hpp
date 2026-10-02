@@ -120,6 +120,15 @@ struct TransformBoundary {
     BoundaryTransformation transformation;
 };
 
+// One shared rigid transform and its supplemental physical/relationship edits
+// are admitted only after every measured owner has been reconstructed.
+struct TransformBoundaries {
+    Revision expected_revision = 0;
+    std::vector<BoundaryTransformation> transformations;
+    std::vector<EntityChange> entity_changes;
+    std::string message;
+};
+
 struct EditBoundaryGeometry {
     Revision expected_revision = 0;
     BoundaryGeometryEdit edit;
@@ -152,7 +161,7 @@ struct ApplyBoundaryConstraintChanges {
 
 using Command = std::variant<ApplyEntityChanges, NameRevision, TranslateBoundary,
                              TransformBoundary, EditBoundaryGeometry, ApplyBoundaryConstraintChanges,
-                             TranslateBoundaries>;
+                             TranslateBoundaries, TransformBoundaries>;
 
 // Commands cross worker, workspace, and persistence boundaries as a strict,
 // versioned JSON envelope.  The codec preserves typed command identity and
@@ -200,6 +209,7 @@ struct RevisionRecord {
     std::optional<BoundaryGeometryEdit> boundary_geometry_edit;
     std::optional<ApplyBoundaryConstraintChanges> boundary_constraint_changes;
     std::optional<TranslateBoundaries> boundary_translations;
+    std::optional<TransformBoundaries> boundary_transforms;
 };
 
 class DocumentSnapshot {

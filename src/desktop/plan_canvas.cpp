@@ -417,11 +417,13 @@ void PlanCanvas::setEntities(std::vector<CanvasEntity> entities) {
     // Replacing the document projection invalidates the captured revision and
     // its transient host-wall geometry, even when the selected ID survives.
     if (m_touch_active || m_gesture_button != Qt::NoButton ||
-        m_opening_width_handle || m_vertex_move_handle || m_move_release_pending) resetGesture();
+        m_opening_width_handle || m_vertex_move_handle || m_move_release_pending ||
+        m_transform_frame_start) resetGesture();
     else {
         ++m_opening_width_preview_serial;
         ++m_boundary_vertex_preview_serial;
         ++m_move_preview_serial;
+        ++m_transform_preview_serial;
     }
     resetTouchInput();
     m_entities = std::move(entities);
@@ -516,7 +518,8 @@ void PlanCanvas::setSelectionFilter(CanvasSelectionFilter filter) {
     // A selection press captures a target under the old filter. Navigation
     // and explicit selected transform controls do not capture a new pick.
     if (m_gesture_button == Qt::RightButton || m_left_gesture == LeftGesture::marquee ||
-        m_left_gesture == LeftGesture::canvas_pan || m_left_gesture == LeftGesture::object_move) {
+        m_left_gesture == LeftGesture::canvas_pan || m_left_gesture == LeftGesture::object_move ||
+        m_transform_frame_start) {
         resetGesture();
         resetTouchInput();
     }
@@ -536,7 +539,8 @@ void PlanCanvas::setSelectedId(const QString& entity_id) {
 }
 
 void PlanCanvas::setSelectedIds(const QStringList& entity_ids) {
-    if ((m_gesture_button != Qt::NoButton || m_opening_width_handle || m_vertex_move_handle) &&
+    if ((m_gesture_button != Qt::NoButton || m_opening_width_handle || m_vertex_move_handle ||
+         m_transform_frame_start) &&
         selectedIds() != entity_ids)
         resetGesture();
     for (auto& entity : m_entities) {
@@ -560,6 +564,8 @@ void PlanCanvas::setSelectionTransformEnabled(bool resize_enabled, bool rotate_e
         m_selection_rotate_enabled == rotate_enabled) return;
     m_selection_resize_enabled = resize_enabled;
     m_selection_rotate_enabled = rotate_enabled;
+    if ((!resize_enabled && m_left_gesture == LeftGesture::selection_resize) ||
+        (!rotate_enabled && m_left_gesture == LeftGesture::selection_rotate)) resetGesture();
     if (m_last_mouse_position) updatePointerCursor(*m_last_mouse_position);
     update();
 }
@@ -575,7 +581,8 @@ void PlanCanvas::setSelectionAxisResizeEnabled(bool enabled) {
 void PlanCanvas::setLabels(std::vector<CanvasLabel> labels) {
     // A captured projection depends on the source annotations as well as the
     // geometry, even when a replacement retains every annotation identity.
-    if (m_touch_active || m_gesture_button != Qt::NoButton || m_vertex_move_handle) resetGesture();
+    if (m_touch_active || m_gesture_button != Qt::NoButton || m_vertex_move_handle ||
+        m_transform_frame_start) resetGesture();
     resetTouchInput();
     // Derived plan labels share their owner's ID for output filtering; they
     // are not independent annotations with their own transform controls.
@@ -592,7 +599,7 @@ void PlanCanvas::setReference(std::optional<CanvasReference> reference) {
 }
 
 void PlanCanvas::setReferences(std::vector<CanvasReference> references) {
-    if (m_touch_active || m_gesture_button != Qt::NoButton) resetGesture();
+    if (m_touch_active || m_gesture_button != Qt::NoButton || m_transform_frame_start) resetGesture();
     resetTouchInput();
     m_references = std::move(references);
     if (m_last_mouse_position) updatePointerCursor(*m_last_mouse_position);
@@ -829,7 +836,7 @@ void PlanCanvas::renderSceneWithTransform(QPainter& painter, const QRectF& viewp
             painter.translate(m_move_preview_delta->x, m_move_preview_delta->y);
             drawReference(painter, reference);
             painter.restore();
-        } else if (!output && reference.selected && m_transform_frame_start &&
+        } else if (!output && reference.selected && m_transform_frame_start && !m_transform_preview_exact &&
                    (m_left_gesture == LeftGesture::selection_resize ||
                     m_left_gesture == LeftGesture::selection_rotate)) {
             auto preview = reference;
@@ -849,7 +856,8 @@ void PlanCanvas::renderSceneWithTransform(QPainter& painter, const QRectF& viewp
     painted_entities.reserve(m_entities.size());
     for (const auto& entity : m_entities) painted_entities.push_back(&entity);
     if (!output && ((m_vertex_move_handle && m_boundary_vertex_preview_valid) ||
-                    (m_move_preview_exact && !m_move_entities_preview.empty()))) {
+                    (m_move_preview_exact && !m_move_entities_preview.empty()) ||
+                    m_transform_preview_valid)) {
         // Candidate model owners can enter a crop/depth slice while another
         // owner's corner is dragged. They are interactive projections only;
         // neither committed entities nor output bounds gain these entries.
@@ -863,7 +871,8 @@ void PlanCanvas::renderSceneWithTransform(QPainter& painter, const QRectF& viewp
             if (entity.type==QStringLiteral("dimension_line")) return 40;
             return 15;
         };
-        const auto& proposals=m_move_preview_exact ? m_move_entities_preview : m_boundary_vertex_entities_preview;
+        const auto& proposals = m_transform_preview_valid ? m_transform_entities_preview :
+            m_move_preview_exact ? m_move_entities_preview : m_boundary_vertex_entities_preview;
         for (const auto& preview : proposals) {
             if (std::any_of(m_entities.begin(),m_entities.end(),
                 [&](const auto& entity) { return entity.id==preview.id; })) continue;
@@ -908,7 +917,7 @@ void PlanCanvas::renderSceneWithTransform(QPainter& painter, const QRectF& viewp
             painter.translate(-m_axis_anchor.x, -m_axis_anchor.y);
             drawEntity(painter, entity, output, background, paper_pixels_per_mm);
             painter.restore();
-        } else if (!output && entity.selected && m_transform_frame_start &&
+        } else if (!output && entity.selected && m_transform_frame_start && !m_transform_preview_exact &&
                    (m_left_gesture == LeftGesture::selection_resize ||
                     m_left_gesture == LeftGesture::selection_rotate)) {
             const Vec2 center{view_center.x + (m_transform_center.x() - viewport.center().x()) / scale,
@@ -1113,11 +1122,13 @@ void PlanCanvas::renderSceneWithTransform(QPainter& painter, const QRectF& viewp
                 painter.drawLine(QLineF(x, bottom - 3.0, x, bottom + 3.0));
             painter.restore();
         }
-        drawSelectionFrame(painter, viewport, annotation_footprints);
-        drawVertexHandles(painter, viewport);
-        drawSelectionDimensions(painter, viewport, annotation_footprints);
-        drawOpeningWidthHandles(painter, viewport);
-        drawSelectionCaption(painter, viewport, background);
+        if (m_selection_controls_visible) {
+            drawSelectionFrame(painter, viewport, annotation_footprints);
+            drawVertexHandles(painter, viewport);
+            drawSelectionDimensions(painter, viewport, annotation_footprints);
+            drawOpeningWidthHandles(painter, viewport);
+            drawSelectionCaption(painter, viewport, background);
+        }
         drawCursorReadout(painter, viewport, background);
     }
 
@@ -1472,7 +1483,7 @@ bool PlanCanvas::eventFilter(QObject* watched, QEvent* event) {
 bool PlanCanvas::event(QEvent* event) {
     switch (event->type()) {
     case QEvent::FocusOut:
-        if (m_touch_active || m_opening_width_handle || m_vertex_move_handle) resetGesture();
+        if (m_touch_active || m_opening_width_handle || m_vertex_move_handle || m_transform_frame_start) resetGesture();
         resetTouchInput();
         break;
     case QEvent::Hide:
@@ -1743,6 +1754,13 @@ void PlanCanvas::pointerPress(QPointF position, Qt::MouseButton button,
             m_axis_anchor = {axes->center.x - sign * direction.x * m_axis_extent * .5,
                              axes->center.y - sign * direction.y * m_axis_extent * .5};
         }
+        if (m_left_gesture == LeftGesture::selection_resize ||
+            m_left_gesture == LeftGesture::selection_rotate) {
+            m_transform_source_id = m_move_ids.size() == 1 ? m_move_ids.front() : QString{};
+            m_transform_pivot = toModel(m_transform_center, rect());
+            if (!m_transform_source_id.isEmpty() && m_entity_transform_started)
+                m_entity_transform_started(m_transform_source_id);
+        }
         return;
     }
     m_pressed_entity = hitTest(position);
@@ -1763,7 +1781,7 @@ void PlanCanvas::pointerPress(QPointF position, Qt::MouseButton button,
 
 void PlanCanvas::pointerMove(QPointF position, Qt::KeyboardModifiers modifiers) {
     m_last_mouse_position = position;
-    if (m_move_release_pending) return;
+    if (m_move_release_pending || m_transform_release_pending) return;
     if (m_gesture_button == Qt::RightButton &&
         (position - m_right_start).manhattanLength() >= QApplication::startDragDistance())
         m_right_dragging = true;
@@ -1871,6 +1889,7 @@ void PlanCanvas::pointerMove(QPointF position, Qt::KeyboardModifiers modifiers) 
                 }
                 setCursor(Qt::CrossCursor);
             }
+            updateEntityTransformPreview();
             update();
         }
     } else if (m_left_gesture == LeftGesture::vertex_move) {
@@ -1956,6 +1975,16 @@ void PlanCanvas::pointerRelease(QPointF position, Qt::MouseButton button,
         if (gesture==LeftGesture::object_move && dragging && m_move_preview_exact && m_move_entities_preview.empty()) {
             resetGesture();
             if (m_entities_move_rejected) m_entities_move_rejected(move_ids,delta);
+            return;
+        }
+        if ((gesture == LeftGesture::selection_resize || gesture == LeftGesture::selection_rotate) &&
+            dragging && m_transform_preview_exact) {
+            if (m_transform_preview_pending) {
+                m_transform_release_pending = true;
+                m_gesture_button = Qt::NoButton;
+            } else {
+                finishEntityTransformPreview(m_transform_preview_serial);
+            }
             return;
         }
         const auto transform_scale = m_transform_scale_preview;
@@ -2083,6 +2112,15 @@ void PlanCanvas::resetGesture() {
     m_transform_frame_start.reset();
     m_transform_scale_preview = 1.0;
     m_transform_rotation_preview = 0.0;
+    ++m_transform_preview_serial;
+    m_transform_source_id.clear();
+    m_transform_entities_preview.clear();
+    m_transform_labels_preview.clear();
+    m_transform_preview_exact = false;
+    m_transform_preview_valid = false;
+    m_transform_preview_pending = false;
+    m_transform_preview_request_in_progress = false;
+    m_transform_release_pending = false;
     m_axis_handle = SelectionHandle::none;
     m_axis_scale_x_preview = 1.0;
     m_axis_scale_y_preview = 1.0;
@@ -2135,6 +2173,14 @@ void PlanCanvas::mouseDoubleClickEvent(QMouseEvent* event) {
 
 std::optional<QRectF> PlanCanvas::selectionBounds() const {
     return selectionFrame(QRectF(rect()));
+}
+
+std::optional<QPointF> PlanCanvas::selectionRotationHandlePosition() const {
+    const QRectF viewport(rect());
+    if (!m_selection_controls_visible || !m_selection_rotate_enabled ||
+        selectedIds().size()!=1 || selectedOpening() || !selectionFrame(viewport)) return std::nullopt;
+    return selectionControlTransform(viewport).map(selectionRotationPoint(
+        viewport,selectionAnnotationFootprints(viewport,font())));
 }
 
 std::optional<QRectF> PlanCanvas::selectionBounds(const QRectF& viewport) const {
@@ -2274,6 +2320,10 @@ std::optional<CanvasSelectionFrame> PlanCanvas::selectionAxes() const {
 
 CanvasLabel PlanCanvas::presentedLabel(const CanvasLabel& label, bool output) const {
     auto presented = label;
+    if (!output && m_transform_preview_valid) {
+        for (const auto& proposed : m_transform_labels_preview)
+            if (proposed.id == label.id) { presented = proposed; break; }
+    }
     if (!output && m_move_preview_exact) {
         for (const auto& proposed : m_move_labels_preview)
             if (proposed.id == label.id) { presented = proposed; break; }
@@ -2284,7 +2334,7 @@ CanvasLabel PlanCanvas::presentedLabel(const CanvasLabel& label, bool output) co
             [&](const CanvasLabel& item) { return item.id == label.id; });
         if (preview_label != m_boundary_vertex_labels_preview.end()) presented = *preview_label;
     }
-    if (!output && label.selected && m_transform_frame_start && m_move_ids.contains(label.id) &&
+    if (!output && label.selected && m_transform_frame_start && !m_transform_preview_exact && m_move_ids.contains(label.id) &&
         (m_left_gesture == LeftGesture::selection_resize || m_left_gesture == LeftGesture::selection_rotate)) {
         presented.rotation_radians += m_transform_rotation_preview;
         presented.scale *= m_transform_scale_preview;
@@ -2297,6 +2347,12 @@ const std::vector<CanvasLabel>& PlanCanvas::positionedLabels(
     double dpi, bool output) const {
     auto& cache = m_label_placement_cache[output ? 1 : 0];
     auto retained_labels=m_labels;
+    if (!output && m_transform_preview_valid) {
+        for (const auto& proposed : m_transform_labels_preview)
+            if (std::none_of(retained_labels.begin(), retained_labels.end(),
+                [&](const auto& label) { return label.id == proposed.id; }))
+                retained_labels.push_back(proposed);
+    }
     if (!output && m_boundary_vertex_preview_valid) {
         for (const auto& proposed:m_boundary_vertex_labels_preview)
             if (std::none_of(retained_labels.begin(),retained_labels.end(),
@@ -2516,9 +2572,9 @@ QRectF PlanCanvas::selectionControlRect(const QRectF& viewport) const {
         }
         const bool label_selection = std::any_of(m_labels.begin(),m_labels.end(),
             [](const CanvasLabel& label) { return label.selected; });
-        const auto sx = label_selection ? 1.0 : m_left_gesture == LeftGesture::selection_axis_resize
+        const auto sx = label_selection || m_transform_preview_exact ? 1.0 : m_left_gesture == LeftGesture::selection_axis_resize
             ? m_axis_scale_x_preview : m_transform_scale_preview;
-        const auto sy = label_selection ? 1.0 : m_left_gesture == LeftGesture::selection_axis_resize
+        const auto sy = label_selection || m_transform_preview_exact ? 1.0 : m_left_gesture == LeftGesture::selection_axis_resize
             ? m_axis_scale_y_preview : m_transform_scale_preview;
         const auto width = std::max(44.0, axes->width_metres*m_scale*sx + 2*padding);
         const auto depth = std::max(44.0, axes->depth_metres*m_scale*sy + 2*padding);
@@ -2537,7 +2593,7 @@ QTransform PlanCanvas::selectionControlTransform(const QRectF& viewport) const {
             const auto x = (dx*c+dy*s)*m_axis_scale_x_preview;
             const auto y = (-dx*s+dy*c)*m_axis_scale_y_preview;
             axes->center = {m_axis_anchor.x+x*c-y*s, m_axis_anchor.y+x*s+y*c};
-        } else if (m_transform_frame_start && m_left_gesture == LeftGesture::selection_rotate) {
+        } else if (m_transform_frame_start && !m_transform_preview_exact && m_left_gesture == LeftGesture::selection_rotate) {
             // Label axes already include their presented rotation.
             const bool label_selection = std::any_of(m_labels.begin(),m_labels.end(),
                 [](const CanvasLabel& label) { return label.selected; });
@@ -2565,7 +2621,7 @@ QTransform PlanCanvas::selectionControlTransform(const QRectF& viewport) const {
         transform.scale(m_axis_scale_x_preview, m_axis_scale_y_preview);
         transform.rotate(m_axis_rotation*180/pi);
         transform.translate(-anchor.x(), -anchor.y());
-    } else if (m_transform_frame_start &&
+    } else if (m_transform_frame_start && !m_transform_preview_exact &&
                (m_left_gesture == LeftGesture::selection_resize ||
                 m_left_gesture == LeftGesture::selection_rotate)) {
         transform.translate(m_transform_center.x(), m_transform_center.y());
@@ -2745,6 +2801,10 @@ const CanvasEntity* PlanCanvas::selectedOpening() const {
 }
 
 const CanvasEntity& PlanCanvas::interactiveEntity(const CanvasEntity& entity) const {
+    if (m_transform_preview_valid) {
+        for (const auto& preview : m_transform_entities_preview)
+            if (preview.id == entity.id) return preview;
+    }
     if (m_move_preview_exact) {
         for (const auto& preview : m_move_entities_preview)
             if (preview.id == entity.id) return preview;
@@ -3243,7 +3303,7 @@ void PlanCanvas::drawSelectionDimensions(QPainter& painter, const QRectF& viewpo
         auto depth = axes.depth_metres;
         auto center = axes.center;
         const bool transforming = m_transform_frame_start && m_move_ids.contains(id);
-        if (transforming) {
+        if (transforming && !m_transform_preview_exact) {
             if (m_left_gesture == LeftGesture::selection_axis_resize) {
                 width *= m_axis_scale_x_preview;
                 depth *= m_axis_scale_y_preview;
@@ -3279,8 +3339,14 @@ void PlanCanvas::drawSelectionDimensions(QPainter& painter, const QRectF& viewpo
             .arg(display_cursor_length(dimension_width, m_metric_units),
                  display_cursor_length(dimension_depth, m_metric_units));
         if (invalid_opening) text += QStringLiteral("  ·  Invalid");
+        if (transforming && m_transform_preview_exact) {
+            if (m_transform_preview_pending) text += QStringLiteral("  ·  Checking");
+            else if (!m_transform_preview_valid) text += QStringLiteral("  ·  Invalid");
+        }
         if (transforming && m_left_gesture == LeftGesture::selection_rotate) {
-            auto degrees = std::fmod(axes.rotation_radians * 180/pi, 360.0);
+            const auto radians = m_transform_preview_exact
+                ? m_transform_initial_rotation + m_transform_rotation_preview : axes.rotation_radians;
+            auto degrees = std::fmod(radians * 180/pi, 360.0);
             if (degrees < 0) degrees += 360;
             if (std::abs(degrees-360) < 1e-6 || std::abs(degrees) < 1e-6) degrees = 0;
             text += QStringLiteral("  ·  %1°").arg(degrees, 0, 'f', 1);
@@ -3546,7 +3612,7 @@ void PlanCanvas::keyPressEvent(QKeyEvent* event) {
         return;
     }
     if (event->key() == Qt::Key_Escape) {
-        if (m_touch_active || m_gesture_button != Qt::NoButton || m_move_release_pending) {
+        if (m_touch_active || m_gesture_button != Qt::NoButton || m_move_release_pending || m_transform_frame_start) {
             resetGesture();
             resetTouchInput();
             event->accept();
@@ -3559,7 +3625,7 @@ void PlanCanvas::keyPressEvent(QKeyEvent* event) {
         return;
     }
     if (event->key() == Qt::Key_D && event->modifiers() == Qt::NoModifier &&
-        m_gesture_button == Qt::NoButton && !m_touch_active && !m_move_release_pending &&
+        m_gesture_button == Qt::NoButton && !m_touch_active && !m_move_release_pending && !m_transform_release_pending &&
         (m_tool == CanvasTool::boundary || m_tool == CanvasTool::wall || m_tool == CanvasTool::select)) {
         if (m_precise_input_requested) {
             m_precise_input_requested();
@@ -3982,7 +4048,7 @@ QStringList PlanCanvas::selectedIds() const {
 }
 
 bool PlanCanvas::selectionInteractionEnabled() const {
-    return (m_tool == CanvasTool::select || m_tool == CanvasTool::boundary) &&
+    return m_selection_controls_visible && (m_tool == CanvasTool::select || m_tool == CanvasTool::boundary) &&
            !m_boundary_draft_preview;
 }
 
@@ -4045,7 +4111,106 @@ void PlanCanvas::updatePointerCursor(QPointF point) {
 
 void PlanCanvas::setEntityTransformRequested(
     std::function<bool(QString, double, double)> callback) {
+    if (m_transform_frame_start) resetGesture();
     m_entity_transform_requested = std::move(callback);
+}
+
+void PlanCanvas::setEntityTransformStarted(std::function<void(QString)> callback) {
+    resetGesture();
+    m_entity_transform_started = std::move(callback);
+}
+
+void PlanCanvas::setEntityTransformPreviewRequested(
+    std::function<std::optional<std::vector<CanvasEntity>>(
+        QString, double, double, Vec2, std::uint64_t)> callback) {
+    resetGesture();
+    m_entity_transform_preview_requested = std::move(callback);
+}
+
+void PlanCanvas::updateEntityTransformPreview() {
+    const auto serial = ++m_transform_preview_serial;
+    m_transform_entities_preview.clear();
+    m_transform_labels_preview.clear();
+    m_transform_preview_exact = false;
+    m_transform_preview_valid = false;
+    m_transform_preview_pending = false;
+    if (!m_entity_transform_preview_requested || m_transform_source_id.isEmpty()) return;
+    m_transform_preview_request_in_progress = true;
+    std::optional<std::vector<CanvasEntity>> proposed;
+    try {
+        proposed = m_entity_transform_preview_requested(m_transform_source_id,
+            m_transform_scale_preview, m_transform_rotation_preview, m_transform_pivot, serial);
+    } catch (const std::exception&) { proposed = std::vector<CanvasEntity>{}; }
+    if (serial != m_transform_preview_serial || !m_transform_preview_request_in_progress) return;
+    m_transform_preview_request_in_progress = false;
+    // A host can supply labels by marking/completing this serial inside the
+    // callback. Its completion is authoritative over the callback's return.
+    if (!m_transform_preview_exact && proposed)
+        (void)applyEntityTransformPreview(serial, std::move(proposed));
+}
+
+bool PlanCanvas::markEntityTransformPreviewPending(std::uint64_t serial) {
+    if (serial != m_transform_preview_serial || !m_transform_preview_request_in_progress ||
+        !m_transform_frame_start || m_transform_source_id.isEmpty() ||
+        (m_left_gesture != LeftGesture::selection_resize &&
+         m_left_gesture != LeftGesture::selection_rotate)) return false;
+    m_transform_preview_exact = true;
+    m_transform_preview_pending = true;
+    return true;
+}
+
+bool PlanCanvas::completeEntityTransformPreview(std::uint64_t serial,
+    std::optional<std::vector<CanvasEntity>> result, std::vector<CanvasLabel> labels) {
+    if (!m_transform_preview_pending) return false;
+    return applyEntityTransformPreview(serial, std::move(result), std::move(labels));
+}
+
+bool PlanCanvas::applyEntityTransformPreview(std::uint64_t serial,
+    std::optional<std::vector<CanvasEntity>> result, std::vector<CanvasLabel> labels) {
+    if (serial != m_transform_preview_serial || !m_transform_frame_start ||
+        m_transform_source_id.isEmpty() ||
+        (m_left_gesture != LeftGesture::selection_resize &&
+         m_left_gesture != LeftGesture::selection_rotate)) return false;
+    m_transform_preview_pending = false;
+    m_transform_preview_exact = true;
+    m_transform_preview_valid = result && std::any_of(result->begin(), result->end(),
+        [&](const auto& entity) { return entity.id == m_transform_source_id; });
+    m_transform_entities_preview = m_transform_preview_valid
+        ? std::move(*result) : std::vector<CanvasEntity>{};
+    m_transform_labels_preview = m_transform_preview_valid
+        ? std::move(labels) : std::vector<CanvasLabel>{};
+    // Preview IDs may newly enter the view, but only an exact proposal rooted
+    // in the selected source can expose them. Preserve retained selection.
+    for (auto& proposed : m_transform_entities_preview)
+        proposed.selected = std::any_of(m_entities.begin(), m_entities.end(),
+            [&](const auto& retained) { return retained.id == proposed.id && retained.selected; });
+    for (auto& proposed : m_transform_labels_preview)
+        proposed.selected = std::any_of(m_labels.begin(), m_labels.end(),
+            [&](const auto& retained) { return retained.id == proposed.id && retained.selected; });
+    setCursor(m_transform_preview_valid
+        ? m_left_gesture == LeftGesture::selection_rotate ? Qt::CrossCursor : Qt::SizeFDiagCursor
+        : Qt::ForbiddenCursor);
+    update();
+    if (m_transform_release_pending) {
+        QTimer::singleShot(0, this, [this, serial] {
+            if (m_transform_release_pending) finishEntityTransformPreview(serial);
+        });
+    }
+    return true;
+}
+
+void PlanCanvas::finishEntityTransformPreview(std::uint64_t serial) {
+    if (serial != m_transform_preview_serial || !m_transform_frame_start ||
+        m_transform_preview_pending || !m_transform_preview_exact) return;
+    const auto id = m_transform_source_id;
+    const auto scale = m_transform_scale_preview;
+    const auto radians = m_transform_rotation_preview;
+    const auto accepted = m_transform_preview_valid;
+    // The host admits the captured exact command using this live serial.
+    // Scene replacement in the callback may itself invalidate the gesture.
+    if (accepted && m_entity_transform_requested)
+        (void)m_entity_transform_requested(id, scale, radians);
+    resetGesture();
 }
 
 void PlanCanvas::setEntityAxisResizeRequested(

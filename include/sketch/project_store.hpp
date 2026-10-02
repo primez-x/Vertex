@@ -111,9 +111,10 @@ public:
     // containing independently replayed rigid transforms require v14. Fixed-chord
     // boundary curvature reconstruction proofs require v15; reviewed exterior
     // source replacement and identified topology origins require v16; explicit
-    // fresh topology redefinition requires v17. Any may include
+    // fresh topology redefinition requires v17; grouped rigid transforms
+    // require v18. Any may include
     // the optional recovery ledger. Absent proofs preserve historical formats.
-    static constexpr std::uint32_t format_version = 17;
+    static constexpr std::uint32_t format_version = 18;
     static constexpr std::uint32_t recovery_format_version = 4;
     [[nodiscard]] static std::uint32_t required_format_version(const DocumentSnapshot& snapshot);
     static constexpr std::uint64_t maximum_file_bytes = 4ULL * 1024ULL * 1024ULL * 1024ULL;
@@ -128,7 +129,7 @@ public:
                                           const DocumentSnapshot& snapshot,
                                           const SaveOptions& options = {});
     [[nodiscard]] static LoadResult load(const std::filesystem::path& source);
-    // Recovery-bearing v4 through v17 only. A document-only path never drops a ledger.
+    // Recovery-bearing v4 through v18 only. A document-only path never drops a ledger.
     [[nodiscard]] static SaveReceipt save_archive(const std::filesystem::path& destination,
         const ProjectArchiveSnapshot&, const SaveOptions& options = {});
     [[nodiscard]] static ArchiveLoadResult load_archive(const std::filesystem::path& source, ArchiveRole role);

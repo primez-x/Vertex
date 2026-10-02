@@ -1,4 +1,4 @@
-# Vertex project formats v1 through v17
+# Vertex project formats v1 through v18
 
 ## Original typed wall input
 
@@ -194,8 +194,9 @@ v10 curved endpoint constraints, v11 straight wall-only intent, v12 physical
 arc-length locks, v13 direct physical curve-length inputs, and v14 rigid curve
 construction transforms, v15 fixed-chord boundary curvature edits, v16
 reviewed exterior wall-source replacements, and v17 explicit fresh-topology
-boundary replacements, plus v4 through v17 archives through recovery-aware APIs.
-Under-versioned semantic data and versions above 17 reject. Legacy-only history
+boundary replacements, and v18 measured group rigid transforms, plus v4 through
+v18 archives through recovery-aware APIs.
+Under-versioned semantic data and versions above 18 reject. Legacy-only history
 is still written as v1. Unknown boundary entity
 versions in v2 remain preserved read-only. See `boundary-entity-format.md`.
 Version 2 also recognizes `dimension` entities. Segment-length dimensions refer
@@ -648,7 +649,7 @@ unknown project `format_version` is rejected rather than opened unsafely.
 ## SQLite schema
 
 The SQLite `application_id` is `0x50535444` (`PSTD`). `user_version` and metadata
-`format_version` are equal and range from `1` through `15`, according to the
+`format_version` are equal and range from `1` through `18`, according to the
 retained semantics. The baseline application tables below are shared; later
 versions add the proof columns and recovery data documented in this file.
 
@@ -1214,3 +1215,34 @@ derivation, requires native format 17. Under-versioned archives reject even when
 their digests are recomputed. JSON/assets extraction advertises exchange version
 15. Files without these new semantics retain their previous required format and
 representation; extraction remains separate from project import.
+
+### Measured group rigid transforms (v18)
+
+`TransformBoundaries` retains one shared numerical planar transform and a list
+of distinct measured owner IDs. Its version-one command envelope has exactly
+`version`, `kind: "transform_boundaries"`, `expected_revision`, `message`,
+`transformations` and `entity_changes`. Each transformation uses the existing
+single-boundary transform representation. Supplemental changes preserve existing
+identities and cannot substitute raw boundary or bound-dimension geometry.
+
+The complete candidate reconstructs all measured owners, dimensions, source walls,
+hosted openings and internal relationships together before final admission. Plain
+identified boundaries retain an exact topology origin instead of invented input
+receipts. Source exterior normalization preserves child identities and is admitted
+only with unique machine-precision analytical correspondence and typed replayable
+evidence. Incompatible external relationships and invalidated unchanged consumers
+are refused; they are not silently dropped or refreshed.
+
+A present group proof uses `revisions.boundary_transforms_json` in SQLite and
+`boundary_transforms` in revision JSON/digest data. Absent proofs are omitted from
+logical representations to preserve previous digest values. Retained group history
+requires native format 18 and extraction version 16, including after Undo or
+deletion. Recomputed digests do not authorize lowering those format markers.
+
+New exterior derivations use stable tangent intersection arithmetic. Retained
+replacement commands may instead validate against the complete exact original
+version-one offset result, including its original gap allowance. This historical
+route is separate from live replacement admission and never rounds or rewrites
+stored geometry, command bytes or digests. Exact original outlines can also
+remain current against their unchanged sources. Old records retain this
+compatibility when a later command raises the archive to format 18.

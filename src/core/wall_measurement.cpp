@@ -621,6 +621,8 @@ struct OffsetSupport {
     double half_thickness{};
 };
 
+enum class OffsetKernel { stable, legacy_v1 };
+
 Vec2 unit_vector(Vec2 value) {
     const auto length = std::hypot(value.x, value.y);
     if (!(length > default_geometry_tolerance_metres) || !std::isfinite(length))
@@ -632,7 +634,8 @@ double wrapped_angle_delta(double from, double to) {
     return std::remainder(to - from, 2.0 * std::numbers::pi);
 }
 
-Vec2 offset_join(const OffsetSupport& incoming, const OffsetSupport& outgoing, Vec2 vertex) {
+Vec2 offset_join(const OffsetSupport& incoming, const OffsetSupport& outgoing, Vec2 vertex,
+                 OffsetKernel kernel) {
     std::vector<Vec2> candidates;
     if (!incoming.arc && !outgoing.arc) {
         const auto denominator = cross(incoming.direction, outgoing.direction);
@@ -683,13 +686,35 @@ Vec2 offset_join(const OffsetSupport& incoming, const OffsetSupport& outgoing, V
         const auto direction = line.direction;
         const auto offset = subtract(line_start, circle.center);
         const auto projection = dot(offset, direction);
-        auto discriminant = circle.radius * circle.radius -
-            (dot(offset, offset) - projection * projection);
-        const auto allowed = default_geometry_tolerance_metres *
-                             (2.0 * circle.radius + default_geometry_tolerance_metres);
-        if (discriminant < -allowed)
-            reject("Line and circular wall offsets do not meet at a common corner");
-        discriminant = std::max(0.0, discriminant);
+        double discriminant{};
+        if (kernel == OffsetKernel::legacy_v1) {
+            // Preserve the original operation order and tolerance exactly:
+            // its positive-ulp tangent drift is part of retained v1 bytes.
+            discriminant = circle.radius * circle.radius -
+                (dot(offset, offset) - projection * projection);
+            const auto allowed = default_geometry_tolerance_metres *
+                                 (2.0 * circle.radius + default_geometry_tolerance_metres);
+            if (discriminant < -allowed)
+                reject("Line and circular wall offsets do not meet at a common corner");
+            discriminant = std::max(0.0, discriminant);
+        } else {
+            // The perpendicular distance avoids subtracting two squared lengths.
+            // At a tangent that cancellation otherwise leaves a positive ulp,
+            // whose square root moves the corner by sqrt(epsilon), not epsilon.
+            const auto perpendicular = std::abs(cross(offset, direction));
+            const auto radius_gap = circle.radius - perpendicular;
+            // Account for the rounded support coordinates, their subtraction,
+            // tangent normalization, and the two products in the cross product.
+            // This is an input-roundoff envelope, independent of geometry tolerance.
+            const auto coordinate_scale = std::abs(line_start.x) + std::abs(line_start.y) +
+                std::abs(circle.center.x) + std::abs(circle.center.y);
+            const auto roundoff = 8.0 * std::numeric_limits<double>::epsilon() *
+                (coordinate_scale + std::hypot(offset.x, offset.y) + circle.radius + perpendicular);
+            if (radius_gap < -roundoff)
+                reject("Line and circular wall offsets do not meet at a common corner");
+            discriminant = std::abs(radius_gap) <= roundoff ? 0.0 :
+                radius_gap * (circle.radius + perpendicular);
+        }
         const auto root = std::sqrt(discriminant);
         candidates.push_back(add(line_start, multiply(direction, -projection + root)));
         if (root > default_geometry_tolerance_metres)
@@ -704,7 +729,7 @@ Vec2 offset_join(const OffsetSupport& incoming, const OffsetSupport& outgoing, V
     return selected;
 }
 
-Boundary offset_loop(const Boundary& loop, const std::vector<SourceWall>& walls) {
+Boundary offset_loop(const Boundary& loop, const std::vector<SourceWall>& walls, OffsetKernel kernel) {
     if (loop.size() != walls.size()) reject("Source wall loop assembly was incomplete");
     const auto area = signed_area(loop);
     if (!std::isfinite(area) || std::abs(area) <= default_geometry_tolerance_metres)
@@ -754,7 +779,7 @@ Boundary offset_loop(const Boundary& loop, const std::vector<SourceWall>& walls)
     std::vector<Vec2> corners(loop.size());
     for (std::size_t index = 0; index < loop.size(); ++index) {
         const auto previous = (index + loop.size() - 1) % loop.size();
-        corners[index] = offset_join(edges[previous], edges[index], loop[index].start);
+        corners[index] = offset_join(edges[previous], edges[index], loop[index].start, kernel);
     }
 
     Boundary result;
@@ -947,9 +972,9 @@ WallMeasurementResult derive_exterior_wall_measurement(
     return derive_exterior_wall_measurement(document.entities(), wall_ids);
 }
 
-WallMeasurementResult derive_exterior_wall_measurement(
+static WallMeasurementResult derive_exterior_wall_measurement_impl(
     const std::map<std::string, Entity, std::less<>>& entities,
-    const std::vector<std::string>& wall_ids) {
+    const std::vector<std::string>& wall_ids, OffsetKernel kernel) {
     auto walls = read_source_walls(entities, wall_ids);
     auto geometry_walls = walls;
     for (auto& wall : geometry_walls) {
@@ -976,7 +1001,7 @@ WallMeasurementResult derive_exterior_wall_measurement(
         if (found == wall_by_baseline.end()) reject("Assembled wall loop lost a source wall");
         loop_walls.push_back(*found->second);
     }
-    auto boundary = offset_loop(loop, loop_walls);
+    auto boundary = offset_loop(loop, loop_walls, kernel);
     if (signed_area(boundary) < 0.0) {
         std::reverse(boundary.begin(), boundary.end());
         for (auto& segment : boundary) {
@@ -998,6 +1023,18 @@ WallMeasurementResult derive_exterior_wall_measurement(
     return {std::move(boundary), source_for_walls(walls)};
 }
 
+WallMeasurementResult derive_exterior_wall_measurement(
+    const std::map<std::string, Entity, std::less<>>& entities,
+    const std::vector<std::string>& wall_ids) {
+    return derive_exterior_wall_measurement_impl(entities, wall_ids, OffsetKernel::stable);
+}
+
+WallMeasurementResult derive_legacy_exterior_wall_measurement(
+    const std::map<std::string, Entity, std::less<>>& entities,
+    const std::vector<std::string>& wall_ids) {
+    return derive_exterior_wall_measurement_impl(entities, wall_ids, OffsetKernel::legacy_v1);
+}
+
 std::vector<std::string> exterior_wall_measurement_source_ids(const Entity& owner) {
     if (owner.type != "measurement_boundary" || !owner.properties.is_object() ||
         !owner.properties.contains("wall_measurement_source"))
@@ -1008,9 +1045,9 @@ std::vector<std::string> exterior_wall_measurement_source_ids(const Entity& owne
     return ids;
 }
 
-WallMeasurementResult derive_replacement_exterior_wall_measurement(
+static WallMeasurementResult derive_replacement_exterior_wall_measurement_impl(
     const std::map<std::string, Entity, std::less<>>& entities, const Entity& owner,
-    const std::vector<std::string>& wall_ids) {
+    const std::vector<std::string>& wall_ids, OffsetKernel kernel) {
     if (owner.type != "measurement_boundary" ||
         inspect_boundary_entity_version(owner).format != BoundaryEntityFormat::identified_v1 ||
         !owner.properties.contains("wall_measurement_source"))
@@ -1092,7 +1129,19 @@ WallMeasurementResult derive_replacement_exterior_wall_measurement(
     }
     for (const auto* field : {"elevation_m", "elevation"})
         if (owner.properties.contains(field)) { check_plane(number(owner.properties.at(field), "Measured owner elevation")); break; }
-    return derive_exterior_wall_measurement(entities, wall_ids);
+    return derive_exterior_wall_measurement_impl(entities, wall_ids, kernel);
+}
+
+WallMeasurementResult derive_replacement_exterior_wall_measurement(
+    const std::map<std::string, Entity, std::less<>>& entities, const Entity& owner,
+    const std::vector<std::string>& wall_ids) {
+    return derive_replacement_exterior_wall_measurement_impl(entities, owner, wall_ids, OffsetKernel::stable);
+}
+
+WallMeasurementResult derive_legacy_replacement_exterior_wall_measurement(
+    const std::map<std::string, Entity, std::less<>>& entities, const Entity& owner,
+    const std::vector<std::string>& wall_ids) {
+    return derive_replacement_exterior_wall_measurement_impl(entities, owner, wall_ids, OffsetKernel::legacy_v1);
 }
 
 bool wall_measurement_source_current(const DocumentSnapshot& document, const Entity& boundary) {
@@ -1103,13 +1152,21 @@ bool wall_measurement_source_current(const DocumentSnapshot& document, const Ent
         if (boundary.type != "boundary" && boundary.type != "measurement_boundary") return false;
         std::vector<std::string> wall_ids;
         validate_source_schema(*source_property, wall_ids);
-        const auto expected = derive_exterior_wall_measurement(document, wall_ids);
-        if (normalize_source_order(*source_property) != expected.source ||
-            !boundary_context_matches(boundary, expected.source))
-            return false;
         const auto actual = actual_boundary_geometry(boundary);
         if (!validate_boundary(actual).empty()) return false;
-        return edge_keys(actual) == edge_keys(expected.boundary);
+        const auto matches = [&](OffsetKernel kernel) {
+            const auto expected = derive_exterior_wall_measurement_impl(document.entities(), wall_ids, kernel);
+            return normalize_source_order(*source_property) == expected.source &&
+                boundary_context_matches(boundary, expected.source) &&
+                edge_keys(actual) == edge_keys(expected.boundary);
+        };
+        try {
+            if (matches(OffsetKernel::stable)) return true;
+        } catch (const std::invalid_argument&) {
+            // A retained v1 gap may be outside the stable roundoff envelope.
+            // The legacy result must still match the complete source/outline.
+        }
+        return matches(OffsetKernel::legacy_v1);
     } catch (const std::exception&) {
         return false;
     }

@@ -256,7 +256,10 @@ void rewrite_logical_digest(const std::filesystem::path& path) {
     sqlite3_stmt* statement = nullptr;
     require(sqlite3_prepare_v2(
                 database,
-                format >= 9
+                format >= 18
+                    ? "SELECT revision,parent_revision,source_revision,action,name,undo_stack_json,"
+                      "redo_stack_json,boundary_translation_json,boundary_transform_json,boundary_edit_json,boundary_constraint_changes_json,boundary_translations_json,boundary_transforms_json FROM revisions ORDER BY revision"
+                    : format >= 9
                     ? "SELECT revision,parent_revision,source_revision,action,name,undo_stack_json,"
                       "redo_stack_json,boundary_translation_json,boundary_transform_json,boundary_edit_json,boundary_constraint_changes_json,boundary_translations_json FROM revisions ORDER BY revision"
                     : format >= 8
@@ -304,6 +307,8 @@ void rewrite_logical_digest(const std::filesystem::path& path) {
         if (format >= 9 && sqlite3_column_type(statement, 11) != SQLITE_NULL)
             manifest["history"].back()["boundary_translations"] =
                 nlohmann::json::parse(sqlite_text(statement, 11));
+        if (format >= 18 && sqlite3_column_type(statement,12)!=SQLITE_NULL)
+            manifest["history"].back()["boundary_transforms"]=nlohmann::json::parse(sqlite_text(statement,12));
     }
     sqlite3_finalize(statement);
 
@@ -2391,6 +2396,34 @@ void test_reopen_preserves_redo_navigation_and_named_abandoned_branch() {
             "branch replacement receipt should name the exact published revision");
 }
 
+void test_rigid_group_storage_and_history_floors() {
+    TempDirectory temp;
+    auto document=Document::create({identified_boundary("rigid-group-area")});const auto before=document.snapshot();
+    const sketch::TransformBoundaries command{document.revision(),{{"rigid-group-area",{{.5,.5},.37,true,false,{7,-3}}}},{},"Rotate retained area"};
+    document.apply(command);const auto transformed=document.snapshot();
+    auto deleted=Document::fork(transformed);deleted.apply(ApplyEntityChanges{deleted.revision(),{EntityChange::erase("rigid-group-area")},{},"Delete transformed owner later"});
+    document.undo(document.revision());
+    for(const auto& snapshot:{transformed,document.snapshot(),deleted.snapshot()}) {
+        require(ProjectStore::required_format_version(snapshot)==18,"current, undone and deleted grouped transform history requires native eighteen");
+        const auto path=temp.path/("rigid-group-"+sketch::make_stable_id()+".bldproj");(void)ProjectStore::save(path,snapshot);
+        auto loaded=ProjectStore::load(path);require(loaded.document.snapshot().entities()==snapshot.entities() && loaded.document.snapshot().history().size()==snapshot.history().size(),"native eighteen must reopen exact grouped transform history and navigation");
+        if(snapshot.entities()==before.entities()) {loaded.document.redo(loaded.document.revision());require(loaded.document.snapshot().entities()==transformed.entities(),"undone grouped transform reopens with exact redo state");}
+        const auto downgrade=temp.path/("rigid-underfloor-"+sketch::make_stable_id()+".bldproj");std::filesystem::copy_file(path,downgrade);
+        execute_sql(downgrade,"PRAGMA user_version=17; UPDATE metadata SET value='17' WHERE key='format_version'");rewrite_logical_digest(downgrade);
+        const auto digest=ProjectStore::file_sha256(downgrade);
+        require_error([&]{(void)ProjectStore::load(downgrade);},StorageErrorCode::integrity_failure,"recomputed digest cannot downgrade the grouped transform proof column to native seventeen");
+        require(ProjectStore::file_sha256(downgrade)==digest,"refused grouped-transform downgrade preserves exact file bytes");
+    }
+    const auto original=temp.path/"rigid-original.bldproj";(void)ProjectStore::save(original,transformed);
+    for(const auto* mutation:{"UPDATE revisions SET boundary_transforms_json=NULL WHERE revision=1",
+        "UPDATE revisions SET boundary_transforms_json=json_set(boundary_transforms_json,'$.transformations[0].transform.rotation_radians',0.5) WHERE revision=1",
+        "UPDATE revisions SET boundary_transforms_json=json_set(boundary_transforms_json,'$.unknown',true) WHERE revision=1"}) {
+        const auto forged=temp.path/("rigid-forged-"+sketch::make_stable_id()+".bldproj");std::filesystem::copy_file(original,forged);
+        execute_sql(forged,mutation);rewrite_logical_digest(forged);
+        require_error([&]{(void)ProjectStore::load(forged);},StorageErrorCode::integrity_failure,"removed, forged or unknown grouped transform proof must reject despite a recomputed digest");
+    }
+}
+
 void test_reviewed_exterior_source_reader_floor() {
   for (const bool fresh : {false,true}) {
     TempDirectory temp;
@@ -2491,6 +2524,7 @@ void test_native_room_topology_is_validated_on_restore() {
 int main() {
     sketch::testing::noninteractive_errors();
     try {
+        test_rigid_group_storage_and_history_floors();
         test_reviewed_exterior_source_reader_floor();
         test_physical_arc_length_history_requires_v12();
         test_direct_curve_length_history_requires_v13();

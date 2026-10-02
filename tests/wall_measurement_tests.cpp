@@ -15,6 +15,7 @@
 #include <iostream>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <numbers>
 #include <set>
 #include <stdexcept>
@@ -325,6 +326,60 @@ void curved_exterior_is_analytical_reversible_and_current() {
     require(!wall_measurement_source_current(changed_arc_document.snapshot(),
                 changed_arc_document.snapshot().entities().at("area-1")),
             "changing only a source arc sweep with fixed endpoints must stale the measured boundary");
+}
+
+void tangent_capsule_offsets_are_rigid_covariant_without_false_closure() {
+    auto shell=capsule_walls(.4);
+    shell[0].baseline.end.x=5;shell[1].baseline.start.x=5;shell[1].baseline.end.x=5;shell[2].baseline.start.x=5;
+    auto original=Document::create(base_entities(shell));
+    const auto outline=derive_exterior_wall_measurement(original.snapshot(),wall_ids(shell)).boundary;
+    for(const bool reflected:{false,true}) for(const double angle:{.37,-.81}) {
+        const PlanarTransform transform{{2,1.5},angle,reflected,false,{7,-3}};
+        auto moved=shell;for(auto& wall:moved)wall.baseline=transform_segment(wall.baseline,transform);
+        auto document=Document::create(base_entities(moved));
+        const auto derived=derive_exterior_wall_measurement(document.snapshot(),wall_ids(moved)).boundary;
+        for(const auto& edge:outline) {
+            const auto expected=transform_segment(edge,transform);unsigned matches=0;
+            const auto equivalent=[&](const Segment& candidate) {
+                const auto scalar=[](double a,double b) {
+                    return std::abs(a-b)<=128*std::numeric_limits<double>::epsilon()*std::max({1.0,std::abs(a),std::abs(b),9.0});
+                };
+                return scalar(expected.start.x,candidate.start.x) && scalar(expected.start.y,candidate.start.y) &&
+                    scalar(expected.end.x,candidate.end.x) && scalar(expected.end.y,candidate.end.y) &&
+                    scalar(expected.sweep_radians,candidate.sweep_radians);
+            };
+            for(const auto& candidate:derived) {
+                if(equivalent(candidate))++matches;
+                if(equivalent(Segment{candidate.end,candidate.start,-candidate.sweep_radians}))++matches;
+            }
+            require(matches==1,"rotated/reflected tangent capsule must retain unique machine-precision analytical correspondence");
+        }
+    }
+    // A real separation is much larger than the arithmetic error envelope,
+    // although it is smaller than the former geometry-tolerance allowance.
+    auto gap=shell;gap[2].thickness+=2e-9;
+    auto gap_document=Document::create(base_entities(gap));
+    rejects([&]{(void)derive_exterior_wall_measurement(gap_document.snapshot(),wall_ids(gap));},
+        "a genuinely separated near-tangent line and circular offset must refuse rather than fabricate a common corner");
+    const auto retained_gap=derive_legacy_exterior_wall_measurement(gap_document.snapshot().entities(),wall_ids(gap));
+    auto retained_gap_entities=base_entities(gap);
+    retained_gap_entities.push_back(measurement_entity(retained_gap.boundary,retained_gap.source));
+    auto retained_gap_document=Document::create(retained_gap_entities);
+    require(wall_measurement_source_current(retained_gap_document.snapshot(),retained_gap_document.snapshot().entities().at("area-1")),
+        "a complete exact retained v1 gap outline remains current when the stable kernel refuses its sources");
+    auto forged_gap=retained_gap_document.snapshot().entities().at("area-1");
+    forged_gap.properties["boundary"][0]["start"][0]=forged_gap.properties["boundary"][0]["start"][0].get<double>()+1e-12;
+    require(!wall_measurement_source_current(retained_gap_document.snapshot(),forged_gap),
+        "legacy source compatibility must not admit even sub-tolerance outline edits");
+    forged_gap=retained_gap_document.snapshot().entities().at("area-1");forged_gap.properties["floor_id"]="changed-floor";
+    require(!wall_measurement_source_current(retained_gap_document.snapshot(),forged_gap),
+        "legacy source compatibility must retain exact owner context checks");
+    auto secant=shell;secant[2].thickness-=2e-9;
+    auto secant_document=Document::create(base_entities(secant));
+    const auto secant_outline=derive_exterior_wall_measurement(secant_document.snapshot(),wall_ids(secant)).boundary;
+    require(std::any_of(secant_outline.begin(),secant_outline.end(),[](const Segment& edge) {
+        return edge.sweep_radians!=0 && std::abs(std::abs(edge.sweep_radians)-std::numbers::pi)>1e-6;
+    }),"a genuine near-tangent secant beyond input roundoff must retain distinct intersections and changed arc sweep");
 }
 
 void concave_curved_wall_offsets_concentrically_and_analytically() {
@@ -1260,6 +1315,11 @@ void reviewed_source_replacement_preserves_owner_and_proofs() {
 
 int main(int argc, char** argv) {
     try {
+        if (argc > 1 && std::string_view(argv[1]) == "--tangent-offset-only") {
+            tangent_capsule_offsets_are_rigid_covariant_without_false_closure();
+            std::cout << "Tangent offset workflows passed\n";
+            return 0;
+        }
         if (argc > 1 && std::string_view(argv[1]) == "--wall-source-rebind-only") {
             reviewed_source_replacement_preserves_owner_and_proofs();
             std::cout << "Wall source rebind workflows passed\n";
@@ -1270,6 +1330,7 @@ int main(int argc, char** argv) {
         stable_wall_identity_seeds_output_order_across_coordinate_edits();
         concave_l_outline_and_per_wall_thickness_are_respected();
         curved_exterior_is_analytical_reversible_and_current();
+        tangent_capsule_offsets_are_rigid_covariant_without_false_closure();
         concave_curved_wall_offsets_concentrically_and_analytically();
         major_arc_endpoint_tangent_order_keeps_partition_out_of_exterior();
         four_concentric_quarter_arcs_offset_as_one_exact_circle();

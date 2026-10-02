@@ -11,9 +11,13 @@
 #include "sketch/annotation_entity_codec.hpp"
 #include "sketch/georeferencing_entity_codec.hpp"
 #include "sketch/constraint_integrity.hpp"
+#include "sketch/constraint_entity.hpp"
 #include "sketch/constraint_wall_edit.hpp"
 #include "sketch/boundary_integrity.hpp"
 #include "sketch/boundary_dimension.hpp"
+#include "sketch/boundary_transform.hpp"
+#include "sketch/wall_measurement.hpp"
+#include "sketch/project_organization.hpp"
 #include "sketch/wall_semantics.hpp"
 #include "sketch/roof_join_semantics.hpp"
 #include "sketch/slab_semantics.hpp"
@@ -34,6 +38,7 @@
 #include <iomanip>
 #include <initializer_list>
 #include <limits>
+#include <numbers>
 #include <random>
 #include <set>
 #include <sstream>
@@ -1127,9 +1132,10 @@ std::optional<std::string> validate_state(const std::map<std::string, Entity, st
 void validate_constraint_change(const std::map<std::string, Entity, std::less<>>& before,
                                 const std::map<std::string, Entity, std::less<>>& after,
                                 bool qualified_curve_edits=false,
-                                bool validate_curve_provenance=true) {
+                                bool validate_curve_provenance=true,
+                                bool qualified_rigid_transform=false) {
     try {
-        validate_constraint_transition(before, after);
+        validate_constraint_transition(before, after, qualified_rigid_transform);
         if (validate_curve_provenance)
             validate_constraint_wall_geometry_transition(before,after,qualified_curve_edits);
     }
@@ -1337,13 +1343,15 @@ static void validate_split_dimension_lifetime(const BoundaryGeometryEdit& edit,
 
 std::map<std::string, Entity, std::less<>> boundary_constraint_entities(
     const std::map<std::string, Entity, std::less<>>& source,
-    const ApplyBoundaryConstraintChanges& command) {
+    const ApplyBoundaryConstraintChanges& command, bool retained_replay = false) {
     if (command.boundary_edits.empty() && command.wall_edits.empty())
         document_error(DocumentErrorCode::invalid_entity,
                        "Boundary constraint transaction requires geometry edits");
     auto result = source;
     try {
-        if (!command.boundary_edits.empty()) result = edited_boundary_entities_batch(result, command.boundary_edits);
+        if (!command.boundary_edits.empty()) result = retained_replay
+            ? replayed_boundary_entities_batch(result, command.boundary_edits)
+            : edited_boundary_entities_batch(result, command.boundary_edits);
     } catch (const std::exception& error) {
         document_error(DocumentErrorCode::invalid_entity, error.what());
     }
@@ -1447,6 +1455,285 @@ std::map<std::string, Entity, std::less<>> boundary_translation_entities(
     validate_boundary_change(history, intermediate, result);
     try { validate_boundary_identity_transition(history, source, result); }
     catch (const std::exception& error) { document_error(DocumentErrorCode::invalid_entity, error.what()); }
+    return result;
+}
+
+Boundary uniquely_aligned_rigid_exterior(const Boundary& expected, const Boundary& derived,
+                                        const PlanarTransform& transform) {
+    if (expected.size() != derived.size())
+        throw std::invalid_argument("Rigid exterior transform changed analytical topology");
+    const auto within_roundoff = [&](double a, double b, bool coordinate) {
+        double scale = std::max({1.0, std::abs(a), std::abs(b)});
+        if (coordinate)
+            scale = std::max({scale, std::abs(transform.pivot.x), std::abs(transform.pivot.y),
+                std::abs(transform.offset.x), std::abs(transform.offset.y)});
+        return std::abs(a - b) <= 128.0 * std::numeric_limits<double>::epsilon() * scale;
+    };
+    const auto same = [&](const Segment& a, const Segment& b) {
+        return within_roundoff(a.start.x,b.start.x,true) && within_roundoff(a.start.y,b.start.y,true) &&
+            within_roundoff(a.end.x,b.end.x,true) && within_roundoff(a.end.y,b.end.y,true) &&
+            within_roundoff(a.sweep_radians,b.sweep_radians,false);
+    };
+    Boundary aligned;
+    unsigned matches = 0;
+    for (std::size_t offset = 0; offset < derived.size(); ++offset) {
+        for (const bool reverse : {false, true}) {
+            Boundary candidate;
+            bool match = true;
+            for (std::size_t i = 0; i < derived.size(); ++i) {
+                auto segment = derived[(offset + (reverse ? derived.size() - i : i)) % derived.size()];
+                if (reverse) {
+                    std::swap(segment.start, segment.end);
+                    segment.sweep_radians = -segment.sweep_radians;
+                }
+                if (!same(expected[i], segment)) {
+                    match = false;
+                    break;
+                }
+                candidate.push_back(segment);
+            }
+            if (match) {
+                ++matches;
+                aligned = std::move(candidate);
+            }
+        }
+    }
+    if (matches != 1)
+        throw std::invalid_argument("Rigid exterior requires one unique machine-precision analytical correspondence");
+    return aligned;
+}
+
+std::map<std::string, Entity, std::less<>> boundary_transform_entities(
+    const BoundaryIdentityHistory& history,
+    const std::map<std::string, Entity, std::less<>>& source,
+    const TransformBoundaries& command) {
+    if (command.transformations.empty())
+        document_error(DocumentErrorCode::invalid_entity,"Boundary transform group is empty");
+    (void)command_to_json(command); // The retained proof must be persistable too.
+    const auto& shared = command.transformations.front().transform;
+    std::set<std::string> owners, protected_ids, source_walls, moved_walls;
+    for (const auto& transformation : command.transformations) {
+        validate_boundary_transform(transformation);
+        if (!(transformation.transform == shared))
+            document_error(DocumentErrorCode::invalid_entity,"Boundary transform group requires one shared transform");
+        if (!owners.insert(transformation.boundary_id).second)
+            document_error(DocumentErrorCode::duplicate_change,"Boundary is transformed more than once");
+    }
+    protected_ids = owners;
+    const auto source_current = [&](const auto& entities, const Entity& owner) {
+        try {
+            const auto ids = exterior_wall_measurement_source_ids(owner);
+            const auto derived = derive_exterior_wall_measurement(entities,ids);
+            auto recorded = owner.properties.at("wall_measurement_source");
+            auto& walls = recorded.at("walls");
+            std::sort(walls.begin(), walls.end(), [](const auto& a, const auto& b) {
+                return a.at("id").template get<std::string>() < b.at("id").template get<std::string>();
+            });
+            if (recorded != derived.source)
+                return false;
+            const auto actual = boundary_geometry(decode_identified_boundary_entity(owner));
+            const auto aligned = uniquely_aligned_rigid_exterior(actual,derived.boundary,PlanarTransform{});
+            for (std::size_t i = 0; i < actual.size(); ++i) {
+                const auto& a = actual[i];
+                const auto& b = aligned[i];
+                if (a.start.x != b.start.x || a.start.y != b.start.y || a.end.x != b.end.x ||
+                    a.end.y != b.end.y || a.sweep_radians != b.sweep_radians)
+                    return false;
+            }
+            return true;
+        } catch (const std::exception&) {
+            return false;
+        }
+    };
+    for (const auto& [id, entity] : source) {
+        if (can_recognize_boundary_dimension_entity_type(entity.type)) {
+            const auto dimension = decode_boundary_dimension_entity(entity);
+            if (dimension.dimension && owners.contains(dimension.dimension->boundary_id))
+                protected_ids.insert(id);
+        }
+    }
+    for (const auto& id : owners) {
+        const auto& owner = source.at(id);
+        if (const auto deductions = owner.properties.find("deduction_ids"); deductions != owner.properties.end()) {
+            if (!deductions->is_array())
+                throw std::invalid_argument("Measured deductions must be an array");
+            std::set<std::string> unique;
+            for (const auto& value : *deductions) {
+                if (!value.is_string() || !owners.contains(value.get<std::string>()) || value == id ||
+                    !unique.insert(value.get<std::string>()).second)
+                    throw std::invalid_argument("Rigid transform must include every retained deduction exactly once");
+            }
+        }
+        if (owner.properties.contains("wall_measurement_source")) {
+            const auto ids = exterior_wall_measurement_source_ids(owner);
+            // A transform cannot repair a source that was already stale.
+            if (!source_current(source,owner))
+                throw std::invalid_argument("Exterior transform requires current recorded source context");
+            source_walls.insert(ids.begin(),ids.end());
+        }
+    }
+    auto intermediate = transformed_boundary_entities_batch(source,command.transformations);
+    auto result = intermediate;
+    std::set<std::string> touched;
+    for (const auto& change : command.entity_changes) {
+        const auto& id = change.kind == EntityChangeKind::upsert ? change.entity.id : change.entity_id;
+        if (protected_ids.contains(id) || !touched.insert(id).second)
+            document_error(DocumentErrorCode::duplicate_change,"Supplement overlaps a transformed owner or dimension: " + id);
+        const auto previous = source.find(id);
+        if (change.kind != EntityChangeKind::upsert || previous == source.end() ||
+            change.entity.type != previous->second.type || change.entity.required != previous->second.required)
+            throw std::invalid_argument("Rigid transform supplements must preserve existing entity identities and types");
+        if (can_recognize_boundary_entity_type(change.entity.type) ||
+            can_recognize_boundary_dimension_entity_type(change.entity.type))
+            throw std::invalid_argument("Rigid transform supplements cannot inject raw boundary or dimension geometry");
+        validate_entity(change.entity);
+        if (change.entity.type == "wall") {
+            const auto read = [](const Entity& wall) {
+                const auto& value = wall.properties.at("baseline");
+                return Segment{{value.at("start")[0].get<double>(),value.at("start")[1].get<double>()},
+                    {value.at("end")[0].get<double>(),value.at("end")[1].get<double>()},value.value("sweep_radians",0.0)};
+            };
+            const auto expected = transform_segment(read(previous->second), shared);
+            const auto actual = read(change.entity);
+            if (expected.start.x != actual.start.x || expected.start.y != actual.start.y ||
+                expected.end.x != actual.end.x || expected.end.y != actual.end.y || expected.sweep_radians != actual.sweep_radians)
+                throw std::invalid_argument("Supplemental wall baseline differs from the shared rigid transform");
+            for (const auto* key : {"thickness_m","thickness","height_m","height","elevation_m","elevation",
+                                   "property_id","building_id","floor_id","layer_id","phase_id","vertical_placement"}) {
+                if (previous->second.properties.contains(key) != change.entity.properties.contains(key) ||
+                    (previous->second.properties.contains(key) && previous->second.properties.at(key) != change.entity.properties.at(key)))
+                    throw std::invalid_argument("Rigid wall transform must preserve physical dimensions and source context");
+            }
+            moved_walls.insert(id);
+        } else if (change.entity.type == "opening") {
+            // Hosting distances do not change when the host endpoint identities are retained.
+            for (const auto* key : {"wall_id", "opening_kind", "offset_m", "offset", "width_m", "width",
+                                   "height_m", "height", "sill_m", "sill_height_m", "sill_height",
+                                   "property_id", "building_id", "floor_id", "layer_id", "phase_id"}) {
+                if (previous->second.properties.contains(key) != change.entity.properties.contains(key) ||
+                    (previous->second.properties.contains(key) &&
+                     previous->second.properties.at(key) != change.entity.properties.at(key)))
+                    throw std::invalid_argument("Rigid opening transform must preserve its host and physical dimensions");
+            }
+        }
+        result.insert_or_assign(id,change.entity);
+    }
+    const bool identity = shared.rotation_radians == 0.0 && !shared.flip_horizontal && !shared.flip_vertical &&
+        shared.offset.x == 0.0 && shared.offset.y == 0.0;
+    for (const auto& id : source_walls)
+        if (!moved_walls.contains(id) && !identity)
+            throw std::invalid_argument("Rigid exterior transform must include every source wall");
+    std::set<std::string> transformed_ids = owners;
+    transformed_ids.insert(moved_walls.begin(),moved_walls.end());
+    for (const auto& [id, entity] : source) {
+        if (entity.type != "constraint")
+            continue;
+        const auto decoded = decode_constraint_entity(entity);
+        if (!decoded.supported())
+            throw std::invalid_argument(decoded.unsupported_reason);
+        const auto& bindings = decoded.constraint->bindings;
+        const bool affected = std::any_of(bindings.begin(),bindings.end(),[&](const auto& value){return transformed_ids.contains(value.owner_id);});
+        if (!affected) {
+            if (result.at(id) != entity)
+                throw std::invalid_argument("Rigid transform cannot rewrite an unrelated constraint");
+            continue;
+        }
+        if (!std::all_of(bindings.begin(),bindings.end(),[&](const auto& value){return transformed_ids.contains(value.owner_id);}))
+            throw std::invalid_argument("Rigid transform cannot move only one owner of an external hard relation");
+        auto expected = *decoded.constraint;
+        if (expected.anchor)
+            expected.anchor = transform_point(*expected.anchor, shared);
+        if (expected.relation == ConstraintRelationKind::horizontal || expected.relation == ConstraintRelationKind::vertical) {
+            if (std::abs(std::remainder(shared.rotation_radians,std::numbers::pi/2)) > 1e-12)
+                throw std::invalid_argument("Axis-locked relations require a quarter-turn rigid rotation");
+            if (std::llround(shared.rotation_radians/(std::numbers::pi/2)) % 2 != 0)
+                expected.relation = expected.relation == ConstraintRelationKind::horizontal ? ConstraintRelationKind::vertical : ConstraintRelationKind::horizontal;
+        }
+        if (result.at(id) != encode_constraint_entity(expected,&entity))
+            throw std::invalid_argument("Rigid transform must preserve constraint endpoint identities, values and metadata");
+    }
+    // Reject ordinary receipt edits before any canonical source reconciliation.
+    validate_boundary_change(history,intermediate,result);
+    if (identity) {
+        if (result != source)
+            throw std::invalid_argument("Identity rigid transform cannot perform supplemental edits");
+        return source;
+    }
+    for (const auto& id : owners) {
+        if (!result.at(id).properties.contains("wall_measurement_source"))
+            continue;
+        const auto ids = exterior_wall_measurement_source_ids(result.at(id));
+        const auto exterior = derive_replacement_exterior_wall_measurement(result,result.at(id),ids);
+        auto boundary = decode_identified_boundary_entity(result.at(id));
+        const auto aligned = uniquely_aligned_rigid_exterior(boundary_geometry(boundary),exterior.boundary,shared);
+        bool exact = true;
+        for (std::size_t i = 0; i < aligned.size(); ++i) {
+            const auto& a = boundary.segments[i].segment;
+            const auto& b = aligned[i];
+            exact = exact && a.start.x == b.start.x && a.start.y == b.start.y && a.end.x == b.end.x &&
+                a.end.y == b.end.y && a.sweep_radians == b.sweep_radians;
+            boundary.segments[i].segment = b;
+        }
+        if (!exact || result.at(id).properties.at("wall_measurement_source") != exterior.source) {
+            BoundaryGeometryEdit edit;
+            edit.boundary_id = id;
+            edit.target_id = id;
+            edit.kind = BoundaryGeometryEditKind::redefine_boundary;
+            edit.replacement_segments = encode_identified_boundary_entity(boundary).properties.at("segments");
+            edit.replacement_wall_source_ids = ids;
+            result = edited_boundary_entities(result, edit);
+        }
+    }
+    const auto organization = organize_project(result);
+    for (const auto& [id, owner] : source) {
+        if (owners.contains(id) || !can_recognize_boundary_entity_type(owner.type))
+            continue;
+        if (owner.properties.contains("wall_measurement_source")) {
+            const auto ids = exterior_wall_measurement_source_ids(owner);
+            if (std::any_of(ids.begin(),ids.end(),[&](const auto& wall){return moved_walls.contains(wall);}) &&
+                source_current(source,owner) && !source_current(result,result.at(id)))
+                throw std::invalid_argument("Rigid transform would stale an unchanged exterior source consumer");
+        }
+        if (const auto deductions = owner.properties.find("deduction_ids"); deductions != owner.properties.end()) {
+            std::vector<Boundary> holes;
+            bool affected = false;
+            for (const auto& child_id : *deductions) {
+                if (!child_id.is_string())
+                    throw std::invalid_argument("Measured deduction identifiers are invalid");
+                affected = affected || owners.contains(child_id.get<std::string>());
+                const auto& child = result.at(child_id.get<std::string>());
+                const auto identified = inspect_boundary_entity_version(child).format == BoundaryEntityFormat::identified_v1
+                    ? child : upgrade_legacy_boundary_entity(child);
+                holes.push_back(boundary_geometry(decode_identified_boundary_entity(identified)));
+            }
+            if (affected) {
+                const auto identified = inspect_boundary_entity_version(owner).format == BoundaryEntityFormat::identified_v1
+                    ? owner : upgrade_legacy_boundary_entity(owner);
+                if (const auto invalid = validate_boundary_holes(boundary_geometry(decode_identified_boundary_entity(identified)), holes))
+                    throw std::invalid_argument("Rigid transform would invalidate an unchanged deduction consumer: " + *invalid);
+            }
+        }
+    }
+    for (const auto& id : owners) {
+        const auto& owner = result.at(id);
+        if (!owner.properties.contains("deduction_ids"))
+            continue;
+        const auto context = organization.drawing_context(id);
+        std::vector<Boundary> holes;
+        for (const auto& child_id : owner.properties.at("deduction_ids")) {
+            const auto& child = result.at(child_id.get<std::string>());
+            const auto child_context = organization.drawing_context(child.id);
+            if (context || child_context) {
+                if (!context || !child_context || context->property_id != child_context->property_id ||
+                    context->building_id != child_context->building_id || context->floor_id != child_context->floor_id)
+                    throw std::invalid_argument("Rigid transform deductions must retain their measured context");
+            }
+            holes.push_back(boundary_geometry(decode_identified_boundary_entity(child)));
+        }
+        if (const auto invalid = validate_boundary_holes(boundary_geometry(decode_identified_boundary_entity(owner)), holes))
+            throw std::invalid_argument(*invalid);
+    }
+    validate_boundary_identity_transition(history,source,result);
     return result;
 }
 
@@ -1641,6 +1928,27 @@ nlohmann::json command_to_json(const Command& command) {
             return nlohmann::json{{"version", 1}, {"kind", "apply_entity_changes"},
                                   {"expected_revision", typed.expected_revision}, {"message", typed.message},
                                   {"entity_changes", std::move(entities)}, {"asset_changes", std::move(assets)}};
+        } else if constexpr (std::is_same_v<T, TransformBoundaries>) {
+            auto encoded = command_to_json(ApplyEntityChanges{
+                typed.expected_revision, typed.entity_changes, {}, typed.message});
+            encoded["kind"] = "transform_boundaries";
+            encoded.erase("asset_changes");
+            encoded["transformations"] = nlohmann::json::array();
+            if (typed.transformations.empty())
+                document_error(DocumentErrorCode::invalid_entity, "Boundary transform group is empty");
+            std::set<std::string> owners;
+            const auto& shared = typed.transformations.front().transform;
+            for (const auto& transformation : typed.transformations) {
+                if (!(transformation.transform == shared))
+                    document_error(DocumentErrorCode::invalid_entity, "Boundary transform group requires one shared transform");
+                if (!owners.insert(transformation.boundary_id).second)
+                    document_error(DocumentErrorCode::duplicate_change, "Boundary is transformed more than once");
+                encoded["transformations"].push_back(command_to_json(
+                    TransformBoundary{typed.expected_revision, transformation}).at("transformation"));
+            }
+            if (encoded.dump().size() > 1024 * 1024)
+                document_error(DocumentErrorCode::invalid_entity, "Boundary transform group exceeds the persisted proof budget");
+            return encoded;
         } else if constexpr (std::is_same_v<T, TranslateBoundaries>) {
             auto encoded = command_to_json(ApplyEntityChanges{
                 typed.expected_revision, typed.entity_changes, {}, typed.message});
@@ -1724,6 +2032,31 @@ Command command_from_json(const nlohmann::json& value) {
         const auto kind = value.at("kind").get<std::string>();
         if (value.at("version") != 1 && kind != "apply_boundary_constraint_changes")
             document_error(DocumentErrorCode::invalid_entity,"Unsupported command envelope version");
+        if (kind == "transform_boundaries") {
+            command_exact_fields(value, {"version", "kind", "expected_revision", "message", "entity_changes", "transformations"},
+                                 DocumentErrorCode::invalid_entity, "serialized transform group");
+            if (!value.at("transformations").is_array() || value.at("transformations").empty())
+                document_error(DocumentErrorCode::invalid_entity, "Transformations must be a nonempty array");
+            auto ordinary = value;
+            ordinary["kind"] = "apply_entity_changes";
+            ordinary.erase("transformations");
+            ordinary["asset_changes"] = nlohmann::json::array();
+            const auto changes = std::get<ApplyEntityChanges>(command_from_json(ordinary));
+            TransformBoundaries result{changes.expected_revision, {}, changes.entity_changes, changes.message};
+            std::set<std::string> owners;
+            for (const auto& transformation : value.at("transformations")) {
+                const auto single = std::get<TransformBoundary>(command_from_json(nlohmann::json{
+                    {"version", 1}, {"kind", "transform_boundary"},
+                    {"expected_revision", result.expected_revision}, {"transformation", transformation}}));
+                if (!owners.insert(single.transformation.boundary_id).second)
+                    document_error(DocumentErrorCode::duplicate_change, "Boundary is transformed more than once");
+                if (!result.transformations.empty() &&
+                    !(result.transformations.front().transform == single.transformation.transform))
+                    document_error(DocumentErrorCode::invalid_entity, "Boundary transform group requires one shared transform");
+                result.transformations.push_back(single.transformation);
+            }
+            return result;
+        }
         if (kind == "translate_boundaries") {
             command_exact_fields(value, {"version", "kind", "expected_revision", "message",
                                          "entity_changes", "translations"},
@@ -2089,6 +2422,22 @@ Revision Document::apply(const Command& command) {
                 validate_boundary_change(boundary_identity_history_, current.entities, next.entities,
                                          next.action == "Propagate room relationships");
                 record_boundary_identity_transition(next_identity_history, current.entities, next.entities);
+            } else if constexpr (std::is_same_v<CommandType, TransformBoundaries>) {
+                next.action = typed_command.message.empty() ? "Transform boundaries" : typed_command.message;
+                validate_action(next.action);
+                next.boundary_transforms = typed_command;
+                try {
+                    next.entities = boundary_transform_entities(boundary_identity_history_, current.entities, typed_command);
+                } catch (const DocumentError&) {
+                    throw;
+                } catch (const std::exception& error) {
+                    document_error(DocumentErrorCode::invalid_entity, error.what());
+                }
+                next_unsupported_constraints = validate_state(next.entities, next.assets);
+                validate_constraint_change(current.entities, next.entities, false, true, true);
+                if (same_state(next, current))
+                    return head_revision_;
+                record_boundary_identity_transition(next_identity_history, current.entities, next.entities);
             } else if constexpr (std::is_same_v<CommandType, TranslateBoundaries>) {
                 next.action = typed_command.message.empty() ? "Translate boundaries" : typed_command.message;
                 validate_action(next.action);
@@ -2303,7 +2652,7 @@ Document Document::restore(DocumentSnapshot snapshot) {
         if (index == 0) {
             if (record.parent_revision.has_value() || record.source_revision.has_value() || record.boundary_translation.has_value() ||
                 record.boundary_transform.has_value() || record.boundary_geometry_edit.has_value() ||
-                record.boundary_constraint_changes.has_value() || record.boundary_translations.has_value() ||
+                record.boundary_constraint_changes.has_value() || record.boundary_translations.has_value() || record.boundary_transforms.has_value() ||
                 record.name.has_value() || record.action != "create" ||
                 !record.undo_stack.empty() || !record.redo_stack.empty()) {
                 document_error(DocumentErrorCode::invalid_history,
@@ -2319,7 +2668,8 @@ Document Document::restore(DocumentSnapshot snapshot) {
             static_cast<unsigned>(record.boundary_transform.has_value()) +
             static_cast<unsigned>(record.boundary_geometry_edit.has_value()) +
             static_cast<unsigned>(record.boundary_constraint_changes.has_value()) +
-            static_cast<unsigned>(record.boundary_translations.has_value());
+            static_cast<unsigned>(record.boundary_translations.has_value()) +
+            static_cast<unsigned>(record.boundary_transforms.has_value());
         if (boundary_proof_count > 1)
             document_error(DocumentErrorCode::invalid_history, "Boundary derivation proofs are mutually exclusive");
         if (record.boundary_transform && (record.name || record.source_revision))
@@ -2337,13 +2687,16 @@ Document Document::restore(DocumentSnapshot snapshot) {
         if (record.boundary_translations && (record.name || record.source_revision))
             document_error(DocumentErrorCode::invalid_history,
                            "Boundary group translation proof is not valid on history navigation or named revisions");
+        if (record.boundary_transforms && (record.name || record.source_revision))
+            document_error(DocumentErrorCode::invalid_history,"Boundary group transform proof is not valid on history navigation or named revisions");
         // Unknown locks retain the read-only latch, but must not suppress
         // stable-endpoint checks for known relations in the same history.
         // Undo/redo restores an exact retained state and its provenance. The
         // source-state and stack checks below validate navigation; mutation
         // rules must not reject restoration of a shorter derivation prefix.
         validate_constraint_change(previous.entities, record.entities,
-            record.boundary_constraint_changes.has_value(), !record.source_revision.has_value());
+            record.boundary_constraint_changes.has_value(), !record.source_revision.has_value(),
+            record.boundary_transforms.has_value() || record.source_revision.has_value());
         if (record.parent_revision != Revision{index - 1}) {
             document_error(DocumentErrorCode::invalid_history,
                            "revision parent must be the immediately preceding event");
@@ -2414,7 +2767,20 @@ Document Document::restore(DocumentSnapshot snapshot) {
         // An exact, validated history navigation may undo an identity upgrade.
         // Ordinary Apply records must never masquerade as that downgrade.
         if (!record.source_revision.has_value()) {
-            if (record.boundary_translations) {
+            if (record.boundary_transforms) {
+                const auto& proof = *record.boundary_transforms;
+                const auto action = proof.message.empty() ? "Transform boundaries" : proof.message;
+                if (proof.expected_revision != previous.revision || record.action != action)
+                    document_error(DocumentErrorCode::invalid_history, "Boundary transform group proof does not match revision");
+                auto expected = previous;
+                try {
+                    expected.entities = boundary_transform_entities(identity_history, previous.entities, proof);
+                } catch (const std::exception& error) {
+                    document_error(DocumentErrorCode::invalid_history, error.what());
+                }
+                if (!same_state(expected, record) || same_state(expected, previous))
+                    document_error(DocumentErrorCode::invalid_history, "Boundary transform group differs from deterministic reconstruction");
+            } else if (record.boundary_translations) {
                 const auto& proof = *record.boundary_translations;
                 const auto action = proof.message.empty() ? "Translate boundaries" : proof.message;
                 if (proof.expected_revision != previous.revision || record.action != action)
@@ -2464,7 +2830,7 @@ Document Document::restore(DocumentSnapshot snapshot) {
                 auto expected = previous;
                 try {
                     validate_split_dimension_lifetime(*record.boundary_geometry_edit, snapshot.history_, index);
-                    expected.entities = edited_boundary_entities(
+                    expected.entities = replayed_boundary_entities(
                         previous.entities, *record.boundary_geometry_edit);
                     validate_boundary_identity_transition(
                         identity_history, previous.entities, record.entities, &*record.boundary_geometry_edit);
@@ -2485,7 +2851,7 @@ Document Document::restore(DocumentSnapshot snapshot) {
                                    "Boundary constraint transaction proof does not match revision");
                 auto expected = previous;
                 try {
-                    expected.entities = boundary_constraint_entities(previous.entities, proof);
+                    expected.entities = boundary_constraint_entities(previous.entities, proof, true);
                     validate_boundary_identity_transition(identity_history, previous.entities, record.entities);
                 } catch (const std::exception& error) {
                     document_error(DocumentErrorCode::invalid_history, error.what());

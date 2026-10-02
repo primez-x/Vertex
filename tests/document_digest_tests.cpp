@@ -46,6 +46,8 @@ void test_full_snapshot_binding() {
         [](auto& record) { record.boundary_translations = TranslateBoundaries{0,
             {{"boundary-1", {8, -4}}, {"boundary-2", {8, -4}}},
             {EntityChange::erase("old-label")}, "group proof"}; },
+        [](auto& record) { record.boundary_transforms = TransformBoundaries{0,
+            {{"boundary-1",{{2,1},.37,true,false,{8,-4}}}}, {}, "rigid group proof"}; },
     };
     for (const auto& mutate : mutations) {
         auto changed = source;

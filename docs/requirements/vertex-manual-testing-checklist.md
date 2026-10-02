@@ -1,6 +1,6 @@
 # Vertex user testing checklist
 
-324 practical tasks, grouped by how you use the app (including U100a). This replaces the earlier engineering-oriented checklist. The old 130-item list is preserved separately as engineering-requirements-checklist.md.
+325 practical tasks, grouped by how you use the app (including U100a). This replaces the earlier engineering-oriented checklist. The old 130-item list is preserved separately as engineering-requirements-checklist.md.
 
 This is a user acceptance list for the intended app, not a claim that every listed action is implemented or working in the current preview. If you cannot find a control, or a feature is absent, mark **Blocked / missing** and describe it. Specialized sections can be skipped if you do not use them or lack the device or sample files.
 
@@ -41,6 +41,7 @@ Start with the workspace, draw a room, close it with the mouse, drag-select it, 
 - Architectural joins and named views (3 tasks)
 - Connected boundary edits and exterior source repair (3 tasks)
 - Appraisal area copying (1 task)
+- Appraisal area rotation and reflection (1 task)
 
 ## Start a project and arrange the workspace
 
@@ -1874,6 +1875,12 @@ drawing; switching modes does not change existing geometry.
 - [ ] **U323 — Copy an appraisal area with its deduction**
   - Steps: Declare a dwelling area and a contained garage deduction with appraisal facts. Select the parent and choose **Clone**; place the copy without overlapping the original. Check both appraisal totals, then change the copied garage boundary and check the totals again. Undo and Redo, save and reopen. Next, select only the parent, use Copy and Paste, and drag the pasted group clear of the original; verify its deduction and totals.
   - Expected: Each copy includes the required garage boundary and deduction relationship, preserving the parent's net area, category and appearance. Editing the copied garage changes only the copied parent's net. The original parent, garage, appearance and totals remain unchanged. Undo/Redo and reopening retain the copies and their deduction links. Copy and Paste of the parent also carries the required deduction so the pasted group can be placed without overlap and qualified independently.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **U324 — Rotate or mirror an appraisal area and its deduction**
+  - Steps: Create a dwelling area with a garage deduction. Select only the dwelling and use its rotation handle; confirm the garage follows in the preview, then press Escape. Rotate again and release. Open **Transform selection**, cancel once, then try both horizontal and vertical flips. Check net area and category totals, Undo and Redo, save and reopen. Repeat with an exterior area measured from walls containing a hosted window or door, and with a light-commercial occupiable area and service deduction.
+  - Expected: Preview includes the parent, deduction and, where used, supporting walls and hosted openings. Cancel leaves them unchanged. Rotation or flipping keeps the same objects, facts, appearance and deduction links; it preserves unrounded areas and category totals. Undo/Redo moves the complete group in one step. Reopening preserves its geometry and current exterior sources. A transformation that would invalidate another area's shared walls, deduction or external locked relationship is refused without changing the drawing.
   - Result: Not tested
   - Notes: ______________________________
 

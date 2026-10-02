@@ -227,7 +227,13 @@ std::optional<std::string> validate_constraint_integrity(const Entities& entitie
     return unsupported;
 }
 
-void validate_constraint_transition(const Entities& before, const Entities& after) {
+void validate_constraint_transition(const Entities& before, const Entities& after,
+                                   bool qualified_rigid_endpoint_transform) {
+    // A verified rigid transform moves named endpoints without reversing
+    // their identities, even when its coordinates exchange start and end.
+    // Exact history navigation likewise restores those retained identities.
+    if (qualified_rigid_endpoint_transform)
+        return;
     std::set<std::string, std::less<>> reversed;
     for (const auto& [id, entity] : before) {
         if (entity.type != "constraint" || !after.contains(id) ||

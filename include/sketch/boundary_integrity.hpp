@@ -5,6 +5,11 @@ namespace sketch {
 [[nodiscard]] std::map<std::string, Entity, std::less<>> transformed_boundary_entities(
     const std::map<std::string, Entity, std::less<>>& source,
     const BoundaryTransformation& transformation);
+// Reconstruct all owners/dimensions from the same source revision. Plain
+// identified owners retain their topology origin as explicit derivation.
+[[nodiscard]] std::map<std::string, Entity, std::less<>> transformed_boundary_entities_batch(
+    const std::map<std::string, Entity, std::less<>>& source,
+    const std::vector<BoundaryTransformation>& transformations);
 // Reconstruct an entire entity state from a qualified receipt-backed offset.
 // Preserves identities and all unrelated entities; invalid derivations throw.
 [[nodiscard]] std::map<std::string, Entity, std::less<>> translated_boundary_entities(
@@ -19,6 +24,15 @@ namespace sketch {
 // Applies solved vertex positions together when sequential intermediate geometry
 // would be invalid. Existing sequential derivations remain byte-compatible.
 [[nodiscard]] std::map<std::string, Entity, std::less<>> edited_boundary_entities_batch(
+    const std::map<std::string, Entity, std::less<>>& source,
+    const std::vector<BoundaryGeometryEdit>& edits);
+// Retained history only: after stable derivation fails to reproduce a source
+// replacement, accept a complete exact original-v1 kernel result. Live edits
+// continue to use edited_boundary_entities[_batch]. No history is rewritten.
+[[nodiscard]] std::map<std::string, Entity, std::less<>> replayed_boundary_entities(
+    const std::map<std::string, Entity, std::less<>>& source,
+    const BoundaryGeometryEdit& edit);
+[[nodiscard]] std::map<std::string, Entity, std::less<>> replayed_boundary_entities_batch(
     const std::map<std::string, Entity, std::less<>>& source,
     const std::vector<BoundaryGeometryEdit>& edits);
 // Validate every supported boundary, qualified construction receipt and

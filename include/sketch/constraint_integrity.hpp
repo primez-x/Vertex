@@ -15,7 +15,8 @@ namespace sketch {
 // in the same atomic candidate state.
 void validate_constraint_transition(
     const std::map<std::string, Entity, std::less<>>& before,
-    const std::map<std::string, Entity, std::less<>>& after);
+    const std::map<std::string, Entity, std::less<>>& after,
+    bool qualified_rigid_endpoint_transform = false);
 
 // Endpoint-authoring and typed replay share this solver-free admission.
 // Only changed geometry is checked against the original drawing topology;

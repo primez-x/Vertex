@@ -2562,6 +2562,95 @@ void test_single_selection_transform_handles() {
             "rotation handle must commit an angular transform");
 }
 
+void test_compound_rotation_exact_preview_protocol() {
+    PlanCanvas canvas;
+    canvas.resize(640,480);
+    canvas.setGridEnabled(false);
+    canvas.setOverviewMapEnabled(false);
+    canvas.setTool(CanvasTool::select);
+    CanvasEntity owner{QStringLiteral("owner"),QStringLiteral("measurement_boundary"),
+        Boundary{{{-1,-.5},{1,-.5},0},{{1,-.5},{1,.5},0},{{1,.5},{-1,.5},0},{{-1,.5},{-1,-.5},0}}};
+    CanvasEntity dependency{QStringLiteral("dependency"),QStringLiteral("wall"),Boundary{{{2,-1},{2,1},0}}};
+    dependency.stroke_color=QColor(220,35,35);
+    canvas.setEntities({owner,dependency});
+    canvas.setSelectedId(owner.id);
+    canvas.setSelectionTransformEnabled(false,true);
+    const auto original=render(canvas,false);
+    const auto output=render(canvas,true);
+    std::uint64_t serial{};
+    int starts=0,commits=0;
+    canvas.setEntityTransformStarted([&](QString id) {
+        require(id==owner.id,"rotation captures the selected root identity once");
+        ++starts;
+    });
+    canvas.setEntityTransformPreviewRequested([&](QString id,double scale,double rotation,Vec2 pivot,std::uint64_t next)
+        ->std::optional<std::vector<CanvasEntity>> {
+        require(id==owner.id && scale==1.0 && std::abs(rotation)>0.5 && std::hypot(pivot.x,pivot.y)<1e-9,
+            "compound rotation proposal contains the numerical angle and retained model pivot");
+        serial=next;
+        require(canvas.markEntityTransformPreviewPending(serial),"current transform may await exact projection");
+        return std::nullopt;
+    });
+    canvas.setEntityTransformRequested([&](QString id,double scale,double rotation) {
+        require(id==owner.id && scale==1.0 && std::abs(rotation)>0.5,"accepted exact rotation commits captured parameters");
+        ++commits;
+        return true;
+    });
+    const auto mouse=[&](QEvent::Type type,QPointF position) {
+        QMouseEvent event(type,position,position,type==QEvent::MouseMove ? Qt::NoButton : Qt::LeftButton,
+            type==QEvent::MouseButtonRelease ? Qt::NoButton : Qt::LeftButton,Qt::NoModifier);
+        QApplication::sendEvent(&canvas,&event);
+    };
+    const auto frame=canvas.selectionBounds();
+    require(frame.has_value(),"compound rotation starts at a visible selection frame");
+    const QPointF pin(frame->center().x(),frame->top()-24);
+    const auto target=frame->center()+QPointF(100,0);
+    mouse(QEvent::MouseButtonPress,pin);
+    mouse(QEvent::MouseMove,target);
+    require(starts==1 && serial && canvas.entityTransformPreviewPending() && commits==0,
+        "pointer rotation waits for authoritative projection without committing");
+    require(images_equal(output,render(canvas,true)),"pending rotation must not alter exported geometry");
+    const auto superseded=serial;
+    mouse(QEvent::MouseMove,frame->center()+QPointF(95,35));
+    require(serial>superseded && !canvas.completeEntityTransformPreview(superseded,std::vector<CanvasEntity>{owner,dependency}),
+        "a superseded rotation projection cannot be admitted");
+    mouse(QEvent::MouseButtonRelease,frame->center()+QPointF(95,35));
+    require(canvas.entityTransformPreviewPending() && commits==0,"early release waits for the final pending projection");
+    auto proposed_owner=owner;
+    proposed_owner.segments=Boundary{{{-.5,-1},{.5,-1},0},{{.5,-1},{.5,1},0},{{.5,1},{-.5,1},0},{{-.5,1},{-.5,-1},0}};
+    auto proposed_dependency=dependency;
+    proposed_dependency.segments={{{-2,-1},{-2,1},0}};
+    require(canvas.completeEntityTransformPreview(serial,std::vector<CanvasEntity>{proposed_owner,proposed_dependency}),
+        "final exact projection includes the retained root and related physical wall");
+    QCoreApplication::processEvents();
+    require(commits==1 && !canvas.entityTransformPreviewPending(),"accepted deferred release commits exactly once");
+    require(images_equal(output,render(canvas,true)),"transient projection cannot change output or retained geometry");
+    mouse(QEvent::MouseButtonPress,pin);
+    mouse(QEvent::MouseMove,target);
+    const auto cancelled=serial;
+    mouse(QEvent::MouseButtonRelease,target);
+    QKeyEvent escape(QEvent::KeyPress,Qt::Key_Escape,Qt::NoModifier);
+    QApplication::sendEvent(&canvas,&escape);
+    require(!canvas.completeEntityTransformPreview(cancelled,std::vector<CanvasEntity>{proposed_owner,proposed_dependency}) && commits==1 &&
+        !canvas.entityTransformPreviewPending(),"Escape after release invalidates late projections and preserves the document");
+    mouse(QEvent::MouseButtonPress,pin);
+    mouse(QEvent::MouseMove,target);
+    mouse(QEvent::MouseButtonRelease,target);
+    require(canvas.completeEntityTransformPreview(serial,std::vector<CanvasEntity>{proposed_owner,proposed_dependency}),
+        "accepted released projection queues its commit on the UI thread");
+    QApplication::sendEvent(&canvas,&escape);
+    QCoreApplication::processEvents();
+    require(commits==1 && !canvas.entityTransformPreviewPending(),
+        "Escape can cancel the queued commit after exact projection completes");
+    mouse(QEvent::MouseButtonPress,pin);
+    mouse(QEvent::MouseMove,target);
+    mouse(QEvent::MouseButtonRelease,target);
+    require(canvas.completeEntityTransformPreview(serial,std::vector<CanvasEntity>{}),"current invalid projection is consumed as rejection");
+    QCoreApplication::processEvents();
+    require(commits==1 && !canvas.entityTransformPreviewPending(),"rejected released rotation cannot commit");
+    require(images_equal(original,render(canvas,false)),"rejection restores the original complete canvas presentation");
+}
+
 void test_boundary_vertex_handles_preview_and_commit_once() {
     PlanCanvas canvas;
     canvas.resize(640, 480);
@@ -3474,6 +3563,10 @@ int main(int argc, char** argv) {
             test_selection_corner_handle_enters_viewport_from_offscreen_anchor();
             return 0;
         }
+        if (application.arguments().contains(QStringLiteral("--compound-transform-only"))) {
+            test_compound_rotation_exact_preview_protocol();
+            return 0;
+        }
         if (application.arguments().contains(QStringLiteral("--adaptive-grid-only"))) {
             test_unit_aware_adaptive_grid();
             test_adaptive_grid_preserves_anchors_and_exact_geometry();
@@ -3481,6 +3574,7 @@ int main(int argc, char** argv) {
             return 0;
         }
         test_unit_aware_adaptive_grid();
+        test_compound_rotation_exact_preview_protocol();
         test_adaptive_grid_preserves_anchors_and_exact_geometry();
         test_automatic_wall_label_collision_layout();
         test_selection_annotations_remain_legible_and_rotation_handle_reachable();

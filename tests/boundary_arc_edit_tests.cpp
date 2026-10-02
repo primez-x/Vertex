@@ -3,7 +3,9 @@
 #include "sketch/boundary_entity.hpp"
 #include "sketch/boundary_receipt.hpp"
 #include "sketch/boundary_dimension.hpp"
+#include "sketch/boundary_integrity.hpp"
 #include "sketch/constraint_entity.hpp"
+#include "sketch/constraint_wall_edit.hpp"
 #include "sketch/project_store.hpp"
 #include "sketch/project_exchange.hpp"
 #include "sketch/wall_measurement.hpp"
@@ -218,11 +220,11 @@ void same_count_fresh_exterior_topology_is_reviewed_and_atomic() {
         owner.extensions["vendor_style"]={{"color","#123456"}};
         if(authored)owner.properties["boundary_authoring"]=encode_boundary_receipt_envelope(record);
         values.push_back(owner);
-        values.push_back(entity("deduction","measurement_boundary",{{"floor_id","floor"},{"layer_id","layer"},
+        values.push_back(upgrade_legacy_boundary_entity(entity("deduction","measurement_boundary",{{"floor_id","floor"},{"layer_id","layer"},
             {"boundary",nlohmann::json::array({{{"start",{1,1}},{"end",{1.5,1}},{"sweep_radians",0}},
                 {{"start",{1.5,1}},{"end",{1.5,1.5}},{"sweep_radians",0}},
                 {{"start",{1.5,1.5}},{"end",{1,1.5}},{"sweep_radians",0}},
-                {{"start",{1,1.5}},{"end",{1,1}},{"sweep_radians",0}}})}}));
+                {{"start",{1,1.5}},{"end",{1,1}},{"sweep_radians",0}}})}})));
         BoundaryDimension manual{"manual","area",old_boundary.segments[0].segment_id,{12,-3}};
         auto manual_entity=encode_boundary_dimension_entity(manual);manual_entity.extensions["presentation_note"]="retain";values.push_back(manual_entity);
         BoundaryDimension automatic{"automatic","area",old_boundary.segments[0].segment_id,{2,-1},BoundaryDimensionPlacement::automatic,2};
@@ -294,6 +296,52 @@ void same_count_fresh_exterior_topology_is_reviewed_and_atomic() {
         require(actual.extensions.at("vendor_style")==owner.extensions.at("vendor_style"),"fresh topology must preserve owner style");
         if(authored)require(actual.extensions.at("boundary_geometry_derivation").at("source_boundary_authoring")==owner.properties.at("boundary_authoring"),"fresh source redraw must archive original authored receipts exactly");
         else require(actual.extensions.at("boundary_geometry_derivation").at("version")==2,"plain identified owners must retain their explicit topology origin");
+        // Apply rotation plus reflection to the repaired analytical source
+        // graph under one retained typed command, including original arc input.
+        std::vector<Entity> group_values;
+        for(const auto& [id,value]:after.entities()) {
+            (void)id;auto retained=value;
+            if(curved && retained.type=="wall" && retained.properties.at("baseline").at("sweep_radians")!=0.0) {
+                const auto& baseline=retained.properties.at("baseline");const auto sweep=baseline.at("sweep_radians").get<double>();
+                const auto angle=angle_from_radians(sweep);
+                retained.extensions["curve_input"]={{"version",2},{"construction","angle"},{"measure",angle.original_expression},
+                    {"normalized_measure",angle.normalized_expression},{"measure_value",sweep},{"start",baseline.at("start")},
+                    {"end",baseline.at("end")},{"radians",sweep},{"vendor_input","retain"}};
+            }
+            group_values.push_back(retained);
+        }
+        // Its boundary/internal lock graph is unchanged, but the next rotation
+        // also carries each physical source and shared-corner relation.
+        auto grouped=Document::create(group_values);const auto group_before=grouped.snapshot();
+        const PlanarTransform rigid{{2,1.5},.37,true,false,{7,-3}};
+        TransformBoundaries group{group_before.revision(),{{"area",rigid},{"deduction",rigid}},{},"Rotate measured assembly"};
+        for(const auto& wall_id:new_ids) {
+            auto wall=group_before.entities().at(wall_id);const auto& baseline=wall.properties.at("baseline");
+            const Segment old_segment{{baseline.at("start")[0].get<double>(),baseline.at("start")[1].get<double>()},
+                {baseline.at("end")[0].get<double>(),baseline.at("end")[1].get<double>()},baseline.at("sweep_radians").get<double>()};
+            transform_wall_curve_input(wall,rigid);const auto moved=transform_segment(old_segment,rigid);
+            wall.properties["baseline"]["start"]={moved.start.x,moved.start.y};wall.properties["baseline"]["end"]={moved.end.x,moved.end.y};wall.properties["baseline"]["sweep_radians"]=moved.sweep_radians;
+            group.entity_changes.push_back(EntityChange::upsert(wall));
+        }
+        const auto group_wire=command_to_json(group);require(command_to_json(command_from_json(group_wire))==group_wire,"sourced rigid group codec must retain exact analytical inputs");
+        auto shared_values=group_values;auto shared_owner=group_before.entities().at("area");
+        const auto shared_model=decode_identified_boundary_entity(shared_owner);
+        shared_owner=encode_identified_boundary_entity(IdentifiedBoundary{"shared-source-owner","measurement_boundary",shared_model.segments});
+        shared_owner.properties["floor_id"]="floor";shared_owner.properties["layer_id"]="layer";shared_owner.properties["wall_measurement_source"]=group_before.entities().at("area").properties.at("wall_measurement_source");
+        shared_values.push_back(shared_owner);auto shared_document=Document::create(shared_values);
+        rejected([&]{(void)Document::preview_command(shared_document.snapshot(),group);},DocumentErrorCode::invalid_entity,
+            "rigid source movement must refuse to stale an unchanged measured owner sharing its walls");
+        std::cout<<"Sourced rigid fixture: curved="<<curved<<", authored="<<authored<<'\n';
+        const auto group_preview=Document::preview_command(group_before,group);grouped.apply(group);const auto group_after=grouped.snapshot();
+        require(group_after.entities()==group_preview.entities() && group_after.revision()==group_before.revision()+1 &&
+            wall_measurement_source_current(group_after,group_after.entities().at("area")),"sourced rigid rotation/reflection must normalize only machine-roundoff and remain current in one command");
+        for(const auto& wall_id:new_ids) if(group_before.entities().at(wall_id).extensions.contains("curve_input"))
+            require(group_after.entities().at(wall_id).extensions.at("curve_input_derivation").at("source_input")==group_before.entities().at(wall_id).extensions.at("curve_input"),"rigid source transform archives exact original analytical arc receipt");
+        require(Document::fork(group_after).snapshot().entities()==group_after.entities(),"sourced rigid group must replay canonical exterior and archived curve geometry exactly");
+        grouped.undo(grouped.revision());require(grouped.snapshot().entities()==group_before.entities(),"sourced rigid group undo retains exact source graph");
+        grouped.redo(grouped.revision());require(grouped.snapshot().entities()==group_after.entities(),"sourced rigid group redo retains exact canonical graph");
+        TempDirectory group_temp;(void)ProjectStore::save(group_temp.path/"sourced-group.bldproj",grouped.snapshot());
+        require(ProjectStore::load(group_temp.path/"sourced-group.bldproj").document.snapshot().entities()==group_after.entities(),"sourced analytical group save/reopen reproduces typed canonical normalization");
         auto missing=wire;missing["replacement_child_mapping"]["vertices"]=nlohmann::json::object();
         const auto missing_edit=decode_boundary_geometry_edit(missing);
         rejected([&]{(void)Document::preview_command(before,EditBoundaryGeometry{before.revision(),missing_edit});},DocumentErrorCode::invalid_entity,"missing reviewed reference decisions must refuse same-count fresh redraw");
@@ -361,10 +409,185 @@ void generic_plain_fresh_topology_retains_explicit_origin() {
     extract_project(imported.snapshot(),temp.path/"generic-exchange");std::ifstream exported(temp.path/"generic-exchange"/"project.json");
     require(nlohmann::json::parse(exported).at("exchange_version")==15,"generic imported fresh redraw requires exchange fifteen");
 }
+
+void frozen_legacy_tangent_history_remains_exact_and_replayable() {
+    // Frozen output of the original v1 squared-distance kernel for a five
+    // metre capsule with .6 metre walls. The positive top-corner ulp takes a
+    // square root and moves both endpoints by about 3e-8. Never regenerate
+    // these expectations with either production offset kernel.
+    const Boundary frozen{{{9.184850993605148e-17,-.3},{5,-.3},0},
+        {{5,-.3},{4.999999970197678,3.3},3.141592670146639},
+        {{4.999999970197678,3.3},{-2.9802322295846802e-08,3.3},0},
+        {{-2.9802322295846802e-08,3.3},{9.184850993605148e-17,-.3},3.1415926370329474}};
+    const auto entity=[](std::string id,std::string type,nlohmann::json properties=nlohmann::json::object()) {
+        return Entity{std::move(id),std::move(type),std::move(properties),false,nlohmann::json::object()};
+    };
+    std::vector<Entity> values{entity("property","property"),entity("building","building",{{"property_id","property"}}),
+        entity("floor","floor",{{"building_id","building"}}),entity("layer","layer",{{"floor_id","floor"}})};
+    const Vec2 points[]{{0,0},{5,0},{5,3},{0,3}};
+    auto records=nlohmann::json::array();std::vector<std::string> old_ids,new_ids;
+    for(std::size_t i=0;i<4;++i) {
+        old_ids.push_back("legacy-wall-"+std::to_string(i));new_ids.push_back("replacement-wall-"+std::to_string(i));
+        const auto a=points[i],b=points[(i+1)%4];
+        values.push_back(entity(old_ids.back(),"wall",{{"baseline",{{"start",{a.x,a.y}},{"end",{b.x,b.y}},
+            {"sweep_radians",i==1 || i==3 ? std::numbers::pi : 0.0}}},{"thickness_m",.6},
+            {"height_m",3.0},{"elevation_m",0.0},{"floor_id","floor"},{"layer_id","layer"}}));
+        records.push_back({{"id",old_ids.back()},{"context",{{"floor_id","floor"},{"layer_id","layer"}}}});
+    }
+    IdentifiedBoundary model{"legacy-area","measurement_boundary",{}};
+    for(std::size_t i=0;i<4;++i) model.segments.push_back({"legacy-edge-"+std::to_string(i),
+        "legacy-corner-"+std::to_string(i),"legacy-corner-"+std::to_string((i+1)%4),frozen[i]});
+    auto owner=encode_identified_boundary_entity(model);owner.properties["floor_id"]="floor";owner.properties["layer_id"]="layer";
+    owner.properties["wall_measurement_source"]={{"version",1},{"basis","exterior"},{"walls",records}};
+    owner.extensions["vendor_style"]={{"retain","old-bytes"}};values.push_back(owner);
+    values.push_back(rectangle());
+    auto document=Document::create(values);
+    require(wall_measurement_source_current(document.snapshot(),owner),"frozen original tangent owner must remain current without rewriting its geometry");
+    std::vector<EntityChange> changes;
+    for(std::size_t i=0;i<4;++i) {auto wall=document.snapshot().entities().at(old_ids[i]);wall.id=new_ids[i];
+        changes.push_back(EntityChange::erase(old_ids[i]));changes.push_back(EntityChange::upsert(wall));}
+    document.apply(ApplyEntityChanges{document.revision(),changes,{},"Replace legacy physical sources"});
+    const auto source=document.snapshot();const auto stable=derive_exterior_wall_measurement(source,new_ids);
+    auto stable_model=model;for(std::size_t i=0;i<4;++i)stable_model.segments[i].segment=stable.boundary[i];
+    require(encode_identified_boundary_entity(stable_model).properties.at("segments")!=encode_identified_boundary_entity(model).properties.at("segments"),
+        "frozen fixture must exercise an actual old-kernel tangent drift");
+    BoundaryGeometryEdit edit;edit.boundary_id=owner.id;edit.target_id=owner.id;edit.kind=BoundaryGeometryEditKind::redefine_boundary;
+    edit.replacement_segments=encode_identified_boundary_entity(stable_model).properties.at("segments");
+    auto wire=encode_boundary_geometry_edit(edit);wire["version"]=3;wire["replacement_wall_source_ids"]=new_ids;
+    wire["replacement_child_mapping"]=nlohmann::json::object();wire["replacement_removed_reference_ids"]=nlohmann::json::array();
+    edit=decode_boundary_geometry_edit(wire);document.apply(EditBoundaryGeometry{source.revision(),edit});
+    // Retain a historical old-kernel command/state, replacing only the new
+    // scaffold's analytical payload with the frozen pre-change bytes.
+    auto historical=document.snapshot();auto& record=const_cast<std::vector<RevisionRecord>&>(historical.history()).back();
+    edit.replacement_segments=encode_identified_boundary_entity(model).properties.at("segments");record.boundary_geometry_edit=edit;
+    auto old_owner=encode_identified_boundary_entity(model,&record.entities.at(owner.id));
+    old_owner.extensions.at("boundary_geometry_derivation").at("operations").back().at("value")=encode_boundary_geometry_edit(edit);
+    record.entities.at(owner.id)=old_owner;
+    bool live_rejected=false;try{(void)Document::preview_command(source,EditBoundaryGeometry{source.revision(),edit});}
+    catch(const DocumentError& error){live_rejected=error.code()==DocumentErrorCode::invalid_entity;}
+    require(live_rejected,"new live source replacements must refuse legacy tangent geometry");
+    require(replayed_boundary_entities(source.entities(),edit)==historical.entities(),"retained replay must reproduce the complete exact old-kernel replacement state");
+    const auto digest=document_snapshot_digest(historical),authoring_digest=document_authoring_source_digest_v1(historical);
+    auto restored=Document::fork(historical);
+    require(restored.snapshot().entities()==historical.entities() && document_snapshot_digest(restored.snapshot())==digest &&
+        document_authoring_source_digest_v1(restored.snapshot())==authoring_digest,"legacy fork must retain geometry, records and digests exactly");
+    require(wall_measurement_source_current(restored.snapshot(),restored.snapshot().entities().at(owner.id)),"exact old-kernel replacement must remain current");
+    TempDirectory temp;
+    const auto save_exact=[&](const DocumentSnapshot& snapshot,const char* filename,std::uint32_t expected_version) {
+        const auto path=temp.path/filename;(void)ProjectStore::save(path,snapshot);auto loaded=ProjectStore::load(path);
+        require(stored_version(path)==expected_version, std::string(filename)+": expected reader "+
+            std::to_string(expected_version)+", got "+std::to_string(stored_version(path)));
+        require(loaded.document.snapshot().entities()==snapshot.entities() &&
+            document_authoring_source_digest_v1(loaded.document.snapshot())==document_authoring_source_digest_v1(snapshot),
+            "native archive must preserve frozen tangent geometry, retained commands and history digest at its exact reader floor");
+    };
+    save_exact(historical,"legacy-tangent-v16.bldproj",16);
+    auto forged=edit;forged.replacement_segments[0]["start"][0]=1e-12;
+    bool forged_rejected=false;try{(void)replayed_boundary_entities(source.entities(),forged);}catch(const std::invalid_argument&){forged_rejected=true;}
+    require(forged_rejected,"legacy compatibility must refuse outlines that match neither complete exact kernel result");
+    restored.undo(restored.revision());require(Document::fork(restored.snapshot()).snapshot().entities()==source.entities(),"undone old replacement must remain reconstructible in retained redo history");
+    save_exact(restored.snapshot(),"legacy-tangent-undone-v16.bldproj",16);
+    restored.redo(restored.revision());require(restored.snapshot().entities()==historical.entities(),"legacy redo must restore the frozen bytes");
+    auto fresh=decode_identified_boundary_entity(restored.snapshot().entities().at("area"));
+    for(std::size_t i=0;i<fresh.segments.size();++i) {
+        fresh.segments[i].segment_id="later-edge-"+std::to_string(i);
+        fresh.segments[i].start_vertex_id="later-corner-"+std::to_string(i);
+        fresh.segments[i].end_vertex_id="later-corner-"+std::to_string((i+1)%fresh.segments.size());
+    }
+    BoundaryGeometryEdit fresh_edit;fresh_edit.boundary_id="area";fresh_edit.target_id="area";
+    fresh_edit.kind=BoundaryGeometryEditKind::redefine_boundary;fresh_edit.fresh_topology=true;
+    fresh_edit.replacement_segments=encode_identified_boundary_entity(fresh).properties.at("segments");
+    restored.apply(EditBoundaryGeometry{restored.revision(),fresh_edit});
+    save_exact(restored.snapshot(),"legacy-tangent-v17.bldproj",17);
+    restored.apply(TransformBoundaries{restored.revision(),{{"area",{{},0,false,false,{1,0}}}},{},"Retain legacy history in reader eighteen"});
+    require(ProjectStore::required_format_version(restored.snapshot())==18,"legacy replacement must coexist with a later reader-eighteen command");
+    restored.apply(ApplyEntityChanges{restored.revision(),{EntityChange::erase(new_ids.front())},{},"Delete legacy source later"});
+    const auto deleted=restored.snapshot();require(!wall_measurement_source_current(deleted,deleted.entities().at(owner.id)),"deleted legacy source must still stale its retained owner");
+    require(document_snapshot_digest(Document::fork(deleted).snapshot())==document_snapshot_digest(deleted),"deleted-source legacy history must fork without changing records");
+    save_exact(deleted,"legacy-tangent-v18.bldproj",18);
+}
+
+void grouped_rigid_transform_is_atomic_and_replayable() {
+    for(const bool authored:{false,true}) {
+        auto parent=rectangle();if(!authored)parent.properties.erase("boundary_authoring");
+        parent.properties["deduction_ids"]={"deduction"};
+        IdentifiedBoundary hole{"deduction","measurement_boundary",{{"hole-edge-0","hole-corner-0","hole-corner-1",{{1,1},{2,1},0}},
+            {"hole-edge-1","hole-corner-1","hole-corner-2",{{2,1},{2,2},0}},
+            {"hole-edge-2","hole-corner-2","hole-corner-3",{{2,2},{1,2},0}},
+            {"hole-edge-3","hole-corner-3","hole-corner-0",{{1,2},{1,1},0}}}};
+        auto deduction=encode_identified_boundary_entity(hole);deduction.extensions["deduction_style"]="retain";
+        BoundaryDimension manual{"group-manual","area","edge-0",{12,-3}};
+        auto document=Document::create({parent,deduction,encode_boundary_dimension_entity(manual)});const auto before=document.snapshot();
+        const PlanarTransform transform{{5,2},.37,true,false,{7,-3}};
+        const auto one=command_to_json(TransformBoundary{0,{"area",transform}}).at("transformation");
+        auto two=one;two["boundary_id"]="deduction";
+        const auto wire=nlohmann::json{{"version",1},{"kind","transform_boundaries"},{"expected_revision",0},
+            {"message","Transform measured assembly"},{"transformations",nlohmann::json::array({one,two})},{"entity_changes",nlohmann::json::array()}};
+        const auto command=command_from_json(wire);require(command_to_json(command)==wire,"group rigid transform strict codec retains typed intent");
+        auto unknown=wire;unknown["unexpected"]=true;
+        rejected([&]{(void)command_from_json(unknown);},DocumentErrorCode::invalid_entity,"group transform codec must reject unknown fields");
+        auto duplicated=wire;duplicated["transformations"].push_back(one);
+        rejected([&]{(void)command_from_json(duplicated);},DocumentErrorCode::duplicate_change,"group transform codec must reject duplicate owners");
+        const auto preview=Document::preview_command(before,command);require(document.snapshot().entities()==before.entities(),"group transform preview must remain detached");
+        document.apply(command);const auto after=document.snapshot();require(after.revision()==1 && after.entities()==preview.entities(),"group transform must commit exactly one atomic revision");
+        auto expected=decode_identified_boundary_entity(parent);for(auto& edge:expected.segments)edge.segment=transform_segment(edge.segment,transform);
+        require(decode_identified_boundary_entity(after.entities().at("area"))==expected,"group transform retains exact parent topology and transformed analytical geometry");
+        for(auto& edge:hole.segments)edge.segment=transform_segment(edge.segment,transform);
+        require(decode_identified_boundary_entity(after.entities().at("deduction"))==hole && after.entities().at("deduction").extensions.at("deduction_style")=="retain","group transform retains same deduction identity, exact geometry and style");
+        const auto position=transform_point(manual.text_position,transform);require(dimension(after,"group-manual").text_position.x==position.x && dimension(after,"group-manual").text_position.y==position.y,"group transform moves manual text once with the shared pivot");
+        require(ProjectStore::required_format_version(after)==18 && Document::fork(after).snapshot().entities()==after.entities(),"group rigid transform requires reader eighteen and deterministic history replay");
+        auto partial=wire;partial["transformations"].erase(1);
+        rejected([&]{(void)Document::preview_command(before,command_from_json(partial));},DocumentErrorCode::invalid_entity,"parent transform without its retained deduction must refuse atomically");
+        auto inconsistent=wire;inconsistent["transformations"][1]["transform"]["offset"]["x"]=8;
+        rejected([&]{(void)Document::preview_command(before,command_from_json(inconsistent));},DocumentErrorCode::invalid_entity,"group transform requires one shared transform for every owner");
+        auto shared_parent=encode_identified_boundary_entity(IdentifiedBoundary{"shared-parent","measurement_boundary",decode_identified_boundary_entity(parent).segments});
+        shared_parent.properties["deduction_ids"]={"deduction"};
+        auto shared_document=Document::create({parent,deduction,shared_parent,encode_boundary_dimension_entity(manual)});
+        rejected([&]{(void)Document::preview_command(shared_document.snapshot(),command);},DocumentErrorCode::invalid_entity,
+            "moving a shared deduction must refuse when it leaves an unchanged measured parent");
+        auto sibling=decode_identified_boundary_entity(deduction);sibling.id="sibling";
+        for(auto& edge:sibling.segments){edge.segment.start.x+=2;edge.segment.end.x+=2;}
+        auto sibling_parent=parent;sibling_parent.properties["deduction_ids"]={"deduction","sibling"};
+        auto overlap_document=Document::create({sibling_parent,deduction,encode_identified_boundary_entity(sibling)});
+        TransformBoundaries overlap{0,{{"deduction",{{},0,false,false,{2,0}}}},{},"Move deduction onto sibling"};
+        rejected([&]{(void)Document::preview_command(overlap_document.snapshot(),overlap);},DocumentErrorCode::invalid_entity,
+            "unchanged parent must validate all deductions collectively after a shared child moves");
+        auto forged=after;const_cast<std::vector<RevisionRecord>&>(forged.history()).back().action="Forged transform";
+        rejected([&]{(void)Document::fork(forged);},DocumentErrorCode::invalid_history,"retained group transform action must match its exact command proof");
+        document.undo(document.revision());require(document.snapshot().entities()==before.entities() && ProjectStore::required_format_version(document.snapshot())==18,"group transform undo retains exact source and required redo floor");
+        document.redo(document.revision());require(document.snapshot().entities()==after.entities(),"group transform redo restores same owner and deductions");
+        const auto unchanged_revision=document.revision();
+        document.apply(TransformBoundaries{unchanged_revision,{{"area",{}},{"deduction",{}}},{},"Identity group"});
+        require(document.revision()==unchanged_revision && document.snapshot().entities()==after.entities(),"identity grouped transform must not create history or alter provenance");
+        TempDirectory temp;(void)ProjectStore::save(temp.path/"group.bldproj",document.snapshot());
+        auto reopened=ProjectStore::load(temp.path/"group.bldproj");require(stored_version(temp.path/"group.bldproj")==18 && reopened.document.snapshot().entities()==after.entities(),"group transform native eighteen reopens exactly");
+        extract_project(document.snapshot(),temp.path/"group-exchange");std::ifstream exported(temp.path/"group-exchange"/"project.json");require(nlohmann::json::parse(exported).at("exchange_version")==16,"group transform requires exchange sixteen");
+    }
+    auto owner=rectangle();
+    Entity first{"rigid-wall-1","wall",{{"baseline",{{"start",{0,0}},{"end",{4,0}},{"sweep_radians",0}}},{"thickness_m",.2},{"height_m",3.0},{"elevation_m",0.0}},false,nlohmann::json::object()};
+    auto second=first;second.id="rigid-wall-2";second.properties["baseline"]["start"]={4,0};second.properties["baseline"]["end"]={4,3};
+    PersistentConstraint corner;corner.id="rigid-shared-corner";corner.relation=ConstraintRelationKind::coincident;
+    corner.bindings={{first.id,WallEndpointRole::end},{second.id,WallEndpointRole::start}};
+    auto mirrored=Document::create({owner,first,second,encode_constraint_entity(corner)});const auto mirror_before=mirrored.snapshot();
+    const PlanarTransform mirror{{2,0},0,true,false,{}};
+    TransformBoundaries mirror_command{0,{{"area",mirror}},{},"Mirror coincident wall corner"};
+    for(auto wall:{first,second}) {
+        const auto& raw=wall.properties.at("baseline");const auto moved=transform_segment({{raw.at("start")[0].get<double>(),raw.at("start")[1].get<double>()},{raw.at("end")[0].get<double>(),raw.at("end")[1].get<double>()},0},mirror);
+        wall.properties["baseline"]["start"]={moved.start.x,moved.start.y};wall.properties["baseline"]["end"]={moved.end.x,moved.end.y};mirror_command.entity_changes.push_back(EntityChange::upsert(wall));
+    }
+    mirrored.apply(mirror_command);const auto mirror_after=mirrored.snapshot();
+    require(mirror_after.entities().at(corner.id)==mirror_before.entities().at(corner.id),"qualified rigid reflection preserves named wall endpoint roles even when start/end coordinates exchange");
+    auto restored=Document::fork(mirror_after);restored.undo(restored.revision());require(restored.snapshot().entities()==mirror_before.entities(),"reflected corner history undo preserves endpoint identity");
+    restored.redo(restored.revision());require(restored.snapshot().entities()==mirror_after.entities(),"reflected corner history redo preserves endpoint identity");
+}
 }
 int main(int argc,char** argv) {
     sketch::testing::noninteractive_errors();
     try {
+        if(argc>1 && std::string_view(argv[1])=="--legacy-tangent-only") {frozen_legacy_tangent_history_remains_exact_and_replayable();std::cout<<"legacy tangent workflows passed\n";return 0;}
+        frozen_legacy_tangent_history_remains_exact_and_replayable();
+        if(argc>1 && std::string_view(argv[1])=="--group-transform-only") {grouped_rigid_transform_is_atomic_and_replayable();same_count_fresh_exterior_topology_is_reviewed_and_atomic();std::cout<<"group transform workflows passed\n";return 0;}
+        grouped_rigid_transform_is_atomic_and_replayable();
         if(argc>1 && std::string_view(argv[1])=="--fresh-topology-only") {same_count_fresh_exterior_topology_is_reviewed_and_atomic();generic_plain_fresh_topology_retains_explicit_origin();std::cout<<"fresh topology workflows passed\n";return 0;}
         same_count_fresh_exterior_topology_is_reviewed_and_atomic();
         generic_plain_fresh_topology_retains_explicit_origin();

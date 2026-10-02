@@ -348,6 +348,9 @@ public:
     // its fixed screen padding. Empty when no drawable selection is retained.
     // Re-query after selection, pan, zoom, or resize to anchor contextual UI.
     [[nodiscard]] std::optional<QRectF> selectionBounds() const;
+    // Actual painted control, including rotation and annotation avoidance.
+    [[nodiscard]] std::optional<QPointF> selectionRotationHandlePosition() const;
+    void setSelectionControlsVisible(bool visible) { m_selection_controls_visible = visible; update(); }
 
     void setPointClicked(std::function<void(Vec2)> callback);
     // A temporary one-click command consumes input before picks or authoring.
@@ -380,6 +383,17 @@ public:
     // Commits a single-selection transform after the interactive preview.
     // Scale is relative and uniform; rotation is a relative radian delta.
     void setEntityTransformRequested(std::function<bool(QString, double, double)> callback);
+    void setEntityTransformStarted(std::function<void(QString)> callback);
+    // nullopt retains the ordinary transform preview; an engaged empty
+    // proposal rejects it. Pending exact projections never invent geometry.
+    void setEntityTransformPreviewRequested(std::function<std::optional<std::vector<CanvasEntity>>(
+        QString, double, double, Vec2, std::uint64_t)> callback);
+    [[nodiscard]] std::uint64_t entityTransformPreviewSerial() const noexcept { return m_transform_preview_serial; }
+    [[nodiscard]] bool entityTransformPreviewPending() const noexcept { return m_transform_preview_pending || m_transform_release_pending; }
+    [[nodiscard]] std::vector<CanvasEntity> entityTransformPreview() const { return m_transform_entities_preview; }
+    bool markEntityTransformPreviewPending(std::uint64_t serial);
+    bool completeEntityTransformPreview(std::uint64_t serial,
+        std::optional<std::vector<CanvasEntity>> result, std::vector<CanvasLabel> labels = {});
     // Local-axis scales around the model-space midpoint of the opposite edge.
     // Capability gating belongs to the document; rejected previews restore.
     void setEntityAxisResizeRequested(
@@ -536,6 +550,10 @@ private:
     [[nodiscard]] std::optional<OpeningWidthHandleHit> openingWidthHandleAt(
         QPointF point, const QRectF& viewport) const;
     [[nodiscard]] const CanvasEntity& interactiveEntity(const CanvasEntity& entity) const;
+    void updateEntityTransformPreview();
+    bool applyEntityTransformPreview(std::uint64_t serial,
+        std::optional<std::vector<CanvasEntity>> result, std::vector<CanvasLabel> labels = {});
+    void finishEntityTransformPreview(std::uint64_t serial);
     void updateOpeningWidthPreview(QPointF point);
     bool applyOpeningWidthPreview(std::uint64_t serial,
         std::optional<std::vector<CanvasEntity>> result);
@@ -646,6 +664,17 @@ private:
     double m_axis_scale_x_preview{1.0};
     double m_axis_scale_y_preview{1.0};
     double m_transform_initial_rotation{};
+    QString m_transform_source_id;
+    bool m_selection_controls_visible{true};
+    Vec2 m_transform_pivot{};
+    std::vector<CanvasEntity> m_transform_entities_preview;
+    std::vector<CanvasLabel> m_transform_labels_preview;
+    std::uint64_t m_transform_preview_serial{};
+    bool m_transform_preview_exact{};
+    bool m_transform_preview_valid{};
+    bool m_transform_preview_pending{};
+    bool m_transform_preview_request_in_progress{};
+    bool m_transform_release_pending{};
     std::optional<VertexHandleHit> m_vertex_move_handle;
     std::optional<Vec2> m_vertex_move_preview;
     std::vector<CanvasEntity> m_boundary_vertex_entities_preview;
@@ -702,6 +731,9 @@ private:
     std::function<std::optional<std::vector<CanvasEntity>>(
         QStringList, Vec2, std::uint64_t)> m_entities_move_preview_requested;
     std::function<bool(QString, double, double)> m_entity_transform_requested;
+    std::function<void(QString)> m_entity_transform_started;
+    std::function<std::optional<std::vector<CanvasEntity>>(
+        QString, double, double, Vec2, std::uint64_t)> m_entity_transform_preview_requested;
     std::function<bool(QString, double, double, Vec2)> m_entity_axis_resize_requested;
     std::function<std::optional<std::vector<CanvasEntity>>(
         QString, double, bool, std::uint64_t)> m_opening_width_preview_requested;

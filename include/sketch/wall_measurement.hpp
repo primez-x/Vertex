@@ -41,9 +41,20 @@ struct WallMeasurementResult {
     const std::map<std::string, Entity, std::less<>>& entities, const Entity& owner,
     const std::vector<std::string>& wall_ids);
 
+// Exact retained-record compatibility only. Reproduces the original v1
+// line/circle squared-distance arithmetic and geometry-gap allowance. Live
+// creation and replacement must use the stable derivation APIs above.
+[[nodiscard]] WallMeasurementResult derive_legacy_exterior_wall_measurement(
+    const std::map<std::string, Entity, std::less<>>& entities,
+    const std::vector<std::string>& wall_ids);
+[[nodiscard]] WallMeasurementResult derive_legacy_replacement_exterior_wall_measurement(
+    const std::map<std::string, Entity, std::less<>>& entities, const Entity& owner,
+    const std::vector<std::string>& wall_ids);
+
 // Boundaries without a wall measurement source remain current for compatibility.
 // A malformed source, changed source context, missing wall, or edited outline
-// returns false. Openings do not change the measured exterior outline.
+// returns false. Exact original-v1 outlines remain current without being
+// rewritten. Openings do not change the measured exterior outline.
 [[nodiscard]] bool wall_measurement_source_current(
     const DocumentSnapshot& document, const Entity& boundary);
 
