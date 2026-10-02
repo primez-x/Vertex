@@ -1008,6 +1008,8 @@ void PlanCanvas::renderSceneWithTransform(QPainter& painter, const QRectF& viewp
                 case SnapKind::perpendicular: cue = QStringLiteral("Perpendicular"); break;
                 case SnapKind::alignment: cue = QStringLiteral("Alignment"); break;
                 case SnapKind::grid: cue = QStringLiteral("Grid"); break;
+                case SnapKind::length: cue = QStringLiteral("Length %1").arg(
+                    drawingLengthText(drawingLengthIncrementMetres(),m_metric_units)); break;
                 case SnapKind::none: break;
                 }
                 if (!cue.isEmpty()) {
@@ -1656,6 +1658,8 @@ void PlanCanvas::pointerPress(QPointF position, Qt::MouseButton button,
     }
     if (button == Qt::RightButton) {
         m_right_start = position;
+        m_pan_start = position;
+        m_pan_view_start = m_view_center;
         return;
     }
     if (button != Qt::LeftButton) return;
@@ -1782,9 +1786,12 @@ void PlanCanvas::pointerPress(QPointF position, Qt::MouseButton button,
 void PlanCanvas::pointerMove(QPointF position, Qt::KeyboardModifiers modifiers) {
     m_last_mouse_position = position;
     if (m_move_release_pending || m_transform_release_pending) return;
-    if (m_gesture_button == Qt::RightButton &&
-        (position - m_right_start).manhattanLength() >= QApplication::startDragDistance())
+    if (m_gesture_button == Qt::RightButton && !m_right_dragging &&
+        (position - m_right_start).manhattanLength() >= QApplication::startDragDistance()) {
         m_right_dragging = true;
+        m_panning = true;
+        setCursor(Qt::ClosedHandCursor);
+    }
     if (m_overview_dragging) {
         (void)navigateOverviewMap(position);
         return;
@@ -1935,10 +1942,14 @@ void PlanCanvas::pointerRelease(QPointF position, Qt::MouseButton button,
         return;
     }
     if (button == Qt::RightButton) {
+        // Some devices omit motion events before release. Apply the same pan
+        // threshold and final location without turning that release into a menu.
+        pointerMove(position, modifiers);
         const bool clicked = !m_right_dragging &&
             (position - m_right_start).manhattanLength() < QApplication::startDragDistance();
         const auto target = clicked ? contextTarget(position) : QString{};
         resetGesture();
+        updateCursor(position);
         if (clicked && m_right_clicked) m_right_clicked(inputPoint(position), target);
         return;
     }
@@ -3674,6 +3685,59 @@ double PlanCanvas::gridSpacingMetres() const noexcept {
     return grid_spacing(m_scale, m_metric_units).minor;
 }
 
+double PlanCanvas::drawingLengthIncrementMetres() const noexcept {
+    // Length magnets can be finer than the painted XY grid. Six logical pixels
+    // keep nearby choices reachable while allowing quarter-foot runs at 80 px/m.
+    const auto minimum = 6.0 / m_scale;
+    if (!m_metric_units) {
+        for (const auto inches : {1.0/16.0,1.0/8.0,1.0/4.0,1.0/2.0,1.0,2.0,3.0,6.0}) {
+            const auto step=inches*0.0254;
+            if (step>=minimum) return step;
+        }
+    }
+    double decade=m_metric_units ? 0.001 : 0.3048;
+    for (int exponent=0;exponent<13;++exponent,decade*=10.0)
+        for (const auto multiple : {1.0,2.0,5.0})
+            if (decade*multiple>=minimum) return decade*multiple;
+    return decade;
+}
+
+QString PlanCanvas::drawingLengthText(double metres, bool metric) {
+    if (!std::isfinite(metres)) return QStringLiteral("—");
+    if (metric) {
+        const auto millimetres=std::abs(metres)<1.0;
+        return QStringLiteral("%1 %2").arg(metres*(millimetres ? 1000.0 : 1.0),0,'g',12)
+            .arg(millimetres ? QStringLiteral("mm") : QStringLiteral("m"));
+    }
+    const auto inches=std::abs(metres)/0.0254;
+    const auto sixteenths=std::round(inches*16.0);
+    const auto sign=metres<0 ? QStringLiteral("-") : QString{};
+    // Do not conceal a true endpoint's arbitrary precision behind a fraction.
+    if (std::abs(inches*16.0-sixteenths)>1e-7 || sixteenths>9e15)
+        return QStringLiteral("%1%2 in").arg(sign).arg(inches,0,'g',12);
+    const auto ticks=static_cast<qint64>(sixteenths);
+    const auto feet=ticks/192;
+    const auto whole=(ticks%192)/16;
+    const auto numerator=ticks%16;
+    QString inch_text=whole || !numerator ? QString::number(whole) : QString{};
+    if (numerator) {
+        const auto divisor=std::gcd(numerator,qint64{16});
+        if (!inch_text.isEmpty()) inch_text += QLatin1Char(' ');
+        inch_text += QStringLiteral("%1/%2").arg(numerator/divisor).arg(16/divisor);
+    }
+    return feet>0 ? QStringLiteral("%1%2 ft %3 in").arg(sign).arg(feet).arg(inch_text)
+                  : QStringLiteral("%1%2 in").arg(sign).arg(inch_text);
+}
+
+std::optional<Vec2> PlanCanvas::drawingOrigin() const {
+    if (m_wall_preview && (m_tool==CanvasTool::wall || m_tool==CanvasTool::sloped_wall))
+        return m_wall_preview->start;
+    if (m_boundary_draft_preview && m_boundary_draft_preview->length_snap_active &&
+        (m_tool==CanvasTool::boundary || m_tool==CanvasTool::select))
+        return m_boundary_draft_preview->pen_position;
+    return std::nullopt;
+}
+
 Vec2 PlanCanvas::snapped(Vec2 point) const {
     if (!m_snap_enabled) {
         return point;
@@ -3707,7 +3771,21 @@ PlanCanvas::SnapResult PlanCanvas::snapResult(QPointF screen_point) const {
         m_touch_navigation) {
         return {snapped(raw), SnapKind::none, {}, {}};
     }
+    const auto origin=drawingOrigin();
+    const auto length_snap=[&](SnapResult result) {
+        if (!origin) return result;
+        const auto length=distance(*origin,result.point);
+        if (!std::isfinite(length) || length<=1e-12) return result;
+        const auto step=drawingLengthIncrementMetres();
+        const auto target=std::round(length/step)*step;
+        const auto factor=target/length;
+        result.point={origin->x+(result.point.x-origin->x)*factor,
+                      origin->y+(result.point.y-origin->y)*factor};
+        if (result.guide) result.guide->end=result.point;
+        return result;
+    };
     SnapResult grid_result{snapped(raw), SnapKind::grid, {}, {}};
+    if (origin) grid_result=length_snap({raw,SnapKind::length,origin,{}});
     if (std::hypot(grid_result.point.x - raw.x, grid_result.point.y - raw.y) * m_scale < 0.5)
         grid_result.kind = SnapKind::none;
     if (!m_wall_snap_enabled || m_vertex_move_handle || m_opening_width_handle)
@@ -3764,8 +3842,8 @@ PlanCanvas::SnapResult PlanCanvas::snapResult(QPointF screen_point) const {
     // Endpoint and wall-segment alignment guides keep chained wall corners
     // square and make common 45-degree runs easy to place without changing
     // the snap point used by the committed segment.
-    if (m_wall_preview) {
-        const auto anchor = m_wall_preview->start;
+    if (origin) {
+        const auto anchor = *origin;
         const auto snap_radius = snap_radius_pixels / std::max(m_scale, 1e-9);
         for (const auto& entity : m_entities) {
             for (const auto endpoint_point : entity.snap_points) {
@@ -3818,8 +3896,15 @@ PlanCanvas::SnapResult PlanCanvas::snapResult(QPointF screen_point) const {
         }
     }
     if (std::isfinite(axis_intersection.distance)) return axis_intersection.result;
-    if (std::isfinite(perpendicular.distance)) return perpendicular.result;
-    if (std::isfinite(alignment.distance)) return alignment.result;
+    if (std::isfinite(perpendicular.distance)) return length_snap(perpendicular.result);
+    if (std::isfinite(alignment.distance)) {
+        // A guide through this segment's own start remains coherent after
+        // radial rounding; an external coordinate guide is an exact object snap.
+        if (alignment.result.anchor && origin &&
+            distance(*alignment.result.anchor,*origin)<1e-10)
+            return length_snap(alignment.result);
+        return alignment.result;
+    }
     return grid_result;
 }
 
@@ -4399,15 +4484,15 @@ void PlanCanvas::drawCursorReadout(QPainter& painter, const QRectF& viewport,
     QString text = QStringLiteral("X %1   Y %2")
         .arg(display_cursor_length(point.x, m_metric_units),
              display_cursor_length(point.y, m_metric_units));
-    if (m_boundary_draft_preview && m_boundary_draft_preview->anchor) {
-        const auto anchor = *m_boundary_draft_preview->anchor;
+    if (const auto origin=drawingOrigin()) {
+        const auto anchor = *origin;
         const auto dx = point.x - anchor.x;
         const auto dy = point.y - anchor.y;
         const auto length = std::hypot(dx, dy);
         if (std::isfinite(dx) && std::isfinite(dy) && std::isfinite(length)) {
             const auto angle = std::atan2(dy, dx) * 180.0 / pi;
             text += QStringLiteral("\nΔ %1   ∠ %2°")
-                .arg(display_cursor_length(length, m_metric_units))
+                .arg(drawingLengthText(length, m_metric_units))
                 .arg(angle, 0, 'f', 1);
         }
     }

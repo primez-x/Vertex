@@ -620,7 +620,8 @@ if(SKETCH_BUILD_DESKTOP)
   add_library(sketch_desktop src/desktop/main_window.cpp
     src/desktop/building_object_dialog.cpp src/desktop/hosted_opening_dialog.cpp src/desktop/constraint_dialog.cpp
     src/desktop/constraint_preview_canvas.cpp src/desktop/text_library_dialog.cpp
-    src/desktop/appraisal_report_dialog.cpp src/desktop/drawing_input_panel.cpp)
+    src/desktop/appraisal_report_dialog.cpp src/desktop/appraisal_details_panel.cpp
+    src/desktop/drawing_input_panel.cpp)
   target_link_libraries(sketch_desktop PUBLIC sketch_text_library)
   target_link_libraries(sketch_desktop PUBLIC sketch_hosted_opening_plan)
   target_include_directories(sketch_desktop PUBLIC include PRIVATE src/desktop)
@@ -783,6 +784,14 @@ if(SKETCH_BUILD_DESKTOP)
       PREFIX "/fonts" BASE assets/fonts FILES assets/fonts/Inter.ttf)
     add_executable(wall_measurement_desktop_tests tests/wall_measurement_desktop_tests.cpp)
     target_link_libraries(wall_measurement_desktop_tests PRIVATE sketch_desktop)
+    add_executable(drawing_measurement_desktop_tests tests/drawing_measurement_desktop_tests.cpp)
+    target_link_libraries(drawing_measurement_desktop_tests PRIVATE sketch_desktop)
+    qt_add_resources(drawing_measurement_desktop_tests drawing_measurement_test_fonts
+      PREFIX "/fonts" BASE assets/fonts FILES assets/fonts/Inter.ttf)
+    add_executable(appraisal_details_panel_tests tests/appraisal_details_panel_tests.cpp)
+    target_link_libraries(appraisal_details_panel_tests PRIVATE sketch_desktop)
+    qt_add_resources(appraisal_details_panel_tests appraisal_details_test_fonts
+      PREFIX "/fonts" BASE assets/fonts FILES assets/fonts/Inter.ttf)
     qt_add_resources(wall_measurement_desktop_tests wall_measurement_fonts
       PREFIX "/fonts" BASE assets/fonts FILES assets/fonts/Inter.ttf)
     qt_add_resources(wall_opening_palette_tests wall_opening_palette_fonts
@@ -853,6 +862,8 @@ if(SKETCH_BUILD_DESKTOP)
       target_compile_options(wall_opening_palette_tests PRIVATE /W4 /permissive- /utf-8)
       target_compile_options(wall_chain_connection_tests PRIVATE /W4 /permissive- /utf-8)
       target_compile_options(connected_wall_canvas_tests PRIVATE /W4 /permissive- /utf-8)
+      target_compile_options(drawing_measurement_desktop_tests PRIVATE /W4 /permissive- /utf-8)
+      target_compile_options(appraisal_details_panel_tests PRIVATE /W4 /permissive- /utf-8)
       target_compile_options(multipage_user_workflow_tests PRIVATE /W4 /permissive- /utf-8)
       target_compile_options(associative_section_desktop_tests PRIVATE /W4 /permissive- /utf-8)
       target_compile_options(desktop_performance_tests PRIVATE /W4 /permissive- /utf-8)
@@ -889,6 +900,8 @@ if(SKETCH_BUILD_DESKTOP)
     add_test(NAME connected_wall_canvas COMMAND connected_wall_canvas_tests)
     add_test(NAME wall_corner_canvas COMMAND wall_corner_canvas_tests)
     add_test(NAME wall_measurement_desktop COMMAND wall_measurement_desktop_tests)
+    add_test(NAME drawing_measurement_desktop COMMAND drawing_measurement_desktop_tests)
+    add_test(NAME appraisal_details_panel COMMAND appraisal_details_panel_tests)
     add_test(NAME desktop_performance COMMAND desktop_performance_tests)
     add_test(NAME desktop_workspace_recovery COMMAND desktop_workspace_recovery_tests)
     add_test(NAME building_object_dialog COMMAND building_object_dialog_tests)
@@ -908,7 +921,7 @@ if(SKETCH_BUILD_DESKTOP)
     get_target_property(SKETCH_QMAKE_EXECUTABLE Qt6::qmake IMPORTED_LOCATION)
     get_filename_component(SKETCH_QT_BIN "${SKETCH_QMAKE_EXECUTABLE}" DIRECTORY)
     get_filename_component(SKETCH_QT_PREFIX "${SKETCH_QT_BIN}" DIRECTORY)
-    set_tests_properties(wall_measurement_desktop wall_chain_connection connected_wall_canvas wall_corner_canvas PROPERTIES
+    set_tests_properties(appraisal_details_panel drawing_measurement_desktop wall_measurement_desktop wall_chain_connection connected_wall_canvas wall_corner_canvas PROPERTIES
       ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_PLUGIN_PATH=${SKETCH_QT_PREFIX}/plugins"
       ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${SKETCH_QT_BIN};PATH=path_list_prepend:${CMAKE_SOURCE_DIR}/.deps/native/x64-windows/$<IF:$<CONFIG:Debug>,debug/bin,bin>")
     set_tests_properties(symbol_transform_desktop named_plan_vertex_desktop axis_canvas_controls deferred_opening_preview PROPERTIES

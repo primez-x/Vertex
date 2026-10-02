@@ -1,4 +1,4 @@
-# Vertex project formats v1 through v19
+# Vertex project formats v1 through v20
 
 ## Original typed wall input
 
@@ -195,9 +195,10 @@ arc-length locks, v13 direct physical curve-length inputs, and v14 rigid curve
 construction transforms, v15 fixed-chord boundary curvature edits, v16
 reviewed exterior wall-source replacements, and v17 explicit fresh-topology
 boundary replacements, v18 measured group rigid transforms, and v19 coordinated
-physical wall/exterior measurement changes, plus v4 through v19 archives through
+physical wall/exterior measurement changes, and v20 mixed ordinary object/asset
+and exterior changes, plus v4 through v20 archives through
 recovery-aware APIs.
-Under-versioned semantic data and versions above 19 reject. Legacy-only history
+Under-versioned semantic data and versions above 20 reject. Legacy-only history
 is still written as v1. Unknown boundary entity
 versions in v2 remain preserved read-only. See `boundary-entity-format.md`.
 Version 2 also recognizes `dimension` entities. Segment-length dimensions refer
@@ -650,7 +651,7 @@ unknown project `format_version` is rejected rather than opened unsafely.
 ## SQLite schema
 
 The SQLite `application_id` is `0x50535444` (`PSTD`). `user_version` and metadata
-`format_version` are equal and range from `1` through `19`, according to the
+`format_version` are equal and range from `1` through `20`, according to the
 retained semantics. The baseline application tables below are shared; later
 versions add the proof columns and recovery data documented in this file.
 
@@ -1277,3 +1278,37 @@ column and corresponding logical/extraction data; no new SQLite column is
 required. Retained v6 history requires native format 19 and extraction version 17,
 including after Undo or deletion. Existing v1-v5 command envelopes retain their
 original replay order and digest bytes.
+
+### Mixed ordinary objects and exterior updates (v20)
+
+Constraint-command envelope version 7 additionally records
+`supplemental_entity_changes` and `supplemental_asset_changes`. These lanes retain
+ordinary object and asset intent alongside the version-six physical wall and
+exterior update proof. Version seven can also retain an ordinary physical wall
+edit with additional author-supplied wall metadata. Ordinary construction
+provenance and source context remain subject to their existing checks; this does
+not grant permission to replace a retained construction record. Version-six
+physical metadata restrictions remain unchanged. The version marker remains retained even if supplemental
+vectors are emptied; removing intent cannot reinterpret a recorded operation as
+an older command. Version-six commands keep their original representation.
+
+The original ordinary command must be admitted before source completion. A
+supplement cannot overlap another lane or inject raw measured-owner or bound
+dimension geometry. Ordinary provenance, constraints, references and asset
+validation remain mandatory. The complete candidate carries exact entity and
+asset changes through preview, atomic Apply, Undo/Redo and retained history.
+Exterior reconstruction still covers every eligible current consumer and requires
+its existing source-wall lineage; unrelated objects confer no additional geometry
+authority.
+
+Retained v7 history requires native format 20 and extraction version 18, including
+after Undo or deletion. Its proof uses the existing revision JSON column. Lowering
+format markers remains invalid even when digests are recomputed. Earlier formats
+and command digests retain their prior semantics.
+
+The retained command keeps the existing one-MiB encoded proof ceiling. Asset
+bytes in supplemental intent are hex-encoded and count toward that ceiling;
+this is smaller than the standalone asset size limit. Exact unchanged asset
+upserts need no retained supplement. Large changed assets combined with a wall
+edit therefore require further storage work; this is an implementation gap,
+not removal of portable reference imagery from the production scope.

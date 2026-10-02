@@ -26,6 +26,7 @@
 #include "sketch/desktop/sheet_layout_dialog.hpp"
 #include "sketch/desktop/text_library_dialog.hpp"
 #include "sketch/desktop/appraisal_report_dialog.hpp"
+#include "sketch/desktop/appraisal_details_panel.hpp"
 #include "sketch/boundary_commit.hpp"
 #include "sketch/area_subtraction.hpp"
 #include "sketch/boundary_construction.hpp"
@@ -152,6 +153,7 @@
 #include <QStatusBar>
 #include <QStandardPaths>
 #include <QSplitter>
+#include <QSpinBox>
 #include <QTabWidget>
 #include <QTableWidget>
 #include <QTableWidgetItem>
@@ -6286,6 +6288,12 @@ public:
                 letter-spacing: 1px; }
             QLabel#inspectorHeading { color: $foreground; font-size: 18px; font-weight: 700; }
             QWidget#navigatorPanel, QWidget#inspectorBody { background: $surface; }
+            QWidget#appraisalDetailsContent, QWidget#appraisalDetailsViewport,
+            QScrollArea#appraisalDetailsScroll { background: $surface; }
+            QWidget#appraisalDetailsPanel QLabel { color: $foreground; }
+            QLabel#appraisalDetailsGla { font-size: 26px; font-weight: 700; }
+            QWidget#appraisalDetailsPanel QPushButton { padding: 5px 8px; }
+
             QWidget#navigatorPanel { border: 1px solid $border; border-radius: 10px; }
             QTabWidget#sidebarTabs::pane { border: 0; background: transparent; }
             QTabWidget#sidebarTabs QTabBar::tab { padding: 7px 14px; margin: 0 2px 0 0;
@@ -15501,9 +15509,13 @@ public:
             const auto found=m_vertex_preview_source->entities().find(id.toStdString());
             return found!=m_vertex_preview_source->entities().end() && found->second.type=="wall";
         });
+        // A mixed wall/presentation move also owns an exact proposal: its
+        // unselected exterior measurements must follow the physical sources
+        // before the gesture is released.
         if (!only_walls && !std::any_of(ids.begin(),ids.end(),[&](const auto& id) {
             const auto found=m_vertex_preview_source->entities().find(id.toStdString());
-            return found!=m_vertex_preview_source->entities().end() && is_closed_boundary_entity(found->second.type);
+            return found!=m_vertex_preview_source->entities().end() &&
+                (found->second.type=="wall" || is_closed_boundary_entity(found->second.type));
         })) return std::nullopt;
         const auto canvas_delta=delta;
         if (m_vertex_preview_view_context) {
@@ -21898,7 +21910,103 @@ public:
         dialog.exec();
     }
 
-    bool setCalculationWorkflow(const QString& requested_workflow) {
+    void showAppraisalSetup(const QString& property_id) {
+        if (!m_document->is_editable()) { setError(QStringLiteral("This document is read-only.")); return; }
+        if (m_boundary_session || m_pending_wall_start) {
+            setError(QStringLiteral("Finish or cancel the current drawing before changing appraisal setup.")); return;
+        }
+        const auto property = propertyEntity();
+        if (!property || id_from(property->id) != property_id) {
+            setError(QStringLiteral("The project property changed. Refresh Details before opening Setup.")); return;
+        }
+        try {
+            const auto source_document = m_document;
+            const auto source = source_document->snapshot();
+            const auto digest = entity_map_digest(source.entities());
+            const auto workflow = calculation_workflow_name(property->properties);
+            const auto policy = property->properties.value("appraisal_policy", json::object());
+            QDialog dialog(owner);
+            dialog.setObjectName(QStringLiteral("appraisalSetupDialog"));
+            dialog.setWindowTitle(QStringLiteral("Appraisal setup"));
+            styleDialog(dialog);
+            auto* layout = new QVBoxLayout(&dialog);
+            auto* enabled = new QCheckBox(QStringLiteral("Enable appraisal calculations"), &dialog);
+            enabled->setObjectName(QStringLiteral("appraisalSetupEnabled"));
+            enabled->setChecked(workflow == "appraisal" || !property->properties.contains("appraisal_policy"));
+            layout->addWidget(enabled);
+            auto* note = new QLabel(QStringLiteral("Declare the property policy and measurement basis. Floor and area facts are edited from each area. "
+                "Declared-facts policy version 1 does not establish ANSI or BOMA compliance."), &dialog);
+            note->setWordWrap(true);layout->addWidget(note);
+            auto* form = new QFormLayout;layout->addLayout(form);
+            const auto combo = [&](const char* name, const QString& title, const char* key,
+                std::initializer_list<std::pair<const char*,const char*>> values) {
+                auto* box = new QComboBox(&dialog);box->setObjectName(QString::fromLatin1(name));
+                box->addItem(QStringLiteral("Undeclared"),QString{});
+                for (const auto& [label,token] : values) box->addItem(QString::fromLatin1(label),QString::fromLatin1(token));
+                if (policy.is_object()) {
+                    const auto value = policy.find(key);
+                    if (value != policy.end() && value->is_string()) {
+                        const auto index = box->findData(QString::fromStdString(value->get<std::string>()));
+                        if (index >= 0) box->setCurrentIndex(index);
+                    }
+                }
+                form->addRow(title,box);return box;
+            };
+            auto* kind = combo("appraisalSetupPolicy",QStringLiteral("Policy"),"policy_kind",
+                {{"Residential declared facts","residential_declared"},{"Light commercial declared facts","light_commercial_declared"}});
+            auto* property_kind = combo("appraisalSetupPropertyKind",QStringLiteral("Property kind"),"property_kind",
+                {{"Detached single-family","detached_single_family"},{"Attached single-family","attached_single_family"},
+                 {"Manufactured home","manufactured_home"},{"Apartment unit","apartment_unit"},{"Multifamily","multifamily"},{"Light commercial","light_commercial"}});
+            auto* basis = combo("appraisalSetupMeasurementBasis",QStringLiteral("Measurement basis"),"measurement_basis",
+                {{"Exterior","exterior"},{"Interior perimeter","interior_perimeter"},{"Plans","plans"},{"Unknown","unknown"}});
+            form->addRow(QStringLiteral("Policy version"),new QLabel(QStringLiteral("1"),&dialog));
+            auto* precision = new QSpinBox(&dialog);precision->setObjectName(QStringLiteral("appraisalSetupPrecision"));precision->setRange(0,6);
+            unsigned initial_precision = 2;
+            try { initial_precision = appraisal_display_profile(property->properties).decimal_places; } catch (const std::exception&) {}
+            precision->setValue(static_cast<int>(initial_precision));form->addRow(QStringLiteral("Area decimal places"),precision);
+            // Missing declarations remain explicit; opening Setup never infers observed facts.
+            const auto update_enabled = [=](bool value) {
+                kind->setEnabled(value);property_kind->setEnabled(value);basis->setEnabled(value);
+            };
+            QObject::connect(enabled,&QCheckBox::toggled,&dialog,update_enabled);
+            auto* error = new QLabel(&dialog);error->setWordWrap(true);layout->addWidget(error);
+            auto* buttons = new QDialogButtonBox(QDialogButtonBox::Save | QDialogButtonBox::Cancel,&dialog);
+            buttons->setObjectName(QStringLiteral("appraisalSetupButtons"));layout->addWidget(buttons);
+            QObject::connect(buttons,&QDialogButtonBox::rejected,&dialog,&QDialog::reject);
+            QObject::connect(buttons,&QDialogButtonBox::accepted,&dialog,[&] {
+                if (m_document != source_document || m_document->revision() != source.revision() ||
+                    entity_map_digest(m_document->snapshot().entities()) != digest ||
+                    m_boundary_session || m_pending_wall_start) {
+                    error->setText(QStringLiteral("The project or drawing changed. Reopen Setup to use the current document."));return;
+                }
+                const auto current_property = propertyEntity();
+                if (!current_property || current_property->id != property->id) {
+                    error->setText(QStringLiteral("The project property changed. Reopen Setup."));return;
+                }
+                if (enabled->isChecked() && (kind->currentData().toString().isEmpty() ||
+                    property_kind->currentData().toString().isEmpty() || basis->currentData().toString().isEmpty())) {
+                    error->setText(QStringLiteral("Choose the policy, property kind and measurement basis before enabling appraisal."));return;
+                }
+                json declaration{{"version",1}};
+                for (const auto& [key,box] : std::initializer_list<std::pair<const char*,QComboBox*>>{
+                    {"policy_kind",kind},{"property_kind",property_kind},{"measurement_basis",basis}}) {
+                    const auto token = box->currentData().toString();
+                    if (!token.isEmpty()) declaration[key] = token.toStdString();
+                }
+                if (setCalculationWorkflow(enabled->isChecked() ? QStringLiteral("appraisal") : QStringLiteral("measurement"),
+                    enabled->isChecked() ? std::optional<json>{std::move(declaration)} : std::nullopt,
+                    static_cast<unsigned>(precision->value()))) dialog.accept();
+                else error->setText(lastError());
+            });
+            dialog.exec();
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Appraisal setup: %1").arg(QString::fromUtf8(error.what())));
+        }
+    }
+
+    bool setCalculationWorkflow(const QString& requested_workflow,
+        std::optional<json> appraisal_policy = std::nullopt,
+        std::optional<unsigned> decimal_places = std::nullopt) {
         if (!m_document->is_editable()) {
             setError(QStringLiteral("This document is read-only."));
             return false;
@@ -21915,18 +22023,22 @@ public:
         }
         try {
             const auto current = calculation_workflow_name(property->properties);
-            if (current == workflow) {
+            if (current == workflow && !appraisal_policy && !decimal_places) {
                 clearError();
                 return true;
             }
+            if (appraisal_policy && !appraisal_policy->is_object())
+                throw std::invalid_argument("Appraisal policy must be an object.");
+            if (decimal_places && *decimal_places > 6)
+                throw std::invalid_argument("Area precision must be between 0 and 6 decimal places.");
             const auto snapshot = m_document->snapshot();
             auto updated = *property;
-            if (workflow == "appraisal") {
+            if (current != workflow && workflow == "appraisal") {
                 updated.properties["measurement_calculation_profile"] =
                     calculation_profile_json(read_calculation_profile(property->properties));
                 updated.properties["calculation_profile"] =
                     calculation_profile_json(builtin_appraisal_profile());
-            } else {
+            } else if (current != workflow) {
                 if (property->properties.contains("measurement_calculation_profile")) {
                     json stored_properties{{"calculation_profile",
                                             property->properties.at("measurement_calculation_profile")}};
@@ -21938,11 +22050,18 @@ public:
                 }
             }
             updated.properties["calculation_workflow"] = workflow;
+            if (appraisal_policy) updated.properties["appraisal_policy"] = *appraisal_policy;
+            if (decimal_places) {
+                auto profile = read_calculation_profile(updated.properties);
+                profile.decimal_places = *decimal_places;
+                updated.properties["calculation_profile"] = calculation_profile_json(profile);
+            }
+            if (updated.properties == property->properties) { clearError(); return true; }
             std::vector<EntityChange> changes;
             changes.push_back(EntityChange::upsert(std::move(updated)));
             for (const auto& [id, source] : snapshot.entities()) {
                 (void)id;
-                if (!is_closed_boundary_entity(source.type)) continue;
+                if (current == workflow || !is_closed_boundary_entity(source.type)) continue;
                 auto boundary = source;
                 bool changed = false;
                 auto measurement = read_string(boundary.properties,
@@ -21982,8 +22101,8 @@ public:
             applyDocumentCommand(ApplyEntityChanges{
                 .expected_revision = snapshot.revision(),
                 .entity_changes = std::move(changes),
-                .message = workflow == "appraisal" ? "activate appraisal workflow"
-                                                    : "activate measurement workflow",
+                .message = current == workflow ? "update appraisal setup"
+                    : workflow == "appraisal" ? "activate appraisal workflow" : "activate measurement workflow",
             });
             clearError();
             refresh();
@@ -25106,6 +25225,30 @@ private:
         symbols_layout->setSpacing(6);
         sidebar_tabs->addTab(layers_page, QStringLiteral("Layers"));
         sidebar_tabs->addTab(symbols_page, QStringLiteral("Library"));
+        m_appraisal_details = new AppraisalDetailsPanel(sidebar_tabs);
+        sidebar_tabs->addTab(m_appraisal_details, QStringLiteral("Details"));
+        m_appraisal_details->setLocateRequested([this](const QString& boundary, Revision revision) {
+            if (!appraisalDetailsCurrent(revision)) return;
+            const auto organization = organize_project(m_document->snapshot());
+            if (const auto context = organization.drawing_context(boundary.toStdString())) {
+                (void)setContainerVisible(id_from(context->floor_id), true);
+                (void)setContainerVisible(id_from(context->layer_id), true);
+            }
+            if (selectEntity(boundary)) {
+                setWorkspace(Workspace::measurement);
+                m_measurementCanvas->fitView();
+            }
+        });
+        m_appraisal_details->setFactsRequested([this](const QString& boundary, Revision revision) {
+            if (appraisalDetailsCurrent(revision) && selectEntity(boundary)) showAppraisalFacts();
+        });
+        m_appraisal_details->setSetupRequested([this](const QString& property) {
+            if (m_appraisal_details_revision && appraisalDetailsCurrent(*m_appraisal_details_revision)) showAppraisalSetup(property);
+        });
+        m_appraisal_details->setReportRequested([this](const QString& property) {
+            if (m_appraisal_details_revision && appraisalDetailsCurrent(*m_appraisal_details_revision) &&
+                m_appraisal_details->propertyId() == property) showAppraisalReport();
+        });
         // The project tree is the drawing-context control. Keep the legacy
         // objects hidden for compatibility with older automation while
         // removing the duplicated layer selector and breadcrumb from view.
@@ -25553,7 +25696,7 @@ private:
         m_snap_button->setIconSize(QSize(16, 16));
         m_snap_button->setToolButtonStyle(Qt::ToolButtonIconOnly);
         m_snap_button->setAccessibleName(QStringLiteral("Snap"));
-        m_snap_button->setToolTip(QStringLiteral("Snap to the displayed grid and nearby geometry. Grid spacing follows zoom and units."));
+        m_snap_button->setToolTip(QStringLiteral("Snap to nearby geometry, the displayed grid, and useful drawing lengths. Increments follow zoom and units. Turn Snap off for free mouse drawing; typed input stays exact."));
         m_snap_button->setObjectName(QStringLiteral("snapTool"));
         m_snap_button->setCheckable(true);
         m_snap_button->setChecked(true);
@@ -26750,14 +26893,15 @@ private:
                     const auto up=plan_view_up(m_vertex_preview_view_context->frame);
                     delta={delta.x*right.x+delta.y*up.x,delta.x*right.y+delta.y*up.y};
                 }
-                if (std::any_of(ids.begin(),ids.end(),[&](const auto& id) {
+                const bool only_walls=std::all_of(ids.begin(),ids.end(),[&](const auto& id) {
                     const auto found=m_wall_move_source->entities().find(id.toStdString());
-                    return found!=m_wall_move_source->entities().end() && is_closed_boundary_entity(found->second.type);
-                })) {
+                    return found!=m_wall_move_source->entities().end() && found->second.type=="wall";
+                });
+                if (!only_walls) {
                     auto parts=prepareSelectionTranslation(*m_wall_move_source,ids,canvas_delta,canvas);
                     (void)makeSelectionGeometryTranslationCommand(*m_wall_move_source,
                         std::move(parts.model_ids),parts.model_delta,std::move(parts.presentation_changes));
-                    throw std::invalid_argument("The area move could not be previewed. The project was not changed.");
+                    throw std::invalid_argument("The selected objects could not be previewed. The project was not changed.");
                 }
                 ConstraintAuthoringIntent intent;
                 intent.wall_geometry_move=wallTranslationIntent(*m_wall_move_source,ids,delta);
@@ -26826,48 +26970,19 @@ private:
             }
             if (m_inspector && m_inspector->isVisible()) positionContextEditor();
         });
-        canvas->setRightClicked([this, canvas](Vec2 point, QString target) {
-            if (!m_pending_opening_kind.isEmpty()) {
+        canvas->setRightClicked([this](Vec2 point, QString target) {
+            // A stationary right click abandons the pending action through
+            // Escape's existing cancellation route. Right drags never reach
+            // this callback, so navigation keeps drafts and placement armed.
+            if (m_boundary_session || m_pending_wall_start || m_text_placement_context ||
+                m_plan_label_context || !m_pending_opening_kind.isEmpty()) {
                 cancelTool();
-                return;
-            }
-            if (m_boundary_session) {
-                QMenu menu(owner);
-                auto* finish = menu.addAction(QStringLiteral("Finish boundary"));
-                QObject::connect(finish, &QAction::triggered, owner, [this] { finishTool(); });
-                auto* undo = menu.addAction(QStringLiteral("Undo last point"));
-                undo->setEnabled(m_boundary_session->can_undo());
-                QObject::connect(undo, &QAction::triggered, owner,
-                                 [this] { (void)undoCommand(); });
-                auto* precise = menu.addAction(QStringLiteral("Precise input…"));
-                QObject::connect(precise, &QAction::triggered, owner,
-                                 [this] { preciseBoundaryInput(); });
-                menu.addSeparator();
-                auto* cancel = menu.addAction(QStringLiteral("Cancel drawing"));
-                QObject::connect(cancel, &QAction::triggered, owner, [this] { cancelTool(); });
-                menu.exec(QCursor::pos());
                 return;
             }
             if (!m_pending_symbol_id.isEmpty()) {
                 cancelSymbolPlacement();
                 if (m_symbol_library_status)
                     m_symbol_library_status->setText(QStringLiteral("Component placement cancelled."));
-                return;
-            }
-            if (m_tool == CanvasTool::wall || m_pending_wall_start) {
-                QMenu menu(owner);
-                if (m_tool == CanvasTool::wall) {
-                    auto* precise = menu.addAction(QStringLiteral("Precise input…"));
-                    precise->setShortcut(QKeySequence(Qt::Key_D));
-                    QObject::connect(precise, &QAction::triggered, owner,
-                                     [this, canvas] { preciseWallInput(canvas); });
-                }
-                auto* finish = menu.addAction(m_wall_chain_has_segments
-                    ? QStringLiteral("Finish wall chain")
-                    : QStringLiteral("Cancel wall start"));
-                QObject::connect(finish, &QAction::triggered, owner,
-                                 [this] { finishWallChain(); });
-                menu.exec(QCursor::pos());
                 return;
             }
             if (!target.isEmpty() && !m_selected_ids.contains(target)) {
@@ -29620,7 +29735,48 @@ private:
         }
     }
 
+    bool appraisalDetailsCurrent(Revision revision) {
+        if (m_appraisal_details_document.lock() != m_document || m_document->revision() != revision ||
+            m_document->snapshot().document_id() != m_appraisal_details_document_id ||
+            entity_map_digest(m_document->snapshot().entities()) != m_appraisal_details_digest) {
+            setError(QStringLiteral("The project changed. Details has been refreshed; choose the area again."));
+            refreshAppraisalDetails();return false;
+        }
+        return true;
+    }
+
+    void refreshAppraisalDetails() {
+        if (!m_appraisal_details) return;
+        const auto source = m_document->snapshot();
+        const bool changed_document = m_appraisal_details_document.lock() != m_document;
+        const bool changed_selection = changed_document || m_appraisal_details_selection != m_selected_ids;
+        m_appraisal_details_document = m_document;
+        m_appraisal_details_revision = source.revision();
+        m_appraisal_details_document_id = source.document_id();
+        m_appraisal_details_digest = entity_map_digest(source.entities());
+        m_appraisal_details_selection = m_selected_ids;
+        if (changed_document) m_appraisal_details->setSelectedBoundary({});
+        const auto property = propertyEntity();
+        try {
+            const auto semantic_visibility = visible_project_entities_with_phase(source, ProjectViewFilter{});
+            m_appraisal_details->setDocument(source, property ? property->id : std::string{},m_metric_units,&semantic_visibility);
+            // An independently chosen row survives units, visibility and document refreshes.
+            // Follow the canvas only when its actual selection changes.
+            if (changed_selection) {
+                const auto selected = source.entities().find(m_selected_id.toStdString());
+                m_appraisal_details->setSelectedBoundary(m_selected_ids.size() == 1 && selected != source.entities().end() &&
+                    is_closed_boundary_entity(selected->second.type) ? m_selected_id : QString{});
+            }
+        } catch (const std::exception& error) {
+            // Never recalculate with an unmasked snapshot when semantic phase resolution fails.
+            m_appraisal_details->setDocument(source,{},m_metric_units);
+            if (auto* status = m_appraisal_details->findChild<QLabel*>(QStringLiteral("appraisalDetailsStatus")))
+                status->setText(QStringLiteral("Details unavailable. Design phase visibility could not be resolved: %1").arg(QString::fromUtf8(error.what())));
+        }
+    }
+
     void refreshInspector() {
+        refreshAppraisalDetails();
         const auto entity = selectedEntity();
         const auto editable = m_document->is_editable();
         const auto inspector_snapshot = m_document->snapshot();
@@ -30702,7 +30858,7 @@ private:
                     return item.segment_id == dimension.segment_id;
                 });
                 if (edge != edges.end()) preview.labels.push_back({dimension.text_position,
-                    format_length(segment_length(edge->segment), m_metric_units)});
+                    PlanCanvas::drawingLengthText(segment_length(edge->segment), m_metric_units)});
             }
         };
         for (const auto& chain : state.accepted_chains)
@@ -30714,6 +30870,8 @@ private:
             preview.can_close_on_anchor = state.phase == BoundaryAuthoringPhase::drawing &&
                 state.pen_state == BoundaryPenState::down && chain.segments.size() >= 2;
             preview.pen_position = chain.segments.empty() ? chain.anchor : chain.segments.back().segment.end;
+            preview.length_snap_active = state.phase == BoundaryAuthoringPhase::drawing &&
+                state.pen_state == BoundaryPenState::down;
             if (state.phase == BoundaryAuthoringPhase::drawing && state.pen_state == BoundaryPenState::down &&
                 state.pointer && (state.pointer->x != preview.pen_position->x || state.pointer->y != preview.pen_position->y))
                 preview.rubber_band = Segment{*preview.pen_position, *state.pointer, 0};
@@ -30722,7 +30880,7 @@ private:
                     return item.segment_id == state.pending_dimension->segment_id;
                 });
                 if (edge != chain.segments.end()) preview.labels.push_back({*state.pointer,
-                    format_length(segment_length(edge->segment), m_metric_units)});
+                    PlanCanvas::drawingLengthText(segment_length(edge->segment), m_metric_units)});
             }
         }
         const auto mode = state.mode == BoundaryAuthoringMode::draw_first
@@ -31779,7 +31937,7 @@ private:
         const auto length = std::hypot(end.x - m_pending_wall_start->x,
                                        end.y - m_pending_wall_start->y);
         WallDraftPreview preview{*m_pending_wall_start, end, thickness,
-            length > 1e-9 ? format_length(length, m_metric_units) : QString{}};
+            length > 1e-9 ? PlanCanvas::drawingLengthText(length, m_metric_units) : QString{}};
         m_measurementCanvas->setWallPreview(preview);
         m_architecturalCanvas->setWallPreview(std::move(preview));
     }
@@ -33586,6 +33744,12 @@ private:
     BuildingViewKind m_architectural_view_kind{BuildingViewKind::plan};
     QString m_active_named_view;
 
+    AppraisalDetailsPanel* m_appraisal_details{};
+    std::weak_ptr<Document> m_appraisal_details_document;
+    std::optional<Revision> m_appraisal_details_revision;
+    std::string m_appraisal_details_digest;
+    std::string m_appraisal_details_document_id;
+    QStringList m_appraisal_details_selection;
     VisibilityTreeWidget* m_navigator{};
     QSplitter* m_workspace_splitter{};
     QWidget* m_drawing_panel{};

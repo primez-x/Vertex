@@ -1329,9 +1329,64 @@ Asset Asset::create(std::string media_type, std::vector<std::byte> bytes,
     return create(make_stable_id(), std::move(media_type), std::move(bytes), std::move(metadata));
 }
 
+static bool has_supplemental_source_completion(const ApplyBoundaryConstraintChanges& command) {
+    return command.supplemental_source_completion || !command.supplemental_entity_changes.empty() ||
+        !command.supplemental_asset_changes.empty();
+}
+
+static bool exact_entity_payload(const Entity& left, const Entity& right) {
+    return left == right && left.properties.dump() == right.properties.dump() &&
+        left.extensions.dump() == right.extensions.dump();
+}
+
+static bool exact_asset_payload(const Asset& left, const Asset& right) {
+    return left == right && left.metadata.dump() == right.metadata.dump();
+}
+
+static bool v6_physical_wall_properties_supported(const Entity& previous, const Entity& wall) {
+    auto unchanged = wall.properties;
+    for (const auto* key : {"baseline", "thickness_m", "thickness", "height_m", "height", "layers", "classification", "name"}) {
+        unchanged.erase(key);
+        if (previous.properties.contains(key)) unchanged[key] = previous.properties.at(key);
+    }
+    return unchanged == previous.properties;
+}
+
+static bool v6_physical_wall_extensions_supported(const Entity& previous, const Entity& wall) {
+    auto retained = wall.extensions;
+    for (const auto* key : {"curve_input", "curve_input_derivation", "constraint_authoring"}) {
+        retained.erase(key);
+        if (previous.extensions.contains(key)) retained[key] = previous.extensions.at(key);
+    }
+    return retained == previous.extensions;
+}
+
 bool has_exterior_source_completion(const ApplyBoundaryConstraintChanges& command) {
     return command.exterior_source_completion || !command.physical_entity_changes.empty() ||
-        !command.exterior_source_edits.empty();
+        !command.exterior_source_edits.empty() || has_supplemental_source_completion(command);
+}
+
+static std::map<std::string, Asset, std::less<>> boundary_constraint_assets(
+    const std::map<std::string, Asset, std::less<>>& source,
+    const ApplyBoundaryConstraintChanges& command) {
+    auto result = source;
+    std::unordered_set<std::string> touched;
+    for (const auto& change : command.supplemental_asset_changes) {
+        if (change.kind != AssetChangeKind::upsert && change.kind != AssetChangeKind::erase)
+            document_error(DocumentErrorCode::invalid_asset, "Invalid supplemental asset change kind");
+        const auto& id = change.kind == AssetChangeKind::upsert ? change.asset.id : change.asset_id;
+        if (!touched.insert(id).second)
+            document_error(DocumentErrorCode::duplicate_change, "Asset supplement is changed more than once: " + id);
+        if (change.kind == AssetChangeKind::upsert) {
+            validate_asset(change.asset);
+            result.insert_or_assign(id, change.asset);
+        } else {
+            if (!is_valid_identifier(id))
+                document_error(DocumentErrorCode::invalid_asset, "Deleted supplemental asset ID is invalid");
+            result.erase(id);
+        }
+    }
+    return result;
 }
 
 void validate_completed_constraint_change(const std::map<std::string, Entity, std::less<>>& before,
@@ -1385,8 +1440,7 @@ static void validate_exterior_source_redraw(const BoundaryGeometryEdit& edit) {
 std::map<std::string, Entity, std::less<>> boundary_constraint_entities(
     const std::map<std::string, Entity, std::less<>>& source,
     const ApplyBoundaryConstraintChanges& command, bool retained_replay = false) {
-    const bool source_completion = command.exterior_source_completion ||
-        !command.physical_entity_changes.empty() || !command.exterior_source_edits.empty();
+    const bool source_completion = has_exterior_source_completion(command);
     if (source_completion) (void)command_to_json(Command{command});
     if (command.boundary_edits.empty() && command.wall_edits.empty() && !source_completion)
         document_error(DocumentErrorCode::invalid_entity,
@@ -1400,6 +1454,19 @@ std::map<std::string, Entity, std::less<>> boundary_constraint_entities(
         document_error(DocumentErrorCode::invalid_entity, error.what());
     }
     std::unordered_set<std::string> touched;
+    const bool supplemental_completion = has_supplemental_source_completion(command);
+    if (supplemental_completion) {
+        // Reserve every primary boundary output, including generated dimensions
+        // and removed references. Supplements cannot alter or resurrect them.
+        for (const auto& [id, entity] : source) {
+            const auto after = result.find(id);
+            if (after == result.end() || !exact_entity_payload(entity, after->second)) touched.insert(id);
+        }
+        for (const auto& [id, entity] : result) {
+            (void)entity;
+            if (!source.contains(id)) touched.insert(id);
+        }
+    }
     for (const auto& edit : command.wall_edits) {
         if (!touched.insert(edit.wall_id).second)
             document_error(DocumentErrorCode::duplicate_change,"Wall is changed more than once: " + edit.wall_id);
@@ -1434,6 +1501,7 @@ std::map<std::string, Entity, std::less<>> boundary_constraint_entities(
             result.erase(id);
         }
     }
+    const auto before_ordinary = result;
     if (source_completion) {
         const auto before_physical = result;
         for (const auto& change : command.physical_entity_changes) {
@@ -1447,29 +1515,72 @@ std::map<std::string, Entity, std::less<>> boundary_constraint_entities(
             if (!touched.insert(wall.id).second)
                 document_error(DocumentErrorCode::duplicate_change,
                     "Exterior physical supplement overlaps another edit: " + wall.id);
-            auto unchanged = wall.properties;
-            for (const auto* key : {"baseline", "thickness_m", "thickness", "height_m", "height", "layers", "classification", "name"}) {
-                unchanged.erase(key);
-                if (previous->second.properties.contains(key)) unchanged[key] = previous->second.properties.at(key);
-            }
-            if (unchanged != previous->second.properties)
+            if (!supplemental_completion && !v6_physical_wall_properties_supported(previous->second, wall))
                 document_error(DocumentErrorCode::invalid_entity,
                     "Exterior physical supplements contain unsupported wall properties or changed source context");
-            auto retained_extensions = wall.extensions;
-            for (const auto* key : {"curve_input", "curve_input_derivation", "constraint_authoring"}) {
-                retained_extensions.erase(key);
-                if (previous->second.extensions.contains(key)) retained_extensions[key] = previous->second.extensions.at(key);
-            }
-            if (retained_extensions != previous->second.extensions)
+            if (!supplemental_completion && !v6_physical_wall_extensions_supported(previous->second, wall))
                 document_error(DocumentErrorCode::invalid_entity,
                     "Exterior physical supplements must retain unrelated wall extension metadata");
+            if (supplemental_completion)
+                for (const auto* key : {"property_id", "building_id", "floor_id", "layer_id", "phase_id"})
+                    if (wall.properties.contains(key) != previous->second.properties.contains(key) ||
+                        (wall.properties.contains(key) && wall.properties.at(key) != previous->second.properties.at(key)))
+                        document_error(DocumentErrorCode::invalid_entity,
+                            "Exterior physical supplements must retain original wall source context");
             validate_entity(wall);
             result.at(wall.id) = wall;
         }
         // Ordinary physical properties retain the same admission contracts;
         // typed source authority does not qualify supplemental raw geometry.
-        validate_constraint_change(before_physical, result);
-        try { validate_boundary_transition(before_physical, result); }
+        if (!supplemental_completion) {
+            validate_constraint_change(before_physical, result);
+            try { validate_boundary_transition(before_physical, result); }
+            catch (const std::exception& error) { document_error(DocumentErrorCode::invalid_entity, error.what()); }
+        }
+    }
+    if (!command.supplemental_entity_changes.empty()) {
+        std::unordered_set<std::string> protected_ids;
+        for (const auto& edit : command.boundary_edits) protected_ids.insert(edit.boundary_id);
+        for (const auto& edit : command.exterior_source_edits) protected_ids.insert(edit.boundary_id);
+        for (const auto& [id, entity] : source)
+            if (can_recognize_boundary_entity_type(entity.type) ||
+                can_recognize_boundary_dimension_entity_type(entity.type)) protected_ids.insert(id);
+        for (const auto& [id, entity] : before_ordinary)
+            if (can_recognize_boundary_entity_type(entity.type) ||
+                can_recognize_boundary_dimension_entity_type(entity.type)) protected_ids.insert(id);
+        for (const auto& change : command.supplemental_entity_changes) {
+            if (change.kind != EntityChangeKind::upsert && change.kind != EntityChangeKind::erase)
+                document_error(DocumentErrorCode::invalid_entity, "Invalid supplemental entity change kind");
+            const auto& id = change.kind == EntityChangeKind::upsert ? change.entity.id : change.entity_id;
+            if (!is_valid_identifier(id))
+                document_error(DocumentErrorCode::invalid_entity, "Supplemental entity ID is invalid");
+            if (protected_ids.contains(id) || (change.kind == EntityChangeKind::upsert &&
+                (can_recognize_boundary_entity_type(change.entity.type) ||
+                 can_recognize_boundary_dimension_entity_type(change.entity.type))))
+                document_error(DocumentErrorCode::invalid_entity,
+                    "Exterior supplements cannot raw-edit a measured owner or dimension");
+            if (!touched.insert(id).second)
+                document_error(DocumentErrorCode::duplicate_change,
+                    "Exterior supplement overlaps another edit: " + id);
+            const auto previous = source.find(id);
+            if (change.kind == EntityChangeKind::upsert && previous != source.end() &&
+                previous->second.type == "wall")
+                document_error(DocumentErrorCode::invalid_entity,
+                    "Existing wall changes require the exterior physical or typed wall lane");
+            if (change.kind == EntityChangeKind::upsert) {
+                validate_entity(change.entity);
+                result.insert_or_assign(id, change.entity);
+            } else result.erase(id);
+        }
+    }
+    if (supplemental_completion) {
+        // Physical changes and ordinary relationship edits are admitted
+        // together, so a removed lock cannot reject an intermediate wall
+        // state that the complete ordinary transaction admits. This never
+        // widens typed authority: primary typed geometry is already present
+        // in before_ordinary, and raw owner/dimension edits were rejected.
+        validate_constraint_change(before_ordinary, result);
+        try { validate_boundary_transition(before_ordinary, result); }
         catch (const std::exception& error) { document_error(DocumentErrorCode::invalid_entity, error.what()); }
     }
     for (const auto& edit : command.wall_edits) {
@@ -1503,8 +1614,7 @@ Command complete_exterior_wall_measurement_command(const DocumentSnapshot& sourc
     const auto* ordinary = std::get_if<ApplyEntityChanges>(&command);
     const auto* constrained = std::get_if<ApplyBoundaryConstraintChanges>(&command);
     if (!ordinary && !constrained) return command;
-    if (constrained && (constrained->exterior_source_completion ||
-        !constrained->physical_entity_changes.empty() || !constrained->exterior_source_edits.empty())) {
+    if (constrained && has_exterior_source_completion(*constrained)) {
         (void)Document::preview_command(source, command);
         return command;
     }
@@ -1528,10 +1638,13 @@ Command complete_exterior_wall_measurement_command(const DocumentSnapshot& sourc
     completed.exterior_source_completion = true;
     completed.exterior_source_edits = updates;
     if (ordinary) {
-        if (!ordinary->asset_changes.empty())
-            document_error(DocumentErrorCode::invalid_entity,
-                "Automatic exterior completion cannot combine asset changes with wall edits");
         completed.message = ordinary->message;
+        for (const auto& change : ordinary->asset_changes) {
+            const auto previous = source.assets().find(change.asset.id);
+            if (change.kind == AssetChangeKind::upsert && previous != source.assets().end() &&
+                exact_asset_payload(previous->second, change.asset)) continue;
+            completed.supplemental_asset_changes.push_back(change);
+        }
         const auto read = [](const Entity& wall) {
             const auto& b = wall.properties.at("baseline");
             return Segment{{b.at("start")[0].get<double>(), b.at("start")[1].get<double>()},
@@ -1541,18 +1654,19 @@ Command complete_exterior_wall_measurement_command(const DocumentSnapshot& sourc
             const auto& id = change.kind == EntityChangeKind::upsert ? change.entity.id : change.entity_id;
             const auto previous = source.entities().find(id);
             if (change.kind == EntityChangeKind::upsert && previous != source.entities().end() &&
-                previous->second == change.entity) continue; // Exact no-op payloads carry no intent.
+                exact_entity_payload(previous->second, change.entity)) continue; // Exact no-op payloads carry no intent.
             if (change.kind != EntityChangeKind::upsert || previous == source.entities().end() ||
-                previous->second.type != "wall" || change.entity.type != "wall")
-                document_error(DocumentErrorCode::invalid_entity,
-                    "Automatic exterior completion cannot reinterpret supplemental non-wall changes");
+                previous->second.type != "wall" || change.entity.type != "wall") {
+                completed.supplemental_entity_changes.push_back(change);
+                continue;
+            }
             bool typed = false;
             if (previous->second.properties.at("baseline") != change.entity.properties.at("baseline")) {
                 const auto old = read(previous->second), next = read(change.entity);
                 if (old.sweep_radians == next.sweep_radians) {
                     ConstraintWallGeometryEdit edit{id, next, std::nullopt, old.sweep_radians == 0.0 ? 1ULL : 2ULL};
                     try {
-                        if (replay_constraint_wall_edit(previous->second, edit) == change.entity) {
+                        if (exact_entity_payload(replay_constraint_wall_edit(previous->second, edit), change.entity)) {
                             completed.wall_edits.push_back(std::move(edit)); typed = true;
                         }
                     } catch (const std::invalid_argument&) {
@@ -1561,13 +1675,22 @@ Command complete_exterior_wall_measurement_command(const DocumentSnapshot& sourc
                     }
                 }
             }
-            if (!typed) completed.physical_entity_changes.push_back(change);
+            if (!typed) {
+                completed.physical_entity_changes.push_back(change);
+                if (!v6_physical_wall_properties_supported(previous->second, change.entity) ||
+                    !v6_physical_wall_extensions_supported(previous->second, change.entity))
+                    completed.supplemental_source_completion = true;
+            }
         }
+        completed.supplemental_source_completion = completed.supplemental_source_completion ||
+            !completed.supplemental_entity_changes.empty() ||
+            !completed.supplemental_asset_changes.empty();
     }
     const Command result{std::move(completed)};
     const auto verified = Document::preview_command(source, result);
-    const auto expected = edited_boundary_entities_batch(physical.entities(), updates);
-    if (verified.entities() != expected || verified.assets() != physical.assets())
+    auto expected = physical.history().back();
+    expected.entities = edited_boundary_entities_batch(physical.entities(), updates);
+    if (!same_state(verified.history().back(), expected))
         document_error(DocumentErrorCode::invalid_entity,
             "Automatic exterior completion does not reproduce the exact authored physical command");
     return result;
@@ -2158,8 +2281,7 @@ nlohmann::json command_to_json(const Command& command) {
                     for (const auto& edit : typed.wall_edits)
                         encoded["wall_edits"].push_back(encode_constraint_wall_edit(edit));
                 }
-                if (typed.exterior_source_completion || !typed.physical_entity_changes.empty() ||
-                    !typed.exterior_source_edits.empty()) {
+                if (has_exterior_source_completion(typed)) {
                     encoded["version"] = 6;
                     if (!encoded.contains("wall_edits")) encoded["wall_edits"] = nlohmann::json::array();
                     encoded["physical_entity_changes"] = command_to_json(ApplyEntityChanges{
@@ -2171,6 +2293,14 @@ nlohmann::json command_to_json(const Command& command) {
                     {
                         validate_exterior_source_redraw(edit);
                         encoded["exterior_source_edits"].push_back(encode_boundary_geometry_edit(edit));
+                    }
+                    if (has_supplemental_source_completion(typed)) {
+                        encoded["version"] = 7;
+                        const auto supplements = command_to_json(ApplyEntityChanges{
+                            typed.expected_revision, typed.supplemental_entity_changes,
+                            typed.supplemental_asset_changes, typed.message});
+                        encoded["supplemental_entity_changes"] = supplements.at("entity_changes");
+                        encoded["supplemental_asset_changes"] = supplements.at("asset_changes");
                     }
                     if (encoded.dump().size() > 1024 * 1024)
                         throw std::invalid_argument("Exterior source completion exceeds the persisted proof budget");
@@ -2216,7 +2346,7 @@ Command command_from_json(const nlohmann::json& value) {
     try {
         if (!value.is_object() || !value.contains("version") || !value.contains("kind") ||
             !value.at("version").is_number_integer() ||
-            (value.at("version") != 1 && value.at("version") != 2 && value.at("version") != 3 && value.at("version") != 4 && value.at("version") != 5 && value.at("version") != 6) ||
+            (value.at("version") != 1 && value.at("version") != 2 && value.at("version") != 3 && value.at("version") != 4 && value.at("version") != 5 && value.at("version") != 6 && value.at("version") != 7) ||
             !value.at("kind").is_string()) {
             document_error(DocumentErrorCode::invalid_entity, "serialized command envelope is invalid");
         }
@@ -2273,8 +2403,17 @@ Command command_from_json(const nlohmann::json& value) {
         }
         if (kind == "apply_boundary_constraint_changes") {
             const bool mixed = value.at("version") != 1;
-            const bool source_completion = value.at("version") == 6;
-            if (source_completion) command_exact_fields(value, {"version","kind","expected_revision","message",
+            const bool supplements = value.at("version") == 7;
+            const bool source_completion = value.at("version") == 6 || supplements;
+            if (supplements) {
+                command_exact_fields(value, {"version","kind","expected_revision","message",
+                    "entity_changes","boundary_edits","wall_edits","physical_entity_changes","exterior_source_edits",
+                    "supplemental_entity_changes","supplemental_asset_changes"},
+                    DocumentErrorCode::invalid_entity,"serialized supplemental exterior source command");
+                if (value.dump().size() > 1024 * 1024)
+                    document_error(DocumentErrorCode::invalid_entity,
+                        "Exterior source completion exceeds the persisted proof budget");
+            } else if (source_completion) command_exact_fields(value, {"version","kind","expected_revision","message",
                                           "entity_changes","boundary_edits","wall_edits",
                                           "physical_entity_changes","exterior_source_edits"},
                                  DocumentErrorCode::invalid_entity,"serialized exterior source command");
@@ -2296,11 +2435,14 @@ Command command_from_json(const nlohmann::json& value) {
             ordinary.erase("boundary_edits");
             ordinary.erase("physical_entity_changes");
             ordinary.erase("exterior_source_edits");
+            ordinary.erase("supplemental_entity_changes");
+            ordinary.erase("supplemental_asset_changes");
             ordinary["asset_changes"] = nlohmann::json::array();
             const auto changes = std::get<ApplyEntityChanges>(command_from_json(ordinary));
             ApplyBoundaryConstraintChanges result{
                 changes.expected_revision, {}, changes.entity_changes, changes.message};
             result.exterior_source_completion = source_completion;
+            result.supplemental_source_completion = supplements;
             try {
                 for (const auto& edit : value.at("boundary_edits"))
                     result.boundary_edits.push_back(decode_boundary_geometry_edit(edit));
@@ -2331,6 +2473,14 @@ Command command_from_json(const nlohmann::json& value) {
                         validate_exterior_source_redraw(decoded);
                         result.exterior_source_edits.push_back(decoded);
                     }
+                }
+                if (supplements) {
+                    auto supplemental = ordinary;
+                    supplemental["entity_changes"] = value.at("supplemental_entity_changes");
+                    supplemental["asset_changes"] = value.at("supplemental_asset_changes");
+                    const auto decoded = std::get<ApplyEntityChanges>(command_from_json(supplemental));
+                    result.supplemental_entity_changes = decoded.entity_changes;
+                    result.supplemental_asset_changes = decoded.asset_changes;
                 }
             } catch (const std::exception& error) {
                 document_error(DocumentErrorCode::invalid_entity, error.what());
@@ -2666,6 +2816,7 @@ Revision Document::apply(const Command& command) {
                 validate_action(next.action);
                 next.boundary_constraint_changes = typed_command;
                 next.entities = boundary_constraint_entities(current.entities, typed_command);
+                next.assets = boundary_constraint_assets(current.assets, typed_command);
                 next_unsupported_constraints = validate_state(next.entities, next.assets);
                 validate_completed_constraint_change(current.entities, next.entities, typed_command);
                 try {
@@ -3067,6 +3218,7 @@ Document Document::restore(DocumentSnapshot snapshot) {
                 auto expected = previous;
                 try {
                     expected.entities = boundary_constraint_entities(previous.entities, proof, true);
+                    expected.assets = boundary_constraint_assets(previous.assets, proof);
                     validate_boundary_identity_transition(identity_history, previous.entities, record.entities);
                 } catch (const std::exception& error) {
                     document_error(DocumentErrorCode::invalid_history, error.what());

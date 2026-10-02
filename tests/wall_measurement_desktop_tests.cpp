@@ -515,6 +515,212 @@ void curved_d_exterior_measurement_stays_analytic_through_refresh_and_output() {
             "the PDF prints exact analytical exterior area and curved-edge physical dimension");
 }
 
+void mixed_wall_shell_move_refreshes_unselected_appraisal_area(bool metric, bool curved) {
+    sketch::desktop::MainWindow window;
+    window.setAttribute(Qt::WA_DontShowOnScreen);
+    window.resize(1200,800);
+    window.show();
+    QApplication::processEvents();
+    window.setMetricUnits(metric);
+    choose_appraisal_workflow(window);
+    const auto walls=curved ? QStringList{
+        window.createCurvedWall({-2,0},{2,0},"180 deg","exterior"),
+        window.createStraightWall({2,0},{2,3},"exterior"),
+        window.createStraightWall({2,3},{-2,3},"exterior"),
+        window.createStraightWall({-2,3},{-2,0},"exterior")} : rectangle_walls(window);
+    require(window.selectEntity(walls.at(1)),"select a physical host for the mixed source fixture");
+    const auto opening=window.createHostedOpening("window","1 m",".8 m",".8 m","1.2 m");
+    require(!opening.isEmpty(),"mixed source fixture includes a retained hosted opening");
+    select_walls(window,walls);
+    const auto area=window.createMeasurementBoundaryFromSelectedWalls();
+    require(!area.isEmpty() && window.selectEntity(area) &&
+        window.editSelectedAppraisalFacts(appraisal_declarations()),
+        "mixed source move begins with a declared exterior owner");
+    set_area_name(window,area,"Mixed source exterior");
+    set_area_appearance(window,area);
+    const auto area_dimension=window.createAreaDimension(area,{.5,1.5});
+    const auto deduction=window.createBoundary({{{.5,1},{.9,1},0},{{.9,1},{.9,1.4},0},
+        {{.9,1.4},{.5,1.4},0},{{.5,1.4},{.5,1},0}},"garage");
+    require(!area_dimension.isEmpty() && !deduction.isEmpty() && window.selectEntity(deduction) &&
+        window.applySelectedAutoSubtract(area) && window.editSelectedAppraisalFacts(appraisal_declarations("garage")),
+        "mixed source move retains an associated area dimension and qualified deduction");
+    const auto label=window.createAnnotationLabel("bedroom","Move this note",{.7,2});
+    const auto symbol=window.createAnnotationSymbol("svg-v2-04_living-sectional-left",{1,1});
+    const auto retained_label=window.createAnnotationLabel("bedroom","Retained note",{5,2});
+    require(!label.isEmpty() && !symbol.isEmpty() && !retained_label.isEmpty(),
+        "mixed source move uses real text and library furniture in a shared provider");
+    const auto before=window.document().snapshot();
+    const auto& owner_before=before.entities().at(area.toStdString());
+    const auto boundary_before=sketch::decode_identified_boundary_entity(owner_before);
+    const auto dimensions_before=dimensions_for(before,area.toStdString());
+    std::string property;
+    for (const auto& [id,entity] : before.entities()) if (entity.type=="property") property=id;
+    const auto report_before=sketch::build_appraisal_document_report(before,property);
+    require(report_before.qualified && report_before.calculation && dimensions_before.size()>=5,
+        "mixed source fixture has qualified appraisal totals and live dimensions");
+    select_walls(window,walls);
+    require(window.selectEntity(symbol,true) && window.selectEntity(label,true) &&
+        !window.selectedEntityIds().contains(area) && !window.selectedEntityIds().contains(deduction),
+        "physical shell, furniture and note are selected while measured owner and deduction remain unselected");
+    auto* canvas=dynamic_cast<sketch::desktop::PlanCanvas*>(window.findChild<QWidget*>("measurementPlanCanvas"));
+    require(canvas,"mixed selection uses the actual measured plan canvas");
+    window.fitView();
+    canvas->setSnapEnabled(false);
+    canvas->setWallSnapEnabled(false);
+    const auto frame=canvas->selectionBounds();
+    require(frame.has_value(),"mixed selection exposes a native drag frame");
+    const auto from=frame->center();
+    const sketch::Vec2 delta{.4,.2};
+    const auto to=from+QPointF(delta.x*canvas->viewScale(),-delta.y*canvas->viewScale());
+    const auto mouse=[&](QEvent::Type type,QPointF position) {
+        QMouseEvent event(type,position,position,type==QEvent::MouseMove ? Qt::NoButton : Qt::LeftButton,
+            type==QEvent::MouseButtonRelease ? Qt::NoButton : Qt::LeftButton,Qt::NoModifier);
+        QApplication::sendEvent(canvas,&event);
+    };
+    const auto begin_preview=[&] {
+        mouse(QEvent::MouseButtonPress,from);
+        mouse(QEvent::MouseMove,to);
+        QElapsedTimer wait;
+        wait.start();
+        while ((canvas->entitiesMovePreviewPending() || canvas->entitiesMovePreview().empty()) && wait.elapsed()<10000)
+            QCoreApplication::processEvents(QEventLoop::AllEvents,50);
+        require(!canvas->entitiesMovePreviewPending() && !canvas->entitiesMovePreview().empty() &&
+            window.document().revision()==before.revision() && window.document().snapshot().entities()==before.entities(),
+            "mixed wall and annotation drag produces a complete detached preview before release");
+    };
+    begin_preview();
+    const auto proposal=canvas->entitiesMovePreview();
+    for (const auto& id : walls+QStringList{area,symbol,opening}) {
+        const auto rendered=std::find_if(canvas->entities().begin(),canvas->entities().end(),
+            [&](const auto& entity){return entity.id==id;});
+        const auto proposed=std::find_if(proposal.begin(),proposal.end(),
+            [&](const auto& entity){return entity.id==id;});
+        require(rendered!=canvas->entities().end() && proposed!=proposal.end(),
+            "exact mixed preview contains each physical wall, furniture and the unselected measured owner");
+        const auto& original=rendered->type=="wall" ? rendered->snap_segments : rendered->segments;
+        const auto& moved=proposed->type=="wall" ? proposed->snap_segments : proposed->segments;
+        if (rendered->svg_symbol) {
+            require(proposed->svg_symbol &&
+                std::abs(proposed->svg_symbol->position.x-rendered->svg_symbol->position.x-delta.x)<1e-8 &&
+                std::abs(proposed->svg_symbol->position.y-rendered->svg_symbol->position.y-delta.y)<1e-8,
+                "mixed preview moves the real SVG furniture by the same gesture");
+        } else {
+            require(!original.empty() && original.size()==moved.size(),"mixed preview retains analytical edges");
+            for (std::size_t index=0;index<original.size();++index)
+                require(std::abs(moved[index].start.x-original[index].start.x-delta.x)<1e-8 &&
+                    std::abs(moved[index].start.y-original[index].start.y-delta.y)<1e-8 &&
+                    std::abs(moved[index].end.x-original[index].end.x-delta.x)<1e-8 &&
+                    std::abs(moved[index].end.y-original[index].end.y-delta.y)<1e-8 &&
+                    std::abs(moved[index].sweep_radians-original[index].sweep_radians)<1e-10,
+                    "mixed preview translates the retained analytical owner and physical wall baselines together");
+        }
+    }
+    QKeyEvent escape(QEvent::KeyPress,Qt::Key_Escape,Qt::NoModifier);
+    QApplication::sendEvent(canvas,&escape);
+    require(window.document().snapshot().entities()==before.entities() && window.document().revision()==before.revision(),
+        "canceling mixed drag preserves geometry, annotations and history");
+    begin_preview();
+    capture(window,QStringLiteral("mixed-source-move-%1-%2").arg(metric ? "metric" : "imperial").arg(curved ? "curved" : "straight"));
+    mouse(QEvent::MouseButtonRelease,to);
+    QElapsedTimer commit_wait;
+    commit_wait.start();
+    while (window.document().revision()==before.revision() && commit_wait.elapsed()<10000)
+        QCoreApplication::processEvents(QEventLoop::AllEvents,50);
+    const auto after=window.document().snapshot();
+    const auto& owner_after=after.entities().at(area.toStdString());
+    require(after.revision()==before.revision()+1 && after.entities().size()==before.entities().size() &&
+        sketch::wall_measurement_source_current(after,owner_after),
+        "mixed release commits physical sources, annotations and the retained live exterior in one history event");
+    for (const auto& id : walls+QStringList{area,symbol,opening}) {
+        const auto rendered=std::find_if(canvas->entities().begin(),canvas->entities().end(),
+            [&](const auto& entity){return entity.id==id;});
+        const auto proposed=std::find_if(proposal.begin(),proposal.end(),
+            [&](const auto& entity){return entity.id==id;});
+        require(rendered!=canvas->entities().end() && proposed!=proposal.end(),
+            "each physical source, hosted opening, annotation and live owner remains visible after release");
+        const auto& committed=rendered->type=="wall" ? rendered->snap_segments : rendered->segments;
+        const auto& previewed=proposed->type=="wall" ? proposed->snap_segments : proposed->segments;
+        require(committed.size()==previewed.size(),"mixed release retains the exact previewed geometry");
+        for (std::size_t index=0;index<committed.size();++index)
+            require(committed[index].start.x==previewed[index].start.x && committed[index].start.y==previewed[index].start.y &&
+                committed[index].end.x==previewed[index].end.x && committed[index].end.y==previewed[index].end.y &&
+                committed[index].sweep_radians==previewed[index].sweep_radians,
+                "mixed release commits the same analytical geometry admitted by the captured preview");
+        if (rendered->svg_symbol) require(proposed->svg_symbol &&
+            rendered->svg_symbol->position.x==proposed->svg_symbol->position.x &&
+            rendered->svg_symbol->position.y==proposed->svg_symbol->position.y,
+            "mixed release commits the exact previewed furniture placement");
+    }
+    const auto boundary_after=sketch::decode_identified_boundary_entity(owner_after);
+    require(boundary_after.segments.size()==boundary_before.segments.size() &&
+        curved_edge_count(owner_after)==(curved ? 1U : 0U),"mixed source redraw preserves straight or analytical curved topology");
+    for (std::size_t index=0;index<boundary_before.segments.size();++index) {
+        const auto& original=boundary_before.segments[index];
+        const auto& moved=boundary_after.segments[index];
+        require(moved.segment_id==original.segment_id && moved.start_vertex_id==original.start_vertex_id &&
+            moved.end_vertex_id==original.end_vertex_id &&
+            std::abs(moved.segment.start.x-original.segment.start.x-delta.x)<1e-8 &&
+            std::abs(moved.segment.start.y-original.segment.start.y-delta.y)<1e-8,
+            "unselected owner moves without changing stable edge and vertex identities");
+    }
+    for (const auto* key : {"name","appraisal_facts","deduction_ids","wall_measurement_source"})
+        require(owner_after.properties.at(key)==owner_before.properties.at(key),"mixed source move retains declarations and references");
+    require(after.entities().at(deduction.toStdString())==before.entities().at(deduction.toStdString()),
+        "moving physical sources preserves the unselected deduction");
+    for (const auto& provider : annotation_entities(before)) {
+        auto expected=provider;
+        const auto& actual=after.entities().at(provider.id);
+        for (const auto* records : {"labels","symbols"}) for (auto& record : expected.properties.at("state").at(records)) {
+            if (record.at("id")!=label.toStdString() && record.at("id")!=symbol.toStdString()) continue;
+            const auto& children=actual.properties.at("state").at(records);
+            const auto found=std::find_if(children.begin(),children.end(),[&](const auto& child){return child.at("id")==record.at("id");});
+            require(found!=children.end(),"selected annotation identity is retained");
+            const auto x=found->at("placement").at("x").get<double>();
+            const auto y=found->at("placement").at("y").get<double>();
+            require(std::abs(x-record.at("placement").at("x").get<double>()-delta.x)<1e-8 &&
+                std::abs(y-record.at("placement").at("y").get<double>()-delta.y)<1e-8,
+                "selected furniture and note move by the physical shell gesture");
+            record.at("placement")["x"]=x;
+            record.at("placement")["y"]=y;
+        }
+        require(actual==expected,
+            "mixed source commit changes only the selected note and furniture inside their shared provider");
+    }
+    const auto dimensions_after=dimensions_for(after,area.toStdString());
+    require(dimensions_after.size()==dimensions_before.size(),"mixed redraw retains every linked dimension");
+    for (const auto& dimension : dimensions_before) {
+        const auto found=std::find_if(dimensions_after.begin(),dimensions_after.end(),[&](const auto& current){return current.id==dimension.id;});
+        require(found!=dimensions_after.end(),"mixed redraw retains linked dimension identities");
+        const auto original=sketch::decode_boundary_dimension_entity(dimension);
+        const auto moved=sketch::decode_boundary_dimension_entity(*found);
+        require(original.supported() && moved.supported() && moved.dimension->boundary_id==original.dimension->boundary_id &&
+            moved.dimension->segment_id==original.dimension->segment_id,"linked dimensions retain their analytical targets");
+        const auto original_value=original.dimension->resolve(owner_before);
+        const auto moved_value=moved.dimension->resolve(owner_after);
+        require(std::abs(moved_value.segment_length_metres-original_value.segment_length_metres)<1e-8 &&
+            std::abs(moved_value.area_square_metres-original_value.area_square_metres)<1e-8,
+            "linked dimensions resolve the translated owner with unchanged physical length and area");
+    }
+    const auto report_after=sketch::build_appraisal_document_report(after,property);
+    require(report_after.qualified && report_after.calculation,"mixed source commit retains qualified net appraisal facts");
+    for (const auto& [category,subtotal] : report_before.calculation->property.by_category)
+        require(std::abs(report_after.calculation->property.by_category.at(category).total.square_metres-subtotal.total.square_metres)<1e-8,
+            "source translation retains exact appraisal net totals and deduction categories");
+    require(window.selectEntity(area),"mixed redraw leaves the owner selectable");
+    auto* qualified=window.findChild<QLabel*>("appraisalQualification");
+    auto* total=window.findChild<QLabel*>("appraisalGlaTotal");
+    const auto net=(analytical_area(owner_after)-.16)/(metric ? 1.0 : .3048*.3048);
+    require(qualified && qualified->text().startsWith("Qualified") && total && total->text().contains(QString::number(net,'f',2)),
+        "visible appraisal total remains qualified in the active unit system");
+    require(window.undoCommand() && window.document().snapshot().entities()==before.entities() && window.redoCommand() &&
+        window.document().snapshot().entities()==after.entities(),"one Undo and Redo restores the complete mixed edit");
+    QTemporaryDir directory;
+    sketch::desktop::MainWindow reopened;
+    require(directory.isValid() && window.saveProjectAs(directory.filePath("mixed-source-move.bldproj")) &&
+        reopened.openProject(directory.filePath("mixed-source-move.bldproj")) && reopened.document().snapshot().entities()==after.entities(),
+        "mixed source edit and its live exterior survive native save and reopen");
+}
+
 void authored_wall_thickness_updates_its_existing_appraisal_area(bool metric, bool curved) {
     sketch::desktop::MainWindow window;
     window.setAttribute(Qt::WA_DontShowOnScreen);
@@ -2170,6 +2376,12 @@ int main(int argc, char** argv) {
         QStringLiteral("Vertex-wall-measurement-test-") +
         QUuid::createUuid().toString(QUuid::WithoutBraces));
     try {
+        if (app.arguments().contains("--mixed-source-edit-only")) {
+            for (bool metric : {false,true}) for (bool curved : {false,true})
+                mixed_wall_shell_move_refreshes_unselected_appraisal_area(metric,curved);
+            std::cout << "Mixed source wall edits passed\n";
+            return 0;
+        }
         if (app.arguments().contains("--live-source-edit-only")) {
             for (bool metric : {false,true}) for (bool curved : {false,true})
                 authored_wall_thickness_updates_its_existing_appraisal_area(metric,curved);
@@ -2208,8 +2420,10 @@ int main(int argc, char** argv) {
             std::cout << "Exterior measurement source repair workflows passed\n";
             return 0;
         }
-        for (bool metric : {false,true}) for (bool curved : {false,true})
+        for (bool metric : {false,true}) for (bool curved : {false,true}) {
+            mixed_wall_shell_move_refreshes_unselected_appraisal_area(metric,curved);
             authored_wall_thickness_updates_its_existing_appraisal_area(metric,curved);
+        }
         selected_wall_loop_creates_and_refreshes_one_exterior_appraisal_area();
         for (bool metric : {false,true}) for (bool sourced : {false,true}) for (int mode : {0,1,2,3}) for (bool commercial : {false,true})
             existing_appraisal_area_transforms_its_dependencies(metric,sourced,mode,commercial);

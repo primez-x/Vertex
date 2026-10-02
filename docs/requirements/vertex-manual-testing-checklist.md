@@ -1,6 +1,6 @@
 # Vertex user testing checklist
 
-326 practical tasks, grouped by how you use the app (including U100a). This replaces the earlier engineering-oriented checklist. The old 130-item list is preserved separately as engineering-requirements-checklist.md.
+331 practical tasks, grouped by how you use the app (including U100a). This replaces the earlier engineering-oriented checklist. The old 130-item list is preserved separately as engineering-requirements-checklist.md.
 
 This is a user acceptance list for the intended app, not a claim that every listed action is implemented or working in the current preview. If you cannot find a control, or a feature is absent, mark **Blocked / missing** and describe it. Specialized sections can be skipped if you do not use them or lack the device or sample files.
 
@@ -494,8 +494,8 @@ drawing; switching modes does not change existing geometry.
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U082 — Toggle magnet/grid snap**
-  - Steps: With Snap on, place nodes near minor grid intersections at several zoom levels in Imperial and Metric. Compare the cursor preview with the committed point. Turn Snap off and place a point between intersections. Hide Grid while leaving Snap on and repeat.
-  - Expected: Grid snapping follows the displayed interval at each zoom and unit setting. The preview and placed point agree. Snap off permits free placement; hiding the grid preserves the snap preference. Existing geometry is not rounded when the interval changes.
+  - Steps: With Snap on, start a wall near a minor grid intersection at several zoom levels in Imperial and Metric. Place its next endpoint along a diagonal and inspect its length. Compare the preview with the committed point. Turn Snap off and place a point between increments. Hide Grid while leaving Snap on and repeat.
+  - Expected: Initial world-grid placement follows the displayed grid interval. An active edge snaps its length to useful increments relative to its own start, even on a diagonal. The preview and placed point agree. Snap off permits free placement; hiding the grid preserves the snap preference. Existing geometry is not rounded when the interval changes.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
@@ -1887,6 +1887,38 @@ drawing; switching modes does not change existing geometry.
 - [ ] **U325 — Change a wall and keep its exterior appraisal measurement current**
   - Steps: Draw a closed exterior wall shell and use **Measure exterior from walls**. Name the resulting area, set its color, declare its appraisal facts and add a garage deduction. Select a source wall and change its thickness in Properties. Then edit a wall length with connected objects enabled. Inspect the measured outline, dimensions and appraisal totals after each edit without choosing Refresh. Undo once, Redo, save and reopen. Repeat in Imperial and Metric and with a curved exterior wall.
   - Expected: Each valid wall edit updates its existing linked outline and dimensions in the same operation. Net appraisal totals recalculate automatically; the area keeps its name, color, declarations and deduction. One Undo restores the complete previous wall and measured outline; Redo and reopening retain the update. An edit that conflicts with a locked measurement or places a deduction outside the area is refused without changing the drawing. A measurement whose sources were already missing or stale remains visibly in need of repair.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **U326 — Move walls and furniture together without losing the measured outline**
+  - Steps: Draw a closed exterior wall shell, add a door or window, and measure its exterior. Name the measured area and declare its appraisal facts. Place a furniture symbol and a text label inside it. Ctrl-click the shell walls, furniture and label to select them together, leaving the measured area unselected. Drag the group a short distance; inspect the preview, then cancel with Escape. Repeat and release. Inspect the walls, opening, symbol, label, exterior dimensions and appraisal totals. Undo once, Redo, save and reopen. Repeat in Imperial and Metric, including a curved shell wall.
+  - Expected: The complete preview shows the linked exterior outline and dimensions following the walls alongside the furniture, label and hosted opening. Cancel changes nothing. Release commits the complete group in one step and keeps the exterior measurement current with its existing name and appraisal facts. The area's unrounded size and qualified totals remain unchanged by translation. Undo/Redo and reopening preserve the complete operation. Invalid or locked relationships refuse the move without leaving part of the selection behind.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **U327 — Draw useful lengths without decimal-inch mouse placement**
+  - Steps: In Imperial with Snap on, start a wall away from the world origin. Move along both a horizontal direction and a diagonal, inspecting the live length before clicking. Zoom out and repeat; zoom very close and repeat. Draw a measured boundary in the same way. Switch to Metric and repeat. Then enter an exact typed dimension that is not a multiple of the current mouse increment and place it.
+  - Expected: Mouse lengths settle on common feet/inch increments when wider out and fractional inches close in; Metric uses common meter, centimeter and millimeter increments. The visible length agrees with the committed geometry. Diagonals do not produce arbitrary decimal-inch values from cursor pixels. Typed input remains exact. Snapping to a real existing endpoint or closing a boundary preserves that exact point, even if its distance is not a common increment.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **U328 — Pan using the right mouse button**
+  - Steps: Right-click and hold, then drag across empty canvas. Repeat over a selected object, while a wall is pending, and while a new symbol is waiting for placement. Release the button. Compare the drawing and selection before and after.
+  - Expected: Right-drag pans the view with no object movement, new node, cancellation or context menu. The selection and pending action remain available. A stationary right-click remains distinct from a drag.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **U329 — Cancel a pending wall or new symbol with right-click**
+  - Steps: Start a wall with a left-click, move its pending endpoint and right-click without dragging. Next place one wall in a chain and right-click while its next wall is pending. Start a measured area and right-click before closing it. Choose a new library symbol for placement and right-click before placing it. Repeat after placing a symbol, with another new placement pending.
+  - Expected: Right-click cancels the pending drawing or placement and removes its preview. Previously committed walls and symbols remain. No context menu or new object is produced by the cancellation. With no pending action, a right-click opens the relevant context menu.
+  - Result: Not tested
+  - Notes: ______________________________
+
+## Project appraisal details
+
+- [ ] **U330 — Read GLA and floor contributions without selecting an object**
+  - Steps: Open the left panel's **Details** tab with nothing selected. Use **Setup** to enable appraisal and declare the property kind and measurement basis; cancel once, then save. Select an area row, inspect its dimensions and deductions, and use **Edit facts** to supply missing observations. Check the GLA and separate garage/below-grade totals. Use **Show on canvas** and **Full report**. Switch Imperial/Metric, hide a layer, edit a qualifying area's dimensions, Undo, save and reopen.
+  - Expected: Details remains accessible without a canvas selection. Required facts are explained and totals are withheld until qualified. GLA and separate totals agree with the current authoritative report; hiding a layer does not change them. Area rows expose current dimensions, perimeter and the gross/deduction/net breakdown. Edits and units refresh the display. Setup Cancel changes nothing; Save is undoable. The actual calculation policy and unverified ANSI status are clear; the application does not imply ANSI approval.
   - Result: Not tested
   - Notes: ______________________________
 

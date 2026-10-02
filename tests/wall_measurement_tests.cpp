@@ -1,10 +1,12 @@
 #include "sketch/appraisal_document.hpp"
+#include "sketch/annotation_entity_codec.hpp"
 #include "sketch/boundary_entity.hpp"
 #include "sketch/boundary_authoring_session.hpp"
 #include "sketch/boundary_construction.hpp"
 #include "sketch/boundary_integrity.hpp"
 #include "sketch/boundary_dimension.hpp"
 #include "sketch/constraint_wall_edit.hpp"
+#include "sketch/constraint_entity.hpp"
 #include "sketch/project_store.hpp"
 #include "sketch/project_exchange.hpp"
 #include "sketch/wall_measurement.hpp"
@@ -1459,6 +1461,281 @@ void automatic_source_completion_retains_identity_and_one_history_event() {
         "updated sourced child and overlapping retained deduction are independently contained in unchanged parent");
 }
 
+void automatic_source_completion_preserves_mixed_objects_and_assets_atomically() {
+    const auto specs = rectangle_walls();
+    auto values = base_entities(specs, true, true);
+    const auto walls = Document::create(values);
+    const auto measured = derive_exterior_wall_measurement(walls.snapshot(), wall_ids(specs));
+    const auto owner = upgrade_legacy_boundary_entity(measurement_entity(measured.boundary, measured.source, true));
+    values.push_back(owner);
+    const auto symbol = entity("ordinary-symbol", "symbol", {{"position", {1.0, 1.0}}, {"name", "Chair"}});
+    const auto old_note = entity("old-note", "label", {{"text", "Replace this annotation"}});
+    const auto old_asset = Asset::create("old-image", "image/png", {std::byte{1}, std::byte{2}});
+    const auto reference = entity("image-reference", "reference_asset", {{"asset_id", old_asset.id}});
+    AnnotationState annotation_state;
+    annotation_state.labels.push_back(instantiate_label(
+        {"mixed-note-template", "notes", "Replace this annotation"}, "mixed-annotation-label"));
+    annotation_state.labels.front().placement.position = {1.0, 1.0};
+    annotation_state.labels.front().placement.layer_id = "layer-1";
+    const auto annotation = make_annotation_entity("annotation-provider", annotation_state);
+    const auto dimension = encode_boundary_dimension_entity(BoundaryDimension{"mixed-manual-dimension", owner.id,
+        decode_identified_boundary_entity(owner).segments.front().segment_id, {1.0, -0.5}, BoundaryDimensionPlacement::manual});
+    values.insert(values.end(), {symbol, old_note, reference, annotation, dimension});
+    auto document = Document::create(values, {old_asset});
+    const auto source = document.snapshot();
+    auto bottom = source.entities().at("wall-bottom");
+    bottom.properties["thickness_m"] = 0.4;
+    auto moved_symbol = symbol;
+    moved_symbol.properties["position"] = {2.5, 1.5};
+    moved_symbol.extensions["vendor"] = {{"opaque", "preserve exact payload"}};
+    auto building = source.entities().at("building-1");
+    building.properties["name"] = "Renamed with physical edit";
+    const auto note = entity("new-note", "label", {{"text", "Moved furniture and updated shell"}, {"layer_id", "layer-1"}});
+    const auto new_asset = Asset::create("new-image", "image/png", {std::byte{3}, std::byte{4}, std::byte{5}},
+        {{"original_filename", "reference.png"}});
+    auto new_reference = reference;
+    new_reference.properties["asset_id"] = new_asset.id;
+    auto changed_annotation_state = annotation_state;
+    changed_annotation_state.labels.front().content = "Moved furniture and updated shell";
+    changed_annotation_state.labels.front().placement.position = {2.5, 1.5};
+    const auto new_annotation = make_annotation_entity(annotation.id, changed_annotation_state);
+    auto opening = source.entities().at("opening-1");
+    opening.properties["offset_m"] = 1.0;
+    const ApplyEntityChanges ordinary{source.revision(), {
+        EntityChange::upsert(bottom), EntityChange::upsert(moved_symbol), EntityChange::erase(old_note.id),
+        EntityChange::upsert(note), EntityChange::upsert(building), EntityChange::upsert(new_reference),
+        EntityChange::upsert(new_annotation), EntityChange::upsert(opening)},
+        {AssetChange::erase(old_asset.id), AssetChange::upsert(new_asset)}, "Mixed physical and annotation transaction"};
+    const auto raw = Document::preview_command(source, ordinary);
+    const auto completed = complete_exterior_wall_measurement_command(source, ordinary);
+    const auto wire = command_to_json(completed);
+    require(wire.at("version") == 7 && command_to_json(command_from_json(wire)) == wire,
+        "mixed completion has an exact additive version-seven command round trip");
+    const auto candidate = Document::preview_command(source, command_from_json(wire));
+    require(candidate.entities().at(symbol.id) == moved_symbol && candidate.entities().at(note.id) == note &&
+        !candidate.entities().contains(old_note.id) && candidate.entities().at(building.id) == building &&
+        candidate.entities().at(reference.id) == new_reference && candidate.assets() == raw.assets() &&
+        candidate.entities().at(annotation.id) == new_annotation && candidate.entities().at(opening.id) == opening &&
+        candidate.entities().at(dimension.id) == dimension &&
+        candidate.assets().size() == 1 && candidate.assets().at(new_asset.id) == new_asset &&
+        candidate.entities().at(bottom.id) == bottom &&
+        wall_measurement_source_current(candidate, candidate.entities().at(owner.id)),
+        "completion preserves exact ordinary entity and asset edits while refreshing the source");
+    document.apply(completed);
+    require(document.snapshot().entities() == candidate.entities() && document.snapshot().assets() == candidate.assets() &&
+        document.snapshot().history().size() == source.history().size() + 1,
+        "mixed completion applies entities and assets through exactly one history event");
+    auto restored = Document::fork(document.snapshot());
+    require(restored.snapshot().entities() == candidate.entities() && restored.snapshot().assets() == candidate.assets(),
+        "retained mixed proof reconstructs both entity and asset maps exactly");
+    document.undo(document.revision());
+    require(document.snapshot().entities() == source.entities() && document.snapshot().assets() == source.assets(),
+        "one undo restores all physical, supplemental and asset state");
+    document.redo(document.revision());
+    require(document.snapshot().entities() == candidate.entities() && document.snapshot().assets() == candidate.assets(),
+        "one redo restores all physical, supplemental and asset state");
+    require(command_to_json(complete_exterior_wall_measurement_command(source, completed)) == wire,
+        "mixed source completion is idempotent after verification");
+
+    const auto refuses_atomically = [&](const Command& bad) {
+        auto untouched = Document::fork(source);
+        bool rejected = false;
+        try { untouched.apply(bad); } catch (const std::exception&) { rejected = true; }
+        require(rejected && untouched.revision() == source.revision() &&
+            untouched.snapshot().entities() == source.entities() && untouched.snapshot().assets() == source.assets() &&
+            untouched.snapshot().history().size() == source.history().size(),
+            "invalid mixed commands reject without entity, asset or history side effects");
+    };
+    auto bad_wire = wire;
+    bad_wire["supplemental_entity_changes"].push_back(wire.at("supplemental_entity_changes").front());
+    refuses_atomically(command_from_json(bad_wire));
+    auto raw_dimension = dimension;
+    raw_dimension.extensions["vendor"] = "Raw dimension metadata supplement";
+    bad_wire = wire;
+    bad_wire["supplemental_entity_changes"].push_back(command_to_json(ApplyEntityChanges{source.revision(),
+        {EntityChange::upsert(raw_dimension)}, {}, {}}).at("entity_changes").front());
+    refuses_atomically(command_from_json(bad_wire));
+    bad_wire = wire;
+    bad_wire["supplemental_entity_changes"] = command_to_json(ApplyEntityChanges{source.revision(),
+        {EntityChange::upsert(bottom)}, {}, {}}).at("entity_changes");
+    refuses_atomically(command_from_json(bad_wire));
+    auto raw_owner = owner;
+    raw_owner.properties["name"] = "Raw measured owner supplement";
+    bad_wire = wire;
+    bad_wire["supplemental_entity_changes"].push_back(command_to_json(ApplyEntityChanges{source.revision(),
+        {EntityChange::upsert(raw_owner)}, {}, {}}).at("entity_changes").front());
+    refuses_atomically(command_from_json(bad_wire));
+    bad_wire = wire;
+    bad_wire["supplemental_asset_changes"] = Json::array();
+    refuses_atomically(command_from_json(bad_wire));
+    bad_wire = wire;
+    bad_wire["supplemental_asset_changes"].push_back(wire.at("supplemental_asset_changes").front());
+    refuses_atomically(command_from_json(bad_wire));
+    bad_wire = wire;
+    bad_wire["exterior_source_edits"][0]["replacement_segments"][0]["start"][0] = 999.0;
+    refuses_atomically(command_from_json(bad_wire));
+    auto invalid = ordinary;
+    invalid.entity_changes.push_back(EntityChange::upsert(entity("bad-note", "label", {{"layer_id", "missing-layer"}})));
+    bool rejected = false;
+    try { (void)complete_exterior_wall_measurement_command(source, invalid); } catch (const std::exception&) { rejected = true; }
+    require(rejected && document.snapshot().entities() == candidate.entities() && document.snapshot().assets() == candidate.assets(),
+        "completion cannot add source authority to an ordinarily inadmissible dangling-reference command");
+    auto invalid_asset = new_asset;
+    invalid_asset.sha256[0] = invalid_asset.sha256[0] == '0' ? '1' : '0';
+    invalid = ordinary;
+    invalid.asset_changes.back() = AssetChange::upsert(invalid_asset);
+    rejected = false;
+    try { (void)complete_exterior_wall_measurement_command(source, invalid); } catch (const std::exception&) { rejected = true; }
+    require(rejected, "mixed completion retains ordinary asset integrity admission");
+    const auto large_asset = Asset::create("proof-budget-image", "image/png", std::vector<std::byte>(530 * 1024, std::byte{42}));
+    const ApplyEntityChanges bounded{source.revision(), {EntityChange::upsert(bottom)}, {AssetChange::upsert(large_asset)},
+        "Retain defensive source proof byte budget"};
+    require(Document::preview_command(source, bounded).assets().contains(large_asset.id),
+        "ordinary asset admission is independent of the typed proof byte ceiling");
+    rejected = false;
+    try { (void)complete_exterior_wall_measurement_command(source, bounded); } catch (const std::exception&) { rejected = true; }
+    require(rejected, "mixed completion rejects assets exceeding the retained source proof byte budget");
+    const auto metadata_only = complete_exterior_wall_measurement_command(source,
+        ApplyEntityChanges{source.revision(), {EntityChange::upsert(bottom), EntityChange::upsert(building)}, {}, "Wall plus metadata"});
+    require(command_to_json(metadata_only).at("version") == 7 &&
+        Document::preview_command(source, metadata_only).entities().at(building.id) == building,
+        "ordinary metadata supplements select version seven without requiring asset changes");
+    auto retained_marker = command_to_json(metadata_only);
+    retained_marker["supplemental_entity_changes"] = Json::array();
+    require(command_to_json(command_from_json(retained_marker)) == retained_marker,
+        "version-seven marker survives empty supplemental lists without silently downgrading the envelope");
+}
+
+void automatic_source_completion_admits_physical_and_relationship_changes_together() {
+    const auto specs = rectangle_walls();
+    auto values = base_entities(specs, true);
+    values.push_back(encode_constraint_entity(PersistentConstraint{"bottom-length-lock", ConstraintRelationKind::fixed_length,
+        {{"wall-bottom", WallEndpointRole::start}, {"wall-bottom", WallEndpointRole::end}}, parse_quantity("4 m", Unit::metre)}));
+    const auto walls = Document::create(values);
+    const auto measured = derive_exterior_wall_measurement(walls.snapshot(), wall_ids(specs));
+    values.push_back(upgrade_legacy_boundary_entity(measurement_entity(measured.boundary, measured.source, true)));
+    auto document = Document::create(values);
+    const auto source = document.snapshot();
+    std::vector<EntityChange> changes{EntityChange::erase("bottom-length-lock")};
+    for (const auto* id : {"wall-bottom", "wall-right", "wall-top"}) {
+        auto wall = source.entities().at(id);
+        for (const auto* endpoint : {"start", "end"})
+            if (wall.properties["baseline"][endpoint][0] == 4.0) wall.properties["baseline"][endpoint][0] = 6.0;
+        if (std::string_view(id) == "wall-bottom") wall.properties["thickness_m"] = 0.4;
+        changes.push_back(EntityChange::upsert(wall));
+    }
+    const ApplyEntityChanges ordinary{source.revision(), changes, {}, "Resize shell and release old length lock"};
+    const auto raw = Document::preview_command(source, ordinary);
+    const auto completed = complete_exterior_wall_measurement_command(source, ordinary);
+    const auto candidate = Document::preview_command(source, completed);
+    require(command_to_json(completed).at("version") == 7 && !candidate.entities().contains("bottom-length-lock") &&
+        candidate.entities().at("wall-bottom") == raw.entities().at("wall-bottom") &&
+        wall_measurement_source_current(candidate, candidate.entities().at("area-1")),
+        "joint ordinary admission permits a physical wall edit with its explicit relationship removal");
+    document.apply(completed);
+    require(Document::fork(document.snapshot()).snapshot().entities() == candidate.entities(),
+        "joint physical and relationship completion preserves its deterministic retained proof");
+    auto missing_release = std::get<ApplyBoundaryConstraintChanges>(completed);
+    missing_release.supplemental_entity_changes.clear();
+    bool rejected = false;
+    try { (void)Document::preview_command(source, missing_release); } catch (const std::exception&) { rejected = true; }
+    require(rejected, "removing the relationship supplement cannot bypass the original retained length lock");
+}
+
+void automatic_source_completion_preserves_json_numeric_representation() {
+    const auto specs = rectangle_walls();
+    auto values = base_entities(specs, true);
+    const auto walls = Document::create(values);
+    const auto measured = derive_exterior_wall_measurement(walls.snapshot(), wall_ids(specs));
+    values.push_back(upgrade_legacy_boundary_entity(measurement_entity(measured.boundary, measured.source, true)));
+    const auto note = entity("numeric-note", "label", {{"text", "Same numeric value, authored representation"}, {"rank", 1}, {"zero", 0.0}});
+    values.push_back(note);
+    const auto asset = Asset::create("numeric-asset", "image/png", {std::byte{7}}, {{"rank", 1}, {"zero", 0.0}});
+    auto document = Document::create(values, {asset});
+    const auto source = document.snapshot();
+    auto changed_note = note;
+    changed_note.properties["rank"] = 1.0;
+    changed_note.properties["zero"] = -0.0;
+    auto changed_asset = asset;
+    changed_asset.metadata["rank"] = 1.0;
+    changed_asset.metadata["zero"] = -0.0;
+    std::vector<EntityChange> changes{EntityChange::upsert(changed_note)};
+    for (const auto* id : {"wall-bottom", "wall-right", "wall-top"}) {
+        auto wall = source.entities().at(id);
+        for (const auto* endpoint : {"start", "end"})
+            if (wall.properties["baseline"][endpoint][0] == 4.0) wall.properties["baseline"][endpoint][0] = 6.0;
+        if (std::string_view(id) == "wall-right") wall.properties["height_m"] = 3;
+        changes.push_back(EntityChange::upsert(wall));
+    }
+    const ApplyEntityChanges ordinary{source.revision(), changes, {AssetChange::upsert(changed_asset)}, "Preserve authored JSON forms"};
+    const auto raw = Document::preview_command(source, ordinary);
+    const auto completed = complete_exterior_wall_measurement_command(source, ordinary);
+    const auto candidate = Document::preview_command(source, command_from_json(command_to_json(completed)));
+    require(candidate.entities().at(note.id).properties.dump() == raw.entities().at(note.id).properties.dump() &&
+        candidate.assets().at(asset.id).metadata.dump() == raw.assets().at(asset.id).metadata.dump() &&
+        candidate.entities().at("wall-right").properties.dump() == raw.entities().at("wall-right").properties.dump(),
+        "mixed source completion preserves integer/float and signed-zero authored entity, wall and asset JSON forms");
+    document.apply(completed);
+    require(Document::fork(document.snapshot()).snapshot().assets().at(asset.id).metadata.dump() == changed_asset.metadata.dump(),
+        "exact numeric asset metadata survives deterministic retained replay");
+    document.undo(document.revision());
+    require(document.snapshot().entities().at(note.id).properties.dump() == note.properties.dump() &&
+        document.snapshot().assets().at(asset.id).metadata.dump() == asset.metadata.dump(),
+        "one undo restores the original numeric payload forms");
+    document.redo(document.revision());
+    require(document.snapshot().entities().at(note.id).properties.dump() == changed_note.properties.dump() &&
+        document.snapshot().assets().at(asset.id).metadata.dump() == changed_asset.metadata.dump(),
+        "one redo restores the authored numeric payload forms");
+}
+
+void automatic_source_completion_protects_generated_primary_dimensions() {
+    const auto specs = rectangle_walls();
+    auto values = base_entities(specs, true);
+    const auto walls = Document::create(values);
+    const auto measured = derive_exterior_wall_measurement(walls.snapshot(), wall_ids(specs));
+    values.push_back(upgrade_legacy_boundary_entity(measurement_entity(measured.boundary, measured.source, true)));
+    const auto other = upgrade_legacy_boundary_entity(entity("unrelated-primary-owner", "boundary", {{"boundary",
+        boundary_json({{{10, 0}, {14, 0}, 0}, {{14, 0}, {14, 3}, 0}, {{14, 3}, {10, 3}, 0}, {{10, 3}, {10, 0}, 0}})}}));
+    const auto identified = decode_identified_boundary_entity(other);
+    values.push_back(other);
+    values.push_back(encode_boundary_dimension_entity(BoundaryDimension{"old-automatic-primary-dimension", other.id,
+        identified.segments.front().segment_id, {12.0, -0.5}, BoundaryDimensionPlacement::automatic, 2}));
+    auto document = Document::create(values);
+    const auto source = document.snapshot();
+    auto bottom = source.entities().at("wall-bottom");
+    bottom.properties["thickness_m"] = 0.4;
+    auto command = std::get<ApplyBoundaryConstraintChanges>(complete_exterior_wall_measurement_command(source,
+        ApplyEntityChanges{source.revision(), {EntityChange::upsert(bottom)}, {}, "Primary redraw and source completion"}));
+    const IdentifiedBoundary triangle{other.id, other.type, {
+        {"new-primary-e0", "new-primary-v0", "new-primary-v1", {{10, 0}, {14, 0}, 0}},
+        {"new-primary-e1", "new-primary-v1", "new-primary-v2", {{14, 0}, {12, 3}, 0}},
+        {"new-primary-e2", "new-primary-v2", "new-primary-v0", {{12, 3}, {10, 0}, 0}}}};
+    BoundaryGeometryEdit redraw;
+    redraw.boundary_id = other.id;
+    redraw.target_id = other.id;
+    redraw.kind = BoundaryGeometryEditKind::redefine_boundary;
+    redraw.replacement_segments = encode_identified_boundary_entity(triangle).properties.at("segments");
+    redraw.replacement_dimension_ids = {"new-primary-d0", "new-primary-d1", "new-primary-d2"};
+    command.boundary_edits.push_back(redraw);
+    command.supplemental_source_completion = true;
+    const auto candidate = Document::preview_command(source, command);
+    require(candidate.entities().contains("new-primary-d0") && !candidate.entities().contains("old-automatic-primary-dimension"),
+        "legitimate primary redraw creates fresh dimensions alongside independent source completion");
+    const auto rejects_atomic = [&](ApplyBoundaryConstraintChanges forged) {
+        bool rejected = false;
+        try { document.apply(forged); } catch (const std::exception&) { rejected = true; }
+        require(rejected && document.revision() == source.revision() && document.snapshot().entities() == source.entities() &&
+            document.snapshot().assets() == source.assets() && document.snapshot().history().size() == source.history().size(),
+            "supplements cannot alter generated or retired primary entities and must reject atomically");
+    };
+    auto forged = command;
+    forged.supplemental_entity_changes.push_back(EntityChange::erase("new-primary-d0"));
+    rejects_atomic(forged);
+    forged = command;
+    forged.supplemental_entity_changes.push_back(EntityChange::upsert(entity("old-automatic-primary-dimension", "label", {{"text", "Resurrect typed removal"}})));
+    rejects_atomic(forged);
+}
+
 void automatic_source_completion_preserves_ordinary_curve_reconstruction() {
     const auto specs = capsule_walls();
     auto values = base_entities(specs, true);
@@ -1522,6 +1799,41 @@ void automatic_source_completion_preserves_ordinary_curve_reconstruction() {
     bool refused = false;
     try { (void)Document::preview_command(source, bad); } catch (const std::exception&) { refused = true; }
     require(refused, "v6 source authority cannot rewrite archived ordinary curve construction input");
+    auto with_metadata = std::get<ApplyEntityChanges>(ordinary);
+    for (auto& change : with_metadata.entity_changes) {
+        if (change.entity.id != "wall-right-arc") continue;
+        change.entity.properties["schedule_note"] = "Ordinarily admitted metadata on the reconstructed wall";
+        change.entity.extensions["vendor"] = {{"revision", 1.0}, {"opaque", "retain authored metadata"}};
+    }
+    const auto metadata_raw = Document::preview_command(source, with_metadata);
+    const auto metadata_command = complete_exterior_wall_measurement_command(source, with_metadata);
+    const auto metadata_wire = command_to_json(metadata_command);
+    const auto metadata_candidate = Document::preview_command(source, command_from_json(metadata_wire));
+    require(metadata_wire.at("version") == 7 && metadata_wire.at("supplemental_entity_changes").empty() &&
+        metadata_wire.at("supplemental_asset_changes").empty() &&
+        metadata_candidate.entities().at("wall-right-arc").properties.dump() == metadata_raw.entities().at("wall-right-arc").properties.dump() &&
+        metadata_candidate.entities().at("wall-right-arc").extensions.dump() == metadata_raw.entities().at("wall-right-arc").extensions.dump() &&
+        wall_measurement_source_current(metadata_candidate, metadata_candidate.entities().at("area-1")),
+        "same-wall ordinary metadata selects retained v7 authority and preserves exact curve reconstruction payloads");
+    auto metadata_document = Document::fork(source);
+    metadata_document.apply(metadata_command);
+    require(Document::fork(metadata_document.snapshot()).snapshot().entities().at("wall-right-arc").extensions.dump() ==
+        metadata_raw.entities().at("wall-right-arc").extensions.dump(), "same-wall metadata survives retained proof replay exactly");
+    metadata_document.undo(metadata_document.revision());
+    require(metadata_document.snapshot().entities() == source.entities(), "one undo restores original wall and metadata");
+    metadata_document.redo(metadata_document.revision());
+    require(metadata_document.snapshot().entities().at("wall-right-arc").extensions.dump() ==
+        metadata_raw.entities().at("wall-right-arc").extensions.dump(), "one redo restores exact authored wall metadata");
+    bad = std::get<ApplyBoundaryConstraintChanges>(metadata_command);
+    bad.physical_entity_changes.front().entity.extensions["curve_input_derivation"]["source_input"]["vendor_input"] = "forged";
+    refused = false;
+    try { (void)Document::preview_command(source, bad); } catch (const std::exception&) { refused = true; }
+    require(refused, "v7 same-wall metadata authority cannot rewrite archived ordinary curve construction input");
+    bad = std::get<ApplyBoundaryConstraintChanges>(metadata_command);
+    bad.supplemental_source_completion = false;
+    refused = false;
+    try { (void)Document::preview_command(source, bad); } catch (const std::exception&) { refused = true; }
+    require(refused, "same-wall metadata extension does not loosen version-six admission restrictions");
 }
 
 } // namespace
@@ -1540,6 +1852,10 @@ int main(int argc, char** argv) {
         }
         if (argc > 1 && std::string_view(argv[1]) == "--automatic-source-only") {
             automatic_source_completion_retains_identity_and_one_history_event();
+            automatic_source_completion_preserves_mixed_objects_and_assets_atomically();
+            automatic_source_completion_admits_physical_and_relationship_changes_together();
+            automatic_source_completion_preserves_json_numeric_representation();
+            automatic_source_completion_protects_generated_primary_dimensions();
             automatic_source_completion_preserves_ordinary_curve_reconstruction();
             std::cout << "Automatic source completion workflows passed\n";
             return 0;
@@ -1567,6 +1883,10 @@ int main(int argc, char** argv) {
         appraisal_withholds_overlapping_old_and_annex_exterior_owners();
         reviewed_source_replacement_preserves_owner_and_proofs();
         automatic_source_completion_retains_identity_and_one_history_event();
+        automatic_source_completion_preserves_mixed_objects_and_assets_atomically();
+        automatic_source_completion_admits_physical_and_relationship_changes_together();
+        automatic_source_completion_preserves_json_numeric_representation();
+        automatic_source_completion_protects_generated_primary_dimensions();
         automatic_source_completion_preserves_ordinary_curve_reconstruction();
         std::cout << "wall_measurement_tests passed\n";
         return 0;

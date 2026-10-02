@@ -36,7 +36,8 @@
   <p>Choose <strong>Wall</strong> to draw physical walls, or <strong>Measurement</strong>
   to draw an appraisal boundary. Wall is the default. Click to place the start,
   then click each next endpoint. Click the original anchor to close and finish
-  the outline, or press <kbd>Esc</kbd> to finish an open wall chain; completed
+  the outline, or press <kbd>Esc</kbd> or right-click to cancel the pending wall
+  and finish an open wall chain; completed
   walls remain. Wall thickness and height are in the Library tab.</p>
   <p>After placing the first point, type a length on the canvas and press an arrow
   key to add an exact horizontal or vertical edge. The floating length control
@@ -60,6 +61,18 @@
   feet, half-feet, inches and fractional inches; Metric uses metres,
   centimetres and millimetres. Stronger lines mark larger intervals and the
   canvas scale cue shows one cell. Zooming never changes existing measurements.</p>
+  <p>With Snap on, a mouse-drawn wall or measured edge also settles on useful
+  length increments relative to its own start, including on a diagonal. Wider
+  views use common feet/inch or metre/centimetre increments; close views use
+  fractional inches or millimetres. The preview and placed edge share the same
+  effective endpoint. Exact existing endpoints and closure take precedence, and
+  typed measurements retain their entered precision. Snap off permits free
+  mouse placement.</p>
+  <p>Right-click and drag to pan anywhere on the canvas, including over a
+  selected object. Panning keeps the pending drawing or placement active. A
+  right-click without dragging cancels a pending drawing or new symbol placement;
+  already placed walls and symbols remain. With no pending action, it opens the
+  relevant context menu.</p>
   <p>Rotate a selected appraisal area with its rotation handle, or use
   <strong>Transform selection</strong> for a numerical rotation or horizontal or
   vertical flip. Its retained deductions and supporting physical walls and hosted
@@ -71,8 +84,7 @@
   <p>An older curved exterior may need a reviewed source refresh before using
   the precise group transform. Its original saved outline and history remain
   intact until you explicitly apply that refresh.</p>
-  <p>For an angled or curved wall, press <kbd>D</kbd> on the canvas, or choose
-  <strong>Precise input</strong> from the active wall chain's right-click menu.
+  <p>For an angled or curved wall, press <kbd>D</kbd> on the canvas.
   Before the first point, D accepts exact start coordinates. After that it
   offers length/heading, rise/run, relative turn, world endpoint, arc
   chord/angle, chord/height, chord/length and start-tangent/length/sweep.
@@ -112,6 +124,18 @@
   their visible markers as usual. The size badge also moves to a clear position.
   These display adjustments do not move saved annotations or change dimensions.
   Printed and exported plans omit selection controls.</p>
+  <h2>Project details and GLA</h2>
+  <p>Open <strong>Details</strong> beside Layers and Library in the left panel.
+  Above-grade finished area (GLA) and separate category totals remain available
+  without selecting anything on the canvas. Choose <strong>Setup</strong> to
+  enable appraisal and declare the property's basis. Expand a floor and select
+  an area to inspect its edge lengths, perimeter, gross area, deductions and net
+  area. <strong>Edit facts</strong> supplies observations needed for qualification;
+  <strong>Show on canvas</strong> locates the area and <strong>Full report</strong>
+  opens the printable calculation report. Missing facts or stale source geometry
+  withhold totals until repaired. Hiding a layer does not change appraisal totals.</p>
+  <p>The panel identifies the current Vertex declared-facts policy. Its ANSI
+  status remains unverified; a qualified total does not constitute ANSI approval.</p>
   <h2>Appraisal measurements</h2>
   <p>Choose <strong>Measurement</strong> for appraisal boundaries. Draw a boundary
   directly, or choose <strong>Define area before drawing</strong> when the classification and
@@ -165,7 +189,11 @@
   appearance. Undeclared legacy areas retain manual classification editing.
   Valid edits to the recorded physical walls update a current exterior outline,
   its dimensions and appraisal totals together in one undoable operation. The
-  area keeps its declarations, appearance and deduction links. If an outline was
+  area keeps its declarations, appearance and deduction links. You can select
+  walls together with furniture and labels to move them in one operation; the
+  preview includes the linked exterior outline even when that area is unselected.
+  Escape cancels the complete preview, and one Undo restores the complete edit.
+  If an outline was
   already stale, select it and use <strong>Refresh exterior measurement…</strong>
   or the source replacement review to repair it. Stale outlines cannot produce
   qualified appraisal totals. Open wall chains need a closed measurement boundary.

@@ -360,6 +360,178 @@ void test_boundary_draft_rendering_and_history() {
     require(canvas.labels().empty(), "committed-label clear must leave an empty label set");
 }
 
+void test_mouse_drawing_lengths_use_relative_zoom_increments() {
+    struct Example { bool metric; double scale; double step; };
+    for (const auto example : {Example{false, 20.0, 0.3048},
+                               Example{false, 80.0, 0.0762},
+                               Example{false, 400.0, 0.0254},
+                               Example{false, 1600.0, 0.00635},
+                               Example{false, 4000.0, 0.0015875},
+                               Example{true, 20.0, 0.5},
+                               Example{true, 80.0, 0.1},
+                               Example{true, 400.0, 0.02},
+                               Example{true, 1600.0, 0.005},
+                               Example{true, 4000.0, 0.002}}) {
+        PlanCanvas canvas;
+        canvas.resize(640, 480);
+        canvas.setOverviewMapEnabled(false);
+        canvas.setMetricUnits(example.metric);
+        canvas.setTool(CanvasTool::wall);
+        const auto center = QRectF(canvas.rect()).center();
+        canvas.zoomBy(example.scale / canvas.viewScale(), center);
+        // Deliberately off-grid start and a heading clear of the axis guides.
+        const Vec2 origin{0.01317, -0.01931};
+        const auto raw_length = example.step * 13.23;
+        const Vec2 heading{std::cos(0.37), std::sin(0.37)};
+        const Vec2 raw{origin.x + raw_length * heading.x,
+                       origin.y + raw_length * heading.y};
+        const auto screen = [&](Vec2 point) {
+            const auto view = canvas.viewCenter();
+            return center + QPointF((point.x-view.x)*canvas.viewScale(),
+                                     -(point.y-view.y)*canvas.viewScale());
+        };
+        canvas.setWallPreview(std::pair{origin, origin});
+        std::optional<Vec2> live, placed;
+        canvas.setCursorMoved([&](Vec2 point) {
+            live = point;
+            canvas.setWallPreview(std::pair{origin, point});
+        });
+        canvas.setPointClicked([&](Vec2 point) { placed = point; });
+        const auto mouse = [&](QEvent::Type type, QPointF position, Qt::MouseButton button,
+                               Qt::MouseButtons buttons) {
+            QMouseEvent event(type, position, position, button, buttons, Qt::NoModifier);
+            QApplication::sendEvent(&canvas, &event);
+        };
+        mouse(QEvent::MouseMove, screen(raw), Qt::NoButton, Qt::NoButton);
+        require(live && std::abs(std::hypot(live->x-origin.x, live->y-origin.y) -
+                    13.0*example.step) < example.step*1e-8,
+                "mouse wall length must round relative to its off-grid origin at this zoom");
+        require(std::abs(std::atan2(live->y-origin.y,live->x-origin.x)-0.37) < 1e-9,
+                "length magnet must preserve raw diagonal heading rather than world grid axes");
+        mouse(QEvent::MouseButtonPress, screen(raw), Qt::LeftButton, Qt::LeftButton);
+        mouse(QEvent::MouseButtonRelease, screen(raw), Qt::LeftButton, Qt::NoButton);
+        require(placed && live && placed->x==live->x && placed->y==live->y &&
+                    placed->x==canvas.wallPreview()->end.x && placed->y==canvas.wallPreview()->end.y,
+                "live wall preview and click must use the same actual quantized endpoint");
+
+        CanvasEntity exact{QStringLiteral("target"),QStringLiteral("wall"),{}};
+        exact.snap_points = {raw};
+        canvas.setEntities({exact});
+        canvas.setWallSnapEnabled(true);
+        mouse(QEvent::MouseMove, screen(raw)+QPointF(1,1), Qt::NoButton, Qt::NoButton);
+        require(live && live->x==raw.x && live->y==raw.y,
+                "exact existing endpoint must take priority over a nearby length magnet");
+        canvas.setEntities({});
+        canvas.setSnapEnabled(false);
+        mouse(QEvent::MouseMove, screen(raw), Qt::NoButton, Qt::NoButton);
+        require(live && std::hypot(live->x-raw.x,live->y-raw.y)<1e-10,
+                "deliberately disabling Snap must bypass mouse length quantization");
+    }
+}
+
+void test_right_drag_pans_without_authoring_or_moving_selection() {
+    for (const auto tool : {CanvasTool::select, CanvasTool::wall, CanvasTool::boundary}) {
+        PlanCanvas canvas;
+        canvas.resize(640,480);
+        canvas.setOverviewMapEnabled(false);
+        canvas.setTool(tool);
+        CanvasEntity entity{QStringLiteral("selected"),QStringLiteral("wall"),
+                            {Segment{{-2,0},{2,0},0}}};
+        canvas.setEntities({entity});
+        canvas.setSelectedId(entity.id);
+        if (tool==CanvasTool::wall) canvas.setWallPreview(std::pair{Vec2{0,0},Vec2{1,1}});
+        if (tool==CanvasTool::boundary) {
+            BoundaryDraftPreview draft;
+            draft.anchor=Vec2{0,0};
+            draft.pen_position=Vec2{1,1};
+            canvas.setBoundaryDraftPreview(draft);
+        }
+        int nodes=0, moves=0, contexts=0;
+        canvas.setPointClicked([&](Vec2) { ++nodes; });
+        canvas.setEntitiesMoveRequested([&](QStringList,Vec2) { ++moves; return true; });
+        canvas.setRightClicked([&](Vec2,QString) { ++contexts; });
+        const auto mouse = [&](QEvent::Type type,QPointF point,Qt::MouseButton button,Qt::MouseButtons buttons) {
+            QMouseEvent event(type,point,point,button,buttons,Qt::NoModifier);
+            QApplication::sendEvent(&canvas,&event);
+        };
+        const auto original=canvas.viewCenter();
+        mouse(QEvent::MouseButtonPress,{320,240},Qt::RightButton,Qt::RightButton);
+        mouse(QEvent::MouseMove,{362,267},Qt::NoButton,Qt::RightButton);
+        mouse(QEvent::MouseButtonRelease,{368,272},Qt::RightButton,Qt::NoButton);
+        require(std::abs(canvas.viewCenter().x-original.x+48/canvas.viewScale())<1e-9 &&
+                std::abs(canvas.viewCenter().y-original.y-32/canvas.viewScale())<1e-9,
+                "right drag over a selected object must pan to the actual release position");
+        require(nodes==0 && moves==0 && contexts==0 && canvas.entities().front().selected,
+                "right panning must preserve selection and never author, move objects, or open context menus");
+        mouse(QEvent::MouseButtonPress,{320,240},Qt::RightButton,Qt::RightButton);
+        mouse(QEvent::MouseButtonRelease,{320,240},Qt::RightButton,Qt::NoButton);
+        require(contexts==1,"stationary right click must retain one context action after panning");
+        const auto before=canvas.viewCenter();
+        mouse(QEvent::MouseButtonPress,{320,240},Qt::RightButton,Qt::RightButton);
+        mouse(QEvent::MouseButtonRelease,{344,252},Qt::RightButton,Qt::NoButton);
+        require(std::abs(canvas.viewCenter().x-before.x+24/canvas.viewScale())<1e-9 &&
+                std::abs(canvas.viewCenter().y-before.y-12/canvas.viewScale())<1e-9 && contexts==1,
+                "right release without an intermediate move must still pan and suppress its context menu");
+    }
+}
+
+void test_drawing_length_guides_and_non_drawing_placements() {
+    PlanCanvas canvas;
+    canvas.resize(640,480);
+    canvas.setOverviewMapEnabled(false);
+    canvas.setTool(CanvasTool::wall);
+    canvas.setWallSnapEnabled(true);
+    const Vec2 origin{0.01317,-0.01931};
+    const auto screen=[&](Vec2 point) {
+        const auto center=QRectF(canvas.rect()).center();
+        const auto view=canvas.viewCenter();
+        return center+QPointF((point.x-view.x)*canvas.viewScale(),-(point.y-view.y)*canvas.viewScale());
+    };
+    std::optional<Vec2> live;
+    canvas.setCursorMoved([&](Vec2 point) { live=point; });
+    const auto move=[&](Vec2 point) {
+        const auto location=screen(point);
+        QMouseEvent event(QEvent::MouseMove,location,location,Qt::NoButton,Qt::NoButton,Qt::NoModifier);
+        QApplication::sendEvent(&canvas,&event);
+    };
+    canvas.setWallPreview(std::pair{origin,origin});
+    move({origin.x+1.01,origin.y+0.003});
+    require(live && live->y==origin.y && std::abs(live->x-origin.x-13*0.0762)<1e-10,
+            "own horizontal guide must remain exactly aligned after relative length rounding");
+    CanvasEntity host{QStringLiteral("host"),QStringLiteral("wall"),{}};
+    host.snap_segments={Segment{{-1,2},{3,2},0}};
+    canvas.setEntities({host});
+    const Vec2 station{1.1234567,2};
+    move({station.x,station.y+0.02});
+    require(live && std::hypot(live->x-station.x,live->y-station.y)<1e-10,
+            "exact host station projection must take priority over the new drawing length magnet");
+    canvas.setRawPointInput(true);
+    const Vec2 raw{1.1234567,1.9876543};
+    move(raw);
+    require(live && std::hypot(live->x-raw.x,live->y-raw.y)<1e-10,
+            "opening host-placement raw input must bypass grid, guide, and length snapping");
+    canvas.setRawPointInput(false);
+    canvas.setEntities({});
+    canvas.setWallPreview(std::nullopt);
+    canvas.setTool(CanvasTool::boundary);
+    BoundaryDraftPreview draft;
+    draft.anchor=origin;
+    draft.pen_position=Vec2{2,1};
+    draft.length_snap_active=true;
+    draft.can_close_on_anchor=true;
+    canvas.setBoundaryDraftPreview(draft);
+    move({origin.x+0.01,origin.y+0.01});
+    require(live && live->x==origin.x && live->y==origin.y,
+            "exact closure anchor must take priority over relative length quantization");
+    draft.length_snap_active=false;
+    draft.can_close_on_anchor=false;
+    canvas.setBoundaryDraftPreview(draft);
+    move(raw);
+    require(live && std::abs(live->x-std::round(raw.x/0.3048)*0.3048)<1e-10 &&
+            std::abs(live->y-std::round(raw.y/0.3048)*0.3048)<1e-10,
+            "dimension-position phase must retain normal XY snapping and never round a segment length");
+}
+
 void test_unit_aware_adaptive_grid() {
     // Fixed metric snapping, unit-blind paint spacing, or a zoom-independent
     // increment all fail these hand-derived pointer and pixel expectations.
@@ -3573,6 +3745,9 @@ int main(int argc, char** argv) {
             test_effective_cursor_matches_click();
             return 0;
         }
+        test_mouse_drawing_lengths_use_relative_zoom_increments();
+        test_right_drag_pans_without_authoring_or_moving_selection();
+        test_drawing_length_guides_and_non_drawing_placements();
         test_unit_aware_adaptive_grid();
         test_compound_rotation_exact_preview_protocol();
         test_adaptive_grid_preserves_anchors_and_exact_geometry();

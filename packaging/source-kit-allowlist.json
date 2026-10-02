@@ -1631,6 +1631,10 @@
     },
     {
       "category": "docs",
+      "path": "docs/requirements/appraisal-standards-gap-review.md"
+    },
+    {
+      "category": "docs",
       "path": "docs/requirements/engineering-requirements-checklist.md"
     },
     {
@@ -2235,6 +2239,10 @@
     },
     {
       "category": "docs",
+      "path": "docs/superpowers/plans/2026-10-02-drawing-measurement-magnets.md"
+    },
+    {
+      "category": "docs",
       "path": "docs/superpowers/plans/2026-10-02-explicit-same-count-reference-repair.md"
     },
     {
@@ -2247,7 +2255,15 @@
     },
     {
       "category": "docs",
+      "path": "docs/superpowers/plans/2026-10-02-mixed-wall-appraisal-edits.md"
+    },
+    {
+      "category": "docs",
       "path": "docs/superpowers/plans/2026-10-02-selection-measurement-readability.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/superpowers/plans/2026-10-02-visible-appraisal-details.md"
     },
     {
       "category": "docs",
@@ -2340,6 +2356,10 @@
     {
       "category": "docs",
       "path": "docs/verification/direct-curve-length-2026-09-30.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/verification/drawing-and-appraisal-details-2026-10-02.md"
     },
     {
       "category": "docs",
@@ -2640,6 +2660,10 @@
     {
       "category": "source",
       "path": "include/sketch/constraints.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/desktop/appraisal_details_panel.hpp"
     },
     {
       "category": "source",
@@ -3747,6 +3771,10 @@
     },
     {
       "category": "source",
+      "path": "src/desktop/appraisal_details_panel.cpp"
+    },
+    {
+      "category": "source",
       "path": "src/desktop/appraisal_report_dialog.cpp"
     },
     {
@@ -3844,6 +3872,10 @@
     {
       "category": "source",
       "path": "tests/appraisal_desktop_workflow_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/appraisal_details_panel_tests.cpp"
     },
     {
       "category": "source",
@@ -4096,6 +4128,10 @@
     {
       "category": "source",
       "path": "tests/door_operation_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/drawing_measurement_desktop_tests.cpp"
     },
     {
       "category": "source",

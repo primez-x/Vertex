@@ -166,6 +166,13 @@ struct ApplyBoundaryConstraintChanges {
     std::vector<BoundaryGeometryEdit> exterior_source_edits;
     // Retains envelope version six even if a caller removes its edit vectors.
     bool exterior_source_completion{};
+    // Version seven retains ordinarily admitted wall/object metadata and asset edits
+    // in the same source-completion event. Raw measured owners and dimensions
+    // cannot borrow the exterior redraw's typed authority.
+    std::vector<EntityChange> supplemental_entity_changes;
+    std::vector<AssetChange> supplemental_asset_changes;
+    // Retains version seven even if its supplemental vectors are removed.
+    bool supplemental_source_completion{};
 };
 
 using Command = std::variant<ApplyEntityChanges, NameRevision, TranslateBoundary,

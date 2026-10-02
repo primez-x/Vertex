@@ -138,7 +138,7 @@ void test_translation_export(const std::filesystem::path& root) {
         "exchange must retain exact mixed proofs only on their command rows");
 }
 
-void test_live_exterior_source_exchange_v17(const std::filesystem::path& root) {
+void test_live_exterior_source_exchange_v17(const std::filesystem::path& root, bool mixed = false) {
   std::vector<sketch::Entity> values{
       {"exchange-property", "property", nlohmann::json::object(), false, nlohmann::json::object()},
       {"exchange-building", "building", {{"property_id", "exchange-property"}}, false, nlohmann::json::object()},
@@ -161,12 +161,28 @@ void test_live_exterior_source_exchange_v17(const std::filesystem::path& root) {
   values.push_back(sketch::upgrade_legacy_boundary_entity({"exchange-area", "measurement_boundary",
       {{"boundary", geometry}, {"floor_id", "exchange-floor"}, {"layer_id", "exchange-layer"},
        {"wall_measurement_source", measured.source}}, false, nlohmann::json::object()}));
-  auto document = sketch::Document::create(values);
+  std::vector<sketch::Asset> assets;
+  if (mixed) {
+    values.push_back({"exchange-label", "label", {{"text", "Before"}}, false, nlohmann::json::object()});
+    values.push_back({"exchange-object", "object", {{"asset_id", "exchange-image"}, {"name", "Before"}}, false, nlohmann::json::object()});
+    assets.push_back(sketch::Asset::create("exchange-image", "application/octet-stream", {std::byte{1}}, {{"caption", "Before"}}));
+  }
+  auto document = sketch::Document::create(values, assets);
   const auto before = document.snapshot();
   auto wall = before.entities().at(ids.front());
   wall.properties["thickness_m"] = 0.4;
-  const auto command = sketch::complete_exterior_wall_measurement_command(before,
-      sketch::ApplyEntityChanges{before.revision(), {sketch::EntityChange::upsert(wall)}, {}, "Widen source wall"});
+  sketch::ApplyEntityChanges ordinary{before.revision(), {sketch::EntityChange::upsert(wall)}, {}, "Widen source wall"};
+  if (mixed) {
+    auto label = before.entities().at("exchange-label");
+    label.properties["text"] = "After";
+    auto object = before.entities().at("exchange-object");
+    object.properties["name"] = "After";
+    ordinary.entity_changes.push_back(sketch::EntityChange::upsert(label));
+    ordinary.entity_changes.push_back(sketch::EntityChange::upsert(object));
+    ordinary.asset_changes.push_back(sketch::AssetChange::upsert(sketch::Asset::create("exchange-image",
+        "application/octet-stream", {std::byte{2}, std::byte{3}}, {{"caption", "After"}})));
+  }
+  const auto command = sketch::complete_exterior_wall_measurement_command(before, ordinary);
   document.apply(command);
   const auto changed = document.snapshot();
   auto deleted = sketch::Document::fork(changed);
@@ -178,9 +194,9 @@ void test_live_exterior_source_exchange_v17(const std::filesystem::path& root) {
     std::ifstream input(destination / "project.json");
     const auto exchanged = nlohmann::json::parse(input);
     const auto& rows = exchanged.at("revisions");
-    check(exchanged.at("exchange_version") == 17 && rows.size() == snapshot.history().size() &&
+    check(exchanged.at("exchange_version") == (mixed ? 18 : 17) && rows.size() == snapshot.history().size() &&
         rows[1].at("boundary_constraint_changes") == sketch::command_to_json(command),
-        "current, undone and deleted live source history must advertise exchange seventeen and retain exact proof");
+        "current, undone and deleted live source history must advertise its exchange floor and retain exact proof");
     for (std::size_t i = 0; i < rows.size(); ++i) {
       check(rows[i].contains("boundary_constraint_changes") == (i == 1),
           "only the source command revision owns the completion proof");
@@ -192,27 +208,56 @@ void test_live_exterior_source_exchange_v17(const std::filesystem::path& root) {
     for (const auto& value : rows[0].at("entities"))
       source_values.push_back({value.at("id").get<std::string>(), value.at("type").get<std::string>(),
           value.at("properties"), value.at("required").get<bool>(), value.at("extensions")});
-    auto replay = sketch::Document::create(source_values);
+    auto replay = sketch::Document::create(source_values, assets);
     replay.apply(sketch::command_from_json(rows[1].at("boundary_constraint_changes")));
-    check(replay.snapshot().entities() == changed.entities() &&
+    check(replay.snapshot().entities() == changed.entities() && replay.snapshot().assets() == changed.assets() &&
         sketch::wall_measurement_source_current(replay.snapshot(), replay.snapshot().entities().at("exchange-area")),
         "decoded exchange source completion must replay exact current physical and measured geometry");
     replay.undo(replay.revision());
-    check(replay.snapshot().entities() == before.entities(), "exchanged completion must undo both geometry lanes once");
+    check(replay.snapshot().entities() == before.entities() && replay.snapshot().assets() == before.assets(),
+        "exchanged completion must undo geometry, supplemental entities and assets once");
     replay.redo(replay.revision());
-    check(replay.snapshot().entities() == changed.entities(), "exchanged completion must redo both geometry lanes once");
+    check(replay.snapshot().entities() == changed.entities() && replay.snapshot().assets() == changed.assets(),
+        "exchanged completion must redo geometry, supplemental entities and assets once");
 
     for (const bool physical : {false, true}) {
       auto forged = rows[1].at("boundary_constraint_changes");
       if (physical) forged["physical_entity_changes"][0]["entity"]["properties"]["thickness_m"] = 0.6;
       else forged["exterior_source_edits"][0]["replacement_segments"][0]["start"][0] = 999.0;
-      auto refused = sketch::Document::create(source_values);
+      auto refused = sketch::Document::create(source_values, assets);
       const auto untouched = sketch::document_snapshot_digest(refused.snapshot());
       bool rejected = false;
       try { refused.apply(sketch::command_from_json(forged)); }
       catch (const std::exception&) { rejected = true; }
       check(rejected && sketch::document_snapshot_digest(refused.snapshot()) == untouched,
           "exchanged source proof tampering must reject atomically at document admission");
+    }
+    if (mixed) {
+      const auto& asset_rows = rows[1].at("assets");
+      check(asset_rows.size() == 1 && asset_rows[0].at("sha256") == changed.assets().at("exchange-image").sha256,
+          "mixed extraction must retain the referenced asset identity and exact byte digest");
+      std::ifstream asset_input(destination / asset_rows[0].at("path").get<std::string>(), std::ios::binary);
+      const std::string extracted_bytes{std::istreambuf_iterator<char>(asset_input), std::istreambuf_iterator<char>()};
+      check(extracted_bytes == std::string("\x02\x03", 2), "mixed extraction must publish exact supplemental asset bytes");
+      for (const int mutation : {0, 1, 2, 3}) {
+        auto forged = rows[1].at("boundary_constraint_changes");
+        if (mutation == 0) forged["supplemental_entity_changes"][0]["entity"]["properties"]["text"] = "Forged";
+        if (mutation == 1) forged["supplemental_asset_changes"][0]["asset"]["metadata"]["caption"] = "Forged";
+        if (mutation == 2) forged.erase("supplemental_asset_changes");
+        if (mutation == 3) forged["version"] = 6;
+        if (mutation < 2) {
+          auto tampered = snapshot;
+          auto& proof = *const_cast<std::vector<sketch::RevisionRecord>&>(tampered.history())[1].boundary_constraint_changes;
+          proof = std::get<sketch::ApplyBoundaryConstraintChanges>(sketch::command_from_json(forged));
+          bool rejected = false;
+          try { (void)sketch::Document::fork(tampered); } catch (const std::exception&) { rejected = true; }
+          check(rejected, "extracted supplemental proof must independently reproduce the recorded entities and assets");
+        } else {
+          bool rejected = false;
+          try { (void)sketch::command_from_json(forged); } catch (const std::exception&) { rejected = true; }
+          check(rejected, "extracted v7 proof must reject removed lanes and downgraded envelopes");
+        }
+      }
     }
   }
 }
@@ -423,6 +468,7 @@ void test_safe_curved_wall_history_exchange_replays(const std::filesystem::path&
   bool rejected = false;
   try {
     test_live_exterior_source_exchange_v17(root);
+    test_live_exterior_source_exchange_v17(root, true);
     refused.apply(forged_command);
   } catch (const sketch::DocumentError& error) {
     rejected = std::string_view(error.what()).find("topology") != std::string_view::npos;

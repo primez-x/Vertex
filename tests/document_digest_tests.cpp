@@ -6,6 +6,7 @@
 #include <iostream>
 #include <numbers>
 #include <stdexcept>
+#include <utility>
 
 namespace {
 using namespace sketch;
@@ -309,7 +310,8 @@ void test_live_source_proof_digest_binding() {
     const auto full = document_snapshot_digest(snapshot);
     const auto authoring = document_authoring_source_digest_v1(snapshot);
     const auto wire = command_to_json(original);
-    require(wire.at("version") == 6 && command_to_json(command_from_json(wire)) == wire,
+    require(wire.at("version") == 6 && !wire.contains("supplemental_entity_changes") &&
+        !wire.contains("supplemental_asset_changes") && command_to_json(command_from_json(wire)) == wire,
         "source proof must retain both new lanes through the command codec");
     const std::vector<std::function<void(ApplyBoundaryConstraintChanges&)>> mutations{
         [](auto& p) { p.physical_entity_changes.front().entity.properties["thickness_m"] = 0.6; },
@@ -340,6 +342,65 @@ void test_live_source_proof_digest_binding() {
         try { (void)command_from_json(mislabeled); } catch (const std::exception&) { rejected = true; }
         require(rejected, "old command envelopes must refuse the new source proof lanes");
     }
+
+    original.supplemental_source_completion = true;
+    original.supplemental_entity_changes = {
+        EntityChange::upsert({"source-label", "label", {{"text", "Measured"}}, false, {{"vendor", "retain"}}}),
+        EntityChange::erase("removed-label")};
+    original.supplemental_asset_changes = {
+        AssetChange::upsert(Asset::create("source-image", "application/octet-stream",
+            {std::byte{1}, std::byte{2}}, {{"caption", "Measured"}})),
+        AssetChange::erase("removed-image")};
+    proof = original;
+    const auto mixed_wire = command_to_json(*proof);
+    const auto mixed_full = document_snapshot_digest(snapshot);
+    const auto mixed_authoring = document_authoring_source_digest_v1(snapshot);
+    require(mixed_wire.at("version") == 7 && command_to_json(command_from_json(mixed_wire)) == mixed_wire,
+        "v7 must roundtrip exact supplemental entity and asset intents");
+    const std::vector<std::function<void(ApplyBoundaryConstraintChanges&)>> mixed_mutations{
+        [](auto& p) { p.supplemental_entity_changes[0].entity.properties["text"] = "Changed"; },
+        [](auto& p) { p.supplemental_entity_changes[0].entity.id = "changed-label"; },
+        [](auto& p) { p.supplemental_entity_changes[0].entity.type = "symbol"; },
+        [](auto& p) { p.supplemental_entity_changes[0].entity.required = true; },
+        [](auto& p) { p.supplemental_entity_changes[0].entity.extensions["vendor"] = "Changed"; },
+        [](auto& p) { p.supplemental_entity_changes[1].entity_id = "other-removed-label"; },
+        [](auto& p) { p.supplemental_entity_changes[0] = EntityChange::erase("source-label"); },
+        [](auto& p) { std::swap(p.supplemental_entity_changes[0], p.supplemental_entity_changes[1]); },
+        [](auto& p) { p.supplemental_entity_changes.clear(); },
+        [](auto& p) { p.supplemental_asset_changes[0].asset = Asset::create("source-image", "application/octet-stream",
+            {std::byte{3}, std::byte{2}}, {{"caption", "Measured"}}); },
+        [](auto& p) { p.supplemental_asset_changes[0].asset.id = "changed-image"; },
+        [](auto& p) { p.supplemental_asset_changes[0].asset.media_type = "image/png"; },
+        [](auto& p) { p.supplemental_asset_changes[0].asset.metadata["caption"] = "Changed"; },
+        [](auto& p) { p.supplemental_asset_changes[1].asset_id = "other-removed-image"; },
+        [](auto& p) { p.supplemental_asset_changes[0] = AssetChange::erase("source-image"); },
+        [](auto& p) { std::swap(p.supplemental_asset_changes[0], p.supplemental_asset_changes[1]); },
+        [](auto& p) { p.supplemental_asset_changes.clear(); }};
+    for (const auto& mutate : mixed_mutations) {
+        proof = original;
+        mutate(*proof);
+        require(document_snapshot_digest(snapshot) != mixed_full &&
+            document_authoring_source_digest_v1(snapshot) != mixed_authoring,
+            "both digest surfaces must bind every supplemental entity and asset intent field");
+    }
+    for (const auto* key : {"supplemental_entity_changes", "supplemental_asset_changes"}) {
+        auto missing = mixed_wire;
+        missing.erase(key);
+        bool rejected = false;
+        try { (void)command_from_json(missing); } catch (const std::exception&) { rejected = true; }
+        require(rejected, "v7 decoder must require every supplemental lane");
+    }
+    auto mislabeled = mixed_wire;
+    mislabeled["version"] = 6;
+    bool rejected = false;
+    try { (void)command_from_json(mislabeled); } catch (const std::exception&) { rejected = true; }
+    require(rejected, "v6 must reject supplemental intents rather than silently downgrade them");
+    auto stripped = original;
+    stripped.supplemental_entity_changes.clear();
+    stripped.supplemental_asset_changes.clear();
+    const auto stripped_wire = command_to_json(stripped);
+    require(stripped_wire.at("version") == 7 && command_to_json(command_from_json(stripped_wire)) == stripped_wire,
+        "v7 discriminator must survive decode and re-encode even when supplemental vectors are stripped");
 }
 } // namespace
 

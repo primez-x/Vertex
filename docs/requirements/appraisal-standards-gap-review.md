@@ -1,0 +1,39 @@
+# Appraisal standards gap review
+
+Reviewed 2026-10-02 against the current calculation engine and official guidance.
+This remains part of the original production scope. The Details panel makes
+existing calculations accessible; it does not certify a measurement standard.
+
+The current engine implements `vertex-residential-declared-v1` and
+`vertex-light-commercial-declared-v1`. It validates explicitly declared facts,
+classifies qualifying above/below-grade areas, applies geometric deductions and
+records calculation provenance. A qualified report means those implemented
+rules have sufficient inputs. It does not mean ANSI approval.
+
+Fannie Mae requires ANSI Z765-2021 for relevant single-family appraisal
+measurements, calculations and reporting. Apartment/multifamily buildings need
+different treatment, including interior-perimeter measurement of apartment
+units. Software output must conform to the applicable standard. See
+[Fannie Mae's Improvements policy](https://selling-guide.fanniemae.com/sel/b4-1.3-05/improvements-section-appraisal-report).
+
+The published measuring guidance also distinguishes acquisition precision,
+sketch dimension precision and final area rounding. It specifies stair and
+open-to-below treatment and ceiling-height rules. See
+[Fannie Mae's standardized measuring guidelines](https://singlefamily.fanniemae.com/media/30266/display).
+
+## Required production work
+
+| Gap | Required behavior and evidence |
+| --- | --- |
+| Versioned standard profile | An explicitly identified, source-reviewed ANSI Z765-2021 profile separate from Vertex's current declared-facts policy. Store the profile version and basis in the project and output. |
+| Measurement and reporting precision | Separate entered/retained precision from required sketch dimension presentation and final aggregate area rounding. Golden output cases must cover rounding boundaries without rounding every segment before calculation. |
+| Ceiling evidence | Record height eligibility and low-height exclusions, including sloped-ceiling proportions. A single generic eligibility declaration does not verify the numeric threshold or its geometric exclusion. |
+| Stairs, openings and circulation | Verify stairs on the applicable floor, open-to-below deductions and access through unfinished areas. Include multiple floors and overlapping exclusions in independent expected-result fixtures. |
+| Dwelling identity and grade | Verify attached/detached spaces, ADUs, detached structures, noncontinuous access and partially below-grade levels. Mere building grouping cannot infer their eligibility. |
+| Inspection/basis statements | Retain required statements for plans and applicable inspection limitations, including explicit unknown facts. Do not treat plan-derived dimensions as observed field measurements. |
+| Output consistency | The Details totals, canvas measurements, sheets and appraisal PDF must use the same authoritative geometry while applying the relevant presentation rules. Test both units and save/reopen. |
+| Qualification evidence | Complete a requirement-to-rule/output checklist with sourced expected results and independent review. Keep the current ANSI status unverified until that evidence exists. |
+
+No release gate is waived by adding the panel. Light-commercial rules are a
+separate profile scope; the residential ANSI standard is not a generic
+commercial certification.

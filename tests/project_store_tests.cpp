@@ -2424,7 +2424,7 @@ void test_rigid_group_storage_and_history_floors() {
     }
 }
 
-void test_live_exterior_source_storage_and_history_floor() {
+void test_live_exterior_source_storage_and_history_floor(bool mixed = false) {
     TempDirectory temp;
     std::vector<Entity> values{
         entity("live-property", "property"),
@@ -2448,52 +2448,78 @@ void test_live_exterior_source_storage_and_history_floor() {
     values.push_back(sketch::upgrade_legacy_boundary_entity(entity("live-area", "measurement_boundary",
         {{"boundary", geometry}, {"floor_id", "live-floor"}, {"layer_id", "live-layer"},
          {"wall_measurement_source", measured.source}, {"name", "Retained source area"}})));
-    auto document = Document::create(values);
+    std::vector<Asset> assets;
+    if (mixed) {
+        values.push_back(entity("live-label", "label", {{"text", "Before"}}));
+        values.push_back(entity("live-object", "object", {{"asset_id", "live-image"}, {"name", "Before"}}));
+        assets.push_back(Asset::create("live-image", "application/octet-stream", {std::byte{1}}, {{"caption", "Before"}}));
+    }
+    auto document = Document::create(values, assets);
     const auto before = document.snapshot();
     auto changed_wall = before.entities().at(wall_ids.front());
     changed_wall.properties["thickness_m"] = 0.4;
-    const auto command = sketch::complete_exterior_wall_measurement_command(before,
-        ApplyEntityChanges{before.revision(), {EntityChange::upsert(changed_wall)}, {}, "Widen live source wall"});
+    ApplyEntityChanges ordinary{before.revision(), {EntityChange::upsert(changed_wall)}, {}, "Widen live source wall"};
+    if (mixed) {
+        auto label = before.entities().at("live-label");
+        label.properties["text"] = "After";
+        auto object = before.entities().at("live-object");
+        object.properties["name"] = "After";
+        ordinary.entity_changes.push_back(EntityChange::upsert(label));
+        ordinary.entity_changes.push_back(EntityChange::upsert(object));
+        ordinary.asset_changes.push_back(AssetChange::upsert(Asset::create("live-image", "application/octet-stream",
+            {std::byte{2}, std::byte{3}}, {{"caption", "After"}})));
+    }
+    const auto command = sketch::complete_exterior_wall_measurement_command(before, ordinary);
     const auto wire = sketch::command_to_json(command);
-    require(wire.at("version") == 6 && wire.at("physical_entity_changes").size() == 1 &&
+    require(wire.at("version") == (mixed ? 7 : 6) && wire.at("physical_entity_changes").size() == 1 &&
         wire.at("exterior_source_edits").size() == 1, "fixture must join physical and measured source intent");
+    if (mixed) require(wire.at("supplemental_entity_changes").size() == 2 &&
+        wire.at("supplemental_asset_changes").size() == 1, "v7 fixture must retain label, object and asset intents");
     document.apply(command);
     const auto changed = document.snapshot();
     std::vector<Entity> imported_values;
     for (const auto& [id, value] : changed.entities()) { (void)id; imported_values.push_back(value); }
-    const auto imported = Document::create(imported_values);
+    std::vector<Asset> imported_assets;
+    for (const auto& [id, asset] : changed.assets()) { (void)id; imported_assets.push_back(asset); }
+    const auto imported = Document::create(imported_values, imported_assets);
     require(ProjectStore::required_format_version(imported.snapshot()) == 16,
         "source entities without retained v6 command history must keep their existing native floor");
     auto emptied_proof = changed;
     auto& retained_proof = *const_cast<std::vector<sketch::RevisionRecord>&>(emptied_proof.history())[1].boundary_constraint_changes;
     retained_proof.physical_entity_changes.clear();
     retained_proof.exterior_source_edits.clear();
-    require(ProjectStore::required_format_version(emptied_proof) == 19,
-        "retained v6 discriminator must keep the native floor even when command lanes are removed");
+    if (mixed) {
+        retained_proof.supplemental_entity_changes.clear();
+        retained_proof.supplemental_asset_changes.clear();
+    }
+    require(ProjectStore::required_format_version(emptied_proof) == (mixed ? 20U : 19U),
+        "retained source discriminator must keep the native floor even when command lanes are removed");
     auto deleted = Document::fork(changed);
     deleted.apply(ApplyEntityChanges{deleted.revision(), {EntityChange::erase("live-area")}, {}, "Delete source owner later"});
     document.undo(document.revision());
     for (const auto& snapshot : {changed, document.snapshot(), deleted.snapshot()}) {
-        require(ProjectStore::required_format_version(snapshot) == 19,
-            "current, undone and deleted v6 source history requires native nineteen");
+        require(ProjectStore::required_format_version(snapshot) == (mixed ? 20U : 19U),
+            "current, undone and deleted source history requires its native format floor");
         const auto path = temp.path / ("live-source-" + sketch::make_stable_id() + ".bldproj");
         (void)ProjectStore::save(path, snapshot);
         auto loaded = ProjectStore::load(path);
         const auto restored = loaded.document.snapshot();
-        require(restored.entities() == snapshot.entities() && restored.history().size() == snapshot.history().size() &&
+        require(restored.entities() == snapshot.entities() && restored.assets() == snapshot.assets() &&
+            restored.history().size() == snapshot.history().size() &&
             sketch::command_to_json(*restored.history()[1].boundary_constraint_changes) == wire &&
             sketch::document_authoring_source_digest_v1(restored) == sketch::document_authoring_source_digest_v1(snapshot),
-            "native nineteen must reopen exact source proof, history and navigation");
+            "native storage must reopen exact source proof, entities, assets, history and navigation");
         if (snapshot.entities() == before.entities()) {
             loaded.document.redo(loaded.document.revision());
-            require(loaded.document.snapshot().entities() == changed.entities(),
-                "reopened Undo must retain one Redo for physical and analytical geometry");
+            require(loaded.document.snapshot().entities() == changed.entities() && loaded.document.snapshot().assets() == changed.assets(),
+                "reopened Undo must retain one Redo for geometry, supplemental entities and assets");
         }
-        execute_sql(path, "PRAGMA user_version=18; UPDATE metadata SET value='18' WHERE key='format_version'");
+        execute_sql(path, mixed ? "PRAGMA user_version=19; UPDATE metadata SET value='19' WHERE key='format_version'" :
+            "PRAGMA user_version=18; UPDATE metadata SET value='18' WHERE key='format_version'");
         rewrite_logical_digest(path);
         const auto hash = ProjectStore::file_sha256(path);
         require_error([&] { (void)ProjectStore::load(path); }, StorageErrorCode::unsupported_format,
-            "a recomputed digest must not admit retained v6 history under native eighteen");
+            "a recomputed digest must not admit source history below its native format floor");
         require(ProjectStore::file_sha256(path) == hash, "refused source downgrade preserves file bytes");
     }
     const auto original = temp.path / "live-original.bldproj";
@@ -2511,6 +2537,20 @@ void test_live_exterior_source_storage_and_history_floor() {
         rewrite_logical_digest(forged);
         require_error([&] { (void)ProjectStore::load(forged); }, StorageErrorCode::integrity_failure,
             "missing, forged or mislabeled source proof must fail independently of a recomputed digest");
+    }
+    if (mixed) for (const auto* mutation : {
+        "UPDATE revisions SET boundary_constraint_changes_json=json_remove(boundary_constraint_changes_json,'$.supplemental_entity_changes') WHERE revision=1",
+        "UPDATE revisions SET boundary_constraint_changes_json=json_remove(boundary_constraint_changes_json,'$.supplemental_asset_changes') WHERE revision=1",
+        "UPDATE revisions SET boundary_constraint_changes_json=json_set(boundary_constraint_changes_json,'$.supplemental_entity_changes[0].entity.properties.text','Forged') WHERE revision=1",
+        "UPDATE revisions SET boundary_constraint_changes_json=json_set(boundary_constraint_changes_json,'$.supplemental_asset_changes[0].asset.metadata.caption','Forged') WHERE revision=1",
+        "UPDATE revisions SET boundary_constraint_changes_json=json_set(boundary_constraint_changes_json,'$.supplemental_asset_changes',json('[]')) WHERE revision=1",
+        "UPDATE revisions SET boundary_constraint_changes_json=json_set(boundary_constraint_changes_json,'$.version',6) WHERE revision=1"}) {
+        const auto forged = temp.path / ("mixed-forged-" + sketch::make_stable_id() + ".bldproj");
+        std::filesystem::copy_file(original, forged);
+        execute_sql(forged, mutation);
+        rewrite_logical_digest(forged);
+        require_error([&] { (void)ProjectStore::load(forged); }, StorageErrorCode::integrity_failure,
+            "supplemental intent tampering must reject independently of a recomputed logical digest");
     }
 }
 
@@ -2616,6 +2656,7 @@ int main() {
     try {
         test_rigid_group_storage_and_history_floors();
         test_live_exterior_source_storage_and_history_floor();
+        test_live_exterior_source_storage_and_history_floor(true);
         test_reviewed_exterior_source_reader_floor();
         test_physical_arc_length_history_requires_v12();
         test_direct_curve_length_history_requires_v13();

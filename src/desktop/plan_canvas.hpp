@@ -249,6 +249,9 @@ struct BoundaryDraftPreview {
     QString instruction;
     // Authoring owns phase/pen state; dimension placement must never close.
     bool can_close_on_anchor{false};
+    // Only a mouse-authored next segment uses the relative length magnet.
+    // Anchor/dimension placement and precise typed construction stay exact.
+    bool length_snap_active{false};
 };
 
 // Model-space geometry for a pending physical wall segment. The canvas uses
@@ -332,6 +335,10 @@ public:
     [[nodiscard]] double viewScale() const noexcept { return m_scale; }
     // Current screen grid increment, shared by painting and interactive snap.
     [[nodiscard]] double gridSpacingMetres() const noexcept;
+    [[nodiscard]] double drawingLengthIncrementMetres() const noexcept;
+    // Transient drawing labels use exact inch fractions when representable.
+    // Arbitrary exact object snaps retain decimal precision instead of rounding.
+    [[nodiscard]] static QString drawingLengthText(double metres, bool metric);
     void renderScene(QPainter& painter, const QRectF& viewport) const;
     void renderScene(QPainter& painter, const QRectF& viewport, bool fit_to_content,
                      QColor background) const;
@@ -494,7 +501,7 @@ private:
     void pointerRelease(QPointF position, Qt::MouseButton button,
                         Qt::KeyboardModifiers modifiers = Qt::NoModifier);
     void resetGesture();
-    enum class SnapKind { none, grid, endpoint, on_wall, on_boundary, alignment, perpendicular };
+    enum class SnapKind { none, grid, length, endpoint, on_wall, on_boundary, alignment, perpendicular };
     struct SnapResult {
         Vec2 point{};
         SnapKind kind{SnapKind::none};
@@ -502,6 +509,7 @@ private:
         std::optional<Segment> guide;
     };
     [[nodiscard]] SnapResult snapResult(QPointF point) const;
+    [[nodiscard]] std::optional<Vec2> drawingOrigin() const;
     void handleTouchEvent(QTouchEvent& event);
     void resetTouchInput();
     [[nodiscard]] std::optional<std::pair<Vec2, Vec2>> contentBounds() const;
