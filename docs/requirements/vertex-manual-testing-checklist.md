@@ -1528,6 +1528,7 @@ drawing; switching modes does not change existing geometry.
 
 - [ ] **U269 — Derive garage, carport, porch, patio and deck from area use**
   - Expected: Set each boundary's Area use in **Edit appraisal facts**. Each area appears only in its derived named bucket; none silently becomes finished dwelling area.
+  - Display check: Start with a manually classified dwelling area, then declare Garage in the facts editor. The selected category must read Garage and be read-only; its default outline/fill becomes the garage style. Open Area appearance and check its defaults agree with the canvas. Change the use back to Dwelling and check both update. An undeclared legacy area's manual classification remains editable.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
@@ -1545,6 +1546,7 @@ drawing; switching modes does not change existing geometry.
 
 - [ ] **U272 — Change appraisal facts and undo them**
   - Expected: Change an area's declared use or its floor's grade. Vertex immediately derives the new category and recalculates totals. Undo and Redo restore the prior declarations, derived category, qualification state and totals together.
+  - Appearance check: Give the area a custom color and label position before changing its use. Those custom settings must stay. Reset to defaults must use the latest declared category, and Undo must restore the custom appearance. Save/reopen and check the category and appearance again. Clear a required fact: the selected category must show Unqualified instead of an older manual category.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
@@ -1761,6 +1763,7 @@ drawing; switching modes does not change existing geometry.
 
 - [ ] **U307 — Change a boundary curve without moving its endpoints**
   - Steps: Draw a measured room, select it and choose **Edit curve…**. Choose an edge and enter a signed sweep angle, signed height or arc length. Review the preview, then Apply. Try the opposite side, undo, redo, save, reopen and export the plan. Try a curve that crosses another edge.
+  - Angle check: Enter `1` without a unit; Apply must be disabled and explain how to enter the angle. Try `90 deg`, `pi/2`, and `-pi/2`; the first two produce the same quarter-circle sweep and the last chooses the opposite side.
   - Expected: Both endpoints stay fixed. The selected edge becomes the requested analytical curve; associated lengths, area and perimeter update. The preview shows the proposed result before commitment. An invalid crossing disables Apply and leaves the drawing unchanged. Saved and exported geometry agrees.
   - Result: Not tested
   - Notes: ______________________________

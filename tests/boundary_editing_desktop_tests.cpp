@@ -294,8 +294,9 @@ void assert_arc_receipt(const sketch::DocumentSnapshot& snapshot,
     const auto& input = *edit.arc_construction;
     if (test_case.construction == sketch::BoundaryConstructionKind::arc_chord_angle) {
         require(input.angle &&
-                    std::abs(input.angle->radians - test_case.expected_input) < 1e-12,
-                "angle construction must retain the entered signed angle intent");
+                    std::abs(input.angle->radians - test_case.expected_input) < 1e-12 &&
+                    *input.angle == sketch::parse_angle(test_case.expression),
+                "angle construction must retain the exact entered expression and signed angle intent");
     } else if (test_case.construction == sketch::BoundaryConstructionKind::arc_chord_height) {
         require(input.height && std::abs(input.height->metres - test_case.expected_input) < 1e-12,
                 "height construction must retain the entered signed height intent");
@@ -382,6 +383,9 @@ void fixed_endpoint_arc_edit(const ArcCase& test_case) {
                         same_point(new_edge.segment.end, old_edge.segment.end) &&
                         std::abs(new_edge.segment.sweep_radians) > 1e-8,
                     "reconstructed arc must keep both chord endpoints fixed");
+            if (test_case.construction == sketch::BoundaryConstructionKind::arc_chord_angle)
+                require(std::abs(new_edge.segment.sweep_radians - test_case.expected_input) < 1e-12,
+                        "explicit angle input must construct the requested signed analytical sweep");
             const auto bounds = sketch::segment_bounds(new_edge.segment);
             require(test_case.outward ? bounds.minimum.y < -0.01 : bounds.maximum.y > 0.01,
                     "signed construction input must select the expected side of the chord");
@@ -427,6 +431,67 @@ void fixed_endpoint_arc_edit(const ArcCase& test_case) {
     assert_arc_receipt(reopened_snapshot, test_case, segment_id);
 }
 
+void curve_angle_requires_explicit_units() {
+    // Generic core parsing deliberately retains its bare-radian contract;
+    // the actual authoring editor must require users to state their intent.
+    require(sketch::parse_angle("1").radians == 1.0,
+            "core angle parsing must preserve generic bare-radian semantics");
+    QTemporaryDir directory;
+    require(directory.isValid(), "curve angle unit fixture needs a temporary directory");
+    MainWindow window({}, nullptr, directory.filePath(QStringLiteral("text-library.json")));
+    window.setMetricUnits(true);
+    const auto boundary_id = window.createBoundary(tall_rectangle());
+    require(!boundary_id.isEmpty(), "curve angle unit fixture needs a real boundary");
+    const auto before = window.document().snapshot();
+    const auto source = sketch::decode_identified_boundary_entity(
+        before.entities().at(boundary_id.toStdString()));
+    window.resize(1100, 780);
+    window.show();
+    QApplication::processEvents();
+    require(window.selectEntity(boundary_id), "select boundary before checking curve angle units");
+    auto& button = child<QPushButton>(window, "editBoundaryGeometry");
+    require(button.isEnabled(), "selected boundary must expose actual geometry editing");
+    modal_interaction(window, "boundaryGeometryDialog", [&] { button.click(); },
+        [&](QDialog& dialog) {
+            choose_data(child<QComboBox>(dialog, "boundaryEditOperation"), QStringLiteral("angle"));
+            choose_data(child<QComboBox>(dialog, "boundaryEdge"),
+                        QString::fromStdString(source.segments.front().segment_id));
+            child<QLineEdit>(dialog, "boundaryEdgeLength").setText(QStringLiteral("1"));
+            QApplication::processEvents();
+            const auto unchanged = window.document().snapshot();
+            require(unchanged.revision() == before.revision() &&
+                        unchanged.entities() == before.entities() &&
+                        unchanged.history().size() == before.history().size(),
+                    "ambiguous curve-angle preview must leave geometry and history unchanged");
+            require(!child<QDialogButtonBox>(dialog, "boundaryGeometryButtons")
+                         .button(QDialogButtonBox::Apply)->isEnabled(),
+                    "Curve angle bare '1' must disable Apply despite being geometrically valid radians");
+            const auto status = child<QLabel>(dialog, "boundaryGeometryStatus").text();
+            require(status.contains(QStringLiteral("explicit"), Qt::CaseInsensitive) &&
+                        status.contains(QStringLiteral("deg")) &&
+                        status.contains(QStringLiteral("rad")) &&
+                        status.contains(QStringLiteral("pi")),
+                    "ambiguous curve angle must show actionable explicit deg/rad/pi validation");
+            capture(dialog, QStringLiteral("boundary-curve-angle-explicit-unit-validation.png"));
+        });
+    require(window.document().snapshot().revision() == before.revision() &&
+                window.document().snapshot().entities() == before.entities(),
+            "cancelling invalid curve angle must preserve the complete boundary");
+}
+
+void explicit_curve_angle_constructions() {
+    const auto quarter_turn = std::numbers::pi / 2.0;
+    const auto quarter_arc_length = std::sqrt(2.0) * std::numbers::pi;
+    const ArcCase cases[]{
+        {"explicit-degrees", "angle", "90 deg", sketch::BoundaryConstructionKind::arc_chord_angle,
+         quarter_turn, quarter_arc_length, true, false},
+        {"explicit-pi", "angle", "pi/2", sketch::BoundaryConstructionKind::arc_chord_angle,
+         quarter_turn, quarter_arc_length, true, false},
+        {"explicit-negative-pi", "angle", "-pi/2", sketch::BoundaryConstructionKind::arc_chord_angle,
+         -quarter_turn, quarter_arc_length, false, false}};
+    for (const auto& test_case : cases) fixed_endpoint_arc_edit(test_case);
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -436,6 +501,15 @@ int main(int argc, char** argv) {
         require(QFontDatabase::addApplicationFont(QStringLiteral(":/fonts/Inter.ttf")) >= 0,
                 "bundled font must load for actual editor captures");
         app.setFont(QFont(QStringLiteral("Inter"), 10));
+        curve_angle_requires_explicit_units();
+        explicit_curve_angle_constructions();
+        const bool curve_units_only = std::any_of(argv + 1, argv + argc, [](const char* arg) {
+            return std::string_view(arg) == "--curve-angle-units-only";
+        });
+        if (curve_units_only) {
+            std::cout << "boundary_editing_desktop_tests curve angle units passed\n";
+            return 0;
+        }
         length_dimension_delete_recreate_and_restore();
         default_length_operation_remains_available();
         const ArcCase cases[]{

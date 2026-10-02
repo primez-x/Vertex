@@ -808,6 +808,21 @@ PlanAreaPresentation plan_area_presentation(QString classification) {
     return {};
 }
 
+PlanAreaPresentation appraisal_plan_area_presentation(std::string_view category) {
+    // Appraisal category tokens are exact policy outputs, so map them without
+    // the substring heuristics used for editable measurement classifications.
+    if (category == "garage" || category == "carport" ||
+        category == "porch" || category == "patio" || category == "deck")
+        return plan_area_presentation(QString::fromStdString(std::string(category)));
+    if (category == "above_grade_finished" ||
+        category == "above_grade_nonstandard_finished" ||
+        category == "below_grade_finished" ||
+        category == "below_grade_nonstandard_finished" ||
+        category == "noncontinuous_finished" || category == "commercial_occupiable")
+        return plan_area_presentation(QStringLiteral("residential"));
+    return {};
+}
+
 QString plan_area_label(const Entity& entity) {
     auto value = read_string(entity.properties, "name")
         .value_or(read_string(entity.properties, "classification").value_or(""));
@@ -1202,6 +1217,13 @@ Vec2 plan_label_leader_anchor(const Boundary& boundary,Vec2 target) {
         }
     }
     return nearest;
+}
+
+bool has_explicit_angle_unit(const QString& value) {
+    const auto lower = value.trimmed().toLower();
+    return lower.endsWith(QStringLiteral("deg")) ||
+           lower.endsWith(QStringLiteral("rad")) ||
+           lower.contains(QStringLiteral("pi"));
 }
 
 CanvasLabel place_plan_area_label(CanvasLabel label,const Boundary& boundary,
@@ -2558,14 +2580,134 @@ std::set<std::string, std::less<>> visible_project_entities_with_phase(
     return visible;
 }
 
-std::map<std::string, QString, std::less<>> appraisal_plan_area_values(
-    const DocumentSnapshot& snapshot, bool metric_units) {
+struct AppraisalPlanAreaProjection {
     std::map<std::string, QString, std::less<>> values;
+    // A present key means declared facts own the display category. A missing
+    // category is unqualified/excluded and must not fall back to stale manual
+    // classification metadata.
+    struct CategoryStatus {
+        std::optional<std::string> category;
+        bool qualified_exclusion{};
+    };
+    std::map<std::string, CategoryStatus, std::less<>> categories;
+};
+
+bool appraisal_area_has_declarations(const DocumentSnapshot& snapshot,
+                                     const Entity& property,
+                                     const Entity& boundary) {
+    if (property.properties.contains("appraisal_policy")) return true;
+    if (boundary.properties.contains("appraisal_facts")) return true;
+    const auto floor_id = read_string(boundary.properties, "floor_id");
+    if (!floor_id) return false;
+    const auto floor = snapshot.entities().find(*floor_id);
+    return floor != snapshot.entities().end() &&
+           floor->second.properties.contains("appraisal_facts");
+}
+
+std::optional<std::string> appraisal_boundary_property_id(
+    const DocumentSnapshot& snapshot, const Entity& boundary) {
+    const auto floor_id = read_string(boundary.properties, "floor_id");
+    const auto floor = floor_id ? snapshot.entities().find(*floor_id) : snapshot.entities().end();
+    auto building_id = floor != snapshot.entities().end() && floor->second.type == "floor"
+        ? read_string(floor->second.properties, "building_id") : std::nullopt;
+    if (!building_id) building_id = read_string(boundary.properties, "building_id");
+    if (!building_id) return read_string(boundary.properties, "property_id");
+    const auto building = snapshot.entities().find(*building_id);
+    if (building == snapshot.entities().end() || building->second.type != "building")
+        return read_string(boundary.properties, "property_id");
+    const auto owner = read_string(building->second.properties, "property_id");
+    return owner ? owner : read_string(boundary.properties, "property_id");
+}
+
+bool appraisal_property_has_declarations(const DocumentSnapshot& snapshot,
+                                        const Entity& property) {
+    if (property.properties.contains("appraisal_policy")) return true;
+    for (const auto& [id, boundary] : snapshot.entities()) {
+        (void)id;
+        if (!is_closed_boundary_entity(boundary.type) ||
+            appraisal_boundary_property_id(snapshot, boundary) != property.id)
+            continue;
+        try {
+            if (area_scope_name(boundary.properties) == "site") continue;
+        } catch (const std::exception&) {
+            // A malformed scope still represents an incomplete declaration.
+        }
+        if (appraisal_area_has_declarations(snapshot, property, boundary)) return true;
+    }
+    return false;
+}
+
+bool appraisal_area_has_derived_category_authority(const DocumentSnapshot& snapshot,
+                                                    const Entity& property,
+                                                    const Entity& boundary) {
+    try {
+        if (area_scope_name(boundary.properties) == "site") return false;
+    } catch (const std::exception&) {
+        // Invalid scope cannot safely restore an editable legacy category.
+    }
+    return appraisal_property_has_declarations(snapshot, property);
+}
+
+PlanAreaPresentation effective_plan_area_presentation(
+    const Entity& entity, const AppraisalPlanAreaProjection& projection) {
+    if (const auto found = projection.categories.find(entity.id);
+        found != projection.categories.end()) {
+        if (found->second.qualified_exclusion)
+            return plan_area_presentation(QStringLiteral("excluded"));
+        return found->second.category
+            ? appraisal_plan_area_presentation(*found->second.category)
+            : PlanAreaPresentation{};
+    }
+    return plan_area_presentation(QString::fromStdString(
+        read_string(entity.properties, "classification").value_or("")));
+}
+
+AppraisalPlanAreaProjection appraisal_plan_area_projection(
+    const DocumentSnapshot& snapshot, bool metric_units) {
+    AppraisalPlanAreaProjection projection;
+    // Seed declared rows before phase/report validation. If a current report
+    // cannot be produced, their default style stays explicitly unqualified
+    // instead of reverting to stale stored classification metadata.
+    std::map<std::string, std::vector<const Entity*>, std::less<>> boundaries_by_property;
+    for (const auto& [boundary_id, boundary] : snapshot.entities()) {
+        (void)boundary_id;
+        if (!is_closed_boundary_entity(boundary.type)) continue;
+        if (const auto owner = appraisal_boundary_property_id(snapshot, boundary))
+            boundaries_by_property[*owner].push_back(&boundary);
+    }
+    for (const auto& [property_id, property] : snapshot.entities()) {
+        const auto workflow = property.properties.find("calculation_workflow");
+        if (property.type != "property" || workflow == property.properties.end() ||
+            !workflow->is_string() || workflow->get_ref<const std::string&>() != "appraisal")
+            continue;
+        const auto owned = boundaries_by_property.find(property_id);
+        if (owned == boundaries_by_property.end()) continue;
+        const bool has_declarations = std::any_of(
+            owned->second.begin(), owned->second.end(), [&](const Entity* boundary) {
+                try {
+                    if (area_scope_name(boundary->properties) == "site") return false;
+                } catch (const std::exception&) {
+                    // Keep malformed candidates in the unqualified projection.
+                }
+                return appraisal_area_has_declarations(snapshot, property, *boundary);
+            });
+        if (!has_declarations) continue;
+        for (const auto* boundary : owned->second) {
+            try {
+                if (area_scope_name(boundary->properties) == "site") continue;
+            } catch (const std::exception&) {
+                // An invalid scope is still an appraisal row that must not
+                // trust an old manually stored category for its appearance.
+            }
+            projection.categories.try_emplace(boundary->id,
+                AppraisalPlanAreaProjection::CategoryStatus{});
+        }
+    }
     std::set<std::string, std::less<>> semantic_visibility;
     try {
         semantic_visibility = visible_project_entities_with_phase(snapshot, ProjectViewFilter{});
     } catch (const std::exception&) {
-        return values;
+        return projection;
     }
     for (const auto& [id, entity] : snapshot.entities()) {
         if (entity.type != "property") continue;
@@ -2575,15 +2717,28 @@ std::map<std::string, QString, std::less<>> appraisal_plan_area_values(
         try {
             const auto report = build_appraisal_document_report(snapshot, id,
                 metric_units ? AreaUnit::square_metre : AreaUnit::square_foot, &semantic_visibility);
+            if (report.configured) {
+                for (const auto& boundary : report.boundaries) {
+                    if (!projection.categories.contains(boundary.boundary_id)) continue;
+                    AppraisalPlanAreaProjection::CategoryStatus status;
+                    if (boundary.qualification.derived_category)
+                        status.category = std::string(appraisal_category_name(
+                            *boundary.qualification.derived_category));
+                    status.qualified_exclusion = boundary.exclusion &&
+                                                 boundary.qualification.qualified;
+                    projection.categories.insert_or_assign(boundary.boundary_id,
+                                                           std::move(status));
+                }
+            }
             if (!report.qualified || !report.calculation) continue;
             for (const auto& area : report.calculation->calculation.areas)
-                values.emplace(area.area_id, format_display_area(area.display));
+                projection.values.emplace(area.area_id, format_display_area(area.display));
         } catch (const std::exception&) {
             // A malformed or unqualified property retains its meaningful names
             // without displaying a plausible automatic numerical total.
         }
     }
-    return values;
+    return projection;
 }
 
 BuildingViewFrame architectural_view_frame(BuildingViewKind kind) {
@@ -3913,8 +4068,9 @@ public:
                 PresentationOverride value;
                 value.target_kind="area";
                 value.target_id=selected->id;
-                const auto appearance=plan_area_presentation(QString::fromStdString(
-                    read_string(selected->properties,"classification").value_or("")));
+                const auto area_projection = appraisal_plan_area_projection(source, m_metric_units);
+                const auto appearance = effective_plan_area_presentation(
+                    *selected, area_projection);
                 value.style.stroke_color=appearance.stroke.name(QColor::HexRgb).toStdString();
                 value.style.fill_color=appearance.fill.name(QColor::HexRgb).toStdString();
                 value.style.fill_pattern=!appearance.filled ? "none" : appearance.hatch==QStringLiteral("solid") ? "solid" : "hatch";
@@ -3998,8 +4154,9 @@ public:
                 throw std::invalid_argument("Select one closed area to edit its appearance.");
             const auto context = captureModalContext();
             const auto source = authoringSnapshot();
-            const auto presentation = plan_area_presentation(QString::fromStdString(
-                read_string(selected->properties, "classification").value_or("")));
+            const auto area_projection = appraisal_plan_area_projection(source, m_metric_units);
+            const auto presentation = effective_plan_area_presentation(
+                *selected, area_projection);
             PresentationOverride defaults;
             defaults.target_kind = "area";
             defaults.target_id = selected->id;
@@ -13674,7 +13831,8 @@ public:
         const std::optional<ArchitecturalViewContext>& view_context, const QFont& label_font) {
         try {
             const auto& candidate = candidate_snapshot.entities();
-            const auto area_values = appraisal_plan_area_values(candidate_snapshot, metric_units);
+            const auto area_projection = appraisal_plan_area_projection(candidate_snapshot, metric_units);
+            const auto& area_values = area_projection.values;
             const auto wall_regions=wall_dimension_exterior_regions(candidate_snapshot);
             const auto wall_presentations=wall_dimension_presentations(candidate);
             // A worker-local paint device measures candidate text without
@@ -13719,6 +13877,15 @@ public:
             VertexPreviewProjection result;
             std::map<QString, CanvasEntity> projection_sources;
             std::set<QString> captured_ids;
+            std::set<std::string, std::less<>> explicit_area_appearances;
+            for (const auto& [owner_id, owner] : candidate) {
+                (void)owner_id;
+                if (owner.type != kAnnotationEntityType) continue;
+                for (const auto& override : decode_annotation_entity(owner).overrides) {
+                    if (override.target_kind == "area" && !override.inherit_appearance)
+                        explicit_area_appearances.insert(override.target_id);
+                }
+            }
             for (const auto& item : eligible) projection_sources.emplace(item.id, item);
             for (const auto& item : retained) {
                 projection_sources.insert_or_assign(item.id, item);
@@ -13731,6 +13898,18 @@ public:
                 const auto& entity=found->second;
                 auto proposed=item;
                 bool world_paths = true;
+                if (is_closed_boundary_entity(entity.type) &&
+                    !explicit_area_appearances.contains(entity.id)) {
+                    const auto presentation = effective_plan_area_presentation(entity,
+                                                                               area_projection);
+                    proposed.stroke_color = presentation.stroke;
+                    proposed.dark_stroke_color = presentation.dark_stroke;
+                    proposed.fill_color = presentation.fill;
+                    proposed.hatch_pattern = presentation.hatch;
+                    proposed.hatch_scale = presentation.hatch.contains(QStringLiteral("diagonal"))
+                        ? 0.7 : 1.0;
+                    proposed.filled = presentation.filled;
+                }
                 if (can_recognize_boundary_dimension_entity_type(entity.type)) {
                     const auto decoded=decode_boundary_dimension_entity(entity);
                     if (!decoded.supported()) return std::nullopt;
@@ -16701,6 +16880,15 @@ public:
             appraisal_area = property.has_value() &&
                 calculation_workflow_name(property->properties) == "appraisal";
             if (appraisal_area) {
+                const auto snapshot = authoringSnapshot();
+                const auto property_entity = snapshot.entities().find(property->id);
+                if (property_entity != snapshot.entities().end() &&
+                    appraisal_area_has_derived_category_authority(
+                        snapshot, property_entity->second, *entity)) {
+                    setError(QStringLiteral(
+                        "This appraisal category is derived from declared facts. Edit the appraisal facts instead."));
+                    return false;
+                }
                 const auto parsed = parse_appraisal_category(value.toStdString());
                 if (!parsed.has_value() || *parsed == AppraisalAreaCategory::none) {
                     setError(QStringLiteral("Choose a defined appraisal area category."));
@@ -25330,7 +25518,8 @@ private:
             (void)m_vertex_preview_queue.cancel(m_vertex_preview_sequence);
         const auto snapshot = m_document->snapshot();
         const auto organization = organize_project(snapshot);
-        const auto appraisal_area_values = appraisal_plan_area_values(snapshot, m_metric_units);
+        const auto appraisal_area_projection = appraisal_plan_area_projection(snapshot, m_metric_units);
+        const auto& appraisal_area_values = appraisal_area_projection.values;
         m_plan_appraisal_area_ids.clear();
         for (const auto& [id, value] : appraisal_area_values) {
             (void)value;
@@ -25776,9 +25965,8 @@ private:
                 }
             }
             if (is_closed_boundary_entity(entity.type)) {
-                const auto classification = QString::fromStdString(
-                    read_string(geometry_entity.properties, "classification").value_or(""));
-                const auto presentation = plan_area_presentation(classification);
+                const auto presentation = effective_plan_area_presentation(
+                    geometry_entity, appraisal_area_projection);
                 canvas_entity.stroke_color = presentation.stroke;
                 canvas_entity.dark_stroke_color = presentation.dark_stroke;
                 canvas_entity.fill_color = presentation.fill;
@@ -27348,9 +27536,13 @@ private:
         CalculationProfile display_profile = persisted_profile;
         display_profile.display_unit =
             m_metric_units ? AreaUnit::square_metre : AreaUnit::square_foot;
+        const bool derived_category_authority = appraisal_workflow &&
+            appraisal_area_has_derived_category_authority(snapshot, *property, *selected);
         const auto classification = area_classification_for_workflow(
             selected->properties, calculation_workflow);
-        const auto classification_name =
+        const auto classification_name = derived_category_authority
+            ? QStringLiteral("Unqualified")
+            :
             classification.has_value() && !classification->empty()
                 ? QString::fromStdString(*classification)
                 : QStringLiteral("(unassigned)");
@@ -27373,6 +27565,7 @@ private:
                 m_classification_combo->addItem(classification_name);
             }
             m_classification_combo->setCurrentText(classification_name);
+            m_classification_combo->setEnabled(editable && !derived_category_authority);
         }
         StoredFactor factor;
         try {
@@ -27460,7 +27653,8 @@ private:
                 throw std::invalid_argument(
                     "selected boundary is hidden by the active design phase");
             }
-            const bool declared = appraisal_workflow && property->properties.contains("appraisal_policy");
+            const bool declared = appraisal_workflow &&
+                appraisal_property_has_declarations(snapshot, *property);
             std::optional<AppraisalDocumentReport> declared_report;
             if (declared) {
                 declared_report = build_appraisal_document_report(
@@ -27671,8 +27865,14 @@ private:
                 for (const auto& issue : declared_report->issues)
                     qualification_reasons.push_back(QString::fromStdString(issue));
                 qualifications.clear();
+                bool selected_qualified_exclusion = false;
                 for (const auto& boundary : declared_report->boundaries)
+                {
                     qualifications.emplace(boundary.boundary_id, boundary.qualification);
+                    if (boundary.boundary_id == selected->id && boundary.exclusion &&
+                        boundary.qualification.qualified)
+                        selected_qualified_exclusion = true;
+                }
                 m_appraisal_summary_group->setTitle(all_qualified
                     ? QStringLiteral("Automatic appraisal — Qualified (Vertex policy)")
                     : QStringLiteral("Automatic appraisal — Unqualified"));
@@ -27681,6 +27881,25 @@ private:
                     : QStringLiteral("Unqualified\n") + qualification_reasons.join(QLatin1Char('\n')));
                 if (const auto found = qualifications.find(selected->id); found != qualifications.end()) {
                     const auto& q = found->second;
+                    if (derived_category_authority) {
+                        const auto category = q.derived_category
+                            ? QString::fromUtf8(appraisal_category_name(*q.derived_category).data())
+                            : (selected_qualified_exclusion
+                                   ? QStringLiteral("Excluded — no standalone contribution")
+                                   : QStringLiteral("Unqualified"));
+                        QSignalBlocker blocker(m_classification_combo);
+                        if (m_classification_combo->findText(category) < 0)
+                            m_classification_combo->addItem(category);
+                        m_classification_combo->setCurrentText(category);
+                        m_classification_combo->setEnabled(false);
+                        m_calculation_profile_context->setText(
+                            q.derived_category
+                                ? QStringLiteral("Facts-derived appraisal category: %1")
+                                      .arg(category)
+                                : selected_qualified_exclusion
+                                    ? QStringLiteral("Excluded — no standalone contribution")
+                                    : QStringLiteral("Unqualified — complete declared appraisal facts."));
+                    }
                     m_appraisal_derived_value->setText(QStringLiteral("%1\nPhysical: %2\nAdjusted: %3")
                         .arg(q.derived_category ? QString::fromUtf8(appraisal_category_name(*q.derived_category).data())
                                                : (q.qualified ? QStringLiteral("Excluded — no standalone contribution") : QStringLiteral("Unqualified")),
@@ -30215,6 +30434,9 @@ public:
                         receipt.chord_end = original_edge.segment.end;
                         receipt.clockwise = clockwise->isChecked();
                         if (mode == QStringLiteral("angle")) {
+                            if (!has_explicit_angle_unit(length->text()))
+                                throw std::invalid_argument(
+                                    "Sweep angle requires an explicit deg, rad, or pi expression.");
                             receipt.kind = BoundaryConstructionKind::arc_chord_angle;
                             receipt.angle = parse_angle(length->text().toStdString());
                             receipt.clockwise = false; // Signed angle defines the side.

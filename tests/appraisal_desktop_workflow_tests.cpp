@@ -20,6 +20,7 @@
 #include <QTemporaryDir>
 #include <QDialog>
 #include <QDialogButtonBox>
+#include <QFormLayout>
 #include <QPushButton>
 #include <QPdfDocument>
 #include <QTimer>
@@ -380,9 +381,23 @@ bool set_appraisal_fact(QDialog& dialog, const char* key, const char* value) {
     return true;
 }
 
+QComboBox* inspector_classification_control(QWidget& owner) {
+    for (auto* form : owner.findChildren<QFormLayout*>()) {
+        for (int row = 0; row < form->rowCount(); ++row) {
+            const auto* label_item = form->itemAt(row, QFormLayout::LabelRole);
+            const auto* field_item = form->itemAt(row, QFormLayout::FieldRole);
+            const auto* label = label_item ? qobject_cast<QLabel*>(label_item->widget()) : nullptr;
+            auto* combo = field_item ? qobject_cast<QComboBox*>(field_item->widget()) : nullptr;
+            if (label && label->text() == QStringLiteral("Classification") && combo) return combo;
+        }
+    }
+    return nullptr;
+}
+
 void save_appraisal_facts_through_controls(sketch::desktop::MainWindow& window,
                                            const QString& boundary_id,
-                                           const char* area_use) {
+                                           const char* area_use,
+                                           const char* finish = "finished") {
     require(window.selectEntity(boundary_id), "select boundary before editing declared appraisal facts");
     bool saved = false;
     bool timed_out = false;
@@ -406,7 +421,7 @@ void save_appraisal_facts_through_controls(sketch::desktop::MainWindow& window,
             set_appraisal_fact(*dialog, "property_kind", "detached_single_family") &&
             set_appraisal_fact(*dialog, "measurement_basis", "exterior") &&
             set_appraisal_fact(*dialog, "grade", "above") &&
-            set_appraisal_fact(*dialog, "finish", "finished") &&
+            set_appraisal_fact(*dialog, "finish", finish) &&
             set_appraisal_fact(*dialog, "access", "direct_interior") &&
             set_appraisal_fact(*dialog, "ceiling_eligibility", "standard") &&
             set_appraisal_fact(*dialog, "area_use", area_use) &&
@@ -931,6 +946,18 @@ void declared_exclusions_and_commercial_totals() {
     require(window.selectEntity(hole) && qualification->text().startsWith("Qualified") &&
             window.findChild<QLabel*>(QStringLiteral("appraisalPropertyTotal"))->text().contains("89.24"),
             "selected void must not contribute independently or hide valid parent totals");
+    auto* exclusion_classification = inspector_classification_control(window);
+    auto* exclusion_canvas = dynamic_cast<sketch::desktop::PlanCanvas*>(
+        window.findChild<QWidget*>(QStringLiteral("measurementPlanCanvas")));
+    require(exclusion_classification && exclusion_canvas &&
+            exclusion_classification->currentText().startsWith(QStringLiteral("Excluded")) &&
+            !exclusion_classification->isEnabled() &&
+            std::any_of(exclusion_canvas->entities().begin(), exclusion_canvas->entities().end(),
+                [&](const auto& entity) {
+                    return entity.id == hole && entity.stroke_color == QColor(137, 86, 86) &&
+                           entity.filled && entity.hatch_pattern == QStringLiteral("diagonal");
+                }),
+            "a qualified linked void must display Excluded read-only with the deduction style, not Unqualified");
     require(window.selectEntity(outer) && window.editSelectedAppraisalFacts(declarations("light_commercial_declared", "commercial_occupiable")), "declare commercial area");
     require(window.selectEntity(hole) && window.editSelectedAppraisalFacts(declarations("light_commercial_declared", "commercial_service")), "declare service area");
     require(qualification->text().startsWith("Qualified") &&
@@ -1946,6 +1973,388 @@ void area_appearance_workflow() {
     require(window.selectEntity(area) && !appearance->isEnabled(), "read-only areas must disable appearance editing");
 }
 
+void appraisal_derived_category_presentation_workflow() {
+    using namespace sketch;
+    using desktop::MainWindow;
+    using desktop::PlanCanvas;
+
+    MainWindow window;
+    window.setMetricUnits(false);
+    const auto capture_directory = qEnvironmentVariable("VERTEX_TEST_CAPTURE_DIR");
+    if (!capture_directory.isEmpty()) {
+        window.setAttribute(Qt::WA_DontShowOnScreen, true);
+        window.resize(1280, 840);
+        window.show();
+        QApplication::setActiveWindow(&window);
+        QCoreApplication::processEvents();
+    }
+    const auto area = window.createBoundary(square(0, 0, 3.048));
+    auto* workflow = window.findChild<QComboBox*>(QStringLiteral("calculationWorkflow"));
+    require(!area.isEmpty() && workflow, "derived presentation fixture needs a boundary and workflow selector");
+    workflow->setCurrentIndex(workflow->findData(QStringLiteral("appraisal")));
+    require(window.editSelectedClassification(QStringLiteral("above_grade_finished")),
+            "fixture must retain its explicitly saved manual appraisal category");
+    save_appraisal_facts_through_controls(window, area, "garage");
+
+    auto* classification = inspector_classification_control(window);
+    auto* qualification = window.findChild<QLabel*>(QStringLiteral("appraisalQualification"));
+    auto* derived = window.findChild<QLabel*>(QStringLiteral("appraisalDerivedCategory"));
+    auto* canvas = dynamic_cast<PlanCanvas*>(window.findChild<QWidget*>(QStringLiteral("measurementPlanCanvas")));
+    require(classification && qualification && derived && canvas,
+            "derived presentation fixture needs the inspector, qualification, and retained canvas controls");
+    const auto current_canvas_area = [](PlanCanvas* target_canvas, const QString& id) {
+        const auto found = std::find_if(target_canvas->entities().begin(), target_canvas->entities().end(),
+            [&](const auto& entity) { return entity.id == id; });
+        require(found != target_canvas->entities().end(), "derived area must remain in the actual plan canvas");
+        return *found;
+    };
+    const auto garage_style = current_canvas_area(canvas, area);
+    const auto garage_facts_state = window.document().snapshot();
+    const auto garage_entity = garage_facts_state.entities().at(area.toStdString());
+    const auto geometry = garage_entity.properties.at("segments");
+    require(garage_entity.properties.at("appraisal_category") == "above_grade_finished" &&
+            garage_entity.properties.at("classification") == "measurement" &&
+            garage_entity.properties.at("appraisal_facts").at("area_use") == "garage",
+            "declared Garage facts must coexist with retained manual Above-grade finished metadata");
+    require(qualification->text().startsWith(QStringLiteral("Qualified")) &&
+            derived->text().startsWith(QStringLiteral("garage")),
+            "the automatic report must show the facts-derived Garage category");
+    // Intended first RED: the report already derives Garage, but the current
+    // inspector still exposes the stale manual category as an editable value.
+    require(classification->currentText() == QStringLiteral("garage") && !classification->isEnabled(),
+            "a qualified declared area must show its facts-derived category read-only in the inspector");
+    const auto before_manual_edit = window.document().snapshot();
+    require(!window.editSelectedClassification(QStringLiteral("porch")) &&
+            window.document().revision() == before_manual_edit.revision() &&
+            window.document().snapshot().entities() == before_manual_edit.entities(),
+            "declared facts own the derived category and reject a conflicting manual-category edit");
+    require(garage_style.stroke_color == QColor(194, 116, 24) &&
+            garage_style.fill_color == QColor(237, 197, 132) &&
+            garage_style.filled && garage_style.hatch_pattern == QStringLiteral("forward_diagonal") &&
+            std::abs(garage_style.hatch_scale - 0.7) < 1e-12,
+            "facts-derived Garage must use the orange hatched plan default");
+    if (!capture_directory.isEmpty()) {
+        QCoreApplication::processEvents();
+        auto* inspector = classification->parentWidget();
+        require(inspector && QDir().mkpath(capture_directory) &&
+                canvas->grab().save(QDir(capture_directory).filePath("appraisal-derived-garage-canvas.png")) &&
+                inspector->grab().save(QDir(capture_directory).filePath("appraisal-derived-garage-inspector.png")),
+                "retain the actual Garage plan canvas and selected inspector controls");
+    }
+
+    const auto open_appearance = [](MainWindow& host, const QString& boundary_id,
+                                    const std::function<void(QDialog*)>& edit) {
+        require(host.selectEntity(boundary_id), "select boundary before opening its appearance dialog");
+        auto* button = host.findChild<QPushButton*>(QStringLiteral("areaAppearanceButton"));
+        if (!button || !button->isEnabled()) {
+            std::cerr << "Appearance disabled: selected=" << host.selectedEntityId().toStdString()
+                      << " count=" << host.selectedEntityIds().size()
+                      << " editable=" << host.document().is_editable()
+                      << " reason=" << host.document().read_only_reason()
+                      << " error=" << host.lastError().toStdString() << '\n';
+        }
+        require(button && button->isEnabled(), "editable boundary must expose Area appearance");
+        bool seen = false;
+        std::exception_ptr callback_failure;
+        QTimer::singleShot(0, &host, [&] {
+            try {
+                auto* dialog = qobject_cast<QDialog*>(QApplication::activeModalWidget());
+                require(dialog && dialog->objectName() == QStringLiteral("areaAppearanceDialog"),
+                        "appearance action must open the native area dialog");
+                seen = true;
+                edit(dialog);
+            } catch (...) {
+                callback_failure = std::current_exception();
+                if (auto* dialog = qobject_cast<QDialog*>(QApplication::activeModalWidget())) dialog->reject();
+            }
+        });
+        button->click();
+        if (callback_failure) std::rethrow_exception(callback_failure);
+        require(seen, "native appearance dialog callback must run");
+    };
+    const auto appearance_buttons = [](QDialog* dialog) {
+        auto* buttons = dialog->findChild<QDialogButtonBox*>();
+        require(buttons && buttons->button(QDialogButtonBox::Apply) &&
+                    buttons->button(QDialogButtonBox::Cancel),
+                "appearance dialog must provide Apply and Cancel");
+        return buttons;
+    };
+    const auto verify_dialog_matches_canvas = [&](MainWindow& host, const QString& boundary_id,
+                                                   const desktop::CanvasEntity& expected,
+                                                   bool check_garage_palette) {
+        open_appearance(host, boundary_id, [&](QDialog* dialog) {
+            auto* outline = dialog->findChild<QLineEdit*>(QStringLiteral("areaOutlineColor"));
+            auto* fill = dialog->findChild<QLineEdit*>(QStringLiteral("areaFillColor"));
+            auto* pattern = dialog->findChild<QComboBox*>(QStringLiteral("areaFillPattern"));
+            auto* hatch = dialog->findChild<QDoubleSpinBox*>(QStringLiteral("areaHatchScale"));
+            require(outline && fill && pattern && hatch,
+                    "appearance defaults must populate outline, fill, pattern, and hatch scale controls");
+            const auto expected_pattern = !expected.filled ? QStringLiteral("none")
+                : expected.hatch_pattern == QStringLiteral("solid") ? QStringLiteral("solid")
+                                                                     : QStringLiteral("hatch");
+            require(QColor(outline->text()).rgb() == expected.stroke_color.rgb() &&
+                    QColor(fill->text()).rgb() == expected.fill_color.rgb() &&
+                    pattern->currentData().toString() == expected_pattern &&
+                    std::abs(hatch->value() - (expected.hatch_pattern.contains(QStringLiteral("diagonal")) ? 0.7 : 1.0)) < 1e-12,
+                    "appearance dialog defaults must match the facts-derived canvas style");
+            if (check_garage_palette)
+                require(QColor(outline->text()).rgb() == QColor(194, 116, 24).rgb() &&
+                        QColor(fill->text()).rgb() == QColor(237, 197, 132).rgb() &&
+                        pattern->currentData().toString() == QStringLiteral("hatch") &&
+                        std::abs(hatch->value() - 0.7) < 1e-12,
+                        "Garage appearance defaults must be orange and hatched");
+            if (check_garage_palette && !capture_directory.isEmpty()) {
+                if (dialog->layout()) dialog->layout()->activate();
+                dialog->adjustSize();
+                QCoreApplication::processEvents();
+                require(dialog->grab().save(QDir(capture_directory).filePath("appraisal-derived-garage-appearance.png")),
+                        "retain the actual Garage appearance defaults dialog");
+            }
+            appearance_buttons(dialog)->button(QDialogButtonBox::Cancel)->click();
+        });
+    };
+    verify_dialog_matches_canvas(window, area, garage_style, true);
+    require(window.document().snapshot().entities() == garage_facts_state.entities(),
+            "reading Garage classification and appearance defaults must not mutate project state");
+
+    save_appraisal_facts_through_controls(window, area, "dwelling");
+    const auto dwelling_state = window.document().snapshot();
+    const auto dwelling_entity = dwelling_state.entities().at(area.toStdString());
+    const auto dwelling_style = current_canvas_area(canvas, area);
+    require(dwelling_entity.properties.at("appraisal_category") == "above_grade_finished" &&
+            dwelling_entity.properties.at("classification") == "measurement" &&
+            dwelling_entity.properties.at("appraisal_facts").at("area_use") == "dwelling" &&
+            dwelling_entity.properties.at("segments") == geometry &&
+            derived->text().startsWith(QStringLiteral("above_grade_finished")) &&
+            classification->currentText() == QStringLiteral("above_grade_finished") &&
+            !classification->isEnabled(),
+            "editing facts back to Dwelling must update the derived inspector without rewriting geometry or manual metadata");
+    require(dwelling_style.stroke_color != garage_style.stroke_color ||
+            dwelling_style.fill_color != garage_style.fill_color ||
+            dwelling_style.hatch_pattern != garage_style.hatch_pattern ||
+            dwelling_style.filled != garage_style.filled,
+            "facts-derived Dwelling must select a different plan default from Garage");
+    verify_dialog_matches_canvas(window, area, dwelling_style, false);
+    require(window.document().snapshot().entities() == dwelling_state.entities(),
+            "reading Dwelling appearance defaults must not mutate project state");
+
+    // A user override remains authoritative in the canvas while the displayed
+    // semantic category changes; Reset must then use the latest declared facts.
+    open_appearance(window, area, [&](QDialog* dialog) {
+        dialog->findChild<QLineEdit*>(QStringLiteral("areaOutlineColor"))->setText(QStringLiteral("#5B2C83"));
+        dialog->findChild<QLineEdit*>(QStringLiteral("areaFillColor"))->setText(QStringLiteral("#88CC44"));
+        auto* pattern = dialog->findChild<QComboBox*>(QStringLiteral("areaFillPattern"));
+        pattern->setCurrentIndex(pattern->findData(QStringLiteral("solid")));
+        dialog->findChild<QDoubleSpinBox*>(QStringLiteral("areaHatchScale"))->setValue(2.0);
+        appearance_buttons(dialog)->button(QDialogButtonBox::Apply)->click();
+    });
+    const auto explicit_style_state = window.document().snapshot();
+    const auto explicit_area = explicit_style_state.entities().at(area.toStdString());
+    const auto explicit_style = current_canvas_area(canvas, area);
+    require(explicit_area == dwelling_entity &&
+            explicit_style.stroke_color == QColor(QStringLiteral("#5B2C83")) &&
+            explicit_style.fill_color == QColor(QStringLiteral("#88CC44")) &&
+            explicit_style.filled && explicit_style.hatch_pattern == QStringLiteral("solid"),
+            "explicit appearance must alter only presentation and remain visible on the canvas");
+    require(window.undoCommand() && window.document().snapshot().entities() == dwelling_state.entities() &&
+            window.redoCommand() && window.document().snapshot().entities() == explicit_style_state.entities(),
+            "explicit area appearance must undo and redo without changing source facts or geometry");
+
+    save_appraisal_facts_through_controls(window, area, "garage");
+    const auto garage_override_state = window.document().snapshot();
+    require(garage_override_state.entities().at(area.toStdString()).properties.at("appraisal_category") ==
+                "above_grade_finished" &&
+            garage_override_state.entities().at(area.toStdString()).properties.at("appraisal_facts").at("area_use") == "garage" &&
+            garage_override_state.entities().at(area.toStdString()).properties.at("segments") == geometry &&
+            current_canvas_area(canvas, area).stroke_color == QColor(QStringLiteral("#5B2C83")) &&
+            classification->currentText() == QStringLiteral("garage") && !classification->isEnabled(),
+            "changing facts must update the read-only derived category while preserving explicit appearance and source metadata");
+    QTemporaryDir directory;
+    const auto path = directory.filePath(QStringLiteral("facts-derived-area-appearance.bldproj"));
+    require(directory.isValid() && window.saveProjectAs(path),
+            "facts-derived appearance fixture must save with its explicit override");
+    require(window.createNewProject(), "release the saved project's ownership before reopening it for editing");
+    MainWindow reopened;
+    require(reopened.openProject(path) && reopened.selectEntity(area),
+            "facts-derived appearance fixture must reopen");
+    auto* reopened_classification = inspector_classification_control(reopened);
+    auto* reopened_derived = reopened.findChild<QLabel*>(QStringLiteral("appraisalDerivedCategory"));
+    auto* reopened_canvas = dynamic_cast<PlanCanvas*>(reopened.findChild<QWidget*>(QStringLiteral("measurementPlanCanvas")));
+    require(reopened_classification && reopened_derived && reopened_canvas &&
+            reopened_classification->currentText() == QStringLiteral("garage") &&
+            !reopened_classification->isEnabled() &&
+            reopened_derived->text().startsWith(QStringLiteral("garage")) &&
+            current_canvas_area(reopened_canvas, area).stroke_color == QColor(QStringLiteral("#5B2C83")) &&
+            reopened.document().snapshot().entities().at(area.toStdString()).properties.at("appraisal_category") ==
+                "above_grade_finished",
+            "reopen must preserve explicit presentation and the distinct facts-derived and manual categories");
+
+    const auto before_reset = reopened.document().snapshot();
+    open_appearance(reopened, area, [&](QDialog* dialog) {
+        auto* outline = dialog->findChild<QLineEdit*>(QStringLiteral("areaOutlineColor"));
+        auto* fill = dialog->findChild<QLineEdit*>(QStringLiteral("areaFillColor"));
+        auto* pattern = dialog->findChild<QComboBox*>(QStringLiteral("areaFillPattern"));
+        auto* reset = dialog->findChild<QPushButton*>(QStringLiteral("resetAreaAppearance"));
+        require(outline && fill && pattern && reset,
+                "explicit appearance editor must expose its current fields and Reset control");
+        require(QColor(outline->text()) == QColor(QStringLiteral("#5B2C83")) &&
+                QColor(fill->text()) == QColor(QStringLiteral("#88CC44")),
+                "appearance editor must reopen with the persisted explicit override");
+        reset->click();
+        require(QColor(outline->text()).rgb() == QColor(194, 116, 24).rgb() &&
+                QColor(fill->text()).rgb() == QColor(237, 197, 132).rgb() &&
+                pattern->currentData().toString() == QStringLiteral("hatch"),
+                "Reset must load the current facts-derived Garage defaults, not the stale manual category");
+        appearance_buttons(dialog)->button(QDialogButtonBox::Apply)->click();
+    });
+    const auto reset_state = reopened.document().snapshot();
+    require(reset_state.entities().at(area.toStdString()) == before_reset.entities().at(area.toStdString()) &&
+            current_canvas_area(reopened_canvas, area).stroke_color == QColor(194, 116, 24) &&
+            current_canvas_area(reopened_canvas, area).fill_color == QColor(237, 197, 132) &&
+            current_canvas_area(reopened_canvas, area).hatch_pattern == QStringLiteral("forward_diagonal"),
+            "Reset must remove only the explicit style and restore the orange Garage default");
+    require(reopened.undoCommand() && reopened.document().snapshot().entities() == before_reset.entities() &&
+            reopened.redoCommand() && reopened.document().snapshot().entities() == reset_state.entities(),
+            "undo and redo around Reset must restore the exact override and facts-derived default states");
+    require(reopened.saveProject(), "facts-derived default presentation must save after Reset");
+    require(reopened.createNewProject(), "release the reset project's ownership before opening the next editor");
+    MainWindow final_reopen;
+    require(final_reopen.openProject(path) && final_reopen.selectEntity(area),
+            "reset facts-derived presentation must survive another save/reopen");
+    auto* final_classification = inspector_classification_control(final_reopen);
+    auto* final_derived = final_reopen.findChild<QLabel*>(QStringLiteral("appraisalDerivedCategory"));
+    auto* final_canvas = dynamic_cast<PlanCanvas*>(final_reopen.findChild<QWidget*>(QStringLiteral("measurementPlanCanvas")));
+    require(final_classification && final_derived && final_canvas &&
+            final_classification->currentText() == QStringLiteral("garage") && !final_classification->isEnabled() &&
+            final_derived->text().startsWith(QStringLiteral("garage")) &&
+            current_canvas_area(final_canvas, area).stroke_color == QColor(194, 116, 24) &&
+            current_canvas_area(final_canvas, area).fill_color == QColor(237, 197, 132) &&
+            current_canvas_area(final_canvas, area).hatch_pattern == QStringLiteral("forward_diagonal") &&
+            final_reopen.document().snapshot().entities().at(area.toStdString()).properties.at("appraisal_category") ==
+                "above_grade_finished" &&
+            final_reopen.document().snapshot().entities().at(area.toStdString()).properties.at("segments") == geometry,
+            "saved reset state must retain Garage-derived presentation, geometry, and manual appraisal metadata");
+
+    // Another incomplete participant withholds aggregate totals, but must not
+    // discard this boundary's independently qualified category and defaults.
+    const auto incomplete = final_reopen.createBoundary(square(5, 0, 3.048));
+    require(!incomplete.isEmpty() && final_reopen.selectEntity(area),
+            "partial report fixture needs a second boundary and the qualified Garage selected");
+    require(final_reopen.findChild<QLabel*>(QStringLiteral("appraisalQualification"))->text()
+                .startsWith(QStringLiteral("Unqualified")) &&
+            final_classification->currentText() == QStringLiteral("garage") &&
+            !final_classification->isEnabled() &&
+            current_canvas_area(final_canvas, area).stroke_color == QColor(194, 116, 24),
+            "aggregate refusal must preserve an individually qualified Garage's derived display");
+    require(final_reopen.selectEntity(incomplete) &&
+            final_classification->currentText() == QStringLiteral("Unqualified") &&
+            !final_classification->isEnabled(),
+            "a declared property boundary missing its own facts must show Unqualified read-only");
+
+    MainWindow unqualified;
+    const auto unqualified_area = unqualified.createBoundary(square(0, 0, 3.048));
+    auto* unqualified_workflow = unqualified.findChild<QComboBox*>(QStringLiteral("calculationWorkflow"));
+    require(!unqualified_area.isEmpty() && unqualified_workflow,
+            "unqualified display fixture needs a boundary and workflow selector");
+    unqualified_workflow->setCurrentIndex(unqualified_workflow->findData(QStringLiteral("appraisal")));
+    require(unqualified.editSelectedClassification(QStringLiteral("above_grade_finished")),
+            "unqualified fixture must retain a manual category for comparison");
+    save_appraisal_facts_through_controls(unqualified, unqualified_area, "garage", "");
+    auto* unqualified_label = unqualified.findChild<QLabel*>(QStringLiteral("appraisalQualification"));
+    auto* unqualified_derived = unqualified.findChild<QLabel*>(QStringLiteral("appraisalDerivedCategory"));
+    auto* unqualified_classification = inspector_classification_control(unqualified);
+    require(unqualified_label && unqualified_derived && unqualified_classification &&
+            unqualified_label->text().startsWith(QStringLiteral("Unqualified")) &&
+            unqualified_derived->text().startsWith(QStringLiteral("Unqualified")) &&
+            unqualified_classification->currentText() == QStringLiteral("Unqualified") &&
+            !unqualified_classification->isEnabled() &&
+            unqualified.document().snapshot().entities().at(unqualified_area.toStdString()).properties.at("appraisal_category") ==
+                "above_grade_finished",
+            "incomplete declared facts must display Unqualified instead of falling back to a saved category");
+
+    MainWindow legacy;
+    const auto legacy_area = legacy.createBoundary(square(0, 0, 3.048));
+    require(!legacy_area.isEmpty() && legacy.editSelectedClassification(QStringLiteral("garage")),
+            "legacy compatibility fixture must store its old classification before the Appraisal workflow");
+    auto* legacy_workflow = legacy.findChild<QComboBox*>(QStringLiteral("calculationWorkflow"));
+    require(legacy_workflow, "legacy compatibility fixture needs the workflow selector");
+    legacy_workflow->setCurrentIndex(legacy_workflow->findData(QStringLiteral("appraisal")));
+    require(legacy.editSelectedClassification(QStringLiteral("porch")) &&
+            legacy.editSelectedClassification(QStringLiteral("garage")),
+            "undeclared legacy Appraisal categories must remain manually editable");
+    auto* legacy_classification = inspector_classification_control(legacy);
+    require(legacy_classification && legacy_classification->isEnabled() && legacy_classification->isEditable() &&
+            legacy_classification->currentText() == QStringLiteral("garage") &&
+            legacy.document().snapshot().entities().at(legacy_area.toStdString()).properties.at("classification") == "garage" &&
+            legacy.document().snapshot().entities().at(legacy_area.toStdString()).properties.at("appraisal_category") == "garage",
+            "undeclared legacy classifications must retain the editable manual category migrated by workflow activation");
+    save_appraisal_facts_through_controls(legacy, legacy_area, "dwelling");
+    require(legacy_classification->currentText() == QStringLiteral("above_grade_finished") &&
+            !legacy_classification->isEnabled() &&
+            legacy.document().snapshot().entities().at(legacy_area.toStdString()).properties.at("classification") == "garage" &&
+            legacy.document().snapshot().entities().at(legacy_area.toStdString()).properties.at("appraisal_category") == "garage" &&
+            legacy.document().snapshot().entities().at(legacy_area.toStdString()).properties.at("appraisal_facts").at("area_use") == "dwelling",
+            "declared Dwelling facts must override a legacy raw Garage label only in derived presentation");
+    require(legacy.setSelectedPlanLabelPosition({-1.0, 4.0}),
+            "automatic style inheritance fixture needs a manually placed area label");
+    const auto inherited_state = legacy.document().snapshot();
+    const auto inherited_override = [&] {
+        for (const auto& [id, entity] : inherited_state.entities()) {
+            if (entity.type != kAnnotationEntityType) continue;
+            for (const auto& record : entity.properties.at("state").at("overrides"))
+                if (record.at("target_kind") == "area" && record.at("target_id") == legacy_area.toStdString())
+                    return record;
+        }
+        return nlohmann::json{};
+    }();
+    require(inherited_override.value("inherit_appearance", false) &&
+            inherited_override.contains("plan_label_offset_m"),
+            "manual label placement must retain automatic category appearance inheritance");
+    save_appraisal_facts_through_controls(legacy, legacy_area, "garage");
+    auto* legacy_canvas = dynamic_cast<PlanCanvas*>(legacy.findChild<QWidget*>(QStringLiteral("measurementPlanCanvas")));
+    require(legacy_canvas && current_canvas_area(legacy_canvas, legacy_area).stroke_color == QColor(194, 116, 24),
+            "an inherited label override must still follow the latest Garage default");
+    for (const auto& [id, entity] : inherited_state.entities())
+        if (entity.type == kAnnotationEntityType)
+            require(legacy.document().snapshot().entities().at(id) == entity,
+                    "facts-only restyling must preserve inherited annotation state and label placement exactly");
+}
+
+void malformed_appraisal_boundary_has_no_stale_presentation() {
+    using namespace sketch;
+    desktop::MainWindow window;
+    const auto area = window.createBoundary(square(0, 0, 3.048), QStringLiteral("garage"));
+    auto* workflow = window.findChild<QComboBox*>(QStringLiteral("calculationWorkflow"));
+    require(!area.isEmpty() && workflow, "malformed presentation fixture needs its legacy Garage");
+    workflow->setCurrentIndex(workflow->findData(QStringLiteral("appraisal")));
+    require(window.editSelectedAppraisalFacts(declarations()), "declare facts before damaging hierarchy");
+    const auto before = window.document().snapshot();
+    auto malformed = before.entities().at(area.toStdString());
+    const auto floor = before.entities().at(malformed.properties.at("floor_id").get<std::string>());
+    const auto building = before.entities().at(floor.properties.at("building_id").get<std::string>());
+    const auto property_id = building.properties.at("property_id").get<std::string>();
+    malformed.properties["property_id"] = property_id;
+    malformed.properties.erase("floor_id");
+    malformed.properties.erase("building_id");
+    window.document().apply(ApplyEntityChanges{before.revision(),
+        {EntityChange::upsert(malformed)}, {}, "malformed ownership presentation fixture"});
+    const auto report = build_appraisal_document_report(window.document().snapshot(), property_id);
+    require(!report.qualified && std::any_of(report.boundaries.begin(), report.boundaries.end(),
+                [&](const auto& row) {
+                    return row.boundary_id == area.toStdString() && !row.qualification.qualified && !row.measurement;
+                }), "malformed known-property boundary must remain a diagnostic report row");
+    require(window.selectEntity(area), "malformed boundary must remain selectable for repair");
+    auto* canvas = dynamic_cast<desktop::PlanCanvas*>(window.findChild<QWidget*>(QStringLiteral("measurementPlanCanvas")));
+    require(canvas, "malformed presentation must use the actual retained canvas");
+    const auto item = std::find_if(canvas->entities().begin(), canvas->entities().end(),
+        [&](const auto& value) { return value.id == area; });
+    require(item != canvas->entities().end(), "malformed boundary geometry must remain visible for repair");
+    require(item->stroke_color != QColor(194, 116, 24) && !item->filled,
+            "no-floor/no-building declared boundary must not recover stale raw Garage styling");
+    require(window.document().snapshot().entities().at(area.toStdString()) == malformed,
+            "diagnostic presentation must not repair or rewrite source metadata");
+}
+
 void appraisal_area_display_precision_workflow() {
     sketch::desktop::MainWindow window;
     window.setMetricUnits(false);
@@ -2323,9 +2732,20 @@ int main(int argc, char** argv) {
         const auto families = QFontDatabase::applicationFontFamilies(font_id);
         require(!families.isEmpty(), "bundled appraisal workflow font must expose its family");
         app.setFont(QFont(families.front(), 10));
+        if (app.arguments().contains(QStringLiteral("--derived-presentation-only"))) {
+            appraisal_derived_category_presentation_workflow();
+            malformed_appraisal_boundary_has_no_stale_presentation();
+            return 0;
+        }
+        if (app.arguments().contains(QStringLiteral("--malformed-presentation-only"))) {
+            malformed_appraisal_boundary_has_no_stale_presentation();
+            return 0;
+        }
         if (app.arguments().contains(QStringLiteral("--area-appearance-only"))) {
             selection_filter_dropdown_workflow();
             area_appearance_workflow();
+            appraisal_derived_category_presentation_workflow();
+            malformed_appraisal_boundary_has_no_stale_presentation();
             return 0;
         }
         if (app.arguments().contains(QStringLiteral("--area-display-only"))) {
@@ -2370,6 +2790,8 @@ int main(int argc, char** argv) {
         appraisal_qualification_transition_preview_workflow();
         appraisal_qualification_transition_preview_workflow(false);
         selection_filter_dropdown_workflow();
+        appraisal_derived_category_presentation_workflow();
+        malformed_appraisal_boundary_has_no_stale_presentation();
         area_appearance_workflow();
         malformed_appraisal_projection_prints_withheld_status();
         appraisal_summary_prints_from_the_automatic_report();

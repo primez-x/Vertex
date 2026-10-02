@@ -84,7 +84,10 @@
   <p>Select a measured boundary and choose <strong>Edit curve…</strong> or
   <strong>Edit boundary geometry…</strong>. Choose an edge and a curve angle,
   signed height, or arc length. Negative angle or height chooses the opposite
-  side; arc length offers <strong>Clockwise curve</strong>. Both curve endpoints
+  side. Angles require explicit units or a pi expression, such as
+  <code>90 deg</code>, <code>1.5708 rad</code>, or <code>pi/2</code>;
+  a bare number is ambiguous and cannot be applied.
+  Arc length offers <strong>Clockwise curve</strong>. Both curve endpoints
   stay fixed. Review the original/proposed outlines and changed dimensions, area
   and perimeter before Apply. Invalid topology or conflicting locked measurements
   disables Apply and explains the problem.</p>
@@ -98,6 +101,12 @@
   treating its baseline as the outside face or replacing a curve with a chord.</p>
   <p>Declare the property's appraisal workflow and the area's observed facts in
   <strong>Edit appraisal facts…</strong> to obtain classified square-footage totals.
+  The selected category and default area colors follow those declarations.
+  Change a declared category through the facts editor; the category itself is
+  read-only. Incomplete or invalid declarations show <strong>Unqualified</strong>.
+  Custom area appearance and label placement remain independent of the facts.
+  <strong>Reset to defaults</strong> restores the current declared category's
+  appearance. Undeclared legacy areas retain manual classification editing.
   After changing source walls, select the measured area and choose
   <strong>Refresh exterior measurement…</strong>. Stale outlines cannot produce
   qualified appraisal totals. Open wall chains need a closed measurement boundary.
