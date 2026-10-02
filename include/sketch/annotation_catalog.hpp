@@ -61,6 +61,12 @@ struct PresentationOverride {
     // existing semantic presentation defaults; neither affects geometry.
     std::optional<double> paper_line_width_mm;
     std::optional<double> hatch_scale;
+    // Model-space label offset from the owning area's derived anchor. It
+    // changes presentation only; the text and area value remain derived.
+    std::optional<Vec2> plan_label_offset;
+    // Placement-only area records retain semantic colors, fills and linework.
+    // Explicit appearance edits remove this inheritance flag.
+    bool inherit_appearance{false};
 };
 
 struct SymbolStroke { Vec2 start; Vec2 end; };

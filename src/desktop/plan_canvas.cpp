@@ -663,7 +663,16 @@ std::optional<std::pair<Vec2, Vec2>> PlanCanvas::contentBounds() const {
             }
         }
     }
-    for (const auto& label : m_labels) include(label.position);
+    for (const auto& label : m_labels) {
+        include(label.position);
+        if (label.leader_start) include(*label.leader_start);
+        if (label.avoid_components && drawable_label(label)) {
+            const auto layout=label_layout(label,font(),this,80.0,logicalDpiY());
+            const auto footprint=label_transform(label,{}).mapRect(layout.bounds);
+            include({label.position.x+footprint.left()/80.0,label.position.y-footprint.bottom()/80.0});
+            include({label.position.x+footprint.right()/80.0,label.position.y-footprint.top()/80.0});
+        }
+    }
     for (const auto& reference : m_references) {
         if (reference.visible && !reference.image.isNull() &&
             std::isfinite(reference.metres_per_source_unit) &&
@@ -1289,6 +1298,12 @@ void PlanCanvas::setPointClicked(std::function<void(Vec2)> callback) {
     m_point_clicked = std::move(callback);
 }
 
+void PlanCanvas::setPointPlacementRequested(std::function<void(Vec2)> callback) {
+    resetGesture();
+    m_point_placement_requested = std::move(callback);
+    update();
+}
+
 void PlanCanvas::setEntityClicked(std::function<void(QString)> callback) {
     m_entity_clicked = std::move(callback);
 }
@@ -1619,6 +1634,14 @@ void PlanCanvas::pointerPress(QPointF position, Qt::MouseButton button,
         return;
     }
     if (button != Qt::LeftButton) return;
+    if (m_point_placement_requested) {
+        m_left_start = position;
+        m_left_dragging = false;
+        m_left_gesture = LeftGesture::canvas_pan;
+        m_pan_start=position;
+        m_pan_view_start=m_view_center;
+        return;
+    }
     if (navigateOverviewMap(position)) {
         m_overview_dragging = true;
         return;
@@ -1865,6 +1888,19 @@ void PlanCanvas::pointerRelease(QPointF position, Qt::MouseButton button,
     // delivering an intervening move event; authoring must use the release
     // point the user actually chose.
     updateCursor(position);
+    if (button == Qt::LeftButton && m_point_placement_requested) {
+        if ((position-m_left_start).manhattanLength()>=QApplication::startDragDistance()) {
+            pointerMove(position,modifiers);
+            resetGesture();
+            update();
+            return;
+        }
+        const auto callback = m_point_placement_requested;
+        const auto point = toModel(position, QRectF(rect()));
+        resetGesture();
+        callback(point);
+        return;
+    }
     if (button == Qt::RightButton) {
         const bool clicked = !m_right_dragging &&
             (position - m_right_start).manhattanLength() < QApplication::startDragDistance();
@@ -2245,19 +2281,27 @@ const std::vector<CanvasLabel>& PlanCanvas::positionedLabels(
     const QFont& base_font, const QPaintDevice* device, double scale,
     double dpi, bool output) const {
     auto& cache = m_label_placement_cache[output ? 1 : 0];
+    auto retained_labels=m_labels;
+    if (!output && m_boundary_vertex_preview_valid) {
+        for (const auto& proposed:m_boundary_vertex_labels_preview)
+            if (std::none_of(retained_labels.begin(),retained_labels.end(),
+                [&](const auto& label){return label.id==proposed.id;}))
+                retained_labels.push_back(proposed);
+    }
     std::vector<CanvasLabel> labels;
-    labels.reserve(m_labels.size());
+    labels.reserve(retained_labels.size());
     QByteArray key;
     QDataStream signature(&key, QIODevice::WriteOnly);
-    signature << base_font << font() << scale << dpi << output << quint64(m_labels.size())
+    signature << base_font << font() << scale << dpi << output << quint64(retained_labels.size())
               << device->logicalDpiX() << device->logicalDpiY()
               << device->devicePixelRatioF() << device->devType();
     const auto point_key = [&](Vec2 p) { signature << p.x << p.y; };
-    for (const auto& retained : m_labels) {
+    for (const auto& retained : retained_labels) {
         auto label = presentedLabel(retained, output);
         if (!output && m_move_preview_delta && !m_move_preview_exact && m_move_ids.contains(label.id)) {
             const auto delta = *m_move_preview_delta;
             label.position = label.position + delta;
+            if (label.leader_start) label.leader_start = *label.leader_start + delta;
             if (label.automatic_linear_placement) {
                 label.automatic_linear_placement->anchor.start =
                     label.automatic_linear_placement->anchor.start + delta;
@@ -2271,6 +2315,9 @@ const std::vector<CanvasLabel>& PlanCanvas::positionedLabels(
                   << label.fill_pattern << label.show_background << label.avoid_components
                   << label.plan_only << label.selection_type;
         point_key(label.position);
+        signature << label.leader_start.has_value() << label.plan_label_offset.has_value();
+        if (label.leader_start) point_key(*label.leader_start);
+        if (label.plan_label_offset) point_key(*label.plan_label_offset);
         signature << label.automatic_linear_placement.has_value();
         if (label.automatic_linear_placement) {
             const auto& automatic = *label.automatic_linear_placement;
@@ -2836,8 +2883,14 @@ bool PlanCanvas::applyBoundaryVertexPreview(std::uint64_t serial,
     for (auto& label : labels) {
         const auto original = std::find_if(m_labels.begin(), m_labels.end(),
             [&](const CanvasLabel& item) { return item.id == label.id; });
-        if (original == m_labels.end()) continue;
-        label.selected = original->selected;
+        if (original == m_labels.end()) {
+            // A repaired area may acquire its first qualified quantity. Only
+            // derived plan labels on retained visible owners can be introduced.
+            if (!label.plan_only || !label.avoid_components ||
+                std::none_of(m_entities.begin(),m_entities.end(),
+                    [&](const auto& entity){return entity.id==label.id;})) continue;
+            label.selected=false;
+        } else label.selected = original->selected;
         m_boundary_vertex_labels_preview.push_back(std::move(label));
     }
     m_boundary_vertex_entities_preview = std::move(*result);
@@ -4150,7 +4203,7 @@ void PlanCanvas::drawSegment(QPainter& painter, const Segment& segment) const {
 void PlanCanvas::drawLabels(QPainter& painter, const QRectF& viewport, double scale,
                             Vec2 view_center, bool output, QColor background,
                             std::optional<double> paper_pixels_per_mm) const {
-    if (m_labels.empty() || !(scale > 0.0) || !std::isfinite(scale)) {
+    if (!(scale > 0.0) || !std::isfinite(scale)) {
         return;
     }
     const auto to_screen = [&](Vec2 point) {
@@ -4185,6 +4238,21 @@ void PlanCanvas::drawLabels(QPainter& painter, const QRectF& viewport, double sc
         painter.setFont(layout.font);
         const auto& bounds = layout.bounds;
         const auto center = to_screen(label.position);
+        if (label.leader_start) {
+            const auto start = to_screen(*label.leader_start);
+            const auto delta = start-center;
+            const auto factor = std::max(std::abs(delta.x()) / std::max(1.0,bounds.width()*0.5),
+                                         std::abs(delta.y()) / std::max(1.0,bounds.height()*0.5));
+            if (factor > 1.0) {
+                auto color = label.color.isValid() ? label.color :
+                    background.lightnessF()>0.5 ? QColor(85,98,115) : QColor(190,195,200);
+                color.setAlpha(160);
+                QPen pen(color, output ? std::max(0.7,dpi*0.15/25.4) : 0.7);
+                pen.setCosmetic(true);
+                painter.setPen(pen);
+                painter.drawLine(start, center+delta/factor);
+            }
+        }
         painter.save();
         painter.setTransform(label_transform(label, center), true);
         if (!output && label.selected) {

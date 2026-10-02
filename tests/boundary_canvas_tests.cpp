@@ -366,8 +366,12 @@ void test_unit_aware_adaptive_grid() {
     struct Example { bool metric; double scale; double spacing; double major; };
     for (const auto example : {Example{false, 80.0, 0.3048, 1.524},
                                Example{true, 80.0, 0.2, 1.0},
+                               Example{false, 160.0, 0.1524, 0.6096},
+                               Example{true, 160.0, 0.1, 0.5},
                                Example{false, 800.0, 0.0254, 0.1524},
                                Example{true, 800.0, 0.02, 0.1},
+                               Example{false, 1600.0, 0.0127, 0.0508},
+                               Example{true, 1600.0, 0.01, 0.05},
                                Example{false, 4000.0, 0.00635, 0.0254},
                                Example{true, 4000.0, 0.005, 0.02},
                                Example{false, 0.0001, 152400.0, 1524000.0},
@@ -2553,6 +2557,29 @@ void test_boundary_vertex_annotation_preview() {
     require(sync.canvas.boundaryVertexPreviewLabels().empty() &&
             !sync.canvas.boundaryVertexPreviewMetrics(),
             "legacy synchronous geometry callback must retain no annotations or metrics");
+
+    VertexPreviewFixture newly_qualified;
+    auto first_quantity=source;
+    first_quantity.id=newly_qualified.boundary.id;
+    first_quantity.plan_only=true;
+    first_quantity.avoid_components=true;
+    first_quantity.show_background=false;
+    auto hidden_quantity=first_quantity;
+    hidden_quantity.id=QStringLiteral("hidden-owner");
+    const auto unqualified_output=newly_qualified.output();
+    newly_qualified.begin();
+    const auto before_quantity=render(newly_qualified.canvas,false);
+    require(newly_qualified.canvas.completeBoundaryVertexPreview(newly_qualified.serial,
+                newly_qualified.exact(),{first_quantity,hidden_quantity}),
+            "first qualified quantity must be accepted on a retained owner");
+    require(newly_qualified.canvas.labels().empty() &&
+                newly_qualified.canvas.boundaryVertexPreviewLabels().size()==1 &&
+                differing_pixels(before_quantity,render(newly_qualified.canvas,false),QRect(75,360,290,50))>0 &&
+                images_equal(unqualified_output,newly_qualified.output()),
+            "first quantity must paint only in preview without resurrecting hidden owners or changing output");
+    newly_qualified.cancel();
+    require(newly_qualified.canvas.boundaryVertexPreviewLabels().empty(),
+            "cancel must discard a newly qualified preview label");
 }
 
 void test_boundary_vertex_annotation_invalidation() {

@@ -173,6 +173,25 @@ void exercise(double direction_z, bool depth_slice=false) {
     const auto has_door=std::any_of(canvas->entities().begin(),canvas->entities().end(),
         [&](const auto& value) { return value.id==door; });
     require(has_door!=depth_slice,"view depth must distinguish the hosted assembly from the retained wall");
+    const auto label_for_area=[&]() {
+        const auto found=std::find_if(canvas->labels().begin(),canvas->labels().end(),
+            [&](const auto& value){return value.id.toStdString()==area.id && value.avoid_components;});
+        require(found!=canvas->labels().end(),"named plan retains derived area text");
+        return *found;
+    };
+    const Vec2 first_label{8,3};
+    require(window.setSelectedPlanLabelPosition(first_label) &&
+                close_enough(label_for_area().position,project(first_label,frame)) &&
+                label_for_area().leader_start.has_value(),
+            "saved placement and leader must project through rotated/reflected plan axes");
+    const Vec2 clicked_label{7,4};
+    require(window.beginSelectedPlanLabelPlacement(),"named plan supports one-click label placement");
+    mouse(*canvas,QEvent::MouseButtonPress,project(clicked_label,frame));
+    mouse(*canvas,QEvent::MouseButtonRelease,project(clicked_label,frame));
+    require(close_enough(label_for_area().position,project(clicked_label,frame)) &&
+                window.document().snapshot().entities().at(area.id)==area,
+            "named-plan placement click must map to world coordinates without changing owner geometry");
+    canvas->setSnapEnabled(false); // Placement refresh restores the workspace's snapping preference.
     const auto source=window.document().snapshot();
     const Vec2 target{4.5,0.4};
     mouse(*canvas,QEvent::MouseButtonPress,project(start,frame));

@@ -25,6 +25,44 @@ int main() {
     const auto catalog = default_symbol_catalog();
     {
         AnnotationState presentation;
+        presentation.overrides.push_back({"area", "room-a", {}, true});
+        auto wire = encode_annotation_state(presentation, catalog);
+        wire["version"] = 4;
+        wire["overrides"][0]["plan_label_offset_m"] = {0.125, -2.5};
+        bool retained = false;
+        try {
+            retained = encode_annotation_state(decode_annotation_state(wire, catalog), catalog) == wire;
+        } catch (const std::invalid_argument&) {}
+        require(retained, "Authored plan label offsets must round-trip without changing area styles or values");
+        for (const auto invalid : {nlohmann::json::array({1.0}),
+                                  nlohmann::json::array({1.0, 2.0, 3.0}),
+                                  nlohmann::json::array({"1", 2.0}),
+                                  nlohmann::json::array({std::numeric_limits<double>::infinity(), 2.0}),
+                                  nlohmann::json(nullptr)}) {
+            auto bad = wire; bad["overrides"][0]["plan_label_offset_m"] = invalid;
+            rejected([&] { (void)decode_annotation_state(bad, catalog); });
+        }
+        for (const auto* kind : {"object", "output_view"}) {
+            auto bad = wire; bad["overrides"][0]["target_kind"] = kind;
+            rejected([&] { (void)decode_annotation_state(bad, catalog); });
+        }
+        auto legacy = wire; legacy["version"] = 3;
+        rejected([&] { (void)decode_annotation_state(legacy, catalog); });
+        wire["overrides"][0].erase("plan_label_offset_m");
+        require(encode_annotation_state(decode_annotation_state(wire, catalog), catalog)["version"] == 3,
+                "Removing the last placement override must retain compatibility with the ordinary annotation version");
+        wire["overrides"][0]["inherit_appearance"] = true;
+        require(encode_annotation_state(decode_annotation_state(wire,catalog),catalog)==wire,
+                "Placement-only records must preserve semantic appearance inheritance");
+        auto invalid_inheritance=wire; invalid_inheritance["overrides"][0]["inherit_appearance"]="true";
+        rejected([&]{(void)decode_annotation_state(invalid_inheritance,catalog);});
+        invalid_inheritance=wire; invalid_inheritance["version"]=3;
+        rejected([&]{(void)decode_annotation_state(invalid_inheritance,catalog);});
+        invalid_inheritance=wire; invalid_inheritance["overrides"][0]["target_kind"]="object";
+        rejected([&]{(void)decode_annotation_state(invalid_inheritance,catalog);});
+    }
+    {
+        AnnotationState presentation;
         presentation.overrides.push_back({"area", "area-a", {}, true});
         auto wire = encode_annotation_state(presentation, catalog);
         wire["overrides"][0]["paper_line_width_mm"] = 0.75;
@@ -466,7 +504,7 @@ int main() {
     rejected([&]{(void)placed_symbol_preview(catalog.front(),{{},0,0.001});});
     auto malformed = encoded; malformed["version"] = 1.0;
     rejected([&]{(void)decode_annotation_state(malformed,catalog);});
-    malformed = encoded; malformed["version"] = 4;
+    malformed = encoded; malformed["version"] = 5;
     rejected([&]{(void)decode_annotation_state(malformed,catalog);});
     malformed = encoded; malformed["labels"][0]["visible"] = "false";
     rejected([&]{(void)decode_annotation_state(malformed,catalog);});

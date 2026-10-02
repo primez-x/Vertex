@@ -81,3 +81,7 @@ Existing placement can omit text when no readable position fits; very small
 or furnished areas need further placement/override work. Physical printing,
 external-reader text fidelity and full production/compatibility gates remain
 open. These controlled native checks do not claim user-observed resolution.
+
+The subsequent [label-placement checkpoint](plan-label-placement-2026-10-01.md)
+addresses the omitted-label limit with exterior leaders and persisted manual
+placement. The limits above record this checkpoint's original evidence.

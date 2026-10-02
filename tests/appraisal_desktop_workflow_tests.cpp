@@ -925,6 +925,238 @@ void malformed_appraisal_projection_prints_withheld_status() {
             "malformed appraisal data must print an unqualified status and no area values");
 }
 
+void plan_label_placement_workflow() {
+    using sketch::desktop::PlanCanvas;
+    sketch::desktop::MainWindow window;
+    window.setMetricUnits(true);
+    window.resize(1100, 780);
+    window.show();
+    const auto area = window.createBoundary(square(0, 0, 0.25));
+    auto* workflow = window.findChild<QComboBox*>(QStringLiteral("calculationWorkflow"));
+    workflow->setCurrentIndex(workflow->findData(QStringLiteral("appraisal")));
+    require(window.editSelectedAppraisalFacts(declarations()), "tiny area must qualify");
+    require(!window.createAnnotationSymbol(QStringLiteral("desk"),{0.125,0.125}).isEmpty() && window.selectEntity(area),
+        "furnished tiny area must remain selectable with its derived label");
+    auto* canvas = dynamic_cast<PlanCanvas*>(window.findChild<QWidget*>(QStringLiteral("measurementPlanCanvas")));
+    const auto label = [&]() -> sketch::desktop::CanvasLabel {
+        const auto found = std::find_if(canvas->labels().begin(), canvas->labels().end(),
+            [&](const auto& value) { return value.id == area && value.avoid_components; });
+        require(found != canvas->labels().end(), "tiny area must retain its derived label");
+        return *found;
+    };
+    require(label().text.contains(QStringLiteral("m²")) && label().leader_start && !label().show_background,
+            "no-fit area must retain readable quantity with a subordinate leader");
+    auto* place = window.findChild<QPushButton*>(QStringLiteral("placePlanLabel"));
+    auto* automatic = window.findChild<QPushButton*>(QStringLiteral("automaticPlanLabel"));
+    require(place && automatic && place->isEnabled(), "selected area needs contextual placement controls");
+    QApplication::processEvents();
+    canvas->setOverviewMapEnabled(false);
+    canvas->fitView();
+    const auto captures=qEnvironmentVariable("VERTEX_TEST_CAPTURE_DIR");
+    if (!captures.isEmpty()) require(QDir().mkpath(captures) &&
+        canvas->grab().save(QDir(captures).filePath(QStringLiteral("tiny-area-label-leader.png"))),
+        "retain actual tiny-area canvas");
+    const auto click = [&](sketch::Vec2 point) {
+        const auto p = QRectF(canvas->rect()).center() + QPointF(
+            (point.x-canvas->viewCenter().x)*canvas->viewScale(),
+            -(point.y-canvas->viewCenter().y)*canvas->viewScale());
+        QMouseEvent down(QEvent::MouseButtonPress,p,canvas->mapToGlobal(p.toPoint()),
+            Qt::LeftButton,Qt::LeftButton,Qt::NoModifier);
+        QMouseEvent up(QEvent::MouseButtonRelease,p,canvas->mapToGlobal(p.toPoint()),
+            Qt::LeftButton,Qt::NoButton,Qt::NoModifier);
+        QApplication::sendEvent(canvas,&down);
+        QApplication::sendEvent(canvas,&up);
+    };
+    auto seeded=window.document().snapshot();
+    auto annotations=seeded.entities().at("annotations-1");
+    annotations.properties["state"]["vendor_layout"]={{"retain",17}};
+    annotations.extensions["vendor_annotation_owner"]={{"retain",true}};
+    window.document().apply(sketch::ApplyEntityChanges{seeded.revision(),{sketch::EntityChange::upsert(annotations)}, {}, "seed opaque annotation metadata"});
+    require(window.selectEntity(area), "reselect tiny area after newer metadata");
+    const auto before = window.document().snapshot();
+    const auto area_style=std::find_if(canvas->entities().begin(),canvas->entities().end(),
+        [&](const auto& value){return value.id==area;});
+    require(area_style!=canvas->entities().end(), "placement fixture retains owner geometry");
+    const auto old_style=*area_style;
+    place->click();
+    const sketch::Vec2 chosen{0.75, 0.75};
+    click(chosen);
+    const auto placed = window.document().snapshot();
+    const auto new_style=std::find_if(canvas->entities().begin(),canvas->entities().end(),
+        [&](const auto& value){return value.id==area;});
+    require(new_style!=canvas->entities().end() && new_style->stroke_color==old_style.stroke_color &&
+        new_style->dark_stroke_color==old_style.dark_stroke_color && new_style->fill_color==old_style.fill_color &&
+        new_style->hatch_pattern==old_style.hatch_pattern && new_style->stroke_width_metres==old_style.stroke_width_metres,
+        "label placement must preserve the owner's semantic appearance");
+    require(placed.revision() == before.revision()+1 && placed.entities().at(area.toStdString()) == before.entities().at(area.toStdString()) &&
+            std::abs(label().position.x-chosen.x)<1e-9 && std::abs(label().position.y-chosen.y)<1e-9 && label().leader_start &&
+            !canvas->boundaryDraftPreview(), "placement click must change presentation once without starting geometry");
+    require(placed.entities().at("annotations-1").properties.at("state").at("vendor_layout")==annotations.properties.at("state").at("vendor_layout") &&
+            placed.entities().at("annotations-1").extensions==annotations.extensions &&
+            placed.entities().at("annotations-1").properties.at("state").at("symbols")==annotations.properties.at("state").at("symbols"),
+            "placement must preserve opaque annotation metadata and pinned furnished symbols");
+    if (!captures.isEmpty()) require(canvas->grab().save(QDir(captures).filePath(QStringLiteral("manual-area-label-leader.png"))),
+        "retain actual manually placed label canvas");
+    require(window.undoCommand() && window.document().snapshot().entities()==before.entities() &&
+            window.redoCommand() && window.document().snapshot().entities()==placed.entities(), "placement must undo/redo");
+    automatic->click();
+    require(label().leader_start && std::abs(label().position.x-chosen.x)>1e-6 &&
+            window.undoCommand() && window.document().snapshot().entities()==placed.entities(), "Automatic must reset offset and undo restores it");
+    QTemporaryDir directory;
+    const auto pdf_path=directory.filePath(QStringLiteral("manual-area-label.pdf"));
+    require(window.exportDraftPdf(pdf_path), "manual derived labels must render in actual PDF output");
+    QPdfDocument pdf;
+    require(pdf.load(pdf_path)==QPdfDocument::Error::None && pdf.getAllText(0).text().contains(label().text),
+        "actual plan PDF must retain the manually placed derived quantity");
+    if (!captures.isEmpty()) require(QFile::copy(pdf_path,QDir(captures).filePath(QStringLiteral("manual-area-label.pdf"))) &&
+        pdf.render(0,QSize(1400,1000)).save(QDir(captures).filePath(QStringLiteral("manual-area-label-pdf.png"))),
+        "retain actual exported plan label PDF");
+    const auto path=directory.filePath(QStringLiteral("label-placement.bldproj"));
+    require(directory.isValid() && window.saveProjectAs(path) && window.openProject(path) && window.selectEntity(area) &&
+            std::abs(label().position.x-chosen.x)<1e-9, "saved placement must reopen at the derived offset");
+    const auto geometry_before=window.document().snapshot();
+    const auto identified=sketch::decode_identified_boundary_entity(geometry_before.entities().at(area.toStdString()));
+    const auto old_text=label().text;
+    const auto old_label=label().position;
+    require(window.moveSelectedBoundaryVertex(QString::fromStdString(identified.segments.front().start_vertex_id),{-0.1,-0.1}),
+        "placed label fixture supports ordinary corner editing");
+    require(label().text!=old_text && label().plan_label_offset &&
+            (std::abs(label().position.x-old_label.x)>1e-6 || std::abs(label().position.y-old_label.y)>1e-6) &&
+            window.undoCommand() && std::abs(label().position.x-chosen.x)<1e-9,
+        "derived quantity and attached label anchor must follow corner edits and undo");
+    require(window.beginSelectedPlanLabelPlacement(), "begin cancellable placement");
+    const auto cancellation=window.document().snapshot();
+    const auto pan_center=canvas->viewCenter();
+    const auto pan_start=QRectF(canvas->rect()).center();
+    const auto pan_end=pan_start+QPointF(80,30);
+    QMouseEvent pan_down(QEvent::MouseButtonPress,pan_start,canvas->mapToGlobal(pan_start.toPoint()),
+        Qt::LeftButton,Qt::LeftButton,Qt::NoModifier);
+    QMouseEvent pan_move(QEvent::MouseMove,pan_end,canvas->mapToGlobal(pan_end.toPoint()),
+        Qt::NoButton,Qt::LeftButton,Qt::NoModifier);
+    QMouseEvent pan_up(QEvent::MouseButtonRelease,pan_end,canvas->mapToGlobal(pan_end.toPoint()),
+        Qt::LeftButton,Qt::NoButton,Qt::NoModifier);
+    QApplication::sendEvent(canvas,&pan_down); QApplication::sendEvent(canvas,&pan_move); QApplication::sendEvent(canvas,&pan_up);
+    require(window.document().revision()==cancellation.revision() &&
+                std::hypot(canvas->viewCenter().x-pan_center.x,canvas->viewCenter().y-pan_center.y)>0,
+            "dragging while placement is armed must pan without placing or altering history");
+    const sketch::Vec2 after_pan{0.9,0.9};
+    click(after_pan);
+    require(std::abs(label().position.x-after_pan.x)<1e-9 && window.undoCommand() &&
+                window.document().snapshot().entities()==cancellation.entities(),
+            "panning must leave placement armed for the next click and Undo restores prior placement");
+    require(window.beginSelectedPlanLabelPlacement(),"re-arm placement for Escape");
+    QKeyEvent escape(QEvent::KeyPress,Qt::Key_Escape,Qt::NoModifier);
+    QApplication::sendEvent(canvas,&escape);
+    require(window.document().snapshot().entities()==cancellation.entities() && window.selectedEntityId()==area,
+            "Escape must cancel label placement without clearing its selection or altering history");
+    require(window.beginSelectedPlanLabelPlacement(), "begin fenced placement");
+    auto changed=window.document().snapshot().entities().at(area.toStdString());
+    changed.properties["newer_note"]="preserve";
+    window.document().apply(sketch::ApplyEntityChanges{window.document().revision(),{sketch::EntityChange::upsert(changed)}, {}, "newer edit"});
+    const auto newer=window.document().snapshot();
+    click(chosen);
+    require(window.document().revision()==newer.revision() && window.document().snapshot().entities()==newer.entities(),
+            "stale pending placement must preserve newer document data");
+    window.document().mark_read_only("label placement read-only fixture");
+    require(!window.beginSelectedPlanLabelPlacement() && !window.setSelectedPlanLabelPosition({2,2}) &&
+            !window.resetSelectedPlanLabelPlacement() && window.document().revision()==newer.revision(),
+            "read-only placement commands must refuse mutation");
+    sketch::desktop::MainWindow room_window;
+    room_window.resize(1100,780); room_window.show();
+    const auto room=room_window.createRoomVolumeFromBoundary(square(0,0,2),"3 m","0 m");
+    require(!room.isEmpty(),"native room placement fixture must create a real room volume");
+    auto named_room=room_window.document().snapshot().entities().at(room.toStdString());
+    named_room.properties["name"]="Office";
+    room_window.document().apply(sketch::ApplyEntityChanges{room_window.document().revision(),
+        {sketch::EntityChange::upsert(named_room)}, {}, "name native room fixture"});
+    require(room_window.selectEntity(room),"native room with a derived name must select");
+    auto* room_place=room_window.findChild<QPushButton*>(QStringLiteral("placePlanLabel"));
+    require(room_place && room_place->isEnabled() && !room_place->parentWidget()->isHidden() &&
+                room_window.setSelectedPlanLabelPosition({3,3}) &&
+                room_window.document().snapshot().entities().at(room.toStdString())==named_room,
+            "native room placement controls must be available and preserve physical room geometry");
+}
+
+void appraisal_qualification_transition_preview_workflow(bool named=true) {
+    using namespace sketch;
+    using namespace sketch::desktop;
+    MainWindow window;
+    window.resize(1100,780); window.show(); window.setMetricUnits(true);
+    const auto parent=window.createBoundary(square(0,0,2));
+    auto* workflow=window.findChild<QComboBox*>(QStringLiteral("calculationWorkflow"));
+    workflow->setCurrentIndex(workflow->findData(QStringLiteral("appraisal")));
+    require(window.editSelectedAppraisalFacts(declarations()),"declare preview qualification parent");
+    if (!named)
+        require(window.setSelectedPlanLabelPosition({3,3}),
+                "a qualified anonymous area must allow saved label placement");
+    const Boundary outline{{{-.2,.5},{1.5,.5},0},{{1.5,.5},{1.5,1.5},0},
+                           {{1.5,1.5},{.5,1.5},0},{{.5,1.5},{-.2,.5},0}};
+    const auto child=window.createBoundary(outline);
+    require(window.editSelectedAppraisalFacts(declarations("residential_declared","garage")),
+            "declare preview qualification deduction");
+    auto outer=window.document().snapshot().entities().at(parent.toStdString());
+    outer.properties["name"]=named ? "Dwelling" : "measurement"; outer.properties["deduction_ids"]={child.toStdString()};
+    auto inner=window.document().snapshot().entities().at(child.toStdString());
+    inner.properties["name"]=named ? "Garage" : "measurement";
+    window.document().apply(ApplyEntityChanges{window.document().revision(),
+        {EntityChange::upsert(outer),EntityChange::upsert(inner)}, {}, "outside deduction qualification fixture"});
+    require(window.selectEntity(child),"select outside deduction for repair");
+    auto* canvas=dynamic_cast<PlanCanvas*>(window.findChild<QWidget*>(QStringLiteral("measurementPlanCanvas")));
+    canvas->setSnapEnabled(false); canvas->setOverviewMapEnabled(false); canvas->fitView();
+    const auto text=[&](const auto& labels,const QString& id){
+        const auto found=std::find_if(labels.begin(),labels.end(),[&](const auto& value){return value.id==id;});
+        return found==labels.end() ? QString{} : found->text;
+    };
+    const auto old_parent=named ? QStringLiteral("Dwelling") : QString{};
+    const auto old_child=named ? QStringLiteral("Garage") : QString{};
+    const auto new_parent=(named ? QStringLiteral("Dwelling\n") : QString{})+QStringLiteral("3.00 m²");
+    const auto new_child=(named ? QStringLiteral("Garage\n") : QString{})+QStringLiteral("1.00 m²");
+    require(text(canvas->labels(),parent)==old_parent && text(canvas->labels(),child)==old_child,
+            "outside deduction must start with withheld appraisal quantities");
+    const auto before=window.document().snapshot();
+    const auto pixel=[&](Vec2 point){return QRectF(canvas->rect()).center()+QPointF(
+        (point.x-canvas->viewCenter().x)*canvas->viewScale(),-(point.y-canvas->viewCenter().y)*canvas->viewScale());};
+    const auto start=pixel({-.2,.5}), end=pixel({.5,.5});
+    QMouseEvent down(QEvent::MouseButtonPress,start,canvas->mapToGlobal(start.toPoint()),Qt::LeftButton,Qt::LeftButton,Qt::NoModifier);
+    QMouseEvent move(QEvent::MouseMove,end,canvas->mapToGlobal(end.toPoint()),Qt::NoButton,Qt::LeftButton,Qt::NoModifier);
+    QApplication::sendEvent(canvas,&down); QApplication::sendEvent(canvas,&move);
+    QElapsedTimer timer; timer.start();
+    while(!canvas->boundaryVertexPreviewMetrics() && timer.elapsed()<3000)
+        QApplication::processEvents(QEventLoop::AllEvents,30);
+    if (!canvas->boundaryVertexPreviewMetrics() ||
+        text(canvas->boundaryVertexPreviewLabels(),parent)!=new_parent ||
+        text(canvas->boundaryVertexPreviewLabels(),child)!=new_child) {
+        std::cerr<<"qualification preview named="<<named<<" metrics="
+                 <<canvas->boundaryVertexPreviewMetrics().has_value()<<" parent="
+                 <<text(canvas->boundaryVertexPreviewLabels(),parent).toStdString()<<" child="
+                 <<text(canvas->boundaryVertexPreviewLabels(),child).toStdString()<<'\n';
+    }
+    require(canvas->boundaryVertexPreviewMetrics() &&
+                text(canvas->boundaryVertexPreviewLabels(),parent)==new_parent &&
+                text(canvas->boundaryVertexPreviewLabels(),child)==new_child &&
+                window.document().snapshot().entities()==before.entities(),
+            "repair preview must gain qualified quantities and footprints before any commit");
+    const auto proposed_labels=canvas->boundaryVertexPreviewLabels();
+    QMouseEvent up(QEvent::MouseButtonRelease,end,canvas->mapToGlobal(end.toPoint()),Qt::LeftButton,Qt::NoButton,Qt::NoModifier);
+    QApplication::sendEvent(canvas,&up); QApplication::processEvents();
+    require(text(canvas->labels(),parent)==new_parent && text(canvas->labels(),child)==new_child,
+            "committed qualification must agree with candidate label values");
+    for (const auto& proposed:proposed_labels) {
+        if (proposed.id!=parent && proposed.id!=child) continue;
+        const auto committed=std::find_if(canvas->labels().begin(),canvas->labels().end(),
+            [&](const auto& label){return label.id==proposed.id;});
+        require(committed!=canvas->labels().end() &&
+                    std::hypot(committed->position.x-proposed.position.x,
+                               committed->position.y-proposed.position.y)<1e-9,
+                "newly qualified label placement must remain stable across commit");
+        if (!named && proposed.id==parent)
+            require(std::hypot(proposed.position.x-3,proposed.position.y-3)<1e-9,
+                    "newly qualified anonymous label must honor its persisted position");
+    }
+    require(window.undoCommand() && text(canvas->labels(),parent)==old_parent,
+            "committed qualification and Undo must agree with candidate label values");
+}
+
 void appraisal_plan_area_labels_workflow() {
     using sketch::desktop::PlanCanvas;
     sketch::desktop::MainWindow window;
@@ -1876,6 +2108,12 @@ int main(int argc, char** argv) {
             appraisal_plan_area_labels_workflow();
             return 0;
         }
+        if (app.arguments().contains(QStringLiteral("--plan-label-placement-only"))) {
+            plan_label_placement_workflow();
+            appraisal_qualification_transition_preview_workflow();
+            appraisal_qualification_transition_preview_workflow(false);
+            return 0;
+        }
         if (app.arguments().contains(QStringLiteral("--auto-subtract-only"))) {
             auto_subtract_selected_area_workflow();
             auto_subtract_context_repair_workflow();
@@ -1896,6 +2134,9 @@ int main(int argc, char** argv) {
         appraisal_declarations_reject_read_only_documents();
         appraisal_area_display_precision_workflow();
         appraisal_plan_area_labels_workflow();
+        plan_label_placement_workflow();
+        appraisal_qualification_transition_preview_workflow();
+        appraisal_qualification_transition_preview_workflow(false);
         selection_filter_dropdown_workflow();
         area_appearance_workflow();
         malformed_appraisal_projection_prints_withheld_status();

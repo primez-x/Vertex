@@ -25,6 +25,7 @@ sketch::AnnotationState fixture() {
     state.symbols.front().flip_horizontal = true;
     state.symbols.front().flip_vertical = true;
     state.overrides.push_back({"area", "area-1", {}, false});
+    state.overrides.back().plan_label_offset = sketch::Vec2{0.25, -1.75};
     return state;
 }
 

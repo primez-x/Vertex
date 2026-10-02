@@ -36,3 +36,7 @@ The rendered evidence and controlled native checks are not user-observed
 resolution or full production/Apex compatibility certification. Placement can
 still omit a label when no readable position fits. The full release goal
 remains open.
+
+The subsequent [label-placement checkpoint](plan-label-placement-2026-10-01.md)
+retains labels through exterior/manual placement and verifies qualification
+transitions in live proposals. The omitted-label limit above is historical.

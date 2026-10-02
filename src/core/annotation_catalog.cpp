@@ -1098,12 +1098,19 @@ void validate_annotation_state(const AnnotationState& state, const std::vector<S
         check(!o.hatch_scale || (std::isfinite(*o.hatch_scale) &&
                   *o.hatch_scale >= 0.1 && *o.hatch_scale <= 10.0),
               "Invalid presentation hatch scale");
+        check(!o.plan_label_offset || (o.target_kind == "area" &&
+                  std::isfinite(o.plan_label_offset->x) && std::isfinite(o.plan_label_offset->y)),
+              "Invalid area label placement offset");
+        check(!o.inherit_appearance || o.target_kind == "area",
+              "Appearance inheritance requires an area target");
     }
 }
 
 json encode_annotation_state(const AnnotationState& state, const std::vector<SymbolDefinition>& catalog) {
     validate_annotation_state(state,catalog);
-    json j{{"version",3},{"catalog_revision",kSymbolCatalogRevision},
+    const bool label_placements = std::any_of(state.overrides.begin(), state.overrides.end(),
+        [](const auto& value) { return value.plan_label_offset.has_value() || value.inherit_appearance; });
+    json j{{"version",label_placements ? 4 : 3},{"catalog_revision",kSymbolCatalogRevision},
            {"labels",json::array()},{"symbols",json::array()},{"overrides",json::array()}};
     for (const auto& l : state.labels) j["labels"].push_back({{"id",l.id},{"template_id",l.template_id},{"content",l.content},
         {"style",encode_style(l.style)},{"placement",encode_placement(l.placement)},{"visible",l.visible}});
@@ -1121,6 +1128,9 @@ json encode_annotation_state(const AnnotationState& state, const std::vector<Sym
             {"style",encode_style(o.style)},{"visible",o.visible}};
         if (o.paper_line_width_mm) value["paper_line_width_mm"] = *o.paper_line_width_mm;
         if (o.hatch_scale) value["hatch_scale"] = *o.hatch_scale;
+        if (o.plan_label_offset) value["plan_label_offset_m"] =
+            json::array({o.plan_label_offset->x, o.plan_label_offset->y});
+        if (o.inherit_appearance) value["inherit_appearance"] = true;
         j["overrides"].push_back(std::move(value));
     }
     return j;
@@ -1129,10 +1139,11 @@ json encode_annotation_state(const AnnotationState& state, const std::vector<Sym
 AnnotationState decode_annotation_state(const json& j, const std::vector<SymbolDefinition>& catalog) {
     try {
         check(j.at("version").is_number_integer() &&
-                  (j.at("version") == 1 || j.at("version") == 2 || j.at("version") == 3),
+                  (j.at("version") == 1 || j.at("version") == 2 ||
+                   j.at("version") == 3 || j.at("version") == 4),
               "Unsupported annotation version");
         const bool pinned = j.at("version") != 1;
-        const bool independent_transform = j.at("version") == 3;
+        const bool independent_transform = j.at("version").get<int>() >= 3;
         const auto catalog_revision = j.contains("catalog_revision")
             ? j.at("catalog_revision")
             : json(kLegacySymbolCatalogRevision);
@@ -1199,6 +1210,19 @@ AnnotationState decode_annotation_state(const json& j, const std::vector<SymbolD
                 o.at("target_id").get<std::string>(),decode_style(o.at("style")),o.at("visible").get<bool>()};
             if (o.contains("paper_line_width_mm")) value.paper_line_width_mm = o.at("paper_line_width_mm").get<double>();
             if (o.contains("hatch_scale")) value.hatch_scale = o.at("hatch_scale").get<double>();
+            if (o.contains("plan_label_offset_m")) {
+                check(j.at("version") == 4, "Area label placement requires annotation version 4");
+                const auto& offset = o.at("plan_label_offset_m");
+                check(offset.is_array() && offset.size() == 2 &&
+                      offset[0].is_number() && offset[1].is_number(),
+                      "Area label placement must contain two numeric metre offsets");
+                value.plan_label_offset = Vec2{offset[0].get<double>(), offset[1].get<double>()};
+            }
+            if (o.contains("inherit_appearance")) {
+                check(j.at("version") == 4 && o.at("inherit_appearance").is_boolean(),
+                      "Area appearance inheritance requires a version 4 boolean");
+                value.inherit_appearance = o.at("inherit_appearance").get<bool>();
+            }
             state.overrides.push_back(std::move(value));
         }
         validate_annotation_state(state,catalog); return state;

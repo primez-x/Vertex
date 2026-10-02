@@ -426,7 +426,7 @@ std::map<std::string, std::string, std::less<>> annotation_selection_owners(
 
 void upgrade_annotation_transform_version(Entity& owner, const AnnotationState& state) {
     auto& raw = owner.properties.at("state");
-    if (raw.at("version") == 3) return;
+    if (raw.at("version").get<int>() >= 3) return;
     // Independent dimensions require v3 on every symbol in this owner. Add
     // only its new required fields; retain admitted legacy records verbatim.
     const auto upgraded = encode_annotation_state(state, default_symbol_catalog());
@@ -1169,6 +1169,39 @@ QFont sheet_text_font(double point_size, double pixels_per_mm) {
     return font;
 }
 
+Vec2 plan_label_leader_anchor(const Boundary& boundary,Vec2 target) {
+    auto nearest=boundary.front().start;
+    auto distance=std::hypot(target.x-nearest.x,target.y-nearest.y);
+    const auto consider=[&](Vec2 point){
+        const auto d=std::hypot(target.x-point.x,target.y-point.y);
+        if(d<distance){distance=d;nearest=point;}
+    };
+    for(const auto& edge:boundary) {
+        consider(edge.start);
+        consider(edge.end);
+        const auto dx=edge.end.x-edge.start.x,dy=edge.end.y-edge.start.y;
+        const auto chord=std::hypot(dx,dy);
+        if(!(chord>1e-7)) continue;
+        if(edge.sweep_radians==0) {
+            const auto t=std::clamp(((target.x-edge.start.x)*dx+(target.y-edge.start.y)*dy)/(chord*chord),0.0,1.0);
+            consider({edge.start.x+t*dx,edge.start.y+t*dy});
+        } else {
+            const auto factor=1.0/(2.0*std::tan(edge.sweep_radians*.5));
+            const Vec2 center{std::midpoint(edge.start.x,edge.end.x)-dy*factor,
+                              std::midpoint(edge.start.y,edge.end.y)+dx*factor};
+            const auto start=std::atan2(edge.start.y-center.y,edge.start.x-center.x);
+            const auto angle=std::atan2(target.y-center.y,target.x-center.x);
+            constexpr auto tau=2.0*std::numbers::pi;
+            auto travel=std::fmod(edge.sweep_radians>0 ? angle-start : start-angle,tau);
+            if(travel<0) travel+=tau;
+            if(travel<=std::abs(edge.sweep_radians)) {
+                if(const auto point=point_at_segment(edge,travel/std::abs(edge.sweep_radians))) consider(*point);
+            }
+        }
+    }
+    return nearest;
+}
+
 CanvasLabel place_plan_area_label(CanvasLabel label,const Boundary& boundary,
     const std::vector<Bounds2>& component_bounds,QSizeF footprint) {
     const auto overlaps = [](const Bounds2& left, const Bounds2& right) {
@@ -1208,6 +1241,19 @@ CanvasLabel place_plan_area_label(CanvasLabel label,const Boundary& boundary,
             candidates.push_back({room_bounds.minimum.x + room_width * column / 20.0,
                                   room_bounds.minimum.y + room_height * row / 20.0});
         }
+    }
+    label.leader_start.reset();
+    if (label.plan_label_offset) {
+        label.position = {center.x+label.plan_label_offset->x,center.y+label.plan_label_offset->y};
+        if (!std::isfinite(label.position.x) || !std::isfinite(label.position.y))
+            throw std::invalid_argument("Resolved plan label position is not finite.");
+        const auto p=label.position;
+        const Boundary rectangle{{{p.x-width*.5,p.y-height*.5},{p.x+width*.5,p.y-height*.5},0},
+            {{p.x+width*.5,p.y-height*.5},{p.x+width*.5,p.y+height*.5},0},
+            {{p.x+width*.5,p.y+height*.5},{p.x-width*.5,p.y+height*.5},0},
+            {{p.x-width*.5,p.y+height*.5},{p.x-width*.5,p.y-height*.5},0}};
+        if (validate_boundary_holes(boundary,{rectangle})) label.leader_start=plan_label_leader_anchor(boundary,label.position);
+        return label;
     }
     bool placed = false;
     for (const auto candidate : candidates) {
@@ -1249,7 +1295,34 @@ CanvasLabel place_plan_area_label(CanvasLabel label,const Boundary& boundary,
             break;
         }
     }
-    if (!placed) label.text.clear();
+    if (!placed) {
+        // Retain the quantity even in tiny or completely furnished areas.
+        // Search outside the owner's bounds using the measured text footprint.
+        for (int ring=0; ring<32 && !placed; ++ring) {
+            const auto gap=0.2+ring*std::max({width,height,0.25});
+            const std::array<Vec2,4> outside{{
+                {room_bounds.maximum.x+width*.5+gap,center.y},
+                {center.x,room_bounds.maximum.y+height*.5+gap},
+                {room_bounds.minimum.x-width*.5-gap,center.y},
+                {center.x,room_bounds.minimum.y-height*.5-gap}}};
+            for (const auto p:outside) {
+                const Bounds2 box{{p.x-width*.5-0.1,p.y-height*.5-0.1},
+                                  {p.x+width*.5+0.1,p.y+height*.5+0.1}};
+                if (std::none_of(component_bounds.begin(),component_bounds.end(),
+                    [&](const auto& obstacle){return overlaps(box,obstacle);})) {
+                    label.position=p;
+                    placed=true;
+                    break;
+                }
+            }
+        }
+        if (!placed) {
+            auto right=room_bounds.maximum.x;
+            for (const auto& obstacle:component_bounds) right=std::max(right,obstacle.maximum.x);
+            label.position={right+width*.5+0.25,center.y};
+        }
+        label.leader_start=plan_label_leader_anchor(boundary,label.position);
+    }
     return label;
 }
 
@@ -2571,8 +2644,10 @@ void project_plan_model_labels(std::vector<CanvasLabel>& labels,
         const auto found = snapshot.entities().find(label.id.toStdString());
         // Generated model labels follow their projected geometry. Explicit
         // annotations retain the existing view-overlay coordinate convention.
-        if (label.plan_only || (found != snapshot.entities().end() && found->second.type == "dimension"))
+        if (label.plan_only || (found != snapshot.entities().end() && found->second.type == "dimension")) {
             label.position = project_plan_point(label.position, frame);
+            if (label.leader_start) label.leader_start=project_plan_point(*label.leader_start,frame);
+        }
     }
 }
 
@@ -3434,6 +3509,140 @@ public:
         }
     }
 
+    void cancelPlanLabelPlacement() {
+        m_plan_label_context.reset();
+        m_measurementCanvas->setPointPlacementRequested({});
+        m_architecturalCanvas->setPointPlacementRequested({});
+    }
+
+    bool editSelectedPlanLabelOffset(std::optional<Vec2> position,
+                                    std::optional<Revision> expected_revision) {
+        try {
+            if (!m_document->is_editable()) throw std::invalid_argument("This document is read-only.");
+            const auto source=authoringSnapshot();
+            if (expected_revision && *expected_revision!=source.revision())
+                throw std::invalid_argument("The project changed while placing the label. Start placement again.");
+            const auto selected=selectedEntity();
+            if (!selected || m_selected_ids.size()!=1 ||
+                (!is_closed_boundary_entity(selected->type) && selected->type!="room"))
+                throw std::invalid_argument("Select one area or room with a plan label.");
+            const auto label=std::find_if(m_measurementCanvas->labels().begin(),m_measurementCanvas->labels().end(),
+                [&](const auto& value){return value.id==m_selected_id && value.avoid_components && !value.text.isEmpty();});
+            if (label==m_measurementCanvas->labels().end())
+                throw std::invalid_argument("The selected area has no qualified quantity or room name to place.");
+            const auto anchor=plan_label_anchor(read_boundary(selected->properties));
+            std::optional<Vec2> offset;
+            if (position) {
+                offset=Vec2{position->x-anchor.x,position->y-anchor.y};
+                if (!std::isfinite(position->x) || !std::isfinite(position->y) ||
+                    !std::isfinite(offset->x) || !std::isfinite(offset->y) ||
+                    !std::isfinite(anchor.x+offset->x) || !std::isfinite(anchor.y+offset->y))
+                    throw std::invalid_argument("Label position must be finite model coordinates.");
+            }
+            std::optional<std::string> owner_id, provider_id;
+            for (const auto& [id,entity]:source.entities()) {
+                if (entity.type!=kAnnotationEntityType) continue;
+                const auto state=decode_annotation_entity(entity);
+                if (!owner_id) owner_id=id;
+                for (const auto& value:state.overrides) {
+                    if (value.target_kind!="area" || value.target_id!=selected->id) continue;
+                    if (provider_id) throw std::invalid_argument("This area has duplicate presentation overrides.");
+                    owner_id=id;
+                    provider_id=id;
+                }
+            }
+            if (!position && !provider_id) { clearError(); return true; }
+            Entity updated;
+            if (owner_id) updated=source.entities().at(*owner_id);
+            else {
+                std::string id;
+                do {id=new_id("annotations");} while(source.entities().contains(id));
+                updated=make_annotation_entity(id,AnnotationState{});
+            }
+            // Upgrade required transform fields only; retain raw opaque records.
+            if (offset) upgrade_annotation_transform_version(updated,decode_annotation_entity(updated));
+            auto& raw=updated.properties.at("state");
+            auto& records=raw.at("overrides");
+            auto record=std::find_if(records.begin(),records.end(),[&](const json& value){
+                return value.at("target_kind")=="area" && value.at("target_id")==selected->id;});
+            if (record==records.end()) {
+                PresentationOverride value;
+                value.target_kind="area";
+                value.target_id=selected->id;
+                const auto appearance=plan_area_presentation(QString::fromStdString(
+                    read_string(selected->properties,"classification").value_or("")));
+                value.style.stroke_color=appearance.stroke.name(QColor::HexRgb).toStdString();
+                value.style.fill_color=appearance.fill.name(QColor::HexRgb).toStdString();
+                value.style.fill_pattern=!appearance.filled ? "none" : appearance.hatch==QStringLiteral("solid") ? "solid" : "hatch";
+                AnnotationState state;
+                state.overrides.push_back(value);
+                records.push_back(encode_annotation_state(state,desktop_symbol_catalog()).at("overrides").at(0));
+                record=std::prev(records.end());
+                (*record)["inherit_appearance"]=true;
+            }
+            if (offset) {
+                (*record)["plan_label_offset_m"]=json::array({offset->x,offset->y});
+                raw["version"]=4;
+            } else record->erase("plan_label_offset_m");
+            validate_annotation_entity(updated);
+            if (owner_id && updated==source.entities().at(*owner_id)) {clearError(); return true;}
+            const ApplyEntityChanges command{source.revision(),{EntityChange::upsert(std::move(updated))},{},
+                position ? "Place plan label" : "Automatic plan label"};
+            (void)Document::preview_command(source,command);
+            applyDocumentCommand(command);
+            clearError();
+            refresh();
+            return true;
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Plan label: %1").arg(QString::fromUtf8(error.what())));
+            return false;
+        }
+    }
+
+    bool setSelectedPlanLabelPosition(Vec2 position,std::optional<Revision> expected_revision) {
+        cancelPlanLabelPlacement();
+        return editSelectedPlanLabelOffset(position,expected_revision);
+    }
+    bool resetSelectedPlanLabelPlacement(std::optional<Revision> expected_revision) {
+        cancelPlanLabelPlacement();
+        return editSelectedPlanLabelOffset(std::nullopt,expected_revision);
+    }
+    bool beginSelectedPlanLabelPlacement() {
+        try {
+            if (!m_document->is_editable()) throw std::invalid_argument("This document is read-only.");
+            if (m_boundary_session || m_pending_wall_start || !m_pending_symbol_id.isEmpty() || !m_pending_opening_kind.isEmpty())
+                throw std::invalid_argument("Finish or cancel the current drawing before placing a label.");
+            auto* canvas=m_workspace==Workspace::measurement ? m_measurementCanvas : m_architecturalCanvas;
+            const auto view=boundaryVertexViewContext(canvas,authoringSnapshot());
+            const auto label=std::find_if(canvas->labels().begin(),canvas->labels().end(),
+                [&](const auto& value){return value.id==m_selected_id && value.avoid_components && !value.text.isEmpty();});
+            if (m_selected_ids.size()!=1 || label==canvas->labels().end())
+                throw std::invalid_argument("Select one area or room with a plan label.");
+            cancelPlanLabelPlacement();
+            m_plan_label_context=captureModalContext();
+            const auto workspace=m_workspace;
+            const auto named_view=m_active_named_view;
+            const auto kind=m_architectural_view_kind;
+            canvas->setPointPlacementRequested([this,workspace,view,named_view,kind](Vec2 point){
+                const auto context=m_plan_label_context;
+                cancelPlanLabelPlacement();
+                if (!context || !modalContextUnchanged(*context)) return;
+                if (workspace!=m_workspace || named_view!=m_active_named_view || kind!=m_architectural_view_kind) {
+                    setError(QStringLiteral("The view changed while placing the label. Start placement again.")); return;
+                }
+                if (view) point=unproject_plan_point(point,view->frame);
+                (void)setSelectedPlanLabelPosition(point,context->revision);
+            });
+            canvas->setFocus();
+            clearError();
+            owner->statusBar()->showMessage(QStringLiteral("Click to place the plan label; Esc cancels."));
+            return true;
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Plan label: %1").arg(QString::fromUtf8(error.what())));
+            return false;
+        }
+    }
+
     void showAreaAppearance() {
         try {
             if (!m_document->is_editable()) throw std::invalid_argument("This document is read-only.");
@@ -3467,7 +3676,8 @@ public:
                         throw std::invalid_argument("This area has appearance overrides in multiple annotation groups. Remove duplicate overrides before editing.");
                     provider_id = id;
                     owner_id = id;
-                    initial = value;
+                    initial = value.inherit_appearance ? defaults : value;
+                    initial.plan_label_offset=value.plan_label_offset;
                     for (const auto& record : entity.properties.at("state").at("overrides"))
                         if (record.at("target_kind") == "area" && record.at("target_id") == selected->id)
                             original_record = record;
@@ -3593,8 +3803,14 @@ public:
                         if (provider_id) {
                             auto updated = source.entities().at(*provider_id);
                             auto& records = updated.properties.at("state").at("overrides");
-                            records.erase(std::remove_if(records.begin(), records.end(), [&](const json& record) {
-                                return record.at("target_kind") == "area" && record.at("target_id") == selected->id;
+                            records.erase(std::remove_if(records.begin(), records.end(), [&](json& record) {
+                                if (record.at("target_kind") != "area" || record.at("target_id") != selected->id) return false;
+                                if (record.contains("plan_label_offset_m")) {
+                                    record["inherit_appearance"]=true;
+                                    updated.properties.at("state")["version"]=4;
+                                    return false;
+                                }
+                                return true;
                             }), records.end());
                             validate_annotation_entity(updated);
                             changes.push_back(EntityChange::upsert(std::move(updated)));
@@ -3619,6 +3835,7 @@ public:
                         record_state.overrides.push_back(value);
                         const auto encoded = encode_annotation_state(record_state, desktop_symbol_catalog()).at("overrides").at(0);
                         auto record = provider_id ? original_record : encoded;
+                        record.erase("inherit_appearance");
                         for (const auto* key : {"stroke_color", "fill_color", "fill_pattern", "stroke_width_metres"})
                             record.at("style")[key] = encoded.at("style").at(key);
                         record["visible"] = encoded.at("visible");
@@ -4805,6 +5022,7 @@ public:
     }
 
     void setWorkspace(Workspace workspace) {
+        if (workspace!=m_workspace && m_plan_label_context) cancelPlanLabelPlacement();
         if (workspace != m_workspace &&
             (m_boundary_session || m_pending_wall_start || !m_pending_opening_kind.isEmpty() ||
              !m_pending_symbol_id.isEmpty())) {
@@ -10574,6 +10792,7 @@ public:
 
     bool beginBoundaryDrawing(BoundaryAuthoringMode mode, QString classification,
                               QString subtract_target = {}) {
+        if (m_plan_label_context) cancelPlanLabelPlacement();
         if (m_workspace != Workspace::measurement) {
             setWorkspace(Workspace::measurement);
             if (m_workspace != Workspace::measurement) return false;
@@ -13044,9 +13263,7 @@ public:
         const std::optional<ArchitecturalViewContext>& view_context, const QFont& label_font) {
         try {
             const auto& candidate = candidate_snapshot.entities();
-            const auto area_values = appraisal_area_ids.empty()
-                ? std::map<std::string, QString, std::less<>>{}
-                : appraisal_plan_area_values(candidate_snapshot, metric_units);
+            const auto area_values = appraisal_plan_area_values(candidate_snapshot, metric_units);
             // A worker-local paint device measures candidate text without
             // reading a QWidget from the background projection thread.
             QImage label_device(1, 1, QImage::Format_ARGB32);
@@ -13205,7 +13422,39 @@ public:
                 if (!captured_ids.contains(item.id) && proposed.segments.empty() && proposed.holes.empty()) continue;
                 result.entities.push_back(std::move(proposed));
             }
-            for (const auto& label : labels) {
+            std::vector<Bounds2> candidate_label_bounds;
+            auto candidate_labels=labels;
+            std::map<std::string,Vec2,std::less<>> candidate_label_offsets;
+            for (const auto& [id,owner]:candidate) {
+                if (owner.type!="annotation_state") continue;
+                for (const auto& override:decode_annotation_entity(owner).overrides) {
+                    if (override.target_kind=="area" && override.plan_label_offset)
+                        candidate_label_offsets.insert_or_assign(override.target_id,*override.plan_label_offset);
+                }
+            }
+            for (const auto& [id,value]:area_values) {
+                if (!captured_ids.contains(id_from(id)) ||
+                    std::any_of(candidate_labels.begin(),candidate_labels.end(),
+                        [&](const auto& label){return label.id.toStdString()==id;})) continue;
+                const auto& owner=candidate.at(id);
+                auto text=plan_area_label(owner);
+                if (!text.isEmpty()) text+=QLatin1Char('\n');
+                text+=value;
+                CanvasLabel label{id_from(id),plan_label_anchor(read_boundary(owner.properties)),text};
+                label.text_height_metres=0.20;
+                label.show_background=false;
+                label.avoid_components=true;
+                label.plan_only=true;
+                if (const auto offset=candidate_label_offsets.find(id);offset!=candidate_label_offsets.end())
+                    label.plan_label_offset=offset->second;
+                if(view_context) label.position=project_plan_point(label.position,view_context->frame);
+                candidate_labels.push_back(std::move(label));
+            }
+            // Refresh emits derived area labels in document ID order. Keep
+            // the same obstacle order when a proposal newly qualifies an area.
+            std::stable_sort(candidate_labels.begin(),candidate_labels.end(),
+                [](const auto& first,const auto& second){return first.id<second.id;});
+            for (const auto& label : candidate_labels) {
                 const auto found=candidate.find(label.id.toStdString());
                 if (found==candidate.end()) continue;
                 const auto& entity=found->second;
@@ -13235,13 +13484,14 @@ public:
                         ? project_plan_point(projected.position,view_context->frame) : projected.position;
                     proposed.text=std::move(projected.text);
                     result.labels.push_back(std::move(proposed));
-                } else if (can_recognize_boundary_entity_type(entity.type) &&
-                           (entity!=source.entities().at(entity.id) || appraisal_area_ids.contains(entity.id))) {
+                } else if (label.avoid_components &&
+                           (can_recognize_boundary_entity_type(entity.type) || entity.type=="room")) {
                     auto proposed=label;
                     // Deductions can change an unchanged parent's net value.
                     // Use the shared qualified report at the candidate head;
                     // unqualified proposals retain names without assertions.
-                    if (appraisal_area_ids.contains(entity.id)) {
+                    const bool appraisal_label=appraisal_area_ids.contains(entity.id) || area_values.contains(entity.id);
+                    if (appraisal_label) {
                         proposed.text=plan_area_label(entity);
                         if (const auto value=area_values.find(entity.id); value!=area_values.end()) {
                             if (!proposed.text.isEmpty()) proposed.text+=QLatin1Char('\n');
@@ -13250,10 +13500,11 @@ public:
                     }
                     if (label.avoid_components) {
                         const auto footprint=label_footprints.find(label.id);
-                        if (footprint==label_footprints.end()) return std::nullopt;
-                        const auto text_size = appraisal_area_ids.contains(entity.id)
+                        if (!appraisal_label && footprint==label_footprints.end()) return std::nullopt;
+                        const auto text_size = appraisal_label
                             ? plan_area_label_footprint(proposed,label_font,&label_device) : footprint->second;
                         auto obstacles=component_bounds;
+                        obstacles.insert(obstacles.end(),candidate_label_bounds.begin(),candidate_label_bounds.end());
                         if (area_values.contains(entity.id)) {
                             for (const auto& deduction_id : read_deduction_ids(entity.properties)) {
                                 const auto deduction=candidate.find(deduction_id);
@@ -13262,12 +13513,19 @@ public:
                             }
                         }
                         auto world_label = proposed;
-                        if (view_context)
+                        if (view_context) {
                             world_label.position = unproject_plan_point(world_label.position,view_context->frame);
+                            if (world_label.leader_start) world_label.leader_start=unproject_plan_point(*world_label.leader_start,view_context->frame);
+                        }
                         proposed=place_plan_area_label(world_label,read_boundary(entity.properties),
                             obstacles,text_size);
-                        if (view_context)
+                        candidate_label_bounds.push_back({
+                            {proposed.position.x-text_size.width()*.5,proposed.position.y-text_size.height()*.5},
+                            {proposed.position.x+text_size.width()*.5,proposed.position.y+text_size.height()*.5}});
+                        if (view_context) {
                             proposed.position = project_plan_point(proposed.position,view_context->frame);
+                            if (proposed.leader_start) proposed.leader_start=project_plan_point(*proposed.leader_start,view_context->frame);
+                        }
                     }
                     result.labels.push_back(std::move(proposed));
                 }
@@ -24045,6 +24303,20 @@ private:
         area_attributes_layout->addRow(m_area_appearance_button);
         QObject::connect(m_area_appearance_button, &QPushButton::clicked, owner,
                          [this] { showAreaAppearance(); });
+        auto* label_row=new QWidget(m_area_attributes_group);
+        auto* label_layout=new QHBoxLayout(label_row);
+        label_layout->setContentsMargins(0,0,0,0);
+        m_place_plan_label_button=new QPushButton(QStringLiteral("Place label"),label_row);
+        m_place_plan_label_button->setObjectName(QStringLiteral("placePlanLabel"));
+        m_automatic_plan_label_button=new QPushButton(QStringLiteral("Automatic"),label_row);
+        m_automatic_plan_label_button->setObjectName(QStringLiteral("automaticPlanLabel"));
+        label_layout->addWidget(m_place_plan_label_button);
+        label_layout->addWidget(m_automatic_plan_label_button);
+        area_attributes_layout->addRow(QStringLiteral("Plan label"),label_row);
+        QObject::connect(m_place_plan_label_button,&QPushButton::clicked,owner,
+            [this]{(void)beginSelectedPlanLabelPlacement();});
+        QObject::connect(m_automatic_plan_label_button,&QPushButton::clicked,owner,
+            [this]{(void)resetSelectedPlanLabelPlacement(std::nullopt);});
         m_area_attributes_edit = new QPlainTextEdit(m_area_attributes_group);
         m_area_attributes_edit->setObjectName(QStringLiteral("areaAttributesJson"));
         m_area_attributes_edit->setPlaceholderText(QStringLiteral("{\"key\": \"value\"}"));
@@ -24965,6 +25237,15 @@ private:
                 canvas_entity.fill_color = QColor(219, 234, 254, 54);
                 canvas_entity.filled = true;
                 canvas_entity.output_stroke_width_mm = 0.30;
+                const auto text=plan_area_label(geometry_entity);
+                if (!text.isEmpty()) {
+                    CanvasLabel label{id_from(id),plan_label_anchor(segments),text};
+                    label.text_height_metres=0.20;
+                    label.show_background=false;
+                    label.avoid_components=true;
+                    label.plan_only=true;
+                    all_labels.push_back(std::move(label));
+                }
             } else if (entity.type == "wall") {
                 canvas_entity.stroke_segments = wall_plans.at(id).strokes;
                 canvas_entity.stroke_color = QColor(35, 77, 113);
@@ -25057,6 +25338,18 @@ private:
                 }
                 for (const auto& override : state.overrides) {
                     if (override.target_kind == "output_view") continue;
+                    if (override.target_kind=="area" && override.plan_label_offset) {
+                        for (auto& label:all_labels) {
+                            if (label.avoid_components && label.id.toStdString()==override.target_id) {
+                                const auto anchor=label.position;
+                                if (!std::isfinite(anchor.x+override.plan_label_offset->x) ||
+                                    !std::isfinite(anchor.y+override.plan_label_offset->y))
+                                    throw std::invalid_argument("Resolved plan label position is not finite.");
+                                label.plan_label_offset=override.plan_label_offset;
+                            }
+                        }
+                    }
+                    if (override.target_kind=="area" && override.inherit_appearance) continue;
                     if (!override.visible) {
                         presentation_hidden_ids.insert(override.target_id);
                         continue;
@@ -25190,6 +25483,7 @@ private:
                 // Malformed component geometry is reported by its owner.
             }
         }
+        std::vector<Bounds2> placed_area_label_bounds;
         for (auto& label : all_labels) {
             if (!label.avoid_components || !visible_ids.contains(label.id.toStdString()) ||
                 presentation_hidden_ids.contains(label.id.toStdString())) continue;
@@ -25198,6 +25492,7 @@ private:
             if (label_owner == all_geometry.end() || label_owner->segments.empty()) continue;
             const auto footprint=plan_area_label_footprint(label,m_measurementCanvas->font(),m_measurementCanvas);
             auto obstacles = component_bounds;
+            obstacles.insert(obstacles.end(),placed_area_label_bounds.begin(),placed_area_label_bounds.end());
             if (appraisal_area_values.contains(label.id.toStdString())) {
                 // A net area label belongs in the parent's remaining footprint,
                 // including when a deducted garage/void is hidden by a layer.
@@ -25214,6 +25509,8 @@ private:
                 }
             }
             label=place_plan_area_label(label,label_owner->segments,obstacles,footprint);
+            placed_area_label_bounds.push_back({{label.position.x-footprint.width()*.5,label.position.y-footprint.height()*.5},
+                {label.position.x+footprint.width()*.5,label.position.y+footprint.height()*.5}});
         }
         std::erase_if(all_labels, [](const auto& label) {
             return label.avoid_components && label.text.isEmpty();
@@ -27205,14 +27502,23 @@ private:
         }
         m_project_details_group->setVisible(project_entity);
         m_project_details_group->setEnabled(editable && project_entity);
-        m_area_attributes_group->setVisible(area_entity);
-        m_area_attributes_group->setEnabled(editable && area_entity);
+        const bool native_room=entity && entity->type=="room";
+        m_area_attributes_group->setVisible(area_entity || native_room);
+        m_area_attributes_group->setEnabled(editable && (area_entity || native_room));
         m_area_appearance_button->setEnabled(editable && area_entity && m_selected_ids.size() == 1);
+        m_area_appearance_button->setVisible(!native_room);
+        m_area_attributes_edit->setVisible(!native_room);
+        m_apply_area_attributes_button->setVisible(!native_room);
+        const bool has_plan_label=std::any_of(m_measurementCanvas->labels().begin(),m_measurementCanvas->labels().end(),
+            [&](const auto& label){return label.id==m_selected_id && label.avoid_components && !label.text.isEmpty();});
+        m_place_plan_label_button->parentWidget()->setVisible(has_plan_label);
+        m_place_plan_label_button->setEnabled(editable && has_plan_label && m_selected_ids.size()==1);
+        m_automatic_plan_label_button->setEnabled(editable && has_plan_label && m_selected_ids.size()==1);
         m_area_name_context.reset();
         {
             QSignalBlocker blocker(m_area_name_edit);
             m_area_name_edit->setEnabled(editable && area_entity);
-            if (editable && area_entity) {
+            if ((editable && area_entity) || native_room) {
                 m_area_name_edit->setText(QString::fromStdString(
                     read_string(entity->properties, "name").value_or("")));
                 m_area_name_context = captureModalContext();
@@ -28533,6 +28839,10 @@ private:
     }
 
     void cancelTool() {
+        if (m_plan_label_context) {
+            cancelPlanLabelPlacement();
+            return;
+        }
         if (!m_pending_symbol_id.isEmpty()) {
             cancelSymbolPlacement();
             return;
@@ -28591,6 +28901,7 @@ private:
     }
 
     void setTool(CanvasTool tool) {
+        if (m_plan_label_context) cancelPlanLabelPlacement();
         if (m_pending_wall_start) {
             if (tool == m_tool) return;
             setError(QStringLiteral("Finish the wall chain with Esc or cancel its start before changing tools."));
@@ -30460,6 +30771,9 @@ private:
     QLineEdit* m_area_name_edit{};
     QPushButton* m_area_appearance_button{};
     std::optional<ModalContext> m_area_name_context;
+    std::optional<ModalContext> m_plan_label_context;
+    QPushButton* m_place_plan_label_button{};
+    QPushButton* m_automatic_plan_label_button{};
     QPlainTextEdit* m_area_attributes_edit{};
     QPushButton* m_apply_area_attributes_button{};
     QLabel* m_calculation_status{};
@@ -30618,6 +30932,15 @@ bool MainWindow::editProjectSubject(const QString& name, const QString& address,
 
 bool MainWindow::editSelectedAreaAttributes(const QString& attributes_json) {
     return m_impl->editSelectedAreaAttributes(attributes_json);
+}
+bool MainWindow::beginSelectedPlanLabelPlacement() {
+    return m_impl->beginSelectedPlanLabelPlacement();
+}
+bool MainWindow::setSelectedPlanLabelPosition(Vec2 position,std::optional<Revision> revision) {
+    return m_impl->setSelectedPlanLabelPosition(position,revision);
+}
+bool MainWindow::resetSelectedPlanLabelPlacement(std::optional<Revision> revision) {
+    return m_impl->resetSelectedPlanLabelPlacement(revision);
 }
 
 bool MainWindow::editScheduleCell(const QString& object_id, const QString& column,

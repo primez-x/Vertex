@@ -24,6 +24,19 @@ preserve it. Undo/redo and project history retain the value alongside geometry.
 
 ## Symbol instance transforms
 
+Area presentation overrides may carry `plan_label_offset_m: [x, y]`, two
+finite model-space metre offsets from the owner's derived plan-label anchor.
+Only `target_kind: "area"` admits this field. It controls the placement of
+derived names and quantities; it does not store a numeric area value or change
+geometry. An explicit zero offset is a manual centered placement. Absence
+restores automatic placement. Annotation state version 4 is required when an
+offset is present; versions 1–3 cannot admit it. Placement-only records may
+also carry `inherit_appearance: true` (only for an area target), so positioning
+a label retains semantic colors, fills and linework. Explicit appearance edits
+remove this flag. Version 4 retains the version 3 symbol representation. States
+without offsets or appearance inheritance continue to encode as version 3,
+and future unknown versions remain unsupported.
+
 Area presentation overrides optionally carry `paper_line_width_mm` (finite,
 0.05–10.0) and `hatch_scale` (finite, 0.1–10.0). Both fields are optional within
 annotation state version 3: legacy records retain their existing defaults and

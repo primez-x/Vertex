@@ -1718,6 +1718,14 @@ drawing; switching modes does not change existing geometry.
   - Result: Not tested
   - Notes: ______________________________
 
+## Plan label placement
+
+- [ ] **U302 — Place a calculated area label where it is readable**
+  - Steps: Create and qualify a small appraisal area, then furnish a larger area until its interior is crowded. Double-click an area, choose **Place label** in Area attributes and click a clear position on the canvas. Choose **Automatic** to restore automatic placement. Repeat placement but press Escape before clicking. Undo, redo, save and reopen, then export the plan PDF.
+  - Expected: Names and calculated values remain visible; a label that cannot fit inside has a leader to its area. Placement changes only the label position. The click does not draw a wall or start a shape. Escape preserves the previous position. Reopening and PDF retain the manual placement; editing the boundary still updates the calculated value. Automatic restores normal placement. A read-only project refuses placement edits.
+  - Result: Not tested
+  - Notes: ______________________________
+
 ## Issue report template
 
 - Task ID(s):

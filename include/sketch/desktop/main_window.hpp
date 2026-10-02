@@ -496,6 +496,12 @@ public:
     // JSON object remains inspectable in the native project format and the
     // update uses the normal undoable Document history.
     [[nodiscard]] bool editSelectedAreaAttributes(const QString& attributes_json);
+    // Presentation-only placement relative to the selected area's derived anchor.
+    [[nodiscard]] bool beginSelectedPlanLabelPlacement();
+    [[nodiscard]] bool setSelectedPlanLabelPosition(Vec2 position,
+        std::optional<Revision> expected_revision = std::nullopt);
+    [[nodiscard]] bool resetSelectedPlanLabelPlacement(
+        std::optional<Revision> expected_revision = std::nullopt);
     // Atomically declares property policy, selected floor grade and boundary facts.
     // JSON keys: appraisal_policy {policy_kind, version, property_kind, measurement_basis},
     // grade, appraisal_facts {finish, access, ceiling_eligibility, area_use, boundary_role}.

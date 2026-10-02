@@ -1741,7 +1741,7 @@ void test_long_room_label_footprint_avoids_narrow_notch() {
             "entire font-aware long-label footprint must avoid the concave notch");
 }
 
-void test_room_label_avoids_components_and_omits_unplaceable_names() {
+void test_room_label_avoids_components_and_retains_no_fit_names() {
     MainWindow window;
     prepare_window(window);
     const Boundary room{{{0, 0}, {8, 0}, 0}, {{8, 0}, {8, 6}, 0},
@@ -1772,9 +1772,11 @@ void test_room_label_avoids_components_and_omits_unplaceable_names() {
             "font-aware room placement must retain component clearance");
     const auto huge_id = window.createRoomBoundary(room, QString(500, QLatin1Char('W')));
     require(!huge_id.isEmpty(), "unplaceable label must not reject its valid owning room");
-    require(std::none_of(target->labels().begin(), target->labels().end(),
-        [&](const auto& value) { return value.id == huge_id; }),
-        "an unplaceable derived name must not retain an invalid centroid fallback");
+    const auto outside=std::find_if(target->labels().begin(),target->labels().end(),
+        [&](const auto& value){return value.id==huge_id;});
+    require(outside!=target->labels().end() && outside->text.compare(QString(500,QLatin1Char('W')),Qt::CaseInsensitive)==0 &&
+            outside->leader_start && !outside->show_background,
+        "a no-fit derived name must retain text outside its owner with a leader");
 }
 
 void test_appraisal_draw_category_survives_workflow_switches() {
@@ -1893,7 +1895,7 @@ int main(int argc, char** argv) {
         if (application.arguments().contains(QStringLiteral("--room-labels-only"))) {
             test_concave_room_label_stays_inside_room();
             test_long_room_label_footprint_avoids_narrow_notch();
-            test_room_label_avoids_components_and_omits_unplaceable_names();
+            test_room_label_avoids_components_and_retains_no_fit_names();
             return 0;
         }
         const auto run_test = [](const char* name, void (*test)()) {
@@ -1921,7 +1923,7 @@ int main(int argc, char** argv) {
         run_test("appraisal_draw_category_survives_workflow_switches", test_appraisal_draw_category_survives_workflow_switches);
         run_test("concave_room_label_stays_inside_room", test_concave_room_label_stays_inside_room);
         run_test("long_room_label_footprint_avoids_narrow_notch", test_long_room_label_footprint_avoids_narrow_notch);
-        run_test("room_label_avoids_components_and_omits_unplaceable_names", test_room_label_avoids_components_and_omits_unplaceable_names);
+        run_test("room_label_avoids_components_and_retains_no_fit_names", test_room_label_avoids_components_and_retains_no_fit_names);
         std::cout << "Boundary workflow event tests passed\n";
         return 0;
     } catch (const std::exception& error) {

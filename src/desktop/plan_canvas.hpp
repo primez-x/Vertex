@@ -187,6 +187,9 @@ struct CanvasLabel {
     QString selection_type;
     // Derived wall measurements only. Authored annotations keep their anchor.
     std::optional<CanvasLinearLabelPlacement> automatic_linear_placement;
+    // Derived area presentation; both positions are model-space metres.
+    std::optional<Vec2> leader_start;
+    std::optional<Vec2> plan_label_offset;
 };
 
 // Exact geometric totals from the candidate document, used only while editing.
@@ -339,6 +342,8 @@ public:
     [[nodiscard]] std::optional<QRectF> selectionBounds() const;
 
     void setPointClicked(std::function<void(Vec2)> callback);
+    // A temporary one-click command consumes input before picks or authoring.
+    void setPointPlacementRequested(std::function<void(Vec2)> callback);
     void setEntityClicked(std::function<void(QString)> callback);
     // Unmodified left-button double-click in Select mode. The first click has
     // already applied ordinary selection; this callback requests the object's
@@ -667,6 +672,7 @@ private:
     bool m_tablet_active{false};
 
     std::function<void(Vec2)> m_point_clicked;
+    std::function<void(Vec2)> m_point_placement_requested;
     std::function<void(QString)> m_entity_clicked;
     std::function<void(QString)> m_entity_double_clicked;
     std::function<void(QString, bool)> m_entity_selection_clicked;

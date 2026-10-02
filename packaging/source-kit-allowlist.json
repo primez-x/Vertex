@@ -2167,6 +2167,10 @@
     },
     {
       "category": "docs",
+      "path": "docs/superpowers/plans/2026-10-01-plan-label-placement.md"
+    },
+    {
+      "category": "docs",
       "path": "docs/superpowers/plans/2026-10-01-wall-measurement.md"
     },
     {
@@ -2276,6 +2280,10 @@
     {
       "category": "docs",
       "path": "docs/verification/physical-curve-length-2026-09-30.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/verification/plan-label-placement-2026-10-01.md"
     },
     {
       "category": "docs",

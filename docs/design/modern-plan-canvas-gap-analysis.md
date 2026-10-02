@@ -11,7 +11,7 @@ and must survive save, reopen, print, and export.
 | Architectural line hierarchy | Bright orange walls and similarly weighted objects | Navy primary boundaries and walls, slate openings/components, lighter dimensions, and semantic draw ordering |
 | Named rooms and areas | Names appeared only when users created separate text annotations | Room and meaningful area names derive from persisted `name` and `classification` fields and render as plain plan text |
 | Calculated square footage on plans | Derived names lacked automatic area values | Qualified Appraisal areas append their calculated net area and workspace unit, using the report's precision and deductions; generic names can show the value alone |
-| Labels remain readable around furniture | Labels stayed at a fixed center point | Derived labels evaluate alternate positions within their owning boundary to avoid placed components |
+| Labels remain readable around furniture | Labels stayed at a fixed center point | Derived labels avoid components and deductions, fall back to an exterior leader when needed, and support saved manual placement |
 | Floor title | No plan title derived from the project hierarchy | The active floor name is anchored above the largest visible measurement area |
 | Main, exterior, and accessory-area colors | Entity type alone selected a generic color | Living areas use blue, porch/patio/deck use green, garage/carport use orange, and excluded/service areas use distinct muted palettes |
 | Garage and material hatching | Hatch renderer existed but ordinary areas never supplied it | Classification presentation supplies retained fills and diagonal garage/excluded-area hatching; saved overrides can replace it |
@@ -34,7 +34,8 @@ Appraisal numerical labels use the full semantic phase, independently of layer
 visibility. Linked voids and site outlines do not acquire standalone building
 area labels. Net labels avoid their own deducted footprints, including hidden
 deductions. Multiline text is measured as a complete text block on screen and
-in output. Existing placement may omit a label when no readable position fits.
+in output. Labels that cannot fit inside retain their text outside with a leader;
+Place label and Automatic provide contextual, reversible placement controls.
 Accepted vertex previews recalculate net values from a validated candidate
 snapshot, including unchanged deduction parents. Cancel restores committed
 values; release commits the same geometry and values. See the
