@@ -295,6 +295,73 @@ void remap_entity_references(Entity& entity,
                     reference(segment, key);
             }
         }
+        if (properties.contains("wall_measurement_source")) {
+            auto& source = properties.at("wall_measurement_source");
+            if (source.is_object() && source.value("version",0) == 1 && source.contains("walls"))
+                for (auto& wall : source.at("walls")) {
+                    reference(wall,"id");
+                    for (const auto* key : {"property_id","building_id","floor_id","layer_id","phase_id"})
+                        reference(wall.at("context"),key);
+                }
+        }
+        if (entity.extensions.contains("boundary_geometry_derivation")) {
+            auto& derivation = entity.extensions.at("boundary_geometry_derivation");
+            const auto version = derivation.value("version",0);
+            if (version == 1 || version == 2) {
+                const auto remapped_id = [&](std::string& id) {
+                    if (const auto found = remap.find(id); found != remap.end()) id = found->second;
+                };
+                const auto remapped_record = [&](json& envelope) {
+                    const auto decoded = decode_boundary_receipt_envelope(envelope);
+                    if (!decoded.supported()) throw std::invalid_argument(decoded.diagnostic);
+                    envelope = encode_boundary_receipt_envelope(
+                        transformed_boundary_construction(*decoded.record,{},remap));
+                };
+                if (version == 1) remapped_record(derivation.at("source_boundary_authoring"));
+                else for (auto& edge : derivation.at("source_boundary").at("segments"))
+                    for (const auto* key : {"segment_id","start_vertex_id","end_vertex_id"}) reference(edge,key);
+                const auto remapped_edit = [&](json& value) {
+                    auto edit = decode_boundary_geometry_edit(value);
+                    remapped_id(edit.boundary_id);
+                    remapped_id(edit.target_id);
+                    remapped_id(edit.new_vertex_id);
+                    remapped_id(edit.new_segment_id);
+                    remapped_id(edit.new_dimension_id);
+                    if (edit.arc_construction) remapped_id(edit.arc_construction->segment_id);
+                    if (edit.kind == BoundaryGeometryEditKind::redefine_boundary) {
+                        for (auto& edge : edit.replacement_segments)
+                            for (const auto* key : {"segment_id","start_vertex_id","end_vertex_id"}) reference(edge,key);
+                        if (!edit.replacement_authoring.is_null()) remapped_record(edit.replacement_authoring);
+                        for (auto& id : edit.replacement_dimension_ids) remapped_id(id);
+                        for (auto& id : edit.replacement_removed_reference_ids) remapped_id(id);
+                        for (auto& id : edit.replacement_wall_source_ids) remapped_id(id);
+                        auto mappings = json::object();
+                        for (const auto& [group,mapping] : edit.replacement_child_mapping.items()) {
+                            mappings[group] = json::object();
+                            for (const auto& [old_id,new_id] : mapping.items()) {
+                                auto old_child = old_id;
+                                auto new_child = new_id.get<std::string>();
+                                remapped_id(old_child);
+                                remapped_id(new_child);
+                                mappings[group][old_child] = new_child;
+                            }
+                        }
+                        edit.replacement_child_mapping = std::move(mappings);
+                    }
+                    value = encode_boundary_geometry_edit(edit);
+                };
+                for (auto& operation : derivation.at("operations")) {
+                    if (operation.at("kind") == "geometry_edit") remapped_edit(operation.at("value"));
+                    else if (operation.at("kind") == "vertex_batch")
+                        for (auto& edit : operation.at("value")) remapped_edit(edit);
+                    else if (operation.at("kind") == "transform") {
+                        auto transform = decode_boundary_transform(operation.at("value"));
+                        remapped_id(transform.boundary_id);
+                        operation["value"] = encode_boundary_transform(transform);
+                    } else throw std::invalid_argument("Boundary geometry derivation operation kind is unsupported");
+                }
+            }
+        }
     }
     if (entity.type == "dimension" && properties.contains("target")) {
         reference(properties.at("target"), "entity_id");
@@ -4927,15 +4994,27 @@ public:
             }
             if (source_derivation) {
                 const auto& value = *source_derivation;
-                if (!value.is_object() || value.size() != 3 || value.value("version", 0) != 1 ||
-                    !value.contains("source_boundary_authoring") ||
+                const auto derivation_version = value.value("version",0);
+                if (!value.is_object() || value.size() != 3 || (derivation_version != 1 && derivation_version != 2) ||
+                    !value.contains(derivation_version == 1 ? "source_boundary_authoring" : "source_boundary") ||
                     !value.contains("operations") || !value.at("operations").is_array() ||
                     value.at("operations").empty()) {
                     throw std::invalid_argument("Boundary geometry derivation is invalid");
                 }
-                const auto decoded = decode_boundary_receipt_envelope(
-                    value.at("source_boundary_authoring"));
-                if (!decoded.supported()) throw std::invalid_argument(decoded.diagnostic);
+                std::optional<BoundaryConstructionRecord> source_record;
+                std::optional<IdentifiedBoundary> source_boundary;
+                if (derivation_version == 1) {
+                    const auto decoded = decode_boundary_receipt_envelope(value.at("source_boundary_authoring"));
+                    if (!decoded.supported()) throw std::invalid_argument(decoded.diagnostic);
+                    source_record = *decoded.record;
+                } else {
+                    const auto& geometry = value.at("source_boundary");
+                    if (!geometry.is_object() || geometry.size() != 2 ||
+                        !geometry.contains("boundary_model_version") || !geometry.contains("segments"))
+                        throw std::invalid_argument("Archived source boundary geometry is invalid");
+                    source_boundary = decode_identified_boundary_entity(
+                        Entity{original.id,original.type,geometry,false,json::object()});
+                }
                 const auto add_record_identities = [&](const json& envelope_value) {
                     const auto record = decode_boundary_receipt_envelope(envelope_value);
                     if (!record.supported()) throw std::invalid_argument(record.diagnostic);
@@ -4946,7 +5025,12 @@ public:
                         identities.try_emplace(edge.end_vertex_id, new_id("vertex"));
                     }
                 };
-                add_record_identities(value.at("source_boundary_authoring"));
+                if (source_record) add_record_identities(value.at("source_boundary_authoring"));
+                else for (const auto& edge : source_boundary->segments) {
+                    identities.try_emplace(edge.segment_id,new_id("segment"));
+                    identities.try_emplace(edge.start_vertex_id,new_id("vertex"));
+                    identities.try_emplace(edge.end_vertex_id,new_id("vertex"));
+                }
                 // Retired topology still participates in historical replay.
                 for (const auto& operation : value.at("operations")) {
                     if (operation.at("kind") == "geometry_edit") {
@@ -4980,8 +5064,15 @@ public:
                         }
                     }
                 }
-                const auto remapped_construction = transformed_boundary_construction(
-                    *decoded.record, {}, identities);
+                json remapped_origin;
+                if (source_record) remapped_origin = encode_boundary_receipt_envelope(
+                    transformed_boundary_construction(*source_record,{},identities));
+                else {
+                    remapped_origin = value.at("source_boundary");
+                    for (auto& edge : remapped_origin.at("segments"))
+                        for (const auto* key : {"segment_id","start_vertex_id","end_vertex_id"})
+                            edge[key] = identities.at(edge.at(key).get<std::string>());
+                }
                 auto operations = json::array();
                 for (const auto& operation : value.at("operations")) {
                     if (!operation.is_object() || operation.size() != 2 ||
@@ -5002,6 +5093,7 @@ public:
                                 "Boundary geometry derivation target does not exist");
                         edit.boundary_id = clone_id;
                         edit.target_id = target->second;
+                        if (edit.arc_construction) edit.arc_construction->segment_id = edit.target_id;
                         if (edit.kind == BoundaryGeometryEditKind::insert_vertex) {
                             edit.new_vertex_id = identities.at(edit.new_vertex_id);
                             edit.new_segment_id = identities.at(edit.new_segment_id);
@@ -5032,6 +5124,8 @@ public:
                             }
                             edit.replacement_child_mapping = std::move(remapped_children);
                             for (auto& id : edit.replacement_removed_reference_ids) id = identities.at(id);
+                            for (auto& id : edit.replacement_wall_source_ids)
+                                if (const auto mapped = identities.find(id); mapped != identities.end()) id = mapped->second;
                         }
                         operations.push_back({{"kind", "geometry_edit"},
                             {"value", encode_boundary_geometry_edit(edit)}});
@@ -5075,9 +5169,8 @@ public:
                         {"value", encode_boundary_transform(
                             BoundaryTransformation{clone_id, requested_transform})}});
                 }
-                derivation = json{{"version", 1},
-                    {"source_boundary_authoring",
-                     encode_boundary_receipt_envelope(remapped_construction)},
+                derivation = json{{"version", derivation_version},
+                    {derivation_version == 1 ? "source_boundary_authoring" : "source_boundary",std::move(remapped_origin)},
                     {"operations", std::move(operations)}};
             }
             auto metadata = original;
@@ -12024,8 +12117,10 @@ public:
         } catch (const json::exception&) { return false; }
     }
 
-    std::vector<std::string> selectedWallMeasurementSources(const DocumentSnapshot& source) const {
-        if (m_selected_ids.isEmpty())
+    std::vector<std::string> selectedWallMeasurementSources(
+        const DocumentSnapshot& source, const std::optional<QStringList>& requested_ids = std::nullopt) const {
+        const auto& selection = requested_ids ? *requested_ids : m_selected_ids;
+        if (selection.isEmpty())
             throw std::invalid_argument("Select a wall in the intended exterior shell or connected interior layout.");
         const auto eligible = visible_project_entities_with_phase(source, ProjectViewFilter{});
         const auto organization = organize_project(source);
@@ -12042,7 +12137,7 @@ public:
         double shared_elevation{};
         double minimum_elevation{};
         double maximum_elevation{};
-        for (const auto& selected : m_selected_ids) {
+        for (const auto& selected : selection) {
             const auto id = selected.toStdString();
             const auto found = source.entities().find(id);
             if (found == source.entities().end() || found->second.type != "wall" || !eligible.contains(id))
@@ -12327,6 +12422,304 @@ public:
         } catch (const std::exception& error) {
             setError(QStringLiteral("Exterior measurement: %1")
                 .arg(QString::fromUtf8(error.what())));
+        }
+    }
+
+    static bool supportedExteriorWallMeasurement(const Entity& entity) {
+        try {
+            if (entity.type != "measurement_boundary") return false;
+            const auto& provenance = entity.properties.at("wall_measurement_source");
+            if (!provenance.is_object() || provenance.size() != 3 || provenance.at("version") != 1 ||
+                provenance.at("basis") != "exterior" || !provenance.at("walls").is_array() ||
+                provenance.at("walls").empty()) return false;
+            std::set<std::string> ids;
+            for (const auto& record : provenance.at("walls")) {
+                if (!record.is_object() || record.size() != 2 || !record.at("id").is_string() ||
+                    !record.at("context").is_object()) return false;
+                const auto id = record.at("id").get<std::string>();
+                if (id.empty() || !ids.insert(id).second) return false;
+                for (const auto& [key, value] : record.at("context").items())
+                    if ((key != "property_id" && key != "building_id" && key != "floor_id" &&
+                         key != "layer_id" && key != "phase_id") || !value.is_string() ||
+                        value.get_ref<const std::string&>().empty()) return false;
+            }
+            return true;
+        } catch (const json::exception&) { return false; }
+    }
+
+    // Identity retention needs a unique cyclic geometric match, including
+    // direction. Source wall IDs can change the derivation's first edge.
+    static bool uniquelyEquivalentExterior(const Boundary& original, const Boundary& proposed) {
+        if (original.size() != proposed.size() || original.empty()) return false;
+        const auto close = [](double a, double b) {
+            const auto scale = std::max({1.0, std::abs(a), std::abs(b)});
+            return std::abs(a-b) <= std::min(default_geometry_tolerance_metres * 0.01,
+                64.0 * std::numeric_limits<double>::epsilon() * scale);
+        };
+        const auto same_point = [&](Vec2 a, Vec2 b) { return close(a.x,b.x) && close(a.y,b.y); };
+        std::size_t matches{};
+        for (std::size_t offset = 0; offset < proposed.size(); ++offset) {
+            for (const bool reversed : {false,true}) {
+                bool match = true;
+                for (std::size_t i = 0; i < original.size(); ++i) {
+                    const auto& a = original[i];
+                    const auto& b = proposed[reversed ? (offset + proposed.size()-i)%proposed.size()
+                                                     : (offset+i)%proposed.size()];
+                    if (!same_point(a.start,reversed ? b.end : b.start) ||
+                        !same_point(a.end,reversed ? b.start : b.end) ||
+                        !close(a.sweep_radians,reversed ? -b.sweep_radians : b.sweep_radians)) {
+                        match = false;
+                        break;
+                    }
+                }
+                if (match && ++matches > 1) return false;
+            }
+        }
+        return matches == 1;
+    }
+
+    void showWallMeasurementSourceReview() {
+        try {
+            if (!m_document->is_editable() || m_boundary_session || m_pending_wall_start)
+                throw std::invalid_argument("Finish the drawing before replacing exterior measurement sources.");
+            const auto selected = selectedEntity();
+            if (!selected || m_selected_ids.size() != 1 || !supportedExteriorWallMeasurement(*selected))
+                throw std::invalid_argument("Select one exterior measurement with supported wall sources.");
+            const auto context = captureModalContext();
+            const auto selection = m_selected_ids;
+            const auto workspace = m_workspace;
+            const auto source = authoringSnapshot();
+            const auto original = decode_identified_boundary_entity(*selected);
+            const auto original_geometry = boundary_geometry(original);
+            const auto organization = organize_project(source);
+            const auto target_context = organization.drawing_context(selected->id);
+            if (!target_context || !target_context->complete())
+                throw std::invalid_argument("The measurement has no resolved drawing context.");
+            const auto& provenance = selected->properties.at("wall_measurement_source");
+            const auto original_phase = read_string(provenance.at("walls").front().at("context"),"phase_id");
+            std::set<std::string> original_ids;
+            for (const auto& record : provenance.at("walls")) {
+                if (read_string(record.at("context"),"phase_id") != original_phase)
+                    throw std::invalid_argument("The retained source phases are inconsistent.");
+                original_ids.insert(record.at("id").get<std::string>());
+            }
+            std::optional<double> original_elevation;
+            for (const auto& id : original_ids) {
+                const auto found = source.entities().find(id);
+                if (found == source.entities().end() || found->second.type != "wall") continue;
+                const auto resolved = resolve_vertical_placement(source,found->second);
+                original_elevation = read_finite_number(resolved.properties,
+                    resolved.properties.contains("elevation_m") ? "elevation_m" : "elevation");
+                if (original_elevation) break;
+            }
+            if (!original_elevation && (selected->properties.contains("elevation_m") ||
+                selected->properties.contains("elevation") || selected->properties.contains("vertical_placement"))) {
+                const auto resolved = resolve_vertical_placement(source,*selected);
+                original_elevation = read_finite_number(resolved.properties,
+                    resolved.properties.contains("elevation_m") ? "elevation_m" : "elevation");
+            }
+            const auto eligible = visible_project_entities_with_phase(source,ProjectViewFilter{});
+            QDialog dialog(owner);
+            styleDialog(dialog);
+            dialog.setObjectName(QStringLiteral("wallMeasurementSourceReview"));
+            dialog.setWindowTitle(QStringLiteral("Replace source walls"));
+            dialog.resize(640,580);
+            auto* layout = new QVBoxLayout(&dialog);
+            auto* help = new QLabel(QStringLiteral("Choose a wall in the intended shell. Review its exterior and source changes before applying."),&dialog);
+            help->setWordWrap(true);
+            layout->addWidget(help);
+            auto* form = new QFormLayout;
+            auto* seed = new QComboBox(&dialog);
+            seed->setObjectName(QStringLiteral("wallMeasurementSourceSeed"));
+            seed->addItem(QStringLiteral("Choose a shell wall…"));
+            for (const auto& [id, wall] : source.entities()) {
+                if (wall.type != "wall" || !eligible.contains(id) ||
+                    organization.drawing_context(id) != target_context ||
+                    read_string(wall.properties,"phase_id") != original_phase) continue;
+                const auto baseline = read_required_segment(wall.properties,"baseline");
+                if (!baseline) continue;
+                seed->addItem(QStringLiteral("%1 · %2%3").arg(QString::fromStdString(
+                    read_string(wall.properties,"name").value_or("Wall")),
+                    format_length(segment_length(*baseline),context.metric_units),
+                    baseline->sweep_radians == 0.0 ? QString{} : QStringLiteral(" · curved")),QString::fromStdString(id));
+                seed->setItemData(seed->count()-1,QString::fromStdString(id),Qt::ToolTipRole);
+            }
+            form->addRow(QStringLiteral("Shell wall"),seed);
+            layout->addLayout(form);
+            auto* changes = new QLabel(&dialog);
+            changes->setObjectName(QStringLiteral("wallMeasurementSourceChanges"));
+            changes->setWordWrap(true);
+            changes->setTextFormat(Qt::PlainText);
+            layout->addWidget(changes);
+            auto* preview = new PlanCanvas(&dialog);
+            preview->setObjectName(QStringLiteral("wallMeasurementSourcePreview"));
+            preview->setGridEnabled(false);
+            preview->setSnapEnabled(false);
+            preview->setOverviewMapEnabled(false);
+            preview->setSelectionTransformEnabled(false,false);
+            preview->setMinimumHeight(280);
+            layout->addWidget(preview,1);
+            auto* legend = new QLabel(QStringLiteral("Gray: retained exterior. Blue: proposed exterior. Amber: chosen wall."),&dialog);
+            layout->addWidget(legend);
+            auto* status = new QLabel(&dialog);
+            status->setObjectName(QStringLiteral("wallMeasurementSourceStatus"));
+            status->setWordWrap(true);
+            status->setTextFormat(Qt::PlainText);
+            layout->addWidget(status);
+            auto* buttons = new QDialogButtonBox(QDialogButtonBox::Apply | QDialogButtonBox::Cancel,&dialog);
+            buttons->setObjectName(QStringLiteral("wallMeasurementSourceButtons"));
+            layout->addWidget(buttons);
+            std::optional<EditBoundaryGeometry> candidate;
+            std::optional<DocumentSnapshot> candidate_snapshot;
+            bool topology_changed = false;
+            bool no_op = false;
+            const auto unchanged = [&] {
+                return modalContextUnchanged(context) && m_selected_ids == selection && m_workspace == workspace &&
+                    m_document->is_editable() && !m_boundary_session && !m_pending_wall_start;
+            };
+            const auto show_geometry = [&](const std::optional<Boundary>& proposed) {
+                CanvasEntity before;
+                before.id = QStringLiteral("retained-exterior");
+                before.type = QStringLiteral("measurement_boundary");
+                before.segments = original_geometry;
+                before.stroke_color = QColor(130,143,158);
+                before.output_stroke_width_mm = 1.0;
+                before.paper_stroke_width_on_screen = true;
+                std::vector<CanvasEntity> shapes{before};
+                if (proposed) {
+                    CanvasEntity after;
+                    after.id = QStringLiteral("proposed-exterior");
+                    after.type = QStringLiteral("measurement_boundary");
+                    after.segments = *proposed;
+                    after.stroke_color = QColor(40,102,245);
+                    after.filled = true;
+                    after.fill_color = QColor(40,102,245,18);
+                    shapes.push_back(std::move(after));
+                }
+                const auto chosen = source.entities().find(seed->currentData().toString().toStdString());
+                if (chosen != source.entities().end()) {
+                    if (const auto baseline = read_required_segment(chosen->second.properties,"baseline")) {
+                        CanvasEntity wall;
+                        wall.id = QStringLiteral("chosen-source-wall");
+                        wall.type = QStringLiteral("line");
+                        wall.segments = {*baseline};
+                        wall.stroke_color = QColor(190,115,35);
+                        shapes.push_back(std::move(wall));
+                    }
+                }
+                preview->setEntities(std::move(shapes));
+                preview->fitView();
+            };
+            const auto update = [&] {
+                candidate.reset();
+                candidate_snapshot.reset();
+                buttons->button(QDialogButtonBox::Apply)->setEnabled(false);
+                changes->clear();
+                show_geometry(std::nullopt);
+                try {
+                    if (!unchanged()) throw std::invalid_argument("The project, selection, workspace, drawing or units changed. Cancel and reopen this review.");
+                    if (!seed->currentIndex()) throw std::invalid_argument("Choose a current wall in the intended shell.");
+                    const auto candidates = selectedWallMeasurementSources(source,QStringList{seed->currentData().toString()});
+                    const auto ids = exterior_wall_measurement_sources(source,candidates);
+                    const auto derived = derive_exterior_wall_measurement(source,ids);
+                    for (const auto& [id, entity] : source.entities())
+                        if (id != selected->id && entity.type == "measurement_boundary" &&
+                            entity.properties.contains("wall_measurement_source") &&
+                            sameWallMeasurementSource(entity.properties.at("wall_measurement_source"),derived.source))
+                            throw std::invalid_argument("Another exterior measurement already owns these source walls. Select that measurement to review it.");
+                    QStringList added, removed;
+                    const auto wall_label = [&](const std::string& id) {
+                        const auto found = source.entities().find(id);
+                        const auto name = found == source.entities().end() ? std::optional<std::string>{}
+                            : read_string(found->second.properties,"name");
+                        return name ? QStringLiteral("%1 (%2)").arg(QString::fromStdString(*name),QString::fromStdString(id))
+                                    : QString::fromStdString(id);
+                    };
+                    for (const auto& id : ids) if (!original_ids.contains(id)) added.push_back(wall_label(id));
+                    for (const auto& id : original_ids)
+                        if (std::find(ids.begin(),ids.end(),id) == ids.end()) removed.push_back(wall_label(id));
+                    const auto resolved = resolve_vertical_placement(source,source.entities().at(ids.front()));
+                    const auto elevation = read_finite_number(resolved.properties,
+                        resolved.properties.contains("elevation_m") ? "elevation_m" : "elevation");
+                    if (!elevation) throw std::invalid_argument("The source elevation is unavailable.");
+                    changes->setText(QStringLiteral("%1 added · %2 removed · %3 exterior walls\nArea: %4 → %5\nPerimeter: %6 → %7 · Elevation: %8 → %9\nAdded: %10\nRemoved: %11")
+                        .arg(added.size()).arg(removed.size()).arg(ids.size())
+                        .arg(format_dimension_area(std::abs(signed_area(original_geometry)),context.metric_units),
+                             format_dimension_area(std::abs(signed_area(derived.boundary)),context.metric_units),
+                             format_length(perimeter(original_geometry),context.metric_units),
+                             format_length(perimeter(derived.boundary),context.metric_units),
+                             original_elevation ? format_length(*original_elevation,context.metric_units)
+                                                : QStringLiteral("original unavailable"),
+                             format_length(*elevation,context.metric_units),
+                             added.isEmpty() ? QStringLiteral("None") : added.join(QStringLiteral(", ")),
+                             removed.isEmpty() ? QStringLiteral("None") : removed.join(QStringLiteral(", "))));
+                    show_geometry(derived.boundary);
+                    topology_changed = original_geometry.size() != derived.boundary.size();
+                    const bool equivalent = uniquelyEquivalentExterior(original_geometry,derived.boundary);
+                    if (!topology_changed && !equivalent)
+                        throw std::invalid_argument("The exterior geometry changed with the same edge count. Restore the original shell geometry before repairing sources; child identities cannot be assigned safely by edge order.");
+                    no_op = equivalent && sameWallMeasurementSource(provenance,derived.source) &&
+                        wall_measurement_source_current(source,*selected);
+                    auto command = boundaryRedefinitionCommand(source,equivalent ? original_geometry : derived.boundary,{});
+                    command.edit.replacement_wall_source_ids = ids;
+                    if (!topology_changed) candidate_snapshot = Document::preview_command(source,command);
+                    else {
+                        // Check the retained deductions before asking for child
+                        // mappings. Reference choices are reviewed only on Apply.
+                        std::vector<AreaDeduction> deductions;
+                        for (const auto& id : read_deduction_ids(selected->properties))
+                            deductions.push_back({id,read_boundary(source.entities().at(id).properties)});
+                        const CalculationProfile profile{"source-repair-preview",1,AreaUnit::square_metre,2,{{"physical",{false,false}}}};
+                        (void)calculate_area(MeasurementArea{selected->id,target_context->building_id,target_context->floor_id,
+                            "physical",derived.boundary,deductions,read_stored_factor(selected->properties).rational},profile);
+                    }
+                    candidate = std::move(command);
+                    status->setText(no_op ? QStringLiteral("These sources and exterior are already current. Apply closes without changing history.")
+                        : topology_changed ? QStringLiteral("Apply reviews attached edge and corner references before committing the replacement.")
+                                           : QStringLiteral("The exterior matches uniquely. Apply preserves its edge, corner and dimension identities."));
+                    buttons->button(QDialogButtonBox::Apply)->setEnabled(true);
+                } catch (const std::exception& error) { status->setText(QString::fromUtf8(error.what())); }
+            };
+            QObject::connect(seed,qOverload<int>(&QComboBox::currentIndexChanged),&dialog,update);
+            QObject::connect(buttons->button(QDialogButtonBox::Cancel),&QPushButton::clicked,&dialog,&QDialog::reject);
+            QObject::connect(buttons->button(QDialogButtonBox::Apply),&QPushButton::clicked,&dialog,[&] {
+                if (!candidate || !unchanged()) { update(); return; }
+                try {
+                    if (authoringSnapshot().entities() != source.entities())
+                        throw std::invalid_argument("The captured source document changed. Cancel and reopen the review.");
+                    if (no_op) { clearError(); dialog.accept(); return; }
+                    auto command = *candidate;
+                    if (topology_changed) {
+                        const auto reviewed = reviewBoundaryRedefinition(source,command);
+                        if (!unchanged()) { update(); return; }
+                        if (!reviewed) return;
+                        command = *reviewed;
+                    }
+                    const auto validated = Document::preview_command(source,command);
+                    if (candidate_snapshot && validated.entities() != candidate_snapshot->entities())
+                        throw std::invalid_argument("The proposed exterior changed. Review it again.");
+                    if (!unchanged()) { update(); return; }
+                    if (authoringSnapshot().entities() != source.entities())
+                        throw std::invalid_argument("The captured source document changed during reference review. Cancel and reopen the review.");
+                    applyDocumentCommand(command);
+                    clearError();
+                    refresh();
+                    dialog.accept();
+                } catch (const std::exception& error) {
+                    status->setText(QString::fromUtf8(error.what()));
+                    buttons->button(QDialogButtonBox::Apply)->setEnabled(false);
+                }
+            });
+            QTimer timer(&dialog);
+            timer.setInterval(100);
+            QObject::connect(&timer,&QTimer::timeout,&dialog,[&] {
+                if (!unchanged()) { timer.stop(); update(); }
+            });
+            timer.start();
+            update();
+            (void)dialog.exec();
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Replace source walls: %1").arg(QString::fromUtf8(error.what())));
         }
     }
 
@@ -16340,6 +16733,58 @@ public:
                         remap.emplace(edge.segment_id, allocate("segment"));
                         remap.emplace(edge.start_vertex_id, allocate("vertex"));
                         remap.emplace(edge.end_vertex_id, allocate("vertex"));
+                    }
+                    if (entity.extensions.contains("boundary_geometry_derivation")) {
+                        const auto& derivation = entity.extensions.at("boundary_geometry_derivation");
+                        const auto add_identity = [&](const std::string& id,std::string_view prefix) {
+                            if (!id.empty() && !remap.contains(id)) remap.emplace(id,allocate(prefix));
+                        };
+                        const auto add_record = [&](const json& envelope) {
+                            const auto decoded = decode_boundary_receipt_envelope(envelope);
+                            if (!decoded.supported()) throw std::invalid_argument(decoded.diagnostic);
+                            for (const auto& edge : decoded.record->edges) {
+                                add_identity(edge.segment_id,"segment");
+                                add_identity(edge.start_vertex_id,"vertex");
+                                add_identity(edge.end_vertex_id,"vertex");
+                            }
+                        };
+                        if (derivation.value("version",0) == 1) add_record(derivation.at("source_boundary_authoring"));
+                        else if (derivation.value("version",0) == 2) {
+                            const auto archived = decode_identified_boundary_entity(Entity{entity.id,entity.type,
+                                derivation.at("source_boundary"),false,json::object()});
+                            for (const auto& edge : archived.segments) {
+                                add_identity(edge.segment_id,"segment");
+                                add_identity(edge.start_vertex_id,"vertex");
+                                add_identity(edge.end_vertex_id,"vertex");
+                            }
+                        } else throw std::invalid_argument("Boundary geometry derivation version is unsupported");
+                        const auto add_edit = [&](const json& value) {
+                            const auto edit = decode_boundary_geometry_edit(value);
+                            if (edit.kind != BoundaryGeometryEditKind::redefine_boundary)
+                                add_identity(edit.target_id,edit.kind == BoundaryGeometryEditKind::move_vertex ? "vertex" : "segment");
+                            add_identity(edit.new_vertex_id,"vertex");
+                            add_identity(edit.new_segment_id,"segment");
+                            add_identity(edit.new_dimension_id,"dimension");
+                            if (edit.kind != BoundaryGeometryEditKind::redefine_boundary) return;
+                            for (const auto& edge : edit.replacement_segments) {
+                                add_identity(edge.at("segment_id").get<std::string>(),"segment");
+                                add_identity(edge.at("start_vertex_id").get<std::string>(),"vertex");
+                                add_identity(edge.at("end_vertex_id").get<std::string>(),"vertex");
+                            }
+                            if (!edit.replacement_authoring.is_null()) add_record(edit.replacement_authoring);
+                            for (const auto& id : edit.replacement_dimension_ids) add_identity(id,"dimension");
+                            for (const auto& id : edit.replacement_removed_reference_ids) add_identity(id,"reference");
+                            for (const auto& [group,mapping] : edit.replacement_child_mapping.items())
+                                for (const auto& [old_id,new_id] : mapping.items()) {
+                                    add_identity(old_id,group == "segments" ? "segment" : "vertex");
+                                    add_identity(new_id.get<std::string>(),group == "segments" ? "segment" : "vertex");
+                                }
+                        };
+                        for (const auto& operation : derivation.at("operations")) {
+                            if (operation.at("kind") == "geometry_edit") add_edit(operation.at("value"));
+                            else if (operation.at("kind") == "vertex_batch")
+                                for (const auto& edit : operation.at("value")) add_edit(edit);
+                        }
                     }
                 }
                 if (entity.type == kAnnotationEntityType) {
@@ -23655,12 +24100,17 @@ private:
         measure_exterior->setObjectName(QStringLiteral("measureExteriorFromWalls"));
         auto* refresh_exterior = new QAction(QStringLiteral("Refresh exterior measurement…"),owner);
         refresh_exterior->setObjectName(QStringLiteral("refreshExteriorMeasurement"));
+        auto* replace_exterior = new QAction(QStringLiteral("Replace source walls…"),owner);
+        replace_exterior->setObjectName(QStringLiteral("replaceExteriorMeasurementSources"));
         owner->addAction(measure_exterior);
         owner->addAction(refresh_exterior);
+        owner->addAction(replace_exterior);
         more_menu->addAction(measure_exterior);
         more_menu->addAction(refresh_exterior);
+        more_menu->addAction(replace_exterior);
         QObject::connect(measure_exterior,&QAction::triggered,owner,[this] { showWallMeasurementReview(); });
         QObject::connect(refresh_exterior,&QAction::triggered,owner,[this] { showWallMeasurementReview(true); });
+        QObject::connect(replace_exterior,&QAction::triggered,owner,[this] { showWallMeasurementSourceReview(); });
         m_terrain_action = new QAction(QStringLiteral("Create terrain surface…"), owner);
         m_terrain_action->setObjectName(QStringLiteral("createTerrainSurface"));
         m_architectural_actions = {curved_wall_action, sloped_wall_action, m_view_action, m_remodel_action,
@@ -25724,8 +26174,11 @@ private:
                 if (selected && selected->type == "wall")
                     menu.addAction(owner->findChild<QAction*>(QStringLiteral("measureExteriorFromWalls")));
                 if (m_selected_ids.size() == 1 && selected && selected->type == "measurement_boundary" &&
-                    selected->properties.contains("wall_measurement_source"))
+                    selected->properties.contains("wall_measurement_source")) {
                     menu.addAction(owner->findChild<QAction*>(QStringLiteral("refreshExteriorMeasurement")));
+                    if (supportedExteriorWallMeasurement(*selected))
+                        menu.addAction(owner->findChild<QAction*>(QStringLiteral("replaceExteriorMeasurementSources")));
+                }
                 if (m_selected_ids.size()==1 && selected &&
                     (selected->type=="measurement_boundary" || selected->type=="boundary"))
                     menu.addAction(m_auto_subtract_action);
@@ -29158,6 +29611,9 @@ private:
         m_save_as_action->setEnabled(m_document->is_editable());
         m_object_button->setEnabled(m_document->is_editable());
         const auto selected=selectedEntity();
+        if (auto* repair = owner->findChild<QAction*>(QStringLiteral("replaceExteriorMeasurementSources")))
+            repair->setEnabled(m_document->is_editable() && !m_boundary_session && !m_pending_wall_start &&
+                m_selected_ids.size() == 1 && selected && supportedExteriorWallMeasurement(*selected));
         if (m_auto_subtract_action) m_auto_subtract_action->setEnabled(m_document->is_editable() &&
             !m_boundary_session && m_selected_ids.size()==1 && selected &&
             (selected->type=="measurement_boundary" || selected->type=="boundary"));
@@ -30998,7 +31454,7 @@ public:
             dialog.resize(720, 700);
             auto* layout = new QVBoxLayout(&dialog);
             auto* help = new QLabel(QStringLiteral(
-                "Change an edge's length or curvature. Curve edits keep both endpoints fixed."), &dialog);
+                "Length edits preserve the curve sweep. Curvature reconstruction keeps both endpoints fixed."), &dialog);
             help->setWordWrap(true);
             layout->addWidget(help);
             auto* form = new QFormLayout;
@@ -31046,12 +31502,10 @@ public:
             auto* related = new QCheckBox(QStringLiteral("Move related objects"), &dialog);
             related->setObjectName(QStringLiteral("boundaryMoveRelatedObjects"));
             related->setChecked(true);
-            related->setEnabled(std::all_of(boundary.segments.begin(),boundary.segments.end(),
-                [](const auto& value) { return value.segment.sweep_radians==0.0; }));
             related->setToolTip(QStringLiteral(
                 "Moves walls and other areas joined by saved endpoint relationships. "
-                "When disabled, those objects stay fixed and conflicting edits cannot apply. "
-                "Related-object solving requires straight boundaries."));
+                "When unchecked, those objects stay fixed and conflicting edits cannot apply. "
+                "Curved edges retain their signed sweep during length editing."));
             form->addRow(related);
             layout->addLayout(form);
             auto* preview = new PlanCanvas(&dialog);
@@ -31330,8 +31784,7 @@ public:
                 if (auto* label = form->labelForField(fixed)) label->setVisible(!curve);
                 connected->setEnabled(!curve);
                 connected->setVisible(!curve);
-                related->setEnabled(!curve && std::all_of(boundary.segments.begin(), boundary.segments.end(),
-                    [](const auto& item) { return item.segment.sweep_radians == 0; }));
+                related->setEnabled(!curve);
                 related->setVisible(!curve);
                 clockwise->setVisible(mode == QStringLiteral("arc_length"));
                 chord->setVisible(curve);

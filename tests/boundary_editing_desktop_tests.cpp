@@ -1,6 +1,7 @@
 #include "sketch/boundary_dimension.hpp"
 #include "sketch/boundary_edit.hpp"
 #include "sketch/boundary_entity.hpp"
+#include "sketch/constraint_entity.hpp"
 #include "sketch/desktop/main_window.hpp"
 #include "support/noninteractive_errors.hpp"
 
@@ -17,6 +18,7 @@
 #include <QLineEdit>
 #include <QPushButton>
 #include <QTemporaryDir>
+#include <QTableWidget>
 #include <QTimer>
 #include <QWidget>
 
@@ -268,6 +270,84 @@ void default_length_operation_remains_available() {
             "default Length Apply must remain one undoable and redoable geometry edit");
 }
 
+void curved_edge_resize_offers_related_object_choice(bool metric) {
+    QTemporaryDir directory;
+    require(directory.isValid(), "curved linked editor fixture needs a project directory");
+    MainWindow window({}, nullptr, directory.filePath("text-library.json"));
+    window.setAttribute(Qt::WA_DontShowOnScreen);
+    window.setMetricUnits(metric);
+    const sketch::Boundary shape{{{0,0},{4,0},0.6},{{4,0},{4,3},0},
+        {{4,3},{0,3},0},{{0,3},{0,0},0}};
+    const auto area_id = window.createBoundary(shape);
+    const auto wall_id = window.createStraightWall({4,0},{7,0});
+    require(!area_id.isEmpty() && !wall_id.isEmpty(), "curved linked fixture creates measured area and wall");
+    const auto original = window.document().snapshot();
+    const auto boundary = sketch::decode_identified_boundary_entity(original.entities().at(area_id.toStdString()));
+    const auto& edge = boundary.segments.front();
+    const sketch::PersistentConstraint relation{"curved-edge-wall-joint",
+        sketch::ConstraintRelationKind::coincident,
+        {{area_id.toStdString(),sketch::WallEndpointRole::end,edge.segment_id,edge.end_vertex_id},
+         {wall_id.toStdString(),sketch::WallEndpointRole::start}},std::nullopt,std::nullopt};
+    window.document().apply(sketch::ApplyEntityChanges{window.document().revision(),
+        {sketch::EntityChange::upsert(sketch::encode_constraint_entity(relation))},{},"Fixture explicit endpoint joint"});
+    window.resize(1100,780);
+    window.show();
+    QApplication::processEvents();
+    const auto before = window.document().snapshot();
+    const auto edit = [&](bool apply) {
+        require(window.selectEntity(area_id), "select curved boundary before resizing");
+        auto& button = child<QPushButton>(window,"editBoundaryGeometry");
+        button.setFocus();
+        modal_interaction(window,"boundaryGeometryDialog",[&] { button.click(); },[&](QDialog& dialog) {
+            auto& related = child<QCheckBox>(dialog,"boundaryMoveRelatedObjects");
+            require(related.isEnabled() && related.isChecked(),
+                "curved edge length editing must offer an enabled related-object choice");
+            choose_data(child<QComboBox>(dialog,"boundaryEdge"),QString::fromStdString(edge.segment_id));
+            auto& length = child<QLineEdit>(dialog,"boundaryEdgeLength");
+            length.setText("5 m"); // An explicit unit must work in either display system.
+            auto& buttons = child<QDialogButtonBox>(dialog,"boundaryGeometryButtons");
+            require(buttons.button(QDialogButtonBox::Apply)->isEnabled(),
+                "curved physical length resize must preview its related wall movement");
+            related.click();
+            require(!related.isChecked() && !buttons.button(QDialogButtonBox::Apply)->isEnabled() &&
+                        !child<QLabel>(dialog,"boundaryGeometryStatus").text().isEmpty(),
+                "retaining a joined wall must explain and refuse the conflicting curved edge resize");
+            require(window.document().snapshot().entities()==before.entities(),
+                "conflicting preview must preserve both owners and their saved relationship");
+            related.click();
+            require(related.isChecked() && buttons.button(QDialogButtonBox::Apply)->isEnabled() &&
+                        child<QTableWidget>(dialog,"boundaryGeometryChanges").rowCount()>=2,
+                "allowing related movement must restore the valid analytical proposal");
+            capture(dialog,metric ? "curved-related-metric.png" : "curved-related-imperial.png");
+            buttons.button(apply ? QDialogButtonBox::Apply : QDialogButtonBox::Cancel)->click();
+        });
+    };
+    edit(false);
+    require(window.document().snapshot().entities()==before.entities() &&
+                window.document().revision()==before.revision(),
+        "Cancel must retain the original curved area, related wall and history");
+    edit(true);
+    const auto after = window.document().snapshot();
+    const auto resized = sketch::decode_identified_boundary_entity(after.entities().at(area_id.toStdString()));
+    const auto& segment = resized.segments.front().segment;
+    const auto& wall = after.entities().at(wall_id.toStdString()).properties.at("baseline");
+    require(after.revision()==before.revision()+1 && segment.sweep_radians==edge.segment.sweep_radians &&
+                same_point(segment.start,edge.segment.start) && std::abs(sketch::segment_length(segment)-5)<1e-8 &&
+                std::hypot(wall.at("start").at(0).get<double>()-segment.end.x,
+                           wall.at("start").at(1).get<double>()-segment.end.y)<1e-7,
+        "one Apply must retain sweep and anchored endpoint while moving the joined wall to the resized arc");
+    require(after.entities().at(relation.id)==before.entities().at(relation.id),
+        "physical curved editing must retain the explicit endpoint relationship");
+    require(window.undoCommand() && window.document().snapshot().entities()==before.entities() &&
+                window.redoCommand() && window.document().snapshot().entities()==after.entities(),
+        "related curved editing must undo and redo both owners together");
+    const auto project = directory.filePath("curved-related.bldproj");
+    MainWindow reopened({},nullptr,directory.filePath("missing-library.json"));
+    require(window.saveProjectAs(project) && reopened.openProject(project) &&
+                reopened.document().snapshot().entities()==after.entities(),
+        "related curved edit, dimensions and joint must survive save/reopen");
+}
+
 struct ArcCase {
     const char* name;
     const char* operation;
@@ -501,6 +581,12 @@ int main(int argc, char** argv) {
         require(QFontDatabase::addApplicationFont(QStringLiteral(":/fonts/Inter.ttf")) >= 0,
                 "bundled font must load for actual editor captures");
         app.setFont(QFont(QStringLiteral("Inter"), 10));
+        if (app.arguments().contains(QStringLiteral("--curved-related-only"))) {
+            curved_edge_resize_offers_related_object_choice(false);
+            curved_edge_resize_offers_related_object_choice(true);
+            std::cout << "curved related-object editor passed\n";
+            return 0;
+        }
         curve_angle_requires_explicit_units();
         explicit_curve_angle_constructions();
         const bool curve_units_only = std::any_of(argv + 1, argv + argc, [](const char* arg) {
@@ -512,6 +598,8 @@ int main(int argc, char** argv) {
         }
         length_dimension_delete_recreate_and_restore();
         default_length_operation_remains_available();
+        curved_edge_resize_offers_related_object_choice(false);
+        curved_edge_resize_offers_related_object_choice(true);
         const ArcCase cases[]{
             {"angle-outward", "angle", "60 deg",
              sketch::BoundaryConstructionKind::arc_chord_angle,

@@ -1,6 +1,6 @@
 # Vertex user testing checklist
 
-319 practical tasks, grouped by how you use the app. This replaces the earlier engineering-oriented checklist. The old 130-item list is preserved separately as engineering-requirements-checklist.md.
+321 practical tasks, grouped by how you use the app. This replaces the earlier engineering-oriented checklist. The old 130-item list is preserved separately as engineering-requirements-checklist.md.
 
 This is a user acceptance list for the intended app, not a claim that every listed action is implemented or working in the current preview. If you cannot find a control, or a feature is absent, mark **Blocked / missing** and describe it. Specialized sections can be skipped if you do not use them or lack the device or sample files.
 
@@ -39,6 +39,7 @@ Start with the workspace, draw a room, close it with the mouse, drag-select it, 
 - Custom area details (1 task)
 - Exact keyboard drawing (8 tasks)
 - Architectural joins and named views (3 tasks)
+- Connected boundary edits and exterior source repair (2 tasks)
 
 ## Start a project and arrange the workspace
 
@@ -1848,6 +1849,18 @@ drawing; switching modes does not change existing geometry.
 - [ ] **U319 — Undo and redo while continuing a wall chain**
   - Steps: In Imperial, start a wall chain and add two edges. Press Ctrl+Z, then Ctrl+Y; press Ctrl+Z twice and confirm the original start point remains active. Add an edge, undo it, add a different one and press Ctrl+Y. Finish the chain. Start another chain and place only its start point, then click toolbar **Undo** before drawing a wall. Repeat in Metric.
   - Expected: Ctrl+Z removes only the last accepted chain edge and resumes at the retained endpoint where that edge began; Ctrl+Y restores the edge and resumes at its restored end. Undoing all edges returns to the original anchor while keeping the chain active. Adding a different edge after Undo abandons the old redo branch. Toolbar Undo with only an unfinished start point cancels that draft without changing project geometry or history.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **U320 — Change a curved boundary length with a related wall**
+  - Steps: In Imperial, create a closed area with a curved edge and a wall joined to that edge through a saved relationship. Select the area and edit the curved edge's physical length. Leave **Move related objects** checked and Apply; inspect the joined wall and undo. Repeat with the option unchecked. Repeat both choices in Metric.
+  - Expected: The option is on by default. With it checked, the boundary and connected wall update together as one undoable edit. With it unchecked, an edit that would leave invalid connected geometry is refused without changing either object. The area remains valid after Undo and Redo.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **U321 — Replace the recorded walls of a stale exterior measurement**
+  - Steps: Create and name an exterior measurement from a closed wall shell. Set its style, declare appraisal facts, and link a deduction. Delete a perimeter wall and redraw its equivalent. Try **Refresh exterior measurement…** and confirm it cannot refresh from the removed source. Open **Replace source walls…** from Tools or the measured area's right-click menu, select the replacement shell wall, and review the proposed sources and counts. Cancel and confirm nothing changed; reopen, Apply, then inspect dimensions and appraisal totals. Undo, Redo, save and reopen.
+  - Expected: Ordinary Refresh reports that its recorded sources are unavailable and leaves the measurement unchanged. Replacement shows the recorded shell in gray and proposed shell in blue, with source details for review. Cancel is non-mutating. Apply preserves the measurement's owner, facts, name, style, deduction relationships and dimensions while restoring current qualified appraisal totals. Undo/Redo and reopening retain the replacement. If same-count edge mapping is ambiguous, the app refuses to guess; changed topology uses the existing reference planner.
   - Result: Not tested
   - Notes: ______________________________
 

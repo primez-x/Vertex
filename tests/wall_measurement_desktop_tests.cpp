@@ -26,6 +26,7 @@
 #include <QPdfDocument>
 #include <QStandardPaths>
 #include <QTemporaryDir>
+#include <QTableWidget>
 #include <QTimer>
 #include <QUuid>
 
@@ -958,6 +959,299 @@ void level_bound_walls_share_a_physical_plane_despite_arithmetic_roundoff() {
             "single-wall discovery reuses the coplanar source owner without double counting");
 }
 
+void replaced_wall_sources_repair_existing_appraisal_area(bool metric, bool curved) {
+    using sketch::desktop::MainWindow;
+    MainWindow window;
+    window.setAttribute(Qt::WA_DontShowOnScreen);
+    window.resize(1200,800);
+    window.show();
+    QApplication::processEvents();
+    window.setMetricUnits(metric);
+    choose_appraisal_workflow(window);
+    auto* repair = window.findChild<QAction*>("replaceExteriorMeasurementSources");
+    require(repair,"existing exterior measurements must expose Replace source walls as a repair command");
+    QStringList walls;
+    if (curved) {
+        walls = {window.createCurvedWall({0,0},{4,0},"90 deg","exterior"),
+            window.createStraightWall({4,0},{4,3},"exterior"),
+            window.createStraightWall({4,3},{0,3},"exterior"),
+            window.createStraightWall({0,3},{0,0},"exterior")};
+    } else walls = rectangle_walls(window);
+    select_walls(window,walls);
+    const auto area = window.createMeasurementBoundaryFromSelectedWalls();
+    require(!area.isEmpty() && window.selectEntity(area) &&
+                window.editSelectedAppraisalFacts(appraisal_declarations()),
+        "repair fixture starts with a qualified exterior measurement");
+    const auto garage = window.createBoundary({{{1,1},{1.2,1},0},{{1.2,1},{1.2,1.2},0},
+        {{1.2,1.2},{1,1.2},0},{{1,1.2},{1,1},0}},"garage");
+    require(!garage.isEmpty() && window.selectEntity(garage) && window.applySelectedAutoSubtract(area) &&
+                window.editSelectedAppraisalFacts(appraisal_declarations("garage")),
+        "repair fixture retains a declared garage deduction");
+    set_area_name(window,area,"Repaired exterior");
+    require(window.editSelectedAreaAttributes(R"({"finish_note":"retain me"})"),
+        "repair fixture retains area attributes");
+    set_area_appearance(window,area);
+    const auto prepared = window.document().snapshot();
+    auto* qualified = window.findChild<QLabel*>("appraisalQualification");
+    require(qualified && qualified->text().startsWith("Qualified"),"prepared exterior is qualified");
+    require(window.selectEntity(walls.front()) && window.deleteSelection(),
+        "ordinary deletion removes a perimeter source wall");
+    const auto replacement = curved ? window.createCurvedWall({0,0},{4,0},"90 deg","exterior")
+        : window.createStraightWall({0,0},{4,0},"exterior");
+    const auto isolated = window.createStraightWall({10,10},{11,10},"exterior");
+    require(!replacement.isEmpty() && !isolated.isEmpty() && replacement!=walls.front() && window.selectEntity(area),
+        "redrawing the same perimeter produces a new wall identity");
+    const auto before = window.document().snapshot();
+    require(!window.refreshSelectedWallMeasurement() && window.document().snapshot().entities()==before.entities() &&
+                qualified->text().startsWith("Unqualified"),
+        "ordinary Refresh refuses missing retained IDs without silently discovering new walls");
+    const auto review = [&](bool accept, bool stale_units=false, bool stale_selection=false) {
+        require(window.selectEntity(area),"select the stale exterior area for source repair");
+        std::exception_ptr failure;
+        bool opened=false;
+        QTimer::singleShot(0,&window,[&] {
+            auto* dialog=qobject_cast<QDialog*>(QApplication::activeModalWidget());
+            try {
+                require(dialog && dialog->objectName()=="wallMeasurementSourceReview", "repair opens its source-choice review");
+                opened=true;
+                auto* seed=dialog->findChild<QComboBox*>("wallMeasurementSourceSeed");
+                auto* buttons=dialog->findChild<QDialogButtonBox*>("wallMeasurementSourceButtons");
+                auto* summary=dialog->findChild<QLabel*>("wallMeasurementSourceChanges");
+                auto* status=dialog->findChild<QLabel*>("wallMeasurementSourceStatus");
+                require(seed && buttons && summary && status && seed->findData(replacement)>=0,
+                    "repair lets the user choose a current shell wall");
+                require(seed->findData(isolated)>=0,"the repair chooser includes the isolated wall in this layer");
+                seed->setCurrentIndex(seed->findData(isolated));
+                QApplication::processEvents();
+                require(!buttons->button(QDialogButtonBox::Apply)->isEnabled() && !status->text().isEmpty() &&
+                            window.document().snapshot().entities()==before.entities(),
+                    "an open shell refuses Apply without changing the owner or sources");
+                seed->setCurrentIndex(seed->findData(replacement));
+                QApplication::processEvents();
+                require(buttons->button(QDialogButtonBox::Apply)->isEnabled() &&
+                            summary->text().contains("1 added") && summary->text().contains("1 removed"),
+                    "repair previews and discloses the exact source replacement");
+                require(window.document().snapshot().entities()==before.entities(),"repair review is detached");
+                const auto capture_name=QStringLiteral("%1-source-repair-%2")
+                    .arg(curved ? QStringLiteral("curved") : QStringLiteral("straight"))
+                    .arg(metric ? QStringLiteral("metric") : QStringLiteral("imperial")).toUtf8();
+                capture(*dialog,capture_name.constData());
+                if (stale_units) {
+                    window.setMetricUnits(!metric);
+                    buttons->button(QDialogButtonBox::Apply)->click();
+                    require(window.document().snapshot().entities()==before.entities() && !status->text().isEmpty(),
+                        "unit-stale repair is refused without publishing the captured proposal");
+                    dialog->reject();
+                } else if (stale_selection) {
+                    require(window.selectEntity(replacement),"change the selection while a repair proposal is open");
+                    buttons->button(QDialogButtonBox::Apply)->click();
+                    require(window.document().snapshot().entities()==before.entities() && !status->text().isEmpty(),
+                        "selection-stale repair is refused without publishing the captured proposal");
+                    dialog->reject();
+                } else buttons->button(accept ? QDialogButtonBox::Apply : QDialogButtonBox::Cancel)->click();
+            } catch (...) { failure=std::current_exception(); if (dialog) dialog->reject(); }
+        });
+        repair->trigger();
+        if (failure) std::rethrow_exception(failure);
+        require(opened,"repair command opens its actual modal");
+    };
+    review(false);
+    require(window.document().snapshot().entities()==before.entities() && window.document().revision()==before.revision(),
+        "Cancel retains the stale owner and project history");
+    review(true,true);
+    window.setMetricUnits(metric);
+    review(true,false,true);
+    review(true);
+    const auto after=window.document().snapshot();
+    const auto& owner=after.entities().at(area.toStdString());
+    require(after.revision()==before.revision()+1 && count_type(after,"measurement_boundary")==2 &&
+                sketch::wall_measurement_source_current(after,owner) && qualified->text().startsWith("Qualified"),
+        "repair commits one edit to the retained exterior owner and restores appraisal qualification");
+    for (const auto* key : {"name","appraisal_facts","area_attributes","deduction_ids","factor"})
+        require(owner.properties.at(key)==prepared.entities().at(area.toStdString()).properties.at(key),
+            "repair must preserve area metadata, exact factor and deduction links");
+    require(annotation_entities(after)==annotation_entities(before) &&
+                std::abs(analytical_area(owner)-analytical_area(prepared.entities().at(area.toStdString())))<1e-8 &&
+                curved_edge_count(owner)==(curved ? 1U : 0U),
+        "equivalent source repair retains styling and the original analytical quantities");
+    const auto old_dimensions=dimensions_for(before,area.toStdString());
+    const auto new_dimensions=dimensions_for(after,area.toStdString());
+    require(old_dimensions.size()==new_dimensions.size(),"equivalent source repair retains every bound dimension");
+    for (const auto& dimension : old_dimensions)
+        require(after.entities().contains(dimension.id),"equivalent source repair preserves dimension identities");
+    require(window.undoCommand() && window.document().snapshot().entities()==before.entities() &&
+                window.redoCommand() && window.document().snapshot().entities()==after.entities(),
+        "source repair undoes and redoes geometry and provenance together");
+    QTemporaryDir directory;
+    MainWindow reopened;
+    require(directory.isValid() && window.saveProjectAs(directory.filePath("source-repair.bldproj")) &&
+                reopened.openProject(directory.filePath("source-repair.bldproj")) &&
+                reopened.document().snapshot().entities()==after.entities(),
+        "repaired appraisal facts, relationships, geometry and sources survive save/reopen");
+}
+
+void split_source_replacement_reviews_manual_references() {
+    sketch::desktop::MainWindow window;
+    window.setMetricUnits(true);
+    const auto walls=rectangle_walls(window);
+    select_walls(window,walls);
+    const auto area=window.createMeasurementBoundaryFromSelectedWalls();
+    require(!area.isEmpty(),"split source repair starts with a measured exterior");
+    const auto original=sketch::decode_identified_boundary_entity(
+        window.document().snapshot().entities().at(area.toStdString()));
+    const auto manual=window.createLengthDimension(area,
+        QString::fromStdString(original.segments.front().segment_id),{2,-1});
+    require(!manual.isEmpty() && window.selectEntity(walls.front()) && window.deleteSelection(),
+        "split fixture retains a manual dimension and replaces one source wall");
+    const auto first=window.createStraightWall({0,0},{2,0});
+    const auto second=window.createStraightWall({2,0},{4,0});
+    require(!first.isEmpty() && !second.isEmpty() && window.selectEntity(area),"split replacement walls exist");
+    const auto before=window.document().snapshot();
+    auto* repair=window.findChild<QAction*>("replaceExteriorMeasurementSources");
+    require(repair,"split repair has a source replacement action");
+    for (const bool accept : {false,true}) {
+        std::exception_ptr failure;
+        bool references_opened=false;
+        QTimer::singleShot(0,&window,[&] {
+            auto* dialog=qobject_cast<QDialog*>(QApplication::activeModalWidget());
+            try {
+                require(dialog && dialog->objectName()=="wallMeasurementSourceReview","split replacement opens source review");
+                auto* seed=dialog->findChild<QComboBox*>("wallMeasurementSourceSeed");
+                auto* buttons=dialog->findChild<QDialogButtonBox*>("wallMeasurementSourceButtons");
+                require(seed && buttons && seed->findData(first)>=0,"split repair offers the replacement shell");
+                seed->setCurrentIndex(seed->findData(first));
+                require(buttons->button(QDialogButtonBox::Apply)->isEnabled(),"split topology can proceed to explicit reference review");
+                QTimer::singleShot(0,&window,[&] {
+                    auto* review=qobject_cast<QDialog*>(QApplication::activeModalWidget());
+                    try {
+                        require(review && review->objectName()=="boundaryReferenceReview","Apply reviews changed topology references");
+                        references_opened=true;
+                        auto* choices=review->findChild<QTableWidget*>("boundaryReferenceChoices");
+                        auto* mappings=review->findChild<QTableWidget*>("boundaryReferenceMappings");
+                        auto* reference_buttons=review->findChild<QDialogButtonBox*>("boundaryReferenceButtons");
+                        require(choices && mappings && reference_buttons && choices->rowCount()==1 && mappings->rowCount()==1,
+                            "only the attached manual length dimension needs an explicit replacement edge");
+                        require(!reference_buttons->button(QDialogButtonBox::Apply)->isEnabled(),"unresolved references cannot apply");
+                        if (!accept) { review->reject(); return; }
+                        auto* decision=qobject_cast<QComboBox*>(choices->cellWidget(0,1));
+                        auto* target=qobject_cast<QComboBox*>(mappings->cellWidget(0,1));
+                        require(decision && target && target->count()>1,"reference controls have actual choices");
+                        decision->setCurrentIndex(1); // Explicitly keep and map.
+                        target->setCurrentIndex(1);   // Explicitly choose displayed E1.
+                        require(reference_buttons->button(QDialogButtonBox::Apply)->isEnabled(),"reviewed reference mapping validates");
+                        require(window.document().snapshot().entities()==before.entities(),"reference preview is detached");
+                        capture(*review,"split-source-reference-review");
+                        reference_buttons->button(QDialogButtonBox::Apply)->click();
+                    } catch (...) { failure=std::current_exception(); if (review) review->reject(); }
+                });
+                buttons->button(QDialogButtonBox::Apply)->click();
+                if (!accept || failure) dialog->reject();
+            } catch (...) { failure=std::current_exception(); if (dialog) dialog->reject(); }
+        });
+        repair->trigger();
+        if (failure) std::rethrow_exception(failure);
+        require(references_opened,"changed topology uses the real reference planner");
+        if (!accept) require(window.document().snapshot().entities()==before.entities() && window.document().revision()==before.revision(),
+            "Cancel in reference review preserves the original measurement, source IDs and manual dimension");
+    }
+    const auto after=window.document().snapshot();
+    const auto& owner=after.entities().at(area.toStdString());
+    const auto edited=sketch::decode_identified_boundary_entity(owner);
+    const auto dimension=sketch::decode_boundary_dimension_entity(after.entities().at(manual.toStdString()));
+    require(after.revision()==before.revision()+1 && edited.segments.size()==5 &&
+                sketch::wall_measurement_source_current(after,owner) && dimension.supported() &&
+                dimension.dimension->segment_id==edited.segments.front().segment_id,
+        "split replacement commits the new source and explicit manual edge mapping once");
+    require(std::abs(analytical_area(owner)-analytical_area(before.entities().at(area.toStdString())))<1e-8 &&
+                window.undoCommand() && window.document().snapshot().entities()==before.entities() &&
+                window.redoCommand() && window.document().snapshot().entities()==after.entities(),
+        "a split shell retains exact area and undoes/redoes geometry, sources and references atomically");
+}
+
+void plain_source_repair_clones_and_pastes_its_retained_proof() {
+    sketch::desktop::MainWindow seed_window;
+    const auto wall_ids=rectangle_walls(seed_window);
+    select_walls(seed_window,wall_ids);
+    const auto area=seed_window.createMeasurementBoundaryFromSelectedWalls();
+    require(!area.isEmpty(),"plain repair fixture begins with an exterior owner");
+    std::vector<sketch::Entity> imported;
+    const auto seeded=seed_window.document().snapshot();
+    for (const auto& [id,value] : seeded.entities()) {
+        auto entity=value;
+        if (id==area.toStdString()) entity.properties.erase("boundary_authoring");
+        imported.push_back(std::move(entity));
+    }
+    auto document=std::make_shared<sketch::Document>(sketch::Document::create(imported));
+    sketch::desktop::MainWindow window(document);
+    window.setMetricUnits(true);
+    require(window.selectEntity(wall_ids.front()) && window.deleteSelection(),"replace a plain owner's source wall");
+    const auto replacement=window.createStraightWall({0,0},{4,0});
+    require(!replacement.isEmpty() && window.selectEntity(area),"plain source repair retains the imported owner");
+    std::exception_ptr failure;
+    QTimer::singleShot(0,&window,[&] {
+        auto* dialog=qobject_cast<QDialog*>(QApplication::activeModalWidget());
+        try {
+            require(dialog && dialog->objectName()=="wallMeasurementSourceReview","plain source opens the real repair dialog");
+            auto* seed=dialog->findChild<QComboBox*>("wallMeasurementSourceSeed");
+            auto* buttons=dialog->findChild<QDialogButtonBox*>("wallMeasurementSourceButtons");
+            require(seed && buttons && seed->findData(replacement)>=0,"plain repair offers its replacement wall");
+            seed->setCurrentIndex(seed->findData(replacement));
+            require(buttons->button(QDialogButtonBox::Apply)->isEnabled(),"plain repair validates without invented input receipts");
+            buttons->button(QDialogButtonBox::Apply)->click();
+        } catch (...) { failure=std::current_exception(); if (dialog) dialog->reject(); }
+    });
+    auto* repair=window.findChild<QAction*>("replaceExteriorMeasurementSources");
+    require(repair,"plain repair has an actual action");
+    repair->trigger();
+    if (failure) std::rethrow_exception(failure);
+    const auto repaired=window.document().snapshot();
+    const auto original=repaired.entities().at(area.toStdString());
+    require(original.extensions.at("boundary_geometry_derivation").at("version")==2 &&
+                !original.properties.contains("boundary_authoring"),"plain source repair archives geometry without fabricating receipts");
+    require(window.transformSelectedBoundary("0",false,false,"10 m","0 m",true),
+        "a plain source-repaired boundary can be cloned with its retained proof");
+    const auto cloned=window.document().snapshot();
+    const auto clone_id=window.selectedEntityId().toStdString();
+    require(clone_id!=original.id && cloned.entities().at(original.id)==original &&
+                cloned.entities().at(clone_id).extensions.at("boundary_geometry_derivation").at("version")==2,
+        "single clone remaps the archived topology while preserving the source owner");
+    require(window.undoCommand() && window.document().snapshot().entities()==repaired.entities() &&
+                window.redoCommand() && window.document().snapshot().entities()==cloned.entities() && window.undoCommand(),
+        "a plain source clone undoes and redoes exactly");
+    require(window.selectEntity(area),"copy the original repaired owner with its current walls");
+    for (qsizetype i=1;i<wall_ids.size();++i)
+        require(window.selectEntity(wall_ids[i],true),"add each surviving wall to the clipboard group");
+    require(window.selectEntity(replacement,true) && window.copySelection(),"copy all current sources with the repaired owner");
+    const auto before_paste=window.document().snapshot();
+    require(window.pasteSelection(),"group paste remaps plain source-repair proofs");
+    const auto pasted=window.document().snapshot();
+    std::optional<sketch::Entity> pasted_owner;
+    for (const auto& [id,value] : pasted.entities())
+        if (!before_paste.entities().contains(id) && value.type=="measurement_boundary") pasted_owner=value;
+    require(pasted_owner && sketch::wall_measurement_source_current(pasted,*pasted_owner),
+        "the pasted owner uses the pasted source walls and remains analytically current");
+    std::set<std::string> sources;
+    for (const auto& record : pasted_owner->properties.at("wall_measurement_source").at("walls")) {
+        const auto id=record.at("id").get<std::string>();
+        require(!before_paste.entities().contains(id) && pasted.entities().at(id).type=="wall",
+            "group provenance refers to fresh pasted walls rather than original source walls");
+        sources.insert(id);
+    }
+    const auto& operations=pasted_owner->extensions.at("boundary_geometry_derivation").at("operations");
+    const auto& reviewed=operations.front().at("value").at("replacement_wall_source_ids");
+    require(std::set<std::string>(reviewed.begin(),reviewed.end())==sources,
+        "the persisted typed replacement proof remaps the same source identities as the provenance envelope");
+    require(window.undoCommand() && window.document().snapshot().entities()==before_paste.entities() &&
+                window.redoCommand() && window.document().snapshot().entities()==pasted.entities(),
+        "group paste restores the complete geometry and provenance together through history");
+    QTemporaryDir directory;
+    sketch::desktop::MainWindow reopened;
+    require(directory.isValid() && window.saveProjectAs(directory.filePath("plain-source-clones.bldproj")) &&
+                reopened.openProject(directory.filePath("plain-source-clones.bldproj")) &&
+                reopened.document().snapshot().entities()==pasted.entities(),
+        "plain source repair and group clone proofs survive save and reopen");
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -971,6 +1265,14 @@ int main(int argc, char** argv) {
         QStringLiteral("Vertex-wall-measurement-test-") +
         QUuid::createUuid().toString(QUuid::WithoutBraces));
     try {
+        if (app.arguments().contains("--source-repair-only")) {
+            for (bool metric : {false,true}) for (bool curved : {false,true})
+                replaced_wall_sources_repair_existing_appraisal_area(metric,curved);
+            split_source_replacement_reviews_manual_references();
+            plain_source_repair_clones_and_pastes_its_retained_proof();
+            std::cout << "Exterior measurement source repair workflows passed\n";
+            return 0;
+        }
         selected_wall_loop_creates_and_refreshes_one_exterior_appraisal_area();
         curved_d_exterior_measurement_stays_analytic_through_refresh_and_output();
         wall_measurement_admission_failures_are_atomic();
@@ -978,6 +1280,10 @@ int main(int argc, char** argv) {
         split_perimeter_with_t_branches_and_internal_chord();
         automatic_candidates_respect_placement_and_phase();
         level_bound_walls_share_a_physical_plane_despite_arithmetic_roundoff();
+        for (bool metric : {false,true}) for (bool curved : {false,true})
+            replaced_wall_sources_repair_existing_appraisal_area(metric,curved);
+        split_source_replacement_reviews_manual_references();
+        plain_source_repair_clones_and_pastes_its_retained_proof();
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
         return 1;

@@ -1,4 +1,4 @@
-# Vertex project formats v1 through v15
+# Vertex project formats v1 through v16
 
 ## Original typed wall input
 
@@ -192,9 +192,10 @@ translation history, v6 transform history, v7 boundary-coordinate edit
 history, v8 boundary-constraint transactions, v9 measured group translations,
 v10 curved endpoint constraints, v11 straight wall-only intent, v12 physical
 arc-length locks, v13 direct physical curve-length inputs, and v14 rigid curve
-construction transforms, and v15 fixed-chord boundary curvature edits, plus v4
-through v15 archives through recovery-aware APIs.
-Under-versioned semantic data and versions above 15 reject. Legacy-only history
+construction transforms, v15 fixed-chord boundary curvature edits, and v16
+reviewed exterior wall-source replacements, plus v4 through v16 archives through
+recovery-aware APIs.
+Under-versioned semantic data and versions above 16 reject. Legacy-only history
 is still written as v1. Unknown boundary entity
 versions in v2 remain preserved read-only. See `boundary-entity-format.md`.
 Version 2 also recognizes `dimension` entities. Segment-length dimensions refer
@@ -1157,3 +1158,50 @@ lower that floor. Older format markers reject the retained semantics. Files
 without this intent retain their previous required format and serialization.
 JSON/assets extraction advertises exchange version 13, including recovery
 archives carrying this intent. Extraction is not a JSON project importer.
+
+## Reviewed exterior wall-source replacement (v16)
+
+An explicit source repair is a `redefine_boundary` intent encoded as strict
+`BoundaryGeometryEdit` version 3. In addition to the existing redefinition fields,
+it requires nonempty `replacement_wall_source_ids` and both reference-plan fields
+(`replacement_child_mapping` and `replacement_removed_reference_ids`, possibly
+empty). The IDs must identify 3 to 2048 distinct walls and count toward the
+persisted proof budget. Other edit kinds cannot carry source replacements. The
+existing version-1 and version-2 edit representations are unchanged.
+
+The core independently derives the analytical exterior from those walls. The
+replacement outline must match that exterior, allowing cyclic ordering or
+reversed direction; a caller cannot provide arbitrary source JSON. The owner and
+sources must resolve to the same property/building/floor/layer, consistent eligible
+phase and effective elevation plane. Retained deductions must fit the replacement.
+Geometry and `wall_measurement_source` change in one transaction; facts, factors,
+name, styling, custom attributes and deduction links are preserved. Ordinary
+Refresh remains tied to the originally recorded sources.
+
+An authored owner retains the existing version-1 geometry derivation and its
+original construction record. An identified owner without a construction record
+uses strict `boundary_geometry_derivation` version 2 with exactly `version`,
+`source_boundary` and `operations`. `source_boundary` contains only the original
+`boundary_model_version` and identified `segments`. No construction receipt is
+invented. Historical replay uses this archived geometry and its typed operations,
+without rederiving from today's walls. Later wall deletion or editing can make
+source freshness false while the project and its history remain readable. The
+final source IDs must agree with the latest retained source-replacement intent.
+
+Supported identified measurement owners cannot acquire, change or remove their
+wall-source metadata through a raw surviving-entity edit. Generic and legacy
+vendor metadata remain separate. Original source v1 does not archive elevation;
+when no original walls survive and the owner has no explicit elevation, the
+original plane is unavailable. Replacement walls still must share one coherent
+effective plane and the resolved original hierarchy and phase.
+
+The desktop retains existing child identities only for a uniquely equivalent
+cyclic/directional outline. Changed geometry with equal edge count refuses rather
+than guessing correspondence. Different edge counts use explicit reference
+mapping/removal decisions and regenerate automatic length dimensions.
+
+This intent anywhere in retained, undone or deleted history, or an imported
+version-2 derivation, requires native format 16. Under-versioned archives reject
+even when their digests are recomputed. JSON/assets extraction advertises exchange
+version 14. Files without these new semantics retain their previous required
+format and representation; extraction remains separate from project import.

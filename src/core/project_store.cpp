@@ -79,10 +79,14 @@ std::uint32_t ProjectStore::required_format_version(const DocumentSnapshot& snap
         if (revision.boundary_translation) required = std::max(required, 5U);
         if (revision.boundary_transform) required = std::max(required, 6U);
         if (revision.boundary_geometry_edit) required = std::max(required,
+            !revision.boundary_geometry_edit->replacement_wall_source_ids.empty() ? 16U :
             revision.boundary_geometry_edit->kind == BoundaryGeometryEditKind::reconstruct_arc ? 15U : 7U);
         if (revision.boundary_constraint_changes) {
             required = std::max(required, 8U);
             const auto& command = *revision.boundary_constraint_changes;
+            if (std::any_of(command.boundary_edits.begin(), command.boundary_edits.end(),
+                [](const auto& edit) { return !edit.replacement_wall_source_ids.empty(); }))
+                required = std::max(required, 16U);
             if (std::any_of(command.boundary_edits.begin(), command.boundary_edits.end(),
                 [](const auto& edit) { return edit.kind == BoundaryGeometryEditKind::reconstruct_arc; }))
                 required = std::max(required, 15U);
@@ -138,12 +142,20 @@ std::uint32_t ProjectStore::required_format_version(const DocumentSnapshot& snap
                 entity.extensions.contains("boundary_geometry_derivation")) {
                 required = std::max(required, 7U);
                 const auto& derivation = entity.extensions.at("boundary_geometry_derivation");
+                if (derivation.is_object() && derivation.value("version", 0) == 2)
+                    required = std::max(required, 16U);
                 if (derivation.is_object() && derivation.contains("operations") && derivation.at("operations").is_array())
                     for (const auto& operation : derivation.at("operations"))
                         if (operation.is_object() && operation.value("kind", std::string{}) == "geometry_edit" &&
                             operation.contains("value") && operation.at("value").is_object() &&
                             operation.at("value").value("kind", std::string{}) == "reconstruct_arc")
                             required = std::max(required, 15U);
+                if (derivation.is_object() && derivation.contains("operations") && derivation.at("operations").is_array())
+                    for (const auto& operation : derivation.at("operations"))
+                        if (operation.is_object() && operation.value("kind", std::string{}) == "geometry_edit" &&
+                            operation.contains("value") && operation.at("value").is_object() &&
+                            operation.at("value").value("version", 0) == 3)
+                            required = std::max(required, 16U);
             }
             if (identified_boundary || entity.type == "boundary_draft" ||
                 entity.type == "dimension") {
@@ -1459,6 +1471,7 @@ bool verify_sqlite_schema(sqlite3* database, bool allow_recovery = false) {
          sqlite3_column_int(user_version.get(), 0) != 13 &&
          sqlite3_column_int(user_version.get(), 0) != 14 &&
          sqlite3_column_int(user_version.get(), 0) != 15 &&
+         sqlite3_column_int(user_version.get(), 0) != 16 &&
          !(allow_recovery && sqlite3_column_int(user_version.get(), 0) == 4))) {
         storage_error(StorageErrorCode::unsupported_format,
                       "unsupported SQLite project user_version");
@@ -1668,11 +1681,11 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
                                std::string* verified_digest = nullptr) {
     const auto format = required_metadata(database, "format_version");
     if (format != "1" && format != "2" && format != "3" && format != "5" &&
-        format != "6" && format != "7" && format != "8" && format != "9" && format != "10" && format != "11" && format != "12" && format != "13" && format != "14" && format != "15" && !(recovery && format == "4")) {
+        format != "6" && format != "7" && format != "8" && format != "9" && format != "10" && format != "11" && format != "12" && format != "13" && format != "14" && format != "15" && format != "16" && !(recovery && format == "4")) {
         storage_error(StorageErrorCode::unsupported_format,
                       "unsupported project format version: " + format);
     }
-    const auto format_number = format == "15" ? 15U : format == "14" ? 14U : format == "13" ? 13U : format == "12" ? 12U : format == "11" ? 11U : format == "10" ? 10U : format == "9" ? 9U : format == "8" ? 8U : format == "7" ? 7U : (format == "6" ? 6U :
+    const auto format_number = format == "16" ? 16U : format == "15" ? 15U : format == "14" ? 14U : format == "13" ? 13U : format == "12" ? 12U : format == "11" ? 11U : format == "10" ? 10U : format == "9" ? 9U : format == "8" ? 8U : format == "7" ? 7U : (format == "6" ? 6U :
         (format == "5" ? 5U : (format == "4" ? 4U : (format == "3" ? 3U :
         (format == "2" ? 2U : 1U)))));
     Statement format_marker(database, "PRAGMA user_version");
@@ -1881,7 +1894,7 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
 
     const auto required_format = ProjectStore::required_format_version(snapshot);
     if (required_format > format_number) {
-        const auto reason = required_format >= 14 ? "rigid curve-transform construction archive" : required_format >= 13 ? "physical curve-length input or edit proof" : required_format >= 12 ? "physical arc-length constraint" : required_format >= 11 ? "straight wall-only endpoint proof" : required_format >= 10 ? "curved endpoint constraint or wall proof" : required_format >= 9 ? "boundary translation group" : required_format >= 8 ? "boundary constraint changes" : required_format >= 7 ? "boundary geometry edit" :
+        const auto reason = required_format >= 16 ? "reviewed exterior wall-source replacement" : required_format >= 15 ? "boundary curvature reconstruction proof" : required_format >= 14 ? "rigid curve-transform construction archive" : required_format >= 13 ? "physical curve-length input or edit proof" : required_format >= 12 ? "physical arc-length constraint" : required_format >= 11 ? "straight wall-only endpoint proof" : required_format >= 10 ? "curved endpoint constraint or wall proof" : required_format >= 9 ? "boundary translation group" : required_format >= 8 ? "boundary constraint changes" : required_format >= 7 ? "boundary geometry edit" :
             required_format >= 6 ? "boundary transform" : required_format >= 5 ? "boundary translation" : required_format >= 3 ? "boundary_authoring" :
                             "identified boundary, dimension or boundary draft";
         storage_error(StorageErrorCode::unsupported_format,

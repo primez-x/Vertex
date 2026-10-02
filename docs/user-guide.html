@@ -125,6 +125,9 @@
   stay fixed. Review the original/proposed outlines and changed dimensions, area
   and perimeter before Apply. Invalid topology or conflicting locked measurements
   disables Apply and explains the problem.</p>
+  <p>When an edited curved edge has related objects, leave
+  <strong>Move related objects</strong> checked to update them with the boundary.
+  Turning it off can be refused if it would leave connected geometry invalid.</p>
   <p>For a closed physical wall layout, select a wall and choose
   <strong>Measure exterior from walls…</strong> from its right-click menu or Tools.
   Connected interior partitions are excluded from the exterior perimeter. You can
@@ -158,9 +161,14 @@
   explain the problem and prevent Save. Cancel leaves the project unchanged.
   These custom details do not change appraisal facts or square-footage totals.</p>
   <p>Refresh follows the perimeter walls recorded when the area was created.
-  An addition that changes which walls form the exterior needs a new measurement.
-  Save a revision before replacing the old area. Overlapping building measurements
-  cannot produce qualified totals.</p>
+  Replaced walls or an addition that changes the exterior require an explicit
+  source replacement review. Overlapping building measurements cannot produce
+  qualified totals.</p>
+  <p>To repair a stale measurement while retaining its identity, choose
+  <strong>Replace source walls…</strong> from Tools or the measured area's right-click
+  menu. Review the recorded and proposed outlines before Apply; Cancel leaves the
+  drawing unchanged. Refresh continues to use the originally recorded walls, while
+  replacement explicitly records the reviewed shell as the new source.</p>
 
   <p>Select a contained area, right-click and choose <strong>Subtract from area</strong>
   to choose its compatible parent. In declared Appraisal, current area facts

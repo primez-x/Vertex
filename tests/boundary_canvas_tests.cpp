@@ -385,6 +385,11 @@ void test_unit_aware_adaptive_grid() {
         const auto center = QRectF(canvas.rect()).center();
         canvas.zoomBy(example.scale / canvas.viewScale(), center);
         const auto scene = render(canvas, false);
+        if (example.scale >= 80.0 && example.scale <= 4000.0)
+            save_capture(qEnvironmentVariable("SKETCH_BOUNDARY_CANVAS_CAPTURE_DIR"),
+                QStringLiteral("adaptive-grid-%1-%2.png")
+                    .arg(example.metric ? QStringLiteral("metric") : QStringLiteral("imperial"))
+                    .arg(example.scale, 0, 'f', 0), scene);
         const auto cell_pixels = example.spacing * canvas.viewScale();
         require(std::abs(canvas.gridSpacingMetres() - example.spacing) < example.spacing * 1e-9,
                 "reported grid increment must describe the selected units and current zoom");

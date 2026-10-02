@@ -136,6 +136,36 @@ void test_translation_export(const std::filesystem::path& root) {
         "exchange must retain exact mixed proofs only on their command rows");
 }
 
+void test_reviewed_source_export_floor(const std::filesystem::path& root) {
+  sketch::IdentifiedBoundary boundary{"imported-source-area", "measurement_boundary", {}};
+  const sketch::Vec2 points[]{{0,0},{4,0},{4,3},{0,3}};
+  for (std::size_t i = 0; i < 4; ++i)
+    boundary.segments.push_back({"source-edge-" + std::to_string(i), "source-vertex-" + std::to_string(i),
+      "source-vertex-" + std::to_string((i+1)%4), {points[i], points[(i+1)%4], 0.0}});
+  auto owner = sketch::encode_identified_boundary_entity(boundary);
+  sketch::BoundaryGeometryEdit edit;
+  edit.boundary_id = owner.id; edit.target_id = owner.id;
+  edit.kind = sketch::BoundaryGeometryEditKind::redefine_boundary;
+  edit.replacement_segments = owner.properties.at("segments");
+  edit.replacement_wall_source_ids = {"historical-wall-0", "historical-wall-1", "historical-wall-2", "historical-wall-3"};
+  auto records = nlohmann::json::array();
+  for (const auto& id : edit.replacement_wall_source_ids)
+    records.push_back({{"id", id}, {"context", nlohmann::json::object()}});
+  owner.properties["wall_measurement_source"] = {{"version", 1}, {"basis", "exterior"}, {"walls", records}};
+  owner.extensions["boundary_geometry_derivation"] = {{"version", 2}, {"source_boundary", owner.properties},
+    {"operations", nlohmann::json::array({{{"kind", "geometry_edit"}, {"value", sketch::encode_boundary_geometry_edit(edit)}}})}};
+  owner.extensions["boundary_geometry_derivation"]["source_boundary"].erase("wall_measurement_source");
+  auto document = sketch::Document::create({owner});
+  check(document.snapshot().history().size() == 1 && sketch::ProjectStore::required_format_version(document.snapshot()) == 16,
+    "imported topology source intent must retain its native floor without originating history or current walls");
+  const auto destination = root / "reviewed-source-import";
+  sketch::extract_project(document.snapshot(), destination);
+  std::ifstream input(destination / "project.json");
+  const auto exported = nlohmann::json::parse(input);
+  check(exported.at("exchange_version") == 14, "retained imported source redefinition requires exchange fourteen");
+  check(document.snapshot().entities().at(owner.id) == owner, "source extraction must preserve the imported analytical proof");
+}
+
 void test_curved_constraint_export_floor(const std::filesystem::path& root) {
   sketch::Entity wall{"curve-wall", "wall",
       {{"baseline", {{"start", {0, 0}}, {"end", {4, 0}}, {"sweep_radians", 0.4}}},
@@ -864,6 +894,7 @@ int main() {
     std::filesystem::remove_all(residual);
     // Only this test's unique, resolved temporary tree is removed.
     test_translation_export(root);
+    test_reviewed_source_export_floor(root);
     test_curved_constraint_export_floor(root);
     check(std::filesystem::equivalent(
               std::filesystem::canonical(root).parent_path(),

@@ -58,5 +58,7 @@ struct ProjectOrganization {
 // and applies level elevation plus offset_m to supported Z coordinates.
 [[nodiscard]] Entity resolve_vertical_placement(const DocumentSnapshot& snapshot,
                                                 const Entity& entity);
+[[nodiscard]] Entity resolve_vertical_placement(
+    const std::map<std::string, Entity, std::less<>>& entities, const Entity& entity);
 
 }  // namespace sketch

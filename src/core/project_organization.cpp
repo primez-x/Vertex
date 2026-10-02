@@ -581,6 +581,11 @@ ProjectOrganization organize_project(const std::map<std::string, Entity, std::le
 
 Entity resolve_vertical_placement(const DocumentSnapshot& snapshot,
                                   const Entity& entity) {
+    return resolve_vertical_placement(snapshot.entities(), entity);
+}
+
+Entity resolve_vertical_placement(const std::map<std::string, Entity, std::less<>>& entities,
+                                  const Entity& entity) {
     if (!entity.properties.is_object()) {
         return entity;
     }
@@ -610,13 +615,13 @@ Entity resolve_vertical_placement(const DocumentSnapshot& snapshot,
         throw std::invalid_argument("level placement is supported only for 3D objects and slabs");
     }
 
-    const auto organization = organize_project(snapshot);
+    const auto organization = organize_project(entities);
     const auto context = organization.drawing_context(entity.id);
     if (!context || context->floor_id.empty()) {
         throw std::invalid_argument("level placement requires a valid bound floor context");
     }
-    const auto floor = snapshot.entities().find(context->floor_id);
-    if (floor == snapshot.entities().end() || floor->second.type != "floor" ||
+    const auto floor = entities.find(context->floor_id);
+    if (floor == entities.end() || floor->second.type != "floor" ||
         !floor->second.properties.is_object() ||
         !floor->second.properties.contains("vertical_level_binding")) {
         throw std::invalid_argument("level placement requires a floor level binding");
@@ -628,8 +633,8 @@ Entity resolve_vertical_placement(const DocumentSnapshot& snapshot,
     } catch (const std::exception& error) {
         throw std::invalid_argument(std::string("floor level binding is invalid: ") + error.what());
     }
-    const auto graph = snapshot.entities().find(binding.graph_entity_id);
-    if (graph == snapshot.entities().end() || graph->second.type != "vertical_levels" ||
+    const auto graph = entities.find(binding.graph_entity_id);
+    if (graph == entities.end() || graph->second.type != "vertical_levels" ||
         !graph->second.properties.is_object() || !graph->second.properties.contains("model")) {
         throw std::invalid_argument("level placement references a missing vertical level graph");
     }

@@ -5,6 +5,8 @@
 #include "sketch/boundary_transform.hpp"
 #include "sketch/geometry_operations.hpp"
 #include "sketch/constraint_entity.hpp"
+#include "sketch/wall_measurement.hpp"
+#include "sketch/project_organization.hpp"
 #include <algorithm>
 #include <cmath>
 #include <numeric>
@@ -260,20 +262,30 @@ nlohmann::json geometry_transform_operation(const BoundaryTransformation& transf
 IdentifiedBoundary replay_geometry_derivation(const Entity& entity) {
     const auto found = entity.extensions.find("boundary_geometry_derivation");
     if (found == entity.extensions.end() || !found->is_object() ||
-        found->value("version", 0) != 1 || found->size() != 3 ||
-        !found->contains("source_boundary_authoring") ||
+        !found->contains("version") || !found->at("version").is_number_integer() ||
+        (found->value("version", 0) != 1 && found->value("version", 0) != 2) || found->size() != 3 ||
         !found->contains("operations") || !found->at("operations").is_array() ||
         found->at("operations").empty()) {
         throw std::invalid_argument("Boundary geometry derivation is invalid");
     }
-    const auto decoded = decode_boundary_receipt_envelope(
-        found->at("source_boundary_authoring"));
-    if (!decoded.supported()) throw std::invalid_argument(decoded.diagnostic);
-    const auto replay = replay_boundary_construction(*decoded.record);
-    IdentifiedBoundary result{replay.boundary_id, entity.type, {}};
-    for (const auto& edge : replay.edges) {
-        result.segments.push_back({edge.segment_id, edge.start_vertex_id,
-                                   edge.end_vertex_id, edge.segment});
+    IdentifiedBoundary result;
+    if (found->at("version") == 1) {
+        if (!found->contains("source_boundary_authoring"))
+            throw std::invalid_argument("Boundary geometry derivation requires its construction origin");
+        const auto decoded = decode_boundary_receipt_envelope(found->at("source_boundary_authoring"));
+        if (!decoded.supported()) throw std::invalid_argument(decoded.diagnostic);
+        const auto replay = replay_boundary_construction(*decoded.record);
+        result = {replay.boundary_id, entity.type, {}};
+        for (const auto& edge : replay.edges)
+            result.segments.push_back({edge.segment_id, edge.start_vertex_id, edge.end_vertex_id, edge.segment});
+    } else {
+        if (!found->contains("source_boundary") || !found->at("source_boundary").is_object() ||
+            found->at("source_boundary").size() != 2 ||
+            !found->at("source_boundary").contains("boundary_model_version") ||
+            !found->at("source_boundary").contains("segments"))
+            throw std::invalid_argument("Boundary geometry derivation requires a strict identified topology origin");
+        result = decode_identified_boundary_entity(Entity{entity.id, entity.type,
+            found->at("source_boundary"), false, nlohmann::json::object()});
     }
     for (const auto& operation : found->at("operations")) {
         if (!operation.is_object() || operation.size() != 2 ||
@@ -550,6 +562,55 @@ std::map<std::string, Entity, std::less<>> transformed_boundary_entities(
     return result;
 }
 
+static bool exact_replacement_outline(const Boundary& requested, const Boundary& derived) {
+    if (requested.size() != derived.size()) return false;
+    const auto equal = [](const Segment& a, const Segment& b) {
+        return a.start.x == b.start.x && a.start.y == b.start.y &&
+            a.end.x == b.end.x && a.end.y == b.end.y && a.sweep_radians == b.sweep_radians;
+    };
+    for (std::size_t offset = 0; offset < derived.size(); ++offset) {
+        bool forward = true, reverse = true;
+        for (std::size_t i = 0; i < requested.size(); ++i) {
+            forward = forward && equal(requested[i], derived[(offset + i) % derived.size()]);
+            const auto& backwards = derived[(offset + derived.size() - i) % derived.size()];
+            reverse = reverse && equal(requested[i], Segment{backwards.end, backwards.start, -backwards.sweep_radians});
+        }
+        if (forward || reverse) return true;
+    }
+    return false;
+}
+
+static void validate_retained_replacement_deductions(
+    const std::map<std::string, Entity, std::less<>>& entities, const Entity& owner,
+    const Boundary& replacement) {
+    const auto deductions = owner.properties.find("deduction_ids");
+    if (deductions == owner.properties.end()) return;
+    if (!deductions->is_array()) throw std::invalid_argument("Measured area deductions must be an array");
+    const auto organization = organize_project(entities);
+    const auto context = organization.drawing_context(owner.id);
+    std::set<std::string> unique;
+    for (const auto& value : *deductions) {
+        if (!value.is_string() || value.get_ref<const std::string&>().empty() ||
+            !unique.insert(value.get<std::string>()).second)
+            throw std::invalid_argument("Retained deduction identifiers are invalid");
+        const auto found = entities.find(value.get<std::string>());
+        if (found == entities.end() || found->first == owner.id ||
+            (found->second.type != "boundary" && found->second.type != "measurement_boundary"))
+            throw std::invalid_argument("Retained deduction is missing or is not a measured area");
+        const auto child_context = organization.drawing_context(found->first);
+        if (!context || !child_context || context->property_id != child_context->property_id ||
+            context->building_id != child_context->building_id || context->floor_id != child_context->floor_id)
+            throw std::invalid_argument("Retained deduction belongs to a different measurement context");
+        const auto child = inspect_boundary_entity_version(found->second).format == BoundaryEntityFormat::identified_v1
+            ? found->second : upgrade_legacy_boundary_entity(found->second);
+        // Validate each deduction independently: overlapping deductions remain
+        // legitimate calculation tools, while none may escape the new parent.
+        if (const auto diagnostic = validate_boundary_holes(replacement,
+            {boundary_geometry(decode_identified_boundary_entity(child))}))
+            throw std::invalid_argument("Retained deduction does not fit replacement measured area: " + *diagnostic);
+    }
+}
+
 static std::map<std::string, Entity, std::less<>> edited_boundary_entities_impl(
     const std::map<std::string, Entity, std::less<>>& source,
     const BoundaryGeometryEdit& edit, const std::vector<BoundaryGeometryEdit>* batch) {
@@ -564,10 +625,24 @@ static std::map<std::string, Entity, std::less<>> edited_boundary_entities_impl(
         throw std::invalid_argument(*unsupported);
     const auto edited = batch ? apply_vertex_batch(decode_identified_boundary_entity(original), *batch)
                               : apply_geometry_edit(decode_identified_boundary_entity(original), edit);
+    std::optional<WallMeasurementResult> replacement_source;
+    if (!edit.replacement_wall_source_ids.empty()) {
+        if (batch) throw std::invalid_argument("Wall source replacement cannot be a vertex batch");
+        replacement_source = derive_replacement_exterior_wall_measurement(source, original,
+            edit.replacement_wall_source_ids);
+        const auto replacement_outline = boundary_geometry(edited);
+        if (!exact_replacement_outline(replacement_outline, replacement_source->boundary))
+            throw std::invalid_argument("Replacement measured outline differs from the supplied exterior source walls");
+        validate_retained_replacement_deductions(source, original, replacement_outline);
+        for (const auto& [key, value] : edit.replacement_properties.items())
+            if (!original.properties.contains(key) || original.properties.at(key) != value)
+                throw std::invalid_argument("Wall source replacement must retain the measured area's metadata");
+    }
     if (edit.kind != BoundaryGeometryEditKind::redefine_boundary &&
         edited == decode_identified_boundary_entity(original)) return source;
 
     auto metadata = original;
+    if (replacement_source) metadata.properties["wall_measurement_source"] = replacement_source->source;
     if (edit.kind == BoundaryGeometryEditKind::redefine_boundary)
         for (const auto& [key, value] : edit.replacement_properties.items()) metadata.properties[key] = value;
     const bool had_derivation = metadata.extensions.contains("boundary_geometry_derivation");
@@ -579,6 +654,13 @@ static std::map<std::string, Entity, std::less<>> edited_boundary_entities_impl(
             {"source_boundary_authoring", metadata.properties.at("boundary_authoring")},
             {"operations", nlohmann::json::array()}};
         metadata.properties.erase("boundary_authoring");
+    }
+    if (replacement_source && !had_derivation &&
+        !metadata.extensions.contains("boundary_geometry_derivation")) {
+        metadata.extensions["boundary_geometry_derivation"] = {
+            {"version", 2}, {"source_boundary", {
+                {"boundary_model_version", 1}, {"segments", original.properties.at("segments")}}},
+            {"operations", nlohmann::json::array()}};
     }
     if (auto derivation = metadata.extensions.find("boundary_geometry_derivation");
         derivation != metadata.extensions.end()) {
@@ -901,6 +983,21 @@ std::optional<std::string> validate_boundary_integrity(
                 if (replayed != boundary)
                     throw std::invalid_argument("Boundary " + id +
                         ": canonical geometry differs from geometry edit replay");
+                // Reconcile the retained proof with the final source envelope,
+                // without requiring historical walls to remain in today's map.
+                std::vector<std::string> reviewed_sources;
+                for (const auto& operation : entity.extensions.at("boundary_geometry_derivation").at("operations")) {
+                    if (operation.at("kind") != "geometry_edit") continue;
+                    const auto edit = decode_boundary_geometry_edit(operation.at("value"));
+                    if (!edit.replacement_wall_source_ids.empty()) reviewed_sources = edit.replacement_wall_source_ids;
+                }
+                if (!reviewed_sources.empty()) {
+                    auto actual_sources = exterior_wall_measurement_source_ids(entity);
+                    std::sort(reviewed_sources.begin(), reviewed_sources.end());
+                    std::sort(actual_sources.begin(), actual_sources.end());
+                    if (reviewed_sources != actual_sources)
+                        throw std::invalid_argument("Boundary " + id + ": exterior source differs from its reviewed replacement proof");
+                }
             }
         } else if (version.format == BoundaryEntityFormat::unsupported_version) {
             future_boundaries.insert(id);
@@ -944,6 +1041,11 @@ void validate_boundary_transition(const std::map<std::string, Entity, std::less<
         const auto found = after.find(id);
         if (found == after.end()) continue;
         const bool previous_receipt = identified_v1(entity) && entity.properties.contains("boundary_authoring");
+        if (identified_v1(entity) && entity.type == "measurement_boundary" &&
+            (entity.properties.contains("wall_measurement_source") != found->second.properties.contains("wall_measurement_source") ||
+             (entity.properties.contains("wall_measurement_source") &&
+              entity.properties.at("wall_measurement_source") != found->second.properties.at("wall_measurement_source"))))
+            throw std::invalid_argument("Exterior measured-area sources require a reviewed typed source replacement");
         const bool next_receipt = identified_v1(found->second) &&
                                   found->second.properties.contains("boundary_authoring");
         if (previous_receipt != next_receipt)

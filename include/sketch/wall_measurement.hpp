@@ -13,6 +13,9 @@ struct WallMeasurementResult {
     nlohmann::json source;
 };
 
+// Strict structural decoding only; historical wall IDs may no longer exist.
+[[nodiscard]] std::vector<std::string> exterior_wall_measurement_source_ids(const Entity& owner);
+
 // Recognizes the unique simple exterior in an analytical line/arc wall network.
 // Interior partitions/loops and connected dangling branches are excluded.
 // Disconnected geometry must be strictly inside that exterior. Returns sorted
@@ -28,6 +31,15 @@ struct WallMeasurementResult {
 // outline or an offset join is ambiguous or exceeds the geometry envelope.
 [[nodiscard]] WallMeasurementResult derive_exterior_wall_measurement(
     const DocumentSnapshot& document, const std::vector<std::string>& wall_ids);
+[[nodiscard]] WallMeasurementResult derive_exterior_wall_measurement(
+    const std::map<std::string, Entity, std::less<>>& entities,
+    const std::vector<std::string>& wall_ids);
+
+// Rebinding additionally validates the measured owner's historical source,
+// fully resolved hierarchy, phase and effective source-wall elevation plane.
+[[nodiscard]] WallMeasurementResult derive_replacement_exterior_wall_measurement(
+    const std::map<std::string, Entity, std::less<>>& entities, const Entity& owner,
+    const std::vector<std::string>& wall_ids);
 
 // Boundaries without a wall measurement source remain current for compatibility.
 // A malformed source, changed source context, missing wall, or edited outline

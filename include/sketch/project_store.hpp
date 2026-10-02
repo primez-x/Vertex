@@ -109,9 +109,10 @@ public:
     // require v12; direct physical curve-length proofs and their known
     // exact-input receipts require v13; version-two curve construction archives
     // containing independently replayed rigid transforms require v14. Fixed-chord
-    // boundary curvature reconstruction proofs require v15. Any may include
+    // boundary curvature reconstruction proofs require v15; reviewed exterior
+    // source replacement and identified topology origins require v16. Any may include
     // the optional recovery ledger. Absent proofs preserve historical formats.
-    static constexpr std::uint32_t format_version = 15;
+    static constexpr std::uint32_t format_version = 16;
     static constexpr std::uint32_t recovery_format_version = 4;
     [[nodiscard]] static std::uint32_t required_format_version(const DocumentSnapshot& snapshot);
     static constexpr std::uint64_t maximum_file_bytes = 4ULL * 1024ULL * 1024ULL * 1024ULL;
@@ -126,7 +127,7 @@ public:
                                           const DocumentSnapshot& snapshot,
                                           const SaveOptions& options = {});
     [[nodiscard]] static LoadResult load(const std::filesystem::path& source);
-    // Recovery-bearing v4 through v15 only. A document-only path never drops a ledger.
+    // Recovery-bearing v4 through v16 only. A document-only path never drops a ledger.
     [[nodiscard]] static SaveReceipt save_archive(const std::filesystem::path& destination,
         const ProjectArchiveSnapshot&, const SaveOptions& options = {});
     [[nodiscard]] static ArchiveLoadResult load_archive(const std::filesystem::path& source, ArchiveRole role);

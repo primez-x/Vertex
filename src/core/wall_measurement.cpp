@@ -3,6 +3,7 @@
 #include "sketch/boundary_entity.hpp"
 #include "sketch/geometry_operations.hpp"
 #include "sketch/project_organization.hpp"
+#include "sketch/model_phases.hpp"
 
 #include <algorithm>
 #include <array>
@@ -117,7 +118,7 @@ std::pair<double, double> point_key(Vec2 point) {
     return {point.x, point.y};
 }
 
-std::vector<SourceWall> read_source_walls(const DocumentSnapshot& document,
+std::vector<SourceWall> read_source_walls(const std::map<std::string, Entity, std::less<>>& entities,
                                           const std::vector<std::string>& wall_ids) {
     if (wall_ids.size() < 3)
         reject("At least three source walls are required for an exterior loop");
@@ -142,8 +143,8 @@ std::vector<SourceWall> read_source_walls(const DocumentSnapshot& document,
     for (const auto& id : wall_ids) {
         if (id.empty() || !unique_ids.insert(id).second)
             reject("Source wall IDs must be unique and non-empty");
-        const auto found = document.entities().find(id);
-        if (found == document.entities().end() || found->second.type != "wall")
+        const auto found = entities.find(id);
+        if (found == entities.end() || found->second.type != "wall")
             reject("Exterior measurement source wall is missing or is not a wall: " + id);
         const auto& properties = found->second.properties;
         if (!properties.is_object()) reject("Source wall properties must be an object");
@@ -903,7 +904,7 @@ bool boundary_context_matches(const Entity& boundary, const Json& source) {
 
 std::vector<std::string> exterior_wall_measurement_sources(
     const DocumentSnapshot& document, const std::vector<std::string>& candidate_wall_ids) {
-    auto walls = read_source_walls(document, candidate_wall_ids);
+    auto walls = read_source_walls(document.entities(), candidate_wall_ids);
     // Automatic discovery must never combine separate property, building or
     // phase contexts merely because their projected floor/layer geometry meets.
     for (const auto& wall : walls)
@@ -943,7 +944,13 @@ std::vector<std::string> exterior_wall_measurement_sources(
 
 WallMeasurementResult derive_exterior_wall_measurement(
     const DocumentSnapshot& document, const std::vector<std::string>& wall_ids) {
-    auto walls = read_source_walls(document, wall_ids);
+    return derive_exterior_wall_measurement(document.entities(), wall_ids);
+}
+
+WallMeasurementResult derive_exterior_wall_measurement(
+    const std::map<std::string, Entity, std::less<>>& entities,
+    const std::vector<std::string>& wall_ids) {
+    auto walls = read_source_walls(entities, wall_ids);
     auto geometry_walls = walls;
     for (auto& wall : geometry_walls) {
         if (point_key(wall.baseline.end) < point_key(wall.baseline.start)) {
@@ -989,6 +996,103 @@ WallMeasurementResult derive_exterior_wall_measurement(
     std::rotate(loop_walls.begin(), loop_walls.begin() + static_cast<std::ptrdiff_t>(rotation),
                 loop_walls.end());
     return {std::move(boundary), source_for_walls(walls)};
+}
+
+std::vector<std::string> exterior_wall_measurement_source_ids(const Entity& owner) {
+    if (owner.type != "measurement_boundary" || !owner.properties.is_object() ||
+        !owner.properties.contains("wall_measurement_source"))
+        reject("Exterior measurement source is missing from its measured owner");
+    std::vector<std::string> ids;
+    validate_source_schema(owner.properties.at("wall_measurement_source"), ids);
+    if (ids.size() < 3) reject("Exterior source requires at least three walls");
+    return ids;
+}
+
+WallMeasurementResult derive_replacement_exterior_wall_measurement(
+    const std::map<std::string, Entity, std::less<>>& entities, const Entity& owner,
+    const std::vector<std::string>& wall_ids) {
+    if (owner.type != "measurement_boundary" ||
+        inspect_boundary_entity_version(owner).format != BoundaryEntityFormat::identified_v1 ||
+        !owner.properties.contains("wall_measurement_source"))
+        reject("Wall source replacement requires an identified exterior measured area");
+    (void)exterior_wall_measurement_source_ids(owner);
+    const auto& previous_source = owner.properties.at("wall_measurement_source");
+    const auto organization = organize_project(entities);
+    const auto owner_context = organization.drawing_context(owner.id);
+    if (!owner_context || !owner_context->complete())
+        reject("Exterior measured area requires fully resolved property, building, floor and layer");
+    const auto& first_context = previous_source.at("walls").front().at("context");
+    const auto phase = [](const Json& context) {
+        return context.contains("phase_id") ? context.at("phase_id") : Json(nullptr);
+    };
+    const auto original_phase = phase(first_context);
+    const auto contextual_id = [&](std::string_view field) -> std::string {
+        if (field == "property_id") return owner_context->property_id;
+        if (field == "building_id") return owner_context->building_id;
+        if (field == "floor_id") return owner_context->floor_id;
+        return owner_context->layer_id;
+    };
+    for (const auto& record : previous_source.at("walls")) {
+        const auto& context = record.at("context");
+        if (!context.contains("layer_id") ||
+            !organization.drawing_context(context.at("layer_id").get<std::string>()))
+            reject("Original exterior source requires a fully resolved recorded drawing layer");
+        if (phase(context) != original_phase)
+            reject("Original exterior sources disagree on design phase");
+        for (const auto field : {"property_id", "building_id", "floor_id", "layer_id"})
+            if (context.contains(field) && context.at(field) != contextual_id(field))
+                reject("Original exterior source context disagrees with its measured owner");
+    }
+    if (owner.properties.contains("phase_id") && owner.properties.at("phase_id") != original_phase)
+        reject("Exterior measured owner and original source phases disagree");
+    const auto effective_elevation = [&](const Entity& wall) {
+        const auto resolved = resolve_vertical_placement(entities, wall);
+        auto value = resolved.properties.find("elevation_m");
+        if (value == resolved.properties.end()) value = resolved.properties.find("elevation");
+        const auto elevation = value == resolved.properties.end() ? 0.0 : number(*value, "Wall elevation");
+        if (!bounded(elevation)) reject("Wall elevation exceeds the supported geometry envelope");
+        return elevation;
+    };
+    std::optional<double> plane;
+    const auto check_plane = [&](double elevation) {
+        if (!plane) plane = elevation;
+        else if (std::abs(*plane - elevation) > default_geometry_tolerance_metres)
+            reject("Replacement and surviving source walls must share one effective elevation plane");
+    };
+    const auto walls = read_source_walls(entities, wall_ids);
+    for (const auto& [id, entity] : entities) {
+        (void)id;
+        if (entity.type != "model_phases") continue;
+        const auto model = ModelPhases::from_json(entity.properties.at("model"));
+        const auto active = model.active_state();
+        for (const auto& wall : walls)
+            if (std::find(model.entity_ids().begin(), model.entity_ids().end(), wall.id) != model.entity_ids().end() &&
+                (!active.contains(wall.id) || active.at(wall.id) == ModelPhase::demolished))
+                reject("Replacement source wall is unavailable in the active design phase");
+    }
+    for (const auto& wall : walls) {
+        const auto context = organization.drawing_context(wall.id);
+        if (!context || !context->complete() || context->property_id != owner_context->property_id ||
+            context->building_id != owner_context->building_id || context->floor_id != owner_context->floor_id ||
+            context->layer_id != owner_context->layer_id || phase(wall.context) != original_phase)
+            reject("Replacement source walls must retain the measured owner's hierarchy and original phase");
+        check_plane(effective_elevation(entities.at(wall.id)));
+    }
+    for (const auto& record : previous_source.at("walls")) {
+        const auto found = entities.find(record.at("id").get<std::string>());
+        if (found == entities.end()) continue;
+        if (found->second.type != "wall" || wall_context(found->second.properties) != record.at("context"))
+            reject("A surviving original wall no longer matches its recorded source context");
+        const auto context = organization.drawing_context(found->first);
+        if (!context || !context->complete() || context->property_id != owner_context->property_id ||
+            context->building_id != owner_context->building_id || context->floor_id != owner_context->floor_id ||
+            context->layer_id != owner_context->layer_id)
+            reject("A surviving original source has unresolved or contradictory hierarchy");
+        check_plane(effective_elevation(found->second));
+    }
+    for (const auto* field : {"elevation_m", "elevation"})
+        if (owner.properties.contains(field)) { check_plane(number(owner.properties.at(field), "Measured owner elevation")); break; }
+    return derive_exterior_wall_measurement(entities, wall_ids);
 }
 
 bool wall_measurement_source_current(const DocumentSnapshot& document, const Entity& boundary) {

@@ -7,6 +7,7 @@
 #include "sketch/boundary_transform.hpp"
 #include "sketch/constraint_entity.hpp"
 #include "sketch/constraint_wall_edit.hpp"
+#include "sketch/wall_measurement.hpp"
 #include "support/noninteractive_errors.hpp"
 
 #include <sqlite3.h>
@@ -2390,6 +2391,61 @@ void test_reopen_preserves_redo_navigation_and_named_abandoned_branch() {
             "branch replacement receipt should name the exact published revision");
 }
 
+void test_reviewed_exterior_source_reader_floor() {
+    TempDirectory temp;
+    std::vector<Entity> entities{
+        entity("source-property", "property"),
+        entity("source-building", "building", {{"property_id", "source-property"}}),
+        entity("source-floor", "floor", {{"building_id", "source-building"}}),
+        entity("source-layer", "layer", {{"floor_id", "source-floor"}})};
+    const sketch::Vec2 points[]{{0,0},{4,0},{4,3},{0,3}};
+    std::vector<std::string> ids;
+    for (std::size_t i = 0; i < 4; ++i) {
+        ids.push_back("new-source-" + std::to_string(i));
+        const auto a = points[i], b = points[(i + 1) % 4];
+        entities.push_back(entity(ids.back(), "wall", {{"baseline", {{"start", {a.x,a.y}},
+            {"end", {b.x,b.y}}, {"sweep_radians", 0.0}}}, {"thickness_m", 0.2}, {"height_m", 3.0},
+            {"floor_id", "source-floor"}, {"layer_id", "source-layer"}}));
+    }
+    auto source_document = Document::create(entities);
+    const auto measured = sketch::derive_exterior_wall_measurement(source_document.snapshot(), ids);
+    auto geometry = nlohmann::json::array();
+    for (const auto& segment : measured.boundary) geometry.push_back({{"start", {segment.start.x,segment.start.y}},
+        {"end", {segment.end.x,segment.end.y}}, {"sweep_radians", segment.sweep_radians}});
+    auto old_source = measured.source;
+    for (auto& wall : old_source["walls"]) wall["id"] = "old-" + wall["id"].get<std::string>();
+    auto owner = sketch::upgrade_legacy_boundary_entity(entity("source-area", "measurement_boundary",
+        {{"boundary", geometry}, {"floor_id", "source-floor"}, {"layer_id", "source-layer"},
+         {"wall_measurement_source", old_source}}));
+    entities.push_back(owner);
+    auto document = Document::create(entities);
+    sketch::BoundaryGeometryEdit edit;
+    edit.boundary_id = owner.id; edit.target_id = owner.id;
+    edit.kind = sketch::BoundaryGeometryEditKind::redefine_boundary;
+    edit.replacement_segments = owner.properties.at("segments");
+    edit.replacement_wall_source_ids = ids;
+    document.apply(sketch::EditBoundaryGeometry{document.revision(), edit});
+    const auto repaired = document.snapshot();
+    std::vector<Entity> imported_values;
+    for (const auto& [id, value] : repaired.entities()) { (void)id; imported_values.push_back(value); }
+    auto imported = Document::create(imported_values);
+    document.undo(document.revision());
+    for (const auto& snapshot : {repaired, document.snapshot(), imported.snapshot()}) {
+        require(ProjectStore::required_format_version(snapshot) == 16,
+            "current, undone and imported reviewed source intent must require reader sixteen");
+        const auto path = temp.path / ("source-" + sketch::make_stable_id() + ".bldproj");
+        (void)ProjectStore::save(path, snapshot);
+        require(ProjectStore::load(path).document.snapshot().entities() == snapshot.entities(),
+            "reviewed source reader sixteen must reopen all retained states");
+        execute_sql(path, "PRAGMA user_version=15; UPDATE metadata SET value='15' WHERE key='format_version'");
+        rewrite_logical_digest(path);
+        const auto original_hash = ProjectStore::file_sha256(path);
+        require_error([&] { (void)ProjectStore::load(path); }, StorageErrorCode::unsupported_format,
+            "recomputed digest cannot downgrade current, undone or imported source intent");
+        require(ProjectStore::file_sha256(path) == original_hash, "refused source downgrade must preserve the file");
+    }
+}
+
 void test_native_room_topology_is_validated_on_restore() {
     TempDirectory temp;
     const auto path = temp.path / "room.bldproj";
@@ -2420,6 +2476,7 @@ void test_native_room_topology_is_validated_on_restore() {
 int main() {
     sketch::testing::noninteractive_errors();
     try {
+        test_reviewed_exterior_source_reader_floor();
         test_physical_arc_length_history_requires_v12();
         test_direct_curve_length_history_requires_v13();
         test_native_room_topology_is_validated_on_restore();

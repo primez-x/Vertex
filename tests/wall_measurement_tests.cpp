@@ -1,12 +1,20 @@
 #include "sketch/appraisal_document.hpp"
 #include "sketch/boundary_entity.hpp"
+#include "sketch/boundary_authoring_session.hpp"
+#include "sketch/boundary_construction.hpp"
+#include "sketch/boundary_integrity.hpp"
+#include "sketch/project_store.hpp"
+#include "sketch/project_exchange.hpp"
 #include "sketch/wall_measurement.hpp"
 #include "sketch/vertical_levels.hpp"
+#include "sketch/model_phases.hpp"
 
 #include <algorithm>
 #include <array>
 #include <cmath>
 #include <iostream>
+#include <filesystem>
+#include <fstream>
 #include <numbers>
 #include <set>
 #include <stdexcept>
@@ -1040,10 +1048,223 @@ void appraisal_withholds_overlapping_old_and_annex_exterior_owners() {
             "the overlap guard must operate on owners with valid residential facts rather than missing qualification");
 }
 
+BoundaryGeometryEdit source_replacement_edit(const Entity& owner, const Boundary& outline,
+                                             const std::vector<std::string>& ids) {
+    auto replacement = decode_identified_boundary_entity(owner);
+    require(replacement.segments.size() == outline.size(), "replacement fixture retains ordered child identities");
+    for (std::size_t i = 0; i < outline.size(); ++i) replacement.segments[i].segment = outline[i];
+    BoundaryGeometryEdit edit;
+    edit.boundary_id = owner.id; edit.target_id = owner.id;
+    edit.kind = BoundaryGeometryEditKind::redefine_boundary;
+    edit.replacement_segments = encode_identified_boundary_entity(replacement).properties.at("segments");
+    auto wire = encode_boundary_geometry_edit(edit);
+    wire["version"] = 3;
+    wire["replacement_wall_source_ids"] = ids;
+    wire["replacement_child_mapping"] = Json::object();
+    wire["replacement_removed_reference_ids"] = Json::array();
+    return decode_boundary_geometry_edit(wire);
+}
+
+void reviewed_source_replacement_preserves_owner_and_proofs() {
+    for (const bool curved : {false, true}) for (const bool authored : {false, true}) {
+        const auto specs = curved ? capsule_walls() : rectangle_walls();
+        auto initial_entities = base_entities(specs, true);
+        auto initial_walls = Document::create(initial_entities);
+        const auto measured = derive_exterior_wall_measurement(initial_walls.snapshot(), wall_ids(specs));
+        auto owner = upgrade_legacy_boundary_entity(measurement_entity(measured.boundary, measured.source, true));
+        if (authored) {
+            BoundaryAuthoringSession session(BoundaryAuthoringMode::draw_first);
+            (void)session.anchor(measured.boundary.front().start);
+            for (const auto& edge : measured.boundary) {
+                if (edge.sweep_radians == 0.0) (void)session.add_line_to(edge.end);
+                else (void)session.add_arc_chord_angle(edge.end, angle_from_radians(edge.sweep_radians));
+            }
+            session.classify_current_chain("living");
+            auto chain = session.close_chain();
+            chain.boundary.id = owner.id;
+            owner = encode_identified_boundary_entity(chain.boundary, &owner);
+            owner.properties["boundary_authoring"] = boundary_construction_envelope(chain, session.options());
+        }
+        owner.properties["name"] = "Retained area";
+        owner.properties["factor_numerator"] = 2;
+        owner.properties["factor_denominator"] = 2;
+        owner.properties["factor_expression"] = "2/2";
+        owner.properties["vendor_metadata"] = Json{{"preserve", "opaque"}};
+        owner.properties["deduction_ids"] = Json::array({"deduction-1"});
+        owner.extensions["vendor_style"] = Json{{"color", "#123456"}};
+        auto deduction = measurement_entity({{{1,1},{1.5,1},0},{{1.5,1},{1.5,1.5},0},
+            {{1.5,1.5},{1,1.5},0},{{1,1.5},{1,1},0}}, Json::object());
+        deduction.id = "deduction-1";
+        deduction.properties.erase("wall_measurement_source");
+        deduction.properties["appraisal_facts"] = Json{{"boundary_role", "other_void"}};
+        initial_entities.push_back(owner); initial_entities.push_back(deduction);
+        auto document = Document::create(initial_entities);
+        const auto qualified_before = build_appraisal_document_report(document.snapshot(), "property-1");
+        require(qualified_before.qualified && qualified_before.calculation, "source replacement fixture is appraisal-qualified");
+        auto replacement_wall = document.snapshot().entities().at(specs.front().id);
+        replacement_wall.id = "zz-replacement-wall";
+        document.apply(ApplyEntityChanges{document.revision(),
+            {EntityChange::erase(specs.front().id), EntityChange::upsert(replacement_wall)}, {}, "replace source wall"});
+        const auto stale = document.snapshot();
+        require(!wall_measurement_source_current(stale, stale.entities().at(owner.id)), "deleted exterior source makes the owner stale");
+        auto ids = wall_ids(specs); ids.front() = replacement_wall.id;
+        auto derived = derive_exterior_wall_measurement(stale, ids);
+        std::rotate(derived.boundary.begin(), derived.boundary.begin() + 1, derived.boundary.end());
+        const auto edit = source_replacement_edit(stale.entities().at(owner.id), derived.boundary, ids);
+        const auto wire = encode_boundary_geometry_edit(edit);
+        require(wire.at("version") == 3 && wire.at("replacement_wall_source_ids") == ids &&
+            decode_boundary_geometry_edit(wire) == edit, "explicit source replacement must round-trip strict version three intent");
+        auto bad_wire = wire; bad_wire["unknown"] = true;
+        rejects([&] { (void)decode_boundary_geometry_edit(bad_wire); }, "unknown source replacement fields must reject");
+        bad_wire = wire; bad_wire["replacement_wall_source_ids"] = Json::array();
+        rejects([&] { (void)decode_boundary_geometry_edit(bad_wire); }, "version three requires explicit replacement source IDs");
+        const EditBoundaryGeometry command{stale.revision(), edit};
+        const auto preview = Document::preview_command(stale, command);
+        require(document.snapshot().entities() == stale.entities() &&
+            encode_boundary_geometry_edit(edit) == wire, "source replacement preview must mutate neither source nor caller intent");
+        document.apply(command);
+        const auto repaired = document.snapshot();
+        require(repaired.revision() == stale.revision() + 1 && repaired.entities() == preview.entities() &&
+            wall_measurement_source_current(repaired, repaired.entities().at(owner.id)), "reviewed redefinition must atomically repair the same measured owner");
+        const auto& actual = repaired.entities().at(owner.id);
+        for (const auto* key : {"name", "factor_numerator", "factor_denominator", "factor_expression", "appraisal_facts", "deduction_ids", "vendor_metadata"})
+            require(actual.properties.at(key) == owner.properties.at(key), "source replacement must retain measurement/appraisal metadata and deductions");
+        require(actual.extensions.at("vendor_style") == owner.extensions.at("vendor_style"), "source replacement must retain opaque style");
+        for (const auto& [id, entity_value] : stale.entities()) if (id != owner.id)
+            require(repaired.entities().at(id) == entity_value, "source replacement must preserve source walls, deductions and unrelated entities");
+        const auto qualified_after = build_appraisal_document_report(repaired, "property-1");
+        require(qualified_after.qualified && qualified_after.calculation &&
+            qualified_after.boundaries.size() == qualified_before.boundaries.size(), "repaired source must restore qualified appraisal totals");
+        require(qualified_after.boundaries.front().qualification.adjusted_square_metres.has_value() &&
+            qualified_before.boundaries.front().qualification.adjusted_square_metres.has_value(),
+            "qualified source replacement fixture exposes adjusted quantities");
+        near(*qualified_after.boundaries.front().qualification.adjusted_square_metres,
+            *qualified_before.boundaries.front().qualification.adjusted_square_metres, 1e-10,
+            "equivalent source replacement retains qualified adjusted quantities");
+        require(ProjectStore::required_format_version(repaired) == 16, "source replacement requires native reader sixteen");
+        auto fork = Document::fork(repaired);
+        require(fork.snapshot().entities() == repaired.entities(), "source replacement retained history must fork exactly");
+        auto imported_entities = std::vector<Entity>{};
+        for (const auto& [id, value] : repaired.entities()) { (void)id; imported_entities.push_back(value); }
+        const auto imported = Document::create(imported_entities);
+        require(ProjectStore::required_format_version(imported.snapshot()) == 16,
+            "imported source replacement derivation requires reader sixteen without original command history");
+        document.undo(document.revision());
+        require(document.snapshot().entities() == stale.entities() && ProjectStore::required_format_version(document.snapshot()) == 16,
+            "undo preserves stale original owner and retains source-replacement reader floor");
+        document.redo(document.revision());
+        require(document.snapshot().entities() == repaired.entities(), "source replacement redo restores exact reviewed state");
+        const auto root = std::filesystem::temp_directory_path() / ("wall-source-rebind-" + make_stable_id());
+        std::filesystem::create_directory(root);
+        const auto path = root / "repaired.bldproj";
+        (void)ProjectStore::save(path, document.snapshot());
+        {
+            auto loaded = ProjectStore::load(path);
+            require(loaded.document.snapshot().entities() == repaired.entities(), "native save/reopen retains repaired source and metadata");
+            extract_project(imported.snapshot(), root / "exchange");
+            std::ifstream input(root / "exchange" / "project.json");
+            require(Json::parse(input).at("exchange_version") == 14, "imported source replacement requires exchange fourteen");
+        }
+        std::filesystem::remove_all(root);
+        const auto reject_edit = [&](const BoundaryGeometryEdit& bad, const char* reason) {
+            bool refused = false;
+            try { (void)Document::preview_command(stale, EditBoundaryGeometry{stale.revision(), bad}); }
+            catch (const std::exception&) { refused = true; }
+            require(refused && document.snapshot().entities() == repaired.entities(), reason);
+        };
+        auto bad = edit; bad.replacement_segments[0]["start"][0] = 999.0;
+        reject_edit(bad, "requested source replacement geometry must exactly equal the derived analytical shell");
+        for (const auto& invalid_ids : std::vector<std::vector<std::string>>{
+            {"missing", ids[1], ids[2]}, {ids[1], ids[1], ids[2]}, {"deduction-1", ids[1], ids[2]},
+            {ids[0], ids[1], ids[2]}}) {
+            auto malformed = wire; malformed["replacement_wall_source_ids"] = invalid_ids;
+            bool refused = false;
+            try { reject_edit(decode_boundary_geometry_edit(malformed), "bad replacement sources must fail atomically"); refused = true; }
+            catch (const std::invalid_argument&) { refused = true; }
+            require(refused, "invalid source set must reject");
+        }
+        auto raw = stale.entities().at(owner.id); raw.properties["wall_measurement_source"] = derived.source;
+        bool raw_refused = false;
+        try { (void)Document::preview_command(stale, ApplyEntityChanges{stale.revision(),
+            {EntityChange::upsert(raw)}, {}, "forge generic source metadata"}); }
+        catch (const std::exception&) { raw_refused = true; }
+        require(raw_refused, "generic metadata must not bypass reviewed typed source replacement");
+        auto forged_entities = imported_entities;
+        for (auto& value : forged_entities) if (value.id == owner.id)
+            value.properties["wall_measurement_source"]["walls"][0]["id"] = "forged-source";
+        bool forged_refused = false;
+        try { (void)Document::create(forged_entities); } catch (const std::exception&) { forged_refused = true; }
+        require(forged_refused, "imported final source IDs must reconcile with the retained reviewed proof");
+
+        const auto refuse_map = [&](const std::map<std::string, Entity, std::less<>>& values,
+                                     const char* reason) {
+            rejects([&] { (void)edited_boundary_entities(values, edit); }, reason);
+        };
+        auto mixed = stale.entities(); mixed.at(ids.front()).properties["phase_id"] = "other-phase";
+        refuse_map(mixed, "replacement sources cannot migrate the original design phase");
+        mixed = stale.entities(); mixed.at(ids.front()).properties["building_id"] = "missing-building";
+        refuse_map(mixed, "replacement source context must resolve consistently through actual hierarchy");
+        mixed = stale.entities();
+        mixed.at(owner.id).properties["wall_measurement_source"]["walls"][0]["context"]["property_id"] = "spoofed-property";
+        refuse_map(mixed, "the first historical source record cannot spoof the target hierarchy");
+        mixed = stale.entities(); mixed.at(ids.front()).properties["elevation_m"] = 1.0;
+        refuse_map(mixed, "replacement sources must share the surviving original effective plane");
+        mixed = stale.entities(); mixed.at(ids[1]).properties["elevation_m"] = 1.0;
+        refuse_map(mixed, "a surviving original source cannot disagree with the replacement plane");
+        mixed = stale.entities();
+        mixed.emplace("phase-model", entity("phase-model", "model_phases",
+            {{"model", ModelPhases::create(ids, ids,
+                {{"demolition", "Demolition", {ids.front()}, {}}}, "demolition").to_json()}}));
+        refuse_map(mixed, "demolished replacement source walls cannot participate in the active semantic model");
+        mixed = stale.entities();
+        for (const auto& id : ids) {
+            mixed.at(id).properties["baseline"]["start"][0] = mixed.at(id).properties["baseline"]["start"][0].get<double>() + 10.0;
+            mixed.at(id).properties["baseline"]["end"][0] = mixed.at(id).properties["baseline"]["end"][0].get<double>() + 10.0;
+        }
+        const auto shifted = derive_exterior_wall_measurement(mixed, ids);
+        const auto shifted_edit = source_replacement_edit(mixed.at(owner.id), shifted.boundary, ids);
+        rejects([&] { (void)edited_boundary_entities(mixed, shifted_edit); },
+            "reviewed source replacement must refuse a retained deduction outside its newly derived parent");
+
+        // The stored geometry proof survives later removal of its current
+        // physical sources; appraisal then reports staleness rather than
+        // attempting to reconstruct history from today's incomplete shell.
+        document.apply(ApplyEntityChanges{document.revision(), {EntityChange::erase(ids.front())}, {},
+            "delete repaired source later"});
+        const auto later_stale = document.snapshot();
+        require(!wall_measurement_source_current(later_stale, later_stale.entities().at(owner.id)) &&
+            !build_appraisal_document_report(later_stale, "property-1").qualified,
+            "later source deletion must withhold totals while retaining reviewed geometry");
+        auto later_fork = Document::fork(later_stale);
+        require(later_fork.snapshot().entities() == later_stale.entities(),
+            "later stale source proof must fork without consulting missing walls");
+        const auto stale_root = std::filesystem::temp_directory_path() / ("wall-source-stale-" + make_stable_id());
+        std::filesystem::create_directory(stale_root);
+        (void)ProjectStore::save(stale_root / "later-stale.bldproj", later_stale);
+        {
+            auto stale_loaded = ProjectStore::load(stale_root / "later-stale.bldproj");
+            require(stale_loaded.document.snapshot().entities() == later_stale.entities(),
+                "later stale source must save and reopen with its exact historical proof");
+            stale_loaded.document.undo(stale_loaded.document.revision());
+            require(stale_loaded.document.snapshot().entities() == repaired.entities(),
+                "undo of later deletion restores the repaired source without redefinition");
+            stale_loaded.document.redo(stale_loaded.document.revision());
+            require(stale_loaded.document.snapshot().entities() == later_stale.entities(),
+                "redo of later deletion preserves the stale historical geometry proof");
+        }
+        std::filesystem::remove_all(stale_root);
+    }
+}
+
 } // namespace
 
-int main() {
+int main(int argc, char** argv) {
     try {
+        if (argc > 1 && std::string_view(argv[1]) == "--wall-source-rebind-only") {
+            reviewed_source_replacement_preserves_owner_and_proofs();
+            std::cout << "Wall source rebind workflows passed\n";
+            return 0;
+        }
         rectangle_offsets_outward_and_records_sources();
         shuffled_and_reversed_walls_keep_the_same_outline();
         stable_wall_identity_seeds_output_order_across_coordinate_edits();
@@ -1064,6 +1285,7 @@ int main() {
         wall_network_recognition_rejects_ambiguous_and_unsupported_inputs();
         wall_network_recognition_uses_resolved_elevation_planes_without_mutation();
         appraisal_withholds_overlapping_old_and_annex_exterior_owners();
+        reviewed_source_replacement_preserves_owner_and_proofs();
         std::cout << "wall_measurement_tests passed\n";
         return 0;
     } catch (const std::exception& error) {
