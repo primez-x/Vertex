@@ -81,6 +81,7 @@
 #include <QAction>
 #include <QActionGroup>
 #include <QApplication>
+#include <QAbstractItemModel>
 #include <QAbstractItemView>
 #include <QComboBox>
 #include <QCloseEvent>
@@ -3857,7 +3858,8 @@ public:
         }
     }
 
-    [[nodiscard]] bool editSelectedAreaAttributes(const QString& attributes_json) {
+    [[nodiscard]] bool editSelectedAreaAttributes(
+        const QString& attributes_json, std::optional<Revision> expected_revision = std::nullopt) {
         if (!m_document->is_editable()) {
             setError(QStringLiteral("This document is read-only."));
             return false;
@@ -3869,7 +3871,7 @@ public:
             }
             auto updated = *entity;
             updated.properties["area_attributes"] = parse_bounded_string_attributes(attributes_json);
-            if (!applyEntity(std::move(updated), "edit area attributes")) return false;
+            if (!applyEntity(std::move(updated), "edit area attributes", expected_revision)) return false;
             clearError();
             refresh();
             return true;
@@ -3877,6 +3879,182 @@ public:
             setError(QStringLiteral("Area attributes: %1").arg(QString::fromUtf8(error.what())));
             return false;
         }
+    }
+
+    void showAreaAttributesEditor() {
+        if (!m_document->is_editable()) {
+            setError(QStringLiteral("This document is read-only."));
+            return;
+        }
+        const auto selected = selectedEntity();
+        if (!selected || !is_closed_boundary_entity(selected->type) ||
+            m_selected_ids.size() != 1 || m_selected_ids.front() != m_selected_id) {
+            setError(QStringLiteral("Select one closed boundary before editing its details."));
+            return;
+        }
+        const auto context = captureModalContext();
+        const auto existing = selected->properties.find("area_attributes");
+        json original = json::object();
+        if (existing != selected->properties.end()) {
+            try {
+                if (!existing->is_object())
+                    throw std::invalid_argument("Stored area attributes are not a string map.");
+                original = parse_bounded_string_attributes(
+                    QString::fromStdString(existing->dump()));
+            } catch (const std::exception& error) {
+                setError(QStringLiteral("Area details cannot be edited: %1")
+                             .arg(QString::fromUtf8(error.what())));
+                return;
+            }
+        }
+
+        QDialog dialog(owner);
+        dialog.setObjectName(QStringLiteral("areaAttributesDialog"));
+        dialog.setWindowTitle(QStringLiteral("Area details"));
+        auto* layout = new QVBoxLayout(&dialog);
+        auto* table = new QTableWidget(static_cast<int>(original.size()), 2, &dialog);
+        table->setObjectName(QStringLiteral("areaAttributesTable"));
+        table->setHorizontalHeaderLabels({QStringLiteral("Name"), QStringLiteral("Value")});
+        table->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Interactive);
+        table->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
+        table->setColumnWidth(0, 160);
+        table->horizontalHeader()->setMinimumSectionSize(120);
+        table->setSelectionBehavior(QAbstractItemView::SelectRows);
+        table->setSelectionMode(QAbstractItemView::SingleSelection);
+        table->setEditTriggers(QAbstractItemView::DoubleClicked | QAbstractItemView::EditKeyPressed |
+                               QAbstractItemView::AnyKeyPressed);
+        table->setMinimumSize(500, 230);
+        int row = 0;
+        for (const auto& [key, value] : original.items()) {
+            table->setItem(row, 0, new QTableWidgetItem(QString::fromStdString(key)));
+            table->setItem(row, 1, new QTableWidgetItem(QString::fromStdString(value.get<std::string>())));
+            ++row;
+        }
+        layout->addWidget(table);
+        auto* row_buttons = new QWidget(&dialog);
+        auto* row_buttons_layout = new QHBoxLayout(row_buttons);
+        row_buttons_layout->setContentsMargins(0, 0, 0, 0);
+        auto* add = new QPushButton(QStringLiteral("Add"), row_buttons);
+        add->setObjectName(QStringLiteral("areaAttributeAdd"));
+        auto* remove = new QPushButton(QStringLiteral("Remove"), row_buttons);
+        remove->setObjectName(QStringLiteral("areaAttributeRemove"));
+        row_buttons_layout->addWidget(add);
+        row_buttons_layout->addWidget(remove);
+        row_buttons_layout->addStretch();
+        layout->addWidget(row_buttons);
+        auto* validation = new QLabel(&dialog);
+        validation->setObjectName(QStringLiteral("areaAttributesValidation"));
+        validation->setWordWrap(true);
+        layout->addWidget(validation);
+        auto* buttons = new QDialogButtonBox(QDialogButtonBox::Save | QDialogButtonBox::Cancel, &dialog);
+        auto* save = buttons->button(QDialogButtonBox::Save);
+        save->setObjectName(QStringLiteral("areaAttributesSave"));
+        buttons->button(QDialogButtonBox::Cancel)->setObjectName(QStringLiteral("areaAttributesCancel"));
+        layout->addWidget(buttons);
+        const auto collect_attributes = [table, validation](bool focus_invalid) -> std::optional<json> {
+            const auto invalid = [&](const QString& message, int row, int column) -> std::optional<json> {
+                validation->setText(message);
+                if (focus_invalid && row >= 0) {
+                    table->setCurrentCell(row, column);
+                    if (table->item(row, column)) table->editItem(table->item(row, column));
+                }
+                return std::nullopt;
+            };
+            if (table->rowCount() > 256)
+                return invalid(QStringLiteral("Area details allow at most 256 entries."), -1, -1);
+            json attributes = json::object();
+            std::set<std::string> keys;
+            for (int index = 0; index < table->rowCount(); ++index) {
+                const auto* name_item = table->item(index, 0);
+                const auto* value_item = table->item(index, 1);
+                const auto name = name_item ? name_item->text() : QString{};
+                const auto value = value_item ? value_item->text() : QString{};
+                const auto key_bytes = name.toUtf8();
+                const auto value_bytes = value.toUtf8();
+                if (name.isEmpty())
+                    return invalid(QStringLiteral("Each entry needs a nonempty Name."), index, 0);
+                if (key_bytes.size() > 256)
+                    return invalid(QStringLiteral("Names must be at most 256 UTF-8 bytes."), index, 0);
+                if (value_bytes.size() > 16384 || value.contains(QChar(0)))
+                    return invalid(QStringLiteral("Values must be at most 16,384 UTF-8 bytes and contain no NUL."), index, 1);
+                const auto key = std::string(key_bytes.constData(), static_cast<std::size_t>(key_bytes.size()));
+                if (!keys.insert(key).second)
+                    return invalid(QStringLiteral("Names must be unique."), index, 0);
+                attributes[key] = std::string(value_bytes.constData(), static_cast<std::size_t>(value_bytes.size()));
+            }
+            try {
+                attributes = parse_bounded_string_attributes(QString::fromStdString(attributes.dump()));
+            } catch (const std::exception& error) {
+                return invalid(QString::fromUtf8(error.what()), -1, -1);
+            }
+            validation->clear();
+            return attributes;
+        };
+        const auto update_validation = [collect_attributes, save, add, table] {
+            save->setEnabled(collect_attributes(false).has_value());
+            add->setEnabled(table->rowCount() < 256);
+        };
+        QObject::connect(add, &QPushButton::clicked, &dialog, [table, update_validation] {
+            const int new_row = table->rowCount();
+            table->insertRow(new_row);
+            table->setItem(new_row, 0, new QTableWidgetItem);
+            table->setItem(new_row, 1, new QTableWidgetItem);
+            table->setCurrentCell(new_row, 0);
+            table->editItem(table->item(new_row, 0));
+            update_validation();
+        });
+        QObject::connect(remove, &QPushButton::clicked, &dialog, [table, update_validation] {
+            if (table->currentRow() >= 0) table->removeRow(table->currentRow());
+            update_validation();
+        });
+        QObject::connect(table, &QTableWidget::itemChanged, &dialog,
+                         [update_validation](QTableWidgetItem*) { update_validation(); });
+        QObject::connect(table, &QTableWidget::itemSelectionChanged, &dialog,
+                         [remove, table, update_validation] {
+                             remove->setEnabled(table->currentRow() >= 0);
+                             update_validation();
+                         });
+        QObject::connect(table->model(), &QAbstractItemModel::rowsInserted, &dialog,
+                         [update_validation](const QModelIndex&, int, int) { update_validation(); });
+        QObject::connect(table->model(), &QAbstractItemModel::rowsRemoved, &dialog,
+                         [update_validation](const QModelIndex&, int, int) { update_validation(); });
+        remove->setEnabled(false);
+        update_validation();
+        QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+        QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, [&, collect_attributes] {
+            if (!modalContextUnchanged(context)) {
+                validation->setText(lastError());
+                return;
+            }
+            if (!m_document->is_editable()) {
+                setError(QStringLiteral("This document is read-only."));
+                validation->setText(lastError());
+                return;
+            }
+            if (m_selected_ids.size() != 1 || m_selected_ids.front() != context.selected_id) {
+                setError(QStringLiteral("Selection changed; close and reopen Area details."));
+                validation->setText(lastError());
+                return;
+            }
+            const auto current = selectedEntity();
+            if (!current || current->id != context.selected_id.toStdString() ||
+                !is_closed_boundary_entity(current->type)) {
+                validation->setText(QStringLiteral("The selected boundary changed; reopen Area details."));
+                return;
+            }
+            const auto attributes_value = collect_attributes(true);
+            if (!attributes_value) return;
+            const auto& attributes = *attributes_value;
+            if (attributes == original) {
+                clearError();
+                dialog.accept();
+                return;
+            }
+            if (editSelectedAreaAttributes(QString::fromStdString(attributes.dump()), context.revision)) dialog.accept();
+            else validation->setText(lastError());
+        });
+        dialog.resize(540, 360);
+        dialog.exec();
     }
 
     void cancelPlanLabelPlacement() {
@@ -17365,13 +17543,34 @@ public:
     }
 
     void showAppraisalFacts() {
+        if (!m_document->is_editable()) {
+            setError(QStringLiteral("This document is read-only."));
+            return;
+        }
         const auto selected = selectedEntity();
         const auto property = propertyEntity();
-        if (!selected || !is_closed_boundary_entity(selected->type) || !property) return;
+        if (m_selected_ids.size() != 1 || m_selected_ids.front() != m_selected_id || !selected ||
+            !is_closed_boundary_entity(selected->type) || !property) {
+            setError(QStringLiteral("Select one closed area before editing appraisal facts."));
+            return;
+        }
+        try {
+            if (calculation_workflow_name(property->properties) != "appraisal") {
+                setError(QStringLiteral("Switch the area workflow to Appraisal before editing appraisal facts."));
+                return;
+            }
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Appraisal facts: %1").arg(QString::fromUtf8(error.what())));
+            return;
+        }
         const auto snapshot = m_document->snapshot();
         const auto selected_id = selected->id;
         const auto floor_id = read_string(selected->properties, "floor_id");
-        if (!floor_id || !snapshot.entities().contains(*floor_id)) return;
+        const auto floor = floor_id ? snapshot.entities().find(*floor_id) : snapshot.entities().end();
+        if (floor == snapshot.entities().end() || floor->second.type != "floor") {
+            setError(QStringLiteral("Assign the area to a floor before editing its appraisal facts."));
+            return;
+        }
         QDialog dialog(owner);
         dialog.setObjectName(QStringLiteral("appraisalFactsDialog"));
         dialog.setWindowTitle(QStringLiteral("Edit appraisal facts"));
@@ -21932,12 +22131,11 @@ public:
             {QStringLiteral("Edit selected area attributes"), [this] {
                  if (m_selected_id.isEmpty() || !selectedEntity().has_value() ||
                      !is_closed_boundary_entity(selectedEntity()->type)) {
-                     setError(QStringLiteral("Select a closed boundary first."));
-                     return;
+                      setError(QStringLiteral("Select a closed boundary first."));
+                      return;
                  }
-                 m_area_attributes_group->setVisible(true);
-                 m_area_attributes_edit->setFocus();
-            }},
+                 showAreaAttributesEditor();
+             }},
             {QStringLiteral("Edit calculation profile"), [this] { showCalculationProfileEditor(); }},
             {QStringLiteral("Manage workspace profiles"), [this] { showWorkspaceProfiles(); }},
             {QStringLiteral("Named revisions and comparison"), [this] { showRevisionHistory(); }},
@@ -24444,7 +24642,6 @@ private:
         m_edit_curve_button->setObjectName(QStringLiteral("editCurvedWall"));
         m_edit_curve_button->setToolTip(QStringLiteral(
             "Edit analytical angle, arc length, or arc height. Boundary curve edits keep both endpoints fixed."));
-        inspector_layout->addWidget(m_edit_curve_button);
         QObject::connect(m_edit_curve_button, &QPushButton::clicked, owner,
                          [this] {
             const auto selected = selectedEntity();
@@ -24763,16 +24960,27 @@ private:
                          [this] { showReferenceCalibration(); });
         m_constraint_button = new QPushButton(QStringLiteral("Dimensions and constraints…"), inspector_body);
         m_constraint_button->setObjectName(QStringLiteral("editWallConstraints"));
-        inspector_layout->addWidget(m_constraint_button);
         QObject::connect(m_constraint_button, &QPushButton::clicked, owner, [this] { showConstraintEditor(); });
         m_boundary_geometry_button = new QPushButton(
             QStringLiteral("Edit boundary geometry…"), inspector_body);
         m_boundary_geometry_button->setObjectName(QStringLiteral("editBoundaryGeometry"));
         m_boundary_geometry_button->setToolTip(QStringLiteral(
             "Change an edge length and anchor, or use the canvas vertex handles"));
-        inspector_layout->addWidget(m_boundary_geometry_button);
         QObject::connect(m_boundary_geometry_button, &QPushButton::clicked, owner,
                          [this] { showBoundaryGeometryEditor(); });
+        m_geometry_actions = new QWidget(inspector_body);
+        auto* geometry_actions_layout = new QHBoxLayout(m_geometry_actions);
+        geometry_actions_layout->setContentsMargins(0, 0, 0, 0);
+        geometry_actions_layout->setSpacing(4);
+        m_boundary_geometry_button->setText(QStringLiteral("Geometry"));
+        m_edit_curve_button->setText(QStringLiteral("Curve"));
+        m_edit_curve_button->setToolTip(QStringLiteral("Edit curve construction"));
+        m_constraint_button->setText(QStringLiteral("Constraints"));
+        m_constraint_button->setToolTip(QStringLiteral("Dimensions and constraints"));
+        geometry_actions_layout->addWidget(m_boundary_geometry_button);
+        geometry_actions_layout->addWidget(m_edit_curve_button);
+        geometry_actions_layout->addWidget(m_constraint_button);
+        inspector_layout->addWidget(m_geometry_actions);
         auto* form = new QFormLayout;
         m_geometry_form = form;
         form->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
@@ -24783,12 +24991,21 @@ private:
         form->addRow(QStringLiteral("Length"), m_length_edit);
         m_classification_combo = new QComboBox(inspector_body);
         m_classification_combo->setEditable(true);
-        m_classification_combo->setMinimumWidth(0);
+        m_classification_combo->setMinimumWidth(240);
         m_classification_combo->addItems({QStringLiteral("measurement"), QStringLiteral("interior"),
                                           QStringLiteral("exterior"), QStringLiteral("party"),
                                           QStringLiteral("room"), QStringLiteral("door"),
                                           QStringLiteral("window"), QStringLiteral("slab")});
         form->addRow(QStringLiteral("Classification"), m_classification_combo);
+        m_edit_appraisal_facts_action = new QAction(QStringLiteral("Edit appraisal facts…"), owner);
+        m_edit_appraisal_facts_action->setObjectName(QStringLiteral("editAppraisalFactsAction"));
+        QObject::connect(m_edit_appraisal_facts_action, &QAction::triggered, owner,
+                         [this] { showAppraisalFacts(); });
+        m_edit_appraisal_facts_button = new QPushButton(QStringLiteral("Edit appraisal facts…"), inspector_body);
+        m_edit_appraisal_facts_button->setObjectName(QStringLiteral("editAppraisalFacts"));
+        QObject::connect(m_edit_appraisal_facts_button, &QPushButton::clicked, owner,
+                         [this] { if (m_edit_appraisal_facts_action) m_edit_appraisal_facts_action->trigger(); });
+        form->addRow(m_edit_appraisal_facts_button);
         m_height_edit = new QLineEdit(inspector_body);
         m_height_edit->setObjectName(QStringLiteral("inspectorHeight"));
         m_height_edit->setMinimumWidth(0);
@@ -24906,10 +25123,12 @@ private:
         calculation_group->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Maximum);
         auto* calculation_layout = new QFormLayout(calculation_group);
         calculation_layout->setRowWrapPolicy(QFormLayout::WrapLongRows);
+        calculation_layout->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
         const auto configure_value_label = [](QLabel* label) {
             label->setMinimumWidth(0);
+            label->setWordWrap(true);
             auto policy = label->sizePolicy();
-            policy.setHorizontalPolicy(QSizePolicy::Preferred);
+            policy.setHorizontalPolicy(QSizePolicy::Ignored);
             policy.setVerticalPolicy(QSizePolicy::Preferred);
             policy.setHeightForWidth(label->wordWrap());
             label->setSizePolicy(policy);
@@ -24973,58 +25192,90 @@ private:
                                                   inspector_body);
         m_appraisal_summary_group->setObjectName(QStringLiteral("appraisalSummary"));
         m_appraisal_summary_group->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Maximum);
-        auto* appraisal_layout = new QFormLayout(m_appraisal_summary_group);
-        appraisal_layout->setRowWrapPolicy(QFormLayout::WrapLongRows);
-        const auto add_appraisal_value = [&](const QString& label, const char* object_name) {
-            auto* value = new QLabel(m_appraisal_summary_group);
+        auto* appraisal_layout = new QVBoxLayout(m_appraisal_summary_group);
+        auto* primary_form = new QFormLayout;
+        primary_form->setRowWrapPolicy(QFormLayout::WrapLongRows);
+        primary_form->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
+        appraisal_layout->addLayout(primary_form);
+        const auto add_appraisal_value = [&](QFormLayout* target, QWidget* parent,
+                                             const QString& label, const char* object_name) {
+            auto* value = new QLabel(parent);
             value->setObjectName(QString::fromLatin1(object_name));
             configure_value_label(value);
-            appraisal_layout->addRow(label, value);
+            target->addRow(label, value);
+            if (auto* caption = qobject_cast<QLabel*>(target->labelForField(value)))
+                caption->setWordWrap(true);
             return value;
         };
-        m_appraisal_gla_value = add_appraisal_value(
-            QStringLiteral("Above-grade finished area"), "appraisalGlaTotal");
-        m_appraisal_above_unfinished_value = add_appraisal_value(
-            QStringLiteral("Above-grade unfinished"), "appraisalAboveGradeUnfinishedTotal");
-        m_appraisal_below_finished_value = add_appraisal_value(
-            QStringLiteral("Below-grade finished"), "appraisalBelowGradeFinishedTotal");
-        m_appraisal_below_unfinished_value = add_appraisal_value(
-            QStringLiteral("Below-grade unfinished"), "appraisalBelowGradeUnfinishedTotal");
-        m_appraisal_garage_value = add_appraisal_value(
-            QStringLiteral("Garage"), "appraisalGarageTotal");
-        m_appraisal_carport_value = add_appraisal_value(
-            QStringLiteral("Carport"), "appraisalCarportTotal");
-        m_appraisal_porch_value = add_appraisal_value(
-            QStringLiteral("Porch"), "appraisalPorchTotal");
-        m_appraisal_patio_value = add_appraisal_value(
-            QStringLiteral("Patio"), "appraisalPatioTotal");
-        m_appraisal_deck_value = add_appraisal_value(
-            QStringLiteral("Deck"), "appraisalDeckTotal");
-        m_appraisal_other_value = add_appraisal_value(
-            QStringLiteral("Other non-living"), "appraisalOtherNonLivingTotal");
-        m_appraisal_floor_value = add_appraisal_value(
-            QStringLiteral("Selected floor measured"), "appraisalFloorTotal");
-        m_appraisal_property_value = add_appraisal_value(
+        m_appraisal_status_value = add_appraisal_value(primary_form, m_appraisal_summary_group,
+            QStringLiteral("Status"), "appraisalQualificationStatus");
+        m_appraisal_gla_value = add_appraisal_value(primary_form, m_appraisal_summary_group,
+            QStringLiteral("Finished above grade"), "appraisalGlaTotal");
+        m_appraisal_property_value = add_appraisal_value(primary_form, m_appraisal_summary_group,
             QStringLiteral("Property measured"), "appraisalPropertyTotal");
-        m_appraisal_contribution_value = add_appraisal_value(
+        m_appraisal_details_button = new QToolButton(m_appraisal_summary_group);
+        m_appraisal_details_button->setText(QStringLiteral("Details"));
+        m_appraisal_details_button->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+        m_appraisal_details_button->setArrowType(Qt::RightArrow);
+        m_appraisal_details_button->setAutoRaise(true);
+        m_appraisal_details_button->setObjectName(QStringLiteral("appraisalDetailsToggle"));
+        m_appraisal_details_button->setCheckable(true);
+        appraisal_layout->addWidget(m_appraisal_details_button, 0, Qt::AlignLeft);
+        m_appraisal_details_widget = new QWidget(m_appraisal_summary_group);
+        auto* details_form = new QFormLayout(m_appraisal_details_widget);
+        details_form->setContentsMargins(0, 0, 0, 0);
+        details_form->setRowWrapPolicy(QFormLayout::WrapLongRows);
+        details_form->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
+        m_appraisal_qualification_value = add_appraisal_value(details_form, m_appraisal_details_widget,
+            QStringLiteral("Qualification details"), "appraisalQualification");
+        m_appraisal_derived_value = add_appraisal_value(details_form, m_appraisal_details_widget,
+            QStringLiteral("Selected area calculation"), "appraisalDerivedCategory");
+        m_appraisal_above_unfinished_value = add_appraisal_value(details_form, m_appraisal_details_widget,
+            QStringLiteral("Above-grade unfinished"), "appraisalAboveGradeUnfinishedTotal");
+        m_appraisal_below_finished_value = add_appraisal_value(details_form, m_appraisal_details_widget,
+            QStringLiteral("Below-grade finished"), "appraisalBelowGradeFinishedTotal");
+        m_appraisal_below_unfinished_value = add_appraisal_value(details_form, m_appraisal_details_widget,
+            QStringLiteral("Below-grade unfinished"), "appraisalBelowGradeUnfinishedTotal");
+        m_appraisal_garage_value = add_appraisal_value(details_form, m_appraisal_details_widget,
+            QStringLiteral("Garage"), "appraisalGarageTotal");
+        m_appraisal_carport_value = add_appraisal_value(details_form, m_appraisal_details_widget,
+            QStringLiteral("Carport"), "appraisalCarportTotal");
+        m_appraisal_porch_value = add_appraisal_value(details_form, m_appraisal_details_widget,
+            QStringLiteral("Porch"), "appraisalPorchTotal");
+        m_appraisal_patio_value = add_appraisal_value(details_form, m_appraisal_details_widget,
+            QStringLiteral("Patio"), "appraisalPatioTotal");
+        m_appraisal_deck_value = add_appraisal_value(details_form, m_appraisal_details_widget,
+            QStringLiteral("Deck"), "appraisalDeckTotal");
+        m_appraisal_other_value = add_appraisal_value(details_form, m_appraisal_details_widget,
+            QStringLiteral("Other non-living"), "appraisalOtherNonLivingTotal");
+        m_appraisal_floor_value = add_appraisal_value(details_form, m_appraisal_details_widget,
+            QStringLiteral("Selected floor measured"), "appraisalFloorTotal");
+        m_appraisal_contribution_value = add_appraisal_value(details_form, m_appraisal_details_widget,
             QStringLiteral("Contributing boundaries"), "appraisalContribution");
         m_appraisal_contribution_value->setWordWrap(true);
-        m_appraisal_qualification_value = add_appraisal_value(QStringLiteral("Qualification"), "appraisalQualification");
-        m_appraisal_derived_value = add_appraisal_value(QStringLiteral("Derived category / physical area"), "appraisalDerivedCategory");
-        m_appraisal_commercial_value = add_appraisal_value(QStringLiteral("Commercial occupiable / common / service"), "appraisalCommercialTotals");
-        m_appraisal_nonstandard_value = add_appraisal_value(QStringLiteral("Nonstandard / noncontinuous finished"), "appraisalNonstandardTotals");
-        auto* edit_appraisal = new QPushButton(QStringLiteral("Edit appraisal facts..."), m_appraisal_summary_group);
-        edit_appraisal->setObjectName(QStringLiteral("editAppraisalFacts"));
-        appraisal_layout->addRow(edit_appraisal);
-        QObject::connect(edit_appraisal, &QPushButton::clicked, owner, [this] { showAppraisalFacts(); });
+        m_appraisal_commercial_value = add_appraisal_value(details_form, m_appraisal_details_widget,
+            QStringLiteral("Commercial occupiable / common / service"), "appraisalCommercialTotals");
+        m_appraisal_nonstandard_value = add_appraisal_value(details_form, m_appraisal_details_widget,
+            QStringLiteral("Nonstandard / noncontinuous finished"), "appraisalNonstandardTotals");
+        appraisal_layout->addWidget(m_appraisal_details_widget);
+        m_appraisal_details_widget->setVisible(m_appraisal_details_expanded);
+        QObject::connect(m_appraisal_details_button, &QToolButton::toggled, owner, [this](bool expanded) {
+            m_appraisal_details_expanded = expanded;
+            m_appraisal_details_widget->setVisible(expanded);
+            m_appraisal_details_button->setArrowType(expanded ? Qt::DownArrow : Qt::RightArrow);
+            if (m_inspector && m_inspector->isVisible()) positionContextEditor();
+        });
         m_appraisal_summary_group->hide();
-        inspector_layout->addWidget(m_appraisal_summary_group);
+        inspector_layout->insertWidget(inspector_layout->indexOf(m_calculation_group),
+                                       m_appraisal_summary_group);
 
         auto* profile_group = new QGroupBox(QStringLiteral("Area workflow"), inspector_body);
         m_profile_group = profile_group;
         profile_group->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Maximum);
         auto* profile_layout = new QVBoxLayout(profile_group);
         auto* workflow_form = new QFormLayout;
+        workflow_form->setRowWrapPolicy(QFormLayout::WrapLongRows);
+        workflow_form->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
         m_calculation_workflow_combo = new QComboBox(profile_group);
         m_calculation_workflow_combo->setObjectName(QStringLiteral("calculationWorkflow"));
         m_calculation_workflow_combo->addItem(QStringLiteral("Measurement"),
@@ -25060,7 +25311,10 @@ private:
         inspector_layout->addWidget(profile_group);
         m_area_attributes_group = new QGroupBox(QStringLiteral("Area attributes"), inspector_body);
         m_area_attributes_group->setObjectName(QStringLiteral("areaAttributes"));
-        auto* area_attributes_layout = new QFormLayout(m_area_attributes_group);
+        m_area_attributes_layout = new QFormLayout(m_area_attributes_group);
+        m_area_attributes_layout->setRowWrapPolicy(QFormLayout::WrapLongRows);
+        m_area_attributes_layout->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
+        auto* area_attributes_layout = m_area_attributes_layout;
         m_area_name_edit = new QLineEdit(m_area_attributes_group);
         m_area_name_edit->setObjectName(QStringLiteral("areaName"));
         m_area_name_edit->setMaxLength(256);
@@ -25108,21 +25362,18 @@ private:
             [this]{(void)beginSelectedPlanLabelPlacement();});
         QObject::connect(m_automatic_plan_label_button,&QPushButton::clicked,owner,
             [this]{(void)resetSelectedPlanLabelPlacement(std::nullopt);});
-        m_area_attributes_edit = new QPlainTextEdit(m_area_attributes_group);
-        m_area_attributes_edit->setObjectName(QStringLiteral("areaAttributesJson"));
-        m_area_attributes_edit->setPlaceholderText(QStringLiteral("{\"key\": \"value\"}"));
-        m_area_attributes_edit->setMaximumHeight(82);
-        m_area_attributes_edit->setTabChangesFocus(true);
-        area_attributes_layout->addRow(QStringLiteral("Attributes (JSON)"), m_area_attributes_edit);
-        m_apply_area_attributes_button = new QPushButton(QStringLiteral("Apply area attributes"),
-                                                          m_area_attributes_group);
-        m_apply_area_attributes_button->setObjectName(QStringLiteral("applyAreaAttributes"));
-        area_attributes_layout->addRow(m_apply_area_attributes_button);
+        m_area_attributes_summary = new QLabel(m_area_attributes_group);
+        m_area_attributes_summary->setObjectName(QStringLiteral("areaAttributesSummary"));
+        m_area_attributes_summary->setWordWrap(true);
+        configure_value_label(m_area_attributes_summary);
+        area_attributes_layout->addRow(QStringLiteral("Custom details"), m_area_attributes_summary);
+        m_area_attributes_button = new QPushButton(QStringLiteral("Details…"), m_area_attributes_group);
+        m_area_attributes_button->setObjectName(QStringLiteral("editAreaAttributes"));
+        area_attributes_layout->addRow(m_area_attributes_button);
+        QObject::connect(m_area_attributes_button, &QPushButton::clicked, owner,
+                         [this] { showAreaAttributesEditor(); });
         m_area_attributes_group->setVisible(false);
         inspector_layout->addWidget(m_area_attributes_group);
-        QObject::connect(m_apply_area_attributes_button, &QPushButton::clicked, owner, [this] {
-            (void)editSelectedAreaAttributes(m_area_attributes_edit->toPlainText());
-        });
         m_read_only_label = new QLabel(inspector_body);
         m_read_only_label->setWordWrap(true);
         m_read_only_label->setStyleSheet(QStringLiteral("color:#d59564;"));
@@ -25408,6 +25659,16 @@ private:
                 if (m_selected_ids.size()==1 && selected &&
                     (selected->type=="measurement_boundary" || selected->type=="boundary"))
                     menu.addAction(m_auto_subtract_action);
+                if (m_selected_ids.size() == 1 && selected &&
+                    is_closed_boundary_entity(selected->type)) {
+                    try {
+                        const auto property = propertyEntity();
+                        if (property && calculation_workflow_name(property->properties) == "appraisal")
+                            menu.addAction(m_edit_appraisal_facts_action);
+                    } catch (const std::exception&) {
+                        // Fail closed if the current workflow cannot be resolved.
+                    }
+                }
                 if (m_selected_ids.size() == 1 && selected && is_closed_boundary_entity(selected->type) &&
                     inspect_boundary_entity_version(*selected).format == BoundaryEntityFormat::anonymous_legacy)
                     menu.addAction(m_upgrade_boundary_identities_action);
@@ -27428,15 +27689,24 @@ private:
                 m_calculation_profile_action->setEnabled(false);
             }
         }
-        m_appraisal_qualification_value->setText(QStringLiteral("Unqualified — declare appraisal policy and facts."));
+        const auto set_appraisal_qualification = [this](const QString& detail) {
+            m_appraisal_qualification_value->setText(detail);
+            m_appraisal_status_value->setToolTip(detail);
+            m_appraisal_status_value->setText(detail.startsWith(QStringLiteral("Qualified"))
+                ? QStringLiteral("Qualified") : QStringLiteral("Unqualified"));
+        };
+        set_appraisal_qualification(QStringLiteral("Unqualified — declare appraisal policy and facts."));
         m_appraisal_derived_value->setText(QStringLiteral("—"));
         m_appraisal_commercial_value->setText(QStringLiteral("—"));
         m_appraisal_nonstandard_value->setText(QStringLiteral("—"));
-        m_appraisal_summary_group->setTitle(QStringLiteral("Manual appraisal totals — Unqualified"));
+        m_appraisal_summary_group->setTitle(QStringLiteral("Appraisal"));
         const bool is_area = selected.has_value() && is_closed_boundary_entity(selected->type);
         m_calculation_group->setVisible(is_area);
         m_profile_group->setVisible(is_area);
         m_appraisal_summary_group->hide();
+        m_geometry_form->setRowVisible(m_edit_appraisal_facts_button, false);
+        m_edit_appraisal_facts_button->setEnabled(false);
+        m_edit_appraisal_facts_action->setEnabled(false);
         for (auto* value : {m_appraisal_gla_value, m_appraisal_above_unfinished_value,
                             m_appraisal_below_finished_value, m_appraisal_below_unfinished_value,
                             m_appraisal_garage_value, m_appraisal_carport_value,
@@ -27479,8 +27749,7 @@ private:
             m_calculation_workflow_combo->setEnabled(false);
         };
         const auto set_calculation_error = [&](const QString& message) {
-            m_appraisal_summary_group->setTitle(QStringLiteral("Appraisal — Unqualified"));
-            m_appraisal_qualification_value->setText(QStringLiteral("Unqualified: %1").arg(message));
+            set_appraisal_qualification(QStringLiteral("Unqualified: %1").arg(message));
             clear_values();
             set_status_style(true);
             m_calculation_status->setText(QStringLiteral("Totals blocked: %1").arg(message));
@@ -27524,6 +27793,15 @@ private:
         }
 
         const bool appraisal_workflow = calculation_workflow == "appraisal";
+        const bool facts_action_visible = appraisal_workflow && m_selected_ids.size() == 1;
+        const auto selected_floor_id = read_string(selected->properties, "floor_id");
+        const auto selected_floor = selected_floor_id
+            ? snapshot.entities().find(*selected_floor_id) : snapshot.entities().end();
+        const bool facts_action_enabled = facts_action_visible && editable &&
+            selected_floor != snapshot.entities().end() && selected_floor->second.type == "floor";
+        m_geometry_form->setRowVisible(m_edit_appraisal_facts_button, facts_action_visible);
+        m_edit_appraisal_facts_button->setEnabled(facts_action_enabled);
+        m_edit_appraisal_facts_action->setEnabled(facts_action_enabled);
         {
             QSignalBlocker blocker(m_calculation_workflow_combo);
             m_calculation_workflow_combo->setCurrentIndex(
@@ -27555,6 +27833,7 @@ private:
         }
         {
             QSignalBlocker blocker(m_classification_combo);
+            m_classification_combo->setEditable(!derived_category_authority);
             m_classification_combo->clear();
             for (const auto& [name, rule] : persisted_profile.classifications) {
                 (void)rule;
@@ -27873,24 +28152,23 @@ private:
                         boundary.qualification.qualified)
                         selected_qualified_exclusion = true;
                 }
-                m_appraisal_summary_group->setTitle(all_qualified
-                    ? QStringLiteral("Automatic appraisal — Qualified (Vertex policy)")
-                    : QStringLiteral("Automatic appraisal — Unqualified"));
-                m_appraisal_qualification_value->setText(all_qualified
+                set_appraisal_qualification(all_qualified
                     ? QStringLiteral("Qualified under declared Vertex policy v1; no ANSI/BOMA certification.")
                     : QStringLiteral("Unqualified\n") + qualification_reasons.join(QLatin1Char('\n')));
                 if (const auto found = qualifications.find(selected->id); found != qualifications.end()) {
                     const auto& q = found->second;
                     if (derived_category_authority) {
                         const auto category = q.derived_category
-                            ? QString::fromUtf8(appraisal_category_name(*q.derived_category).data())
+                            ? QString::fromStdString(appraisal_category_label(*q.derived_category))
                             : (selected_qualified_exclusion
                                    ? QStringLiteral("Excluded — no standalone contribution")
                                    : QStringLiteral("Unqualified"));
                         QSignalBlocker blocker(m_classification_combo);
-                        if (m_classification_combo->findText(category) < 0)
-                            m_classification_combo->addItem(category);
-                        m_classification_combo->setCurrentText(category);
+                        m_classification_combo->clear();
+                        m_classification_combo->addItem(category, q.derived_category
+                            ? QString::fromUtf8(appraisal_category_name(*q.derived_category).data()) : QString{});
+                        m_classification_combo->setCurrentIndex(0);
+                        m_classification_combo->setToolTip(category);
                         m_classification_combo->setEnabled(false);
                         m_calculation_profile_context->setText(
                             q.derived_category
@@ -27901,7 +28179,7 @@ private:
                                     : QStringLiteral("Unqualified — complete declared appraisal facts."));
                     }
                     m_appraisal_derived_value->setText(QStringLiteral("%1\nPhysical: %2\nAdjusted: %3")
-                        .arg(q.derived_category ? QString::fromUtf8(appraisal_category_name(*q.derived_category).data())
+                        .arg(q.derived_category ? QString::fromStdString(appraisal_category_label(*q.derived_category))
                                                : (q.qualified ? QStringLiteral("Excluded — no standalone contribution") : QStringLiteral("Unqualified")),
                              q.physical_square_metres
                                  ? format_display_area(display_area(*q.physical_square_metres, display_profile))
@@ -28063,9 +28341,9 @@ private:
                 }
             }
             if (selected_site_area) {
-                m_appraisal_summary_group->setTitle(QStringLiteral("Automatic appraisal — Site boundary excluded"));
-                m_appraisal_qualification_value->setText(
+                set_appraisal_qualification(
                     QStringLiteral("Site/survey boundary is outside building appraisal totals."));
+                m_appraisal_status_value->setText(QStringLiteral("Excluded"));
                 m_appraisal_derived_value->setText(QStringLiteral("Site area — no building contribution"));
                 m_calculation_status->setText(QStringLiteral("Calculated site area; excluded from building appraisal"));
             } else {
@@ -28223,6 +28501,7 @@ private:
             inspect_boundary_entity_version(*entity).format ==
                 BoundaryEntityFormat::identified_v1;
         m_boundary_geometry_button->setVisible(directly_editable_boundary);
+        m_geometry_actions->setVisible(directly_editable_boundary || curved_wall || curve_boundary || constraint_target);
         m_boundary_geometry_button->setEnabled(directly_editable_boundary && editable);
         const bool building_object = entity && can_recognize_building_entity_type(entity->type);
         const bool material_object = wall || opening || slab || building_object ||
@@ -28348,8 +28627,9 @@ private:
         m_area_attributes_group->setEnabled(editable && (area_entity || native_room));
         m_area_appearance_button->setEnabled(editable && area_entity && m_selected_ids.size() == 1);
         m_area_appearance_button->setVisible(!native_room);
-        m_area_attributes_edit->setVisible(!native_room);
-        m_apply_area_attributes_button->setVisible(!native_room);
+        m_area_attributes_button->setEnabled(editable && area_entity && m_selected_ids.size() == 1);
+        m_area_attributes_layout->setRowVisible(m_area_attributes_summary, !native_room);
+        m_area_attributes_layout->setRowVisible(m_area_attributes_button, !native_room);
         const bool has_plan_label=std::any_of(m_measurementCanvas->labels().begin(),m_measurementCanvas->labels().end(),
             [&](const auto& label){return label.id==m_selected_id && label.avoid_components && !label.text.isEmpty();});
         m_place_plan_label_button->parentWidget()->setVisible(has_plan_label);
@@ -28605,13 +28885,16 @@ private:
         }
         if (area_entity) {
             const auto attributes = entity->properties.value("area_attributes", json::object());
-            QSignalBlocker blocker(m_area_attributes_edit);
-            m_area_attributes_edit->setPlainText(
-                attributes.is_object() ? QString::fromStdString(attributes.dump(2))
-                                       : QStringLiteral("{}"));
+            if (!attributes.is_object())
+                m_area_attributes_summary->setText(QStringLiteral("Stored details need review"));
+            else if (attributes.empty())
+                m_area_attributes_summary->setText(QStringLiteral("No custom details"));
+            else
+                m_area_attributes_summary->setText(QStringLiteral("%1 custom %2")
+                    .arg(static_cast<qulonglong>(attributes.size()))
+                    .arg(attributes.size() == 1 ? QStringLiteral("entry") : QStringLiteral("entries")));
         } else {
-            QSignalBlocker blocker(m_area_attributes_edit);
-            m_area_attributes_edit->clear();
+            m_area_attributes_summary->setText(QStringLiteral("—"));
         }
         m_geometry_form->setRowVisible(m_length_edit, editable_geometry);
         m_geometry_form->setRowVisible(m_classification_combo, editable_geometry);
@@ -31661,6 +31944,11 @@ private:
     QGroupBox* m_calculation_group{};
     QGroupBox* m_profile_group{};
     QGroupBox* m_appraisal_summary_group{};
+    QAction* m_edit_appraisal_facts_action{};
+    QPushButton* m_edit_appraisal_facts_button{};
+    QToolButton* m_appraisal_details_button{};
+    QWidget* m_appraisal_details_widget{};
+    bool m_appraisal_details_expanded{};
     QLabel* m_inspector_context{};
     QLabel* m_plan_error_banner{};
     QGroupBox* m_project_details_group{};
@@ -31704,14 +31992,15 @@ private:
     QString m_roof_thickness_original_text;
     std::optional<ModalContext> m_roof_edit_context;
     QGroupBox* m_area_attributes_group{};
+    QFormLayout* m_area_attributes_layout{};
     QLineEdit* m_area_name_edit{};
+    QLabel* m_area_attributes_summary{};
+    QPushButton* m_area_attributes_button{};
     QPushButton* m_area_appearance_button{};
     std::optional<ModalContext> m_area_name_context;
     std::optional<ModalContext> m_plan_label_context;
     QPushButton* m_place_plan_label_button{};
     QPushButton* m_automatic_plan_label_button{};
-    QPlainTextEdit* m_area_attributes_edit{};
-    QPushButton* m_apply_area_attributes_button{};
     QLabel* m_calculation_status{};
     QLabel* m_calculation_base_value{};
     QLabel* m_calculation_net_value{};
@@ -31723,6 +32012,7 @@ private:
     QLabel* m_calculation_building_total_value{};
     QLabel* m_calculation_living_total_value{};
     QLabel* m_appraisal_gla_value{};
+    QLabel* m_appraisal_status_value{};
     QLabel* m_appraisal_above_unfinished_value{};
     QLabel* m_appraisal_below_finished_value{};
     QLabel* m_appraisal_below_unfinished_value{};
@@ -31797,6 +32087,7 @@ private:
     QPushButton* m_calibrate_reference_button{};
     QPushButton* m_constraint_button{};
     QPushButton* m_boundary_geometry_button{};
+    QWidget* m_geometry_actions{};
     QComboBox* m_selection_filter_combo{};
     QToolButton* m_grid_button{};
     QToolButton* m_snap_button{};

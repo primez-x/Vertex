@@ -1,6 +1,6 @@
 # Vertex user testing checklist
 
-310 practical tasks, grouped by how you use the app. This replaces the earlier engineering-oriented checklist. The old 130-item list is preserved separately as engineering-requirements-checklist.md.
+311 practical tasks, grouped by how you use the app. This replaces the earlier engineering-oriented checklist. The old 130-item list is preserved separately as engineering-requirements-checklist.md.
 
 This is a user acceptance list for the intended app, not a claim that every listed action is implemented or working in the current preview. If you cannot find a control, or a feature is absent, mark **Blocked / missing** and describe it. Specialized sections can be skipped if you do not use them or lack the device or sample files.
 
@@ -36,6 +36,7 @@ Start with the workspace, draw a room, close it with the mouse, drag-select it, 
 - Optional assistance — when available (7 tasks)
 - Complete a real job (5 tasks)
 - Appraisal square-foot workflow (13 tasks)
+- Custom area details (1 task)
 - Architectural joins and named views (3 tasks)
 
 ## Start a project and arrange the workspace
@@ -1545,6 +1546,7 @@ drawing; switching modes does not change existing geometry.
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U272 — Change appraisal facts and undo them**
+  - Steps: Double-click a declared area. Use **Edit appraisal facts** directly below Classification, change its Area use, and Save. Repeat using the area's right-click action, but Cancel. Expand and collapse appraisal **Details** to inspect the remaining category totals.
   - Expected: Change an area's declared use or its floor's grade. Vertex immediately derives the new category and recalculates totals. Undo and Redo restore the prior declarations, derived category, qualification state and totals together.
   - Appearance check: Give the area a custom color and label position before changing its use. Those custom settings must stay. Reset to defaults must use the latest declared category, and Undo must restore the custom appearance. Save/reopen and check the category and appearance again. Clear a required fact: the selected category must show Unqualified instead of an older manual category.
   - Result: Not tested
@@ -1787,6 +1789,14 @@ drawing; switching modes does not change existing geometry.
 - [ ] **U310 — Select an object without covering its measurements**
   - Steps: Create an exterior measurement from a straight or curved wall layout. Select the measured area, then zoom in and out. Move a wall's measurement label manually near the selection frame and rotate its text. Select the area again, drag its visible rotation pin, undo, save/reopen and export PDF.
   - Expected: Complete baseline and exterior measurements stay readable. The selection frame and rotation connector leave space around the text, and the rotation pin and size badge occupy clear positions. The displaced pin still rotates the selected object. Selection and navigation leave saved measurement values, manual label positions and styles unchanged. PDF retains the measurements and omits selection controls.
+  - Result: Not tested
+  - Notes: ______________________________
+
+## Custom area details
+
+- [ ] **U311 — Add and edit custom area details without JSON**
+  - Steps: Double-click a closed area and open **Area attributes > Details…**. Add Name/Value rows for Finish = Oak and Use = Conditioned. Change a value, remove a row and Save. Try a duplicate name and an empty name; fix them, then Cancel. Reopen and Save without changes. Undo, Redo, save the project and reopen it.
+  - Expected: Invalid names explain the problem and prevent Save. Cancel and saving unchanged rows leave the drawing and history unchanged. Accepted details survive Undo/Redo and reopening. Custom details do not change the area's geometry, appraisal facts, colors or square-footage totals.
   - Result: Not tested
   - Notes: ______________________________
 

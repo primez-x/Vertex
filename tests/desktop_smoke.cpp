@@ -6734,9 +6734,9 @@ void test_calculation_deduction_workflow() {
             "deduction fixture should create and select the base boundary");
     window.setMetricUnits(true);
     require(window.findChild<QGroupBox*>(QStringLiteral("areaAttributes")) != nullptr &&
-                window.findChild<QPlainTextEdit*>(QStringLiteral("areaAttributesJson")) != nullptr &&
-                window.findChild<QPushButton*>(QStringLiteral("applyAreaAttributes")) != nullptr,
-            "closed-boundary inspector should expose area attributes");
+                window.findChild<QLabel*>(QStringLiteral("areaAttributesSummary")) != nullptr &&
+                window.findChild<QPushButton*>(QStringLiteral("editAreaAttributes")) != nullptr,
+            "closed-boundary inspector should expose structured area details");
     const auto attributes_revision = window.document().revision();
     require(window.editSelectedAreaAttributes(QStringLiteral(
                 "{\"use\":\"conditioned\",\"finish\":\"oak\"}")),
@@ -6744,8 +6744,7 @@ void test_calculation_deduction_workflow() {
     auto attributed = window.document().snapshot().entities().at(outer_id.toStdString());
     require(window.document().revision() == attributes_revision + 1 &&
                 attributed.properties.at("area_attributes").at("use") == "conditioned" &&
-                window.findChild<QPlainTextEdit*>(QStringLiteral("areaAttributesJson"))->toPlainText()
-                    .contains(QStringLiteral("conditioned")),
+                !window.findChild<QLabel*>(QStringLiteral("areaAttributesSummary"))->text().isEmpty(),
             "area attributes must persist and repopulate the inspector");
     const auto invalid_attributes_revision = window.document().revision();
     require(!window.editSelectedAreaAttributes(QStringLiteral("[1,2,3]")) &&
@@ -7959,6 +7958,10 @@ int main(int argc, char** argv) {
     const auto families = QFontDatabase::applicationFontFamilies(font_id);
     require(!families.isEmpty(), "bundled Inter font must expose a family");
     application.setFont(QFont(families.front(), 10));
+    if (argc == 2 && std::string_view(argv[1]) == "--area-details-deductions-only") {
+        test_calculation_deduction_workflow();
+        return 0;
+    }
     if (argc == 2 && std::string_view(argv[1]) == "--annotation-clipboard-only") {
         test_annotation_transform_legacy_and_ambiguity();
         test_pasted_annotation_visible_selection();

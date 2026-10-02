@@ -12,11 +12,15 @@
 
 #include <QApplication>
 #include <QAction>
+#include <QAbstractButton>
 #include <QComboBox>
 #include <QGroupBox>
 #include <QImage>
 #include <QLabel>
 #include <QListWidget>
+#include <QMenu>
+#include <QScrollArea>
+#include <QScrollBar>
 #include <QTemporaryDir>
 #include <QDialog>
 #include <QDialogButtonBox>
@@ -394,12 +398,14 @@ QComboBox* inspector_classification_control(QWidget& owner) {
     return nullptr;
 }
 
-void save_appraisal_facts_through_controls(sketch::desktop::MainWindow& window,
+void edit_appraisal_facts_through_controls(sketch::desktop::MainWindow& window,
                                            const QString& boundary_id,
                                            const char* area_use,
-                                           const char* finish = "finished") {
+                                           const char* finish,
+                                           const std::function<void()>& open_dialog,
+                                           bool save = true) {
     require(window.selectEntity(boundary_id), "select boundary before editing declared appraisal facts");
-    bool saved = false;
+    bool completed = false;
     bool timed_out = false;
     QString callback_error;
     QTimer responder;
@@ -437,19 +443,37 @@ void save_appraisal_facts_through_controls(sketch::desktop::MainWindow& window,
             dialog->reject();
             return;
         }
-        buttons->button(QDialogButtonBox::Save)->click();
-        saved = dialog->result() == QDialog::Accepted;
-        if (!saved) {
-            callback_error = QStringLiteral("native declared-facts Save did not accept the dialog");
-            dialog->reject();
+        if (save) {
+            buttons->button(QDialogButtonBox::Save)->click();
+            completed = dialog->result() == QDialog::Accepted;
+            if (!completed) {
+                callback_error = QStringLiteral("native declared-facts Save did not accept the dialog");
+                dialog->reject();
+            }
+        } else {
+            if (!buttons->button(QDialogButtonBox::Cancel)) {
+                callback_error = QStringLiteral("declared-facts dialog is missing its Cancel control");
+                dialog->reject();
+                return;
+            }
+            buttons->button(QDialogButtonBox::Cancel)->click();
+            completed = dialog->result() == QDialog::Rejected;
         }
     });
     responder.start(5000);
-    window.showAppraisalFacts();
+    open_dialog();
     responder.stop();
-    require(saved && !timed_out && callback_error.isEmpty(),
-            "native declared-facts controls must save the selected boundary facts: " +
+    require(completed && !timed_out && callback_error.isEmpty(),
+            "native declared-facts controls must complete the requested dialog action: " +
                 callback_error.toStdString());
+}
+
+void save_appraisal_facts_through_controls(sketch::desktop::MainWindow& window,
+                                           const QString& boundary_id,
+                                           const char* area_use,
+                                           const char* finish = "finished") {
+    edit_appraisal_facts_through_controls(window, boundary_id, area_use, finish,
+        [&] { window.showAppraisalFacts(); });
 }
 
 void auto_subtract_uses_current_declared_facts() {
@@ -754,7 +778,7 @@ void declared_appraisal_qualifies_without_manual_categories() {
     require(qualification && qualification->text().contains("Unqualified"), "undeclared geometry must never be qualified");
     const auto before = window.document().snapshot().revision();
     require(window.editSelectedAppraisalFacts(declarations()), "valid declarations must commit atomically");
-    require(qualification->text().startsWith("Qualified") && derived->text().contains("above_grade_finished") && gla->text().contains("100.00"),
+    require(qualification->text().startsWith("Qualified") && derived->text().contains("Above-grade finished (GLA)") && gla->text().contains("100.00"),
             "facts must qualify and derive GLA without manual category assignment");
     const auto appraisal_schedule = window.scheduleSnapshot();
     const auto schedule_gla = std::find_if(
@@ -816,7 +840,7 @@ void declared_appraisal_qualifies_without_manual_categories() {
                 }),
             "unqualified sheet output must state that totals are withheld and print no area values");
     require(window.editSelectedAppraisalFacts(declarations("residential_declared", "dwelling", "below")) &&
-            derived->text().contains("below_grade_finished") && gla->text().contains("0.00"),
+            derived->text().contains("Below-grade finished") && gla->text().contains("0.00"),
             "declared floor grade must override neither name nor elevation, and exclude below grade from GLA");
     require(window.editSelectedFactor(QStringLiteral("0.5")) && qualification->text().contains("Unqualified") &&
             derived->text().contains("Physical: 100.00") && derived->text().contains("Adjusted: 50.00") &&
@@ -828,7 +852,7 @@ void declared_appraisal_qualifies_without_manual_categories() {
     MainWindow reopened;
     require(reopened.openProject(path) && reopened.selectEntity(area), "declared project reopens");
     require(reopened.findChild<QLabel*>(QStringLiteral("appraisalQualification"))->text().startsWith("Qualified") &&
-            reopened.findChild<QLabel*>(QStringLiteral("appraisalDerivedCategory"))->text().contains("below_grade_finished"),
+            reopened.findChild<QLabel*>(QStringLiteral("appraisalDerivedCategory"))->text().contains("Below-grade finished"),
             "reopen must recalculate from persisted facts");
 
     QTimer::singleShot(0, &window, [&] {
@@ -846,7 +870,7 @@ void declared_appraisal_qualifies_without_manual_categories() {
         }
     });
     window.showAppraisalFacts();
-    require(window.findChild<QLabel*>(QStringLiteral("appraisalDerivedCategory"))->text().contains("above_grade_finished"),
+    require(window.findChild<QLabel*>(QStringLiteral("appraisalDerivedCategory"))->text().contains("Above-grade finished (GLA)"),
             "dialog must submit declarations through the same command");
 }
 
@@ -1007,6 +1031,9 @@ void declared_appraisal_excludes_site_boundaries() {
             "explicit and legacy site outlines must not require building appraisal facts or alter totals");
 
     require(window.selectEntity(explicit_site), "site boundary must remain selectable");
+    require(window.findChild<QLabel*>(QStringLiteral("appraisalQualificationStatus"))->text() ==
+                QStringLiteral("Excluded"),
+            "site boundaries must show Excluded in the compact appraisal status");
     auto* status = window.findChild<QLabel*>(QStringLiteral("calculationStatus"));
     require(status->text().contains("excluded from building appraisal") &&
                 property->text().contains("100.00") && net->text().contains("968.75") &&
@@ -2017,11 +2044,11 @@ void appraisal_derived_category_presentation_workflow() {
             garage_entity.properties.at("appraisal_facts").at("area_use") == "garage",
             "declared Garage facts must coexist with retained manual Above-grade finished metadata");
     require(qualification->text().startsWith(QStringLiteral("Qualified")) &&
-            derived->text().startsWith(QStringLiteral("garage")),
+            derived->text().startsWith(QStringLiteral("Garage")),
             "the automatic report must show the facts-derived Garage category");
     // Intended first RED: the report already derives Garage, but the current
     // inspector still exposes the stale manual category as an editable value.
-    require(classification->currentText() == QStringLiteral("garage") && !classification->isEnabled(),
+    require(classification->currentText() == QStringLiteral("Garage") && !classification->isEnabled(),
             "a qualified declared area must show its facts-derived category read-only in the inspector");
     const auto before_manual_edit = window.document().snapshot();
     require(!window.editSelectedClassification(QStringLiteral("porch")) &&
@@ -2125,8 +2152,8 @@ void appraisal_derived_category_presentation_workflow() {
             dwelling_entity.properties.at("classification") == "measurement" &&
             dwelling_entity.properties.at("appraisal_facts").at("area_use") == "dwelling" &&
             dwelling_entity.properties.at("segments") == geometry &&
-            derived->text().startsWith(QStringLiteral("above_grade_finished")) &&
-            classification->currentText() == QStringLiteral("above_grade_finished") &&
+            derived->text().startsWith(QStringLiteral("Above-grade finished (GLA)")) &&
+            classification->currentText() == QStringLiteral("Above-grade finished (GLA)") &&
             !classification->isEnabled(),
             "editing facts back to Dwelling must update the derived inspector without rewriting geometry or manual metadata");
     require(dwelling_style.stroke_color != garage_style.stroke_color ||
@@ -2167,7 +2194,7 @@ void appraisal_derived_category_presentation_workflow() {
             garage_override_state.entities().at(area.toStdString()).properties.at("appraisal_facts").at("area_use") == "garage" &&
             garage_override_state.entities().at(area.toStdString()).properties.at("segments") == geometry &&
             current_canvas_area(canvas, area).stroke_color == QColor(QStringLiteral("#5B2C83")) &&
-            classification->currentText() == QStringLiteral("garage") && !classification->isEnabled(),
+            classification->currentText() == QStringLiteral("Garage") && !classification->isEnabled(),
             "changing facts must update the read-only derived category while preserving explicit appearance and source metadata");
     QTemporaryDir directory;
     const auto path = directory.filePath(QStringLiteral("facts-derived-area-appearance.bldproj"));
@@ -2181,9 +2208,9 @@ void appraisal_derived_category_presentation_workflow() {
     auto* reopened_derived = reopened.findChild<QLabel*>(QStringLiteral("appraisalDerivedCategory"));
     auto* reopened_canvas = dynamic_cast<PlanCanvas*>(reopened.findChild<QWidget*>(QStringLiteral("measurementPlanCanvas")));
     require(reopened_classification && reopened_derived && reopened_canvas &&
-            reopened_classification->currentText() == QStringLiteral("garage") &&
+            reopened_classification->currentText() == QStringLiteral("Garage") &&
             !reopened_classification->isEnabled() &&
-            reopened_derived->text().startsWith(QStringLiteral("garage")) &&
+            reopened_derived->text().startsWith(QStringLiteral("Garage")) &&
             current_canvas_area(reopened_canvas, area).stroke_color == QColor(QStringLiteral("#5B2C83")) &&
             reopened.document().snapshot().entities().at(area.toStdString()).properties.at("appraisal_category") ==
                 "above_grade_finished",
@@ -2225,8 +2252,8 @@ void appraisal_derived_category_presentation_workflow() {
     auto* final_derived = final_reopen.findChild<QLabel*>(QStringLiteral("appraisalDerivedCategory"));
     auto* final_canvas = dynamic_cast<PlanCanvas*>(final_reopen.findChild<QWidget*>(QStringLiteral("measurementPlanCanvas")));
     require(final_classification && final_derived && final_canvas &&
-            final_classification->currentText() == QStringLiteral("garage") && !final_classification->isEnabled() &&
-            final_derived->text().startsWith(QStringLiteral("garage")) &&
+            final_classification->currentText() == QStringLiteral("Garage") && !final_classification->isEnabled() &&
+            final_derived->text().startsWith(QStringLiteral("Garage")) &&
             current_canvas_area(final_canvas, area).stroke_color == QColor(194, 116, 24) &&
             current_canvas_area(final_canvas, area).fill_color == QColor(237, 197, 132) &&
             current_canvas_area(final_canvas, area).hatch_pattern == QStringLiteral("forward_diagonal") &&
@@ -2242,7 +2269,7 @@ void appraisal_derived_category_presentation_workflow() {
             "partial report fixture needs a second boundary and the qualified Garage selected");
     require(final_reopen.findChild<QLabel*>(QStringLiteral("appraisalQualification"))->text()
                 .startsWith(QStringLiteral("Unqualified")) &&
-            final_classification->currentText() == QStringLiteral("garage") &&
+            final_classification->currentText() == QStringLiteral("Garage") &&
             !final_classification->isEnabled() &&
             current_canvas_area(final_canvas, area).stroke_color == QColor(194, 116, 24),
             "aggregate refusal must preserve an individually qualified Garage's derived display");
@@ -2289,7 +2316,7 @@ void appraisal_derived_category_presentation_workflow() {
             legacy.document().snapshot().entities().at(legacy_area.toStdString()).properties.at("appraisal_category") == "garage",
             "undeclared legacy classifications must retain the editable manual category migrated by workflow activation");
     save_appraisal_facts_through_controls(legacy, legacy_area, "dwelling");
-    require(legacy_classification->currentText() == QStringLiteral("above_grade_finished") &&
+    require(legacy_classification->currentText() == QStringLiteral("Above-grade finished (GLA)") &&
             !legacy_classification->isEnabled() &&
             legacy.document().snapshot().entities().at(legacy_area.toStdString()).properties.at("classification") == "garage" &&
             legacy.document().snapshot().entities().at(legacy_area.toStdString()).properties.at("appraisal_category") == "garage" &&
@@ -2318,6 +2345,386 @@ void appraisal_derived_category_presentation_workflow() {
         if (entity.type == kAnnotationEntityType)
             require(legacy.document().snapshot().entities().at(id) == entity,
                     "facts-only restyling must preserve inherited annotation state and label placement exactly");
+}
+
+void appraisal_area_properties_entry_points_are_visible() {
+    using sketch::desktop::MainWindow;
+    using sketch::desktop::PlanCanvas;
+    MainWindow window;
+    window.setAttribute(Qt::WA_DontShowOnScreen, true);
+    window.resize(1280, 840);
+    window.setMetricUnits(false);
+    const auto area = window.createBoundary(square(0, 0, 3.048));
+    auto* workflow = window.findChild<QComboBox*>(QStringLiteral("calculationWorkflow"));
+    require(!area.isEmpty() && workflow, "area Properties fixture needs a boundary and workflow selector");
+    workflow->setCurrentIndex(workflow->findData(QStringLiteral("appraisal")));
+    auto* canvas = dynamic_cast<PlanCanvas*>(window.findChild<QWidget*>(QStringLiteral("measurementPlanCanvas")));
+    require(canvas, "area Properties entry points require the actual plan canvas");
+    canvas->setSnapEnabled(false);
+    canvas->setOverviewMapEnabled(false);
+    window.show();
+    QApplication::setActiveWindow(&window);
+    QCoreApplication::processEvents();
+    canvas->fitView();
+    require(window.selectEntity(area), "select area before opening its actual Properties quick panel");
+
+    const auto trigger_canvas_context_action = [&](const QString& object_name,
+                                                   const QString& label,
+                                                   const std::function<void()>& respond_to_modal) {
+        bool menu_seen = false;
+        bool action_triggered = false;
+        std::exception_ptr callback_error;
+        QTimer::singleShot(0, &window, [&] {
+            try {
+                auto* menu = qobject_cast<QMenu*>(QApplication::activePopupWidget());
+                require(menu, "canvas right-click must expose its actual popup menu");
+                menu_seen = true;
+                const auto actions = menu->actions();
+                const auto found = std::find_if(actions.begin(), actions.end(), [&](const QAction* action) {
+                    return (!object_name.isEmpty() && action->objectName() == object_name) ||
+                           (!label.isEmpty() && action->text() == label);
+                });
+                require(found != actions.end(), "requested QAction is missing from the area context menu");
+                if (respond_to_modal) QTimer::singleShot(0, &window, [&] {
+                    try {
+                        respond_to_modal();
+                    } catch (...) {
+                        callback_error = std::current_exception();
+                        if (auto* modal = QApplication::activeModalWidget())
+                            if (auto* dialog = qobject_cast<QDialog*>(modal)) dialog->reject();
+                    }
+                });
+                (*found)->trigger();
+                action_triggered = true;
+                menu->close();
+            } catch (...) {
+                callback_error = std::current_exception();
+                if (auto* menu = qobject_cast<QMenu*>(QApplication::activePopupWidget())) menu->close();
+            }
+        });
+        const QPointF point = QRectF(canvas->rect()).center() + QPointF(
+            (1.524 - canvas->viewCenter().x) * canvas->viewScale(),
+            -(1.524 - canvas->viewCenter().y) * canvas->viewScale());
+        QMouseEvent press(QEvent::MouseButtonPress, point, canvas->mapToGlobal(point.toPoint()),
+                          Qt::RightButton, Qt::RightButton, Qt::NoModifier);
+        QApplication::sendEvent(canvas, &press);
+        QMouseEvent release(QEvent::MouseButtonRelease, point, canvas->mapToGlobal(point.toPoint()),
+                            Qt::RightButton, Qt::NoButton, Qt::NoModifier);
+        QApplication::sendEvent(canvas, &release);
+        if (callback_error) std::rethrow_exception(callback_error);
+        require(menu_seen && action_triggered,
+                "actual area context action must be found and triggered");
+    };
+    trigger_canvas_context_action({}, QStringLiteral("Properties"), {});
+    QCoreApplication::processEvents();
+
+    auto* editor = window.findChild<QScrollArea*>(QStringLiteral("contextEditor"));
+    require(editor && editor->isVisible(), "Properties action must show the contextual quick panel");
+    const auto captures = qEnvironmentVariable("VERTEX_TEST_CAPTURE_DIR");
+    if (!captures.isEmpty())
+        require(QDir().mkpath(captures) &&
+                    editor->grab().save(QDir(captures).filePath(QStringLiteral("appraisal-area-properties-initial.png"))),
+                "retain the actual initial contextual Properties panel");
+    auto* attributes = window.findChild<QPushButton*>(QStringLiteral("editAreaAttributes"));
+    auto* attributes_summary = window.findChild<QLabel*>(QStringLiteral("areaAttributesSummary"));
+    require(attributes && attributes->isEnabled() && attributes_summary && attributes_summary->isVisible(),
+            "selected area Properties must expose its custom-details summary and structured Name/Value editor");
+
+    auto* facts = window.findChild<QPushButton*>(QStringLiteral("editAppraisalFacts"));
+    require(facts && facts->isVisible() && editor->verticalScrollBar()->value() == 0,
+            "Appraisal facts action must be visible at the initial Properties scroll position");
+    const QRect facts_in_viewport(facts->mapTo(editor->viewport(), QPoint(0, 0)), facts->size());
+    if (!editor->viewport()->rect().contains(facts_in_viewport)) {
+        std::cerr << "Facts rectangle " << facts_in_viewport.x() << ',' << facts_in_viewport.y()
+                  << ' ' << facts_in_viewport.width() << 'x' << facts_in_viewport.height()
+                  << "; viewport " << editor->viewport()->width() << 'x' << editor->viewport()->height() << '\n';
+        for (auto* widget : editor->widget()->findChildren<QWidget*>())
+            if (widget->isVisible() && widget->minimumSizeHint().width() > 280)
+                std::cerr << widget->metaObject()->className() << ' '
+                          << widget->objectName().toStdString() << " minhint="
+                          << widget->minimumSizeHint().width() << " min=" << widget->minimumWidth() << '\n';
+        const auto diagnostic_dir = qEnvironmentVariable("VERTEX_TEST_CAPTURE_DIR");
+        if (!diagnostic_dir.isEmpty()) editor->grab().save(QDir(diagnostic_dir).filePath(
+            QStringLiteral("appraisal-properties-facts-outside.png")));
+    }
+    require(editor->viewport()->rect().contains(facts_in_viewport),
+            "Edit appraisal facts must appear directly in the unscrolled contextual Properties viewport");
+
+    const auto before_cancel = window.document().snapshot();
+    edit_appraisal_facts_through_controls(window, area, "dwelling", "finished",
+        [&] { facts->click(); }, false);
+    require(window.document().snapshot().revision() == before_cancel.revision() &&
+                window.document().snapshot().history().size() == before_cancel.history().size() &&
+                window.document().snapshot().entities() == before_cancel.entities(),
+            "Cancel in the real Properties facts action must preserve facts and command history");
+
+    // The selected-area right-click menu must reuse the same QAction as the
+    // Properties button. Cancel it after the nested dialog actually opens.
+    bool menu_facts_opened = false;
+    trigger_canvas_context_action(QStringLiteral("editAppraisalFactsAction"), {}, [&] {
+        auto* dialog = window.findChild<QDialog*>(QStringLiteral("appraisalFactsDialog"));
+        require(dialog, "area right-click facts action must open the native facts dialog");
+        auto* box = dialog->findChild<QDialogButtonBox*>();
+        require(box && box->button(QDialogButtonBox::Cancel), "native facts dialog must expose Cancel");
+        menu_facts_opened = true;
+        box->button(QDialogButtonBox::Cancel)->click();
+    });
+    require(menu_facts_opened && window.document().snapshot().entities() == before_cancel.entities(),
+            "right-click Edit appraisal facts must open the same cancelable native dialog without mutation");
+
+    edit_appraisal_facts_through_controls(window, area, "dwelling", "finished",
+        [&] { facts->click(); });
+    const auto after_facts = window.document().snapshot();
+    auto* declared_category = inspector_classification_control(window);
+    require(declared_category && declared_category->currentText() == QStringLiteral("Above-grade finished (GLA)") &&
+                declared_category->currentData().toString() == QStringLiteral("above_grade_finished"),
+            "the declared category must use a readable label while retaining its semantic key");
+    QCoreApplication::processEvents();
+    if (!captures.isEmpty())
+        require(editor->grab().save(QDir(captures).filePath(QStringLiteral("appraisal-area-properties-qualified.png"))),
+                "retain the qualified compact appraisal summary");
+    for (const auto* name : {"appraisalGlaTotal", "appraisalPropertyTotal"}) {
+        auto* value = window.findChild<QLabel*>(QString::fromLatin1(name));
+        if (value && !editor->viewport()->rect().contains(
+                QRect(value->mapTo(editor->viewport(), QPoint{}), value->size()))) {
+            const auto bounds = QRect(value->mapTo(editor->viewport(), QPoint{}), value->size());
+            std::cerr << name << " rect " << bounds.x() << ',' << bounds.y() << ' '
+                      << bounds.width() << 'x' << bounds.height() << '\n';
+            for (auto* widget : editor->widget()->findChildren<QWidget*>())
+                if (widget->isVisible() && widget->minimumSizeHint().width() > 260)
+                    std::cerr << widget->metaObject()->className() << ' '
+                              << widget->objectName().toStdString() << " minhint="
+                              << widget->minimumSizeHint().width() << " title="
+                              << widget->property("title").toString().toStdString() << '\n';
+        }
+        require(value && editor->viewport()->rect().contains(
+                    QRect(value->mapTo(editor->viewport(), QPoint{}), value->size())),
+                "qualified primary appraisal totals must fit the unscrolled Properties viewport");
+    }
+    require(window.findChild<QLabel*>(QStringLiteral("appraisalQualification"))->text().startsWith(
+                QStringLiteral("Qualified")) &&
+            window.findChild<QLabel*>(QStringLiteral("appraisalGlaTotal"))->text().contains(
+                QStringLiteral("100.00")) &&
+            after_facts.entities().at(area.toStdString()).properties.at("appraisal_facts").at("area_use") == "dwelling",
+            "the quick-panel action must open the native fact editor and save the declared Dwelling facts");
+    require(window.undoCommand() && window.document().snapshot().entities() == before_cancel.entities() &&
+                window.redoCommand() && window.document().snapshot().entities() == after_facts.entities(),
+            "one Undo and Redo must restore the exact facts saved from Properties");
+
+    auto* detail_toggle = window.findChild<QAbstractButton*>(QStringLiteral("appraisalDetailsToggle"));
+    auto* gla = window.findChild<QLabel*>(QStringLiteral("appraisalGlaTotal"));
+    auto* property = window.findChild<QLabel*>(QStringLiteral("appraisalPropertyTotal"));
+    auto* garage = window.findChild<QLabel*>(QStringLiteral("appraisalGarageTotal"));
+    require(detail_toggle && detail_toggle->isCheckable() && gla && property && garage &&
+                !detail_toggle->isChecked() && !garage->isVisible(),
+            "Properties must begin with a compact appraisal summary and collapsed extended totals");
+    const auto before_details = window.document().snapshot();
+    const auto summary_values = std::pair{gla->text(), property->text()};
+    detail_toggle->click();
+    require(detail_toggle->isChecked() && garage->isVisible() && gla->text() == summary_values.first &&
+                property->text() == summary_values.second &&
+                window.document().snapshot().entities() == before_details.entities() &&
+                window.document().snapshot().revision() == before_details.revision(),
+            "expanding appraisal Details must reveal retained totals without changing summary values or project state");
+    detail_toggle->click();
+    require(!detail_toggle->isChecked() && !garage->isVisible(),
+            "the compact appraisal summary toggle must collapse extended totals again");
+
+    auto* details_button = window.findChild<QPushButton*>(QStringLiteral("editAreaAttributes"));
+    require(details_button && details_button->isEnabled(), "selected area must retain its structured Details action");
+    const auto with_attributes_dialog = [&](const std::function<void(
+        QDialog&, QTableWidget&, QLabel&, QDialogButtonBox&)>& interact) {
+        require(window.selectEntity(area), "select area before opening structured Details");
+        trigger_canvas_context_action({}, QStringLiteral("Properties"), {});
+        details_button = window.findChild<QPushButton*>(QStringLiteral("editAreaAttributes"));
+        require(details_button && details_button->isEnabled(), "area Details action must be enabled");
+        bool completed = false;
+        std::exception_ptr callback_error;
+        QTimer::singleShot(0, &window, [&] {
+            try {
+                auto* dialog = qobject_cast<QDialog*>(QApplication::activeModalWidget());
+                require(dialog && dialog->objectName() == QStringLiteral("areaAttributesDialog"),
+                        "Details action must open the native structured-attributes dialog");
+                auto* table = dialog->findChild<QTableWidget*>(QStringLiteral("areaAttributesTable"));
+                auto* validation = dialog->findChild<QLabel*>(QStringLiteral("areaAttributesValidation"));
+                auto* box = dialog->findChild<QDialogButtonBox*>();
+                require(table && table->columnCount() == 2 && table->horizontalHeaderItem(0) &&
+                            table->horizontalHeaderItem(1) &&
+                            table->horizontalHeaderItem(0)->text() == QStringLiteral("Name") &&
+                            table->horizontalHeaderItem(1)->text() == QStringLiteral("Value") &&
+                            validation && box && box->button(QDialogButtonBox::Save) &&
+                            box->button(QDialogButtonBox::Cancel) &&
+                            dialog->findChild<QPushButton*>(QStringLiteral("areaAttributeAdd")) &&
+                            dialog->findChild<QPushButton*>(QStringLiteral("areaAttributeRemove")),
+                        "Details editor must expose its Name/Value table, Add/Remove, validation, Save and Cancel controls");
+                interact(*dialog, *table, *validation, *box);
+                completed = true;
+            } catch (...) {
+                callback_error = std::current_exception();
+                if (auto* modal = QApplication::activeModalWidget())
+                    if (auto* dialog = qobject_cast<QDialog*>(modal)) dialog->reject();
+            }
+        });
+        details_button->click();
+        if (callback_error) std::rethrow_exception(callback_error);
+        require(completed, "structured Details dialog callback must complete");
+    };
+    const auto set_cell = [](QTableWidget& table, int row, int column, const QString& value) {
+        auto* item = table.item(row, column);
+        require(item, "Add must create editable Name and Value cells");
+        // Add begins editing Name; move focus out before changing the backing
+        // item so the delegate cannot overwrite the test's value on close.
+        table.setCurrentCell(row, column == 0 ? 1 : 0);
+        item->setText(value);
+    };
+    const auto append_attribute = [&](QTableWidget& table, QPushButton& add,
+                                      const QString& name, const QString& value) {
+        const int before = table.rowCount();
+        add.click();
+        require(table.rowCount() == before + 1 && table.currentRow() == before && table.currentColumn() == 0,
+                "Add must append one row and focus its Name cell");
+        set_cell(table, before, 0, name);
+        set_cell(table, before, 1, value);
+    };
+    const auto attributes_before = window.document().snapshot();
+    const auto gla_before_attributes = gla->text();
+    with_attributes_dialog([&](QDialog&, QTableWidget&, QLabel&, QDialogButtonBox& box) {
+        require(box.button(QDialogButtonBox::Save)->isEnabled(), "unchanged structured details may be saved as a no-op");
+        box.button(QDialogButtonBox::Save)->click();
+    });
+    require(window.document().snapshot().revision() == attributes_before.revision() &&
+                window.document().snapshot().history().size() == attributes_before.history().size() &&
+                window.document().snapshot().entities() == attributes_before.entities(),
+            "saving unchanged structured attributes must not add a revision, history entry, or normalized metadata");
+    with_attributes_dialog([&](QDialog& dialog, QTableWidget& table, QLabel&, QDialogButtonBox& box) {
+        auto* add = dialog.findChild<QPushButton*>(QStringLiteral("areaAttributeAdd"));
+        append_attribute(table, *add, QStringLiteral("discard"), QStringLiteral("cancelled"));
+        box.button(QDialogButtonBox::Cancel)->click();
+    });
+    require(window.document().snapshot().entities() == attributes_before.entities() &&
+                window.document().snapshot().revision() == attributes_before.revision(),
+            "Cancel after editing a real Name/Value row must leave the document untouched");
+
+    with_attributes_dialog([&](QDialog& dialog, QTableWidget& table, QLabel& validation,
+                               QDialogButtonBox& box) {
+        auto* add = dialog.findChild<QPushButton*>(QStringLiteral("areaAttributeAdd"));
+        append_attribute(table, *add, QStringLiteral("stale"), QStringLiteral("must not commit"));
+        const auto current = window.document().snapshot();
+        auto external = current.entities().at(area.toStdString());
+        external.properties["external_note"] = "newer project revision";
+        window.document().apply(sketch::ApplyEntityChanges{current.revision(),
+            {sketch::EntityChange::upsert(external)}, {}, "external edit during area details"});
+        const auto newer = window.document().snapshot();
+        box.button(QDialogButtonBox::Save)->click();
+        require(!validation.text().trimmed().isEmpty() &&
+                    window.document().snapshot().revision() == newer.revision() &&
+                    window.document().snapshot().entities() == newer.entities(),
+                "a stale Details dialog must explain refusal and preserve the newer project revision");
+        box.button(QDialogButtonBox::Cancel)->click();
+    });
+    require(window.undoCommand() && window.document().snapshot().entities() == attributes_before.entities(),
+            "Undo must restore the intentional external edit after stale Details refuses to overwrite it");
+
+    const auto& selection_fixture = attributes_before.entities().at(area.toStdString());
+    const auto floor_id = selection_fixture.properties.at("floor_id").get<std::string>();
+    const auto building_id = attributes_before.entities().at(floor_id).properties.at("building_id").get<std::string>();
+    const auto property_id = attributes_before.entities().at(building_id).properties.at("property_id").get<std::string>();
+    with_attributes_dialog([&](QDialog& dialog, QTableWidget& table, QLabel& validation,
+                               QDialogButtonBox& box) {
+        auto* add = dialog.findChild<QPushButton*>(QStringLiteral("areaAttributeAdd"));
+        append_attribute(table, *add, QStringLiteral("wrong-target"), QStringLiteral("must not commit"));
+        require(window.selectEntity(QString::fromStdString(property_id)),
+                "selection-refusal fixture must change the selected entity while Details is open");
+        box.button(QDialogButtonBox::Save)->click();
+        require(!validation.text().trimmed().isEmpty() &&
+                    window.document().snapshot().entities() == attributes_before.entities(),
+                "a Details dialog opened for another selection must refuse without changing the project");
+        box.button(QDialogButtonBox::Cancel)->click();
+    });
+
+    const auto attributes_save_base = window.document().snapshot();
+    with_attributes_dialog([&](QDialog& dialog, QTableWidget& table, QLabel& validation,
+                               QDialogButtonBox& box) {
+        auto* add = dialog.findChild<QPushButton*>(QStringLiteral("areaAttributeAdd"));
+        auto* remove = dialog.findChild<QPushButton*>(QStringLiteral("areaAttributeRemove"));
+        auto* save = box.button(QDialogButtonBox::Save);
+        append_attribute(table, *add, {}, QStringLiteral("value without a name"));
+        QCoreApplication::processEvents();
+        require(!save->isEnabled() && !validation.text().trimmed().isEmpty(),
+                "an empty Name must show inline validation and disable Save");
+        require(table.item(0, 1)->text() == QStringLiteral("value without a name"),
+                "empty-Name validation must preserve the user's entered Value");
+        set_cell(table, 0, 0, QStringLiteral("zone"));
+        require(save->isEnabled(), "a nonempty Name and bounded Value must restore Save");
+        append_attribute(table, *add, QStringLiteral("zone"), QStringLiteral("duplicate"));
+        QCoreApplication::processEvents();
+        require(!save->isEnabled() && !validation.text().trimmed().isEmpty(),
+                "duplicate Names must show validation and disable Save");
+        if (!captures.isEmpty())
+            require(QDir().mkpath(captures) &&
+                        dialog.grab().save(QDir(captures).filePath(QStringLiteral("appraisal-area-attributes-invalid.png"))),
+                    "retain the actual populated duplicate Name/Value dialog");
+        set_cell(table, 1, 0, QString(129, QChar(0x00e9)));
+        require(!save->isEnabled() && !validation.text().trimmed().isEmpty(),
+                "UTF-8 Name length must be bounded in bytes, not code points");
+        set_cell(table, 1, 0, QStringLiteral("note"));
+        set_cell(table, 1, 1, QString(16385, QLatin1Char('v')));
+        require(!save->isEnabled() && !validation.text().trimmed().isEmpty(),
+                "UTF-8 Value length above 16,384 bytes must disable Save");
+        set_cell(table, 1, 1, QStringLiteral("retained"));
+        require(save->isEnabled(), "correcting invalid fields must make the dialog saveable");
+        append_attribute(table, *add, QStringLiteral("discard"), QStringLiteral("remove me"));
+        table.setCurrentCell(2, 0);
+        remove->click();
+        require(table.rowCount() == 2 && table.item(0, 0)->text() == QStringLiteral("zone") &&
+                    table.item(1, 0)->text() == QStringLiteral("note"),
+                "Remove must delete only the selected row while preserving edited rows");
+        set_cell(table, 0, 1, QStringLiteral("north wing"));
+        box.button(QDialogButtonBox::Save)->click();
+    });
+    auto attributes_saved = window.document().snapshot();
+    auto expected_entities = attributes_save_base.entities();
+    expected_entities.at(area.toStdString()).properties["area_attributes"] =
+        nlohmann::json{{"zone", "north wing"}, {"note", "retained"}};
+    require(attributes_saved.revision() == attributes_save_base.revision() + 1 &&
+                attributes_saved.entities() == expected_entities &&
+                attributes_saved.entities().at(area.toStdString()).properties.at("segments") ==
+                    attributes_before.entities().at(area.toStdString()).properties.at("segments") &&
+                attributes_saved.entities().at(area.toStdString()).properties.at("appraisal_facts") ==
+                    attributes_before.entities().at(area.toStdString()).properties.at("appraisal_facts") &&
+                window.findChild<QLabel*>(QStringLiteral("appraisalGlaTotal"))->text() == gla_before_attributes,
+            "structured Save must update only area_attributes and preserve geometry, appraisal facts and totals");
+    require(window.undoCommand() && window.document().snapshot().entities() == attributes_before.entities() &&
+                window.redoCommand() && window.document().snapshot().entities() == attributes_saved.entities(),
+            "one Undo/Redo must remove and restore the exact structured attribute map");
+
+    // Exercise the existing editor limit through actual Add clicks without
+    // writing the oversized map to the document.
+    with_attributes_dialog([&](QDialog& dialog, QTableWidget& table, QLabel&, QDialogButtonBox& box) {
+        auto* add = dialog.findChild<QPushButton*>(QStringLiteral("areaAttributeAdd"));
+        while (table.rowCount() < 256 && add->isEnabled()) {
+            const auto row = table.rowCount();
+            append_attribute(table, *add, QStringLiteral("entry-%1").arg(row), QStringLiteral("v"));
+        }
+        require(table.rowCount() == 256, "Details editor must permit exactly 256 rows");
+        if (add->isEnabled()) add->click();
+        require(table.rowCount() == 256 || (!box.button(QDialogButtonBox::Save)->isEnabled() &&
+                    table.rowCount() == 257),
+                "attempting to add a 257th row must be refused or remain unsaveable");
+        box.button(QDialogButtonBox::Cancel)->click();
+    });
+    require(window.document().snapshot().entities() == attributes_saved.entities(),
+            "row-limit validation must not change persisted area metadata");
+
+    QTemporaryDir directory;
+    const auto project_path = directory.filePath(QStringLiteral("area-properties.bldproj"));
+    require(directory.isValid() && window.saveProjectAs(project_path) && window.createNewProject(),
+            "structured area metadata fixture must save and release its project before reopening");
+    MainWindow reopened;
+    require(reopened.openProject(project_path) && reopened.document().snapshot().entities() == attributes_saved.entities() &&
+                reopened.selectEntity(area) && reopened.document().snapshot().entities().at(area.toStdString())
+                    .properties.at("area_attributes") == nlohmann::json{{"zone", "north wing"}, {"note", "retained"}},
+            "native save/reopen must preserve the exact Name/Value metadata and source entities");
 }
 
 void malformed_appraisal_boundary_has_no_stale_presentation() {
@@ -2741,6 +3148,10 @@ int main(int argc, char** argv) {
             malformed_appraisal_boundary_has_no_stale_presentation();
             return 0;
         }
+        if (app.arguments().contains(QStringLiteral("--area-properties-only"))) {
+            appraisal_area_properties_entry_points_are_visible();
+            return 0;
+        }
         if (app.arguments().contains(QStringLiteral("--area-appearance-only"))) {
             selection_filter_dropdown_workflow();
             area_appearance_workflow();
@@ -2790,6 +3201,7 @@ int main(int argc, char** argv) {
         appraisal_qualification_transition_preview_workflow();
         appraisal_qualification_transition_preview_workflow(false);
         selection_filter_dropdown_workflow();
+        appraisal_area_properties_entry_points_are_visible();
         appraisal_derived_category_presentation_workflow();
         malformed_appraisal_boundary_has_no_stale_presentation();
         area_appearance_workflow();
