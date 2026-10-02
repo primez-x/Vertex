@@ -1,6 +1,6 @@
 # Vertex user testing checklist
 
-309 practical tasks, grouped by how you use the app. This replaces the earlier engineering-oriented checklist. The old 130-item list is preserved separately as engineering-requirements-checklist.md.
+310 practical tasks, grouped by how you use the app. This replaces the earlier engineering-oriented checklist. The old 130-item list is preserved separately as engineering-requirements-checklist.md.
 
 This is a user acceptance list for the intended app, not a claim that every listed action is implemented or working in the current preview. If you cannot find a control, or a feature is absent, mark **Blocked / missing** and describe it. Specialized sections can be skipped if you do not use them or lack the device or sample files.
 
@@ -596,8 +596,8 @@ drawing; switching modes does not change existing geometry.
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U100 — Subtract a drawn area from a chosen parent**
-  - Steps: Draw a 10-by-10-foot finished area and a contained 5-by-5-foot garage. Select the garage, right-click, choose Subtract from area, choose the finished parent and apply. Reopen this action and remove the deduction. Undo and redo each change.
-  - Expected: The parent net changes from 100 to 75 square feet and back to 100. The garage remains independently selectable and contributes once to its garage category in Appraisal. Equal area types cannot be linked by this action. Cancel changes nothing.
+  - Steps: Draw a 10-by-10-foot finished area and a contained 5-by-5-foot garage. Select the garage, right-click, choose Subtract from area, choose the finished parent and apply. Reopen this action and remove the deduction. Undo and redo each change. In declared Appraisal, also start with both areas assigned Above-grade finished, then edit their facts to Dwelling for the parent and Garage for the child. Repeat the subtraction and save/reopen. Finally, give both areas equal Dwelling facts despite different original categories and try linking them.
+  - Expected: The parent net changes from 100 to 75 square feet and back to 100. The garage remains independently selectable and contributes once to its garage category in Appraisal. Current declared facts determine compatible types even when original categories differ. Equal current area types cannot be linked; incomplete declarations require correction. Cancel changes nothing.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
@@ -1776,6 +1776,14 @@ drawing; switching modes does not change existing geometry.
 - [ ] **U309 — Measure a building with a curved exterior wall**
   - Steps: Draw a closed physical wall layout containing a curved wall and an internal partition. Select a wall and choose **Measure exterior from walls…**. Inspect the exterior outline, area, perimeter and excluded partition count; cancel once, then create it. Declare the appraisal facts. Change a perimeter wall's thickness, select the measured area and choose **Refresh exterior measurement…**. Undo, redo, save, reopen and export the plan PDF.
   - Expected: The measurement follows the outside of the actual curved and straight walls, with each wall's thickness included. The curved part stays curved; partitions do not add area. The review leaves the project unchanged until accepted. Area, perimeter and edge measurements update together. Changing a source wall marks the old measurement stale and withholds qualified appraisal totals until refreshed. Undo, reopening and PDF retain the same curved outline and measurements. An ambiguous or crossing layout gives a specific error without changing the project.
+  - Result: Not tested
+  - Notes: ______________________________
+
+## Read measurements while editing
+
+- [ ] **U310 — Select an object without covering its measurements**
+  - Steps: Create an exterior measurement from a straight or curved wall layout. Select the measured area, then zoom in and out. Move a wall's measurement label manually near the selection frame and rotate its text. Select the area again, drag its visible rotation pin, undo, save/reopen and export PDF.
+  - Expected: Complete baseline and exterior measurements stay readable. The selection frame and rotation connector leave space around the text, and the rotation pin and size badge occupy clear positions. The displaced pin still rotates the selected object. Selection and navigation leave saved measurement values, manual label positions and styles unchanged. PDF retains the measurements and omits selection controls.
   - Result: Not tested
   - Notes: ______________________________
 

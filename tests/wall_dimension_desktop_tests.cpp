@@ -1,5 +1,8 @@
 #include "sketch/desktop/main_window.hpp"
 #include "sketch/annotation_entity_codec.hpp"
+#include "sketch/boundary_dimension.hpp"
+#include "sketch/boundary_entity.hpp"
+#include "sketch/geometry.hpp"
 #include "sketch/sheet_view_entity_codec.hpp"
 #include "support/noninteractive_errors.hpp"
 #include "../src/desktop/plan_canvas.hpp"
@@ -69,6 +72,15 @@ void mouse(PlanCanvas& drawing,QEvent::Type type,QPointF point) {
         type==QEvent::MouseButtonRelease ? Qt::NoButton : Qt::LeftButton,Qt::NoModifier);
     QApplication::sendEvent(&drawing,&event);
 }
+void middle_pan(PlanCanvas& drawing,QPointF start,QPointF end) {
+    const auto send=[&](QEvent::Type type,QPointF point,Qt::MouseButton button,Qt::MouseButtons buttons) {
+        QMouseEvent event(type,point,drawing.mapToGlobal(point.toPoint()),button,buttons,Qt::NoModifier);
+        QApplication::sendEvent(&drawing,&event);
+    };
+    send(QEvent::MouseButtonPress,start,Qt::MiddleButton,Qt::MiddleButton);
+    send(QEvent::MouseMove,end,Qt::NoButton,Qt::MiddleButton);
+    send(QEvent::MouseButtonRelease,end,Qt::MiddleButton,Qt::NoButton);
+}
 void click(PlanCanvas& drawing,sketch::Vec2 point) {
     const auto position=screen(drawing,point);mouse(drawing,QEvent::MouseButtonPress,position);mouse(drawing,QEvent::MouseButtonRelease,position);
 }
@@ -112,6 +124,47 @@ QString pdf_text(MainWindow& window,const QString& path,const QString& capture_n
             rendered.save(QDir(directory).filePath(capture_name+".png")),"retain actual wall dimension PDF for style review");
     }
     return pdf.getAllText(0).text().simplified();
+}
+
+QString curved_exterior_dimension_id(const sketch::DocumentSnapshot& snapshot,const QString& boundary_id) {
+    const auto boundary=sketch::decode_identified_boundary_entity(
+        snapshot.entities().at(boundary_id.toStdString()));
+    for(const auto& [id,entity]:snapshot.entities()) {
+        if(!sketch::can_recognize_boundary_dimension_entity_type(entity.type)) continue;
+        const auto decoded=sketch::decode_boundary_dimension_entity(entity);
+        if(!decoded.dimension || decoded.dimension->boundary_id!=boundary_id.toStdString() ||
+            decoded.dimension->kind!=sketch::BoundaryDimensionKind::segment_length) continue;
+        const auto edge=std::find_if(boundary.segments.begin(),boundary.segments.end(),[&](const auto& value) {
+            return value.segment_id==decoded.dimension->segment_id;
+        });
+        if(edge!=boundary.segments.end() && std::abs(edge->segment.sweep_radians)>1e-9)
+            return QString::fromStdString(id);
+    }
+    throw std::runtime_error("curved exterior must retain an analytical arc dimension");
+}
+
+std::optional<sketch::desktop::CanvasLabel> any_canvas_label(PlanCanvas& drawing,const QString& id) {
+    for(const auto& value:drawing.labels()) if(value.id==id) return value;
+    return std::nullopt;
+}
+
+sketch::desktop::CanvasLabel visible_canvas_label(MainWindow& window,const QString& id) {
+    const auto value=any_canvas_label(canvas(window),id);
+    require(value.has_value(),"curved physical wall and exterior dimensions remain visible in the plan");
+    return *value;
+}
+
+void require_label_content_and_presentation_unchanged(
+    const sketch::desktop::CanvasLabel& before,const sketch::desktop::CanvasLabel& after) {
+    require(before.id==after.id && before.position.x==after.position.x && before.position.y==after.position.y &&
+        before.text==after.text && before.rotation_radians==after.rotation_radians &&
+        before.paper_height_mm==after.paper_height_mm && before.color==after.color &&
+        before.bold==after.bold && before.italic==after.italic,
+        "selecting and navigating the outline must not change dimension value or presentation");
+}
+bool same_optional_point(const std::optional<sketch::Vec2>& left,const std::optional<sketch::Vec2>& right) {
+    return left.has_value()==right.has_value() && (!left ||
+        (left->x==right->x && left->y==right->y));
 }
 
 void actual_wall_controls_preserve_geometry_and_raw_siblings() {
@@ -311,6 +364,123 @@ void named_horizontal_wall_measurement_placement() {
             "explicit wall text angles must be projected faithfully instead of being upright-normalized");
     }
 }
+
+void curved_outline_selection_preserves_wall_and_exterior_callouts() {
+    QTemporaryDir directory;require(directory.isValid(),"curved outline selection needs a temporary project directory");
+    MainWindow window({},nullptr,directory.filePath(QStringLiteral("text-library.json")));
+    display(window);
+    const auto arc_wall=window.createCurvedWall({-2,0},{2,0},QStringLiteral("180 deg"),QStringLiteral("exterior"));
+    const QStringList walls{arc_wall,
+        window.createStraightWall({2,0},{2,3},QStringLiteral("exterior")),
+        window.createStraightWall({2,3},{-2,3},QStringLiteral("exterior")),
+        window.createStraightWall({-2,3},{-2,0},QStringLiteral("exterior"))};
+    require(std::all_of(walls.begin(),walls.end(),[](const auto& id){return !id.isEmpty();}),
+        "the callout fixture needs one physical semicircle and its three-wall rectangular return");
+    for(qsizetype i=0;i<walls.size();++i)
+        require(window.selectEntity(walls.at(i),i!=0),"select every physical wall in the curved shell");
+    const auto source=window.document().snapshot();
+    require(std::abs(source.entities().at(arc_wall.toStdString()).properties.at("baseline")
+        .at("sweep_radians").get<double>()-std::numbers::pi)<1e-12,
+        "the physical curved wall retains its exact semicircular baseline");
+    const auto boundary_id=window.createMeasurementBoundaryFromSelectedWalls();
+    require(!boundary_id.isEmpty(),"the physical curved shell creates its derived exterior measurement");
+    auto measured=window.document().snapshot();
+    const auto identified=sketch::decode_identified_boundary_entity(
+        measured.entities().at(boundary_id.toStdString()));
+    require(identified.segments.size()==4 && std::count_if(identified.segments.begin(),identified.segments.end(),
+        [](const auto& edge){return std::abs(edge.segment.sweep_radians)>1e-9;})==1,
+        "the measured exterior retains one analytical curve alongside the rectangular return");
+    const auto outside_arc=curved_exterior_dimension_id(measured,boundary_id);
+    const auto outside_value=visible_canvas_label(window,outside_arc);
+    require(outside_value.text==QStringLiteral("6.503 m"),
+        "the measured exterior callout uses the curved physical face length");
+
+    require(window.selectEntity(arc_wall) && window.editSelectedWallDimension(
+        QStringLiteral("0 m"),QStringLiteral("-2.8 m"),QStringLiteral("5.5"),
+        QStringLiteral("#A12B34"),true,true,true,QStringLiteral("32")),
+        "the source curve accepts an authored manual rotated paper-font callout");
+    QApplication::processEvents();
+    const auto styled_snapshot=window.document().snapshot();
+    const auto baseline_before=visible_label(window,arc_wall);
+    const auto exterior_before=visible_canvas_label(window,outside_arc);
+    require(baseline_before.text==QStringLiteral("6.283 m") &&
+        std::abs(baseline_before.position.x)<1e-9 && std::abs(baseline_before.position.y+2.8)<1e-9 &&
+        baseline_before.paper_height_mm==5.5 && baseline_before.color==QColor(QStringLiteral("#A12B34")) &&
+        baseline_before.bold && baseline_before.italic && baseline_before.wall_dimension_manual_rotation &&
+        std::abs(baseline_before.rotation_radians-32.0*std::numbers::pi/180.0)<1e-12 &&
+        !baseline_before.automatic_linear_placement,
+        "the source-wall callout shows its derived arc length and custom manual paper typography");
+    const auto annotation_before=presentation(window,arc_wall);
+    auto& drawing=canvas(window);
+    drawing.fitView();QApplication::processEvents();
+    capture(window,QStringLiteral("curved-outline-before-selection.png"));
+
+    require(window.selectEntity(boundary_id),"select the measured exterior with both callouts visible");
+    QApplication::processEvents();
+    require(window.document().revision()==styled_snapshot.revision() &&
+        window.document().snapshot().entities()==styled_snapshot.entities() && drawing.selectionBounds().has_value(),
+        "selecting the derived outline must only show selection controls and must not edit model or annotation records");
+    const auto baseline_selected=visible_label(window,arc_wall);
+    const auto exterior_selected=visible_canvas_label(window,outside_arc);
+    require_label_content_and_presentation_unchanged(baseline_before,baseline_selected);
+    require_label_content_and_presentation_unchanged(exterior_before,exterior_selected);
+    const auto selected_annotation=presentation(window,arc_wall);
+    require(same_optional_point(selected_annotation.plan_label_offset,annotation_before.plan_label_offset) &&
+        presentation(window,arc_wall).paper_text_height_mm==annotation_before.paper_text_height_mm &&
+        presentation(window,arc_wall).plan_label_rotation_radians==annotation_before.plan_label_rotation_radians,
+        "outline selection leaves the saved wall callout offset, paper height and rotation unchanged");
+    capture(window,QStringLiteral("curved-outline-selected-before-navigation.png"));
+
+    const auto scale_before=drawing.viewScale();
+    drawing.zoomBy(1.35,QRectF(drawing.rect()).center());
+    const auto center_before_pan=drawing.viewCenter();
+    const auto center=QRectF(drawing.rect()).center();
+    middle_pan(drawing,center,center+QPointF(44,-27));
+    QApplication::processEvents();
+    require(drawing.viewScale()>scale_before &&
+        (std::abs(drawing.viewCenter().x-center_before_pan.x)>1e-8 ||
+         std::abs(drawing.viewCenter().y-center_before_pan.y)>1e-8),
+        "the selected curved outline remains stable through real canvas zoom and pan gestures");
+    require(window.document().revision()==styled_snapshot.revision() &&
+        window.document().snapshot().entities()==styled_snapshot.entities(),
+        "zooming and panning around the selected outline do not persist presentation changes");
+    require_label_content_and_presentation_unchanged(baseline_before,visible_label(window,arc_wall));
+    require_label_content_and_presentation_unchanged(exterior_before,visible_canvas_label(window,outside_arc));
+    capture(window,QStringLiteral("curved-outline-selected-after-navigation.png"));
+
+    const auto project_path=directory.filePath(QStringLiteral("curved-outline-callouts.bldproj"));
+    require(window.saveProjectAs(project_path),"selected curved wall callouts must save natively");
+    MainWindow reopened({},nullptr,directory.filePath(QStringLiteral("missing-library.json")));
+    require(reopened.openProject(project_path),"the curved wall callout project must reopen");
+    require(reopened.document().snapshot().entities()==styled_snapshot.entities(),
+        "native reopen restores the exact curved model and dimension-presentation records");
+    display(reopened);
+    require(reopened.selectEntity(arc_wall),"reopen must retain the curved source wall selection");
+    const auto reopened_baseline=visible_label(reopened,arc_wall);
+    const auto reopened_annotation=presentation(reopened,arc_wall);
+    require(reopened_baseline.text==baseline_before.text &&
+        reopened_baseline.paper_height_mm==baseline_before.paper_height_mm &&
+        reopened_baseline.color==baseline_before.color && reopened_baseline.bold==baseline_before.bold &&
+        reopened_baseline.italic==baseline_before.italic &&
+        reopened_baseline.rotation_radians==baseline_before.rotation_radians &&
+        same_optional_point(reopened_annotation.plan_label_offset,annotation_before.plan_label_offset) &&
+        reopened_annotation.paper_text_height_mm==annotation_before.paper_text_height_mm &&
+        reopened_annotation.plan_label_rotation_radians==annotation_before.plan_label_rotation_radians,
+        "native reopen restores the wall callout value, manual placement, rotation and paper typography");
+    require(reopened.selectEntity(boundary_id),"reopen must retain and select the measured exterior outline");
+    const auto reopened_exterior=visible_canvas_label(reopened,outside_arc);
+    require(reopened_exterior.text==exterior_before.text && reopened_exterior.position.x==exterior_before.position.x &&
+        reopened_exterior.position.y==exterior_before.position.y,
+        "native reopen restores the analytical exterior curve dimension at its saved position");
+    capture(reopened,QStringLiteral("curved-outline-selected-after-reopen.png"));
+
+    const auto text=pdf_text(reopened,directory.filePath(QStringLiteral("curved-outline-callouts.pdf")),
+        QStringLiteral("curved-outline-callouts-native-pdf"));
+    require(text.contains(QStringLiteral("6.283 m")) && text.contains(QStringLiteral("6.503 m")),
+        "native PDF output contains both the source-baseline and derived-exterior curve measurements");
+    require(!text.contains(QStringLiteral("× D ")),
+        "native PDF output omits the screen-only selection size badge");
+}
 }
 
 int main(int argc,char** argv) {
@@ -319,6 +489,7 @@ int main(int argc,char** argv) {
         require(QFontDatabase::addApplicationFont(QStringLiteral(":/fonts/Inter.ttf"))>=0,"bundled font must load for actual rendered measurements");
         app.setFont(QFont(QStringLiteral("Inter"),10));
         actual_wall_controls_preserve_geometry_and_raw_siblings();place_pan_cancel_automatic_and_fences();named_horizontal_wall_measurement_placement();
+        curved_outline_selection_preserves_wall_and_exterior_callouts();
         std::cout<<"wall_dimension_desktop_tests passed\n";return 0;
     } catch(const std::exception& error){std::cerr<<"wall_dimension_desktop_tests: "<<error.what()<<'\n';return 1;}
 }

@@ -93,21 +93,41 @@ std::string area_subtraction_type(const DocumentSnapshot& snapshot, const Entity
         return type;
     }
     if (workflow != "appraisal") invalid("area calculation workflow is unsupported");
-    const auto authoring_type = text(entity.properties, "classification");
-    if (authoring_type.starts_with("role:")) {
-        const auto role = parse_boundary_role(authoring_type.substr(5));
-        if (!role || *role == BoundaryRole::measured_area) invalid("choose a known exclusion TYPE");
-        return "role:" + std::string(boundary_role_name(*role));
+    if (!entity.properties.contains("appraisal_facts")) {
+        // A pending authoring TYPE and truly undeclared legacy areas retain
+        // explicit classification behavior. Once facts exist, saved categories
+        // and role strings are historical metadata rather than TYPE authority.
+        const auto authoring_type = text(entity.properties, "classification");
+        if (authoring_type.starts_with("role:")) {
+            const auto role = parse_boundary_role(authoring_type.substr(5));
+            if (!role || *role == BoundaryRole::measured_area) invalid("choose a known exclusion TYPE");
+            return "role:" + std::string(boundary_role_name(*role));
+        }
+        auto category = text(entity.properties, "appraisal_category");
+        if (!category.empty() && (!parse_appraisal_category(category) || category == "none"))
+            invalid("choose a known appraisal TYPE");
+        if (category.empty()) category = text(entity.properties, "classification");
+        if (const auto parsed = parse_appraisal_category(category); parsed && *parsed != AppraisalAreaCategory::none)
+            return std::string(appraisal_category_name(*parsed));
+        invalid("declare the appraisal area TYPE");
     }
-    auto category = text(entity.properties, "appraisal_category");
-    if (!category.empty() && (!parse_appraisal_category(category) || category == "none"))
-        invalid("choose a known appraisal TYPE");
-    if (category.empty()) category = text(entity.properties, "classification");
-    if (const auto parsed = parse_appraisal_category(category); parsed && *parsed != AppraisalAreaCategory::none)
-        return std::string(appraisal_category_name(*parsed));
-    if (!property.properties.contains("appraisal_policy") || !entity.properties.contains("appraisal_facts") ||
+    if (!property.properties.contains("appraisal_policy") || !property.properties.at("appraisal_policy").is_object() ||
         !entity.properties.at("appraisal_facts").is_object()) invalid("declare the appraisal area TYPE");
     const auto& facts = entity.properties.at("appraisal_facts");
+    for (const auto& [key, value] : facts.items()) {
+        (void)value;
+        if (key != "boundary_role" && key != "area_use" && key != "finish" && key != "access" && key != "ceiling_eligibility")
+            invalid("unknown appraisal declaration: " + key);
+    }
+    const auto validate_supplied = [&](const char* key, auto parser) {
+        if (facts.contains(key)) (void)fact(facts, key, parser);
+    };
+    // Eligibility facts can be irrelevant to a non-dwelling/void TYPE, but
+    // supplied malformed tokens remain invalid under the declaration contract.
+    validate_supplied("finish", parse_finish_status);
+    validate_supplied("access", parse_access_status);
+    validate_supplied("ceiling_eligibility", parse_ceiling_eligibility);
+    validate_supplied("area_use", parse_area_use);
     const auto role = fact(facts, "boundary_role", parse_boundary_role);
     if (role != BoundaryRole::measured_area) return "role:" + std::string(boundary_role_name(role));
     const auto use = fact(facts, "area_use", parse_area_use);

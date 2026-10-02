@@ -1083,7 +1083,9 @@ void PlanCanvas::renderSceneWithTransform(QPainter& painter, const QRectF& viewp
     // Committed labels use the same model-to-screen mapping as the current
     // scene, including fit-to-content output. Drawing after restoring the
     // world transform keeps text upright and readable at its device scale.
-    drawLabels(painter, viewport, scale, view_center, output, background, paper_pixels_per_mm);
+    std::vector<QRectF> annotation_footprints;
+    drawLabels(painter, viewport, scale, view_center, output, background,
+               paper_pixels_per_mm, output ? nullptr : &annotation_footprints);
 
     if (!output) {
         if (m_grid_enabled) {
@@ -1110,9 +1112,9 @@ void PlanCanvas::renderSceneWithTransform(QPainter& painter, const QRectF& viewp
                 painter.drawLine(QLineF(x, bottom - 3.0, x, bottom + 3.0));
             painter.restore();
         }
-        drawSelectionFrame(painter, viewport);
+        drawSelectionFrame(painter, viewport, annotation_footprints);
         drawVertexHandles(painter, viewport);
-        drawSelectionDimensions(painter, viewport);
+        drawSelectionDimensions(painter, viewport, annotation_footprints);
         drawOpeningWidthHandles(painter, viewport);
         drawSelectionCaption(painter, viewport, background);
         drawCursorReadout(painter, viewport, background);
@@ -2564,11 +2566,111 @@ QTransform PlanCanvas::selectionControlTransform(const QRectF& viewport) const {
     return transform;
 }
 
-QPointF PlanCanvas::selectionRotationPoint(const QRectF& viewport) const {
+std::vector<QRectF> PlanCanvas::selectionAnnotationFootprints(
+    const QRectF& viewport, const QFont& base_font) const {
+    std::vector<QRectF> result;
+    const auto& labels = positionedLabels(base_font, this, m_scale, logicalDpiY(), false);
+    result.reserve(labels.size());
+    for (const auto& label : labels) {
+        if (!drawable_label(label)) continue;
+        const auto label_font = std::isfinite(label.paper_height_mm) && label.paper_height_mm > 0.0
+            ? font() : base_font;
+        const auto layout = label_layout(label, label_font, this, m_scale, logicalDpiY());
+        const auto center = toScreen(label.position, viewport);
+        auto footprint = label_transform(label, center).mapRect(layout.bounds)
+                             .adjusted(-2.0, -2.0, 2.0, 2.0);
+        if (std::isfinite(footprint.left()) && std::isfinite(footprint.top()) &&
+            std::isfinite(footprint.right()) && std::isfinite(footprint.bottom()) &&
+            footprint.width() > 0 && footprint.height() > 0)
+            result.push_back(footprint);
+    }
+    return result;
+}
+
+QPointF PlanCanvas::selectionHandlePoint(QPointF anchor, QPointF preferred_direction,
+    const QRectF& viewport, const std::vector<QRectF>& annotation_footprints) const {
+    constexpr qreal hit_radius = 12.0;
+    const auto transform = selectionControlTransform(viewport);
+    const auto available = viewport.adjusted(hit_radius, hit_radius, -hit_radius, -hit_radius);
+    const auto clear = [&](QPointF local_point) {
+        const auto center = transform.map(local_point);
+        if (!available.contains(center)) return false;
+        const QRectF hit(center.x() - hit_radius, center.y() - hit_radius,
+                         hit_radius * 2.0, hit_radius * 2.0);
+        return std::none_of(annotation_footprints.begin(), annotation_footprints.end(),
+            [&](const QRectF& footprint) { return hit.intersects(footprint); });
+    };
+    if (clear(anchor)) return anchor;
+
+    const auto length = std::hypot(preferred_direction.x(), preferred_direction.y());
+    if (length > 1e-9) {
+        preferred_direction /= length;
+    } else {
+        preferred_direction = {1.0, 0.0};
+    }
+    std::vector<QPointF> directions{preferred_direction};
+    constexpr qreal diagonal = 0.7071067811865475244;
+    const std::array<QPointF, 8> compass{{
+        {1,0}, {diagonal,diagonal}, {0,1}, {-diagonal,diagonal},
+        {-1,0}, {-diagonal,-diagonal}, {0,-1}, {diagonal,-diagonal}}};
+    directions.insert(directions.end(), compass.begin(), compass.end());
+    std::stable_sort(directions.begin() + 1, directions.end(), [&](QPointF left, QPointF right) {
+        return QPointF::dotProduct(left, preferred_direction) >
+               QPointF::dotProduct(right, preferred_direction);
+    });
+    const auto maximum_distance = 2.0 * std::hypot(viewport.width(), viewport.height()) + 48.0;
+    for (const auto direction : directions) {
+        bool entered_viewport = false;
+        for (qreal distance = 16.0; distance <= maximum_distance; distance += 8.0) {
+            const auto candidate = anchor + direction * distance;
+            const auto center = transform.map(candidate);
+            if (!available.contains(center)) {
+                if (entered_viewport) break;
+                continue;
+            }
+            entered_viewport = true;
+            if (clear(candidate)) return candidate;
+        }
+    }
+    // If annotations and viewport edges leave no clear position, retain the
+    // original control location and its existing hit target.
+    return anchor;
+}
+
+QPointF PlanCanvas::selectionRotationPoint(
+    const QRectF& viewport, const std::vector<QRectF>& annotation_footprints) const {
     const auto frame = selectionControlRect(viewport);
     const auto transform = selectionControlTransform(viewport);
+    constexpr qreal hit_radius = 12.0;
+    const auto available = viewport.adjusted(hit_radius, hit_radius, -hit_radius, -hit_radius);
+    const auto maximum_distance = std::hypot(viewport.width(), viewport.height()) +
+                                  std::max(frame.width(), frame.height()) + 24.0;
+    for (qreal distance = 24.0; distance <= maximum_distance; distance += 4.0) {
+        const QPointF candidate(frame.center().x(), frame.top() - distance);
+        const auto center = transform.map(candidate);
+        if (!available.contains(center)) break;
+        const QRectF hit(center.x() - hit_radius, center.y() - hit_radius,
+                         hit_radius * 2.0, hit_radius * 2.0);
+        if (std::any_of(annotation_footprints.begin(), annotation_footprints.end(),
+                        [&](const QRectF& footprint) { return hit.intersects(footprint); }))
+            continue;
+        return candidate;
+    }
+    const auto inward_limit = std::min(frame.height() - hit_radius,
+        2.0 * std::hypot(viewport.width(), viewport.height()) + 48.0);
+    for (qreal distance = 24.0; distance <= inward_limit; distance += 4.0) {
+        const QPointF candidate(frame.center().x(), frame.top() + distance);
+        const auto center = transform.map(candidate);
+        if (!available.contains(center)) continue;
+        const QRectF hit(center.x() - hit_radius, center.y() - hit_radius,
+                         hit_radius * 2.0, hit_radius * 2.0);
+        if (std::any_of(annotation_footprints.begin(), annotation_footprints.end(),
+                        [&](const QRectF& footprint) { return hit.intersects(footprint); }))
+            continue;
+        return candidate;
+    }
     const QPointF outside(frame.center().x(), frame.top()-24);
-    if (viewport.adjusted(12,12,-12,-12).contains(transform.map(outside))) return outside;
+    if (available.contains(transform.map(outside))) return outside;
     return {frame.center().x(), std::min(frame.bottom()-10, frame.top()+24)};
 }
 
@@ -2579,13 +2681,15 @@ PlanCanvas::SelectionHandle PlanCanvas::selectionHandleAt(
     if (!selectionFrame(viewport)) return SelectionHandle::none;
     const auto frame = selectionControlRect(viewport);
     const auto transform = selectionControlTransform(viewport);
+    const auto annotation_footprints = selectionAnnotationFootprints(viewport, font());
     constexpr qreal hit_size = 24.0;
     const auto hit = [&](QPointF center) {
         center = transform.map(center);
         return QRectF(center.x() - hit_size * 0.5, center.y() - hit_size * 0.5,
                       hit_size, hit_size).contains(point);
     };
-    if (m_selection_rotate_enabled && hit(selectionRotationPoint(viewport)))
+    if (m_selection_rotate_enabled &&
+        hit(selectionRotationPoint(viewport, annotation_footprints)))
         return SelectionHandle::rotate;
     // Resolve overlaps by proximity. Small objects can put a corner's touch
     // region over a side handle; the point actually nearest the pointer wins.
@@ -2599,20 +2703,26 @@ PlanCanvas::SelectionHandle PlanCanvas::selectionHandleAt(
     if (m_selection_axis_resize_enabled && m_entity_axis_resize_requested) {
         if (const auto axes = selectionAxes()) {
             if (axes->width_metres > 1e-9) {
-                consider({frame.left(), frame.center().y()}, SelectionHandle::left);
-                consider({frame.right(), frame.center().y()}, SelectionHandle::right);
+                consider(selectionHandlePoint({frame.left(), frame.center().y()}, {-1, 0},
+                    viewport, annotation_footprints), SelectionHandle::left);
+                consider(selectionHandlePoint({frame.right(), frame.center().y()}, {1, 0},
+                    viewport, annotation_footprints), SelectionHandle::right);
             }
             if (axes->depth_metres > 1e-9) {
-                consider({frame.center().x(), frame.top()}, SelectionHandle::top);
-                consider({frame.center().x(), frame.bottom()}, SelectionHandle::bottom);
+                consider(selectionHandlePoint({frame.center().x(), frame.top()}, {0, -1},
+                    viewport, annotation_footprints), SelectionHandle::top);
+                consider(selectionHandlePoint({frame.center().x(), frame.bottom()}, {0, 1},
+                    viewport, annotation_footprints), SelectionHandle::bottom);
             }
         }
     }
-    if (m_selection_resize_enabled &&
-        (hit(frame.topLeft()) || hit(frame.topRight()) ||
-         hit(frame.bottomLeft()) || hit(frame.bottomRight()))) {
-        for (const auto p : {frame.topLeft(), frame.topRight(), frame.bottomLeft(), frame.bottomRight()})
-            consider(p, SelectionHandle::resize);
+    if (m_selection_resize_enabled) {
+        const std::array<std::pair<QPointF, QPointF>, 4> corners{{
+            {frame.topLeft(), {-1, -1}}, {frame.topRight(), {1, -1}},
+            {frame.bottomLeft(), {-1, 1}}, {frame.bottomRight(), {1, 1}}}};
+        for (const auto& [anchor, direction] : corners)
+            consider(selectionHandlePoint(anchor, direction, viewport, annotation_footprints),
+                     SelectionHandle::resize);
     }
     return nearest;
 }
@@ -2997,7 +3107,8 @@ void PlanCanvas::drawVertexHandles(QPainter& painter, const QRectF& viewport) co
     painter.restore();
 }
 
-void PlanCanvas::drawSelectionFrame(QPainter& painter, const QRectF& viewport) const {
+void PlanCanvas::drawSelectionFrame(QPainter& painter, const QRectF& viewport,
+                                    const std::vector<QRectF>& annotation_footprints) const {
     if (!selectionFrame(viewport)) return;
     const auto frame = selectionControlRect(viewport);
     const auto transform = selectionControlTransform(viewport);
@@ -3005,51 +3116,101 @@ void PlanCanvas::drawSelectionFrame(QPainter& painter, const QRectF& viewport) c
     painter.save();
     painter.setClipRect(viewport, Qt::IntersectClip);
     painter.setRenderHint(QPainter::Antialiasing, true);
+
+    QPainterPath visible_frame;
+    visible_frame.addRect(viewport);
+    QPainterPath annotation_mask;
+    annotation_mask.setFillRule(Qt::WindingFill);
+    for (const auto& footprint : annotation_footprints)
+        annotation_mask.addRect(footprint);
+    if (!annotation_mask.isEmpty())
+        visible_frame = visible_frame.subtracted(annotation_mask);
+
+    const bool controls = selectedIds().size() == 1 && !selectedOpening() &&
+        (m_selection_resize_enabled || m_selection_rotate_enabled || m_selection_axis_resize_enabled);
+    painter.save();
+    painter.setClipPath(visible_frame, Qt::IntersectClip);
     painter.setBrush(Qt::NoBrush);
     // A white halo keeps the blue frame legible over dark fills and underlays.
     painter.setPen(QPen(QColor(255, 255, 255, 235), 4.0));
     painter.drawPolygon(polygon);
-    if (selectedIds().size() == 1 && !selectedOpening() &&
-        (m_selection_resize_enabled || m_selection_rotate_enabled || m_selection_axis_resize_enabled)) {
-        painter.setBrush(QColor(255, 255, 255));
-        painter.setPen(QPen(QColor(37, 99, 235), 1.5));
+    painter.setPen(QPen(QColor(37, 99, 235), 1.5));
+    painter.drawPolygon(polygon);
+    if (controls && m_selection_rotate_enabled) {
+        const auto handle = transform.map(selectionRotationPoint(viewport, annotation_footprints));
+        painter.drawLine(transform.map(QPointF(frame.center().x(), frame.top())), handle);
+    }
+    painter.restore();
+
+    if (controls) {
+        painter.save();
+        painter.setClipPath(visible_frame, Qt::IntersectClip);
+        const auto draw_link = [&](QPointF anchor, QPointF point) {
+            if (QLineF(anchor, point).length() <= 1.0) return;
+            QPen link_pen(QColor(37, 99, 235, 115), 1.0, Qt::DashLine);
+            link_pen.setCosmetic(true);
+            painter.setBrush(Qt::NoBrush);
+            painter.setPen(link_pen);
+            painter.drawLine(transform.map(anchor), transform.map(point));
+        };
         if (m_selection_resize_enabled) {
-            for (const auto corner : {frame.topLeft(), frame.topRight(),
-                                      frame.bottomLeft(), frame.bottomRight()}) {
-                const auto point = transform.map(corner);
+            const std::array<std::pair<QPointF, QPointF>, 4> corners{{
+                {frame.topLeft(), {-1, -1}}, {frame.topRight(), {1, -1}},
+                {frame.bottomLeft(), {-1, 1}}, {frame.bottomRight(), {1, 1}}}};
+            std::array<QPointF, 4> marker_points{};
+            for (std::size_t index = 0; index < corners.size(); ++index) {
+                const auto& [anchor, direction] = corners[index];
+                marker_points[index] = selectionHandlePoint(
+                    anchor, direction, viewport, annotation_footprints);
+                draw_link(anchor, marker_points[index]);
+            }
+            painter.setBrush(QColor(255, 255, 255));
+            painter.setPen(QPen(QColor(37, 99, 235), 1.5));
+            for (const auto marker : marker_points) {
+                const auto point = transform.map(marker);
                 painter.drawRect(QRectF(point.x() - 4.0, point.y() - 4.0, 8.0, 8.0));
             }
         }
         if (m_selection_axis_resize_enabled && m_entity_axis_resize_requested) {
             if (const auto axes = selectionAxes()) {
-                const auto draw_side = [&](QPointF p) {
-                    const auto point = transform.map(p);
-                    painter.drawRect(QRectF(point.x()-4.5, point.y()-4.5, 9, 9));
-                };
+                std::vector<std::pair<QPointF, QPointF>> axis_handles;
+                axis_handles.reserve(4);
                 if (axes->width_metres > 1e-9) {
-                    draw_side({frame.left(),frame.center().y()});
-                    draw_side({frame.right(),frame.center().y()});
+                    axis_handles.emplace_back(QPointF(frame.left(),frame.center().y()), QPointF(-1,0));
+                    axis_handles.emplace_back(QPointF(frame.right(),frame.center().y()), QPointF(1,0));
                 }
                 if (axes->depth_metres > 1e-9) {
-                    draw_side({frame.center().x(),frame.top()});
-                    draw_side({frame.center().x(),frame.bottom()});
+                    axis_handles.emplace_back(QPointF(frame.center().x(),frame.top()), QPointF(0,-1));
+                    axis_handles.emplace_back(QPointF(frame.center().x(),frame.bottom()), QPointF(0,1));
+                }
+                std::vector<QPointF> marker_points;
+                marker_points.reserve(axis_handles.size());
+                for (const auto& [anchor, direction] : axis_handles) {
+                    marker_points.push_back(selectionHandlePoint(
+                        anchor, direction, viewport, annotation_footprints));
+                    draw_link(anchor, marker_points.back());
+                }
+                painter.setBrush(QColor(255, 255, 255));
+                painter.setPen(QPen(QColor(37, 99, 235), 1.5));
+                for (const auto marker : marker_points) {
+                    const auto point = transform.map(marker);
+                    painter.drawRect(QRectF(point.x()-4.5, point.y()-4.5, 9, 9));
                 }
             }
         }
         if (m_selection_rotate_enabled) {
-            const auto handle = transform.map(selectionRotationPoint(viewport));
-            painter.drawLine(transform.map(QPointF(frame.center().x(), frame.top())), handle);
+            painter.setBrush(QColor(255, 255, 255));
+            painter.setPen(QPen(QColor(37, 99, 235), 1.5));
+            const auto handle = transform.map(selectionRotationPoint(viewport, annotation_footprints));
             painter.drawEllipse(handle, 5.0, 5.0);
         }
+        painter.restore();
     }
-    // Transform handles use a white fill; the placement frame must stay clear.
-    painter.setBrush(Qt::NoBrush);
-    painter.setPen(QPen(QColor(37, 99, 235), 1.5));
-    painter.drawPolygon(polygon);
     painter.restore();
 }
 
-void PlanCanvas::drawSelectionDimensions(QPainter& painter, const QRectF& viewport) const {
+void PlanCanvas::drawSelectionDimensions(QPainter& painter, const QRectF& viewport,
+    const std::vector<QRectF>& annotation_footprints) const {
     // The vertex readout supplies live coordinates, area, and perimeter. Avoid
     // obscuring it with a second bounding-box readout during the same gesture.
     if (m_left_gesture == LeftGesture::vertex_move && m_left_dragging) return;
@@ -3061,6 +3222,7 @@ void PlanCanvas::drawSelectionDimensions(QPainter& painter, const QRectF& viewpo
     dimension_font.setWeight(QFont::Medium);
     painter.setFont(dimension_font);
     const QFontMetricsF metrics(dimension_font, painter.device());
+    std::vector<QRectF> occupied_panels;
     const auto draw = [&](CanvasSelectionFrame axes, const QString& id, bool sizes_presented = false,
                           std::optional<CanvasOpeningWidthControls> opening = std::nullopt) {
         if (!std::isfinite(axes.center.x) || !std::isfinite(axes.center.y) ||
@@ -3119,11 +3281,78 @@ void PlanCanvas::drawSelectionDimensions(QPainter& painter, const QRectF& viewpo
         const auto lower = middle + QPointF(0,
             (std::abs(s)*width + std::abs(c)*depth)*m_scale*.5);
         auto panel = metrics.boundingRect(text).adjusted(-7,-4,7,4);
-        panel.moveCenter(lower + QPointF(0,28));
-        panel.moveLeft(std::clamp(panel.left(), viewport.left()+4,
-            std::max(viewport.left()+4, viewport.right()-panel.width()-4)));
-        panel.moveTop(std::clamp(panel.top(), viewport.top()+4,
-            std::max(viewport.top()+4, viewport.bottom()-panel.height()-4)));
+        const auto preferred = lower + QPointF(0, 28);
+        panel.moveCenter(preferred);
+        const auto inner = viewport.adjusted(4, 4, -4, -4);
+        std::vector<QPointF> candidates;
+        candidates.reserve(annotation_footprints.size() * 4 + 65);
+        candidates.push_back(preferred);
+        for (const auto& footprint : annotation_footprints) {
+            candidates.push_back({footprint.left() - panel.width() * .5 - 4,
+                                  footprint.center().y()});
+            candidates.push_back({footprint.right() + panel.width() * .5 + 4,
+                                  footprint.center().y()});
+            candidates.push_back({footprint.center().x(),
+                                  footprint.top() - panel.height() * .5 - 4});
+            candidates.push_back({footprint.center().x(),
+                                  footprint.bottom() + panel.height() * .5 + 4});
+        }
+        for (int row = 0; row <= 8; ++row) {
+            for (int column = 0; column <= 8; ++column) {
+                candidates.push_back({inner.left() + inner.width() * column / 8.0,
+                                      inner.top() + inner.height() * row / 8.0});
+            }
+        }
+        const auto bounded_panel = [&](QPointF center) {
+            const auto minimum_x = inner.left() + panel.width() * .5;
+            const auto maximum_x = inner.right() - panel.width() * .5;
+            const auto minimum_y = inner.top() + panel.height() * .5;
+            const auto maximum_y = inner.bottom() - panel.height() * .5;
+            center.setX(minimum_x <= maximum_x
+                ? std::clamp(center.x(), minimum_x, maximum_x) : inner.center().x());
+            center.setY(minimum_y <= maximum_y
+                ? std::clamp(center.y(), minimum_y, maximum_y) : inner.center().y());
+            auto candidate = panel;
+            candidate.moveCenter(center);
+            return candidate;
+        };
+        std::sort(candidates.begin(), candidates.end(), [&](QPointF left, QPointF right) {
+            const auto bounded_left = bounded_panel(left).center();
+            const auto bounded_right = bounded_panel(right).center();
+            return QLineF(bounded_left, preferred).length() <
+                   QLineF(bounded_right, preferred).length();
+        });
+        std::optional<QRectF> chosen_panel;
+        qreal least_overlap = std::numeric_limits<qreal>::infinity();
+        for (const auto candidate_center : candidates) {
+            const auto candidate = bounded_panel(candidate_center);
+            if (!inner.contains(candidate) ||
+                std::any_of(occupied_panels.begin(), occupied_panels.end(),
+                            [&](const QRectF& occupied) { return candidate.intersects(occupied); }))
+                continue;
+            qreal overlap = 0;
+            for (const auto& footprint : annotation_footprints) {
+                const auto intersection = candidate.intersected(footprint);
+                overlap += intersection.width() * intersection.height();
+            }
+            if (overlap < least_overlap) {
+                least_overlap = overlap;
+                chosen_panel = candidate;
+            }
+            if (overlap == 0) break;
+        }
+        if (chosen_panel) {
+            panel = *chosen_panel;
+            occupied_panels.push_back(panel);
+        } else {
+            // Very small viewports cannot contain even the compact callout.
+            // Preserve the legacy edge placement so the measurement remains
+            // available while the view is zoomed or resized.
+            panel.moveLeft(std::clamp(panel.left(), viewport.left()+4,
+                std::max(viewport.left()+4, viewport.right()-panel.width()-4)));
+            panel.moveTop(std::clamp(panel.top(), viewport.top()+4,
+                std::max(viewport.top()+4, viewport.bottom()-panel.height()-4)));
+        }
         const bool dark = m_canvas_background.lightnessF() < .45;
         painter.setPen(QPen(invalid_opening ? QColor(220,38,38)
                            : dark ? QColor(125,179,255) : QColor(37,99,235),1));
@@ -4206,7 +4435,8 @@ void PlanCanvas::drawSegment(QPainter& painter, const Segment& segment) const {
 
 void PlanCanvas::drawLabels(QPainter& painter, const QRectF& viewport, double scale,
                             Vec2 view_center, bool output, QColor background,
-                            std::optional<double> paper_pixels_per_mm) const {
+                            std::optional<double> paper_pixels_per_mm,
+                            std::vector<QRectF>* annotation_footprints) const {
     if (!(scale > 0.0) || !std::isfinite(scale)) {
         return;
     }
@@ -4242,19 +4472,24 @@ void PlanCanvas::drawLabels(QPainter& painter, const QRectF& viewport, double sc
         painter.setFont(layout.font);
         const auto& bounds = layout.bounds;
         const auto center = to_screen(label.position);
+        if (annotation_footprints) {
+            annotation_footprints->push_back(
+                label_transform(label, center).mapRect(bounds).adjusted(-2.0, -2.0, 2.0, 2.0));
+        }
         if (label.leader_start) {
             const auto start = to_screen(*label.leader_start);
             const auto delta = start-center;
             const auto factor = std::max(std::abs(delta.x()) / std::max(1.0,bounds.width()*0.5),
                                          std::abs(delta.y()) / std::max(1.0,bounds.height()*0.5));
             if (factor > 1.0) {
+                const auto edge = center + delta / factor;
                 auto color = label.color.isValid() ? label.color :
                     background.lightnessF()>0.5 ? QColor(85,98,115) : QColor(190,195,200);
                 color.setAlpha(160);
                 QPen pen(color, output ? std::max(0.7,dpi*0.15/25.4) : 0.7);
                 pen.setCosmetic(true);
                 painter.setPen(pen);
-                painter.drawLine(start, center+delta/factor);
+                painter.drawLine(start, edge);
             }
         }
         painter.save();

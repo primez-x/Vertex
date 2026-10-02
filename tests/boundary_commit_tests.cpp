@@ -437,11 +437,123 @@ void test_explicit_area_subtraction_atomic_commit() {
         "active-v2 appraisal adjustment must split its category from measurement classification");
 }
 
+json appraisal_area_facts(const char* use = "dwelling") {
+    return {{"boundary_role","measured_area"},{"area_use",use},{"finish","finished"},
+            {"access","direct_interior"},{"ceiling_eligibility","standard"}};
+}
+
+Document declared_subtraction_document(bool same_saved_category = true, bool same_declared_type = false) {
+    auto document=make_document();const auto initial=document.snapshot();
+    auto property=initial.entities().at("property-1");property.properties["calculation_workflow"]="appraisal";
+    property.properties["appraisal_policy"]={{"policy_kind","residential_declared"},{"version",1},
+        {"property_kind","detached_single_family"},{"measurement_basis","exterior"}};
+    auto floor=initial.entities().at("floor-1");floor.properties["appraisal_facts"]={{"grade","above"}};
+    const auto area=[](const char* id,double x,double y,double side,const char* category,const char* use) {
+        auto result=entity(id,"measurement_boundary",{{"property_id","property-1"},{"building_id","building-1"},
+            {"floor_id","floor-1"},{"layer_id","layer-1"},{"classification","measurement"},
+            {"measurement_classification","measurement"},{"appraisal_category",category},
+            {"appraisal_facts",appraisal_area_facts(use)},
+            {"segments",json::array({
+                {{"start",{x,y}},{"end",{x+side,y}},{"sweep_radians",0}},
+                {{"start",{x+side,y}},{"end",{x+side,y+side}},{"sweep_radians",0}},
+                {{"start",{x+side,y+side}},{"end",{x,y+side}},{"sweep_radians",0}},
+                {{"start",{x,y+side}},{"end",{x,y}},{"sweep_radians",0}}})}});
+        result.extensions["vendor"]={{"retain",id}};return result;
+    };
+    document.apply(sketch::ApplyEntityChanges{initial.revision(),{EntityChange::upsert(property),EntityChange::upsert(floor),
+        EntityChange::upsert(area("declared-parent",0,0,3.048,"above_grade_finished","dwelling")),
+        EntityChange::upsert(area("declared-child",.5,.5,1.524,same_saved_category ? "above_grade_finished" : "garage",
+            same_declared_type ? "dwelling" : "garage"))}, {},"declare subtraction fixture"});
+    return document;
+}
+
+void test_declared_area_types_override_equal_saved_manual_categories() {
+    auto document=declared_subtraction_document();const auto source=document.snapshot();
+    const auto& child=source.entities().at("declared-child");const auto& parent=source.entities().at("declared-parent");
+    require(child.properties.at("appraisal_category")==parent.properties.at("appraisal_category") &&
+        sketch::area_subtraction_type(source,child)=="garage" && sketch::area_subtraction_type(source,parent)=="above_grade_finished",
+        "declared garage/dwelling TYPEs must override identical stale saved categories");
+    auto stale_role=child;stale_role.properties["classification"]="role:open_to_below";
+    require(sketch::area_subtraction_type(source,stale_role)=="garage",
+        "present measured-area facts also override stale stored exclusion classification");
+    auto garage_unknown=child;
+    garage_unknown.properties["appraisal_facts"]["finish"]="unknown";
+    garage_unknown.properties["appraisal_facts"]["access"]="unknown";
+    garage_unknown.properties["appraisal_facts"]["ceiling_eligibility"]="unknown";
+    require(sketch::area_subtraction_type(source,garage_unknown)=="garage",
+        "declared garage TYPE must not acquire dwelling-only eligibility qualification requirements");
+    auto garage_use_only=child;garage_use_only.properties["appraisal_facts"]={{"boundary_role","measured_area"},{"area_use","garage"}};
+    require(sketch::area_subtraction_type(source,garage_use_only)=="garage",
+        "explicit garage use determines TYPE without inventing irrelevant dwelling facts");
+    const auto target=sketch::prepare_area_subtraction_target(source,child,parent.id);auto expected=parent;
+    expected.properties["deduction_ids"]=json::array({child.id});
+    require(target==expected && sketch::document_snapshot_digest(document.snapshot())==sketch::document_snapshot_digest(source),
+        "declared compatible subtraction must change only returned parent links and leave source geometry/history untouched");
+    document.apply(sketch::ApplyEntityChanges{source.revision(),{EntityChange::upsert(target)}, {},"subtract declared garage"});
+    const auto linked=document.snapshot();require(linked.entities().at(child.id)==child && linked.revision()==source.revision()+1,
+        "applying a declared adjustment must retain exact source and be one history command");
+    document.undo(document.revision());require(document.snapshot().entities()==source.entities(),"declared subtraction undo restores all original facts/categories/geometry");
+    document.redo(document.revision());require(document.snapshot().entities()==linked.entities(),"declared subtraction redo restores exact source and parent link");
+}
+
+void test_equal_declared_area_types_reject_despite_different_saved_categories() {
+    auto document=declared_subtraction_document(false,true);const auto source=document.snapshot();
+    const auto& child=source.entities().at("declared-child");const auto& parent=source.entities().at("declared-parent");
+    require(child.properties.at("appraisal_category")!=parent.properties.at("appraisal_category") &&
+        sketch::area_subtraction_type(source,child)==sketch::area_subtraction_type(source,parent),
+        "equal dwelling facts must determine equal TYPE despite different stale manual categories");
+    expect_document_unchanged(document,[&]{(void)sketch::prepare_area_subtraction_target(source,child,parent.id);},
+        "same declared TYPE must refuse subtraction even when manual categories differ");
+}
+
+void test_invalid_declarations_never_fall_back_to_stale_manual_area_types() {
+    for(int fault=0;fault<10;++fault) {
+        auto document=declared_subtraction_document(false,true);const auto prior=document.snapshot();
+        auto child=prior.entities().at("declared-child");auto property=prior.entities().at("property-1");
+        switch(fault) {
+        case 0: child.properties["appraisal_facts"].erase("finish");break;
+        case 1: child.properties["appraisal_facts"]="malformed";break;
+        case 2: child.properties["appraisal_facts"]=json::object();break;
+        case 3: child.properties["appraisal_facts"]["boundary_role"]="invalid";break;
+        case 4: child.properties["appraisal_facts"]["area_use"]="invalid";break;
+        case 5: child.properties["appraisal_facts"]["finish"]="invalid";break;
+        case 6: child.properties["appraisal_facts"]=appraisal_area_facts("garage");
+            child.properties["appraisal_facts"]["finish"]="invalid";break;
+        case 7: property.properties.erase("appraisal_policy");break;
+        case 8: child.properties["appraisal_facts"]["unknown_fact"]="invalid";break;
+        case 9: child.properties["appraisal_facts"]={{"boundary_role","open_to_below"},{"finish","invalid"}};break;
+        }
+        document.apply(sketch::ApplyEntityChanges{prior.revision(),{EntityChange::upsert(child),EntityChange::upsert(property)}, {},"invalid declared TYPE fixture"});
+        const auto source=document.snapshot();
+        expect_document_unchanged(document,[&]{(void)sketch::area_subtraction_type(source,source.entities().at(child.id));},
+            "incomplete/malformed declared TYPE must refuse instead of falling back to saved garage category");
+        expect_document_unchanged(document,[&]{(void)sketch::prepare_area_subtraction_target(source,source.entities().at(child.id),"declared-parent");},
+            "invalid declared TYPE must not authorize subtraction through stale manual metadata");
+    }
+}
+
+void test_explicit_pending_and_undeclared_legacy_area_types_remain_usable() {
+    auto document=declared_subtraction_document(false,true);const auto prior=document.snapshot();
+    auto child=prior.entities().at("declared-child"),parent=prior.entities().at("declared-parent"),property=prior.entities().at("property-1");
+    child.properties.erase("appraisal_facts");parent.properties.erase("appraisal_facts");property.properties.erase("appraisal_policy");
+    document.apply(sketch::ApplyEntityChanges{prior.revision(),{EntityChange::upsert(child),EntityChange::upsert(parent),EntityChange::upsert(property)}, {},"undeclared legacy TYPE fixture"});
+    const auto source=document.snapshot();
+    require(sketch::area_subtraction_type(source,child)=="garage" && sketch::area_subtraction_type(source,parent)=="above_grade_finished" &&
+        sketch::prepare_area_subtraction_target(source,child,parent.id).properties.at("deduction_ids")==json::array({child.id}),
+        "truly undeclared legacy areas retain explicit saved category TYPE behavior");
+    auto pending=child;pending.id="pending-subtractor";pending.properties.erase("appraisal_category");pending.properties["classification"]="role:open_to_below";
+    require(sketch::area_subtraction_type(source,pending)=="role:open_to_below","explicit pending authoring exclusion TYPE must remain usable without fabricated facts");
+}
+
 }  // namespace
 
 int main() {
     sketch::testing::noninteractive_errors();
     try {
+        test_declared_area_types_override_equal_saved_manual_categories();
+        test_equal_declared_area_types_reject_despite_different_saved_categories();
+        test_invalid_declarations_never_fall_back_to_stale_manual_area_types();
+        test_explicit_pending_and_undeclared_legacy_area_types_remain_usable();
         test_explicit_area_subtraction_atomic_commit();
         test_both_modes_encode_geometry_dimensions_and_factor_defaults();
         test_preview_is_deterministic_and_owns_a_copy_of_intent();

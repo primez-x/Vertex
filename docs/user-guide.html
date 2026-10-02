@@ -58,6 +58,11 @@
   before starting another drawing. Use <kbd>Ctrl</kbd>+click to add selections and
   <kbd>Ctrl</kbd>+drag for a selection window. Double-click an object to edit its
   quick properties; right-click for its relevant actions.</p>
+  <p>Selection controls leave space around measurement text. Rotation and resize
+  handles can move to clear positions, with connectors back to the object; drag
+  their visible markers as usual. The size badge also moves to a clear position.
+  These display adjustments do not move saved annotations or change dimensions.
+  Printed and exported plans omit selection controls.</p>
   <h2>Appraisal measurements</h2>
   <p>Choose <strong>Measurement</strong> for appraisal boundaries. Draw a boundary
   directly, or choose <strong>Define area before drawing</strong> when the classification and
@@ -105,6 +110,12 @@
   Save a revision before replacing the old area. Overlapping building measurements
   cannot produce qualified totals.</p>
 
+  <p>Select a contained area, right-click and choose <strong>Subtract from area</strong>
+  to choose its compatible parent. In declared Appraisal, current area facts
+  determine each TYPE; an older manually assigned category does not override
+  them. Equal TYPEs and incomplete declarations cannot create a deduction.
+  Applying a deduction retains both boundaries and updates the parent's net.
+  Reopen the action to remove it; Undo and Redo retain the complete relationship.</p>
   <p>Open <strong>Tools &gt; Appraisal area report…</strong> to review the
   property's summary, individual areas and deductions, and qualification issues.
   Select an area to see gross area, requested and applied deductions, physical net,

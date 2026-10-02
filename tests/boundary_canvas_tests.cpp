@@ -1113,6 +1113,293 @@ void test_two_line_area_label_rendering_and_hit_testing() {
     require(selected == label.id, "visible second-line area text must be selectable across its painted extent");
 }
 
+void test_selection_annotations_remain_legible_and_rotation_handle_reachable() {
+    PlanCanvas canvas;
+    canvas.resize(640, 480);
+    canvas.setGridEnabled(false);
+    canvas.setOverviewMapEnabled(false);
+    canvas.setTool(CanvasTool::select);
+    CanvasEntity boundary{QStringLiteral("appraisal-boundary"),
+        QStringLiteral("measurement_boundary"),
+        Boundary{Segment{{-0.5, -0.35}, {0.5, -0.35}, 0},
+                 Segment{{0.5, -0.35}, {0.5, 0.35}, 0},
+                 Segment{{0.5, 0.35}, {-0.5, 0.35}, 0},
+                 Segment{{-0.5, 0.35}, {-0.5, -0.35}, 0}}, 0.08, false};
+    boundary.resize_frame = sketch::desktop::CanvasSelectionFrame{{0, 0}, 0, 1.0, 0.7};
+    canvas.setEntities({boundary});
+
+    CanvasLabel area{QStringLiteral("area-measurement"), {0, 0.65},
+                     QStringLiteral("Net area 12.00 m2")};
+    area.paper_height_mm = 4;
+    area.color = QColor(220, 20, 20);
+    area.show_background = false;
+    area.rotation_radians = 0.22;
+    auto overlapping_area = area;
+    overlapping_area.id = QStringLiteral("area-measurement-overlap");
+    CanvasLabel perimeter{QStringLiteral("perimeter-measurement"), {0, -0.7},
+                          QStringLiteral("Perimeter 8.00 m")};
+    perimeter.paper_height_mm = 4;
+    perimeter.color = QColor(220, 20, 20);
+    perimeter.show_background = false;
+    canvas.setLabels({area, overlapping_area, perimeter});
+    canvas.setSelectedId({});
+
+    const auto selected_view = [&] {
+        QImage image(canvas.size(), QImage::Format_ARGB32_Premultiplied);
+        image.fill(background.rgba());
+        QPainter painter(&image);
+        canvas.renderScene(painter, image.rect(), false, background);
+        return image;
+    };
+    const auto render_one_label = [&](const CanvasLabel& label) {
+        canvas.setLabels({label});
+        return selected_view();
+    };
+    const auto area_before = render_one_label(area);
+    const auto perimeter_before = render_one_label(perimeter);
+    const auto area_glyphs = red_text_bounds(area_before);
+    const auto perimeter_glyphs = red_text_bounds(perimeter_before);
+    require(!area_glyphs.isEmpty() && !perimeter_glyphs.isEmpty(),
+            "appraisal area and perimeter labels must both render before selection");
+    require(!area_glyphs.intersects(perimeter_glyphs),
+            "area and perimeter fixture glyphs must occupy distinct screen footprints");
+    canvas.setLabels({area, overlapping_area, perimeter});
+    const auto annotations_before = selected_view();
+    const auto strong_red_count = [&](const QImage& image, QRect region) {
+        int count = 0;
+        region = region.intersected(image.rect());
+        for (int y = region.top(); y <= region.bottom(); ++y)
+            for (int x = region.left(); x <= region.right(); ++x) {
+                const auto color = image.pixelColor(x, y);
+                if (color.red() > 150 && color.green() < 100 && color.blue() < 100) ++count;
+            }
+        return count;
+    };
+    require(strong_red_count(annotations_before, area_glyphs.adjusted(-1, -1, 1, 1)) > 10 &&
+                strong_red_count(annotations_before, perimeter_glyphs.adjusted(-1, -1, 1, 1)) > 10,
+            "area and perimeter labels must both contribute distinct visible glyph pixels");
+    const auto require_glyphs_preserved = [&](const QImage& before, const QImage& after,
+                                              std::string_view message) {
+        int red_pixels = 0;
+        for (int y = 0; y < before.height(); ++y) {
+            for (int x = 0; x < before.width(); ++x) {
+                const auto color = before.pixelColor(x, y);
+                if (color.red() > 150 && color.green() < 100 && color.blue() < 100) {
+                    ++red_pixels;
+                    if (after.pixel(x, y) != before.pixel(x, y)) {
+                        const auto label_id = area_glyphs.contains(x, y) ? area.id
+                            : perimeter_glyphs.contains(x, y) ? perimeter.id
+                            : QStringLiteral("unknown-label");
+                        const auto after_color = after.pixelColor(x, y);
+                        const auto diagnostic = QString::fromUtf8(message.data(),
+                            static_cast<qsizetype>(message.size())) +
+                            QStringLiteral("; label=%1 pixel=(%2,%3) before=#%4 after=#%5")
+                                .arg(label_id).arg(x).arg(y)
+                                .arg(color.rgba(), 8, 16, QLatin1Char('0'))
+                                .arg(after_color.rgba(), 8, 16, QLatin1Char('0'));
+                        throw std::runtime_error(diagnostic.toStdString());
+                    }
+                }
+            }
+        }
+        require(red_pixels > 30, "area and perimeter measurement glyphs must remain visible");
+    };
+    const auto output_before = render(canvas, true);
+    canvas.setSelectedId(boundary.id);
+    canvas.setSelectionTransformEnabled(true, true);
+    const auto frame = canvas.selectionBounds();
+    require(frame.has_value(), "selected appraisal boundary must expose its screen frame");
+    const QRectF old_rotation_hit(frame->center().x() - 12.0, frame->top() - 36.0, 24.0, 24.0);
+    const QRectF old_dimensions_panel(frame->center().x() - 120.0, frame->bottom() + 10.0,
+                                      240.0, 36.0);
+    require(old_rotation_hit.intersects(area_glyphs) &&
+                old_dimensions_panel.intersects(perimeter_glyphs),
+            "fixture must place area text under the original rotation hit target and perimeter text under its dimensions callout");
+    const auto annotations_selected = selected_view();
+    require_glyphs_preserved(annotations_before, annotations_selected,
+        "selection frame, rotation control, and dimensions callout must leave appraisal glyph pixels unchanged");
+    require(images_equal(output_before, render(canvas, true)),
+            "interactive selection controls must not alter fitted output rendering");
+
+    const auto mouse = [&](QEvent::Type type, QPointF point, Qt::MouseButton button,
+                           Qt::MouseButtons buttons) {
+        QMouseEvent event(type, point, canvas.mapToGlobal(point.toPoint()), button,
+                          buttons, Qt::NoModifier);
+        QApplication::sendEvent(&canvas, &event);
+    };
+    int transforms = 0;
+    double scale = 1.0;
+    double rotation = 0.0;
+    canvas.setEntityTransformRequested([&](QString id, double next_scale, double next_rotation) {
+        require(id == boundary.id, "displaced rotation handle must preserve the selected boundary identity");
+        ++transforms;
+        scale = next_scale;
+        rotation = next_rotation;
+        return true;
+    });
+    QPointF visible_pin;
+    int widest_white_run = 0;
+    const auto center_x = qRound(frame->center().x());
+    const auto first_pin_row = std::max(0, qRound(frame->top()) - 240);
+    const auto last_pin_row = std::max(0, qRound(frame->top()) - 40);
+    for (int y = first_pin_row; y <= last_pin_row; ++y) {
+        int run = 0;
+        int best_run = 0;
+        for (int x = center_x - 10; x <= center_x + 10; ++x) {
+            const auto color = annotations_selected.pixelColor(x, y);
+            if (color.red() > 245 && color.green() > 245 && color.blue() > 245) {
+                ++run;
+                best_run = std::max(best_run, run);
+            } else {
+                run = 0;
+            }
+        }
+        if (best_run > widest_white_run) {
+            widest_white_run = best_run;
+            visible_pin = QPointF(center_x, y);
+        }
+    }
+    require(widest_white_run >= 5,
+            "selected view must paint a detectable white-filled rotation control marker");
+    require(std::abs(visible_pin.y() - (frame->top() - 24.0)) > 12.0,
+            "rotation marker must move its full hit region clear of the appraisal label");
+    const QRectF visible_hit(visible_pin.x() - 12.0, visible_pin.y() - 12.0, 24.0, 24.0);
+    require(QRectF(canvas.rect()).contains(visible_hit),
+            "displaced rotation hit region must remain fully inside the visible canvas");
+    const QPointF target = frame->center() + QPointF(80, 0);
+    mouse(QEvent::MouseButtonPress, visible_pin, Qt::LeftButton, Qt::LeftButton);
+    mouse(QEvent::MouseMove, target, Qt::NoButton, Qt::LeftButton);
+    mouse(QEvent::MouseButtonRelease, target, Qt::LeftButton, Qt::NoButton);
+    require(transforms == 1 && std::abs(rotation) > 0.5 && std::abs(scale - 1.0) < 1e-9,
+            "the visible rotation control displaced clear of measurement text must remain directly draggable");
+
+    QPointF visible_corner;
+    int largest_white_block = 0;
+    for (int y = std::max(2, qRound(frame->top()) - 160);
+         y <= std::min(annotations_selected.height() - 3, qRound(frame->top()) + 20); ++y) {
+        for (int x = std::max(2, qRound(frame->left()) - 160);
+             x <= std::min(annotations_selected.width() - 3, qRound(frame->left()) + 20); ++x) {
+            int white_pixels = 0;
+            for (int dy = -2; dy <= 2; ++dy)
+                for (int dx = -2; dx <= 2; ++dx) {
+                    const auto color = annotations_selected.pixelColor(x + dx, y + dy);
+                    if (color.red() > 245 && color.green() > 245 && color.blue() > 245)
+                        ++white_pixels;
+                }
+            if (white_pixels > largest_white_block) {
+                largest_white_block = white_pixels;
+                visible_corner = QPointF(x, y);
+            }
+        }
+    }
+    require(largest_white_block >= 20,
+            "collision with an appraisal label must leave a visible corner resize affordance nearby");
+    require(std::hypot(visible_corner.x() - (frame->left() - 6.0),
+                       visible_corner.y() - (frame->top() - 6.0)) > 12.0,
+            "corner resize affordance must move clear of appraisal glyphs when its original position is covered");
+    const QRectF corner_hit(visible_corner.x() - 12.0, visible_corner.y() - 12.0, 24.0, 24.0);
+    require(QRectF(canvas.rect()).contains(corner_hit),
+            "displaced corner resize hit region must remain fully inside the visible canvas");
+    const QPointF resize_target = visible_corner - QPointF(40, 32);
+    mouse(QEvent::MouseButtonPress, visible_corner, Qt::LeftButton, Qt::LeftButton);
+    mouse(QEvent::MouseMove, resize_target, Qt::NoButton, Qt::LeftButton);
+    mouse(QEvent::MouseButtonRelease, resize_target, Qt::LeftButton, Qt::NoButton);
+    require(transforms == 2 && scale > 1.05,
+            "displaced corner resize affordance must retain its original transform anchor and remain draggable");
+
+    const auto authored_positions = canvas.labels();
+    canvas.setSelectedId({});
+    canvas.zoomBy(2.0, QRectF(canvas.rect()).center());
+    const auto zoomed_before = selected_view();
+    canvas.setSelectedId(boundary.id);
+    const auto zoomed_selected = selected_view();
+    require_glyphs_preserved(zoomed_before, zoomed_selected,
+        "zoomed selection controls and readout must keep frame-adjacent appraisal glyphs visible");
+    require(canvas.labels().size() == authored_positions.size() &&
+                std::equal(canvas.labels().begin(), canvas.labels().end(), authored_positions.begin(),
+                    [](const CanvasLabel& actual, const CanvasLabel& authored) {
+                        return actual.id == authored.id && actual.position.x == authored.position.x &&
+                               actual.position.y == authored.position.y &&
+                               actual.rotation_radians == authored.rotation_radians;
+                    }),
+            "selection collision handling at another zoom must not rewrite annotation placements");
+    require(images_equal(output_before, render(canvas, true)),
+            "zoomed selection controls must leave fitted output and its selected labels unchanged");
+}
+
+void test_selection_corner_handle_enters_viewport_from_offscreen_anchor() {
+    PlanCanvas canvas;
+    canvas.resize(640, 480);
+    canvas.setGridEnabled(false);
+    canvas.setOverviewMapEnabled(false);
+    canvas.setTool(CanvasTool::select);
+    CanvasEntity boundary{QStringLiteral("edge-boundary"),
+        QStringLiteral("measurement_boundary"),
+        Boundary{Segment{{3.0, -0.35}, {4.0, -0.35}, 0},
+                 Segment{{4.0, -0.35}, {4.0, 0.35}, 0},
+                 Segment{{4.0, 0.35}, {3.0, 0.35}, 0},
+                 Segment{{3.0, 0.35}, {3.0, -0.35}, 0}}, 0.08, false};
+    boundary.resize_frame = sketch::desktop::CanvasSelectionFrame{{3.5, 0}, 0, 1.0, 0.7};
+    canvas.setEntities({boundary});
+    canvas.setSelectedId(boundary.id);
+    canvas.setSelectionTransformEnabled(true, false);
+    const auto frame = canvas.selectionBounds();
+    require(frame.has_value() && frame->right() >= canvas.width() - 6,
+            "edge fixture must retain a selected plan frame at the right viewport boundary");
+
+    QImage image(canvas.size(), QImage::Format_ARGB32_Premultiplied);
+    image.fill(background.rgba());
+    {
+        QPainter painter(&image);
+        canvas.renderScene(painter, image.rect(), false, background);
+    }
+    QPointF visible_corner;
+    int largest_white_block = 0;
+    for (int y = std::max(2, qRound(frame->top()) - 50);
+         y <= std::min(image.height() - 3, qRound(frame->top()) + 35); ++y) {
+        for (int x = canvas.width() - 50; x <= canvas.width() - 3; ++x) {
+            int white_pixels = 0;
+            for (int dy = -2; dy <= 2; ++dy)
+                for (int dx = -2; dx <= 2; ++dx) {
+                    const auto color = image.pixelColor(x + dx, y + dy);
+                    if (color.red() > 245 && color.green() > 245 && color.blue() > 245)
+                        ++white_pixels;
+                }
+            if (white_pixels > largest_white_block) {
+                largest_white_block = white_pixels;
+                visible_corner = QPointF(x, y);
+            }
+        }
+    }
+    require(largest_white_block >= 20,
+            "offscreen corner anchor must reposition a visible resize marker inside the viewport");
+    const QRectF hit(visible_corner.x() - 12, visible_corner.y() - 12, 24, 24);
+    require(QRectF(canvas.rect()).contains(hit),
+            "edge-repositioned corner must retain a full in-viewport hit rectangle");
+
+    int transforms = 0;
+    double scale = 1.0;
+    canvas.setEntityTransformRequested([&](QString id, double next_scale, double) {
+        require(id == boundary.id, "edge-repositioned resize marker must retain its owner");
+        ++transforms;
+        scale = next_scale;
+        return true;
+    });
+    const auto center = frame->center();
+    const auto target = center + (visible_corner - center) * 1.5;
+    const auto mouse = [&](QEvent::Type type, QPointF point, Qt::MouseButton button,
+                           Qt::MouseButtons buttons) {
+        QMouseEvent event(type, point, canvas.mapToGlobal(point.toPoint()), button,
+                          buttons, Qt::NoModifier);
+        QApplication::sendEvent(&canvas, &event);
+    };
+    mouse(QEvent::MouseButtonPress, visible_corner, Qt::LeftButton, Qt::LeftButton);
+    mouse(QEvent::MouseMove, target, Qt::NoButton, Qt::LeftButton);
+    mouse(QEvent::MouseButtonRelease, target, Qt::LeftButton, Qt::NoButton);
+    require(transforms == 1 && scale > 1.05,
+            "inward-search corner marker must hit-test and resize from its displayed point");
+}
+
 void test_canvas_label_pdf_preserves_authored_text() {
     PlanCanvas canvas;
     canvas.setGridEnabled(false);
@@ -3177,6 +3464,11 @@ int main(int argc, char** argv) {
             test_automatic_wall_label_collision_layout();
             return 0;
         }
+        if (application.arguments().contains(QStringLiteral("--selection-annotation-only"))) {
+            test_selection_annotations_remain_legible_and_rotation_handle_reachable();
+            test_selection_corner_handle_enters_viewport_from_offscreen_anchor();
+            return 0;
+        }
         if (application.arguments().contains(QStringLiteral("--adaptive-grid-only"))) {
             test_unit_aware_adaptive_grid();
             test_adaptive_grid_preserves_anchors_and_exact_geometry();
@@ -3186,6 +3478,8 @@ int main(int argc, char** argv) {
         test_unit_aware_adaptive_grid();
         test_adaptive_grid_preserves_anchors_and_exact_geometry();
         test_automatic_wall_label_collision_layout();
+        test_selection_annotations_remain_legible_and_rotation_handle_reachable();
+        test_selection_corner_handle_enters_viewport_from_offscreen_anchor();
         test_dimension_ticks_are_paper_space();
         test_dimension_ticks_respect_angular_geometry();
         test_dark_canvas_semantic_strokes_and_overrides();

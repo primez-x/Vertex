@@ -372,6 +372,234 @@ QString declarations(const char* kind = "residential_declared", const char* use 
              QString::fromLatin1(grade), QString::fromLatin1(use), QString::fromLatin1(role));
 }
 
+bool set_appraisal_fact(QDialog& dialog, const char* key, const char* value) {
+    auto* box = dialog.findChild<QComboBox*>(QString::fromLatin1(key));
+    const auto index = box ? box->findData(QString::fromLatin1(value)) : -1;
+    if (!box || index < 0) return false;
+    box->setCurrentIndex(index);
+    return true;
+}
+
+void save_appraisal_facts_through_controls(sketch::desktop::MainWindow& window,
+                                           const QString& boundary_id,
+                                           const char* area_use) {
+    require(window.selectEntity(boundary_id), "select boundary before editing declared appraisal facts");
+    bool saved = false;
+    bool timed_out = false;
+    QString callback_error;
+    QTimer responder;
+    responder.setSingleShot(true);
+    QObject::connect(&responder, &QTimer::timeout, &window, [&] {
+        auto* dialog = window.findChild<QDialog*>(QStringLiteral("appraisalFactsDialog"));
+        if (!dialog) return;
+        timed_out = true;
+        dialog->reject();
+    });
+    QTimer::singleShot(0, &window, [&] {
+        auto* dialog = window.findChild<QDialog*>(QStringLiteral("appraisalFactsDialog"));
+        if (!dialog) {
+            callback_error = QStringLiteral("declared-facts editing did not open its native dialog");
+            return;
+        }
+        const bool controls_ready =
+            set_appraisal_fact(*dialog, "policy_kind", "residential_declared") &&
+            set_appraisal_fact(*dialog, "property_kind", "detached_single_family") &&
+            set_appraisal_fact(*dialog, "measurement_basis", "exterior") &&
+            set_appraisal_fact(*dialog, "grade", "above") &&
+            set_appraisal_fact(*dialog, "finish", "finished") &&
+            set_appraisal_fact(*dialog, "access", "direct_interior") &&
+            set_appraisal_fact(*dialog, "ceiling_eligibility", "standard") &&
+            set_appraisal_fact(*dialog, "area_use", area_use) &&
+            set_appraisal_fact(*dialog, "boundary_role", "measured_area");
+        if (!controls_ready) {
+            callback_error = QStringLiteral("declared-facts editor is missing a required control or token");
+            dialog->reject();
+            return;
+        }
+        auto* buttons = dialog->findChild<QDialogButtonBox*>();
+        if (!buttons || !buttons->button(QDialogButtonBox::Save)) {
+            callback_error = QStringLiteral("declared-facts dialog is missing its Save control");
+            dialog->reject();
+            return;
+        }
+        buttons->button(QDialogButtonBox::Save)->click();
+        saved = dialog->result() == QDialog::Accepted;
+        if (!saved) {
+            callback_error = QStringLiteral("native declared-facts Save did not accept the dialog");
+            dialog->reject();
+        }
+    });
+    responder.start(5000);
+    window.showAppraisalFacts();
+    responder.stop();
+    require(saved && !timed_out && callback_error.isEmpty(),
+            "native declared-facts controls must save the selected boundary facts: " +
+                callback_error.toStdString());
+}
+
+void auto_subtract_uses_current_declared_facts() {
+    using sketch::desktop::MainWindow;
+    MainWindow window;
+    window.setMetricUnits(false);
+    auto* workflow = window.findChild<QComboBox*>(QStringLiteral("calculationWorkflow"));
+    require(workflow, "fact-driven subtraction fixture needs the appraisal workflow selector");
+    workflow->setCurrentIndex(workflow->findData(QStringLiteral("appraisal")));
+
+    // Keep the legacy/manual categories identical while the declared facts say
+    // that the inner area is a garage. The chooser and calculation must follow
+    // the facts edited through the native controls, not these stale categories.
+    const auto parent = window.createBoundary(square(0, 0, 3.048));
+    require(!parent.isEmpty() && window.editSelectedClassification(QStringLiteral("above_grade_finished")),
+            "create a manually categorized ten-foot appraisal parent");
+    const auto garage = window.createBoundary(square(0.762, 0.762, 1.524));
+    require(!garage.isEmpty() && window.editSelectedClassification(QStringLiteral("above_grade_finished")),
+            "create a manually categorized five-foot appraisal garage");
+    save_appraisal_facts_through_controls(window, parent, "dwelling");
+    save_appraisal_facts_through_controls(window, garage, "garage");
+
+    const auto before = window.document().snapshot();
+    const auto& parent_before = before.entities().at(parent.toStdString());
+    const auto& garage_before = before.entities().at(garage.toStdString());
+    require(parent_before.properties.at("appraisal_category") == "above_grade_finished" &&
+            garage_before.properties.at("appraisal_category") == "above_grade_finished" &&
+            parent_before.properties.at("appraisal_facts").at("area_use") == "dwelling" &&
+            garage_before.properties.at("appraisal_facts").at("area_use") == "garage",
+            "fixture must preserve identical stale categories beside distinct declared uses");
+
+    auto* action = window.findChild<QAction*>(QStringLiteral("autoSubtract"));
+    require(action && action->isEnabled(), "declared garage must expose Auto-Subtract");
+    bool accepted = false;
+    bool chooser_opened = false;
+    bool parent_present = false;
+    QString chooser_error;
+    QTimer::singleShot(0, &window, [&] {
+        auto* dialog = window.findChild<QDialog*>(QStringLiteral("autoSubtractDialog"));
+        if (!dialog) {
+            chooser_error = QStringLiteral("fact-driven subtraction did not open the native parent chooser");
+            return;
+        }
+        chooser_opened = true;
+        auto* target = dialog->findChild<QComboBox*>(QStringLiteral("autoSubtractTarget"));
+        auto* buttons = dialog->findChild<QDialogButtonBox*>(QStringLiteral("autoSubtractButtons"));
+        if (!target || !buttons || !buttons->button(QDialogButtonBox::Apply)) {
+            chooser_error = QStringLiteral("parent chooser is missing its target or Apply controls");
+            dialog->reject();
+            return;
+        }
+        const auto parent_index = target->findData(parent);
+        parent_present = parent_index >= 0;
+        if (!parent_present) {
+            chooser_error = QStringLiteral("declared garage facts did not offer the dwelling parent");
+            dialog->reject();
+            return;
+        }
+        target->setCurrentIndex(parent_index);
+        buttons->button(QDialogButtonBox::Apply)->click();
+        accepted = dialog->result() == QDialog::Accepted;
+        if (!accepted) dialog->reject();
+    });
+    action->trigger();
+    require(chooser_opened && parent_present,
+            "declared garage facts must offer the dwelling parent even when saved manual categories match: " +
+                chooser_error.toStdString());
+    require(accepted, "native Auto-Subtract chooser must apply the selected parent");
+    const auto after = window.document().snapshot();
+    auto expected_parent = parent_before;
+    expected_parent.properties["deduction_ids"] = std::vector<std::string>{garage.toStdString()};
+    require(after.revision() == before.revision() + 1 &&
+            after.entities().at(parent.toStdString()) == expected_parent &&
+            after.entities().at(garage.toStdString()) == garage_before,
+            "subtracting must add only the parent link and preserve both source geometries and facts");
+    auto* qualification = window.findChild<QLabel*>(QStringLiteral("appraisalQualification"));
+    auto* gla = window.findChild<QLabel*>(QStringLiteral("appraisalGlaTotal"));
+    auto* garage_total = window.findChild<QLabel*>(QStringLiteral("appraisalGarageTotal"));
+    require(qualification && qualification->text().startsWith(QStringLiteral("Qualified")) &&
+            gla && gla->text().contains(QStringLiteral("75.00")) &&
+            garage_total && garage_total->text().contains(QStringLiteral("25.00")),
+            "current declared uses must yield 75 square feet of GLA and 25 square feet of garage");
+    require(window.undoCommand() && window.document().snapshot().entities() == before.entities() &&
+            window.redoCommand() && window.document().snapshot().entities() == after.entities(),
+            "fact-driven Auto-Subtract must undo and redo its complete linked state");
+
+    QTemporaryDir directory;
+    const auto path = directory.filePath(QStringLiteral("fact-driven-auto-subtract.bldproj"));
+    require(directory.isValid() && window.saveProjectAs(path),
+            "fact-driven Auto-Subtract project must save");
+    MainWindow reopened;
+    require(reopened.openProject(path) && reopened.selectEntity(parent),
+            "fact-driven Auto-Subtract project must reopen");
+    const auto persisted = reopened.document().snapshot();
+    require(persisted.entities().at(parent.toStdString()).properties.at("deduction_ids") ==
+                std::vector<std::string>{garage.toStdString()} &&
+            persisted.entities().at(parent.toStdString()).properties.at("appraisal_facts").at("area_use") == "dwelling" &&
+            persisted.entities().at(garage.toStdString()).properties.at("appraisal_facts").at("area_use") == "garage" &&
+            reopened.findChild<QLabel*>(QStringLiteral("appraisalGlaTotal"))->text().contains(QStringLiteral("75.00")) &&
+            reopened.findChild<QLabel*>(QStringLiteral("appraisalGarageTotal"))->text().contains(QStringLiteral("25.00")),
+            "reopen must retain the relationship and both declared facts in the automatic totals");
+}
+
+void auto_subtract_rejects_equal_declared_facts_despite_stale_categories() {
+    using sketch::desktop::MainWindow;
+    MainWindow window;
+    window.setMetricUnits(false);
+    auto* workflow = window.findChild<QComboBox*>(QStringLiteral("calculationWorkflow"));
+    require(workflow, "same-facts subtraction fixture needs the appraisal workflow selector");
+    workflow->setCurrentIndex(workflow->findData(QStringLiteral("appraisal")));
+
+    const auto parent = window.createBoundary(square(0, 0, 3.048));
+    require(!parent.isEmpty() && window.editSelectedClassification(QStringLiteral("above_grade_finished")),
+            "create a manually dwelling-classified parent");
+    const auto child = window.createBoundary(square(0.762, 0.762, 1.524));
+    require(!child.isEmpty() && window.editSelectedClassification(QStringLiteral("garage")),
+            "create an inner area with a deliberately different stale manual category");
+    save_appraisal_facts_through_controls(window, parent, "dwelling");
+    save_appraisal_facts_through_controls(window, child, "dwelling");
+
+    const auto before = window.document().snapshot();
+    const auto& parent_entity = before.entities().at(parent.toStdString());
+    const auto& child_entity = before.entities().at(child.toStdString());
+    require(parent_entity.properties.at("appraisal_category") == "above_grade_finished" &&
+            child_entity.properties.at("appraisal_category") == "garage" &&
+            parent_entity.properties.at("appraisal_facts").at("area_use") == "dwelling" &&
+            child_entity.properties.at("appraisal_facts").at("area_use") == "dwelling",
+            "fixture must keep different stale manual categories beside equal declared uses");
+    require(window.selectEntity(child), "select equal-facts source area");
+    auto* action = window.findChild<QAction*>(QStringLiteral("autoSubtract"));
+    require(action, "equal-facts fixture must expose the Auto-Subtract action");
+    if (action->isEnabled()) {
+        bool chooser_opened = false;
+        bool parent_excluded = false;
+        QString chooser_error;
+        QTimer::singleShot(0, &window, [&] {
+            auto* dialog = window.findChild<QDialog*>(QStringLiteral("autoSubtractDialog"));
+            if (!dialog) {
+                chooser_error = QStringLiteral("enabled Auto-Subtract did not open its parent chooser");
+                return;
+            }
+            chooser_opened = true;
+            auto* target = dialog->findChild<QComboBox*>(QStringLiteral("autoSubtractTarget"));
+            auto* buttons = dialog->findChild<QDialogButtonBox*>(QStringLiteral("autoSubtractButtons"));
+            if (!target || !buttons) {
+                chooser_error = QStringLiteral("parent chooser is missing its target or button controls");
+                dialog->reject();
+                return;
+            }
+            parent_excluded = target->findData(parent) < 0;
+            if (!parent_excluded)
+                chooser_error = QStringLiteral("equal declared uses still offered the manually different parent");
+            dialog->reject();
+        });
+        action->trigger();
+        require(chooser_opened && parent_excluded,
+                "equal declared uses must keep a manually different parent out of the chooser: " +
+                    chooser_error.toStdString());
+    }
+    require(!window.applySelectedAutoSubtract(parent) &&
+            window.document().revision() == before.revision() &&
+            window.document().snapshot().entities() == before.entities(),
+            "equal declared uses must reject the stale manual-category relationship atomically");
+}
+
 void auto_subtract_define_first_keyboard_and_recovery() {
     using sketch::desktop::MainWindow;
     using sketch::desktop::PlanCanvas;
@@ -2117,11 +2345,15 @@ int main(int argc, char** argv) {
         if (app.arguments().contains(QStringLiteral("--auto-subtract-only"))) {
             auto_subtract_selected_area_workflow();
             auto_subtract_context_repair_workflow();
+            auto_subtract_uses_current_declared_facts();
+            auto_subtract_rejects_equal_declared_facts_despite_stale_categories();
             auto_subtract_define_first_keyboard_and_recovery();
             return 0;
         }
         auto_subtract_selected_area_workflow();
         auto_subtract_context_repair_workflow();
+        auto_subtract_uses_current_declared_facts();
+        auto_subtract_rejects_equal_declared_facts_despite_stale_categories();
         auto_subtract_define_first_keyboard_and_recovery();
         appraisal_workflow_is_automatic_and_persistent();
         appraisal_redefinition_updates_the_active_category();

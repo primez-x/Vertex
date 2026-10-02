@@ -498,10 +498,16 @@ private:
     [[nodiscard]] const std::vector<CanvasLabel>& positionedLabels(
         const QFont& base_font, const QPaintDevice* device, double scale,
         double dpi, bool output) const;
+    [[nodiscard]] std::vector<QRectF> selectionAnnotationFootprints(
+        const QRectF& viewport, const QFont& base_font) const;
     [[nodiscard]] QTransform selectionControlTransform(const QRectF& viewport) const;
     [[nodiscard]] QRectF selectionControlRect(const QRectF& viewport) const;
-    [[nodiscard]] QPointF selectionRotationPoint(const QRectF& viewport) const;
-    void drawSelectionDimensions(QPainter& painter, const QRectF& viewport) const;
+    [[nodiscard]] QPointF selectionHandlePoint(QPointF anchor, QPointF preferred_direction,
+        const QRectF& viewport, const std::vector<QRectF>& annotation_footprints) const;
+    [[nodiscard]] QPointF selectionRotationPoint(
+        const QRectF& viewport, const std::vector<QRectF>& annotation_footprints) const;
+    void drawSelectionDimensions(QPainter& painter, const QRectF& viewport,
+        const std::vector<QRectF>& annotation_footprints) const;
     [[nodiscard]] SelectionHandle selectionHandleAt(QPointF point,
                                                      const QRectF& viewport) const;
     struct VertexHandleHit {
@@ -531,7 +537,8 @@ private:
     bool applyOpeningWidthPreview(std::uint64_t serial,
         std::optional<std::vector<CanvasEntity>> result);
     void drawOpeningWidthHandles(QPainter& painter, const QRectF& viewport) const;
-    void drawSelectionFrame(QPainter& painter, const QRectF& viewport) const;
+    void drawSelectionFrame(QPainter& painter, const QRectF& viewport,
+        const std::vector<QRectF>& annotation_footprints) const;
     void drawSelectionCaption(QPainter& painter, const QRectF& viewport,
                               QColor background) const;
     [[nodiscard]] bool navigateOverviewMap(QPointF position);
@@ -566,7 +573,8 @@ private:
     void drawSegment(QPainter& painter, const Segment& segment) const;
     void drawLabels(QPainter& painter, const QRectF& viewport, double scale,
                     Vec2 view_center, bool output, QColor background,
-                    std::optional<double> paper_pixels_per_mm) const;
+                    std::optional<double> paper_pixels_per_mm,
+                    std::vector<QRectF>* annotation_footprints = nullptr) const;
     void drawReference(QPainter& painter, const CanvasReference& reference) const;
     void renderSceneWithTransform(QPainter& painter, const QRectF& viewport,
                                   bool fit_to_content, QColor background,
