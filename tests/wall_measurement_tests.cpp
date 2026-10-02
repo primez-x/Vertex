@@ -3,6 +3,8 @@
 #include "sketch/boundary_authoring_session.hpp"
 #include "sketch/boundary_construction.hpp"
 #include "sketch/boundary_integrity.hpp"
+#include "sketch/boundary_dimension.hpp"
+#include "sketch/constraint_wall_edit.hpp"
 #include "sketch/project_store.hpp"
 #include "sketch/project_exchange.hpp"
 #include "sketch/wall_measurement.hpp"
@@ -1311,6 +1313,217 @@ void reviewed_source_replacement_preserves_owner_and_proofs() {
     }
 }
 
+void automatic_source_completion_retains_identity_and_one_history_event() {
+    auto specs = rectangle_walls();
+    auto initial = Document::create(base_entities(specs, true));
+    const auto measured = derive_exterior_wall_measurement(initial.snapshot(), wall_ids(specs));
+    require(measured.ordered_wall_ids.size() == measured.boundary.size(),
+        "derived edges expose parallel physical wall identities");
+    auto geometry = measured.boundary;
+    std::rotate(geometry.begin(), geometry.begin() + 2, geometry.end());
+    std::reverse(geometry.begin(), geometry.end());
+    for (auto& edge : geometry) { std::swap(edge.start, edge.end); edge.sweep_radians = -edge.sweep_radians; }
+    auto owner = upgrade_legacy_boundary_entity(measurement_entity(geometry, measured.source, true));
+    owner.properties["name"] = "Retained exterior";
+    auto values = base_entities(specs, true);
+    values.push_back(owner);
+    const auto identified_owner = decode_identified_boundary_entity(owner);
+    BoundaryDimension manual{"manual-source-edge", owner.id, identified_owner.segments.front().segment_id,
+        {7.123, -4.321}, BoundaryDimensionPlacement::manual};
+    auto manual_entity = encode_boundary_dimension_entity(manual);
+    manual_entity.extensions["vendor"] = "retain exact placement";
+    values.push_back(manual_entity);
+    auto document = Document::create(values);
+    const auto source = document.snapshot();
+    std::vector<EntityChange> changes;
+    for (const auto& id : {"wall-bottom", "wall-right", "wall-top"}) {
+        auto wall = source.entities().at(id);
+        auto& baseline = wall.properties.at("baseline");
+        for (const auto* endpoint : {"start", "end"})
+            if (baseline.at(endpoint)[0] == 4.0) baseline.at(endpoint)[0] = 6.0;
+        if (std::string_view(id) == "wall-bottom") {
+            wall.properties["thickness_m"] = 0.4;
+            wall.properties["name"] = "Combined physical edit";
+        }
+        changes.push_back(EntityChange::upsert(wall));
+    }
+    const Command physical = ApplyEntityChanges{source.revision(), changes, {}, "Resize measured shell"};
+    const auto command = complete_exterior_wall_measurement_command(source, physical);
+    const auto& typed = std::get<ApplyBoundaryConstraintChanges>(command);
+    require(typed.physical_entity_changes.size() == 1 && typed.wall_edits.size() == 2 &&
+        typed.exterior_source_edits.size() == 1 && typed.exterior_source_completion,
+        "physical changes and typed source updates occupy separate command lanes");
+    const auto wire = command_to_json(command);
+    require(wire.at("version") == 6 && command_to_json(command_from_json(wire)) == wire,
+        "source completion has an exact version-six command round trip");
+    const auto candidate = Document::preview_command(source, command);
+    const auto before = decode_identified_boundary_entity(owner);
+    const auto after = decode_identified_boundary_entity(candidate.entities().at(owner.id));
+    for (std::size_t i = 0; i < before.segments.size(); ++i)
+        require(before.segments[i].segment_id == after.segments[i].segment_id &&
+            before.segments[i].start_vertex_id == after.segments[i].start_vertex_id &&
+            before.segments[i].end_vertex_id == after.segments[i].end_vertex_id,
+            "cyclic reversed old outline retains ordered edge and corner identities");
+    require(wall_measurement_source_current(candidate, candidate.entities().at(owner.id)) &&
+        candidate.entities().at(owner.id).properties.at("name") == "Retained exterior" &&
+        build_appraisal_document_report(candidate, "property-1").qualified,
+        "completed candidate has current source and qualified appraisal");
+    require(candidate.entities().at(manual.id) == manual_entity,
+        "source completion retains manual dimension target, exact placement and vendor metadata");
+    const auto target = std::find_if(after.segments.begin(), after.segments.end(), [&](const auto& edge) {
+        return edge.segment_id == manual.segment_id;
+    });
+    near(manual.resolve(candidate.entities().at(owner.id)).segment_length(), segment_length(target->segment), 0.0,
+        "manual dimension continues to resolve its retained semantic edge");
+    document.apply(command);
+    require(document.snapshot().entities() == candidate.entities() && document.snapshot().history().size() == source.history().size() + 1,
+        "Apply reproduces candidate through one history event");
+    auto restored = Document::fork(document.snapshot());
+    require(restored.snapshot().entities() == candidate.entities(), "retained completion proof reconstructs exactly");
+    document.undo(document.revision());
+    require(document.snapshot().entities() == source.entities(), "one Undo restores physical and derived geometry");
+    document.redo(document.revision());
+    require(document.snapshot().entities() == candidate.entities(), "one Redo restores completed geometry");
+    require(command_to_json(complete_exterior_wall_measurement_command(source, command)) == wire,
+        "completion is idempotent for an already verified source command");
+    // Move the formerly lexicographically minimum corner past a different
+    // corner. Derivation ordering must not relabel the saved manual target.
+    const auto second_source = document.snapshot();
+    auto bottom = second_source.entities().at("wall-bottom");
+    auto left = second_source.entities().at("wall-left");
+    bottom.properties["baseline"]["start"] = {2.0, 1.0};
+    left.properties["baseline"]["end"] = {2.0, 1.0};
+    const auto second_command = complete_exterior_wall_measurement_command(second_source,
+        ApplyEntityChanges{second_source.revision(), {EntityChange::upsert(bottom), EntityChange::upsert(left)}, {}, "Move corner past old seed"});
+    const auto second = Document::preview_command(second_source, second_command);
+    const auto second_owner = decode_identified_boundary_entity(second.entities().at(owner.id));
+    for (std::size_t i = 0; i < before.segments.size(); ++i)
+        require(before.segments[i].segment_id == second_owner.segments[i].segment_id &&
+            before.segments[i].start_vertex_id == second_owner.segments[i].start_vertex_id &&
+            before.segments[i].end_vertex_id == second_owner.segments[i].end_vertex_id,
+            "changed canonical corner seed cannot reinterpret old edge or vertex identities");
+    require(second.entities().at(manual.id) == manual_entity && wall_measurement_source_current(second, second.entities().at(owner.id)),
+        "manual edge meaning survives changed coordinate seed");
+    const auto rejects_command = [&](ApplyBoundaryConstraintChanges bad) {
+        bool rejected = false;
+        try { (void)Document::preview_command(source, Command{bad}); } catch (const std::exception&) { rejected = true; }
+        require(rejected, "invalid completion must reject atomically");
+    };
+    auto bad = typed; bad.exterior_source_edits.clear(); rejects_command(bad);
+    bad = typed; bad.exterior_source_edits.push_back(bad.exterior_source_edits.front()); rejects_command(bad);
+    bad = typed; bad.exterior_source_edits.front().replacement_segments[0]["start"][0] = 999.0; rejects_command(bad);
+    bad = typed; bad.physical_entity_changes.push_back(EntityChange::upsert(owner)); rejects_command(bad);
+    auto invalid = source.entities(); invalid.erase("wall-top");
+    rejects([&] { (void)exterior_wall_measurement_source_updates(source.entities(), invalid); },
+        "automatic completion refuses deleted source topology");
+    invalid = source.entities(); invalid.at("wall-top").properties["elevation_m"] = 1.0;
+    rejects([&] { (void)exterior_wall_measurement_source_updates(source.entities(), invalid); },
+        "automatic completion refuses changed source elevation");
+    auto stale = source.entities(); stale.at("wall-top").properties["baseline"]["start"][0] = 7.0;
+    invalid = stale; invalid.at("wall-bottom").properties["thickness_m"] = 0.4;
+    require(exterior_wall_measurement_source_updates(stale, invalid).empty(),
+        "independently stale originals retain the explicit repair workflow");
+    auto height = source.entities().at("wall-top"); height.properties["height_m"] = 4.0;
+    const auto height_command = complete_exterior_wall_measurement_command(source,
+        ApplyEntityChanges{source.revision(), {EntityChange::upsert(height)}, {}, "Height only"});
+    require(std::holds_alternative<ApplyEntityChanges>(height_command), "unchanged exterior does not create a redundant redraw");
+    const auto deletion = complete_exterior_wall_measurement_command(source,
+        ApplyEntityChanges{source.revision(), {EntityChange::erase("wall-top")}, {}, "Explicit source deletion"});
+    require(std::holds_alternative<ApplyEntityChanges>(deletion), "pure deletion preserves explicit stale-source repair behavior");
+    auto renamed_building=source.entities().at("building-1");
+    renamed_building.properties["name"]="Retained building metadata";
+    const auto deletion_with_metadata=complete_exterior_wall_measurement_command(source,
+        ApplyEntityChanges{source.revision(),{EntityChange::erase("wall-top"),EntityChange::upsert(renamed_building)},
+            {},"Explicit source deletion with registry-side metadata"});
+    const auto deletion_preview=Document::preview_command(source,deletion_with_metadata);
+    require(std::holds_alternative<ApplyEntityChanges>(deletion_with_metadata) &&
+        deletion_preview.entities().at(owner.id)==source.entities().at(owner.id) &&
+        deletion_preview.entities().at("building-1")==renamed_building &&
+        !wall_measurement_source_current(deletion_preview,deletion_preview.entities().at(owner.id)),
+        "deletion side effects preserve exact stale measurement and explicit repair behavior");
+    auto with_parents = source.entities();
+    const auto ordinary_area = [&](std::string id, const Boundary& outline) {
+        return upgrade_legacy_boundary_entity(entity(std::move(id), "boundary",
+            {{"boundary", boundary_json(outline)}, {"property_id", "property-1"}, {"building_id", "building-1"},
+             {"floor_id", "floor-1"}, {"layer_id", "layer-1"}}));
+    };
+    auto parent = ordinary_area("retained-parent", {{{-2,-2},{10,-2},0},{{10,-2},{10,8},0},
+        {{10,8},{-2,8},0},{{-2,8},{-2,-2},0}});
+    const auto overlap = ordinary_area("overlapping-deduction", {{{1,1},{2,1},0},{{2,1},{2,2},0},
+        {{2,2},{1,2},0},{{1,2},{1,1},0}});
+    parent.properties["deduction_ids"] = Json::array({owner.id, overlap.id});
+    with_parents.emplace(parent.id, parent); with_parents.emplace(overlap.id, overlap);
+    auto proposed = with_parents;
+    for (const auto& change : changes) proposed.at(change.entity.id) = change.entity;
+    require(exterior_wall_measurement_source_updates(with_parents, proposed).size() == 1,
+        "updated sourced child and overlapping retained deduction are independently contained in unchanged parent");
+}
+
+void automatic_source_completion_preserves_ordinary_curve_reconstruction() {
+    const auto specs = capsule_walls();
+    auto values = base_entities(specs, true);
+    for (auto& wall : values) {
+        if (wall.id != "wall-right-arc") continue;
+        const auto length = parse_quantity("4.71238898038469 m", Unit::metre);
+        wall.extensions["curve_input"] = {{"version", 2}, {"construction", "arc_length"}, {"measure", length.original_expression},
+            {"normalized_measure", format_quantity(length, Unit::metre)}, {"measure_value", length.metres}, {"clockwise", false},
+            {"start", wall.properties.at("baseline").at("start")}, {"end", wall.properties.at("baseline").at("end")},
+            {"radians", std::numbers::pi}, {"vendor_input", "retain"}};
+        const auto original_input = wall.extensions.at("curve_input");
+        const auto original_baseline = wall.properties.at("baseline");
+        wall = replay_constraint_wall_edit(wall, {wall.id, {{4, 0}, {4, 3.5}, std::numbers::pi}, std::nullopt, 2});
+        require(wall.extensions.contains("curve_input_derivation") &&
+            wall.extensions.at("curve_input_derivation").at("source_input") == original_input &&
+            wall.extensions.at("curve_input_derivation").at("source_baseline") == original_baseline &&
+            wall.extensions.at("curve_input_derivation").at("operations").size() == 1,
+            "measured arc endpoint deformation archives its exact original length receipt and one operation");
+    }
+    for (auto& wall : values) {
+        if (wall.id == "wall-top") wall.properties["baseline"] = segment_json({{4, 3.5}, {0, 3.5}, 0});
+        if (wall.id == "wall-left-arc") wall.properties["baseline"] = segment_json({{0, 3.5}, {0, 0}, std::numbers::pi});
+    }
+    auto walls = Document::create(values);
+    const auto measured = derive_exterior_wall_measurement(walls.snapshot(), wall_ids(specs));
+    values.push_back(upgrade_legacy_boundary_entity(measurement_entity(measured.boundary, measured.source, true)));
+    auto document = Document::create(values);
+    const auto source = document.snapshot();
+    std::vector<EntityChange> changes;
+    for (const auto& id : {"wall-right-arc", "wall-top", "wall-left-arc"}) {
+        auto wall = source.entities().at(id);
+        auto& b = wall.properties.at("baseline");
+        for (const auto* endpoint : {"start", "end"})
+            if (b.at(endpoint)[1] == 3.5) b.at(endpoint)[1] = 4.0;
+        if (std::string_view(id) == "wall-right-arc") {
+            auto input = wall.extensions.at("curve_input");
+            input["start"] = b.at("start"); input["end"] = b.at("end");
+            wall.extensions["curve_input"] = input;
+            wall.properties["classification"] = "exterior";
+            preserve_wall_curve_construction(wall, source.entities().at(id));
+        }
+        changes.push_back(EntityChange::upsert(wall));
+    }
+    const Command ordinary = ApplyEntityChanges{source.revision(), changes, {}, "Reconstruct curve and classification"};
+    const auto raw = Document::preview_command(source, ordinary);
+    const auto completed = complete_exterior_wall_measurement_command(source, ordinary);
+    const auto candidate = Document::preview_command(source, completed);
+    require(candidate.entities().at("wall-right-arc") == raw.entities().at("wall-right-arc") &&
+        candidate.entities().at("wall-right-arc").extensions.at("curve_input_derivation").at("operations").size() == 2 &&
+        candidate.entities().at("wall-right-arc").extensions.at("curve_input_derivation").at("source_input") ==
+            source.entities().at("wall-right-arc").extensions.at("curve_input_derivation").at("source_input") &&
+        candidate.entities().at("wall-right-arc").extensions.at("curve_input_derivation").at("operations")[0] ==
+            source.entities().at("wall-right-arc").extensions.at("curve_input_derivation").at("operations")[0] &&
+        wall_measurement_source_current(candidate, candidate.entities().at("area-1")),
+        "ordinary fixed-sweep reconstruction and classification retain exact archived construction plus current exterior");
+    document.apply(completed);
+    require(Document::fork(document.snapshot()).snapshot().entities() == candidate.entities(),
+        "ordinary reconstructed curve retains normal qualification during history replay");
+    auto bad = std::get<ApplyBoundaryConstraintChanges>(completed);
+    bad.physical_entity_changes.front().entity.extensions["curve_input_derivation"]["source_input"]["vendor_input"] = "forged";
+    bool refused = false;
+    try { (void)Document::preview_command(source, bad); } catch (const std::exception&) { refused = true; }
+    require(refused, "v6 source authority cannot rewrite archived ordinary curve construction input");
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -1323,6 +1536,12 @@ int main(int argc, char** argv) {
         if (argc > 1 && std::string_view(argv[1]) == "--wall-source-rebind-only") {
             reviewed_source_replacement_preserves_owner_and_proofs();
             std::cout << "Wall source rebind workflows passed\n";
+            return 0;
+        }
+        if (argc > 1 && std::string_view(argv[1]) == "--automatic-source-only") {
+            automatic_source_completion_retains_identity_and_one_history_event();
+            automatic_source_completion_preserves_ordinary_curve_reconstruction();
+            std::cout << "Automatic source completion workflows passed\n";
             return 0;
         }
         rectangle_offsets_outward_and_records_sources();
@@ -1347,6 +1566,8 @@ int main(int argc, char** argv) {
         wall_network_recognition_uses_resolved_elevation_planes_without_mutation();
         appraisal_withholds_overlapping_old_and_annex_exterior_owners();
         reviewed_source_replacement_preserves_owner_and_proofs();
+        automatic_source_completion_retains_identity_and_one_history_event();
+        automatic_source_completion_preserves_ordinary_curve_reconstruction();
         std::cout << "wall_measurement_tests passed\n";
         return 0;
     } catch (const std::exception& error) {

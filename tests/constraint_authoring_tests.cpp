@@ -4,6 +4,8 @@
 #include "sketch/boundary_dimension.hpp"
 #include "sketch/boundary_receipt.hpp"
 #include "sketch/boundary_integrity.hpp"
+#include "sketch/appraisal_document.hpp"
+#include "sketch/wall_measurement.hpp"
 #include "sketch/project_store.hpp"
 #include "support/noninteractive_errors.hpp"
 
@@ -2639,9 +2641,242 @@ void test_calculation_candidate_snapshot_replays_without_mutation() {
     refuses(document.snapshot(), preview);
 }
 
+Document source_measured_constraint_fixture() {
+    std::vector<Entity> entities{
+        {"property", "property", {{"calculation_workflow", "appraisal"},
+            {"appraisal_policy", {{"policy_kind", "residential_declared"}, {"version", 1},
+                {"property_kind", "detached_single_family"}, {"measurement_basis", "exterior"}}}}, false, json::object()},
+        {"building", "building", {{"property_id", "property"}}, false, json::object()},
+        {"floor", "floor", {{"building_id", "building"}, {"appraisal_facts", {{"grade", "above"}}}}, false, json::object()},
+        {"layer", "layer", {{"floor_id", "floor"}}, false, json::object()},
+        wall("bottom", {0,0}, {4,0}), wall("right", {4,0}, {4,3}),
+        wall("top", {4,3}, {0,3}), wall("left", {0,3}, {0,0})};
+    const std::vector<std::string> ids{"bottom", "right", "top", "left"};
+    for (auto& entity : entities) {
+        if (entity.type != "wall") continue;
+        entity.properties["property_id"] = "property";
+        entity.properties["building_id"] = "building";
+        entity.properties["floor_id"] = "floor";
+        entity.properties["layer_id"] = "layer";
+    }
+    for (std::size_t i = 0; i < ids.size(); ++i) {
+        entities.push_back(encode_constraint_entity(relation("join-" + std::to_string(i),
+            ConstraintRelationKind::coincident,
+            {endpoint(ids[i], WallEndpointRole::end), endpoint(ids[(i+1)%ids.size()], WallEndpointRole::start)})));
+        entities.push_back(encode_constraint_entity(relation("direction-" + std::to_string(i),
+            i%2 == 0 ? ConstraintRelationKind::horizontal : ConstraintRelationKind::vertical,
+            {endpoint(ids[i], WallEndpointRole::start), endpoint(ids[i], WallEndpointRole::end)})));
+    }
+    auto anchor = relation("top-left-anchor", ConstraintRelationKind::fixed_anchor,
+        {endpoint("left", WallEndpointRole::start)});
+    anchor.anchor = Vec2{0,3};
+    entities.push_back(encode_constraint_entity(anchor));
+    auto walls = Document::create(entities);
+    const auto measured = derive_exterior_wall_measurement(walls.snapshot(), ids);
+    IdentifiedBoundary outline{"area", "measurement_boundary", {}};
+    for (std::size_t i = 0; i < measured.boundary.size(); ++i)
+        outline.segments.push_back({"edge-" + std::to_string(i), "corner-" + std::to_string(i),
+            "corner-" + std::to_string((i+1)%measured.boundary.size()), measured.boundary[i]});
+    auto owner = encode_identified_boundary_entity(outline);
+    owner.properties["property_id"] = "property";
+    owner.properties["building_id"] = "building";
+    owner.properties["floor_id"] = "floor";
+    owner.properties["layer_id"] = "layer";
+    owner.properties["calculation_scope"] = "building";
+    owner.properties["wall_measurement_source"] = measured.source;
+    owner.properties["appraisal_facts"] = {{"finish", "finished"}, {"access", "direct_interior"},
+        {"ceiling_eligibility", "standard"}, {"area_use", "dwelling"}, {"boundary_role", "measured_area"}};
+    entities.push_back(owner);
+    auto consumer = owner;
+    consumer.id = "consumer";
+    consumer.properties["calculation_scope"] = "site";
+    entities.push_back(consumer);
+    BoundaryDimension area_dimension;
+    area_dimension.id = "area-dimension";
+    area_dimension.boundary_id = owner.id;
+    area_dimension.kind = BoundaryDimensionKind::area;
+    area_dimension.text_position = {2,1};
+    entities.push_back(encode_boundary_dimension_entity(area_dimension));
+    BoundaryDimension length_dimension;
+    length_dimension.id = "length-dimension";
+    length_dimension.boundary_id = owner.id;
+    const auto bottom_edge = std::find_if(outline.segments.begin(), outline.segments.end(),
+        [](const auto& edge) { return edge.segment.start.y < 0 && edge.segment.end.y < 0; });
+    require(bottom_edge != outline.segments.end(), "source fixture omitted the bottom exterior edge");
+    length_dimension.segment_id = bottom_edge->segment_id;
+    length_dimension.text_position = {2,-0.3};
+    length_dimension.placement = BoundaryDimensionPlacement::automatic;
+    length_dimension.automatic_placement_version = 2;
+    entities.push_back(encode_boundary_dimension_entity(length_dimension));
+    return Document::create(std::move(entities));
+}
+
+void test_source_measured_resize_seals_all_consumers_and_replays_one_event() {
+    auto document = source_measured_constraint_fixture();
+    document.mark_saved(document.revision());
+    const auto before = document.snapshot();
+    ConstraintAuthoringIntent resize;
+    resize.wall_resize = WallResizeIntent{"bottom", parse_quantity("6 m"), WallResizeAnchor::start, true};
+    const auto preview = preview_constraint_authoring(before, resize);
+    require_accepted(preview, "numeric connected shell resize must complete its source-measured owners");
+    const auto candidate = preview_constraint_authoring_snapshot(before, preview);
+    require(candidate.entities() == preview.candidate_entities(), "sealed preview and typed candidate differ");
+    require(document.snapshot().entities() == before.entities() && !document.snapshot().dirty() &&
+        document.snapshot().history().size() == before.history().size(), "cancelling a sourced preview changed live state");
+    require(preview.changed_boundaries().size() == 2,
+        "source completion must expose every affected measured consumer");
+    const auto& proof = *candidate.history().back().boundary_constraint_changes;
+    require(proof.exterior_source_edits.size() == 2 && proof.boundary_edits.empty() &&
+        proof.physical_entity_changes.empty() && proof.wall_edits.size() == 3,
+        "source completion must retain typed wall edits and explicit separate source proofs");
+    for (const auto* id : {"area", "consumer"}) {
+        const auto& owner = candidate.entities().at(id);
+        require(wall_measurement_source_current(candidate, owner), "resized shell consumer remains stale");
+        const auto original = decode_identified_boundary_entity(before.entities().at(id));
+        const auto changed = decode_identified_boundary_entity(owner);
+        require_near(std::abs(signed_area(boundary_geometry(changed))), 6.14*3.14, 1e-7,
+            "completed exterior area did not follow connected shell resize");
+        for (std::size_t i = 0; i < original.segments.size(); ++i)
+            require(original.segments[i].segment_id == changed.segments[i].segment_id &&
+                original.segments[i].start_vertex_id == changed.segments[i].start_vertex_id &&
+                original.segments[i].end_vertex_id == changed.segments[i].end_vertex_id,
+                "automatic completion replaced stable measured edge identities");
+    }
+    const auto dimension = *decode_boundary_dimension_entity(candidate.entities().at("area-dimension")).dimension;
+    require_near(dimension.resolve(candidate.entities().at("area")).area_square_metres, 6.14*3.14, 1e-7,
+        "stable area dimension did not resolve the completed measured geometry");
+    const auto length_dimension = *decode_boundary_dimension_entity(candidate.entities().at("length-dimension")).dimension;
+    require_near(length_dimension.resolve(candidate.entities().at("area")).segment_length_metres, 6.14, 1e-7,
+        "stable exterior dimension did not resolve the completed measured length");
+    require_near(length_dimension.text_position.x, 3.0, 1e-7,
+        "automatic exterior dimension was not repositioned before sealing");
+    const auto report = build_appraisal_document_report(candidate, "property");
+    require(report.qualified && report.calculation.has_value(), "completed candidate withheld appraisal totals");
+    const auto status = std::find_if(report.boundaries.begin(), report.boundaries.end(),
+        [](const auto& value) { return value.boundary_id == "area"; });
+    require(status != report.boundaries.end() && status->measurement.has_value(), "completed candidate omitted area trace");
+    require_near(status->measurement->display.unrounded, (6.14*3.14)/0.09290304, 1e-5,
+        "numeric wall resize did not update appraisal square feet");
+    (void)apply_constraint_authoring(document, preview);
+    const auto committed = document.snapshot();
+    require(committed.entities() == candidate.entities() && committed.history().size() == before.history().size()+1,
+        "sourced shell Apply did not reproduce sealed candidate in one history event");
+    require(Document::fork(committed).snapshot().entities() == committed.entities(), "sourced shell proof did not reconstruct");
+    document.undo(document.revision());
+    require(document.snapshot().entities() == before.entities(), "one Undo did not restore physical and measured geometry");
+    document.redo(document.revision());
+    require(document.snapshot().entities() == committed.entities(), "one Redo did not restore completed geometry");
+    require_rejected_unchanged(document, preview, "stale sourced preview applied again");
+}
+
+void test_source_measured_connected_corner_move_and_proof_tampering() {
+    auto document = source_measured_constraint_fixture();
+    const auto before = document.snapshot();
+    ConstraintAuthoringIntent move;
+    move.wall_geometry_move = WallGeometryMoveIntent{{{"right", {6,0}, {6,3}}}, true};
+    const auto preview = preview_constraint_authoring(before, move);
+    require_accepted(preview, "connected source wall endpoint move must complete measured corners");
+    const auto candidate = preview_constraint_authoring_snapshot(before, preview);
+    require_near(baseline(candidate.entities().at("bottom")).end.x, 6, 1e-7,
+        "connected corner did not follow selected source wall");
+    require_near(std::abs(signed_area(boundary_geometry(decode_identified_boundary_entity(candidate.entities().at("area"))))),
+        6.14*3.14, 1e-7, "connected corner move left the exterior consumer unchanged");
+    require(preview.exterior_source_edits().size() == 2, "preview omitted explicit source completion proof");
+    auto tampered = preview;
+    auto& source_edits = const_cast<std::vector<BoundaryGeometryEdit>&>(tampered.exterior_source_edits());
+    source_edits.clear();
+    require_rejected_unchanged(document, tampered, "altered source completion display was applied");
+    auto stripped = *candidate.history().back().boundary_constraint_changes;
+    require(stripped.exterior_source_completion, "source completion lacks its retained replay discriminator");
+    stripped.exterior_source_edits.clear();
+    bool rejected = false;
+    try { (void)Document::preview_command(before, Command{stripped}); }
+    catch (const std::exception&) { rejected = true; }
+    require(rejected, "stripping all source proofs downgraded a completed edit to legacy replay");
+    (void)apply_constraint_authoring(document, preview);
+    require(document.snapshot().entities() == candidate.entities(), "connected corner commit differs from sealed source preview");
+    document.undo(document.revision());
+    require(document.snapshot().entities() == before.entities(), "connected corner Undo failed to restore measured consumers");
+}
+
+void test_source_measured_invalid_dependencies_reject_before_sealing() {
+    const auto source = source_measured_constraint_fixture().snapshot();
+    ConstraintAuthoringIntent resize;
+    resize.wall_resize = WallResizeIntent{"bottom", parse_quantity("6 m"), WallResizeAnchor::start, true};
+    const auto rejects = [&](std::map<std::string, Entity, std::less<>> entities, std::string_view message,
+                             const ConstraintAuthoringIntent& intent) {
+        std::vector<Entity> values;
+        for (auto& [id, entity] : entities) { (void)id; values.push_back(std::move(entity)); }
+        auto document = Document::create(std::move(values));
+        const auto preview = preview_constraint_authoring(document.snapshot(), intent);
+        require(!preview.accepted() && preview.exterior_source_edits().empty() &&
+            preview.candidate_entities() == document.snapshot().entities(), message);
+        require_rejected_unchanged(document, preview, message);
+    };
+    auto invalid = source.entities();
+    const auto outline = decode_identified_boundary_entity(invalid.at("area"));
+    const auto edge = std::find_if(outline.segments.begin(), outline.segments.end(),
+        [](const auto& value) { return value.segment.start.y < 0 && value.segment.end.y < 0; });
+    auto lock = relation("measured-edge-lock", ConstraintRelationKind::fixed_length,
+        {{"area", WallEndpointRole::start, edge->segment_id, edge->start_vertex_id},
+         {"area", WallEndpointRole::end, edge->segment_id, edge->end_vertex_id}});
+    lock.length = parse_quantity("4.14 m");
+    invalid.emplace(lock.id, encode_constraint_entity(lock));
+    rejects(invalid, "source completion bypassed a measured edge lock", resize);
+    invalid = source.entities();
+    auto child = encode_identified_boundary_entity(IdentifiedBoundary{"deduction", "measurement_boundary", {
+        {"ab","a","b",{{3,1},{3.5,1},0}}, {"bc","b","c",{{3.5,1},{3.5,2},0}},
+        {"cd","c","d",{{3.5,2},{3,2},0}}, {"da","d","a",{{3,2},{3,1},0}}}});
+    for (const auto* key : {"property_id", "building_id", "floor_id", "layer_id"})
+        child.properties[key] = invalid.at("area").properties.at(key);
+    child.properties["calculation_scope"] = "site";
+    invalid.emplace(child.id, child);
+    invalid.at("area").properties["deduction_ids"] = {child.id};
+    auto shrink = resize;
+    shrink.wall_resize->exact_length = parse_quantity("2 m");
+    rejects(invalid, "source completion stranded a retained deduction", shrink);
+    auto frozen = resize;
+    frozen.wall_resize->move_connected_walls = false;
+    rejects(source.entities(), "disabled connected movement detached the measured source cycle", frozen);
+}
+
+void test_source_measured_stale_owner_keeps_explicit_repair_workflow() {
+    auto entities = source_measured_constraint_fixture().snapshot().entities();
+    auto& stale = entities.at("area");
+    for (auto& edge : stale.properties.at("segments"))
+        for (const auto* endpoint : {"start", "end"})
+            if (edge.at(endpoint).at(0).get<double>() > 4.0)
+                edge.at(endpoint).at(0) = edge.at(endpoint).at(0).get<double>() + 0.2;
+    std::vector<Entity> values;
+    for (auto& [id, entity] : entities) { (void)id; values.push_back(std::move(entity)); }
+    auto document = Document::create(std::move(values));
+    const auto before = document.snapshot();
+    require(!wall_measurement_source_current(before, before.entities().at("area")), "stale fixture must require explicit repair");
+    ConstraintAuthoringIntent resize;
+    resize.wall_resize = WallResizeIntent{"bottom", parse_quantity("6 m"), WallResizeAnchor::start, true};
+    const auto preview = preview_constraint_authoring(before, resize);
+    require_accepted(preview, "an already stale consumer must preserve the physical repair workflow");
+    const auto candidate = preview_constraint_authoring_snapshot(before, preview);
+    require(preview.exterior_source_edits().size() == 1 &&
+        candidate.entities().at("area") == before.entities().at("area") &&
+        !wall_measurement_source_current(candidate, candidate.entities().at("area")) &&
+        wall_measurement_source_current(candidate, candidate.entities().at("consumer")),
+        "physical edit must update current consumers while preserving already stale owners for explicit repair");
+    const auto report = build_appraisal_document_report(candidate, "property");
+    require(!report.qualified && !report.calculation.has_value(), "already stale appraisal owner exposed aggregate totals");
+    (void)apply_constraint_authoring(document, preview);
+    require(document.snapshot().entities() == candidate.entities(), "stale repair workflow commit differs from its sealed candidate");
+    document.undo(document.revision());
+    require(document.snapshot().entities() == before.entities(), "stale repair workflow Undo did not restore the prior state");
+}
+
 int main() {
     sketch::testing::noninteractive_errors();
     try {
+        test_source_measured_resize_seals_all_consumers_and_replays_one_event();
+        test_source_measured_connected_corner_move_and_proof_tampering();
+        test_source_measured_invalid_dependencies_reject_before_sealing();
+        test_source_measured_stale_owner_keeps_explicit_repair_workflow();
         test_calculation_candidate_snapshot_replays_without_mutation();
         test_wall_geometry_move_propagates_explicit_connections_only();
         test_wall_geometry_move_multiselection_validation_and_hosting();

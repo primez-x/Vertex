@@ -515,6 +515,114 @@ void curved_d_exterior_measurement_stays_analytic_through_refresh_and_output() {
             "the PDF prints exact analytical exterior area and curved-edge physical dimension");
 }
 
+void authored_wall_thickness_updates_its_existing_appraisal_area(bool metric, bool curved) {
+    sketch::desktop::MainWindow window;
+    window.setAttribute(Qt::WA_DontShowOnScreen);
+    window.resize(1200, 800);
+    window.show();
+    QApplication::processEvents();
+    window.setMetricUnits(metric);
+    choose_appraisal_workflow(window);
+    const auto walls = curved ? QStringList{
+        window.createCurvedWall({-2,0},{2,0},QStringLiteral("180 deg"),QStringLiteral("exterior")),
+        window.createStraightWall({2,0},{2,3},QStringLiteral("exterior")),
+        window.createStraightWall({2,3},{-2,3},QStringLiteral("exterior")),
+        window.createStraightWall({-2,3},{-2,0},QStringLiteral("exterior"))} : rectangle_walls(window);
+    select_walls(window, walls);
+    const auto owner_id = window.createMeasurementBoundaryFromSelectedWalls();
+    require(!owner_id.isEmpty() && window.selectEntity(owner_id) &&
+                window.editSelectedAppraisalFacts(appraisal_declarations()),
+            "the source-linked area begins as a qualified declared exterior measurement");
+    set_area_name(window, owner_id, QStringLiteral("Live exterior"));
+    set_area_appearance(window, owner_id);
+    const auto area_dimension = window.createAreaDimension(owner_id,{0.5,1.5});
+    require(!area_dimension.isEmpty(), "the live area has an associated area dimension");
+    const auto deduction_id = window.createBoundary({{{0.5,1},{0.9,1},0},{{0.9,1},{0.9,1.4},0},
+        {{0.9,1.4},{0.5,1.4},0},{{0.5,1.4},{0.5,1},0}},QStringLiteral("garage"));
+    require(!deduction_id.isEmpty() && window.selectEntity(deduction_id) && window.applySelectedAutoSubtract(owner_id) &&
+                window.editSelectedAppraisalFacts(appraisal_declarations("garage")),
+            "the live exterior has a retained garage deduction and explicit declarations");
+    const auto before = window.document().snapshot();
+    const auto& owner_before = before.entities().at(owner_id.toStdString());
+    const auto geometry_before = sketch::decode_identified_boundary_entity(owner_before);
+    const auto dimensions_before = dimensions_for(before, owner_before.id);
+    require(window.selectEntity(walls.front()), "select the physical source wall for thickness editing");
+    require(window.editSelectedThickness(QStringLiteral("240 mm")),
+            "a real wall-thickness edit succeeds through the user authoring path");
+    const auto after = window.document().snapshot();
+    const auto& owner_after = after.entities().at(owner_id.toStdString());
+    require(after.revision() == before.revision()+1 &&
+                sketch::wall_measurement_source_current(after,owner_after),
+            "one wall edit automatically updates the existing exterior outline without a Refresh command");
+    const auto geometry_after = sketch::decode_identified_boundary_entity(owner_after);
+    require(std::abs(analytical_area(owner_after)-analytical_area(owner_before)) > 0.01,
+            "the linked exterior area changes with the source wall's physical thickness");
+    require(geometry_after.segments.size() == geometry_before.segments.size(),
+            "the live redraw retains the complete analytical topology");
+    for (std::size_t i=0; i<geometry_before.segments.size(); ++i) {
+        const auto& old_edge=geometry_before.segments.at(i);
+        const auto& new_edge=geometry_after.segments.at(i);
+        require(old_edge.segment_id==new_edge.segment_id && old_edge.start_vertex_id==new_edge.start_vertex_id &&
+                    old_edge.end_vertex_id==new_edge.end_vertex_id,
+                "automatic wall redraw retains each existing edge and vertex identity");
+    }
+    require(owner_after.properties.at("name")==owner_before.properties.at("name") &&
+                owner_after.properties.at("appraisal_facts")==owner_before.properties.at("appraisal_facts") &&
+                owner_after.properties.at("deduction_ids")==owner_before.properties.at("deduction_ids") &&
+                owner_after.properties.at("wall_measurement_source")==owner_before.properties.at("wall_measurement_source") &&
+                after.entities().at(deduction_id.toStdString())==before.entities().at(deduction_id.toStdString()) &&
+                annotation_entities(after)==annotation_entities(before),
+            "automatic redraw preserves the area name, declarations, source references and appearance");
+    const auto dimensions_after=dimensions_for(after,owner_before.id);
+    require(dimensions_after.size()==dimensions_before.size(),
+            "automatic redraw preserves the existing associated dimension count");
+    for (const auto& dimension : dimensions_before)
+        require(std::any_of(dimensions_after.begin(),dimensions_after.end(),[&](const auto& current) {
+            return current.id==dimension.id;
+        }), "automatic redraw preserves every associated dimension identity");
+    require(window.selectEntity(owner_id), "the updated area remains selectable");
+    auto* qualification=window.findChild<QLabel*>(QStringLiteral("appraisalQualification"));
+    auto* total=window.findChild<QLabel*>(QStringLiteral("appraisalGlaTotal"));
+    const auto deduction_area=analytical_area(after.entities().at(deduction_id.toStdString()));
+    const auto area=(analytical_area(owner_after)-deduction_area)/(metric ? 1.0 : 0.3048*0.3048);
+    require(qualification && qualification->text().startsWith(QStringLiteral("Qualified")) &&
+                total && total->text().contains(QString::number(area,'f',2)),
+            "the visible qualified appraisal total updates automatically in the active unit system");
+    capture(window,QStringLiteral("live-wall-thickness-%1-%2")
+        .arg(metric ? "metric" : "imperial",curved ? "curved" : "straight"));
+    require(window.undoCommand() && window.document().snapshot().entities()==before.entities() &&
+                window.redoCommand() && window.document().snapshot().entities()==after.entities(),
+            "one Undo and Redo restores the complete physical wall, measured outline and dimensions together");
+    QTemporaryDir output;
+    require(output.isValid() && window.saveProjectAs(output.filePath("live-exterior.bldproj")) &&
+                window.openProject(output.filePath("live-exterior.bldproj")) &&
+                window.document().snapshot().entities()==after.entities(),
+            "the complete live exterior update survives native save and reopen");
+    require(window.selectEntity(walls.front()), "reselect the source wall after reopening");
+    const auto resize_source=window.document().snapshot();
+    const auto resized_ok = curved
+        ? window.editSelectedCurvedWallFromConstruction({-2,0},{2,0},QStringLiteral("arc_height"),QStringLiteral("1.6 m"))
+        : window.editSelectedLength(QStringLiteral("6 m"));
+    require(resized_ok,
+            "source geometry remains editable through the ordinary curve editor or connected length editor");
+    const auto resized=window.document().snapshot();
+    const auto& resized_owner=resized.entities().at(owner_id.toStdString());
+    require(resized.revision()==resize_source.revision()+1 &&
+                sketch::wall_measurement_source_current(resized,resized_owner) &&
+                std::abs(analytical_area(resized_owner)-analytical_area(owner_after))>0.01,
+            "source geometry edits update the existing measured outline in one operation (metric="+
+                std::to_string(metric)+", curved="+std::to_string(curved)+", revision_delta="+
+                std::to_string(resized.revision()-resize_source.revision())+", current="+
+                std::to_string(sketch::wall_measurement_source_current(resized,resized_owner))+", area_delta="+
+                std::to_string(analytical_area(resized_owner)-analytical_area(owner_after))+")");
+    require(window.undoCommand() && window.document().snapshot().entities()==after.entities() &&
+                window.redoCommand() && window.document().snapshot().entities()==resized.entities() &&
+                window.saveProjectAs(output.filePath("live-exterior-resized.bldproj")) &&
+                window.openProject(output.filePath("live-exterior-resized.bldproj")) &&
+                window.document().snapshot().entities()==resized.entities(),
+            "numerical and curve source edits preserve exact one-event history through reopening");
+}
+
 void selected_wall_loop_creates_and_refreshes_one_exterior_appraisal_area() {
     using sketch::desktop::MainWindow;
 
@@ -2062,6 +2170,12 @@ int main(int argc, char** argv) {
         QStringLiteral("Vertex-wall-measurement-test-") +
         QUuid::createUuid().toString(QUuid::WithoutBraces));
     try {
+        if (app.arguments().contains("--live-source-edit-only")) {
+            for (bool metric : {false,true}) for (bool curved : {false,true})
+                authored_wall_thickness_updates_its_existing_appraisal_area(metric,curved);
+            std::cout << "Live source wall edits passed\n";
+            return 0;
+        }
         if (app.arguments().contains("--appraisal-transform-ui-only")) {
             for (bool sourced : {false,true})
                 existing_appraisal_area_transforms_its_dependencies(true,sourced,0,true);
@@ -2094,6 +2208,8 @@ int main(int argc, char** argv) {
             std::cout << "Exterior measurement source repair workflows passed\n";
             return 0;
         }
+        for (bool metric : {false,true}) for (bool curved : {false,true})
+            authored_wall_thickness_updates_its_existing_appraisal_area(metric,curved);
         selected_wall_loop_creates_and_refreshes_one_exterior_appraisal_area();
         for (bool metric : {false,true}) for (bool sourced : {false,true}) for (int mode : {0,1,2,3}) for (bool commercial : {false,true})
             existing_appraisal_area_transforms_its_dependencies(metric,sourced,mode,commercial);

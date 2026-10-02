@@ -4,6 +4,7 @@
 
 #include <functional>
 #include <iostream>
+#include <numbers>
 #include <stdexcept>
 
 namespace {
@@ -239,6 +240,107 @@ void test_transform_proof_digest_and_codec() {
         require(rejected, "transform decoder must require every field");
     }
 }
+
+void test_legacy_constraint_proof_digest_vectors() {
+    auto snapshot = Document::create().snapshot();
+    const_cast<std::string&>(snapshot.document_id()) = "legacy-constraint-digest-vectors";
+    auto& proof = const_cast<std::vector<RevisionRecord>&>(snapshot.history()).front().boundary_constraint_changes;
+    const BoundaryGeometryEdit boundary{"legacy-area", BoundaryGeometryEditKind::move_vertex,
+        "legacy-vertex", {3, 1}};
+    const ConstraintWallGeometryEdit straight{"legacy-wall", {{0,0},{2,0},0}, std::nullopt, 1};
+    const ConstraintWallGeometryEdit curve{"legacy-wall", {{0,0},{2,0},0.4}, std::nullopt, 2};
+    const ConstraintWallGeometryEdit length{"legacy-wall", {{0,0},{2,0},std::numbers::pi},
+        parse_quantity("3.141592653589793 m"), 3};
+    const std::vector<ApplyBoundaryConstraintChanges> legacy{
+        {0, {boundary}, {}, "Legacy proof", {}},
+        {0, {boundary}, {}, "Legacy proof", {straight}},
+        {0, {boundary}, {}, "Legacy proof", {curve}},
+        {0, {}, {}, "Legacy proof", {straight}},
+        {0, {}, {}, "Legacy proof", {length}}};
+    // Frozen from the pre-v6 ordered snapshot encoding, independently hashed.
+    const char* full[] {
+        "37e1cdd1743af1876f51de8d348e6f0b8b100b70469ee8ee972e31478cef53a6",
+        "adf932d0d4a4639948c97d62fc51e5893c2ec5d9e9ce277190174aad029e502a",
+        "53152ff72981e288727d11bf2d6f9a3dde67f4116494e92b2f72b0cf870158f0",
+        "a416cbeb45283b4e47332d1a3c41a3438418820024cc790555ba65d65ca505a7",
+        "77de74ba0c74006301da02a90ad368d2c090e7aed9eb4be42a11b443f7dd1c5f"};
+    const char* authoring[] {
+        "f13337e22d1865f4fb6f68b3c05eef4640f7e59d305c1be3ea0f87f9aeaa8639",
+        "33d00597509a6835d983dee17416855667e90cccde59562895a30d1c2022e46f",
+        "ce0364222e6194eec1195b145a99fc79285360589fbe4ff6e3dd2434938e9c72",
+        "b7234ee77dc117fc8cb8324b79339f8de3f62b061234930237a34286d0406ffb",
+        "e232ecb902140a19ea17db35207a6afde3f530ce18904b3bf0ca005119a1e47a"};
+    for (std::size_t i = 0; i < legacy.size(); ++i) {
+        proof = legacy[i];
+        const auto wire = command_to_json(*proof);
+        require(wire.at("version") == i + 1 && !wire.contains("physical_entity_changes") &&
+            !wire.contains("exterior_source_edits"), "v1-v5 proofs must retain their original envelope shape");
+        require(command_to_json(command_from_json(wire)) == wire,
+            "legacy constraint proof must retain its exact command codec roundtrip");
+        require(document_snapshot_digest(snapshot) == full[i] &&
+            document_authoring_source_digest_v1(snapshot) == authoring[i],
+            "v6 support must preserve every legacy constraint digest vector");
+    }
+}
+
+void test_live_source_proof_digest_binding() {
+    auto snapshot = Document::create().snapshot();
+    auto& proof = const_cast<std::vector<RevisionRecord>&>(snapshot.history()).front().boundary_constraint_changes;
+    ApplyBoundaryConstraintChanges original{0, {}, {}, "Live source proof"};
+    original.physical_entity_changes.push_back(EntityChange::upsert(
+        {"source-wall", "wall", {{"baseline", {{"start", {0,0}}, {"end", {4,0}}, {"sweep_radians", 0.0}}},
+            {"thickness_m", 0.4}, {"height_m", 3.0}, {"elevation_m", 0.0}}, false, {{"vendor", "retain"}}}));
+    BoundaryGeometryEdit exterior;
+    exterior.boundary_id = exterior.target_id = "source-area";
+    exterior.kind = BoundaryGeometryEditKind::redefine_boundary;
+    exterior.replacement_wall_source_ids = {"source-wall", "source-right", "source-top", "source-left"};
+    exterior.replacement_segments = nlohmann::json::array();
+    const Vec2 corners[]{{0,0},{4,0},{4,3},{0,3}};
+    for (std::size_t i = 0; i < 4; ++i) {
+        const auto a = corners[i], b = corners[(i + 1) % 4];
+        exterior.replacement_segments.push_back({{"segment_id", "source-edge-" + std::to_string(i)},
+            {"start_vertex_id", "source-corner-" + std::to_string(i)},
+            {"end_vertex_id", "source-corner-" + std::to_string((i + 1) % 4)},
+            {"start", {a.x,a.y}}, {"end", {b.x,b.y}}, {"sweep_radians", 0.0}});
+    }
+    original.exterior_source_edits.push_back(exterior);
+    original.exterior_source_completion = true;
+    proof = original;
+    const auto full = document_snapshot_digest(snapshot);
+    const auto authoring = document_authoring_source_digest_v1(snapshot);
+    const auto wire = command_to_json(original);
+    require(wire.at("version") == 6 && command_to_json(command_from_json(wire)) == wire,
+        "source proof must retain both new lanes through the command codec");
+    const std::vector<std::function<void(ApplyBoundaryConstraintChanges&)>> mutations{
+        [](auto& p) { p.physical_entity_changes.front().entity.properties["thickness_m"] = 0.6; },
+        [](auto& p) { p.physical_entity_changes.front().entity.extensions["vendor"] = "changed"; },
+        [](auto& p) { p.physical_entity_changes.front().entity.id = "other-wall"; },
+        [](auto& p) { p.exterior_source_edits.front().replacement_segments[0]["start"][0] = -1.0; },
+        [](auto& p) { p.exterior_source_edits.front().boundary_id = p.exterior_source_edits.front().target_id = "other-area"; },
+        [](auto& p) { p.exterior_source_edits.front().replacement_wall_source_ids.front() = "other-wall"; },
+        [](auto& p) { p.physical_entity_changes.clear(); }};
+    for (const auto& mutate : mutations) {
+        proof = original;
+        mutate(*proof);
+        require(document_snapshot_digest(snapshot) != full &&
+            document_authoring_source_digest_v1(snapshot) != authoring,
+            "both digest surfaces must bind source completion geometry, identity and opaque physical data");
+    }
+    for (const auto* key : {"physical_entity_changes", "exterior_source_edits", "wall_edits"}) {
+        auto missing = wire;
+        missing.erase(key);
+        bool rejected = false;
+        try { (void)command_from_json(missing); } catch (const std::exception&) { rejected = true; }
+        require(rejected, "v6 decoder must require every lane rather than silently omitting proof");
+    }
+    for (const int old_version : {1,2,3,4,5}) {
+        auto mislabeled = wire;
+        mislabeled["version"] = old_version;
+        bool rejected = false;
+        try { (void)command_from_json(mislabeled); } catch (const std::exception&) { rejected = true; }
+        require(rejected, "old command envelopes must refuse the new source proof lanes");
+    }
+}
 } // namespace
 
 int main() {
@@ -250,6 +352,8 @@ int main() {
         test_historical_authoring_bindings();
         test_translation_proof_digest_and_codec();
         test_transform_proof_digest_and_codec();
+        test_legacy_constraint_proof_digest_vectors();
+        test_live_source_proof_digest_binding();
         std::cout << "Document digest tests passed\n";
         return 0;
     } catch (const std::exception& error) {

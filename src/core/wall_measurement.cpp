@@ -1,6 +1,8 @@
 #include "sketch/wall_measurement.hpp"
 
 #include "sketch/boundary_entity.hpp"
+#include "sketch/boundary_integrity.hpp"
+#include "sketch/constraint_integrity.hpp"
 #include "sketch/geometry_operations.hpp"
 #include "sketch/project_organization.hpp"
 #include "sketch/model_phases.hpp"
@@ -1020,7 +1022,10 @@ static WallMeasurementResult derive_exterior_wall_measurement_impl(
                 boundary.end());
     std::rotate(loop_walls.begin(), loop_walls.begin() + static_cast<std::ptrdiff_t>(rotation),
                 loop_walls.end());
-    return {std::move(boundary), source_for_walls(walls)};
+    std::vector<std::string> ordered_ids;
+    ordered_ids.reserve(loop_walls.size());
+    for (const auto& wall : loop_walls) ordered_ids.push_back(wall.id);
+    return {std::move(boundary), source_for_walls(walls), std::move(ordered_ids)};
 }
 
 WallMeasurementResult derive_exterior_wall_measurement(
@@ -1170,6 +1175,166 @@ bool wall_measurement_source_current(const DocumentSnapshot& document, const Ent
     } catch (const std::exception&) {
         return false;
     }
+}
+
+std::vector<BoundaryGeometryEdit> exterior_wall_measurement_source_updates(
+    const std::map<std::string, Entity, std::less<>>& original,
+    const std::map<std::string, Entity, std::less<>>& proposed) {
+    const auto same_segment = [](const Segment& a, const Segment& b) {
+        return a.start.x == b.start.x && a.start.y == b.start.y &&
+            a.end.x == b.end.x && a.end.y == b.end.y && a.sweep_radians == b.sweep_radians;
+    };
+    struct Alignment { std::size_t offset{}; bool reversed{}; unsigned matches{}; };
+    const auto align = [&](const Boundary& actual, const Boundary& derived) {
+        Alignment result;
+        if (actual.size() != derived.size()) return result;
+        for (std::size_t offset = 0; offset < derived.size(); ++offset)
+            for (const bool reverse : {false, true}) {
+                bool matched = true;
+                for (std::size_t i = 0; i < actual.size(); ++i) {
+                    auto edge = derived[(offset + (reverse ? derived.size() - i : i)) % derived.size()];
+                    if (reverse) { std::swap(edge.start, edge.end); edge.sweep_radians = -edge.sweep_radians; }
+                    if (!same_segment(actual[i], edge)) { matched = false; break; }
+                }
+                if (matched) { ++result.matches; result.offset = offset; result.reversed = reverse; }
+            }
+        return result;
+    };
+    const auto elevation = [](const auto& entities, const Entity& wall) {
+        const auto resolved = resolve_vertical_placement(entities, wall);
+        auto value = resolved.properties.find("elevation_m");
+        if (value == resolved.properties.end()) value = resolved.properties.find("elevation");
+        return value == resolved.properties.end() ? 0.0 : number(*value, "Wall elevation");
+    };
+    std::map<std::string, BoundaryGeometryEdit, std::less<>> updates;
+    for (const auto& [id, owner] : original) {
+        // Generic and anonymous imported boundaries retain their existing
+        // explicit-upgrade/source-repair contract.
+        if (owner.type != "measurement_boundary" ||
+            inspect_boundary_entity_version(owner).format != BoundaryEntityFormat::identified_v1 ||
+            !owner.properties.contains("wall_measurement_source")) continue;
+        std::vector<std::string> ids;
+        try { ids = exterior_wall_measurement_source_ids(owner); }
+        catch (const std::exception&) { continue; } // Independently stale original source schema.
+        bool affected = false;
+        for (const auto& wall_id : ids) {
+            const auto before = original.find(wall_id), after = proposed.find(wall_id);
+            if (before == original.end() || after == proposed.end() || before->second != after->second) {
+                affected = true; break;
+            }
+        }
+        if (!affected) continue;
+        const auto identified = decode_identified_boundary_entity(owner);
+        const auto actual = boundary_geometry(identified);
+        std::optional<WallMeasurementResult> old;
+        Alignment correspondence;
+        for (const auto kernel : {OffsetKernel::stable, OffsetKernel::legacy_v1}) {
+            std::optional<WallMeasurementResult> derived;
+            try {
+                derived = derive_exterior_wall_measurement_impl(original, ids, kernel);
+                if (normalize_source_order(owner.properties.at("wall_measurement_source")) != derived->source ||
+                    !boundary_context_matches(owner, derived->source)) continue;
+            } catch (const std::invalid_argument&) { continue; }
+            const auto candidate = align(actual, derived->boundary);
+            if (candidate.matches > 1) reject("Automatic exterior update has ambiguous original edge correspondence");
+            if (candidate.matches == 1) { old = std::move(derived); correspondence = candidate; break; }
+        }
+        // Only the original snapshot determines this exemption. A current
+        // owner cannot become stale as a result of an authored physical edit.
+        if (!old) continue;
+        const auto retained_owner = proposed.find(id);
+        if (retained_owner == proposed.end() || retained_owner->second != owner)
+            reject("Automatic exterior update overlaps an edited or removed measured owner");
+        for (const auto& wall_id : ids) {
+            const auto after = proposed.find(wall_id);
+            if (after == proposed.end() || after->second.type != "wall")
+                reject("Automatic exterior update requires every original source wall");
+            if (std::abs(elevation(original, original.at(wall_id)) - elevation(proposed, after->second)) >
+                default_geometry_tolerance_metres)
+                reject("Automatic exterior update must retain the original source elevation plane");
+        }
+        const auto before_context = organize_project(original).drawing_context(id);
+        const auto after_context = organize_project(proposed).drawing_context(id);
+        if (!before_context || !after_context || !before_context->complete() || !after_context->complete() ||
+            before_context->property_id != after_context->property_id ||
+            before_context->building_id != after_context->building_id || before_context->floor_id != after_context->floor_id ||
+            before_context->layer_id != after_context->layer_id)
+            reject("Automatic exterior update must retain the measured owner's resolved hierarchy");
+        const auto replacement = derive_replacement_exterior_wall_measurement(proposed, owner, ids);
+        if (replacement.boundary.size() != old->boundary.size() ||
+            replacement.ordered_wall_ids.size() != replacement.boundary.size())
+            reject("Automatic exterior update changed analytical topology");
+        std::map<std::string, std::size_t, std::less<>> new_edges;
+        for (std::size_t i = 0; i < replacement.ordered_wall_ids.size(); ++i)
+            if (!new_edges.emplace(replacement.ordered_wall_ids[i], i).second)
+                reject("Automatic exterior update has duplicate physical edge lineage");
+        auto retained = identified;
+        const auto count = retained.segments.size();
+        std::vector<std::size_t> mapped;
+        for (std::size_t i = 0; i < count; ++i) {
+            const auto old_index = (correspondence.offset + (correspondence.reversed ? count - i : i)) % count;
+            const auto target = new_edges.find(old->ordered_wall_ids.at(old_index));
+            if (target == new_edges.end()) reject("Automatic exterior update lost physical wall lineage");
+            mapped.push_back(target->second);
+            auto edge = replacement.boundary[target->second];
+            if (correspondence.reversed) { std::swap(edge.start, edge.end); edge.sweep_radians = -edge.sweep_radians; }
+            retained.segments[i].segment = edge;
+        }
+        for (std::size_t i = 0; i < count; ++i)
+            if (mapped[(i + 1) % count] != (mapped[i] + (correspondence.reversed ? count - 1 : 1)) % count)
+                reject("Automatic exterior update changed source-wall corner adjacency");
+        if (retained == identified && normalize_source_order(owner.properties.at("wall_measurement_source")) == replacement.source)
+            continue;
+        BoundaryGeometryEdit edit;
+        edit.boundary_id = edit.target_id = id;
+        edit.kind = BoundaryGeometryEditKind::redefine_boundary;
+        edit.replacement_segments = encode_identified_boundary_entity(retained).properties.at("segments");
+        std::sort(ids.begin(), ids.end());
+        edit.replacement_wall_source_ids = std::move(ids);
+        updates.emplace(id, std::move(edit));
+    }
+    // Children must be reconstructed before their updated parents so retained
+    // deductions are validated against the complete new child geometry.
+    std::vector<BoundaryGeometryEdit> result;
+    std::set<std::string> visiting, visited;
+    const auto append = [&](const auto& self, const std::string& id) -> void {
+        if (visited.contains(id)) return;
+        if (!visiting.insert(id).second) reject("Automatic exterior deductions contain a cycle");
+        const auto& owner = original.at(id);
+        if (const auto children = owner.properties.find("deduction_ids"); children != owner.properties.end()) {
+            if (!children->is_array()) reject("Measured deductions must be an array");
+            for (const auto& child : *children) {
+                if (!child.is_string()) reject("Measured deduction identifiers must be strings");
+                const auto child_id = child.get<std::string>();
+                if (updates.contains(child_id)) self(self, child_id);
+            }
+        }
+        visiting.erase(id); visited.insert(id); result.push_back(updates.at(id));
+    };
+    for (const auto& [id, edit] : updates) { (void)edit; append(append, id); }
+    auto completed = edited_boundary_entities_batch(proposed, result);
+    if (const auto unsupported = validate_boundary_integrity(completed)) reject(*unsupported);
+    if (const auto unsupported = validate_constraint_integrity(completed)) reject(*unsupported);
+    // Also validate unchanged parents of updated deductions against final state.
+    for (const auto& [id, owner] : completed) {
+        (void)id;
+        const auto deductions = owner.properties.find("deduction_ids");
+        if (deductions == owner.properties.end() || !deductions->is_array() ||
+            !can_recognize_boundary_entity_type(owner.type)) continue;
+        bool affected = false;
+        std::vector<Boundary> holes;
+        for (const auto& child : *deductions) {
+            if (!child.is_string()) reject("Measured deduction identifiers must be strings");
+            const auto child_id = child.get<std::string>();
+            affected = affected || updates.contains(child_id);
+            holes.push_back(actual_boundary_geometry(completed.at(child_id)));
+        }
+        if (affected)
+            for (const auto& hole : holes)
+                if (const auto diagnostic = validate_boundary_holes(actual_boundary_geometry(owner), {hole}))
+                    reject("Updated deduction does not fit its retained parent: " + *diagnostic);
+    }
+    return result;
 }
 
 } // namespace sketch

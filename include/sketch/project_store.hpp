@@ -114,7 +114,7 @@ public:
     // fresh topology redefinition requires v17; grouped rigid transforms
     // require v18. Any may include
     // the optional recovery ledger. Absent proofs preserve historical formats.
-    static constexpr std::uint32_t format_version = 18;
+    static constexpr std::uint32_t format_version = 19;
     static constexpr std::uint32_t recovery_format_version = 4;
     [[nodiscard]] static std::uint32_t required_format_version(const DocumentSnapshot& snapshot);
     static constexpr std::uint64_t maximum_file_bytes = 4ULL * 1024ULL * 1024ULL * 1024ULL;

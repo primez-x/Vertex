@@ -1,6 +1,6 @@
 # Vertex user testing checklist
 
-325 practical tasks, grouped by how you use the app (including U100a). This replaces the earlier engineering-oriented checklist. The old 130-item list is preserved separately as engineering-requirements-checklist.md.
+326 practical tasks, grouped by how you use the app (including U100a). This replaces the earlier engineering-oriented checklist. The old 130-item list is preserved separately as engineering-requirements-checklist.md.
 
 This is a user acceptance list for the intended app, not a claim that every listed action is implemented or working in the current preview. If you cannot find a control, or a feature is absent, mark **Blocked / missing** and describe it. Specialized sections can be skipped if you do not use them or lack the device or sample files.
 
@@ -1881,6 +1881,12 @@ drawing; switching modes does not change existing geometry.
 - [ ] **U324 — Rotate or mirror an appraisal area and its deduction**
   - Steps: Create a dwelling area with a garage deduction. Select only the dwelling and use its rotation handle; confirm the garage follows in the preview, then press Escape. Rotate again and release. Open **Transform selection**, cancel once, then try both horizontal and vertical flips. Check net area and category totals, Undo and Redo, save and reopen. Repeat with an exterior area measured from walls containing a hosted window or door, and with a light-commercial occupiable area and service deduction.
   - Expected: Preview includes the parent, deduction and, where used, supporting walls and hosted openings. Cancel leaves them unchanged. Rotation or flipping keeps the same objects, facts, appearance and deduction links; it preserves unrounded areas and category totals. Undo/Redo moves the complete group in one step. Reopening preserves its geometry and current exterior sources. A transformation that would invalidate another area's shared walls, deduction or external locked relationship is refused without changing the drawing.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **U325 — Change a wall and keep its exterior appraisal measurement current**
+  - Steps: Draw a closed exterior wall shell and use **Measure exterior from walls**. Name the resulting area, set its color, declare its appraisal facts and add a garage deduction. Select a source wall and change its thickness in Properties. Then edit a wall length with connected objects enabled. Inspect the measured outline, dimensions and appraisal totals after each edit without choosing Refresh. Undo once, Redo, save and reopen. Repeat in Imperial and Metric and with a curved exterior wall.
+  - Expected: Each valid wall edit updates its existing linked outline and dimensions in the same operation. Net appraisal totals recalculate automatically; the area keeps its name, color, declarations and deduction. One Undo restores the complete previous wall and measured outline; Redo and reopening retain the update. An edit that conflicts with a locked measurement or places a deduction outside the area is refused without changing the drawing. A measurement whose sources were already missing or stale remains visibly in need of repair.
   - Result: Not tested
   - Notes: ______________________________
 

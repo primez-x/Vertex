@@ -4753,15 +4753,16 @@ public:
                 (found->second.type != "wall" && !is_closed_boundary_entity(found->second.type))) {
                 throw std::invalid_argument("Select a wall or an identified closed boundary first.");
             }
-            const auto [command, root] = found->second.type == "wall" ?
+            auto [command, root] = found->second.type == "wall" ?
                 makeWallTransformCommand(source, found->second, rotation_degrees, flip_horizontal,
                     flip_vertical, offset_x, offset_y, clone) :
                 makeBoundaryTransformCommand(source, found->second, rotation_degrees, flip_horizontal,
                     flip_vertical, offset_x, offset_y, clone);
+            command = augmentAuthoredCommand(command, source);
             const auto* changes = std::get_if<ApplyEntityChanges>(&command);
             if (!changes || !changes->entity_changes.empty()) {
                 (void)Document::preview_command(source, command);
-                applyDocumentCommand(command);
+                applyAuthoredCommand(command);
                 m_selected_id = id_from(root);
                 refresh();
             }
@@ -4853,11 +4854,12 @@ public:
             const auto [transaction, root] = makeArchitecturalObjectTransformTransaction(
                 source, found->second, rotation_degrees, offset_x, offset_y, offset_z,
                 uniform_scale, clone);
-            const auto command = architecturalObjectTransformCommand(source,found->second,transaction);
+            const auto command = augmentAuthoredCommand(
+                architecturalObjectTransformCommand(source,found->second,transaction), source);
             if (const auto* changes=std::get_if<ApplyEntityChanges>(&command);
                 changes && changes->entity_changes.empty()) { clearError(); return true; }
             (void)Document::preview_command(source,command);
-            applyDocumentCommand(command);
+            applyAuthoredCommand(command);
             m_selected_id = id_from(root);
             clearError();
             refresh();
@@ -4999,9 +5001,9 @@ public:
             changes.insert(changes.end(),std::make_move_iterator(wall_changes.entity_changes.begin()),
                 std::make_move_iterator(wall_changes.entity_changes.end()));
         }
-        const Command command = translations.empty()
+        const Command command = augmentAuthoredCommand(translations.empty()
             ? Command{ApplyEntityChanges{source.revision(),std::move(changes),{},"Move selected objects"}}
-            : Command{TranslateBoundaries{source.revision(),std::move(translations),std::move(changes),"Move selected objects"}};
+            : Command{TranslateBoundaries{source.revision(),std::move(translations),std::move(changes),"Move selected objects"}}, source);
         const auto candidate = Document::preview_command(source,command);
         for (const auto& id : model_ids) {
             const auto& entity = source.entities().at(id.toStdString());
@@ -7436,7 +7438,9 @@ public:
         layout->addWidget(buttons);
         auto* apply = buttons->button(QDialogButtonBox::Apply);
 
+        std::optional<std::pair<Command, std::string>> candidate_command;
         const auto update_preview = [&] {
+            candidate_command.reset();
             try {
                 if (!m_document->is_editable())
                     throw std::invalid_argument("This document is read-only.");
@@ -7445,12 +7449,14 @@ public:
                 const auto [transaction, root] = makeArchitecturalObjectTransformTransaction(
                     source, *original, rotation->text(), offset_x->text(), offset_y->text(),
                     offset_z->text(), scale->text(), clone->isChecked());
-                const auto preview = Document::preview_command(source,
-                    architecturalObjectTransformCommand(source,*original,transaction));
+                auto command = augmentAuthoredCommand(
+                    architecturalObjectTransformCommand(source,*original,transaction), source);
+                const auto preview = Document::preview_command(source, command);
                 const auto preview_entity = preview.entities().find(root);
                 if (preview_entity == preview.entities().end())
                     throw std::invalid_argument("The transform preview did not produce its target object.");
                 (void)decode_building_entity(preview_entity->second);
+                candidate_command = std::pair{std::move(command), root};
                 status->setText(QStringLiteral("Preview ready at model revision %1. Apply to commit %2.")
                                     .arg(source.revision())
                                     .arg(clone->isChecked() ? QStringLiteral("a transformed copy")
@@ -7472,12 +7478,18 @@ public:
                 update_preview();
                 return;
             }
-            if (transformSelectedArchitecturalObject(rotation->text(), offset_x->text(),
-                                                     offset_y->text(), offset_z->text(),
-                                                     scale->text(), clone->isChecked())) {
+            if (!candidate_command) return;
+            try {
+                const auto* changes = std::get_if<ApplyEntityChanges>(&candidate_command->first);
+                if (!changes || !changes->entity_changes.empty()) {
+                    applyAuthoredCommand(candidate_command->first);
+                    m_selected_id = id_from(candidate_command->second);
+                    refresh();
+                }
+                clearError();
                 dialog.accept();
-            } else {
-                status->setText(lastError());
+            } catch (const std::exception& error) {
+                status->setText(QString::fromUtf8(error.what()));
             }
         });
         QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
@@ -7572,6 +7584,7 @@ public:
                     offset_y->text(), clone->isChecked()) : makeBoundaryTransformCommand(source, *original,
                     rotation->text(), flip_horizontal->isChecked(), flip_vertical->isChecked(),
                     offset_x->text(), offset_y->text(), clone->isChecked());
+                candidate.first = augmentAuthoredCommand(candidate.first, source);
                 const auto* changes = std::get_if<ApplyEntityChanges>(&candidate.first);
                 const auto proposed = changes && changes->entity_changes.empty() ? source :
                     Document::preview_command(source, candidate.first);
@@ -7678,7 +7691,7 @@ public:
                 try {
                     const auto* changes = std::get_if<ApplyEntityChanges>(&candidate_command->first);
                     if (!changes || !changes->entity_changes.empty()) {
-                        applyDocumentCommand(candidate_command->first);
+                        applyAuthoredCommand(candidate_command->first);
                         m_selected_id = id_from(candidate_command->second);
                         refresh();
                     }
@@ -14746,7 +14759,7 @@ public:
             }
             const auto command = makeSelectionGeometryTranslationCommand(source,model_ids,model_delta,
                 std::move(presentation_changes));
-            applyDocumentCommand(command);
+            applyAuthoredCommand(command);
             clearError();
             refresh();
             return true;
@@ -23637,14 +23650,14 @@ private:
                     {ArchitecturalOperation{ArchitecturalAction::property_edit,
                         entity->id, {}, {}, std::move(encoded), std::nullopt}},
                     message);
-                const auto preview = preview_architectural_transaction(source, transaction);
+                const auto command = augmentAuthoredCommand(Command{architectural_transaction_command(
+                    source, transaction, source.revision())}, source);
+                const auto preview = Document::preview_command(source, command);
                 if (entity_map_digest(source.entities()) == entity_map_digest(preview.entities())) {
                     clearError();
                     return true;
                 }
-                const auto command = architectural_transaction_command(source, transaction,
-                                                                        source.revision());
-                applyDocumentCommand(Command{command});
+                applyAuthoredCommand(command);
                 clearError();
                 refresh();
                 return true;
@@ -23925,11 +23938,14 @@ private:
     }
 
     Command augmentAuthoredCommand(const Command& command) {
+        return augmentAuthoredCommand(command, authoringSnapshot());
+    }
+
+    Command augmentAuthoredCommand(const Command& command, const DocumentSnapshot& source) {
         // Register only newly authored geometry. Existing unregistered objects
         // retain their legacy visibility; editing them must not change ownership.
         auto authored_command = command;
         if (auto* changes = std::get_if<ApplyEntityChanges>(&authored_command)) {
-            const auto source = authoringSnapshot();
             std::set<std::string, std::less<>> removed_ids;
             for (const auto& change : changes->entity_changes)
                 if (change.kind == EntityChangeKind::erase) removed_ids.insert(change.entity_id);
@@ -24058,7 +24074,11 @@ private:
                 }
             }
         }
-        return authored_command;
+        // Constraint authoring completed its physical/exterior consequences
+        // before sealing the candidate. Never change that admitted command.
+        if (std::holds_alternative<ApplyBoundaryConstraintChanges>(authored_command))
+            return authored_command;
+        return complete_exterior_wall_measurement_command(source, authored_command);
     }
 
     void applyAuthoredCommand(const Command& command) {

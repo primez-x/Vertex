@@ -11,7 +11,27 @@ namespace sketch {
 struct WallMeasurementResult {
     Boundary boundary;
     nlohmann::json source;
+    // Physical source identity for each analytical exterior edge, after the
+    // same winding and seed rotations used for boundary.
+    std::vector<std::string> ordered_wall_ids;
 };
+
+// Proves old edge/corner correspondence through physical wall identity, then
+// derives stable-coordinate redraws for every affected existing source owner.
+// Initially stale and anonymous sources retain explicit repair behavior.
+// Initially current owners require unchanged cyclic adjacency and valid new
+// context, joins, deductions and constraints; no identities are minted.
+[[nodiscard]] std::vector<BoundaryGeometryEdit> exterior_wall_measurement_source_updates(
+    const std::map<std::string, Entity, std::less<>>& original,
+    const std::map<std::string, Entity, std::less<>>& proposed);
+
+// Authored edits opt in explicitly. Completes ordinary wall changes or typed
+// constraint changes through one v6 command; other command types and commands
+// without affected source consumers are returned unchanged. Affected ordinary
+// commands with asset changes or unsupported supplemental edits are rejected.
+// Already completed commands are validated and returned unchanged.
+[[nodiscard]] Command complete_exterior_wall_measurement_command(
+    const DocumentSnapshot& source, const Command& command);
 
 // Strict structural decoding only; historical wall IDs may no longer exist.
 [[nodiscard]] std::vector<std::string> exterior_wall_measurement_source_ids(const Entity& owner);

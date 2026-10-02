@@ -458,6 +458,8 @@ public:
     // Edits an architectural object's base elevation through the same
     // validated, revision-checked geometry path as its other dimensions.
     [[nodiscard]] bool editSelectedElevation(const QString& expression);
+    // Source-wall thickness and dependent exterior appraisal measurements
+    // are validated and published together in one undoable command.
     [[nodiscard]] bool editSelectedThickness(const QString& expression);
     [[nodiscard]] bool editSelectedFactor(const QString& expression);
     // Applies a validated local DISTO reading to the explicitly selected

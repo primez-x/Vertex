@@ -7,6 +7,7 @@
 #include "sketch/constraint_tolerances.hpp"
 #include "sketch/project_organization.hpp"
 #include "sketch/wall_semantics.hpp"
+#include "sketch/wall_measurement.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -183,6 +184,9 @@ std::string digest_shown_result(const ConstraintAuthoringPreview& preview) {
     auto boundary_edits = ordered_json::array();
     for (const auto& edit : preview.boundary_edits())
         boundary_edits.push_back(encode_boundary_geometry_edit(edit));
+    auto exterior_source_edits = ordered_json::array();
+    for (const auto& edit : preview.exterior_source_edits())
+        exterior_source_edits.push_back(encode_boundary_geometry_edit(edit));
     return digest_json({{"accepted", preview.accepted()},
                         {"document_id", preview.document_id()},
                         {"revision", preview.expected_revision()},
@@ -192,6 +196,7 @@ std::string digest_shown_result(const ConstraintAuthoringPreview& preview) {
                         {"boundary_changes", std::move(boundary_changes)},
                         {"degrees_of_freedom", preview.degrees_of_freedom()},
                         {"boundary_edits", std::move(boundary_edits)},
+                        {"exterior_source_edits", std::move(exterior_source_edits)},
                         {"diagnostics", preview.diagnostics()}});
 }
 
@@ -993,6 +998,16 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(
             result.boundary_edits_.push_back(std::move(edit));
         }
         candidate = edited_boundary_entities_batch(candidate, result.boundary_edits_);
+        result.exterior_source_edits_ = exterior_wall_measurement_source_updates(
+            snapshot.entities(), candidate);
+        for (const auto& edit : result.exterior_source_edits_) {
+            if (std::any_of(result.boundary_edits_.begin(), result.boundary_edits_.end(),
+                [&](const auto& authored) { return authored.boundary_id == edit.boundary_id; }))
+                invalid("Source-measured owner cannot also receive an authored boundary edit: " + edit.boundary_id);
+            boundaries.try_emplace(edit.boundary_id,
+                decode_identified_boundary_entity(snapshot.entities().at(edit.boundary_id)));
+        }
+        candidate = edited_boundary_entities_batch(candidate, result.exterior_source_edits_);
         for (const auto& [id, before] : boundaries) {
             const auto after = decode_identified_boundary_entity(candidate.at(id));
             if (after != before) result.changed_boundaries_.push_back({before, after});
@@ -1015,6 +1030,7 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(
             result.changed_walls_.clear();
             result.changed_boundaries_.clear();
             result.boundary_edits_.clear();
+            result.exterior_source_edits_.clear();
             result.diagnostics_.push_back("Constraint authoring intent makes no document change");
             return result;
         }
@@ -1029,6 +1045,7 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(
         result.changed_walls_.clear();
         result.changed_boundaries_.clear();
         result.boundary_edits_.clear();
+        result.exterior_source_edits_.clear();
         result.candidate_entities_ = snapshot.entities();
         result.candidate_digest_.clear();
         result.shown_result_digest_.clear();
@@ -1070,6 +1087,9 @@ const std::vector<ConstraintBoundaryChange>& ConstraintAuthoringPreview::changed
 int ConstraintAuthoringPreview::degrees_of_freedom() const noexcept { return degrees_of_freedom_; }
 const std::vector<BoundaryGeometryEdit>& ConstraintAuthoringPreview::boundary_edits() const noexcept {
     return boundary_edits_;
+}
+const std::vector<BoundaryGeometryEdit>& ConstraintAuthoringPreview::exterior_source_edits() const noexcept {
+    return exterior_source_edits_;
 }
 const Entities& ConstraintAuthoringPreview::candidate_entities() const noexcept {
     return candidate_entities_;
@@ -1285,7 +1305,8 @@ Command constraint_authoring_verified_command(const DocumentSnapshot& current,
         throw DocumentError(DocumentErrorCode::invalid_entity,
                             "Constraint preview does not contain a document change");
     }
-    if (!recomputed.boundary_edits_.empty() || !recomputed.changed_walls_.empty()) {
+    if (!recomputed.boundary_edits_.empty() || !recomputed.changed_walls_.empty() ||
+        !recomputed.exterior_source_edits_.empty()) {
         std::vector<EntityChange> constraint_changes;
         for (const auto& change : changes) {
             const auto id = change.kind == EntityChangeKind::upsert
@@ -1302,6 +1323,8 @@ Command constraint_authoring_verified_command(const DocumentSnapshot& current,
         ApplyBoundaryConstraintChanges command{
             current.revision(), recomputed.boundary_edits_,
             std::move(constraint_changes), recomputed.normalized_intent_.message};
+        command.exterior_source_edits = recomputed.exterior_source_edits_;
+        command.exterior_source_completion = !recomputed.exterior_source_edits_.empty();
         for (const auto& wall : recomputed.changed_walls_) {
             const auto& resize = recomputed.normalized_intent_.wall_resize;
             const bool resized = resize && resize->wall_id == wall.wall_id;

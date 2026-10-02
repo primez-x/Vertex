@@ -1,4 +1,4 @@
-# Vertex project formats v1 through v18
+# Vertex project formats v1 through v19
 
 ## Original typed wall input
 
@@ -194,9 +194,10 @@ v10 curved endpoint constraints, v11 straight wall-only intent, v12 physical
 arc-length locks, v13 direct physical curve-length inputs, and v14 rigid curve
 construction transforms, v15 fixed-chord boundary curvature edits, v16
 reviewed exterior wall-source replacements, and v17 explicit fresh-topology
-boundary replacements, and v18 measured group rigid transforms, plus v4 through
-v18 archives through recovery-aware APIs.
-Under-versioned semantic data and versions above 18 reject. Legacy-only history
+boundary replacements, v18 measured group rigid transforms, and v19 coordinated
+physical wall/exterior measurement changes, plus v4 through v19 archives through
+recovery-aware APIs.
+Under-versioned semantic data and versions above 19 reject. Legacy-only history
 is still written as v1. Unknown boundary entity
 versions in v2 remain preserved read-only. See `boundary-entity-format.md`.
 Version 2 also recognizes `dimension` entities. Segment-length dimensions refer
@@ -649,7 +650,7 @@ unknown project `format_version` is rejected rather than opened unsafely.
 ## SQLite schema
 
 The SQLite `application_id` is `0x50535444` (`PSTD`). `user_version` and metadata
-`format_version` are equal and range from `1` through `18`, according to the
+`format_version` are equal and range from `1` through `19`, according to the
 retained semantics. The baseline application tables below are shared; later
 versions add the proof columns and recovery data documented in this file.
 
@@ -1246,3 +1247,33 @@ route is separate from live replacement admission and never rounds or rewrites
 stored geometry, command bytes or digests. Exact original outlines can also
 remain current against their unchanged sources. Old records retain this
 compatibility when a later command raises the archive to format 18.
+
+### Coordinated physical wall and exterior updates (v19)
+
+Constraint-command envelope version 6 retains the preceding geometry and
+constraint fields, plus `physical_entity_changes` and `exterior_source_edits`.
+Physical changes are admitted under their ordinary wall-edit rules; they do not
+inherit typed endpoint-edit authority. Exterior edits are explicit typed boundary
+redefinitions applied after the physical wall candidate has been reconstructed.
+The envelope version remains part of command identity even when testing omission
+or tampering; removing a required exterior update cannot downgrade its meaning.
+
+Every automatic exterior update is recomputed from the original physical walls
+and measured owner. A unique cyclic or reversed analytical correspondence binds
+existing edge and corner identities to their recorded source walls. Proposed
+geometry must retain those wall identities and their cyclic adjacency. Equal
+edge counts are insufficient. The owner retains its metadata, appraisal facts,
+appearance and deduction references; dimensions resolve against the retained
+child identities. Final constraints and deduction containment remain mandatory.
+
+Consumer discovery uses the complete original document, including unselected
+owners. Initially current supported owners are coordinated together. Previously
+stale sources, generic imported boundaries and explicit source deletion retain
+their repair contract and cannot produce qualified totals merely from this proof.
+Changing source topology still requires reviewed replacement and reference mapping.
+
+The proof occupies the existing `boundary_constraint_changes_json` revision
+column and corresponding logical/extraction data; no new SQLite column is
+required. Retained v6 history requires native format 19 and extraction version 17,
+including after Undo or deletion. Existing v1-v5 command envelopes retain their
+original replay order and digest bytes.

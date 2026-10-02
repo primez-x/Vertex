@@ -145,8 +145,9 @@ struct ConstraintWallGeometryEdit {
 };
 
 // Geometry is replayed before the relation changes are validated.
-// Entity changes may contain only constraints; boundary payloads are never
-// accepted as substitutes for their typed, receipt-preserving edits.
+// The original entity_changes lane contains only constraints. Version six's
+// physical lane admits existing-wall changes under ordinary provenance rules;
+// boundary payloads never substitute for typed, receipt-preserving edits.
 struct ApplyBoundaryConstraintChanges {
     Revision expected_revision = 0;
     std::vector<BoundaryGeometryEdit> boundary_edits;
@@ -157,6 +158,14 @@ struct ApplyBoundaryConstraintChanges {
     // wall-only edits use version 4. A version-three physical curve-length
     // proof requires envelope version 5. Boundary-only stays version 1.
     std::vector<ConstraintWallGeometryEdit> wall_edits;
+    // Version six additionally admits existing-wall physical/construction changes
+    // and verified exterior redraws, in that order after primary geometry and
+    // constraints. Exterior updates are recomputed from the original source;
+    // they cannot stand in for arbitrary raw boundary payloads.
+    std::vector<EntityChange> physical_entity_changes;
+    std::vector<BoundaryGeometryEdit> exterior_source_edits;
+    // Retains envelope version six even if a caller removes its edit vectors.
+    bool exterior_source_completion{};
 };
 
 using Command = std::variant<ApplyEntityChanges, NameRevision, TranslateBoundary,

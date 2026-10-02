@@ -1329,6 +1329,38 @@ Asset Asset::create(std::string media_type, std::vector<std::byte> bytes,
     return create(make_stable_id(), std::move(media_type), std::move(bytes), std::move(metadata));
 }
 
+bool has_exterior_source_completion(const ApplyBoundaryConstraintChanges& command) {
+    return command.exterior_source_completion || !command.physical_entity_changes.empty() ||
+        !command.exterior_source_edits.empty();
+}
+
+void validate_completed_constraint_change(const std::map<std::string, Entity, std::less<>>& before,
+    const std::map<std::string, Entity, std::less<>>& after,
+    const ApplyBoundaryConstraintChanges& command) {
+    if (!has_exterior_source_completion(command)) {
+        validate_constraint_change(before, after, true);
+        return;
+    }
+    try {
+        validate_constraint_transition(before, after);
+        // Typed endpoint authority applies only to its explicitly proved
+        // walls. Independently constructed ordinary curves must retain the
+        // ordinary reconstruction path, including archived input operations.
+        std::set<std::string> typed_ids;
+        for (const auto& edit : command.wall_edits) typed_ids.insert(edit.wall_id);
+        auto ordinary_before = before, typed_before = before;
+        for (const auto& [id, entity] : before) {
+            if (entity.type != "wall") continue;
+            if (typed_ids.contains(id)) ordinary_before.erase(id);
+            else typed_before.erase(id);
+        }
+        validate_constraint_wall_geometry_transition(ordinary_before, after, false);
+        validate_constraint_wall_geometry_transition(typed_before, after, true);
+    } catch (const std::exception& error) {
+        document_error(DocumentErrorCode::constraint_violation, error.what());
+    }
+}
+
 static void validate_split_dimension_lifetime(const BoundaryGeometryEdit& edit,
                                        const std::vector<RevisionRecord>& history,
                                        std::size_t preceding_records) {
@@ -1341,10 +1373,22 @@ static void validate_split_dimension_lifetime(const BoundaryGeometryEdit& edit,
                 throw std::invalid_argument("Boundary edit dimension ID was already used in retained history");
 }
 
+static void validate_exterior_source_redraw(const BoundaryGeometryEdit& edit) {
+    validate_boundary_geometry_edit(edit);
+    if (edit.kind != BoundaryGeometryEditKind::redefine_boundary || edit.replacement_wall_source_ids.empty() ||
+        edit.fresh_topology || !edit.replacement_authoring.is_null() || !edit.replacement_properties.empty() ||
+        !edit.replacement_dimension_ids.empty() || !edit.replacement_child_mapping.empty() ||
+        !edit.replacement_removed_reference_ids.empty())
+        throw std::invalid_argument("Automatic exterior source updates require retained-topology version-three redraws");
+}
+
 std::map<std::string, Entity, std::less<>> boundary_constraint_entities(
     const std::map<std::string, Entity, std::less<>>& source,
     const ApplyBoundaryConstraintChanges& command, bool retained_replay = false) {
-    if (command.boundary_edits.empty() && command.wall_edits.empty())
+    const bool source_completion = command.exterior_source_completion ||
+        !command.physical_entity_changes.empty() || !command.exterior_source_edits.empty();
+    if (source_completion) (void)command_to_json(Command{command});
+    if (command.boundary_edits.empty() && command.wall_edits.empty() && !source_completion)
         document_error(DocumentErrorCode::invalid_entity,
                        "Boundary constraint transaction requires geometry edits");
     auto result = source;
@@ -1390,12 +1434,142 @@ std::map<std::string, Entity, std::less<>> boundary_constraint_entities(
             result.erase(id);
         }
     }
+    if (source_completion) {
+        const auto before_physical = result;
+        for (const auto& change : command.physical_entity_changes) {
+            const auto& wall = change.entity;
+            const auto previous = source.find(wall.id);
+            if (change.kind != EntityChangeKind::upsert || previous == source.end() ||
+                previous->second.type != "wall" || wall.type != "wall" ||
+                wall.required != previous->second.required)
+                document_error(DocumentErrorCode::invalid_entity,
+                    "Exterior physical supplements require existing walls with retained metadata");
+            if (!touched.insert(wall.id).second)
+                document_error(DocumentErrorCode::duplicate_change,
+                    "Exterior physical supplement overlaps another edit: " + wall.id);
+            auto unchanged = wall.properties;
+            for (const auto* key : {"baseline", "thickness_m", "thickness", "height_m", "height", "layers", "classification", "name"}) {
+                unchanged.erase(key);
+                if (previous->second.properties.contains(key)) unchanged[key] = previous->second.properties.at(key);
+            }
+            if (unchanged != previous->second.properties)
+                document_error(DocumentErrorCode::invalid_entity,
+                    "Exterior physical supplements contain unsupported wall properties or changed source context");
+            auto retained_extensions = wall.extensions;
+            for (const auto* key : {"curve_input", "curve_input_derivation", "constraint_authoring"}) {
+                retained_extensions.erase(key);
+                if (previous->second.extensions.contains(key)) retained_extensions[key] = previous->second.extensions.at(key);
+            }
+            if (retained_extensions != previous->second.extensions)
+                document_error(DocumentErrorCode::invalid_entity,
+                    "Exterior physical supplements must retain unrelated wall extension metadata");
+            validate_entity(wall);
+            result.at(wall.id) = wall;
+        }
+        // Ordinary physical properties retain the same admission contracts;
+        // typed source authority does not qualify supplemental raw geometry.
+        validate_constraint_change(before_physical, result);
+        try { validate_boundary_transition(before_physical, result); }
+        catch (const std::exception& error) { document_error(DocumentErrorCode::invalid_entity, error.what()); }
+    }
     for (const auto& edit : command.wall_edits) {
         try { validate_constraint_wall_host(edit.wall_id, result); }
         catch (const std::exception& error) { document_error(DocumentErrorCode::invalid_entity,error.what()); }
     }
     try { validate_constraint_edit_topology(source,result); }
     catch (const std::exception& error) { document_error(DocumentErrorCode::invalid_entity,error.what()); }
+    if (source_completion) {
+        try {
+            if (command.exterior_source_edits.empty())
+                throw std::invalid_argument("Exterior source completion requires explicit redraws");
+            const auto expected = exterior_wall_measurement_source_updates(source, result);
+            if (expected != command.exterior_source_edits)
+                throw std::invalid_argument("Exterior source redraws differ from complete physical-wall lineage reconstruction");
+            for (const auto& update : expected)
+                if (std::any_of(command.boundary_edits.begin(), command.boundary_edits.end(), [&](const auto& edit) {
+                        return edit.boundary_id == update.boundary_id;
+                    }))
+                    throw std::invalid_argument("Exterior source redraw overlaps primary boundary geometry");
+            result = retained_replay ? replayed_boundary_entities_batch(result, expected)
+                                     : edited_boundary_entities_batch(result, expected);
+        } catch (const std::exception& error) {
+            document_error(DocumentErrorCode::invalid_entity, error.what());
+        }
+    }
+    return result;
+}
+
+Command complete_exterior_wall_measurement_command(const DocumentSnapshot& source, const Command& command) {
+    const auto* ordinary = std::get_if<ApplyEntityChanges>(&command);
+    const auto* constrained = std::get_if<ApplyBoundaryConstraintChanges>(&command);
+    if (!ordinary && !constrained) return command;
+    if (constrained && (constrained->exterior_source_completion ||
+        !constrained->physical_entity_changes.empty() || !constrained->exterior_source_edits.empty())) {
+        (void)Document::preview_command(source, command);
+        return command;
+    }
+    if (ordinary && std::none_of(ordinary->entity_changes.begin(), ordinary->entity_changes.end(), [&](const auto& change) {
+            if (change.kind != EntityChangeKind::upsert) return false;
+            const auto previous = source.entities().find(change.entity.id);
+            return previous != source.entities().end() && previous->second.type == "wall" &&
+                previous->second != change.entity;
+        }))
+        // Deletion may also update phase, annotation and sheet registries.
+        // Those side effects do not turn it into a physical wall edit. New
+        // objects also retain ordinary admission without an extra history fork.
+        return command;
+    // Ordinary commands retain their normal admission before any source
+    // authority is added. Legacy constraint commands retain their typed proof.
+    const auto physical = Document::preview_command(source, command);
+    const auto updates = exterior_wall_measurement_source_updates(source.entities(), physical.entities());
+    if (updates.empty()) return command;
+    ApplyBoundaryConstraintChanges completed = constrained ? *constrained : ApplyBoundaryConstraintChanges{};
+    completed.expected_revision = source.revision();
+    completed.exterior_source_completion = true;
+    completed.exterior_source_edits = updates;
+    if (ordinary) {
+        if (!ordinary->asset_changes.empty())
+            document_error(DocumentErrorCode::invalid_entity,
+                "Automatic exterior completion cannot combine asset changes with wall edits");
+        completed.message = ordinary->message;
+        const auto read = [](const Entity& wall) {
+            const auto& b = wall.properties.at("baseline");
+            return Segment{{b.at("start")[0].get<double>(), b.at("start")[1].get<double>()},
+                {b.at("end")[0].get<double>(), b.at("end")[1].get<double>()}, b.value("sweep_radians", 0.0)};
+        };
+        for (const auto& change : ordinary->entity_changes) {
+            const auto& id = change.kind == EntityChangeKind::upsert ? change.entity.id : change.entity_id;
+            const auto previous = source.entities().find(id);
+            if (change.kind == EntityChangeKind::upsert && previous != source.entities().end() &&
+                previous->second == change.entity) continue; // Exact no-op payloads carry no intent.
+            if (change.kind != EntityChangeKind::upsert || previous == source.entities().end() ||
+                previous->second.type != "wall" || change.entity.type != "wall")
+                document_error(DocumentErrorCode::invalid_entity,
+                    "Automatic exterior completion cannot reinterpret supplemental non-wall changes");
+            bool typed = false;
+            if (previous->second.properties.at("baseline") != change.entity.properties.at("baseline")) {
+                const auto old = read(previous->second), next = read(change.entity);
+                if (old.sweep_radians == next.sweep_radians) {
+                    ConstraintWallGeometryEdit edit{id, next, std::nullopt, old.sweep_radians == 0.0 ? 1ULL : 2ULL};
+                    try {
+                        if (replay_constraint_wall_edit(previous->second, edit) == change.entity) {
+                            completed.wall_edits.push_back(std::move(edit)); typed = true;
+                        }
+                    } catch (const std::invalid_argument&) {
+                        // Explicit ordinary construction retains its ordinary
+                        // provenance admission through the physical lane.
+                    }
+                }
+            }
+            if (!typed) completed.physical_entity_changes.push_back(change);
+        }
+    }
+    const Command result{std::move(completed)};
+    const auto verified = Document::preview_command(source, result);
+    const auto expected = edited_boundary_entities_batch(physical.entities(), updates);
+    if (verified.entities() != expected || verified.assets() != physical.assets())
+        document_error(DocumentErrorCode::invalid_entity,
+            "Automatic exterior completion does not reproduce the exact authored physical command");
     return result;
 }
 
@@ -1984,6 +2158,23 @@ nlohmann::json command_to_json(const Command& command) {
                     for (const auto& edit : typed.wall_edits)
                         encoded["wall_edits"].push_back(encode_constraint_wall_edit(edit));
                 }
+                if (typed.exterior_source_completion || !typed.physical_entity_changes.empty() ||
+                    !typed.exterior_source_edits.empty()) {
+                    encoded["version"] = 6;
+                    if (!encoded.contains("wall_edits")) encoded["wall_edits"] = nlohmann::json::array();
+                    encoded["physical_entity_changes"] = command_to_json(ApplyEntityChanges{
+                        typed.expected_revision, typed.physical_entity_changes, {}, typed.message}).at("entity_changes");
+                    encoded["exterior_source_edits"] = nlohmann::json::array();
+                    if (typed.exterior_source_edits.empty())
+                        throw std::invalid_argument("Exterior source completion requires explicit redraws");
+                    for (const auto& edit : typed.exterior_source_edits)
+                    {
+                        validate_exterior_source_redraw(edit);
+                        encoded["exterior_source_edits"].push_back(encode_boundary_geometry_edit(edit));
+                    }
+                    if (encoded.dump().size() > 1024 * 1024)
+                        throw std::invalid_argument("Exterior source completion exceeds the persisted proof budget");
+                }
             } catch (const std::exception& error) {
                 document_error(DocumentErrorCode::invalid_entity, error.what());
             }
@@ -2025,7 +2216,7 @@ Command command_from_json(const nlohmann::json& value) {
     try {
         if (!value.is_object() || !value.contains("version") || !value.contains("kind") ||
             !value.at("version").is_number_integer() ||
-            (value.at("version") != 1 && value.at("version") != 2 && value.at("version") != 3 && value.at("version") != 4 && value.at("version") != 5) ||
+            (value.at("version") != 1 && value.at("version") != 2 && value.at("version") != 3 && value.at("version") != 4 && value.at("version") != 5 && value.at("version") != 6) ||
             !value.at("kind").is_string()) {
             document_error(DocumentErrorCode::invalid_entity, "serialized command envelope is invalid");
         }
@@ -2082,14 +2273,19 @@ Command command_from_json(const nlohmann::json& value) {
         }
         if (kind == "apply_boundary_constraint_changes") {
             const bool mixed = value.at("version") != 1;
-            if (mixed) command_exact_fields(value, {"version","kind","expected_revision","message",
+            const bool source_completion = value.at("version") == 6;
+            if (source_completion) command_exact_fields(value, {"version","kind","expected_revision","message",
+                                          "entity_changes","boundary_edits","wall_edits",
+                                          "physical_entity_changes","exterior_source_edits"},
+                                 DocumentErrorCode::invalid_entity,"serialized exterior source command");
+            else if (mixed) command_exact_fields(value, {"version","kind","expected_revision","message",
                                           "entity_changes","boundary_edits","wall_edits"},
                                  DocumentErrorCode::invalid_entity,"serialized mixed constraint command");
             else command_exact_fields(value, {"version", "kind", "expected_revision", "message",
                                           "entity_changes", "boundary_edits"},
                                  DocumentErrorCode::invalid_entity, "serialized boundary constraint command");
             if (!value.at("boundary_edits").is_array() ||
-                (value.at("boundary_edits").empty() && value.at("version")!=3 && value.at("version")!=4 && value.at("version")!=5))
+                (value.at("boundary_edits").empty() && value.at("version")!=3 && value.at("version")!=4 && value.at("version")!=5 && !source_completion))
                 document_error(DocumentErrorCode::invalid_entity, "Boundary edits must be a nonempty array");
             if (value.at("version")==4 && !value.at("boundary_edits").empty())
                 document_error(DocumentErrorCode::invalid_entity, "Version 4 requires a straight wall-only transaction");
@@ -2098,15 +2294,18 @@ Command command_from_json(const nlohmann::json& value) {
             ordinary["version"] = 1;
             ordinary.erase("wall_edits");
             ordinary.erase("boundary_edits");
+            ordinary.erase("physical_entity_changes");
+            ordinary.erase("exterior_source_edits");
             ordinary["asset_changes"] = nlohmann::json::array();
             const auto changes = std::get<ApplyEntityChanges>(command_from_json(ordinary));
             ApplyBoundaryConstraintChanges result{
                 changes.expected_revision, {}, changes.entity_changes, changes.message};
+            result.exterior_source_completion = source_completion;
             try {
                 for (const auto& edit : value.at("boundary_edits"))
                     result.boundary_edits.push_back(decode_boundary_geometry_edit(edit));
                 if (mixed) {
-                    if (!value.at("wall_edits").is_array() || value.at("wall_edits").empty())
+                    if (!value.at("wall_edits").is_array() || (value.at("wall_edits").empty() && !source_completion))
                         document_error(DocumentErrorCode::invalid_entity,"Versioned wall transaction requires nonempty wall edits");
                     for (const auto& edit : value.at("wall_edits"))
                         result.wall_edits.push_back(decode_constraint_wall_edit(edit));
@@ -2114,10 +2313,24 @@ Command command_from_json(const nlohmann::json& value) {
                         [](const auto& edit) { return edit.version==3; });
                     const bool curved=std::any_of(result.wall_edits.begin(),result.wall_edits.end(),
                         [](const auto& edit) { return edit.version==2; });
-                    if (physical_curve!=(value.at("version")==5))
+                    if (!source_completion && physical_curve!=(value.at("version")==5))
                         document_error(DocumentErrorCode::invalid_entity,"Physical curve-length proof requires exactly command version 5");
-                    if (!physical_curve && curved!=(value.at("version")==3))
+                    if (!source_completion && !physical_curve && curved!=(value.at("version")==3))
                         document_error(DocumentErrorCode::invalid_entity,"Curved wall proof requires exactly command version 3");
+                }
+                if (source_completion) {
+                    auto physical = ordinary;
+                    physical["entity_changes"] = value.at("physical_entity_changes");
+                    result.physical_entity_changes = std::get<ApplyEntityChanges>(command_from_json(physical)).entity_changes;
+                    if (!value.at("exterior_source_edits").is_array() || value.at("exterior_source_edits").empty())
+                        document_error(DocumentErrorCode::invalid_entity,"Exterior source completion requires explicit redraws");
+                    for (const auto& edit : value.at("exterior_source_edits")) {
+                        if (!edit.is_object() || !edit.contains("version") || edit.at("version") != 3)
+                            throw std::invalid_argument("Automatic exterior source updates require version-three redraws");
+                        const auto decoded = decode_boundary_geometry_edit(edit);
+                        validate_exterior_source_redraw(decoded);
+                        result.exterior_source_edits.push_back(decoded);
+                    }
                 }
             } catch (const std::exception& error) {
                 document_error(DocumentErrorCode::invalid_entity, error.what());
@@ -2454,7 +2667,7 @@ Revision Document::apply(const Command& command) {
                 next.boundary_constraint_changes = typed_command;
                 next.entities = boundary_constraint_entities(current.entities, typed_command);
                 next_unsupported_constraints = validate_state(next.entities, next.assets);
-                validate_constraint_change(current.entities, next.entities,true);
+                validate_completed_constraint_change(current.entities, next.entities, typed_command);
                 try {
                     validate_boundary_identity_transition(
                         boundary_identity_history_, current.entities, next.entities);
@@ -2694,9 +2907,11 @@ Document Document::restore(DocumentSnapshot snapshot) {
         // Undo/redo restores an exact retained state and its provenance. The
         // source-state and stack checks below validate navigation; mutation
         // rules must not reject restoration of a shorter derivation prefix.
-        validate_constraint_change(previous.entities, record.entities,
-            record.boundary_constraint_changes.has_value(), !record.source_revision.has_value(),
-            record.boundary_transforms.has_value() || record.source_revision.has_value());
+        if (record.boundary_constraint_changes && has_exterior_source_completion(*record.boundary_constraint_changes))
+            validate_completed_constraint_change(previous.entities, record.entities, *record.boundary_constraint_changes);
+        else validate_constraint_change(previous.entities, record.entities,
+                record.boundary_constraint_changes.has_value(), !record.source_revision.has_value(),
+                record.boundary_transforms.has_value() || record.source_revision.has_value());
         if (record.parent_revision != Revision{index - 1}) {
             document_error(DocumentErrorCode::invalid_history,
                            "revision parent must be the immediately preceding event");

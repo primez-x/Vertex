@@ -142,6 +142,7 @@ public:
     [[nodiscard]] const std::vector<ConstraintBoundaryChange>& changed_boundaries() const noexcept;
     [[nodiscard]] int degrees_of_freedom() const noexcept;
     [[nodiscard]] const std::vector<BoundaryGeometryEdit>& boundary_edits() const noexcept;
+    [[nodiscard]] const std::vector<BoundaryGeometryEdit>& exterior_source_edits() const noexcept;
     [[nodiscard]] const std::map<std::string, Entity, std::less<>>&
     candidate_entities() const noexcept;
     [[nodiscard]] const std::vector<std::string>& diagnostics() const noexcept;
@@ -159,6 +160,7 @@ private:
     std::vector<ConstraintBoundaryChange> changed_boundaries_;
     int degrees_of_freedom_{-1};
     std::vector<BoundaryGeometryEdit> boundary_edits_;
+    std::vector<BoundaryGeometryEdit> exterior_source_edits_;
     std::map<std::string, Entity, std::less<>> candidate_entities_;
     std::vector<std::string> diagnostics_;
     ConstraintAuthoringIntent normalized_intent_;
