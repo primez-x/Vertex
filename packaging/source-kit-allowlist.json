@@ -2319,6 +2319,10 @@
     },
     {
       "category": "docs",
+      "path": "docs/verification/inline-drawing-2026-10-02.md"
+    },
+    {
+      "category": "docs",
       "path": "docs/verification/joined-boundary-vertex-editing-2026-09-30.md"
     },
     {
@@ -2600,6 +2604,10 @@
     {
       "category": "source",
       "path": "include/sketch/desktop/constraint_preview_canvas.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/desktop/drawing_input_panel.hpp"
     },
     {
       "category": "source",
@@ -3716,6 +3724,10 @@
     {
       "category": "source",
       "path": "src/desktop/draft_image_stamp.hpp"
+    },
+    {
+      "category": "source",
+      "path": "src/desktop/drawing_input_panel.cpp"
     },
     {
       "category": "source",

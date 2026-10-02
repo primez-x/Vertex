@@ -1045,6 +1045,9 @@
       "package": 4,
       "blocker": null,
       "implementation_sources": [
+        "include/sketch/desktop/drawing_input_panel.hpp",
+        "src/desktop/drawing_input_panel.cpp",
+        "src/desktop/plan_canvas.cpp",
         "src/desktop/boundary_input_dialog.cpp",
         "tests/boundary_input_dialog_tests.cpp",
         "tests/boundary_workflow_tests.cpp",
@@ -1054,7 +1057,7 @@
         "scripts/generate_workflow_acceptance_evidence.py",
         "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "Native D entry supports start coordinates, analytical edges and pending Define First dimension positions. Accepted non-coordinate methods and exact expressions repeat within the unfinished session; changing implicit unit basis resets effective defaults, and cancellation or invalid input preserves accepted state. Keyboard-only Draw First/Define First creation fixtures cover actual start commands, exact 12-by-8-foot geometry, dimension placement, focus, cancellation, draft undo/redo, one-command commit and save/reopen. Complete keyboard-only editing, physical-input and Apex shortcut qualification remain open. Deterministic workflow evidence retains its named-source qualification boundary."
+      "implementation_note": "Native D entry supports start coordinates, analytical edges and pending Define First dimension positions. Inline distance/cardinal entry now authors exact physical wall chains and measured outlines without opening a modal for each edge. It shares exact Quantity parsing and receipt replay, retains original input, guards stale context, uses per-wall commands and local boundary history, and provides visible direction repeat, cancellation and an expandable keypad. Native fixtures cover feet/inches, metres, fractions, grid bypass, exact endpoint connections, invalid input, unit/selection/source changes, Define First dimension phases, undo/redo and wall save/reopen. Complete keyboard-only editing, physical-input and Apex shortcut qualification remain open. Deterministic workflow evidence retains its named-source qualification boundary."
     },
     {
       "id": "APX-KEY-002",
@@ -2557,11 +2560,15 @@
       "requirement": "Provide pen/touch-specific controls and an on-screen measurement keypad while preserving keyboard precision paths.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "verified",
+      "implementation_status": "in_progress",
       "acceptance": "Real pen/touch fixtures enter and commit measurements through the keypad, preserve units/provenance, and remain undoable.",
       "package": 5,
       "blocker": null,
       "implementation_sources": [
+        "include/sketch/desktop/drawing_input_panel.hpp",
+        "src/desktop/drawing_input_panel.cpp",
+        "src/desktop/main_window.cpp",
+        "tests/boundary_workflow_tests.cpp",
         "include/sketch/workspace_accessibility.hpp",
         "src/core/workspace_accessibility.cpp",
         "tests/workspace_accessibility_tests.cpp",
@@ -2571,7 +2578,7 @@
         "scripts/generate_workflow_acceptance_evidence.py",
         "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "Pen/touch controls and an on-screen keypad are declared by the interaction profile and qualification manifest; physical pen/touch runs, device drivers, and end-to-end keypad command integration remain open. Deterministic Debug/Release workflow evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
+      "implementation_note": "The expandable native drawing keypad enters lengths through the same guarded physical-wall and measured-outline commands as keyboard input. Native UI fixtures exercise actual digit buttons, direction controls, retained units and input receipts, cancellation, invalid input and undo/history. Expanded direction buttons have 44-pixel targets. Physical pen/touch runs, device drivers and production qualification remain open; a mouse-driven Qt fixture does not certify real hardware behavior."
     },
     {
       "id": "ASSIST-001",

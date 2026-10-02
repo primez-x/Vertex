@@ -1,6 +1,6 @@
 # Vertex user testing checklist
 
-311 practical tasks, grouped by how you use the app. This replaces the earlier engineering-oriented checklist. The old 130-item list is preserved separately as engineering-requirements-checklist.md.
+314 practical tasks, grouped by how you use the app. This replaces the earlier engineering-oriented checklist. The old 130-item list is preserved separately as engineering-requirements-checklist.md.
 
 This is a user acceptance list for the intended app, not a claim that every listed action is implemented or working in the current preview. If you cannot find a control, or a feature is absent, mark **Blocked / missing** and describe it. Specialized sections can be skipped if you do not use them or lack the device or sample files.
 
@@ -37,6 +37,7 @@ Start with the workspace, draw a room, close it with the mouse, drag-select it, 
 - Complete a real job (5 tasks)
 - Appraisal square-foot workflow (13 tasks)
 - Custom area details (1 task)
+- Exact keyboard drawing (3 tasks)
 - Architectural joins and named views (3 tasks)
 
 ## Start a project and arrange the workspace
@@ -1797,6 +1798,26 @@ drawing; switching modes does not change existing geometry.
 - [ ] **U311 — Add and edit custom area details without JSON**
   - Steps: Double-click a closed area and open **Area attributes > Details…**. Add Name/Value rows for Finish = Oak and Use = Conditioned. Change a value, remove a row and Save. Try a duplicate name and an empty name; fix them, then Cancel. Reopen and Save without changes. Undo, Redo, save the project and reopen it.
   - Expected: Invalid names explain the problem and prevent Save. Cancel and saving unchanged rows leave the drawing and history unchanged. Accepted details survive Undo/Redo and reopening. Custom details do not change the area's geometry, appraisal facts, colors or square-footage totals.
+  - Result: Not tested
+  - Notes: ______________________________
+
+## Exact keyboard drawing
+
+- [ ] **U312 — Draw walls by typing exact lengths**
+  - Steps: Leave Draw set to Wall, set thickness to 7 in and height to 9 ft, and click a start point. Type 12 ft 6 in and press Right, type 8 ft and press Up, then repeat the lengths with Left and Down to close. Undo, Redo, save and reopen. Repeat in Metric using centimetres and metres.
+  - Expected: The lengths bypass grid rounding. Each wall keeps the chosen depth and height and meets the preceding endpoint exactly. Closing returns to ordinary canvas use. Undo removes one wall; Redo and reopening restore its geometry.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **U313 — Enter a measured outline without opening a dialog for every edge**
+  - Steps: Choose Measurement, click a start point and type lengths followed by Right, Up and Left. Undo and Redo an unfinished edge, then press Enter on the canvas to close. Repeat through Define First, placing each requested dimension before entering the next edge.
+  - Expected: Typed measurements retain their units. Draft Undo/Redo leaves the saved drawing unchanged until closure; the completed area is one undoable operation. Define First waits for each dimension placement. The existing D dialog remains available for angles and curves.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **U314 — Use the drawing keypad and cancel an invalid measurement**
+  - Steps: Start a wall, expand 123, enter a length with the keypad and choose a direction. Try zero, a negative length and invalid text. Press Escape in the field, then enter a valid length. Change Imperial/Metric while another entry is pending. Finish the wall chain with Escape on the canvas.
+  - Expected: Keypad and keyboard use the same measurement control. Invalid input explains the problem and changes no geometry. Escape clears pending text while retaining committed walls. Changing units clears the pending entry rather than reinterpreting it. The keypad can collapse again to recover drawing space.
   - Result: Not tested
   - Notes: ______________________________
 

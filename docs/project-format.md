@@ -1,5 +1,20 @@
 # Vertex project formats v1 through v15
 
+## Original typed wall input
+
+A straight wall created with inline cardinal entry can retain
+`properties.original_drawing_input`, encoded with the existing standalone
+ConstructionReceipt codec. Its kind is `line_rise_run`; one exact Quantity is
+zero and the other retains the entered distance and directional sign. Its
+segment ID is the initial wall ID. Creation replays the receipt and requires
+its endpoints to match the new authoritative baseline exactly.
+
+This is historical input provenance. The wall's current `baseline` remains the
+geometry authority; later moves or dimension edits can differ from the original
+receipt. Readers must not substitute replayed original input for current
+geometry. It is ordinary optional preserved metadata, requires no new project
+format version and survives native history and save/reopen.
+
 Reusable text templates use a separate [local text-library format](text-library-format.md).
 Placed labels store their complete content and style in the project; opening or
 editing them does not require that library file.

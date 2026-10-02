@@ -22,6 +22,7 @@
 #include "sketch/desktop/building_object_dialog.hpp"
 #include "sketch/desktop/constraint_dialog.hpp"
 #include "sketch/desktop/boundary_input_dialog.hpp"
+#include "sketch/desktop/drawing_input_panel.hpp"
 #include "sketch/desktop/sheet_layout_dialog.hpp"
 #include "sketch/desktop/text_library_dialog.hpp"
 #include "sketch/desktop/appraisal_report_dialog.hpp"
@@ -12701,7 +12702,8 @@ public:
     }
 
     QString createStraightWall(Vec2 start, Vec2 end, const QString& classification,
-                               std::optional<Revision> expected_revision = std::nullopt) {
+                               std::optional<Revision> expected_revision = std::nullopt,
+                               std::optional<ConstructionReceipt> original_input = std::nullopt) {
         const auto revision = expected_revision.value_or(m_document->revision());
         const auto drawing_context = requireDrawingContext();
         if (!drawing_context) return {};
@@ -12732,6 +12734,19 @@ public:
                                {"classification", classification.toStdString()}};
         add_default_level_placement(properties, *drawing_context);
         try {
+            if (original_input) {
+                const auto replay = replay_construction_receipt(*original_input,
+                    ConstructionReplayContext{start, std::nullopt, std::nullopt,
+                                               default_geometry_tolerance_metres});
+                if (replay.segment.start.x != start.x || replay.segment.start.y != start.y ||
+                    replay.segment.end.x != end.x || replay.segment.end.y != end.y ||
+                    replay.segment.sweep_radians != 0.0)
+                    throw std::invalid_argument("The original drawing input does not match the wall baseline.");
+                auto receipt = replay.receipt;
+                receipt.segment_id = entity_id;
+                // Historical input provenance, never a second geometry authority.
+                properties["original_drawing_input"] = encode_construction_receipt(receipt);
+            }
             const auto source = authoringSnapshot();
             const Entity wall{entity_id, "wall", properties, false, json::object()};
             ApplyEntityChanges command{revision, {EntityChange::upsert(wall)}, {}, "create straight wall"};
@@ -24569,7 +24584,10 @@ private:
         m_inspector_heading->setStyleSheet(QStringLiteral("font-size:14px; font-weight:650;"));
         heading_row->addWidget(m_inspector_heading, 1);
         auto* close_inspector = new QToolButton(inspector_body);
-        close_inspector->setText(QStringLiteral("×"));
+        close_inspector->setIcon(owner->style()->standardIcon(QStyle::SP_TitleBarCloseButton));
+        close_inspector->setIconSize(QSize(14, 14));
+        close_inspector->setStyleSheet(QStringLiteral("padding: 0;"));
+        close_inspector->setToolTip(QStringLiteral("Close properties"));
         close_inspector->setAccessibleName(QStringLiteral("Close properties"));
         close_inspector->setAutoRaise(true);
         close_inspector->setFixedSize(24, 24);
@@ -25447,6 +25465,24 @@ private:
     }
 
     void connectCanvas(PlanCanvas* canvas) {
+        if (canvas == m_measurementCanvas) {
+            m_drawing_input = new DrawingInputPanel(canvas);
+            m_drawing_input->hide();
+            m_drawing_input->setInputStarted([this] { captureDrawingInput(); });
+            m_drawing_input->setSubmitRequested([this](const QString& expression,
+                                                        DrawingCardinalDirection direction) {
+                return submitDrawingInput(expression, direction);
+            });
+            m_drawing_input->setCancelRequested([this] {
+                resetDrawingInputContext();
+                m_measurementCanvas->setFocus(Qt::OtherFocusReason);
+            });
+            canvas->setDrawingTextRequested([this](const QString& text) {
+                if (!drawingInputReady()) return false;
+                m_drawing_input->beginText(text);
+                return true;
+            });
+        }
         canvas->setPerformanceMeasured([this](PerformanceMetric metric,
                                               std::chrono::steady_clock::duration elapsed) {
             (void)m_performance_telemetry.record(metric, elapsed);
@@ -25750,6 +25786,7 @@ private:
         refreshInspector();
         refreshActions();
         refreshTitle();
+        updateDrawingInput();
         m_refreshing = false;
     }
 
@@ -29410,6 +29447,7 @@ private:
     }
 
     void refreshBoundaryPreview() {
+        updateDrawingInput();
         if (m_drawing_measurement_button) {
             m_drawing_measurement_button->setVisible(m_tool == CanvasTool::boundary && m_boundary_session.has_value());
             m_drawing_measurement_button->setEnabled(boundaryPrecisionReady());
@@ -29737,7 +29775,12 @@ private:
         m_architecturalCanvas->setBoundaryDraftPreview(std::move(preview));
     }
 
-    void onCanvasPoint(Vec2 point) {
+    void onCanvasPoint(Vec2 point, std::optional<Revision> expected_revision = std::nullopt,
+                       std::optional<ConstructionReceipt> original_input = std::nullopt) {
+        if (expected_revision && m_document->revision() != *expected_revision) {
+            setError(QStringLiteral("The project changed before this drawing input could be applied."));
+            return;
+        }
         if (!m_pending_opening_kind.isEmpty()) {
             updateOpeningPlacement(point, true);
             return;
@@ -29826,7 +29869,7 @@ private:
                                       QStringLiteral("interior"), context.revision);
             } else {
                 id = createStraightWall(*m_pending_wall_start, point,
-                                        QStringLiteral("interior"));
+                                        QStringLiteral("interior"), expected_revision, std::move(original_input));
             }
             if (!id.isEmpty()) {
                 // A just-created wall becomes the new chain segment, not a
@@ -29990,6 +30033,121 @@ private:
         setTool(CanvasTool::select);
     }
 
+    bool drawingInputReady() const {
+        if (!m_document->is_editable() || m_workspace != Workspace::measurement ||
+            !m_pending_symbol_id.isEmpty() || !m_pending_opening_kind.isEmpty()) return false;
+        if (m_tool == CanvasTool::wall) return m_pending_wall_start.has_value();
+        return m_tool == CanvasTool::boundary && m_boundary_session &&
+            m_boundary_session->phase() == BoundaryAuthoringPhase::drawing &&
+            m_boundary_session->pen_state() == BoundaryPenState::down;
+    }
+
+    void resetDrawingInputContext() {
+        m_drawing_input_context.reset();
+        m_drawing_input_snapshot.reset();
+        m_drawing_input_boundary.reset();
+        m_drawing_input_wall_start.reset();
+    }
+
+    void captureDrawingInput() {
+        m_drawing_input_context = captureModalContext();
+        m_drawing_input_snapshot = m_document->snapshot();
+        m_drawing_input_tool = m_tool;
+        m_drawing_input_workspace = m_workspace;
+        m_drawing_input_wall_start = m_pending_wall_start;
+        m_drawing_input_boundary = m_boundary_session
+            ? std::optional{m_boundary_session->view()} : std::nullopt;
+        if (m_drawing_input_boundary) m_drawing_input_boundary->pointer.reset();
+    }
+
+    void updateDrawingInput() {
+        if (!m_drawing_input) return;
+        m_drawing_input->setMetricUnits(m_metric_units);
+        const bool ready = drawingInputReady();
+        m_drawing_input->setVisible(ready);
+        if (ready) m_drawing_input->raise();
+        else {
+            m_drawing_input->clearInput();
+            resetDrawingInputContext();
+        }
+    }
+
+    bool submitDrawingInput(const QString& expression, DrawingCardinalDirection direction) {
+        const auto reject = [this](const QString& error) {
+            setError(error);
+            m_drawing_input->setError(error);
+            return false;
+        };
+        try {
+            if (!drawingInputReady() || !m_drawing_input_context || !m_drawing_input_snapshot)
+                return reject(QStringLiteral("Start an edge before entering its length."));
+            const auto context = *m_drawing_input_context;
+            const auto current = m_document->snapshot();
+            if (m_document != context.document || current.revision() != context.revision ||
+                m_selected_id != context.selected_id || m_active_layer_id != context.layer_id ||
+                m_metric_units != context.metric_units || m_tool != m_drawing_input_tool ||
+                m_workspace != m_drawing_input_workspace ||
+                current.entities() != m_drawing_input_snapshot->entities() ||
+                current.assets() != m_drawing_input_snapshot->assets())
+                return reject(QStringLiteral("The project or drawing context changed. Clear the length and enter it again."));
+            const auto unit = context.metric_units ? Unit::metre : Unit::foot;
+            const auto distance = parse_quantity(expression.toStdString(), unit);
+            if (!std::isfinite(distance.metres) || distance.metres <= default_geometry_tolerance_metres)
+                return reject(QStringLiteral("Enter a positive length greater than the geometry tolerance."));
+            auto signed_distance = distance;
+            if (direction == DrawingCardinalDirection::left || direction == DrawingCardinalDirection::down) {
+                auto negative_expression = expression.trimmed();
+                if (negative_expression.startsWith(QLatin1Char('+'))) negative_expression.remove(0, 1);
+                signed_distance = parse_quantity((QStringLiteral("-") + negative_expression).toStdString(), unit);
+            }
+            const auto zero = parse_quantity("0", unit);
+            const bool vertical = direction == DrawingCardinalDirection::up ||
+                                  direction == DrawingCardinalDirection::down;
+            const auto rise = vertical ? signed_distance : zero;
+            const auto run = vertical ? zero : signed_distance;
+            if (m_tool == CanvasTool::boundary) {
+                auto state = m_boundary_session->view();
+                state.pointer.reset();
+                if (!m_drawing_input_boundary || !(state == *m_drawing_input_boundary) ||
+                    m_boundary_document != m_document || !m_boundary_source || !m_boundary_context ||
+                    inspect_boundary_recovery_source(current,
+                        capture_boundary_recovery_source(*m_boundary_source, *m_boundary_context)) !=
+                        BoundaryRecoverySourceStatus::current)
+                    return reject(QStringLiteral("The unfinished outline changed. Clear the length and enter it again."));
+                const auto original = *m_boundary_session;
+                auto candidate = original;
+                (void)candidate.add_line_rise_run(rise, run);
+                m_boundary_session = std::move(candidate);
+                if (!boundaryDraftChanged()) {
+                    m_boundary_session = original;
+                    refreshBoundaryPreview();
+                    return reject(lastError());
+                }
+            } else {
+                if (!m_drawing_input_wall_start || !m_pending_wall_start ||
+                    m_drawing_input_wall_start->x != m_pending_wall_start->x ||
+                    m_drawing_input_wall_start->y != m_pending_wall_start->y)
+                    return reject(QStringLiteral("The wall start changed. Clear the length and enter it again."));
+                ConstructionReceipt receipt;
+                receipt.kind = BoundaryConstructionKind::line_rise_run;
+                receipt.start = *m_pending_wall_start;
+                receipt.rise = rise;
+                receipt.run = run;
+                const auto replay = replay_construction_receipt(receipt,
+                    ConstructionReplayContext{receipt.start, std::nullopt, std::nullopt,
+                                               default_geometry_tolerance_metres});
+                onCanvasPoint(replay.segment.end, context.revision, replay.receipt);
+                if (m_document->revision() != context.revision + 1) return reject(lastError());
+            }
+            resetDrawingInputContext();
+            clearError();
+            m_measurementCanvas->setFocus(Qt::OtherFocusReason);
+            return true;
+        } catch (const std::exception& error) {
+            return reject(QStringLiteral("Drawing length: %1").arg(QString::fromUtf8(error.what())));
+        }
+    }
+
     bool boundaryPrecisionReady() const {
         if (!m_boundary_session) return false;
         const auto phase=m_boundary_session->phase();
@@ -30058,6 +30216,7 @@ private:
     }
 
     void syncToolControls() {
+        updateDrawingInput();
         if (m_drawing_measurement_button) {
             m_drawing_measurement_button->setVisible(m_tool == CanvasTool::boundary && m_boundary_session.has_value());
             m_drawing_measurement_button->setEnabled(boundaryPrecisionReady());
@@ -30105,6 +30264,11 @@ private:
     void toggleOverviewMap() { setOverviewMap(!m_overview_map_enabled); }
 
     void clearPreview(bool retire = true) {
+        resetDrawingInputContext();
+        if (m_drawing_input) {
+            m_drawing_input->clearInput();
+            m_drawing_input->hide();
+        }
         m_pending_opening_kind.clear();
         m_pending_opening_symbol_id.clear();
         m_pending_opening_door_operation.reset();
@@ -30139,6 +30303,7 @@ private:
     }
 
     void refreshWallPreview(Vec2 end) {
+        updateDrawingInput();
         if (!m_pending_wall_start) {
             m_measurementCanvas->setWallPreview(std::nullopt);
             m_architecturalCanvas->setWallPreview(std::nullopt);
@@ -30167,6 +30332,7 @@ private:
         m_pending_wall_start.reset();
         m_wall_chain_anchor.reset();
         m_wall_chain_has_segments = false;
+        updateDrawingInput();
         m_measurementCanvas->setWallPreview(std::nullopt);
         m_architecturalCanvas->setWallPreview(std::nullopt);
         if (m_tool == CanvasTool::wall || m_tool == CanvasTool::sloped_wall) {
@@ -31889,6 +32055,13 @@ private:
     AssistanceSession m_assistance_session;
     QString m_last_boundary_classification{QStringLiteral("measurement")};
     std::optional<Vec2> m_pending_wall_start;
+    DrawingInputPanel* m_drawing_input{};
+    std::optional<ModalContext> m_drawing_input_context;
+    std::optional<DocumentSnapshot> m_drawing_input_snapshot;
+    std::optional<BoundaryAuthoringState> m_drawing_input_boundary;
+    std::optional<Vec2> m_drawing_input_wall_start;
+    CanvasTool m_drawing_input_tool{CanvasTool::select};
+    Workspace m_drawing_input_workspace{Workspace::measurement};
     std::optional<Vec2> m_wall_chain_anchor;
     bool m_wall_chain_has_segments{};
     QString m_pending_opening_kind;

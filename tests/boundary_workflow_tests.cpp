@@ -24,6 +24,7 @@
 #include <QFontDatabase>
 #include <QFontMetricsF>
 #include <QPainterPath>
+#include <QPixmap>
 #include <QKeyEvent>
 #include <QInputDialog>
 #include <QLabel>
@@ -34,6 +35,7 @@
 #include <QStatusBar>
 #include <QTemporaryDir>
 #include <QTimer>
+#include <QToolButton>
 
 #include <algorithm>
 #include <array>
@@ -1544,6 +1546,407 @@ void test_unified_pointer_clicks_to_draw_and_drags_to_pan() {
     }
 }
 
+void send_inline_key(QWidget& target, int key,
+                     Qt::KeyboardModifiers modifiers = Qt::NoModifier,
+                     const QString& text = {}) {
+    QKeyEvent press(QEvent::KeyPress, key, modifiers, text);
+    QApplication::sendEvent(&target, &press);
+    QKeyEvent release(QEvent::KeyRelease, key, modifiers, text);
+    QApplication::sendEvent(&target, &release);
+    process_events();
+}
+
+void type_inline_length(PlanCanvas& drawing, const QString& text) {
+    require(!text.isEmpty(), "inline typing fixture must contain a length");
+    drawing.setFocus();
+    for (const auto character : text) {
+        auto* target = QApplication::focusWidget();
+        require(target != nullptr, "inline typing must retain a focused native widget");
+        send_inline_key(*target, character.toUpper().unicode(), Qt::NoModifier,
+                        QString(character));
+    }
+}
+
+void capture_inline_widget(QWidget& widget, const QString& filename) {
+    const auto directory = qEnvironmentVariable("VERTEX_TEST_CAPTURE_DIR");
+    if (directory.isEmpty()) return;
+    require(QDir().mkpath(directory), "inline UI capture directory must be writable");
+    require(widget.grab().save(QDir(directory).filePath(filename)),
+            "native inline drawing UI capture must save successfully");
+}
+
+void test_inline_wall_cardinal_length_chain() {
+    MainWindow window;
+    prepare_window(window);
+    window.setMetricUnits(false);
+    QApplication::setActiveWindow(&window);
+    process_events();
+    auto* drawing = canvas(window, QStringLiteral("measurementPlanCanvas"));
+    auto* thickness = window.findChild<QLineEdit*>(QStringLiteral("wallDrawThickness"));
+    auto* height = window.findChild<QLineEdit*>(QStringLiteral("wallDrawHeight"));
+    require(thickness && height, "inline wall fixture needs the existing physical wall settings");
+    thickness->setText(QStringLiteral("7 in"));
+    height->setText(QStringLiteral("9 ft"));
+    const auto original = window.document().snapshot();
+    const auto original_layer = window.activeLayerId();
+    send_click(*drawing, {0.0, 0.0});
+
+    // This is deliberately the first new-feature assertion: the baseline
+    // must fail after an actual default-wall anchor, before any test-only API.
+    auto* panel = drawing->findChild<QWidget*>(QStringLiteral("drawingInputPanel"));
+    require(panel && panel->isVisible(),
+            "a wall anchor must reveal the native inline drawing input panel");
+    auto* length = panel->findChild<QLineEdit*>(QStringLiteral("drawingLengthInput"));
+    auto* right = panel->findChild<QToolButton*>(QStringLiteral("drawingDirectionRight"));
+    auto* up = panel->findChild<QToolButton*>(QStringLiteral("drawingDirectionUp"));
+    auto* left = panel->findChild<QToolButton*>(QStringLiteral("drawingDirectionLeft"));
+    auto* down = panel->findChild<QToolButton*>(QStringLiteral("drawingDirectionDown"));
+    require(length && right && up && left && down && right->isChecked(),
+            "inline drawing must expose the length field and visibly selected default Right direction");
+    require(right->arrowType() == Qt::RightArrow && up->arrowType() == Qt::UpArrow &&
+                left->arrowType() == Qt::LeftArrow && down->arrowType() == Qt::DownArrow,
+            "inline directions must use native cardinal arrow controls");
+    require_same_document(original, window.document().snapshot(),
+                          "anchoring a wall must leave the document unchanged");
+
+    const std::array<QString, 4> lengths{QStringLiteral("12 ft 6 in"), QStringLiteral("8 ft"),
+                                         QStringLiteral("12 ft 6 in"), QStringLiteral("8 ft")};
+    const std::array<int, 4> keys{Qt::Key_Right, Qt::Key_Up, Qt::Key_Left, Qt::Key_Down};
+    const std::array<Vec2, 4> endpoints{{{3.81, 0.0}, {3.81, 2.4384},
+                                          {0.0, 2.4384}, {0.0, 0.0}}};
+    Vec2 previous{};
+    std::vector<std::string> wall_ids;
+    for (std::size_t index = 0; index < lengths.size(); ++index) {
+        const auto before_edge = window.document().snapshot();
+        if (index == 3) {
+            type_inline_length(*drawing, QStringLiteral("99 ft"));
+            send_inline_key(*length, Qt::Key_Escape);
+            require(length->text().isEmpty() && drawing->hasFocus() && panel->isVisible(),
+                    "Escape in the field must clear pending text, retain the chain, and focus the canvas");
+            require_same_document(before_edge, window.document().snapshot(),
+                                  "clearing inline text must retain every committed wall");
+        }
+        type_inline_length(*drawing, lengths[index]);
+        require(length->hasFocus() && length->text() == lengths[index],
+                "typing a length on the canvas must forward every character to the native field");
+        send_inline_key(*length, keys[index]);
+        const auto committed = window.document().snapshot();
+        require(committed.revision() == original.revision() + index + 1,
+                "each typed wall edge must immediately create one history command");
+        std::string id;
+        for (const auto& [candidate, entity] : committed.entities()) {
+            if (entity.type == "wall" && !before_edge.entities().contains(candidate)) {
+                require(id.empty(), "one inline submission must create only one wall");
+                id = candidate;
+            }
+        }
+        require(!id.empty(), "a typed cardinal edge must commit a physical wall");
+        wall_ids.push_back(id);
+        const auto& properties = committed.entities().at(id).properties;
+        const auto& baseline = properties.at("baseline");
+        const Vec2 start{baseline.at("start").at(0).get<double>(),
+                         baseline.at("start").at(1).get<double>()};
+        const Vec2 end{baseline.at("end").at(0).get<double>(),
+                       baseline.at("end").at(1).get<double>()};
+        require(same_point(start, previous),
+                "typed wall edges must share the exact canonical previous endpoint");
+        require(std::abs(end.x - endpoints[index].x) < 1e-12 &&
+                    std::abs(end.y - endpoints[index].y) < 1e-12 &&
+                    ((index % 2 == 0 && end.y == start.y) ||
+                     (index % 2 == 1 && end.x == start.x)) &&
+                    baseline.at("sweep_radians") == 0.0,
+                "typed cardinal lengths must bypass the foot grid and preserve the unchanged coordinate exactly");
+        require(std::abs(properties.at("thickness_m").get<double>() - 0.1778) < 1e-12 &&
+                    std::abs(properties.at("height_m").get<double>() - 2.7432) < 1e-12 &&
+                    !window.metricUnits() && window.activeLayerId() == original_layer,
+                "typed wall commits must retain physical wall depth, height, units, and layer settings");
+        const auto input = sketch::decode_construction_receipt(properties.at("original_drawing_input"));
+        const auto replay = sketch::replay_construction_receipt(input,
+            sketch::ConstructionReplayContext{start, std::nullopt, std::nullopt,
+                                               sketch::default_geometry_tolerance_metres});
+        require(input.kind == sketch::BoundaryConstructionKind::line_rise_run &&
+                    input.segment_id == id && input.rise && input.run &&
+                    same_point(input.start, start) && same_point(replay.segment.end, end) &&
+                    (index % 2 == 0 ? input.run : input.rise)->original_expression.find(
+                        lengths[index].toStdString()) != std::string::npos,
+                "typed wall provenance must retain exact replayable signed input and original expression");
+        previous = end;
+        require(length->text().isEmpty(), "a successful edge must consume its pending length");
+    }
+    require(same_point(previous, {0.0, 0.0}),
+            "four typed cardinal walls must close at the exact original anchor");
+    const auto perimeter = window.document().snapshot();
+    require(!panel->isVisible(), "returning to the first wall anchor must finish the closed chain");
+    send_click(*drawing, {-1.524, -1.524});
+    require(panel->isVisible(), "a new empty-canvas anchor must start another wall chain");
+    send_key(*drawing, Qt::Key_Escape);
+    require(!panel->isVisible(), "Escape on the canvas must finish an open wall chain");
+    require_same_document(perimeter, window.document().snapshot(),
+                          "finishing the chain must retain the committed perimeter");
+    require(window.undoCommand() &&
+                !window.document().snapshot().entities().contains(wall_ids.back()) &&
+                window.document().snapshot().entities().contains(wall_ids.front()),
+            "wall undo must remove only the last immediately committed edge");
+    require(window.redoCommand() &&
+                window.document().snapshot().entities() == perimeter.entities(),
+            "wall redo must restore the exact typed perimeter and canonical endpoints");
+    QTemporaryDir directory;
+    require(directory.isValid(), "typed wall save fixture needs a temporary directory");
+    const auto path = directory.filePath(QStringLiteral("inline-wall-perimeter.bldproj"));
+    require(window.saveProjectAs(path) && window.openProject(path) &&
+                window.document().snapshot().entities() == perimeter.entities(),
+            "typed wall geometry and physical settings must survive save and reopen");
+}
+
+void test_inline_wall_validation_units_enter_and_keypad() {
+    for (const bool metric : {false, true}) {
+        MainWindow window;
+        prepare_window(window);
+        window.setMetricUnits(metric);
+        QApplication::setActiveWindow(&window);
+        process_events();
+        auto* drawing = canvas(window, QStringLiteral("measurementPlanCanvas"));
+        send_click(*drawing, {0, 0});
+        auto* panel = drawing->findChild<QWidget*>(QStringLiteral("drawingInputPanel"));
+        require(panel && panel->isVisible(), "validation fixture must show actual inline controls");
+        auto* length = panel->findChild<QLineEdit*>(QStringLiteral("drawingLengthInput"));
+        auto* error = panel->findChild<QLabel*>(QStringLiteral("drawingInputError"));
+        auto* up = panel->findChild<QToolButton*>(QStringLiteral("drawingDirectionUp"));
+        auto* keypad_toggle = panel->findChild<QToolButton*>(QStringLiteral("drawingKeypadToggle"));
+        auto* keypad = panel->findChild<QWidget*>(QStringLiteral("drawingKeypad"));
+        require(length && error && up && keypad_toggle && keypad,
+                "inline drawing must provide error feedback and an expandable native keypad");
+        require(!keypad->isVisible(), "the compact drawing keypad must initially be collapsed");
+        keypad_toggle->click();
+        process_events();
+        require(keypad->isVisible(), "the native keypad toggle must expand the keypad");
+        for (const auto digit : {QStringLiteral("1"), QStringLiteral("2")}) {
+            QAbstractButton* button = nullptr;
+            for (auto* candidate : keypad->findChildren<QAbstractButton*>()) {
+                if (candidate->text() == digit) button = candidate;
+            }
+            require(button && button->isVisible(), "expanded keypad must expose actual digit buttons");
+            button->click();
+            process_events();
+        }
+        require(length->text() == QStringLiteral("12"),
+                "native keypad clicks must populate the same length field used by keyboard drawing");
+        capture_inline_widget(window, metric ? QStringLiteral("inline-keypad-metric.png")
+                                            : QStringLiteral("inline-keypad-imperial.png"));
+        send_inline_key(*length, Qt::Key_Escape);
+        const auto anchored = window.document().snapshot();
+        for (const auto invalid : {QStringLiteral("0"), QStringLiteral("-2"),
+                                  QStringLiteral("12 malformed")}) {
+            length->setText(invalid);
+            send_inline_key(*length, Qt::Key_Right);
+            require_same_document(anchored, window.document().snapshot(),
+                                  "zero, negative, and malformed inline lengths must reject without creating walls");
+            require(panel->isVisible() && error->isVisible() && !error->text().isEmpty() &&
+                        length->text() == invalid,
+                    "invalid inline input must retain the pending text and show native error feedback");
+        }
+        capture_inline_widget(window, metric ? QStringLiteral("inline-invalid-metric.png")
+                                            : QStringLiteral("inline-invalid-imperial.png"));
+        length->setText(QStringLiteral("2"));
+        send_inline_key(*length, Qt::Key_Up);
+        require(up->isChecked(), "a successful Up key must visibly retain the Up direction");
+        type_inline_length(*drawing, QStringLiteral("1 1/4"));
+        send_inline_key(*length, Qt::Key_Return);
+        const auto after_enter = window.document().snapshot();
+        require(after_enter.revision() == anchored.revision() + 2,
+                "Enter must commit another wall using the visibly retained direction");
+        bool found_end = false;
+        const auto expected_y = metric ? 3.25 : 0.9906;
+        for (const auto& [id, entity] : after_enter.entities()) {
+            (void)id;
+            if (entity.type != "wall") continue;
+            const auto& end = entity.properties.at("baseline").at("end");
+            if (end.at(0).get<double>() == 0.0 &&
+                std::abs(end.at(1).get<double>() - expected_y) < 1e-12) found_end = true;
+        }
+        require(found_end, "implicit fractional lengths must use metres or feet and remain exactly cardinal");
+        type_inline_length(*drawing, QStringLiteral("3"));
+        window.setMetricUnits(!metric);
+        process_events();
+        const auto changed_units = window.document().snapshot();
+        send_inline_key(*length, Qt::Key_Right);
+        require_same_document(changed_units, window.document().snapshot(),
+                              "changing unit basis must not reinterpret and commit a stale pending length");
+        send_key(*drawing, Qt::Key_Escape);
+    }
+}
+
+void test_inline_measurement_receipts_local_history_and_define_first() {
+    for (const auto mode : {BoundaryAuthoringMode::draw_first, BoundaryAuthoringMode::define_first}) {
+        MainWindow window;
+        prepare_window(window);
+        window.setMetricUnits(true);
+        QApplication::setActiveWindow(&window);
+        process_events();
+        auto* drawing = canvas(window, QStringLiteral("measurementPlanCanvas"));
+        require(window.beginBoundaryDrawing(mode, QStringLiteral("living")),
+                "inline measured boundary fixture must start the existing authoring session");
+        const auto original = window.document().snapshot();
+        send_click(*drawing, {0, 0});
+        auto* panel = drawing->findChild<QWidget*>(QStringLiteral("drawingInputPanel"));
+        auto* length = panel ? panel->findChild<QLineEdit*>(QStringLiteral("drawingLengthInput")) : nullptr;
+        require(panel && panel->isVisible() && length,
+                "a measured boundary anchor must expose the same native inline length controls");
+        const std::array<QString, 3> lengths{QStringLiteral("2.125 m"), QStringLiteral("1.375 m"),
+                                             QStringLiteral("2.125 m")};
+        const std::array<int, 3> keys{Qt::Key_Right, Qt::Key_Up, Qt::Key_Left};
+        const std::array<Vec2, 3> endpoints{{{2.125, 0}, {2.125, 1.375}, {0, 1.375}}};
+        for (std::size_t index = 0; index < lengths.size(); ++index) {
+            type_inline_length(*drawing, lengths[index]);
+            send_inline_key(*length, keys[index]);
+            const auto draft = preview(*drawing);
+            require(draft.segments.size() == index + 1 &&
+                        same_point(draft.segments.back().end, endpoints[index]),
+                    "inline measured lengths must bypass the metric grid and retain exact cardinal endpoints");
+            require_same_document(original, window.document().snapshot(),
+                                  "inline measured edges must remain local until boundary closure");
+            if (mode == BoundaryAuthoringMode::define_first) {
+                length->setText(QStringLiteral("4 m"));
+                send_inline_key(*length, Qt::Key_Right);
+                require(same_boundary(preview(*drawing).segments, draft.segments),
+                        "Define First must refuse another typed edge while dimension placement is pending");
+                send_inline_key(*length, Qt::Key_Escape);
+                drive_boundary_modal(window, *drawing, Qt::Key_D, [&](QDialog* modal) {
+                    auto* input = dynamic_cast<sketch::desktop::BoundaryInputDialog*>(modal);
+                    require(input, "D must retain the existing pending-dimension precision form");
+                    if (index == 0) {
+                        input->findChild<QLineEdit*>(QStringLiteral("boundaryInputEndX"))->setText(QStringLiteral("invalid"));
+                        require(!input->submit(), "the retained precision dialog must reject malformed placement input");
+                        capture_inline_widget(*input, QStringLiteral("inline-define-first-invalid-dialog.png"));
+                    }
+                    input->findChild<QLineEdit*>(QStringLiteral("boundaryInputEndX"))->setText(QStringLiteral("1 m"));
+                    input->findChild<QLineEdit*>(QStringLiteral("boundaryInputEndY"))->setText(QStringLiteral("-1 m"));
+                    require(input->submit(), "precision input must place the pending Define First dimension");
+                });
+            }
+            if (index == 0) {
+                send_key(*drawing, Qt::Key_Z, Qt::ControlModifier);
+                if (mode == BoundaryAuthoringMode::define_first) {
+                    require(same_boundary(preview(*drawing).segments, draft.segments),
+                            "Define First first undo must remove manual dimension placement, retaining its edge");
+                    send_key(*drawing, Qt::Key_Z, Qt::ControlModifier);
+                }
+                require(preview(*drawing).segments.empty(), "inline measured edge undo must stay within the draft");
+                send_key(*drawing, Qt::Key_Y, Qt::ControlModifier);
+                if (mode == BoundaryAuthoringMode::define_first)
+                    send_key(*drawing, Qt::Key_Y, Qt::ControlModifier);
+                require(same_boundary(preview(*drawing).segments, draft.segments),
+                        "inline measured edge redo must restore exact geometry and local authoring state");
+            }
+        }
+        send_key(*drawing, Qt::Key_Return);
+        if (mode == BoundaryAuthoringMode::define_first) {
+            send_click(*drawing, {-0.4, 0.6});
+        }
+        require(!drawing->boundaryDraftPreview(), "canvas Enter must close the inline measured boundary");
+        const auto committed = window.document().snapshot();
+        require(committed.revision() == original.revision() + 1,
+                "the entire measured boundary must commit as one command");
+        const auto entity = committed_boundary(committed);
+        const auto boundary = sketch::decode_identified_boundary_entity(entity);
+        const auto receipts = sketch::decode_boundary_receipt_envelope(entity.properties.at("boundary_authoring"));
+        require(receipts.supported() && receipts.record && receipts.record->edges.size() == 4 &&
+                    boundary.segments.size() == 4 && committed_dimensions(committed).size() == 4,
+                "inline measured closure must retain receipt topology and one semantic dimension per edge");
+        for (std::size_t index = 0; index < lengths.size(); ++index) {
+            const auto& receipt = receipts.record->edges[index].receipt;
+            require(receipt.kind == sketch::BoundaryConstructionKind::line_rise_run && receipt.rise && receipt.run &&
+                        receipt.segment_id == boundary.segments[index].segment_id &&
+                        same_point(boundary.segments[index].segment.end, endpoints[index]),
+                    "typed cardinal measured edges must persist exact replayable rise/run receipts");
+            const auto& entered = index == 1 ? *receipt.rise : *receipt.run;
+            require(entered.original_expression.find(lengths[index].toStdString()) != std::string::npos,
+                    "cardinal receipts must retain the actual typed length expression");
+        }
+        require(receipts.record->edges.back().receipt.kind == sketch::BoundaryConstructionKind::line_closure,
+                "canvas Enter must retain the existing receipt-bearing closure command");
+    }
+}
+
+void test_inline_wall_rejects_stale_source_and_selection() {
+    MainWindow window;
+    prepare_window(window);
+    window.setMetricUnits(true);
+    QApplication::setActiveWindow(&window);
+    process_events();
+    auto* drawing = canvas(window, QStringLiteral("measurementPlanCanvas"));
+    send_click(*drawing, {0, 0});
+    auto* length = drawing->findChild<QLineEdit*>(QStringLiteral("drawingLengthInput"));
+    require(length, "stale-source fixture must use the actual inline field");
+    type_inline_length(*drawing, QStringLiteral("2 m"));
+    send_inline_key(*length, Qt::Key_Right);
+    const auto first = window.document().snapshot();
+    std::string wall_id;
+    for (const auto& [id, entity] : first.entities()) {
+        if (entity.type == "wall") wall_id = id;
+    }
+    require(!wall_id.empty(), "stale-source fixture must first commit a wall");
+    type_inline_length(*drawing, QStringLiteral("3 m"));
+    auto changed_wall = first.entities().at(wall_id);
+    changed_wall.properties["height_m"] = 3.5;
+    window.document().apply(sketch::ApplyEntityChanges{
+        first.revision(), {sketch::EntityChange::upsert(changed_wall)}, {}, "inline stale-source fixture"});
+    const auto changed_source = window.document().snapshot();
+    send_inline_key(*length, Qt::Key_Up);
+    require_same_document(changed_source, window.document().snapshot(),
+                          "a source revision changed outside the inline action must reject its stale pending edge");
+    send_key(*drawing, Qt::Key_Escape);
+    send_click(*drawing, {-2, -2});
+    type_inline_length(*drawing, QStringLiteral("3 m"));
+    require(window.selectEntity(QString::fromStdString(wall_id)),
+            "selection guard fixture must select the existing physical wall");
+    const auto selected = window.document().snapshot();
+    send_inline_key(*length, Qt::Key_Right);
+    require_same_document(selected, window.document().snapshot(),
+                          "changing selection must not commit the former wall chain's pending length");
+}
+
+void test_inline_measurement_held_enter_does_not_finish() {
+    MainWindow window;
+    prepare_window(window);
+    window.setMetricUnits(true);
+    QApplication::setActiveWindow(&window);
+    process_events();
+    auto* drawing = canvas(window, QStringLiteral("measurementPlanCanvas"));
+    require(window.beginBoundaryDrawing(BoundaryAuthoringMode::draw_first, QStringLiteral("living")),
+            "held Enter fixture must start a classified measured outline");
+    send_click(*drawing, {0, 0});
+    auto* length = drawing->findChild<QLineEdit*>(QStringLiteral("drawingLengthInput"));
+    require(length, "held Enter fixture must use the actual inline control");
+    type_inline_length(*drawing, QStringLiteral("2 m"));
+    send_inline_key(*length, Qt::Key_Right);
+    auto* up = drawing->findChild<QToolButton*>(QStringLiteral("drawingDirectionUp"));
+    require(up, "held Enter fixture needs the retained direction button");
+    up->click(); // Select Up with an empty field, without adding an edge.
+    type_inline_length(*drawing, QStringLiteral("1 m"));
+    send_inline_key(*length, Qt::Key_Return);
+    const auto original = window.document().snapshot();
+    const auto draft = preview(*drawing).segments;
+    // Focus has returned from inline entry to the canvas, just as when the
+    // operating system continues delivering repeats from a held Enter key.
+    QKeyEvent repeated(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier, QString{}, true, 1);
+    QApplication::sendEvent(drawing, &repeated);
+    process_events();
+    require_same_document(original, window.document().snapshot(),
+                          "a repeated Enter after edge entry must not commit an unfinished outline");
+    require(drawing->boundaryDraftPreview() && same_boundary(preview(*drawing).segments, draft),
+            "a repeated Enter must leave the exact unfinished outline and its edge history unchanged");
+    type_inline_length(*drawing, QStringLiteral("3 m"));
+    send_inline_key(*length, Qt::Key_Escape);
+    QKeyEvent repeated_escape(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier, QString{}, true, 1);
+    QApplication::sendEvent(drawing, &repeated_escape);
+    process_events();
+    require_same_document(original, window.document().snapshot(),
+                          "holding Escape to clear length input must not change the saved drawing");
+    require(drawing->boundaryDraftPreview() && same_boundary(preview(*drawing).segments, draft),
+            "holding Escape in the length field must not discard the unfinished outline");
+}
+
 void test_dimension_presentation_editing() {
     MainWindow window;
     prepare_window(window);
@@ -1872,6 +2275,15 @@ int main(int argc, char** argv) {
     QApplication application(argc, argv);
     try {
         install_test_font();
+        if (application.arguments().contains(QStringLiteral("--inline-drawing-only"))) {
+            test_inline_measurement_held_enter_does_not_finish();
+            test_inline_wall_cardinal_length_chain();
+            test_inline_wall_validation_units_enter_and_keypad();
+            test_inline_measurement_receipts_local_history_and_define_first();
+            test_inline_wall_rejects_stale_source_and_selection();
+            std::cout << "Inline drawing native UI workflows passed\n";
+            return 0;
+        }
         if (application.arguments().contains(QStringLiteral("--workspace-transitions-only"))) {
             test_workspace_switch_preserves_draft_on_refusal_and_allows_finished_drawing();
             test_unified_pointer_clicks_to_draw_and_drags_to_pan();
@@ -1906,6 +2318,11 @@ int main(int argc, char** argv) {
             }
         };
         run_test("unified_pointer_clicks_to_draw_and_drags_to_pan", test_unified_pointer_clicks_to_draw_and_drags_to_pan);
+        run_test("inline_wall_cardinal_length_chain", test_inline_wall_cardinal_length_chain);
+        run_test("inline_measurement_held_enter_does_not_finish", test_inline_measurement_held_enter_does_not_finish);
+        run_test("inline_wall_validation_units_enter_and_keypad", test_inline_wall_validation_units_enter_and_keypad);
+        run_test("inline_measurement_receipts_local_history_and_define_first", test_inline_measurement_receipts_local_history_and_define_first);
+        run_test("inline_wall_rejects_stale_source_and_selection", test_inline_wall_rejects_stale_source_and_selection);
         run_test("draw_first_events_commit_receipts_labels_and_visibility", test_draw_first_events_commit_receipts_labels_and_visibility);
         run_test("define_first_events_place_manual_dimensions_and_close", test_define_first_events_place_manual_dimensions_and_close);
         run_test("workspace_switch_preserves_draft_on_refusal_and_allows_finished_drawing", test_workspace_switch_preserves_draft_on_refusal_and_allows_finished_drawing);

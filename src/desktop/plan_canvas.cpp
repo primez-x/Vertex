@@ -1435,6 +1435,10 @@ void PlanCanvas::setPreciseInputRequested(std::function<void()> callback) {
     m_precise_input_requested = std::move(callback);
 }
 
+void PlanCanvas::setDrawingTextRequested(std::function<bool(const QString&)> callback) {
+    m_drawing_text_requested = std::move(callback);
+}
+
 void PlanCanvas::setDraftUndoRequested(std::function<void()> callback) {
     m_draft_undo_requested = std::move(callback);
 }
@@ -3482,6 +3486,25 @@ void PlanCanvas::wheelEvent(QWheelEvent* event) {
 }
 
 void PlanCanvas::keyPressEvent(QKeyEvent* event) {
+    // Exact entry returns focus here. A held key must not finish/cancel the
+    // draft or reopen a modal after its initial input action was consumed.
+    if (event->isAutoRepeat() &&
+        (event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter ||
+         event->key() == Qt::Key_Escape || event->key() == Qt::Key_D)) {
+        event->accept();
+        return;
+    }
+    if (!(event->modifiers() & (Qt::ControlModifier | Qt::AltModifier | Qt::MetaModifier)) &&
+        m_gesture_button == Qt::NoButton && !m_touch_active &&
+        event->text().size() == 1 && m_drawing_text_requested) {
+        const auto character = event->text().front();
+        if ((character.isDigit() || character == QLatin1Char('.') ||
+             character == QLatin1Char('+') || character == QLatin1Char('-')) &&
+            m_drawing_text_requested(event->text())) {
+            event->accept();
+            return;
+        }
+    }
     // Precise input opens a dialog; exclude the entire dispatch even if a
     // supplied callback happens to be nonmodal (for example in an embedder).
     if (event->key() == Qt::Key_D && m_tool == CanvasTool::boundary) {

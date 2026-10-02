@@ -619,7 +619,7 @@ if(SKETCH_BUILD_DESKTOP)
   add_library(sketch_desktop src/desktop/main_window.cpp
     src/desktop/building_object_dialog.cpp src/desktop/hosted_opening_dialog.cpp src/desktop/constraint_dialog.cpp
     src/desktop/constraint_preview_canvas.cpp src/desktop/text_library_dialog.cpp
-    src/desktop/appraisal_report_dialog.cpp)
+    src/desktop/appraisal_report_dialog.cpp src/desktop/drawing_input_panel.cpp)
   target_link_libraries(sketch_desktop PUBLIC sketch_text_library)
   target_link_libraries(sketch_desktop PUBLIC sketch_hosted_opening_plan)
   target_include_directories(sketch_desktop PUBLIC include PRIVATE src/desktop)
