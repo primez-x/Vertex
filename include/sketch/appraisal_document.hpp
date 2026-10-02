@@ -21,13 +21,15 @@ struct AppraisalBoundaryStatus {
 };
 
 // A revision-bound projection of one property's declared appraisal workflow.
-// The report is present only when every participating building boundary is
+// All in-scope visible building boundaries retain a status, including invalid
+// inputs. Aggregate calculation is present only when every participant is
 // qualified. Site boundaries are deliberately outside this projection.
 struct AppraisalDocumentReport {
     Revision revision{};
     std::string property_id;
     bool configured{};
     bool qualified{};
+    // Absent until the property explicitly declares a valid policy kind/version.
     std::optional<AppraisalPolicy> policy;
     std::vector<AppraisalBoundaryStatus> boundaries;
     std::vector<std::string> issues;

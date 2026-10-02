@@ -115,6 +115,8 @@ IdentifiedBoundary apply_geometry_edit(const IdentifiedBoundary& source,
     if (edit.kind == BoundaryGeometryEditKind::insert_vertex)
         return insert_boundary_vertex(source, edit.target_id, edit.fraction,
                                       edit.new_vertex_id, edit.new_segment_id);
+    if (edit.kind == BoundaryGeometryEditKind::reconstruct_arc)
+        return reconstruct_boundary_arc(source, edit.target_id, *edit.arc_construction);
     if (edit.kind == BoundaryGeometryEditKind::redefine_boundary) {
         const std::set<std::string> fields{"segment_id", "start_vertex_id", "end_vertex_id", "start", "end", "sweep_radians"};
         for (const auto& edge : edit.replacement_segments) {
@@ -727,6 +729,29 @@ static std::map<std::string, Entity, std::less<>> edited_boundary_entities_impl(
             for (const auto* key : {"property_id", "building_id", "floor_id", "layer_id"})
                 if (automatic_template->properties.contains(key)) entity.properties[key] = automatic_template->properties.at(key);
             result.emplace(entity.id, std::move(entity));
+        }
+    }
+    if (!batch && edit.kind == BoundaryGeometryEditKind::reconstruct_arc) {
+        // Curvature changes the analytical length and exterior midpoint even
+        // though both endpoints remain fixed. Retain manual placements and
+        // refresh automatic dimensions using their persisted winding policy.
+        for (auto& [id, entity] : result) {
+            (void)id;
+            if (!can_recognize_boundary_dimension_entity_type(entity.type)) continue;
+            const auto decoded = decode_boundary_dimension_entity(entity);
+            if (!decoded.supported()) throw std::invalid_argument(decoded.unsupported_reason);
+            auto dimension = *decoded.dimension;
+            if (dimension.boundary_id != edit.boundary_id) continue;
+            (void)dimension.resolve(result.at(edit.boundary_id));
+            if (dimension.kind != BoundaryDimensionKind::segment_length ||
+                dimension.placement != BoundaryDimensionPlacement::automatic) continue;
+            const auto edge = std::find_if(edited.segments.begin(), edited.segments.end(),
+                [&](const auto& item) { return item.segment_id == dimension.segment_id; });
+            if (edge == edited.segments.end()) throw std::invalid_argument("Dimension edge is missing");
+            const auto side = dimension.automatic_placement_version.value_or(1) == 1 ? 1.0 :
+                (signed_area(boundary_geometry(edited)) > 0 ? -1.0 : 1.0);
+            dimension.text_position = split_dimension_position(edge->segment, side);
+            entity = encode_boundary_dimension_entity(dimension, &entity);
         }
     }
     if (!batch && edit.kind == BoundaryGeometryEditKind::insert_vertex) {

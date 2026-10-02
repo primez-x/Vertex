@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <iterator>
 #include <limits>
 #include <map>
 #include <numeric>
@@ -139,7 +140,7 @@ void exact_keys(const Json& value, std::initializer_list<std::string_view> allow
 }
 
 struct Declarations {
-    AppraisalPolicy policy;
+    std::optional<AppraisalPolicy> policy;
     AppraisalFacts facts;
     std::vector<std::string> missing;
 };
@@ -171,7 +172,10 @@ Declarations declarations(const Entity& property, const Entity& floor,
     if (!policy.contains("version")) result.missing.push_back("Declare policy version.");
     else if (!policy.at("version").is_number_integer() || policy.at("version") != 1)
         throw std::invalid_argument("unsupported appraisal policy version");
-    token(policy, "policy_kind", parse_appraisal_policy_kind, result.policy.kind);
+    AppraisalPolicy declared_policy;
+    token(policy, "policy_kind", parse_appraisal_policy_kind, declared_policy.kind);
+    if (policy.contains("policy_kind") && policy.contains("version"))
+        result.policy = declared_policy;
     token(policy, "property_kind", parse_property_kind, result.facts.property_kind);
     token(policy, "measurement_basis", parse_measurement_basis, result.facts.measurement_basis);
     const auto level = declaration_object(floor.properties, "appraisal_facts");
@@ -248,6 +252,30 @@ Context context(const DocumentSnapshot& document, const Entity& boundary,
     return {&floor->second, &building->second};
 }
 
+bool belongs_to_other_property(const DocumentSnapshot& document, const Entity& boundary,
+                               const std::string& property_id) {
+    try {
+        const auto floor_id = text(boundary.properties, "floor_id");
+        if (!floor_id) return false;
+        const auto floor = document.entities().find(*floor_id);
+        if (floor == document.entities().end() || floor->second.type != "floor") return false;
+        const auto building_id = text(floor->second.properties, "building_id");
+        if (!building_id) return false;
+        const auto building = document.entities().find(*building_id);
+        if (building == document.entities().end() || building->second.type != "building") return false;
+        const auto owner_id = text(building->second.properties, "property_id");
+        if (!owner_id || *owner_id == property_id) return false;
+        const auto owner = document.entities().find(*owner_id);
+        if (owner == document.entities().end() || owner->second.type != "property") return false;
+        (void)context(document, boundary, *owner_id);
+        return true;
+    } catch (const std::exception&) {
+        // Conflicting/malformed ownership cannot safely prove that this source
+        // belongs elsewhere. Keep its invalid row, with no numeric contribution.
+        return false;
+    }
+}
+
 } // namespace
 
 CalculationProfile appraisal_display_profile(
@@ -294,41 +322,42 @@ AppraisalDocumentReport build_appraisal_document_report(
     result.configured = workflow == "appraisal";
     if (!result.configured) return result;
     CalculationProfile profile;
+    std::optional<std::string> display_error;
     try {
         profile = appraisal_display_profile(property->second.properties, display_unit);
         result.display_decimal_places = profile.decimal_places;
     } catch (const std::invalid_argument& error) {
-        result.issues.push_back(std::string("Area display: ") + error.what());
-        return result;
+        display_error = std::string("Area display: ") + error.what();
+        result.issues.push_back(*display_error);
     }
     if (!property->second.properties.contains("appraisal_policy")) {
         result.issues.push_back("Declare an appraisal policy before producing automatic totals.");
-        return result;
     }
+
+    const auto invalid_boundary = [&](const std::string& id, const std::string& message) {
+        auto found = std::find_if(result.boundaries.begin(), result.boundaries.end(),
+            [&](const auto& value) { return value.boundary_id == id; });
+        if (found == result.boundaries.end()) {
+            result.boundaries.push_back({id, false, {}});
+            found = std::prev(result.boundaries.end());
+        }
+        found->qualification = {};
+        found->qualification.issues.push_back({"invalid_input", message});
+        found->measurement.reset();
+        result.issues.push_back(id + ": " + message);
+    };
 
     std::vector<const Entity*> candidates;
     for (const auto& [id, entity] : document.entities()) {
         if (!boundary_type(entity.type) || !visible(visible_entity_ids, id)) continue;
+        if (belongs_to_other_property(document, entity, property_id)) continue;
         try {
+            if (scope(entity) == "site") continue;
             const auto owner = context(document, entity, property_id);
             (void)owner;
             candidates.push_back(&entity);
         } catch (const std::exception& error) {
-            // Boundaries from another valid property are outside this report.
-            const auto floor_id = text(entity.properties, "floor_id");
-            if (floor_id) {
-                const auto floor = document.entities().find(*floor_id);
-                if (floor != document.entities().end()) {
-                    const auto building_id = text(floor->second.properties, "building_id");
-                    if (building_id) {
-                        const auto building = document.entities().find(*building_id);
-                        if (building != document.entities().end() &&
-                            text(building->second.properties, "property_id").value_or("") != property_id)
-                            continue;
-                    }
-                }
-            }
-            result.issues.push_back(id + ": " + error.what());
+            invalid_boundary(id, error.what());
         }
     }
 
@@ -357,11 +386,15 @@ AppraisalDocumentReport build_appraisal_document_report(
             const auto owner = context(document, *entity, property_id);
             const auto floor_id = text(entity->properties, "floor_id").value();
             const auto building_id = owner.building->id;
+            if (display_error) throw std::invalid_argument(*display_error);
             const auto declared = declarations(property->second, *owner.floor, *entity);
             result.policy = declared.policy;
             if (!wall_measurement_source_current(document, *entity) ||
                 !wall_measurement_sources_visible(*entity, visible_entity_ids)) {
-                auto qualification = derive_appraisal_category(declared.facts, declared.policy);
+                auto qualification = declared.policy
+                    ? derive_appraisal_category(declared.facts, *declared.policy) : AppraisalQualification{};
+                if (!declared.policy)
+                    qualification.issues.push_back({"undeclared_policy", "Declare an appraisal policy before producing automatic totals."});
                 for (const auto& missing : declared.missing)
                     qualification.issues.push_back({"undeclared", missing});
                 qualification.qualified = false;
@@ -400,13 +433,25 @@ AppraisalDocumentReport build_appraisal_document_report(
             MeasurementArea area{entity->id, building_id, floor_id, "unqualified",
                                  geometry(*entity), std::move(deductions),
                                  factor(entity->properties), AreaScope::building};
-            auto qualification = qualify_appraisal_area(area, declared.facts, declared.policy);
+            AppraisalQualification qualification;
+            std::optional<AreaCalculation> diagnostic;
+            if (declared.policy) qualification = qualify_appraisal_area(area, declared.facts, *declared.policy);
+            else {
+                // Measure valid geometry without deriving policy-specific facts
+                // or provenance from AppraisalPolicy's default constructor.
+                diagnostic = calculate_area(area, profile);
+                qualification.physical_square_metres = diagnostic->net_square_metres;
+                qualification.adjusted_square_metres = diagnostic->factored_square_metres;
+                qualification.issues.push_back({"undeclared_policy", "Declare an appraisal policy before producing automatic totals."});
+                if (area.factor.numerator != area.factor.denominator)
+                    qualification.issues.push_back({"factor_not_unity", "Qualified physical area requires a factor exactly equal to one."});
+            }
             for (const auto& missing : declared.missing)
                 qualification.issues.push_back({"undeclared", missing});
             qualification.qualified = qualification.qualified && declared.missing.empty();
             if (!qualification.qualified) qualification.derived_category.reset();
             const bool exclusion = declared.facts.role != BoundaryRole::measured_area;
-            result.boundaries.push_back({entity->id, exclusion, qualification});
+            result.boundaries.push_back({entity->id, exclusion, qualification, std::move(diagnostic)});
             if (qualification.qualified && !exclusion) {
                 if (!qualification.derived_category)
                     throw std::invalid_argument("qualified measured area has no derived category");
@@ -428,7 +473,7 @@ AppraisalDocumentReport build_appraisal_document_report(
             }
             areas.push_back(std::move(area));
         } catch (const std::exception& error) {
-            result.issues.push_back(entity->id + ": " + error.what());
+            invalid_boundary(entity->id, error.what());
         }
     }
     if (areas.empty()) result.issues.push_back("No qualified building appraisal areas are available.");
@@ -446,6 +491,7 @@ AppraisalDocumentReport build_appraisal_document_report(
         }
     }
     for (auto& boundary : result.boundaries) {
+        if (boundary.measurement) continue;
         if (result.calculation) {
             const auto& calculated = result.calculation->calculation.areas;
             const auto found = std::find_if(calculated.begin(), calculated.end(), [&](const auto& value) {
@@ -466,7 +512,7 @@ AppraisalDocumentReport build_appraisal_document_report(
         } catch (const std::exception& error) {
             result.qualified = false;
             result.calculation.reset();
-            result.issues.push_back(boundary.boundary_id + ": " + error.what());
+            invalid_boundary(boundary.boundary_id, error.what());
         }
     }
     std::sort(result.issues.begin(), result.issues.end());

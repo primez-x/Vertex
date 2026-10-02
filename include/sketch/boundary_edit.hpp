@@ -1,10 +1,12 @@
 #pragma once
 
 #include "sketch/geometry.hpp"
+#include "sketch/boundary_receipt.hpp"
 
 #include <nlohmann/json.hpp>
 
 #include <cmath>
+#include <optional>
 #include <stdexcept>
 #include <set>
 #include <string>
@@ -12,7 +14,7 @@
 
 namespace sketch {
 
-enum class BoundaryGeometryEditKind { move_vertex, resize_segment, insert_vertex, redefine_boundary };
+enum class BoundaryGeometryEditKind { move_vertex, resize_segment, insert_vertex, redefine_boundary, reconstruct_arc };
 enum class BoundaryFixedEndpoint { start, end };
 
 // Replayable semantic intent that retains the boundary identity. Coordinate
@@ -42,6 +44,9 @@ struct BoundaryGeometryEdit {
     // authorize silently dropping or reinterpreting references.
     nlohmann::json replacement_child_mapping = nlohmann::json::object();
     std::vector<std::string> replacement_removed_reference_ids;
+    // Exact construction inputs for reconstruct_arc; the selected edge's
+    // endpoints and segment identity remain fixed.
+    std::optional<ConstructionReceipt> arc_construction;
 
     bool operator==(const BoundaryGeometryEdit& other) const {
         return boundary_id == other.boundary_id && kind == other.kind &&
@@ -55,7 +60,8 @@ struct BoundaryGeometryEdit {
             replacement_segments == other.replacement_segments && replacement_authoring == other.replacement_authoring &&
             replacement_properties == other.replacement_properties && replacement_dimension_ids == other.replacement_dimension_ids &&
             replacement_child_mapping == other.replacement_child_mapping &&
-            replacement_removed_reference_ids == other.replacement_removed_reference_ids;
+            replacement_removed_reference_ids == other.replacement_removed_reference_ids &&
+            arc_construction == other.arc_construction;
     }
 };
 
@@ -78,6 +84,8 @@ inline void validate_boundary_geometry_edit(const BoundaryGeometryEdit& edit) {
          !edit.replacement_properties.empty() || !edit.replacement_dimension_ids.empty() ||
          !edit.replacement_child_mapping.empty() || !edit.replacement_removed_reference_ids.empty()))
         throw std::invalid_argument("Boundary coordinate edit contains redefinition fields");
+    if (edit.kind != BoundaryGeometryEditKind::reconstruct_arc && edit.arc_construction)
+        throw std::invalid_argument("Boundary geometry edit contains arc reconstruction fields");
     if (edit.kind != BoundaryGeometryEditKind::insert_vertex &&
         (edit.fraction != 0.0 || !edit.new_vertex_id.empty() || !edit.new_segment_id.empty() ||
          !edit.new_dimension_id.empty()))
@@ -145,6 +153,18 @@ inline void validate_boundary_geometry_edit(const BoundaryGeometryEdit& edit) {
             reference_plan_bytes >
             1024 * 1024 - 4096)
             throw std::invalid_argument("Boundary redefinition exceeds the persisted proof budget");
+    } else if (edit.kind == BoundaryGeometryEditKind::reconstruct_arc) {
+        if (!edit.arc_construction || edit.target_id != edit.arc_construction->segment_id ||
+            edit.target_position.x != 0.0 || edit.target_position.y != 0.0 ||
+            edit.target_length_metres != 0.0 || edit.move_connected ||
+            edit.fixed_endpoint != BoundaryFixedEndpoint::start)
+            throw std::invalid_argument("Boundary arc reconstruction fields are invalid");
+        const auto kind = edit.arc_construction->kind;
+        if (kind != BoundaryConstructionKind::arc_chord_angle &&
+            kind != BoundaryConstructionKind::arc_chord_height &&
+            kind != BoundaryConstructionKind::arc_chord_length)
+            throw std::invalid_argument("Boundary arc reconstruction receipt must describe a chord arc");
+        (void)encode_construction_receipt(*edit.arc_construction);
     } else {
         throw std::invalid_argument("Boundary geometry edit kind is unsupported");
     }
@@ -173,6 +193,11 @@ inline nlohmann::json encode_boundary_geometry_edit(const BoundaryGeometryEdit& 
             result["replacement_removed_reference_ids"] = edit.replacement_removed_reference_ids;
         }
         return result;
+    }
+    if (edit.kind == BoundaryGeometryEditKind::reconstruct_arc) {
+        return {{"version", 1}, {"kind", "reconstruct_arc"},
+                {"boundary_id", edit.boundary_id}, {"segment_id", edit.target_id},
+                {"construction", encode_construction_receipt(*edit.arc_construction)}};
     }
     return {{"version", 1}, {"kind", "resize_segment"},
             {"boundary_id", edit.boundary_id}, {"segment_id", edit.target_id},
@@ -266,6 +291,16 @@ inline BoundaryGeometryEdit decode_boundary_geometry_edit(const nlohmann::json& 
             if (result.replacement_child_mapping.empty() && result.replacement_removed_reference_ids.empty())
                 throw std::invalid_argument("Version two redefinition requires explicit reference decisions");
         }
+    } else if (kind == "reconstruct_arc") {
+        const std::set<std::string> expected{
+            "version", "kind", "boundary_id", "segment_id", "construction"};
+        std::set<std::string> actual;
+        for (const auto& [key, ignored] : value.items()) { (void)ignored; actual.insert(key); }
+        if (reference_plan || actual != expected || !value.at("segment_id").is_string())
+            throw std::invalid_argument("Boundary arc reconstruction edit fields are invalid");
+        result.kind = BoundaryGeometryEditKind::reconstruct_arc;
+        result.target_id = value.at("segment_id").get<std::string>();
+        result.arc_construction = decode_construction_receipt(value.at("construction"));
     } else {
         throw std::invalid_argument("Boundary geometry edit kind is unsupported");
     }

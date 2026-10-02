@@ -5,6 +5,7 @@
 #include <limits>
 #include <numbers>
 #include <stdexcept>
+#include <utility>
 
 namespace {
 void require(bool ok) { if (!ok) throw std::runtime_error("geometry operation assertion failed"); }
@@ -13,11 +14,136 @@ template<class F> void rejects(F f) {
     try { f(); } catch (const std::invalid_argument&) { return; }
     throw std::runtime_error("invalid operation accepted");
 }
+template<class F> void rejects(F f, const char* message) {
+    try { f(); } catch (const std::invalid_argument&) { return; }
+    throw std::runtime_error(message);
+}
 bool near(double a, double b) { return std::abs(a-b) < 1e-8; }
+bool same_point(sketch::Vec2 a, sketch::Vec2 b) { return a.x == b.x && a.y == b.y; }
+sketch::ConstructionReceipt arc_angle(std::string id, sketch::Vec2 start,
+                                      sketch::Vec2 end, const char* expression) {
+    sketch::ConstructionReceipt receipt;
+    receipt.segment_id = std::move(id);
+    receipt.kind = sketch::BoundaryConstructionKind::arc_chord_angle;
+    receipt.start = start;
+    receipt.chord_end = end;
+    receipt.angle = sketch::parse_angle(expression);
+    return receipt;
+}
+sketch::ConstructionReceipt arc_height(std::string id, sketch::Vec2 start,
+                                       sketch::Vec2 end, const char* expression) {
+    sketch::ConstructionReceipt receipt;
+    receipt.segment_id = std::move(id);
+    receipt.kind = sketch::BoundaryConstructionKind::arc_chord_height;
+    receipt.start = start;
+    receipt.chord_end = end;
+    receipt.height = sketch::parse_quantity(expression);
+    return receipt;
+}
+sketch::ConstructionReceipt arc_length(std::string id, sketch::Vec2 start,
+                                       sketch::Vec2 end, const char* expression,
+                                       bool clockwise) {
+    sketch::ConstructionReceipt receipt;
+    receipt.segment_id = std::move(id);
+    receipt.kind = sketch::BoundaryConstructionKind::arc_chord_length;
+    receipt.start = start;
+    receipt.chord_end = end;
+    receipt.arc_length = sketch::parse_quantity(expression);
+    receipt.clockwise = clockwise;
+    return receipt;
+}
 sketch::IdentifiedBoundary square() {
     return {"b", "boundary", {{"e0","v0","v1",{{0,0},{4,0},0}},
         {"e1","v1","v2",{{4,0},{4,3},0}}, {"e2","v2","v3",{{4,3},{0,3},0}},
         {"e3","v3","v0",{{0,3},{0,0},0}}}};
+}
+sketch::IdentifiedBoundary tall_rectangle() {
+    return {"b", "boundary", {{"e0", "v0", "v1", {{0, 0}, {4, 0}, 0}},
+        {"e1", "v1", "v2", {{4, 0}, {4, 20}, 0}},
+        {"e2", "v2", "v3", {{4, 20}, {0, 20}, 0}},
+        {"e3", "v3", "v0", {{0, 20}, {0, 0}, 0}}}};
+}
+sketch::IdentifiedBoundary arc_triangle(double closure_y) {
+    return {"b", "boundary", {{"e0", "v0", "v1", {{0, 0}, {4, 0}, 0}},
+        {"e1", "v1", "v2", {{4, 0}, {2, closure_y}, 0}},
+        {"e2", "v2", "v0", {{2, closure_y}, {0, 0}, 0}}}};
+}
+sketch::IdentifiedBoundary downward_rectangle() {
+    return {"b", "boundary", {{"e0", "v0", "v1", {{0, 0}, {4, 0}, 0}},
+        {"e1", "v1", "v2", {{4, 0}, {4, -20}, 0}},
+        {"e2", "v2", "v3", {{4, -20}, {0, -20}, 0}},
+        {"e3", "v3", "v0", {{0, -20}, {0, 0}, 0}}}};
+}
+
+void test_reconstruct_boundary_arc() {
+    using namespace sketch;
+    const auto source = tall_rectangle();
+    const auto endpoints = source.segments.front().segment;
+
+    const auto positive = reconstruct_boundary_arc(
+        source, "e0", arc_angle("e0", endpoints.start, endpoints.end, "90 deg"));
+    require(positive.segments[0].segment.sweep_radians > 0 &&
+                near(positive.segments[0].segment.sweep_radians, std::numbers::pi / 2),
+            "chord-angle reconstruction must produce the requested positive arc");
+    require(same_point(positive.segments[0].segment.start, endpoints.start) &&
+                same_point(positive.segments[0].segment.end, endpoints.end),
+            "arc reconstruction must keep both chord endpoints fixed");
+    require(positive.segments[0].segment_id == "e0" &&
+                positive.segments[0].start_vertex_id == "v0" &&
+                positive.segments[0].end_vertex_id == "v1" &&
+                positive.segments[1] == source.segments[1],
+            "arc reconstruction must preserve topology identities and other edges");
+    require(source == tall_rectangle(), "arc reconstruction must not mutate its source");
+
+    const auto negative = reconstruct_boundary_arc(
+        positive, "e0", arc_height("e0", endpoints.start, endpoints.end, "-1 m"));
+    require(negative.segments[0].segment.sweep_radians < 0 &&
+                same_point(negative.segments[0].segment.start, endpoints.start) &&
+                same_point(negative.segments[0].segment.end, endpoints.end),
+            "signed chord height must select the negative side without moving endpoints");
+
+    for (const bool clockwise : {false, true}) {
+        // The major arc occupies the side opposite its omitted minor arc.
+        // Close the boundary through that minor-arc cap so both sweep signs
+        // have a valid, non-crossing topology.
+        const auto major_source = arc_triangle(clockwise ? -1.0 : 1.0);
+        const auto major_chord = major_source.segments.front().segment;
+        const auto major = reconstruct_boundary_arc(
+            major_source, "e0", arc_length("e0", major_chord.start, major_chord.end,
+                                            "10 m", clockwise));
+        require(std::abs(major.segments[0].segment.sweep_radians) > std::numbers::pi &&
+                    (major.segments[0].segment.sweep_radians < 0) == clockwise,
+                "arc-length reconstruction must preserve major-arc length and chosen side");
+    }
+    rejects([&] { (void)reconstruct_boundary_arc(downward_rectangle(), "e0",
+        arc_length("e0", endpoints.start, endpoints.end, "10 m", false)); },
+        "major arc crossing the adjacent edge must be rejected");
+
+    BoundaryGeometryEdit edit;
+    edit.boundary_id = source.id;
+    edit.kind = BoundaryGeometryEditKind::reconstruct_arc;
+    edit.target_id = "e0";
+    edit.arc_construction = arc_angle("e0", endpoints.start, endpoints.end, "90 deg");
+    require(decode_boundary_geometry_edit(encode_boundary_geometry_edit(edit)) == edit,
+            "arc reconstruction intent must round-trip its exact typed receipt");
+    auto mismatched = edit;
+    mismatched.arc_construction->chord_end = Vec2{5, 0};
+    rejects([&] { (void)reconstruct_boundary_arc(source, "e0", *mismatched.arc_construction); },
+        "receipt with changed fixed chord must be rejected");
+    auto wrong_id = edit;
+    wrong_id.arc_construction->segment_id = "e1";
+    rejects([&] { (void)encode_boundary_geometry_edit(wrong_id); },
+        "intent receipt with mismatched segment identity must be rejected");
+    auto wrong_kind = edit;
+    wrong_kind.arc_construction->kind = BoundaryConstructionKind::line_heading;
+    rejects([&] { (void)encode_boundary_geometry_edit(wrong_kind); },
+        "intent with a non-arc receipt kind must be rejected");
+    rejects([&] { (void)reconstruct_boundary_arc(source, "missing",
+        arc_angle("missing", endpoints.start, endpoints.end, "90 deg")); },
+        "unknown target segment must be rejected");
+    rejects([&] { (void)reconstruct_boundary_arc(source, "e0",
+        arc_angle("e0", endpoints.start, endpoints.end, "0 deg")); },
+        "arc receipt kernel requires a nonzero sweep");
 }
 
 void test_rotated_boundary_transform_sequence() {
@@ -163,6 +289,7 @@ void test_direct_boundary_edit_rejections() {
 }
 int main() {
     try {
+        test_reconstruct_boundary_arc();
         test_direct_boundary_edits();
         test_direct_boundary_edit_rejections();
         test_rotated_boundary_transform_sequence();

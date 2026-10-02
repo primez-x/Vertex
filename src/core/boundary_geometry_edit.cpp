@@ -126,4 +126,40 @@ IdentifiedBoundary set_boundary_segment_length(const IdentifiedBoundary& source,
     return result;
 }
 
+IdentifiedBoundary reconstruct_boundary_arc(const IdentifiedBoundary& source,
+                                             std::string_view id,
+                                             const ConstructionReceipt& receipt) {
+    validate_editable_boundary(source);
+    const auto found = std::find_if(source.segments.begin(), source.segments.end(),
+        [&](const auto& edge) { return edge.segment_id == id; });
+    if (found == source.segments.end()) throw std::invalid_argument("Unknown segment ID");
+    if (receipt.segment_id != id || receipt.start.x != found->segment.start.x ||
+        receipt.start.y != found->segment.start.y || !receipt.chord_end ||
+        receipt.chord_end->x != found->segment.end.x ||
+        receipt.chord_end->y != found->segment.end.y) {
+        throw std::invalid_argument("Arc construction receipt must retain the selected segment chord");
+    }
+    if (receipt.kind != BoundaryConstructionKind::arc_chord_angle &&
+        receipt.kind != BoundaryConstructionKind::arc_chord_height &&
+        receipt.kind != BoundaryConstructionKind::arc_chord_length) {
+        throw std::invalid_argument("Arc reconstruction requires a chord arc receipt");
+    }
+
+    const auto replayed = replay_construction_receipt(
+        receipt, ConstructionReplayContext{found->segment.start, std::nullopt, std::nullopt,
+                                           default_geometry_tolerance_metres});
+    if (replayed.segment.start.x != found->segment.start.x ||
+        replayed.segment.start.y != found->segment.start.y ||
+        replayed.segment.end.x != found->segment.end.x ||
+        replayed.segment.end.y != found->segment.end.y) {
+        throw std::invalid_argument("Reconstructed arc did not retain the exact segment chord");
+    }
+    auto result = source;
+    const auto target = std::find_if(result.segments.begin(), result.segments.end(),
+        [&](const auto& edge) { return edge.segment_id == id; });
+    target->segment = replayed.segment;
+    validate_editable_boundary(result);
+    return result;
+}
+
 } // namespace sketch

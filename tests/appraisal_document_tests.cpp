@@ -297,9 +297,117 @@ void stale_sources_and_invalid_dependencies_expose_no_current_trace() {
         else broken.back().properties["deduction_ids"] = json::array({"missing-deduction"});
         const auto document = sketch::Document::create(std::move(broken));
         const auto failure = sketch::build_appraisal_document_report(document.snapshot(), "property-1");
-        require(!failure.qualified && !failure.calculation && !failure.issues.empty() && failure.boundaries.empty(),
-            "malformed candidates must retain existing issue-only failure without invented qualification or plausible trace");
+        const auto& boundary = status(failure, "area-1");
+        require(!failure.qualified && !failure.calculation && !failure.issues.empty() && !boundary.measurement &&
+            !boundary.qualification.qualified && !boundary.qualification.derived_category &&
+            !boundary.qualification.physical_square_metres && !boundary.qualification.adjusted_square_metres &&
+            !boundary.qualification.issues.empty(),
+            "malformed candidates must retain an actionable source row without plausible numeric qualification");
     }
+}
+
+void missing_policy_retains_diagnostics_without_inventing_declared_policy() {
+    auto entities = fixture_entities();entities.front().properties.erase("appraisal_policy");
+    entities.back().properties["factor_numerator"] = 1;entities.back().properties["factor_denominator"] = 2;
+    entities.back().properties["deduction_ids"] = json::array({"void-1"});
+    entities.push_back(entity("void-1", "measurement_boundary",
+        {{"property_id", "property-1"}, {"building_id", "building-1"}, {"floor_id", "floor-1"}, {"layer_id", "layer-1"},
+         {"boundary", square(1,1,1)}, {"appraisal_facts", {{"boundary_role", "other_void"}}}}));
+    const auto document = sketch::Document::create(std::move(entities));const auto before = document.snapshot();
+    const auto report = sketch::build_appraisal_document_report(before, "property-1", sketch::AreaUnit::square_metre);
+    require(report.configured && !report.qualified && !report.calculation && !report.policy && report.boundaries.size() == 2,
+        "absent property policy must retain source rows but never infer declared policy or qualified totals");
+    const auto& parent = status(report, "area-1");
+    require(parent.measurement && !parent.qualification.qualified && !parent.qualification.derived_category &&
+        parent.qualification.policy_id.empty() && parent.qualification.policy_version == 0 &&
+        parent.qualification.physical_square_metres && parent.qualification.adjusted_square_metres &&
+        parent.measurement->factor.numerator == 1 && parent.measurement->factor.denominator == 2 &&
+        parent.measurement->classification == "unqualified" && parent.measurement->display.text == "4.15",
+        "missing policy leaves valid physical/adjusted geometry diagnostic with exact factor and rounding");
+    near(parent.measurement->base_square_metres, 9.290304, 1e-8, "missing-policy trace gross area");
+    near(parent.measurement->deducted_square_metres, 1, 1e-8, "missing-policy trace retains linked deduction");
+    near(parent.measurement->net_square_metres, 8.290304, 1e-8, "missing-policy trace physical net");
+    near(parent.measurement->factored_square_metres, 4.145152, 1e-8, "missing-policy trace adjusted amount");
+    require(std::any_of(parent.qualification.issues.begin(), parent.qualification.issues.end(), [](const auto& issue) {
+        return issue.code == "undeclared_policy";
+    }) && std::any_of(parent.qualification.issues.begin(), parent.qualification.issues.end(), [](const auto& issue) {
+        return issue.code == "factor_not_unity";
+    }), "diagnostic trace must retain undeclared-policy and exact-unity blockers");
+    const auto& excluded = status(report, "void-1");
+    require(excluded.exclusion && excluded.measurement && !excluded.qualification.qualified &&
+        !excluded.qualification.derived_category && excluded.qualification.policy_id.empty(),
+        "missing-policy void remains inspectable without positive qualification or standalone contribution");
+    require(document.snapshot().entities() == before.entities() && document.snapshot().revision() == before.revision(),
+        "diagnostic projection must not insert a default policy into authoritative data");
+
+    for (const auto& partial : std::vector<json>{json::object(), {{"version",1}}, {{"policy_kind","residential_declared"}}}) {
+        auto incomplete = fixture_entities();incomplete.front().properties["appraisal_policy"] = partial;
+        const auto partial_document = sketch::Document::create(std::move(incomplete));
+        const auto partial_report = sketch::build_appraisal_document_report(partial_document.snapshot(), "property-1");
+        require(!partial_report.policy && !partial_report.qualified && !partial_report.calculation &&
+            status(partial_report, "area-1").measurement && !status(partial_report, "area-1").qualification.qualified,
+            "incomplete policy kind/version must not be filled from defaults");
+    }
+}
+
+void malformed_candidates_have_source_rows_without_numeric_traces() {
+    for (int fault = 0; fault < 11; ++fault) {
+        auto entities = fixture_entities();
+        switch (fault) {
+        case 0: entities.front().properties["appraisal_policy"] = "bad"; break;
+        case 1: entities.front().properties["appraisal_policy"]["version"] = 2; break;
+        case 2: entities.front().properties["appraisal_policy"]["policy_kind"] = "bad"; break;
+        case 3: entities.back().properties["boundary"][0]["sweep_radians"] = "bad"; break;
+        case 4: entities.back().properties["deduction_ids"] = json::array({"missing-void"}); break;
+        // Document rejects malformed/dangling canonical references before a
+        // snapshot exists. Missing context and conflicting valid references
+        // exercise the report's ownership diagnostics through supported input.
+        case 5: entities.back().properties.erase("floor_id"); break;
+        case 6: entities[2].properties.erase("building_id"); break;
+        case 7:
+            entities.push_back(entity("building-other", "building", {{"property_id","property-1"}}));
+            entities[4].properties["building_id"] = "building-other";
+            break;
+        case 8: entities.back().properties["appraisal_facts"]["finish"] = "bad"; break;
+        case 9: entities.back().properties["boundary"][0]["end"] = json::array({3.048,3.048}); break;
+        case 10: entities.front().properties["calculation_profile"] = {{"decimal_places",7}}; break;
+        }
+        const auto document = sketch::Document::create(std::move(entities));
+        const auto report = sketch::build_appraisal_document_report(document.snapshot(), "property-1");
+        const auto& boundary = status(report, "area-1");
+        require(!report.qualified && !report.calculation && report.boundaries.size() == 1 && !boundary.measurement &&
+            !boundary.qualification.qualified && !boundary.qualification.derived_category &&
+            !boundary.qualification.physical_square_metres && !boundary.qualification.adjusted_square_metres &&
+            !boundary.qualification.issues.empty() && !boundary.qualification.issues.front().message.empty(),
+            "each invalid context/declaration/geometry/dependency retains its source ID with actionable issues and no numeric trace");
+        require(std::any_of(report.issues.begin(), report.issues.end(), [](const auto& issue) {return issue.find("area-1:") != std::string::npos;}),
+            "global issue list must identify the same invalid source");
+        if (fault < 3) require(!report.policy, "malformed policy must not advertise a default declared policy");
+    }
+}
+
+void report_excludes_other_property_site_and_phase_hidden_boundaries() {
+    auto entities = fixture_entities();
+    entities.push_back(entity("property-2", "property", {{"calculation_workflow","appraisal"},{"appraisal_policy",policy()}}));
+    entities.push_back(entity("building-2", "building", {{"property_id","property-2"}}));
+    entities.push_back(entity("floor-2", "floor", {{"building_id","building-2"},{"appraisal_facts",{{"grade","above"}}}}));
+    auto other = entities[4];other.id = "other-area";other.properties["property_id"] = "property-2";
+    other.properties["building_id"] = "building-2";other.properties["floor_id"] = "floor-2";
+    other.properties["boundary"] = "malformed geometry outside requested property";entities.push_back(std::move(other));
+    auto site = entities[4];site.id = "site-area";site.properties["calculation_scope"] = "site";
+    site.properties.erase("floor_id");site.properties["boundary"] = "not building geometry";entities.push_back(std::move(site));
+    auto hidden = entities[4];hidden.id = "hidden-area";hidden.properties["appraisal_facts"] = "bad";entities.push_back(std::move(hidden));
+    std::set<std::string,std::less<>> visible;for (const auto& value : entities) if (value.id != "hidden-area") visible.insert(value.id);
+    const auto document = sketch::Document::create(entities);
+    const auto report = sketch::build_appraisal_document_report(document.snapshot(), "property-1", sketch::AreaUnit::square_foot, &visible);
+    require(report.qualified && report.calculation && report.boundaries.size() == 1 && report.boundaries.front().boundary_id == "area-1" && report.issues.empty(),
+        "valid other-property hierarchy, site outlines and phase-hidden sources are outside the appraisal report even with irrelevant malformed data");
+    auto conflicting = entities[4];conflicting.id = "conflicting-area";conflicting.properties["property_id"] = "property-2";entities.push_back(std::move(conflicting));
+    visible.insert("conflicting-area");const auto conflict_document = sketch::Document::create(std::move(entities));
+    const auto conflict = sketch::build_appraisal_document_report(conflict_document.snapshot(), "property-1", sketch::AreaUnit::square_foot, &visible);
+    require(!conflict.qualified && !conflict.calculation && !status(conflict, "conflicting-area").measurement &&
+        !status(conflict, "conflicting-area").qualification.qualified,
+        "conflicting explicit property and owning hierarchy must appear invalid instead of being silently assigned elsewhere");
 }
 
 void display_profile_preserves_fixed_appraisal_semantics() {
@@ -521,6 +629,9 @@ int main() {
         exclusion_only_report_retains_measurement_without_totals();
         global_overlap_withholds_totals_but_retains_individual_traces();
         stale_sources_and_invalid_dependencies_expose_no_current_trace();
+        missing_policy_retains_diagnostics_without_inventing_declared_policy();
+        malformed_candidates_have_source_rows_without_numeric_traces();
+        report_excludes_other_property_site_and_phase_hidden_boundaries();
         display_precision_rounds_aggregate_from_physical_amounts();
         display_profile_preserves_fixed_appraisal_semantics();
         display_precision_cannot_qualify_facts_or_change_eligibility();

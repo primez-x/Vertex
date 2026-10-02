@@ -36,6 +36,12 @@ enum class BoundaryFlipAxis { horizontal, vertical };
 [[nodiscard]] IdentifiedBoundary set_boundary_segment_length(const IdentifiedBoundary&,
     std::string_view segment_id, double target_length, BoundaryFixedEndpoint fixed_endpoint,
     bool move_connected);
+// Reconstructs only the selected segment's curvature from its fixed chord.
+// The receipt must name the selected segment and retain its exact endpoints;
+// chord angle/height/arc-length receipts carry the signed side and input.
+[[nodiscard]] IdentifiedBoundary reconstruct_boundary_arc(
+    const IdentifiedBoundary&, std::string_view segment_id,
+    const ConstructionReceipt& arc_construction);
 // Helpers operate on geometry only. Closure never snaps or repairs existing points.
 [[nodiscard]] Boundary automatically_close_boundary(const Boundary& open_chain);
 // Completes start -> shoulder1 -> shoulder2 -> end with three straight segments.

@@ -563,11 +563,11 @@ void extract_project_impl(const DocumentSnapshot &snapshot,
                                      : Json(nullptr);
     const auto required_format = ProjectStore::required_format_version(snapshot);
     Json result = {{"exchange_format", "vertex-json-assets"},
-                   {"exchange_version", required_format >= 14 ? 11 : required_format >= 13 ? 10 : required_format >= 12 ? 9 : required_format >= 11 ? 8 : required_format >= 10 ? 7 : 1},
+                   {"exchange_version", required_format >= 15 ? 13 : required_format >= 14 ? 11 : required_format >= 13 ? 10 : required_format >= 12 ? 9 : required_format >= 11 ? 8 : required_format >= 10 ? 7 : 1},
                    {"document", std::move(document)},
                    {"revisions", Json::array()}};
     if (archive) {
-      result["exchange_version"] = 12;
+      result["exchange_version"] = std::max(result["exchange_version"].get<int>(), 12);
       result["archive_role"] = archive->role() == ArchiveRole::ordinary
                                    ? "ordinary"
                                    : "recovery_copy";

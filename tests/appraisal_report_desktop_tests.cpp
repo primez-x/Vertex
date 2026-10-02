@@ -213,6 +213,47 @@ void active_design_phase_report_scope() {
     });
 }
 
+void undeclared_policy_and_malformed_area_remain_inspectable() {
+    QTemporaryDir directory;MainWindow window({},nullptr,directory.filePath("text-library.json"));
+    const auto ids=fixture(window);
+    const auto declared=window.document().snapshot();
+    auto property=declared.entities().at("property-1");property.properties.erase("appraisal_policy");
+    window.document().apply(sketch::ApplyEntityChanges{declared.revision(),{sketch::EntityChange::upsert(property)}, {},"remove policy declaration"});
+    report_action(window,[&](auto& dialog) {
+        const auto summary=child<QTextBrowser>(dialog,"appraisalReportSummary").toPlainText();
+        auto& tree=child<QTreeWidget>(dialog,"appraisalReportAreas");auto& parent=row(tree,ids.parent);tree.setCurrentItem(&parent);
+        require(summary.contains("Undeclared") && summary.contains("totals withheld") && !summary.contains("All measured categories total"),
+            "missing policy must not manufacture qualified summary totals");
+        require(tree.topLevelItemCount()==3 && parent.text(1)=="Unqualified" && parent.text(2)=="100.00 m²" && parent.text(4)=="80.00 m²",
+            "missing policy must retain every source and valid gross/deduction diagnostic");
+        require(child<QTextBrowser>(dialog,"appraisalReportDetail").toPlainText().contains("undeclared_policy"),
+            "individual diagnostic must disclose its missing policy reason");
+    });
+    const auto diagnostic=directory.filePath("undeclared.pdf");require(window.exportAppraisalReportPdf(diagnostic),"undeclared policy diagnostic may export");
+    require(pdf_text(diagnostic).contains("undeclared_policy") && !pdf_text(diagnostic).contains("All measured categories total"),
+        "export must retain missing-policy provenance and withheld totals");
+    auto source=window.document().snapshot();property=declared.entities().at("property-1");
+    auto malformed=source.entities().at(ids.parent.toStdString());malformed.properties["appraisal_facts"]["finish"]=42;
+    window.document().apply(sketch::ApplyEntityChanges{source.revision(),{sketch::EntityChange::upsert(property),sketch::EntityChange::upsert(malformed)}, {},"invalid appraisal fact"});
+    report_action(window,[&](auto& dialog) {
+        auto& tree=child<QTreeWidget>(dialog,"appraisalReportAreas");auto& parent=row(tree,ids.parent);tree.setCurrentItem(&parent);
+        require(parent.text(1)=="Unqualified","malformed facts must remain as an unqualified source row");
+        for(int column=2;column<7;++column)require(parent.text(column)==QString::fromUtf8("—"),"invalid area must suppress all numeric audit fields");
+        const auto detail=child<QTextBrowser>(dialog,"appraisalReportDetail").toPlainText();
+        require(detail.contains("Current measurement unavailable") && detail.contains("invalid_input") && !detail.contains("Gross boundary area"),
+            "invalid source detail must retain actionable reason without a numeric trace");
+        child<QTabWidget>(dialog,"appraisalReportTabs").setCurrentIndex(1);capture(dialog,"appraisal-invalid-source.png");
+        child<QPushButton>(dialog,"locateAppraisalBoundary").click();
+        require(window.selectedEntityId()==ids.parent,"invalid report row must navigate to its actual source for repair");
+    });
+    require(window.editSelectedAppraisalFacts(declarations()),"invalid source can be repaired through actual authoring API");
+    report_action(window,[&](auto& dialog) {
+        require(child<QLabel>(dialog,"appraisalReportState").text().contains("Qualified") &&
+            row(child<QTreeWidget>(dialog,"appraisalReportAreas"),ids.parent).text(4)=="80.00 m²",
+            "repair must restore qualification and fresh diagnostic geometry");
+    });
+}
+
 void paginated_pdf_escaping_and_atomic_destination_failures() {
     QTemporaryDir directory;require(directory.isValid(),"pagination fixture needs local directory");MainWindow window({},nullptr,directory.filePath("text-library.json"));const auto ids=fixture(window);
     std::vector<QString> source_ids{ids.parent,ids.garage,ids.void_id};
@@ -261,7 +302,8 @@ int main(int argc,char** argv) {
     try {
         require(QFontDatabase::addApplicationFont(QStringLiteral(":/fonts/Inter.ttf"))>=0,"bundled font must load for actual report rendering");app.setFont(QFont(QStringLiteral("Inter"),10));
         actual_report_summary_audit_navigation_and_refresh();display_precision_unqualified_diagnostics_and_invalid_trace();
-        active_design_phase_report_scope();paginated_pdf_escaping_and_atomic_destination_failures();
+        active_design_phase_report_scope();undeclared_policy_and_malformed_area_remain_inspectable();
+        paginated_pdf_escaping_and_atomic_destination_failures();
         std::cout<<"appraisal_report_desktop_tests passed\n";return 0;
     } catch(const std::exception& failure){std::cerr<<"appraisal_report_desktop_tests: "<<failure.what()<<'\n';return 1;}
 }

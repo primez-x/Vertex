@@ -1570,9 +1570,10 @@ void test_straight_wall_only_typed_history_requires_v11_and_rejects_consistent_f
                   "historical mixed v2 envelope cannot be substituted for v4 wall-only proof");
     const auto future = temp.path / "straight-future-format.psketch";
     std::filesystem::copy_file(authored_file, future);
-    execute_sql(future, "PRAGMA user_version=15; UPDATE metadata SET value='15' WHERE key='format_version'");
+    const auto future_version = std::to_string(ProjectStore::format_version + 1);
+    execute_sql(future, "PRAGMA user_version=" + future_version + "; UPDATE metadata SET value='" + future_version + "' WHERE key='format_version'");
     require_error([&] { (void)ProjectStore::load(future); }, StorageErrorCode::unsupported_format,
-                  "storage versions newer than v14 must reject before semantic admission");
+                  "storage versions newer than the supported format must reject before semantic admission");
 
     // No length receipt is needed for a connected endpoint movement. Matching
     // proof/result forgery therefore isolates topology from exact-entry checks.

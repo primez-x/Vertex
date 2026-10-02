@@ -66,6 +66,23 @@
   bay completion, and point jumping are available from the command search.</p>
   <p>Select a closed boundary to inspect its classification, factors, deductions, area,
   perimeter, and calculation provenance. Every edit is undoable with <kbd>Ctrl</kbd>+<kbd>Z</kbd>.</p>
+  <p>The grid uses the selected units and current zoom. Imperial views move
+  through feet, half-feet, inches and fractional inches; Metric views move through
+  metres, centimetres and millimetres. The small scale cue shows one grid cell.
+  Grid snapping uses the same spacing. Exact object endpoints take priority, and
+  changing zoom or units does not round existing measurements.</p>
+  <p>Choose <strong>Tools &gt; Add length, angle or area dimension…</strong> to
+  restore a deleted edge dimension or add another associated dimension. Choose
+  the boundary and edge, then <strong>Add length</strong>. Length labels are placed
+  outside the boundary by default; turn that option off to use the entered label
+  coordinates. The dimension follows its source geometry.</p>
+  <p>Select a measured boundary and choose <strong>Edit curve…</strong> or
+  <strong>Edit boundary geometry…</strong>. Choose an edge and a curve angle,
+  signed height, or arc length. Negative angle or height chooses the opposite
+  side; arc length offers <strong>Clockwise curve</strong>. Both curve endpoints
+  stay fixed. Review the original/proposed outlines and changed dimensions, area
+  and perimeter before Apply. Invalid topology or conflicting locked measurements
+  disables Apply and explains the problem.</p>
   <p>For a closed physical wall layout, select a wall and choose
   <strong>Measure exterior from walls…</strong> from its right-click menu or Tools.
   Connected interior partitions are excluded from the exterior perimeter. You can
@@ -95,6 +112,10 @@
   after editing the project. <strong>Export PDF…</strong> saves the complete audit
   across as many pages as needed. Unqualified measurements remain diagnostics;
   they do not become qualified property totals.</p>
+  <p>An undeclared policy retains valid individual diagnostic measurements while
+  withholding qualified totals. An area with malformed facts or geometry remains
+  in the report with its issue and unavailable quantities. Select that row and
+  use <strong>Show on canvas</strong> to locate and repair its source.</p>
   <p>In <strong>Sheet layout…</strong>, choose a horizontal plan and click
   <strong>Create appraisal plan sheet</strong>. This adds an A3 page with a
   1:100 plan and area summary, preserving existing sheets. Adjust its scale and

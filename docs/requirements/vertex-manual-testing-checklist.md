@@ -1,6 +1,6 @@
 # Vertex user testing checklist
 
-305 practical tasks, grouped by how you use the app. This replaces the earlier engineering-oriented checklist. The old 130-item list is preserved separately as engineering-requirements-checklist.md.
+308 practical tasks, grouped by how you use the app. This replaces the earlier engineering-oriented checklist. The old 130-item list is preserved separately as engineering-requirements-checklist.md.
 
 This is a user acceptance list for the intended app, not a claim that every listed action is implemented or working in the current preview. If you cannot find a control, or a feature is absent, mark **Blocked / missing** and describe it. Specialized sections can be skipped if you do not use them or lack the device or sample files.
 
@@ -1748,6 +1748,26 @@ drawing; switching modes does not change existing geometry.
 - [ ] **U305 — Add a plan sheet with an appraisal summary**
   - Steps: Draw a qualified appraisal plan. Open **Sheet layout…**, select a horizontal plan and click **Create appraisal plan sheet**. Cancel once, then repeat and accept. Adjust scale if needed. Undo, redo, save, reopen and export the drawing set to PDF.
   - Expected: Cancel adds nothing. Accept adds one A3 page with a large plan and separate area summary while preserving the previous sheets. One Undo removes the entire addition; Redo restores it. Reopening and PDF retain both placements and the qualified quantities. A summary too long for its box identifies omitted rows and points to the complete report.
+  - Result: Not tested
+  - Notes: ______________________________
+
+## Boundary editing and diagnostic repairs
+
+- [ ] **U306 — Restore a deleted edge measurement**
+  - Steps: Draw a room, delete one edge-length dimension, then choose **Tools > Add length, angle or area dimension…**. Choose the room and missing edge, leave exterior placement checked and click **Add length**. Change the edge length, undo, redo, save and reopen.
+  - Expected: The restored label measures the selected edge and appears outside the room. It updates with geometry, preserves its edge association after reopening, and each committed edit can be undone.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **U307 — Change a boundary curve without moving its endpoints**
+  - Steps: Draw a measured room, select it and choose **Edit curve…**. Choose an edge and enter a signed sweep angle, signed height or arc length. Review the preview, then Apply. Try the opposite side, undo, redo, save, reopen and export the plan. Try a curve that crosses another edge.
+  - Expected: Both endpoints stay fixed. The selected edge becomes the requested analytical curve; associated lengths, area and perimeter update. The preview shows the proposed result before commitment. An invalid crossing disables Apply and leaves the drawing unchanged. Saved and exported geometry agrees.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **U308 — Locate and repair an invalid appraisal area**
+  - Steps: Open the appraisal report with a missing policy or invalid required area fact. Select the affected area in **Areas and deductions**, inspect its issue and click **Show on canvas**. Repair the declaration, reopen or Refresh the report, then export PDF.
+  - Expected: Missing policy retains valid diagnostic quantities but withholds qualified totals. An invalid source remains selectable and shows unavailable quantities with a specific issue. Repair restores current measurements and qualification only when all requirements are met. The PDF retains the same status and reasons.
   - Result: Not tested
   - Notes: ______________________________
 

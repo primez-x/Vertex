@@ -1,4 +1,4 @@
-# Vertex project formats v1 through v14
+# Vertex project formats v1 through v15
 
 Reusable text templates use a separate [local text-library format](text-library-format.md).
 Placed labels store their complete content and style in the project; opening or
@@ -144,8 +144,9 @@ translation history, v6 transform history, v7 boundary-coordinate edit
 history, v8 boundary-constraint transactions, v9 measured group translations,
 v10 curved endpoint constraints, v11 straight wall-only intent, v12 physical
 arc-length locks, v13 direct physical curve-length inputs, and v14 rigid curve
-construction transforms, plus v4 through v14 archives through recovery-aware APIs.
-Under-versioned semantic data and versions above 14 reject. Legacy-only history
+construction transforms, and v15 fixed-chord boundary curvature edits, plus v4
+through v15 archives through recovery-aware APIs.
+Under-versioned semantic data and versions above 15 reject. Legacy-only history
 is still written as v1. Unknown boundary entity
 versions in v2 remain preserved read-only. See `boundary-entity-format.md`.
 Version 2 also recognizes `dimension` entities. Segment-length dimensions refer
@@ -598,7 +599,7 @@ unknown project `format_version` is rejected rather than opened unsafely.
 ## SQLite schema
 
 The SQLite `application_id` is `0x50535444` (`PSTD`). `user_version` and metadata
-`format_version` are equal and range from `1` through `14`, according to the
+`format_version` are equal and range from `1` through `15`, according to the
 retained semantics. The baseline application tables below are shared; later
 versions add the proof columns and recovery data documented in this file.
 
@@ -1082,3 +1083,29 @@ same floor. Older format markers reject even with a recomputed logical digest.
 JSON/assets extraction advertises exchange version 11 and retains the complete
 archive; it does not supply a JSON project importer. Measured-curve scaling
 remains unsupported and rejects without changing the document.
+
+## Fixed-chord boundary curvature edits (v15)
+
+`BoundaryGeometryEdit.kind: "reconstruct_arc"` keeps both endpoints and all
+segment/vertex identities. Its version-1 JSON envelope contains exactly
+`version`, `kind`, `boundary_id`, `segment_id`, and `construction`.
+The construction is a strict receipt of kind `arc_chord_angle`,
+`arc_chord_height`, or `arc_chord_length`; its segment ID, start, and chord end
+must match the selected edge exactly. Angle and height are signed; arc length
+uses the receipt's clockwise flag. The receipt kernel validates the retained
+original and normalized expressions and reconstructs analytical geometry.
+Degenerate curves and invalid closed topology are refused.
+
+The source `boundary_authoring` receipt is archived unchanged in
+`extensions.boundary_geometry_derivation`, followed by a replayable
+`geometry_edit` operation carrying the complete intent. Existing derivation
+operations remain unchanged. Known constraints and dependent dimensions are
+validated by the normal document transaction; automatic length dimensions
+follow the new arc and winding, while manual placements remain unchanged.
+
+The new intent in any retained revision, or in an imported identified boundary's
+derivation, requires format 15. Undoing or deleting the current curve does not
+lower that floor. Older format markers reject the retained semantics. Files
+without this intent retain their previous required format and serialization.
+JSON/assets extraction advertises exchange version 13, including recovery
+archives carrying this intent. Extraction is not a JSON project importer.
