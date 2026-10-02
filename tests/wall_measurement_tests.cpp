@@ -58,6 +58,23 @@ std::vector<WallSpec> rectangle_walls(double bottom = 0.2, double right = 0.2,
     };
 }
 
+std::vector<WallSpec> capsule_walls(double thickness = 0.2) {
+    return {
+        {"wall-bottom", {{0, 0}, {4, 0}, 0}, thickness},
+        {"wall-right-arc", {{4, 0}, {4, 3}, std::numbers::pi}, thickness},
+        {"wall-top", {{4, 3}, {0, 3}, 0}, thickness},
+        {"wall-left-arc", {{0, 3}, {0, 0}, std::numbers::pi}, thickness},
+    };
+}
+
+Vec2 circle_center(const Segment& arc) {
+    const auto dx = arc.end.x - arc.start.x;
+    const auto dy = arc.end.y - arc.start.y;
+    const auto offset = 0.5 / std::tan(arc.sweep_radians * 0.5);
+    return {arc.start.x + dx * 0.5 - dy * offset,
+            arc.start.y + dy * 0.5 + dx * offset};
+}
+
 Json segment_json(const Segment& segment) {
     return {{"start", {segment.start.x, segment.start.y}},
             {"end", {segment.end.x, segment.end.y}},
@@ -228,6 +245,251 @@ void concave_l_outline_and_per_wall_thickness_are_respected() {
          "each rectangle face must use its own half-thickness at the mitered corners");
 }
 
+void curved_exterior_is_analytical_reversible_and_current() {
+    const auto shell = capsule_walls();
+    auto with_partition = shell;
+    with_partition.push_back({"partition", {{2, 0}, {2, 3}, 0}, 0.1});
+    // This detached line is inside the true right-hand semicircular bulb but
+    // outside the polygon formed by replacing that arc with its chord.
+    with_partition.push_back({"bulb-interior", {{4.8, 0.5}, {4.8, 2.5}, 0}, 0.1});
+    const auto source_entities = base_entities(with_partition);
+    const auto source_document = Document::create(source_entities);
+    const auto ids = exterior_wall_measurement_sources(source_document.snapshot(),
+                                                        wall_ids(with_partition));
+    require(ids == std::vector<std::string>{"wall-bottom", "wall-left-arc",
+                "wall-right-arc", "wall-top"},
+            "recognition must include the complete curved exterior and exclude a straight partition");
+
+    const auto measured = derive_exterior_wall_measurement(source_document.snapshot(), ids);
+    require(measured.boundary.size() == 4 && validate_boundary(measured.boundary).empty(),
+            "a mixed straight and curved exterior must retain a valid four-edge analytical outline");
+    require(std::count_if(measured.boundary.begin(), measured.boundary.end(), [](const Segment& edge) {
+                return edge.sweep_radians != 0.0;
+            }) == 2,
+            "the exterior offset must retain both analytical semicircular walls");
+    near(signed_area(measured.boundary), 12.8 + std::numbers::pi * 1.6 * 1.6, 1e-9,
+         "the 0.2m offset capsule must have exact analytic exterior area");
+    near(perimeter(measured.boundary), 8.0 + 2.0 * std::numbers::pi * 1.6, 1e-9,
+         "the 0.2m offset capsule must have exact analytic exterior perimeter");
+
+    auto reversed = with_partition;
+    std::reverse(reversed.begin(), reversed.end());
+    for (auto& wall : reversed) {
+        std::swap(wall.baseline.start, wall.baseline.end);
+        wall.baseline.sweep_radians = -wall.baseline.sweep_radians;
+    }
+    const auto reversed_document = Document::create(base_entities(reversed));
+    const auto reversed_ids = exterior_wall_measurement_sources(reversed_document.snapshot(),
+                                                                 wall_ids(reversed));
+    require(reversed_ids == ids,
+            "wall order and reversed directed arcs must preserve recognized source identities");
+    const auto reversed_measurement = derive_exterior_wall_measurement(reversed_document.snapshot(), ids);
+    require(boundary_json(reversed_measurement.boundary) == boundary_json(measured.boundary),
+            "wall order and reversed directed arcs must preserve the canonical analytical exterior");
+
+    auto area = measurement_entity(measured.boundary, measured.source);
+    auto retained_entities = source_entities;
+    retained_entities.push_back(area);
+    const auto retained_document = Document::create(retained_entities);
+    require(wall_measurement_source_current(retained_document.snapshot(),
+                retained_document.snapshot().entities().at("area-1")),
+            "a serialized curved exterior must remain current against unchanged wall sources");
+    auto edited_outline = area;
+    for (std::size_t index = 0; index < measured.boundary.size(); ++index) {
+        if (measured.boundary[index].sweep_radians != 0.0) {
+            auto edited_boundary = measured.boundary;
+            edited_boundary[index].sweep_radians = -edited_boundary[index].sweep_radians;
+            edited_outline.properties["boundary"] = boundary_json(edited_boundary);
+            break;
+        }
+    }
+    auto edited_outline_entities = source_entities;
+    edited_outline_entities.push_back(edited_outline);
+    const auto edited_outline_document = Document::create(edited_outline_entities);
+    require(!wall_measurement_source_current(edited_outline_document.snapshot(),
+                edited_outline_document.snapshot().entities().at("area-1")),
+            "changing only the measured arc sweep with fixed endpoints must stale its source outline");
+    for (auto& item : retained_entities) {
+        if (item.id == "wall-right-arc")
+            item.properties["baseline"]["sweep_radians"] = -std::numbers::pi;
+    }
+    const auto changed_arc_document = Document::create(retained_entities);
+    require(!wall_measurement_source_current(changed_arc_document.snapshot(),
+                changed_arc_document.snapshot().entities().at("area-1")),
+            "changing only a source arc sweep with fixed endpoints must stale the measured boundary");
+}
+
+void concave_curved_wall_offsets_concentrically_and_analytically() {
+    const std::vector<WallSpec> walls{
+        {"bottom", {{0, 0}, {4, 0}, 0}, 0.2},
+        {"right", {{4, 0}, {4, 3}, 0}, 0.2},
+        {"top", {{4, 3}, {0, 3}, 0}, 0.2},
+        // On the downward chord a negative sweep bows into the footprint,
+        // giving this loop a concave curved side.
+        {"inward-arc", {{0, 3}, {0, 0}, -std::numbers::pi / 2.0}, 0.2},
+    };
+    const auto document = Document::create(base_entities(walls));
+    const auto measured = derive_exterior_wall_measurement(document.snapshot(), wall_ids(walls));
+    require(validate_boundary(measured.boundary).empty() && signed_area(measured.boundary) > 0.0,
+            "a concave analytical wall loop must produce a valid canonical exterior");
+    const auto curve = std::find_if(measured.boundary.begin(), measured.boundary.end(),
+        [](const Segment& segment) { return segment.sweep_radians != 0.0; });
+    require(curve != measured.boundary.end() && curve->sweep_radians < 0.0,
+            "outward offset must preserve the signed curvature of a concave exterior wall");
+    const auto source_radius = 3.0 / (2.0 * std::sin(std::numbers::pi / 4.0));
+    near(segment_length(*curve) / std::abs(curve->sweep_radians), source_radius - 0.1, 1e-9,
+         "the concave wall offset must be concentric and reduce exterior-side radius by half-thickness");
+
+    auto collapsed = walls;
+    collapsed.back().thickness = 5.0;
+    const auto collapsed_document = Document::create(base_entities(collapsed));
+    rejects([&] { (void)derive_exterior_wall_measurement(collapsed_document.snapshot(),
+                                                          wall_ids(collapsed)); },
+            "an inward concave arc offset whose radius collapses must fail closed");
+}
+
+void major_arc_endpoint_tangent_order_keeps_partition_out_of_exterior() {
+    const auto point_on_circle = [](double degrees) {
+        const auto angle = degrees * std::numbers::pi / 180.0;
+        return Vec2{2.0 * std::cos(angle), 2.0 * std::sin(angle)};
+    };
+    const auto start = point_on_circle(75.0);
+    const auto end = point_on_circle(345.0);
+    const auto split = point_on_circle(95.0);
+    const std::vector<WallSpec> walls{
+        {"shell-arc", {start, end, 3.0 * std::numbers::pi / 2.0}, 0.1},
+        {"shell-end", {end, {0, 0}, 0}, 0.1},
+        {"shell-start", {{0, 0}, start, 0}, 0.1},
+        {"partition", {start, split, 0}, 0.1},
+    };
+    const auto document = Document::create(base_entities(walls));
+    const auto ids = exterior_wall_measurement_sources(document.snapshot(), wall_ids(walls));
+    require(ids == std::vector<std::string>{"shell-arc", "shell-end", "shell-start"},
+            "major-arc tangent ordering must retain the complete exterior and exclude its chord partition");
+    const auto measured = derive_exterior_wall_measurement(document.snapshot(), ids);
+    require(validate_boundary(measured.boundary).empty() && signed_area(measured.boundary) > 0.0 &&
+                perimeter(measured.boundary) > 0.0 && measured.source.at("walls").size() == 3,
+            "a major-arc shell must derive valid analytical area/perimeter with exact shell provenance");
+
+    auto reversed = walls;
+    std::reverse(reversed.begin(), reversed.end());
+    for (auto& wall : reversed) {
+        std::swap(wall.baseline.start, wall.baseline.end);
+        wall.baseline.sweep_radians = -wall.baseline.sweep_radians;
+    }
+    const auto reversed_document = Document::create(base_entities(reversed));
+    const auto reversed_ids = exterior_wall_measurement_sources(reversed_document.snapshot(), wall_ids(reversed));
+    require(reversed_ids == ids && boundary_json(derive_exterior_wall_measurement(
+                reversed_document.snapshot(), ids).boundary) == boundary_json(measured.boundary),
+            "major-arc face selection and analytical offset must be invariant to shuffled reversed sources");
+}
+
+void four_concentric_quarter_arcs_offset_as_one_exact_circle() {
+    const std::array<Vec2, 4> points{{{2, 0}, {0, 2}, {-2, 0}, {0, -2}}};
+    std::vector<WallSpec> walls;
+    for (std::size_t index = 0; index < points.size(); ++index)
+        walls.push_back({"quarter-" + std::to_string(index),
+            {points[index], points[(index + 1) % points.size()], std::numbers::pi / 2.0}, 0.2});
+    const auto document = Document::create(base_entities(walls));
+    const auto ids = exterior_wall_measurement_sources(document.snapshot(), wall_ids(walls));
+    require(ids == wall_ids(walls), "a four-arc circle must recognize every unique exterior wall");
+    const auto measured = derive_exterior_wall_measurement(document.snapshot(), ids);
+    require(measured.boundary.size() == 4 && validate_boundary(measured.boundary).empty() &&
+                std::all_of(measured.boundary.begin(), measured.boundary.end(), [](const Segment& edge) {
+                    return edge.sweep_radians > 0.0;
+                }),
+            "concentric quarter-arc joins must remain four analytical arcs");
+    near(signed_area(measured.boundary), std::numbers::pi * 2.1 * 2.1, 1e-9,
+         "the four-arc exterior must have the exact area of the expanded circle");
+    near(perimeter(measured.boundary), 2.0 * std::numbers::pi * 2.1, 1e-9,
+         "the four-arc exterior must have the exact circumference of the expanded circle");
+    for (const auto& arc : measured.boundary) {
+        const auto center = circle_center(arc);
+        near(center.x, 0.0, 1e-9, "each offset quarter arc must retain the shared circle center x");
+        near(center.y, 0.0, 1e-9, "each offset quarter arc must retain the shared circle center y");
+    }
+
+    auto reversed = walls;
+    std::reverse(reversed.begin(), reversed.end());
+    for (auto& wall : reversed) {
+        std::swap(wall.baseline.start, wall.baseline.end);
+        wall.baseline.sweep_radians = -wall.baseline.sweep_radians;
+    }
+    const auto reversed_document = Document::create(base_entities(reversed));
+    const auto reversed_ids = exterior_wall_measurement_sources(reversed_document.snapshot(), wall_ids(reversed));
+    const auto reversed_measurement = derive_exterior_wall_measurement(reversed_document.snapshot(), reversed_ids);
+    require(reversed_ids == ids && boundary_json(reversed_measurement.boundary) ==
+                boundary_json(measured.boundary),
+            "quarter-arc recognition and offset must be invariant to reversed shuffled sources");
+    auto area = measurement_entity(measured.boundary, measured.source);
+    auto entities = base_entities(walls);
+    entities.push_back(area);
+    const auto retained = Document::create(entities);
+    require(wall_measurement_source_current(retained.snapshot(), retained.snapshot().entities().at("area-1")),
+            "the exact full-circle measurement must remain source-current after persistence round-trip");
+}
+
+void adjacent_convex_arcs_use_each_wall_thickness_and_analytic_miters() {
+    const std::vector<WallSpec> walls{
+        {"a-bottom-arc", {{0, 0}, {4, 0}, std::numbers::pi / 6.0}, 0.2},
+        {"b-right-arc", {{4, 0}, {4, 3}, std::numbers::pi / 6.0}, 0.3},
+        {"c-top", {{4, 3}, {0, 3}, 0}, 0.4},
+        {"d-left", {{0, 3}, {0, 0}, 0}, 0.5},
+    };
+    const auto document = Document::create(base_entities(walls));
+    const auto measured = derive_exterior_wall_measurement(document.snapshot(), wall_ids(walls));
+    require(measured.boundary.size() == walls.size() && validate_boundary(measured.boundary).empty(),
+            "adjacent convex arcs with distinct radii and wall thicknesses must form a valid analytical offset");
+    const auto source_bottom_center = circle_center(walls[0].baseline);
+    const auto source_right_center = circle_center(walls[1].baseline);
+    const auto& bottom = measured.boundary[0];
+    const auto& right = measured.boundary[1];
+    require(bottom.sweep_radians > 0.0 && right.sweep_radians > 0.0,
+            "convex offsets must retain each arc's positive sweep");
+    const auto bottom_center = circle_center(bottom);
+    const auto right_center = circle_center(right);
+    near(bottom_center.x, source_bottom_center.x, 1e-8,
+         "the bottom convex offset must remain concentric with its source wall");
+    near(bottom_center.y, source_bottom_center.y, 1e-8,
+         "the bottom convex offset must remain concentric with its source wall");
+    near(right_center.x, source_right_center.x, 1e-8,
+         "the right convex offset must remain concentric with its source wall");
+    near(right_center.y, source_right_center.y, 1e-8,
+         "the right convex offset must remain concentric with its source wall");
+    const auto source_bottom_radius = segment_length(walls[0].baseline) /
+                                      std::abs(walls[0].baseline.sweep_radians);
+    const auto source_right_radius = segment_length(walls[1].baseline) /
+                                     std::abs(walls[1].baseline.sweep_radians);
+    near(segment_length(bottom) / bottom.sweep_radians,
+         source_bottom_radius + walls[0].thickness * 0.5, 1e-8,
+         "the bottom arc must use its own half-thickness for the outward radius");
+    near(segment_length(right) / right.sweep_radians,
+         source_right_radius + walls[1].thickness * 0.5, 1e-8,
+         "the right arc must use its own half-thickness for the outward radius");
+    near(measured.boundary[2].start.y, 3.2, 1e-8,
+         "the top straight face must use its own 0.4m wall thickness");
+    near(measured.boundary[2].end.y, 3.2, 1e-8,
+         "the top straight face must remain a line at its half-thickness offset");
+    near(measured.boundary[3].start.x, -0.25, 1e-8,
+         "the left straight face must use its own 0.5m wall thickness");
+    near(measured.boundary[3].end.x, -0.25, 1e-8,
+         "the left straight face must remain a line at its half-thickness offset");
+    require(std::isfinite(signed_area(measured.boundary)) && std::isfinite(perimeter(measured.boundary)),
+            "the mixed convex analytical shell must provide finite area and perimeter");
+
+    auto reversed = walls;
+    std::reverse(reversed.begin(), reversed.end());
+    for (auto& wall : reversed) {
+        std::swap(wall.baseline.start, wall.baseline.end);
+        wall.baseline.sweep_radians = -wall.baseline.sweep_radians;
+    }
+    const auto reversed_document = Document::create(base_entities(reversed));
+    const auto reversed_measurement = derive_exterior_wall_measurement(
+        reversed_document.snapshot(), wall_ids(reversed));
+    require(boundary_json(reversed_measurement.boundary) == boundary_json(measured.boundary),
+            "different-thickness analytical miter geometry must be invariant to source direction and order");
+}
+
 void equal_offset_collinear_wall_continuations_remain_valid() {
     const std::vector<WallSpec> split_rectangle{
         {"wall-bottom-a", {{0, 0}, {2, 0}, 0}, 0.2},
@@ -393,7 +655,7 @@ void appraisal_withholds_stale_wall_measured_totals() {
             "a stale source must mark its area qualification unqualified");
 }
 
-void open_duplicate_crossed_and_curved_wall_loops_are_rejected() {
+void open_duplicate_and_crossed_wall_loops_are_rejected() {
     auto open = rectangle_walls();
     open.pop_back();
     auto open_document = Document::create(base_entities(open));
@@ -424,12 +686,6 @@ void open_duplicate_crossed_and_curved_wall_loops_are_rejected() {
                 crossed_document.snapshot(), wall_ids(crossed)); },
             "a self-crossing wall loop must not produce a measured outline");
 
-    auto curved = rectangle_walls();
-    curved[0].baseline.sweep_radians = std::numbers::pi / 2.0;
-    auto curved_document = Document::create(base_entities(curved));
-    rejects([&] { (void)derive_exterior_wall_measurement(
-                curved_document.snapshot(), wall_ids(curved)); },
-            "curved source walls must be explicitly rejected by the straight-only outline");
 }
 
 void invalid_thickness_and_out_of_envelope_coordinates_are_rejected() {
@@ -447,6 +703,18 @@ void invalid_thickness_and_out_of_envelope_coordinates_are_rejected() {
     auto far_document = Document::create(base_entities(far));
     rejects([&] { (void)derive_exterior_wall_measurement(far_document.snapshot(), wall_ids(far)); },
             "wall baselines outside the model coordinate envelope must be rejected");
+
+    const std::vector<WallSpec> near_parallel_corner{
+        {"bottom-a", {{0, 0}, {2, 0}, 0}, 0.2},
+        {"bottom-b", {{2, 0}, {4, 2e-13}, 0}, 0.2},
+        {"right", {{4, 2e-13}, {4, 3}, 0}, 0.2},
+        {"top", {{4, 3}, {0, 3}, 0}, 0.2},
+        {"left", {{0, 3}, {0, 0}, 0}, 0.2},
+    };
+    const auto near_parallel_document = Document::create(base_entities(near_parallel_corner));
+    rejects([&] { (void)derive_exterior_wall_measurement(near_parallel_document.snapshot(),
+                                                          wall_ids(near_parallel_corner)); },
+            "a finite but near-parallel noncollinear wall turn must fail closed instead of being averaged");
 }
 
 void wall_network_recognition_excludes_partitions_and_keeps_authoritative_sources() {
@@ -565,9 +833,6 @@ void wall_network_recognition_rejects_ambiguous_and_unsupported_inputs() {
     auto partial = rectangle_walls();
     partial.front().baseline.start = {-1, 0};
     invalid.push_back(partial);
-    auto curved = rectangle_walls();
-    curved.front().baseline.sweep_radians = 0.1;
-    invalid.push_back(curved);
     auto imprecise = rectangle_walls();
     imprecise.push_back({"near-overlap", {{1, 5e-8}, {3, 5e-8}, 0}, 0.1});
     invalid.push_back(imprecise);
@@ -591,10 +856,12 @@ void wall_network_recognition_rejects_ambiguous_and_unsupported_inputs() {
     invalid.push_back({
         {"a", {{0, 0}, {4, 3}, 0}, 0.2}, {"b", {{4, 3}, {0, 3}, 0}, 0.2},
         {"c", {{0, 3}, {4, 0}, 0}, 0.2}, {"d", {{4, 0}, {0, 0}, 0}, 0.2}});
-    for (const auto& walls : invalid) {
+    for (std::size_t index = 0; index < invalid.size(); ++index) {
+        const auto& walls = invalid[index];
         const auto document = Document::create(base_entities(walls));
         rejects([&] { (void)exterior_wall_measurement_sources(document.snapshot(), wall_ids(walls)); },
-                "ambiguous or unsupported wall networks must fail closed");
+                ("ambiguous or unsupported wall network fixture " + std::to_string(index) +
+                 " must fail closed").c_str());
     }
     auto entities = base_entities(rectangle_walls());
     for (auto& wall : entities)
@@ -781,11 +1048,16 @@ int main() {
         shuffled_and_reversed_walls_keep_the_same_outline();
         stable_wall_identity_seeds_output_order_across_coordinate_edits();
         concave_l_outline_and_per_wall_thickness_are_respected();
+        curved_exterior_is_analytical_reversible_and_current();
+        concave_curved_wall_offsets_concentrically_and_analytically();
+        major_arc_endpoint_tangent_order_keeps_partition_out_of_exterior();
+        four_concentric_quarter_arcs_offset_as_one_exact_circle();
+        adjacent_convex_arcs_use_each_wall_thickness_and_analytic_miters();
         equal_offset_collinear_wall_continuations_remain_valid();
         source_guard_detects_changed_or_missing_walls_but_ignores_openings();
         source_guard_accepts_legacy_boundaries_and_rejects_malformed_or_edited_sources();
         appraisal_withholds_stale_wall_measured_totals();
-        open_duplicate_crossed_and_curved_wall_loops_are_rejected();
+        open_duplicate_and_crossed_wall_loops_are_rejected();
         invalid_thickness_and_out_of_envelope_coordinates_are_rejected();
         wall_network_recognition_excludes_partitions_and_keeps_authoritative_sources();
         wall_network_recognition_handles_split_hosts_concavity_and_varied_thickness();

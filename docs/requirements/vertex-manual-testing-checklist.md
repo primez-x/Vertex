@@ -1,6 +1,6 @@
 # Vertex user testing checklist
 
-308 practical tasks, grouped by how you use the app. This replaces the earlier engineering-oriented checklist. The old 130-item list is preserved separately as engineering-requirements-checklist.md.
+309 practical tasks, grouped by how you use the app. This replaces the earlier engineering-oriented checklist. The old 130-item list is preserved separately as engineering-requirements-checklist.md.
 
 This is a user acceptance list for the intended app, not a claim that every listed action is implemented or working in the current preview. If you cannot find a control, or a feature is absent, mark **Blocked / missing** and describe it. Specialized sections can be skipped if you do not use them or lack the device or sample files.
 
@@ -1768,6 +1768,14 @@ drawing; switching modes does not change existing geometry.
 - [ ] **U308 — Locate and repair an invalid appraisal area**
   - Steps: Open the appraisal report with a missing policy or invalid required area fact. Select the affected area in **Areas and deductions**, inspect its issue and click **Show on canvas**. Repair the declaration, reopen or Refresh the report, then export PDF.
   - Expected: Missing policy retains valid diagnostic quantities but withholds qualified totals. An invalid source remains selectable and shows unavailable quantities with a specific issue. Repair restores current measurements and qualification only when all requirements are met. The PDF retains the same status and reasons.
+  - Result: Not tested
+  - Notes: ______________________________
+
+## Curved exterior walls and appraisal measurements
+
+- [ ] **U309 — Measure a building with a curved exterior wall**
+  - Steps: Draw a closed physical wall layout containing a curved wall and an internal partition. Select a wall and choose **Measure exterior from walls…**. Inspect the exterior outline, area, perimeter and excluded partition count; cancel once, then create it. Declare the appraisal facts. Change a perimeter wall's thickness, select the measured area and choose **Refresh exterior measurement…**. Undo, redo, save, reopen and export the plan PDF.
+  - Expected: The measurement follows the outside of the actual curved and straight walls, with each wall's thickness included. The curved part stays curved; partitions do not add area. The review leaves the project unchanged until accepted. Area, perimeter and edge measurements update together. Changing a source wall marks the old measurement stale and withholds qualified appraisal totals until refreshed. Undo, reopening and PDF retain the same curved outline and measurements. An ambiguous or crossing layout gives a specific error without changing the project.
   - Result: Not tested
   - Notes: ______________________________
 

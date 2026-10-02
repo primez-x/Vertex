@@ -39,6 +39,25 @@ v5 authored plan labels and v3 symbol transforms. Earlier readers refuse v6;
 earlier states without wall measurements keep their previous encoding versions.
 Raw updates preserve unrelated records, pinned artwork and opaque metadata.
 
+## Exterior measurements derived from walls
+
+An identified measurement boundary may carry `properties.wall_measurement_source`
+with exactly `version: 1`, `basis: "exterior"` and `walls`. Each wall record has
+exactly a stable `id` and a `context` object. Context may record nonempty
+`property_id`, `building_id`, `floor_id`, `layer_id` and `phase_id` strings.
+Records are unique and stored in ID order; they identify the complete perimeter
+walls, excluding interior partitions and branches.
+
+The boundary stores analytical line and circular-arc segments in the ordinary
+identified-boundary format. Its construction receipts retain those curves.
+The source record does not cache numeric area or perimeter. Currentness derives
+the exterior again from current wall baselines and thicknesses, then checks
+context and the complete analytical outline, including signed curvature.
+Missing sources, changed geometry, malformed provenance or manual outline edits
+withhold qualified appraisal quantities until repaired or refreshed. Openings
+do not change this exterior outline. Refresh uses the recorded perimeter wall
+IDs; an addition with different perimeter membership needs a new measurement.
+
 ## Unfinished Auto-Subtract drawing
 
 An unfinished drawing with an explicit parent uses active recovery envelope

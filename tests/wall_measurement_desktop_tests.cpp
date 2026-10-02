@@ -4,7 +4,9 @@
 #include "sketch/constraint_entity.hpp"
 #include "sketch/desktop/main_window.hpp"
 #include "sketch/document_wall.hpp"
+#include "sketch/geometry.hpp"
 #include "sketch/vertical_levels.hpp"
+#include "sketch/wall_measurement.hpp"
 #include "../src/desktop/plan_canvas.hpp"
 #include "support/noninteractive_errors.hpp"
 
@@ -31,6 +33,7 @@
 #include <cmath>
 #include <exception>
 #include <iostream>
+#include <numbers>
 #include <set>
 #include <stdexcept>
 #include <string>
@@ -47,7 +50,10 @@ void capture(QWidget& widget, const QString& name) {
 }
 
 void review_measurement(sketch::desktop::MainWindow& window, bool accept, bool refresh = false,
-                        std::size_t included = 4, std::size_t excluded = 0) {
+                        std::size_t included = 4, std::size_t excluded = 0,
+                        QString expected_area = {}, QString expected_perimeter = {},
+                        QString capture_name = QStringLiteral("exterior-measurement-review"),
+                        bool require_analytic_arc = false) {
     auto* action = window.findChild<QAction*>(refresh ? QStringLiteral("refreshExteriorMeasurement")
                                                     : QStringLiteral("measureExteriorFromWalls"));
     if (!action) throw std::runtime_error("exterior measurement is available as a user command");
@@ -61,6 +67,13 @@ void review_measurement(sketch::desktop::MainWindow& window, bool accept, bool r
             if (!area || !area->text().contains(QStringLiteral("Exterior faces")) ||
                 !area->text().contains(QStringLiteral("%1 walls").arg(included)))
                 throw std::runtime_error("review shows exterior basis, wall count and measured area");
+            if (!expected_area.isEmpty() && !area->text().contains(expected_area))
+                throw std::runtime_error("review shows the exact analytical exterior area");
+            if (!expected_perimeter.isEmpty()) {
+                auto* perimeter = dialog->findChild<QLabel*>(QStringLiteral("wallMeasurementPerimeter"));
+                if (!perimeter || !perimeter->text().contains(expected_perimeter))
+                    throw std::runtime_error("review shows the exact analytical exterior perimeter");
+            }
             auto* exclusions = dialog->findChild<QLabel*>(QStringLiteral("wallMeasurementExclusions"));
             auto* preview = dynamic_cast<sketch::desktop::PlanCanvas*>(
                 dialog->findChild<QWidget*>(QStringLiteral("wallMeasurementPreview")));
@@ -74,7 +87,17 @@ void review_measurement(sketch::desktop::MainWindow& window, bool accept, bool r
                 if (excluded_shapes != excluded)
                     throw std::runtime_error("excluded partition baselines are visually distinct in the review");
             }
-            capture(*dialog,QStringLiteral("exterior-measurement-review"));
+            if (require_analytic_arc) {
+                const auto curved_shapes = std::count_if(
+                    preview->entities().begin(), preview->entities().end(), [](const auto& shape) {
+                        return std::any_of(shape.segments.begin(), shape.segments.end(), [](const auto& edge) {
+                            return std::abs(edge.sweep_radians) > 1e-9;
+                        });
+                    });
+                if (curved_shapes < 2)
+                    throw std::runtime_error("review previews the source and exterior as analytical arcs");
+            }
+            capture(*dialog,capture_name);
             if (accept) dialog->accept(); else dialog->reject();
         } catch (...) {
             failure = std::current_exception();
@@ -130,6 +153,39 @@ double polygon_area(const sketch::IdentifiedBoundary& boundary) {
         twice_area += static_cast<long double>(edge.segment.start.x) * edge.segment.end.y -
                       static_cast<long double>(edge.segment.end.x) * edge.segment.start.y;
     return std::abs(static_cast<double>(twice_area * 0.5L));
+}
+
+sketch::Boundary analytical_boundary(const sketch::Entity& entity) {
+    const auto identified = sketch::decode_identified_boundary_entity(entity);
+    sketch::Boundary result;
+    result.reserve(identified.segments.size());
+    for (const auto& edge : identified.segments) result.push_back(edge.segment);
+    return result;
+}
+
+double analytical_area(const sketch::Entity& entity) {
+    return std::abs(sketch::signed_area(analytical_boundary(entity)));
+}
+
+double analytical_perimeter(const sketch::Entity& entity) {
+    double result = 0.0;
+    for (const auto& edge : analytical_boundary(entity)) result += sketch::segment_length(edge);
+    return result;
+}
+
+std::size_t curved_edge_count(const sketch::Entity& entity) {
+    const auto boundary = analytical_boundary(entity);
+    return static_cast<std::size_t>(std::count_if(boundary.begin(), boundary.end(), [](const auto& edge) {
+        return std::abs(edge.sweep_radians) > 1e-9;
+    }));
+}
+
+QString metric_area_text(double area) {
+    return QStringLiteral("%1 m²").arg(area, 0, 'f', 2);
+}
+
+QString metric_perimeter_text(double perimeter) {
+    return QStringLiteral("%1 m").arg(perimeter, 0, 'f', 3);
 }
 
 QString appraisal_declarations(const char* area_use = "dwelling") {
@@ -217,6 +273,239 @@ std::vector<sketch::Entity> dimensions_for(const sketch::DocumentSnapshot& snaps
             result.push_back(entity);
     }
     return result;
+}
+
+void require_analytic_wall_dimensions(const sketch::DocumentSnapshot& snapshot,
+                                      const sketch::Entity& boundary_entity,
+                                      double expected_perimeter,
+                                      double expected_arc_length) {
+    const auto identified = sketch::decode_identified_boundary_entity(boundary_entity);
+    const auto dimensions = dimensions_for(snapshot, boundary_entity.id);
+    require(dimensions.size() == identified.segments.size(),
+            "the derived exterior retains one physical dimension for every analytical edge");
+    double measured_perimeter = 0.0;
+    bool found_arc_dimension = false;
+    for (const auto& entity : dimensions) {
+        const auto decoded = sketch::decode_boundary_dimension_entity(entity);
+        require(decoded.dimension &&
+                    decoded.dimension->kind == sketch::BoundaryDimensionKind::segment_length,
+                "each wall-derived perimeter dimension remains a stable physical edge measurement");
+        const auto edge = std::find_if(identified.segments.begin(), identified.segments.end(),
+            [&](const auto& candidate) {
+                return candidate.segment_id == decoded.dimension->segment_id;
+            });
+        require(edge != identified.segments.end(),
+                "every physical perimeter dimension references an existing identified edge");
+        const auto resolution = decoded.dimension->resolve(boundary_entity);
+        measured_perimeter += resolution.segment_length_metres;
+        if (std::abs(edge->segment.sweep_radians) > 1e-9) {
+            found_arc_dimension = true;
+            require(std::abs(resolution.segment_length_metres - expected_arc_length) < 1e-8,
+                    "the curved exterior dimension measures the exact arc length, not its chord");
+        }
+    }
+    require(found_arc_dimension && std::abs(measured_perimeter - expected_perimeter) < 1e-8,
+            "the saved edge dimensions sum to the exact analytical exterior perimeter");
+}
+
+void curved_d_exterior_measurement_stays_analytic_through_refresh_and_output() {
+    using sketch::desktop::MainWindow;
+
+    MainWindow window;
+    window.resize(1200, 800);
+    window.show();
+    QApplication::processEvents();
+    window.setMetricUnits(true);
+    choose_appraisal_workflow(window);
+
+    const auto curved_wall = window.createCurvedWall(
+        {-2.0, 0.0}, {2.0, 0.0}, QStringLiteral("180 deg"), QStringLiteral("exterior"));
+    const QStringList walls{
+        curved_wall,
+        window.createStraightWall({2.0, 0.0}, {2.0, 3.0}, QStringLiteral("exterior")),
+        window.createStraightWall({2.0, 3.0}, {-2.0, 3.0}, QStringLiteral("exterior")),
+        window.createStraightWall({-2.0, 3.0}, {-2.0, 0.0}, QStringLiteral("exterior"))};
+    require(std::all_of(walls.begin(), walls.end(), [](const auto& id) { return !id.isEmpty(); }),
+            "the D-shaped physical shell has one semicircular and three straight walls");
+    const auto source_before = window.document().snapshot();
+    const auto source_ids = wall_ids(source_before);
+    require(source_ids.size() == 4, "the curved fixture contains exactly four physical source walls");
+    const auto& arc_source = source_before.entities().at(curved_wall.toStdString());
+    const auto original_sweep = arc_source.properties.at("baseline").at("sweep_radians").get<double>();
+    require(std::abs(original_sweep - std::numbers::pi) < 1e-12,
+            "the source wall stores one analytical semicircle rather than faceted chords");
+    const auto initial_thickness = arc_source.properties.at("thickness_m").get<double>();
+    for (const auto& id : source_ids)
+        require(std::abs(source_before.entities().at(id).properties.at("thickness_m").get<double>() -
+                         initial_thickness) < 1e-12,
+                "every shell wall begins with the same physical thickness");
+
+    const auto initial_offset = initial_thickness / 2.0;
+    const auto initial_area = (4.0 + 2.0 * initial_offset) * (3.0 + initial_offset) +
+        (std::numbers::pi / 2.0) * std::pow(2.0 + initial_offset, 2.0);
+    const auto initial_perimeter = 2.0 * (3.0 + initial_offset) +
+        (4.0 + 2.0 * initial_offset) + std::numbers::pi * (2.0 + initial_offset);
+    select_walls(window, walls);
+    const auto selected_source = window.document().snapshot();
+    review_measurement(window, false, false, 4, 0, metric_area_text(initial_area),
+                       metric_perimeter_text(initial_perimeter),
+                       QStringLiteral("curved-exterior-create-review"), true);
+    require(window.document().snapshot().entities() == selected_source.entities(),
+            "canceling analytical curved-wall review leaves the complete source document unchanged");
+    review_measurement(window, true, false, 4, 0, metric_area_text(initial_area),
+                       metric_perimeter_text(initial_perimeter),
+                       QStringLiteral("curved-exterior-create-review-accepted"), true);
+
+    const auto boundary_id = window.selectedEntityId();
+    require(!boundary_id.isEmpty(), "accepting the real Tools review creates a D-shaped exterior measurement");
+    const auto created = window.document().snapshot();
+    require(created.revision() == selected_source.revision() + 1,
+            "curved exterior creation commits as one atomic document command");
+    for (const auto& id : source_ids)
+        require(created.entities().at(id) == source_before.entities().at(id),
+                "curved measurement creation leaves all authoritative source walls byte-for-byte unchanged");
+    const auto& measured = created.entities().at(boundary_id.toStdString());
+    const auto identified = sketch::decode_identified_boundary_entity(measured);
+    require(measured.type == "measurement_boundary" && identified.segments.size() == 4 &&
+                curved_edge_count(measured) == 1,
+            "the persisted D-shaped outline retains one true semicircle and three exact lines");
+    const auto& provenance = measured.properties.at("wall_measurement_source");
+    std::set<std::string> recorded_ids;
+    bool valid_contexts = true;
+    for (const auto& record : provenance.at("walls")) {
+        const auto id = record.at("id").get<std::string>();
+        recorded_ids.insert(id);
+        const auto& source_wall = source_before.entities().at(id);
+        const auto& context = record.at("context");
+        valid_contexts = valid_contexts && context.is_object() &&
+            context.value("floor_id", std::string{}) ==
+                source_wall.properties.at("floor_id").get<std::string>() &&
+            context.value("layer_id", std::string{}) ==
+                source_wall.properties.at("layer_id").get<std::string>();
+    }
+    require(provenance.at("version") == 1 && provenance.at("basis") == "exterior" &&
+                recorded_ids == std::set<std::string>(source_ids.begin(), source_ids.end()) &&
+                valid_contexts &&
+                std::abs(created.entities().at(curved_wall.toStdString())
+                             .properties.at("baseline").at("sweep_radians").get<double>() -
+                         original_sweep) < 1e-12 &&
+                sketch::wall_measurement_source_current(created, measured),
+            "the source receipt retains the curved wall identity and validates against its analytical baseline");
+    require(std::abs(analytical_area(measured) - initial_area) < 1e-8 &&
+                std::abs(analytical_perimeter(measured) - initial_perimeter) < 1e-8,
+            "the generated exterior has the exact semicircle-plus-rectangle area and perimeter");
+    const auto initial_arc_length = std::numbers::pi * (2.0 + initial_offset);
+    require_analytic_wall_dimensions(created, measured, initial_perimeter, initial_arc_length);
+
+    require(window.selectEntity(boundary_id) &&
+                window.editSelectedAppraisalFacts(appraisal_declarations()),
+            "the curved wall-derived measurement accepts declared appraisal facts");
+    auto* qualification = window.findChild<QLabel*>(QStringLiteral("appraisalQualification"));
+    auto* gla = window.findChild<QLabel*>(QStringLiteral("appraisalGlaTotal"));
+    require(qualification && qualification->text().startsWith(QStringLiteral("Qualified")) &&
+                gla && gla->text().contains(metric_area_text(initial_area)),
+            "qualified appraisal totals use the exact analytical curved exterior area");
+    const auto prepared = window.document().snapshot();
+
+    const auto changed_thickness = initial_thickness + 0.1;
+    std::vector<sketch::EntityChange> thickness_changes;
+    for (const auto& id : source_ids) {
+        auto wall = prepared.entities().at(id);
+        wall.properties["thickness_m"] = changed_thickness;
+        thickness_changes.push_back(sketch::EntityChange::upsert(std::move(wall)));
+    }
+    window.document().apply(sketch::ApplyEntityChanges{
+        prepared.revision(), std::move(thickness_changes), {},
+        "test changing curved exterior source thickness"});
+    const auto changed_source = window.document().snapshot();
+    for (const auto& id : source_ids)
+        require(changed_source.entities().at(id).properties.at("baseline") ==
+                    prepared.entities().at(id).properties.at("baseline"),
+                "thickness refresh fixture changes physical thickness without changing source curves");
+    require(!sketch::wall_measurement_source_current(
+                changed_source, changed_source.entities().at(boundary_id.toStdString())),
+            "a changed source thickness makes the exact curved outline stale");
+    require(window.selectEntity(boundary_id), "the stale curved measurement remains selectable");
+    require(qualification->text().contains(QStringLiteral("Unqualified")) &&
+                qualification->text().contains(QStringLiteral("stale"), Qt::CaseInsensitive) &&
+                gla->text() == QStringLiteral("—"),
+            "a stale curved outline withholds qualified appraisal totals instead of reporting old area");
+
+    const auto refreshed_offset = changed_thickness / 2.0;
+    const auto refreshed_area = (4.0 + 2.0 * refreshed_offset) * (3.0 + refreshed_offset) +
+        (std::numbers::pi / 2.0) * std::pow(2.0 + refreshed_offset, 2.0);
+    const auto refreshed_perimeter = 2.0 * (3.0 + refreshed_offset) +
+        (4.0 + 2.0 * refreshed_offset) + std::numbers::pi * (2.0 + refreshed_offset);
+    review_measurement(window, false, true, 4, 0, metric_area_text(refreshed_area),
+                       metric_perimeter_text(refreshed_perimeter),
+                       QStringLiteral("curved-exterior-refresh-review"), true);
+    require(window.document().snapshot().entities() == changed_source.entities(),
+            "canceling curved-wall refresh review leaves the stale source and outline untouched");
+    review_measurement(window, true, true, 4, 0, metric_area_text(refreshed_area),
+                       metric_perimeter_text(refreshed_perimeter),
+                       QStringLiteral("curved-exterior-refresh-review-accepted"), true);
+    const auto refreshed = window.document().snapshot();
+    require(refreshed.revision() == changed_source.revision() + 1,
+            "refreshing the curved exterior commits as one document command");
+    for (const auto& id : source_ids)
+        require(refreshed.entities().at(id).properties.at("baseline") ==
+                    changed_source.entities().at(id).properties.at("baseline") &&
+                    refreshed.entities().at(id).properties.at("thickness_m") == changed_thickness,
+                "refresh changes only the derived outline and retains the edited analytical wall sources");
+    const auto& refreshed_entity = refreshed.entities().at(boundary_id.toStdString());
+    require(curved_edge_count(refreshed_entity) == 1 &&
+                std::abs(analytical_area(refreshed_entity) - refreshed_area) < 1e-8 &&
+                std::abs(analytical_perimeter(refreshed_entity) - refreshed_perimeter) < 1e-8 &&
+                sketch::wall_measurement_source_current(refreshed, refreshed_entity),
+            "refresh restores the exact new physical area and perimeter while keeping the true arc and current receipt");
+    const auto refreshed_arc_length = std::numbers::pi * (2.0 + refreshed_offset);
+    require_analytic_wall_dimensions(refreshed, refreshed_entity,
+                                     refreshed_perimeter, refreshed_arc_length);
+    require(qualification->text().startsWith(QStringLiteral("Qualified")) &&
+                gla->text().contains(metric_area_text(refreshed_area)),
+            "refresh restores qualified appraisal totals from the changed curved-wall thickness");
+    capture(window, QStringLiteral("curved-exterior-refreshed-area"));
+
+    const auto before_dimensions = dimensions_for(prepared, boundary_id.toStdString());
+    const auto after_dimensions = dimensions_for(refreshed, boundary_id.toStdString());
+    std::set<std::string> before_ids;
+    std::set<std::string> after_ids;
+    for (const auto& entity : before_dimensions) before_ids.insert(entity.id);
+    for (const auto& entity : after_dimensions) after_ids.insert(entity.id);
+    require(before_ids == after_ids,
+            "refresh preserves the identity of every analytical physical perimeter dimension");
+    require(window.undoCommand() &&
+                window.document().snapshot().entities() == changed_source.entities() &&
+                window.redoCommand() && window.document().snapshot().entities() == refreshed.entities(),
+            "curved measurement refresh undoes and redoes the complete stale/current outline transaction");
+
+    QTemporaryDir output;
+    require(output.isValid(), "curved measurement output verification has a temporary directory");
+    const auto project_path = output.filePath(QStringLiteral("curved-wall-measurement.bldproj"));
+    require(window.saveProjectAs(project_path) && window.openProject(project_path) &&
+                window.document().snapshot().entities() == refreshed.entities(),
+            "curved source provenance and exact refreshed outline survive native save/reopen");
+    const auto reopened = window.document().snapshot();
+    const auto& reopened_boundary = reopened.entities().at(boundary_id.toStdString());
+    require(curved_edge_count(reopened_boundary) == 1 &&
+                std::abs(analytical_area(reopened_boundary) - refreshed_area) < 1e-8 &&
+                std::abs(analytical_perimeter(reopened_boundary) - refreshed_perimeter) < 1e-8 &&
+                sketch::wall_measurement_source_current(reopened, reopened_boundary),
+            "native reopen restores exact analytical arc area, perimeter and live source provenance");
+    require(window.selectEntity(boundary_id) &&
+                window.findChild<QLabel*>(QStringLiteral("appraisalQualification"))->text()
+                    .startsWith(QStringLiteral("Qualified")),
+            "the reopened curved outline recalculates as qualified from its saved appraisal facts");
+
+    const auto pdf_path = output.filePath(QStringLiteral("curved-exterior-measurement.pdf"));
+    require(window.exportDraftPdf(pdf_path), "the refreshed curved exterior exports to its draft plan PDF");
+    QPdfDocument pdf;
+    require(pdf.load(pdf_path) == QPdfDocument::Error::None && pdf.pageCount() > 0,
+            "the curved exterior PDF opens as a real plan page");
+    const auto text = pdf.getAllText(0).text();
+    require(text.contains(QString::number(refreshed_area, 'f', 2)) &&
+                text.contains(QString::number(refreshed_arc_length, 'f', 3)),
+            "the PDF prints exact analytical exterior area and curved-edge physical dimension");
 }
 
 void selected_wall_loop_creates_and_refreshes_one_exterior_appraisal_area() {
@@ -683,6 +972,7 @@ int main(int argc, char** argv) {
         QUuid::createUuid().toString(QUuid::WithoutBraces));
     try {
         selected_wall_loop_creates_and_refreshes_one_exterior_appraisal_area();
+        curved_d_exterior_measurement_stays_analytic_through_refresh_and_output();
         wall_measurement_admission_failures_are_atomic();
         an_unsplit_partition_selects_its_exterior_shell();
         split_perimeter_with_t_branches_and_internal_chord();

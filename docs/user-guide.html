@@ -88,16 +88,18 @@
   Connected interior partitions are excluded from the exterior perimeter. You can
   select a partition to find its connected shell, or <kbd>Ctrl</kbd>+click an explicit
   set of candidate walls. Review the blue exterior outline, excluded wall count,
-  and area, then create the measurement. This uses
-  each wall's thickness, rather than treating its baseline as the outside face.</p>
+  area and perimeter, then create the measurement. Straight and circular walls
+  retain their actual geometry. This uses each wall's thickness, rather than
+  treating its baseline as the outside face or replacing a curve with a chord.</p>
   <p>Declare the property's appraisal workflow and the area's observed facts in
   <strong>Edit appraisal facts…</strong> to obtain classified square-footage totals.
   After changing source walls, select the measured area and choose
   <strong>Refresh exterior measurement…</strong>. Stale outlines cannot produce
-  qualified appraisal totals. Open and curved wall loops currently require a
-  separately drawn measurement boundary. Separate exterior shells or an ambiguous
-  outline must be measured individually; the app does not choose a shell solely
-  because it is the largest.</p>
+  qualified appraisal totals. Open wall chains need a closed measurement boundary.
+  Separate exterior shells must be measured individually; the app does not choose
+  a shell solely because it is the largest. Overlapping walls, ambiguous contacts,
+  offsets that cannot meet and unresolved near-parallel corners are refused with
+  an explanation, leaving the current drawing unchanged.</p>
   <p>Refresh follows the perimeter walls recorded when the area was created.
   An addition that changes which walls form the exterior needs a new measurement.
   Save a revision before replacing the old area. Overlapping building measurements

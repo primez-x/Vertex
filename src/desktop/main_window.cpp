@@ -11751,8 +11751,8 @@ public:
                 candidates.push_back({id,*baseline});
             }
             const auto bounds_overlap = [](const Segment& a, const Segment& b) {
-                // Curves are unsupported by recognition, but must reach it if
-                // connected; their arc may extend outside its endpoint bounds.
+                // An arc can extend outside its endpoint bounds. Let the
+                // analytical contact test decide curved candidate connectivity.
                 if (a.sweep_radians != 0.0 || b.sweep_radians != 0.0) return true;
                 const auto separated = [](double a0, double a1, double b0, double b1) {
                     return std::max(a0,a1) + default_geometry_tolerance_metres < std::min(b0,b1) ||
@@ -11824,7 +11824,10 @@ public:
             options.automatic_placement_version = 2;
             BoundaryAuthoringSession authoring(BoundaryAuthoringMode::draw_first,options);
             (void)authoring.anchor(derived.boundary.front().start);
-            for (const auto& edge : derived.boundary) (void)authoring.add_line_to(edge.end);
+            for (const auto& edge : derived.boundary) {
+                if (edge.sweep_radians == 0.0) (void)authoring.add_line_to(edge.end);
+                else (void)authoring.add_arc_chord_angle(edge.end,edge.sweep_radians);
+            }
             authoring.classify_current_chain(name.toStdString());
             const auto accepted = authoring.close_chain();
             auto entity = encode_identified_boundary_entity(accepted.boundary);
@@ -11929,6 +11932,10 @@ public:
                 .arg(ids.size()).arg(format_dimension_area(std::abs(signed_area(proposed.boundary)),m_metric_units)),&dialog);
             summary->setObjectName(QStringLiteral("wallMeasurementArea"));
             layout->addWidget(summary);
+            auto* perimeter_label = new QLabel(QStringLiteral("Perimeter: %1")
+                .arg(format_length(perimeter(proposed.boundary),m_metric_units)),&dialog);
+            perimeter_label->setObjectName(QStringLiteral("wallMeasurementPerimeter"));
+            layout->addWidget(perimeter_label);
             auto* exclusions = new QLabel(QStringLiteral("%1 excluded partitions or branches")
                 .arg(candidates.size()-ids.size()),&dialog);
             exclusions->setObjectName(QStringLiteral("wallMeasurementExclusions"));
