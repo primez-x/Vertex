@@ -166,6 +166,9 @@ private:
     friend ConstraintAuthoringPreview preview_constraint_authoring(
         const DocumentSnapshot&, const ConstraintAuthoringIntent&);
     friend Revision apply_constraint_authoring(Document&, const ConstraintAuthoringPreview&);
+    friend Command constraint_authoring_verified_command(
+        const DocumentSnapshot&, const ConstraintAuthoringPreview&,
+        std::optional<DocumentSnapshot>*);
     friend class ConstraintAuthoringBuilder;
 };
 
@@ -174,6 +177,13 @@ private:
 [[nodiscard]] ConstraintAuthoringPreview preview_constraint_authoring(
     const DocumentSnapshot& snapshot,
     const ConstraintAuthoringIntent& intent);
+
+// Reproduce an accepted preview through the same guarded typed command as
+// Apply, without modifying the source document. The returned snapshot is a
+// candidate at source revision + 1, suitable for derived calculations only.
+// Rejected, stale, foreign or modified previews throw without mutation.
+[[nodiscard]] DocumentSnapshot preview_constraint_authoring_snapshot(
+    const DocumentSnapshot& source, const ConstraintAuthoringPreview& preview);
 
 // Apply verifies identity, revision, the complete source snapshot digest, and
 // the integrity of the shown preview. It recomputes from normalized intent and

@@ -3161,6 +3161,7 @@ class MainWindow::Impl {
         std::optional<ArchitecturalViewContext> view_context;
         std::shared_ptr<std::optional<VertexPreviewProjection>> result;
         std::optional<WallGeometryMoveIntent> wall_geometry_move;
+        QFont label_font;
     };
 
 public:
@@ -4808,6 +4809,7 @@ public:
             (m_boundary_session || m_pending_wall_start || !m_pending_opening_kind.isEmpty() ||
              !m_pending_symbol_id.isEmpty())) {
             setError(QStringLiteral("Finish or cancel the active drawing before changing views."));
+            refreshTitle(); // Restore the checked 2D/3D action after a refused trigger.
             return;
         }
         m_workspace = workspace;
@@ -13013,18 +13015,18 @@ public:
         const std::set<std::string, std::less<>>& appraisal_area_ids,
         const std::map<QString,QSizeF>& label_footprints,const std::vector<Bounds2>& component_bounds,
         const QString& entity_id,const QString& vertex_id,Vec2 position,
-        const std::optional<ArchitecturalViewContext>& view_context) {
+        const std::optional<ArchitecturalViewContext>& view_context, const QFont& label_font) {
         try {
             const BoundaryGeometryEdit edit{entity_id.toStdString(),BoundaryGeometryEditKind::move_vertex,
                 vertex_id.toStdString(),position};
-            std::map<std::string,Entity,std::less<>> candidate;
             ConstraintAuthoringIntent intent;
             intent.boundary_vertex_move=BoundaryVertexMoveIntent{edit,true};
             const auto preview=preview_constraint_authoring(source,intent);
             if (!preview.accepted()) return std::nullopt;
-            candidate=preview.candidate_entities();
-            auto result = computeConstraintGeometryProjection(source, candidate, retained, eligible,
-                labels, metric_units, appraisal_area_ids, label_footprints, component_bounds, view_context);
+            const auto candidate_snapshot = preview_constraint_authoring_snapshot(source, preview);
+            const auto& candidate=candidate_snapshot.entities();
+            auto result = computeConstraintGeometryProjection(source, candidate_snapshot, retained, eligible,
+                labels, metric_units, appraisal_area_ids, label_footprints, component_bounds, view_context, label_font);
             if (result) {
                 const auto geometry=boundary_geometry(decode_identified_boundary_entity(candidate.at(edit.boundary_id)));
                 result->metrics=CanvasBoundaryPreviewMetrics{std::abs(signed_area(geometry)),perimeter(geometry)};
@@ -13034,13 +13036,20 @@ public:
     }
 
     static std::optional<VertexPreviewProjection> computeConstraintGeometryProjection(
-        const DocumentSnapshot& source, const std::map<std::string, Entity, std::less<>>& candidate,
+        const DocumentSnapshot& source, const DocumentSnapshot& candidate_snapshot,
         const std::vector<CanvasEntity>& retained, const std::vector<CanvasEntity>& eligible,
         const std::vector<CanvasLabel>& labels, bool metric_units,
         const std::set<std::string, std::less<>>& appraisal_area_ids,
         const std::map<QString,QSizeF>& label_footprints, const std::vector<Bounds2>& component_bounds,
-        const std::optional<ArchitecturalViewContext>& view_context) {
+        const std::optional<ArchitecturalViewContext>& view_context, const QFont& label_font) {
         try {
+            const auto& candidate = candidate_snapshot.entities();
+            const auto area_values = appraisal_area_ids.empty()
+                ? std::map<std::string, QString, std::less<>>{}
+                : appraisal_plan_area_values(candidate_snapshot, metric_units);
+            // A worker-local paint device measures candidate text without
+            // reading a QWidget from the background projection thread.
+            QImage label_device(1, 1, QImage::Format_ARGB32);
             const bool shape_projection = view_context &&
                 !analytical_plan_context(BuildingViewKind::plan, *view_context) &&
                 !(horizontal_plan_frame(view_context->frame) && std::isinf(view_context->depth.far_depth_m));
@@ -13229,19 +13238,34 @@ public:
                 } else if (can_recognize_boundary_entity_type(entity.type) &&
                            (entity!=source.entities().at(entity.id) || appraisal_area_ids.contains(entity.id))) {
                     auto proposed=label;
-                    // The candidate can change an unchanged parent's net area
-                    // through deductions. Suppress every captured automatic
-                    // value until the refreshed scene calculates the committed
-                    // geometry, including an empty override for value-only labels.
-                    if (appraisal_area_ids.contains(entity.id)) proposed.text=plan_area_label(entity);
-                    if (label.avoid_components && entity!=source.entities().at(entity.id)) {
+                    // Deductions can change an unchanged parent's net value.
+                    // Use the shared qualified report at the candidate head;
+                    // unqualified proposals retain names without assertions.
+                    if (appraisal_area_ids.contains(entity.id)) {
+                        proposed.text=plan_area_label(entity);
+                        if (const auto value=area_values.find(entity.id); value!=area_values.end()) {
+                            if (!proposed.text.isEmpty()) proposed.text+=QLatin1Char('\n');
+                            proposed.text+=value->second;
+                        }
+                    }
+                    if (label.avoid_components) {
                         const auto footprint=label_footprints.find(label.id);
                         if (footprint==label_footprints.end()) return std::nullopt;
+                        const auto text_size = appraisal_area_ids.contains(entity.id)
+                            ? plan_area_label_footprint(proposed,label_font,&label_device) : footprint->second;
+                        auto obstacles=component_bounds;
+                        if (area_values.contains(entity.id)) {
+                            for (const auto& deduction_id : read_deduction_ids(entity.properties)) {
+                                const auto deduction=candidate.find(deduction_id);
+                                if (deduction!=candidate.end())
+                                    obstacles.push_back(boundary_bounds(read_boundary(deduction->second.properties)));
+                            }
+                        }
                         auto world_label = proposed;
                         if (view_context)
                             world_label.position = unproject_plan_point(world_label.position,view_context->frame);
-                        proposed=place_plan_area_label(world_label,boundary_geometry(decode_identified_boundary_entity(entity)),
-                            component_bounds,footprint->second);
+                        proposed=place_plan_area_label(world_label,read_boundary(entity.properties),
+                            obstacles,text_size);
                         if (view_context)
                             proposed.position = project_plan_point(proposed.position,view_context->frame);
                     }
@@ -13267,8 +13291,9 @@ public:
         const auto position=request.position;
         const auto view_context=request.view_context;
         const auto wall_move=request.wall_geometry_move;
+        const auto label_font=request.label_font;
         m_vertex_preview_sequence=m_vertex_preview_queue.enqueue(
-            [source,retained,eligible,labels,appraisal_area_ids,metric_units,label_footprints,component_bounds,result,id,vertex,position,view_context,wall_move]
+            [source,retained,eligible,labels,appraisal_area_ids,metric_units,label_footprints,component_bounds,result,id,vertex,position,view_context,wall_move,label_font]
             (const RegenerationCancellationToken& cancellation) {
                 if (!cancellation.is_cancelled()) {
                     if (wall_move) {
@@ -13276,10 +13301,10 @@ public:
                         intent.wall_geometry_move=*wall_move;
                         const auto preview=preview_constraint_authoring(*source,intent);
                         if (preview.accepted() && !cancellation.is_cancelled())
-                            *result=computeConstraintGeometryProjection(*source,preview.candidate_entities(),*retained,
-                                *eligible,*labels,metric_units,*appraisal_area_ids,*label_footprints,*component_bounds,view_context);
+                            *result=computeConstraintGeometryProjection(*source,preview_constraint_authoring_snapshot(*source,preview),*retained,
+                                *eligible,*labels,metric_units,*appraisal_area_ids,*label_footprints,*component_bounds,view_context,label_font);
                     } else *result=computeBoundaryVertexPreview(*source,*retained,*eligible,*labels,metric_units,*appraisal_area_ids,
-                        *label_footprints,*component_bounds,id,vertex,position,view_context);
+                        *label_footprints,*component_bounds,id,vertex,position,view_context,label_font);
                 }
                 return RegenerationReceipt{source->revision(),{}};
             });
@@ -13441,6 +13466,7 @@ public:
             m_vertex_preview_label_footprints,m_vertex_preview_component_bounds,m_metric_units,{}, {}, {},
             m_vertex_preview_view_context,std::make_shared<std::optional<VertexPreviewProjection>>(),
             wallTranslationIntent(*m_vertex_preview_source,ids,delta)};
+        request.label_font=canvas->font();
         if (m_running_vertex_preview) {
             (void)m_vertex_preview_queue.cancel(m_vertex_preview_sequence);
             m_pending_vertex_preview=std::move(request);
@@ -13463,6 +13489,7 @@ public:
             m_vertex_preview_labels,m_vertex_preview_appraisal_area_ids,m_vertex_preview_label_footprints,m_vertex_preview_component_bounds,
             m_metric_units,id,vertex,position,m_vertex_preview_view_context,
             std::make_shared<std::optional<VertexPreviewProjection>>()};
+        request.label_font=canvas->font();
         if (m_running_vertex_preview) {
             (void)m_vertex_preview_queue.cancel(m_vertex_preview_sequence);
             m_pending_vertex_preview=std::move(request);
@@ -23287,6 +23314,7 @@ private:
                                      m_workspace == Workspace::measurement ? 0 : 1);
                                  setError(QStringLiteral(
                                      "Finish or cancel the active drawing before changing views."));
+                                 refreshTitle();
                                  return;
                              }
                              m_workspace = requested;
@@ -24109,7 +24137,9 @@ private:
                                               std::chrono::steady_clock::duration elapsed) {
             (void)m_performance_telemetry.record(metric, elapsed);
         });
-        canvas->setPointClicked([this](Vec2 point) {
+        canvas->setPointClicked([this,canvas](Vec2 point) {
+            const auto* active=m_workspace==Workspace::measurement ? m_measurementCanvas : m_architecturalCanvas;
+            if (canvas!=active) return;
             onCanvasPoint(point);
         });
         canvas->setEntitySelectionClicked([this](QString id, bool toggle) {

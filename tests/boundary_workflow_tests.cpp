@@ -10,6 +10,8 @@
 #include "../src/desktop/plan_canvas.hpp"
 
 #include <QApplication>
+#include <QAction>
+#include <QTabWidget>
 #include <QAbstractButton>
 #include <QCoreApplication>
 #include <QComboBox>
@@ -540,7 +542,7 @@ void test_define_first_events_place_manual_dimensions_and_close() {
     require_both_canvas_labels(window, 4);
 }
 
-void test_workspace_switch_preserves_draft_and_uses_architectural_events() {
+void test_workspace_switch_preserves_draft_on_refusal_and_allows_finished_drawing() {
     MainWindow window;
     prepare_window(window);
     window.setMetricUnits(true); // The exact two-metre rectangle lies on the 20 cm grid.
@@ -558,26 +560,45 @@ void test_workspace_switch_preserves_draft_and_uses_architectural_events() {
 
     window.setWorkspace(Workspace::architectural);
     process_events();
-    require(window.workspace() == Workspace::architectural,
-            "workspace switch must select the architectural workspace");
-    const auto architectural_draft = preview(*architectural);
-    require(same_boundary(architectural_draft.segments, measurement_draft.segments) &&
-                same_optional_point(architectural_draft.anchor, measurement_draft.anchor),
-            "switching workspaces must retain the same document-independent draft");
-    require(same_boundary(preview(*measurement).segments, measurement_draft.segments),
-            "the background measurement canvas must retain the live draft too");
-
-    send_click(*architectural, {2.0, 2.0});
-    send_click(*architectural, {0.0, 2.0});
-    send_key(*architectural, Qt::Key_Return);
+    auto* mode2d = window.findChild<QAction*>(QStringLiteral("workspace2D"));
+    auto* mode3d = window.findChild<QAction*>(QStringLiteral("workspace3D"));
+    auto* tabs = window.findChild<QTabWidget*>(QStringLiteral("workspaceTabs"));
+    require(mode2d && mode3d && tabs, "workspace transition fixture needs the real mode controls");
+    const auto require_retained = [&] {
+        const auto retained = preview(*measurement);
+        require(window.workspace() == Workspace::measurement && tabs->currentIndex() == 0 &&
+                    mode2d->isChecked() && !mode3d->isChecked() &&
+                    same_boundary(retained.segments, measurement_draft.segments) &&
+                    same_optional_point(retained.anchor, measurement_draft.anchor) &&
+                    window.document().snapshot().entities() == before.entities(),
+                "refused view switches must restore the visible mode controls and preserve the exact unfinished draft");
+    };
+    require_retained();
+    mode3d->trigger();
+    process_events();
+    require_retained();
+    tabs->setCurrentIndex(1);
+    process_events();
+    require_retained();
+    // A projected architectural view is not a world-XY authoring surface.
+    // Finish the retained draft on its conventional 2D canvas before viewing 3D.
+    send_click(*measurement, {2.0, 2.0});
+    send_click(*measurement, {0.0, 2.0});
+    send_key(*measurement, Qt::Key_Return);
     require(!architectural->boundaryDraftPreview().has_value() &&
                 !measurement->boundaryDraftPreview().has_value(),
-            "architectural Enter must finish the retained shared draft");
+            "2D Enter must finish the retained draft");
     const auto after = window.document().snapshot();
     require(after.entities().size() == before.entities().size() + 5,
-            "architectural event completion must create one boundary and four dimensions");
+            "2D event completion must create one boundary and four dimensions");
     inspect_committed_boundary(after, QStringLiteral("porch"), true);
     require_both_canvas_labels(window, 4);
+    mode3d->trigger();
+    process_events();
+    require(window.workspace() == Workspace::architectural && tabs->currentIndex() == 1 &&
+                !mode2d->isChecked() && mode3d->isChecked() &&
+                window.document().snapshot().entities() == after.entities(),
+            "completed drawings must switch into 3D with consistent controls and unchanged geometry");
 }
 
 void test_escape_cancels_without_document_mutation() {
@@ -1136,11 +1157,8 @@ void test_off_grid_snap_cursor_rubberband_and_point_receipt_in_both_canvases() {
                 window.statusBar()->currentMessage() == snapped_status,
             "re-enabling snap must restore the effective cursor and status without a move");
 
-    // Record a cursor on the second canvas before toggling either canvas. The
-    // MainWindow owns one authoring pointer, so an inactive canvas refresh must
-    // not overwrite the active workspace's effective point or status.
-    window.setWorkspace(Workspace::architectural);
-    process_events();
+    // The 3D switch is refused during a 2D draft. Events/toggles from the
+    // inactive canvas must not overwrite the owning canvas's cursor or nodes.
     const auto architectural_anchor_screen = model_to_canvas(*architectural, {0.0, 0.0});
     const auto architectural_screen = architectural_anchor_screen + QPoint(-31, -29);
     const auto architectural_raw = canvas_to_model(*architectural, architectural_screen);
@@ -1149,29 +1167,14 @@ void test_off_grid_snap_cursor_rubberband_and_point_receipt_in_both_canvases() {
     require(!same_point(architectural_raw, architectural_snapped),
             "architectural off-grid cursor fixture must differ from its 20 cm grid snap");
     send_move_at_screen(*architectural, architectural_screen);
-    const auto architectural_draft = preview(*architectural);
-    require(architectural_draft.rubber_band.has_value() &&
-                same_point(architectural_draft.rubber_band->end, architectural_snapped),
-            "architectural snap-enabled rubber band must use the snapped cursor");
-    const auto architectural_status = window.statusBar()->currentMessage();
-    require(architectural_status.contains(QStringLiteral("Architectural")),
-            "architectural cursor movement must update the workspace status");
-
-    // This is an inactive-canvas toggle. It updates that canvas's own cursor,
-    // but must not feed a stale measurement point into the shared session.
-    measurement->setSnapEnabled(false);
-    process_events();
-    const auto after_inactive_toggle = preview(*architectural);
-    require(after_inactive_toggle.rubber_band.has_value() &&
-                same_point(after_inactive_toggle.rubber_band->end, architectural_snapped) &&
-                window.statusBar()->currentMessage() == architectural_status,
-            "inactive canvas snap toggles must not overwrite the active cursor state");
     architectural->setSnapEnabled(false);
     process_events();
-    require(preview(*architectural).rubber_band.has_value() &&
-                same_point(preview(*architectural).rubber_band->end, architectural_raw) &&
-                window.statusBar()->currentMessage() != architectural_status,
-            "active canvas snap disable must recompute its cursor without a move");
+    send_click_at_screen(*architectural, architectural_screen);
+    const auto retained = preview(*measurement);
+    require(same_boundary(retained.segments, snapped_draft.segments) && retained.rubber_band &&
+                same_point(retained.rubber_band->end, measurement_snapped) &&
+                window.statusBar()->currentMessage() == snapped_status,
+            "inactive canvas input and snap toggles must preserve the active draft and cursor");
 
     // Return to the measurement canvas, keep snap disabled there, and commit a
     // four-edge rectangle from direct screen events. The first endpoint is
@@ -1210,12 +1213,13 @@ void test_off_grid_define_first_pending_dimension_preview_and_placement() {
             window.setMetricUnits(true);
             window.setWorkspace(workspace);
             process_events();
-            auto* active_canvas = canvas(window, workspace == Workspace::measurement
-                ? QStringLiteral("measurementPlanCanvas") : QStringLiteral("architecturalPlanCanvas"));
             const auto before = window.document().snapshot();
             require(window.beginBoundaryDrawing(BoundaryAuthoringMode::define_first,
                                                 QStringLiteral("garage")),
                     "off-grid Define First fixture must start with an explicit classification");
+            require(window.workspace() == Workspace::measurement,
+                    "Define First from either initial workspace must activate its 2D authoring surface");
+            auto* active_canvas = canvas(window, QStringLiteral("measurementPlanCanvas"));
 
             const auto anchor_screen = model_to_canvas(*active_canvas, {0.0, 0.0});
             send_click_at_screen(*active_canvas, anchor_screen);
@@ -1293,11 +1297,12 @@ void test_off_grid_snapped_commit_in_each_workspace() {
         prepare_window(window);
         window.setWorkspace(workspace);
         process_events();
-        auto* target = canvas(window, workspace == Workspace::measurement
-            ? QStringLiteral("measurementPlanCanvas") : QStringLiteral("architecturalPlanCanvas"));
         require(window.beginBoundaryDrawing(BoundaryAuthoringMode::draw_first,
                                             QStringLiteral("living")),
                 "snapped receipt fixture must start Draw First");
+        require(window.workspace() == Workspace::measurement,
+                "Draw First from either initial workspace must activate its 2D authoring surface");
+        auto* target = canvas(window, QStringLiteral("measurementPlanCanvas"));
         const auto origin = model_to_canvas(*target, {0.0, 0.0});
         const auto endpoint = origin + QPoint(37, 0);
         require(target->viewScale() == 80.0, "imperial receipt fixture must use the known empty-view zoom");
@@ -1319,6 +1324,7 @@ void test_off_grid_snapped_commit_in_each_workspace() {
 void test_receipt_boundary_offset_copy() {
     MainWindow window;
     prepare_window(window);
+    window.setMetricUnits(true); // Keep the exact two-metre fixture on its metric grid.
     auto* target = canvas(window, QStringLiteral("measurementPlanCanvas"));
     require(window.beginBoundaryDrawing(BoundaryAuthoringMode::draw_first, "living"), "start copy fixture");
     send_click(*target, {0,0});
@@ -1785,6 +1791,7 @@ void test_appraisal_draw_category_survives_workflow_switches() {
                                         QStringLiteral("garage")),
             "appraisal drawing must accept an explicit garage category");
     auto* target = canvas(window, QStringLiteral("measurementPlanCanvas"));
+    target->setSnapEnabled(false); // Exact 4 m² geometry, displayed in Imperial units.
     send_click(*target, {0.0, 0.0});
     send_click(*target, {2.0, 0.0});
     send_click(*target, {2.0, 2.0});
@@ -1863,6 +1870,12 @@ int main(int argc, char** argv) {
     QApplication application(argc, argv);
     try {
         install_test_font();
+        if (application.arguments().contains(QStringLiteral("--workspace-transitions-only"))) {
+            test_workspace_switch_preserves_draft_on_refusal_and_allows_finished_drawing();
+            test_unified_pointer_clicks_to_draw_and_drags_to_pan();
+            std::cout << "Workspace transition workflows passed\n";
+            return 0;
+        }
         if (application.arguments().contains(QStringLiteral("--adaptive-grid-only"))) {
             test_adaptive_grid_boundary_commit();
             test_keyboard_only_boundary_authoring();
@@ -1893,7 +1906,7 @@ int main(int argc, char** argv) {
         run_test("unified_pointer_clicks_to_draw_and_drags_to_pan", test_unified_pointer_clicks_to_draw_and_drags_to_pan);
         run_test("draw_first_events_commit_receipts_labels_and_visibility", test_draw_first_events_commit_receipts_labels_and_visibility);
         run_test("define_first_events_place_manual_dimensions_and_close", test_define_first_events_place_manual_dimensions_and_close);
-        run_test("workspace_switch_preserves_draft_and_uses_architectural_events", test_workspace_switch_preserves_draft_and_uses_architectural_events);
+        run_test("workspace_switch_preserves_draft_on_refusal_and_allows_finished_drawing", test_workspace_switch_preserves_draft_on_refusal_and_allows_finished_drawing);
         run_test("escape_cancels_without_document_mutation", test_escape_cancels_without_document_mutation);
         run_test("context_change_discards_draft_without_mutating_document", test_context_change_discards_draft_without_mutating_document);
         run_test("precision_and_draw_first_classification_modals", test_precision_and_draw_first_classification_modals);

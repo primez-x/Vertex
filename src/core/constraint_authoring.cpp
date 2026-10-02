@@ -1237,12 +1237,11 @@ PersistentConstraintComponentAnalysis analyze_persistent_constraint_component(
     return analyze_persistent_constraint_component(snapshot.entities(), seed_owner_ids, snapshot.revision());
 }
 
-Revision apply_constraint_authoring(Document& document,
-                                     const ConstraintAuthoringPreview& preview) {
+Command constraint_authoring_verified_command(const DocumentSnapshot& current,
+    const ConstraintAuthoringPreview& preview, std::optional<DocumentSnapshot>* candidate) {
     if (!preview.accepted_) {
         invalid("A rejected constraint preview cannot be applied");
     }
-    const auto current = document.snapshot();
     if (current.document_id() != preview.document_id_) {
         throw DocumentError(DocumentErrorCode::invalid_entity,
                             "Constraint preview belongs to another document");
@@ -1321,13 +1320,32 @@ Revision apply_constraint_authoring(Document& document,
             throw DocumentError(DocumentErrorCode::invalid_entity,
                                 "Typed boundary constraint replay does not reproduce the shown result");
         }
-        return document.apply(Command{std::move(command)});
+        if (candidate) *candidate = verified;
+        return Command{std::move(command)};
     }
-    return document.apply(ApplyEntityChanges{
+    Command command = ApplyEntityChanges{
         .expected_revision = current.revision(),
         .entity_changes = std::move(changes),
         .message = recomputed.normalized_intent_.message,
-    });
+    };
+    const auto verified = Document::preview_command(current, command);
+    if (verified.entities() != recomputed.candidate_entities_ || verified.assets() != current.assets())
+        throw DocumentError(DocumentErrorCode::invalid_entity,
+                            "Constraint replay does not reproduce the shown result");
+    if (candidate) *candidate = verified;
+    return command;
+}
+
+DocumentSnapshot preview_constraint_authoring_snapshot(
+    const DocumentSnapshot& source, const ConstraintAuthoringPreview& preview) {
+    std::optional<DocumentSnapshot> candidate;
+    (void)constraint_authoring_verified_command(source, preview, &candidate);
+    return std::move(candidate.value());
+}
+
+Revision apply_constraint_authoring(Document& document,
+                                     const ConstraintAuthoringPreview& preview) {
+    return document.apply(constraint_authoring_verified_command(document.snapshot(), preview, nullptr));
 }
 
 }  // namespace sketch

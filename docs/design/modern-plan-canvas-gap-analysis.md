@@ -7,7 +7,7 @@ and must survive save, reopen, print, and export.
 
 | Visible reference feature | Previous Vertex behavior | Implemented behavior |
 |---|---|---|
-| Fine graph-paper grid | One coarse adaptive lattice | Adaptive eighth-metre subdivisions with a stronger fourth-line construction grid |
+| Fine graph-paper grid | One coarse adaptive lattice | Unit-aware Imperial/Metric intervals refine with zoom; visible subdivisions and grid snapping share the interval, with stronger major lines and a one-cell scale cue |
 | Architectural line hierarchy | Bright orange walls and similarly weighted objects | Navy primary boundaries and walls, slate openings/components, lighter dimensions, and semantic draw ordering |
 | Named rooms and areas | Names appeared only when users created separate text annotations | Room and meaningful area names derive from persisted `name` and `classification` fields and render as plain plan text |
 | Calculated square footage on plans | Derived names lacked automatic area values | Qualified Appraisal areas append their calculated net area and workspace unit, using the report's precision and deductions; generic names can show the value alone |
@@ -35,5 +35,7 @@ visibility. Linked voids and site outlines do not acquire standalone building
 area labels. Net labels avoid their own deducted footprints, including hidden
 deductions. Multiline text is measured as a complete text block on screen and
 in output. Existing placement may omit a label when no readable position fits.
-During a vertex preview the affected scene's automatic numbers are suppressed
-until commit or cancel; live net-area projection remains unfinished.
+Accepted vertex previews recalculate net values from a validated candidate
+snapshot, including unchanged deduction parents. Cancel restores committed
+values; release commits the same geometry and values. See the
+[live-preview verification](../verification/live-appraisal-preview-2026-10-01.md).

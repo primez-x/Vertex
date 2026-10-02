@@ -73,8 +73,10 @@ The previous installed rotation checkpoint is separate and was not repackaged.
 
 ## Remaining limits
 
-Vertex previews suppress automatic numbers, including unchanged deduction
-parents, until commit or cancel. Live net-area recomputation is unfinished.
+At this checkpoint, vertex previews suppressed automatic numbers until commit
+or cancel. The subsequent
+[live-preview checkpoint](live-appraisal-preview-2026-10-01.md) implements and
+checks candidate net-area recomputation, including unchanged deduction parents.
 Existing placement can omit text when no readable position fits; very small
 or furnished areas need further placement/override work. Physical printing,
 external-reader text fidelity and full production/compatibility gates remain

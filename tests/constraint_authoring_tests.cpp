@@ -2604,9 +2604,45 @@ void test_wall_geometry_move_preserves_arc_provenance_and_exact_length_receipt()
         "arc movement redo did not restore its exact receipt and provenance");
 }
 
+void test_calculation_candidate_snapshot_replays_without_mutation() {
+    auto document = Document::create({wall("candidate-wall", {0,0}, {3,0})},
+        {Asset::create("candidate-asset", "application/octet-stream", {std::byte{42}})});
+    document.mark_saved(document.revision());
+    const auto before = document.snapshot();
+    ConstraintAuthoringIntent intent;
+    intent.wall_resize = WallResizeIntent{"candidate-wall", parse_quantity("14 ft"), WallResizeAnchor::start, false};
+    const auto preview = preview_constraint_authoring(before, intent);
+    require_accepted(preview, "calculation candidate needs a valid exact wall edit");
+    const auto candidate = preview_constraint_authoring_snapshot(before, preview);
+    require(candidate.entities() == preview.candidate_entities() && candidate.assets() == before.assets() &&
+                candidate.revision() == before.revision()+1 &&
+                candidate.history().back().boundary_constraint_changes.has_value(),
+            "calculation candidate must contain the actual typed replay and unchanged assets");
+    require(document.revision() == before.revision() && document.snapshot().entities() == before.entities() &&
+                document.snapshot().history().size() == before.history().size() && !document.snapshot().dirty(),
+            "deriving a calculation candidate must preserve live geometry, history and saved state");
+    const auto refuses = [&](const DocumentSnapshot& source, const ConstraintAuthoringPreview& proposal) {
+        bool rejected = false;
+        try { (void)preview_constraint_authoring_snapshot(source, proposal); }
+        catch (const std::exception&) { rejected = true; }
+        require(rejected, "calculation candidate must reject stale, foreign or modified authority");
+    };
+    refuses(Document::create({wall("candidate-wall", {0,0}, {3,0})}).snapshot(), preview);
+    auto modified = preview;
+    auto& entities = const_cast<std::map<std::string,Entity,std::less<>>&>(modified.candidate_entities());
+    entities.at("candidate-wall").properties["name"] = "tampered";
+    refuses(before, modified);
+    refuses(before, preview_constraint_authoring(before, ConstraintAuthoringIntent{}));
+    (void)apply_constraint_authoring(document, preview);
+    require(document.snapshot().entities() == candidate.entities() && document.snapshot().assets() == candidate.assets(),
+            "committing an unchanged source must reproduce the calculation candidate exactly");
+    refuses(document.snapshot(), preview);
+}
+
 int main() {
     sketch::testing::noninteractive_errors();
     try {
+        test_calculation_candidate_snapshot_replays_without_mutation();
         test_wall_geometry_move_propagates_explicit_connections_only();
         test_wall_geometry_move_multiselection_validation_and_hosting();
         test_wall_geometry_move_preserves_arc_provenance_and_exact_length_receipt();

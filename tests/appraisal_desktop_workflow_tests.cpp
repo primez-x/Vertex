@@ -1079,17 +1079,49 @@ void appraisal_plan_area_labels_workflow() {
             .arg(retained != canvas->entities().end() && retained->selected)
             .arg(canvas->viewScale()).arg(press.x()).arg(press.y()).arg(window.lastError())).toStdString());
     }
-    for (const auto& id : {outer, garage}) {
+    // Moving this corner by 0.2 m on each axis removes 1.524 * 0.2 m²
+    // from the five-foot square. The unchanged parent gains that deduction.
+    const std::map<QString, QString> preview_values{
+        {outer, QStringLiteral("First Floor\n78.28 ft²")},
+        {garage, QStringLiteral("Garage\n21.72 ft²")}};
+    for (const auto& [id, expected] : preview_values) {
         const auto& labels = canvas->boundaryVertexPreviewLabels();
         const auto proposed = std::find_if(labels.begin(), labels.end(), [&](const auto& label) { return label.id == id; });
-        require(proposed != labels.end() && !proposed->text.contains(QStringLiteral("ft²")),
-                "vertex previews must suppress stale net numbers including the unchanged deduction parent");
+        require(proposed != labels.end() && proposed->text == expected,
+                "vertex previews must recalculate net numbers for both the moved deduction and unchanged parent");
+    }
+    require(window.document().revision() == before_drag.revision() &&
+                window.document().snapshot().entities() == before_drag.entities(),
+            "live area labels must not commit preview geometry or history");
+    if (const auto captures = qEnvironmentVariable("VERTEX_TEST_CAPTURE_DIR"); !captures.isEmpty()) {
+        require(QDir().mkpath(captures) &&
+                    canvas->grab().save(QDir(captures).filePath(QStringLiteral("live-net-area-preview.png"))),
+                "retain the actual canvas with live parent and deduction values");
     }
     QKeyEvent escape(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
     QApplication::sendEvent(canvas, &escape);
     require(window.document().snapshot().entities() == before_drag.entities() &&
             label_text(outer) == QStringLiteral("First Floor\n75.00 ft²"),
             "cancelling a vertex preview must restore committed area labels without changing geometry");
+    QApplication::sendEvent(canvas, &down);
+    QApplication::sendEvent(canvas, &drag);
+    preview_wait.restart();
+    while (!canvas->boundaryVertexPreviewMetrics() && preview_wait.elapsed() < 3000)
+        QApplication::processEvents(QEventLoop::AllEvents, 30);
+    require(canvas->boundaryVertexPreviewMetrics().has_value(),
+            "repeat the same accepted corner preview before committing");
+    QMouseEvent up(QEvent::MouseButtonRelease, move, canvas->mapToGlobal(move.toPoint()),
+        Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+    QApplication::sendEvent(canvas, &up);
+    QApplication::processEvents();
+    require(window.document().revision() == before_drag.revision() + 1 &&
+                label_text(outer) == preview_values.at(outer) &&
+                label_text(garage) == preview_values.at(garage),
+            "committing the corner must match the previewed parent and deduction net values");
+    require(window.undoCommand() &&
+                window.document().snapshot().entities() == before_drag.entities() &&
+                label_text(outer) == QStringLiteral("First Floor\n75.00 ft²"),
+            "undo must restore the geometry and the committed area values after the live preview");
     // Connected mode preserves the complementary 5-ft edge while changing
     // the anchored edge to 4 ft: (4 + 5) / 2 * 5 = 22.5 ft².
     const auto before_size = window.document().snapshot();
