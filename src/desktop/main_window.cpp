@@ -12996,85 +12996,100 @@ public:
 
     bool editSelectedCurvedWallFromConstruction(
         Vec2 start, Vec2 end, const QString& construction, const QString& measure,
-        std::optional<Revision> expected_revision = std::nullopt) {
+        std::optional<Revision> expected_revision = std::nullopt,
+        std::optional<QString> classification = std::nullopt,
+        bool preserve_curve_input = false) {
         const auto revision = expected_revision.value_or(m_document->revision());
         try {
+            if (!m_document->is_editable())
+                throw std::invalid_argument("This document is read-only.");
+            if (revision != m_document->revision())
+                throw std::invalid_argument("The project changed while the curved wall was being edited. Reopen its properties.");
             const auto selected = selectedEntity();
             if (!selected || selected->type != "wall")
                 throw std::invalid_argument("Select a curved wall before editing its curve.");
             const auto current_baseline = read_required_segment(selected->properties, "baseline");
             if (!current_baseline || std::abs(current_baseline->sweep_radians) <= 1e-7)
                 throw std::invalid_argument("The selected wall is straight; use wall dimensions and constraints instead.");
-            if (!std::isfinite(start.x) || !std::isfinite(start.y) ||
-                !std::isfinite(end.x) || !std::isfinite(end.y) ||
-                std::hypot(end.x - start.x, end.y - start.y) <= 1e-7) {
-                throw std::invalid_argument("Wall arc endpoints must be finite and distinct.");
-            }
-            const auto expression = measure.trimmed();
-            if (expression.isEmpty()) throw std::invalid_argument("Wall arc defining measure is required.");
-            auto construction_key = construction.trimmed().toLower();
-            if (construction_key == QStringLiteral("sweep")) construction_key = QStringLiteral("angle");
-            if (construction_key == QStringLiteral("arc-length") || construction_key == QStringLiteral("length"))
-                construction_key = QStringLiteral("arc_length");
-            else if (construction_key == QStringLiteral("arc-height") || construction_key == QStringLiteral("height"))
-                construction_key = QStringLiteral("arc_height");
-            if (construction_key != QStringLiteral("angle") &&
-                construction_key != QStringLiteral("arc_length") &&
-                construction_key != QStringLiteral("arc_height")) {
-                throw std::invalid_argument(
-                    "Wall arc construction must be angle, arc_length, or arc_height.");
-            }
-            Segment baseline;
-            std::string normalized_measure;
-            double stored_measure = 0.0;
-            bool clockwise = false;
-            if (construction_key == QStringLiteral("angle")) {
-                const auto angle = parse_angle(expression.toUtf8().toStdString());
-                baseline = arc_from_chord_angle(start, end, angle.radians);
-                normalized_measure = angle.normalized_expression;
-                stored_measure = angle.radians;
-            } else {
-                const auto quantity = parse_quantity(
-                    expression.toUtf8().toStdString(), m_metric_units ? Unit::metre : Unit::foot);
-                if (!std::isfinite(quantity.metres) || quantity.metres == 0.0)
-                    throw std::invalid_argument("Wall arc measure must be finite and nonzero.");
-                stored_measure = quantity.metres;
-                normalized_measure = format_quantity(quantity, Unit::metre);
-                if (construction_key == QStringLiteral("arc_length")) {
-                    clockwise = quantity.metres < 0.0;
-                    baseline = arc_from_chord_arc_length(start, end,
-                                                         std::abs(quantity.metres), clockwise);
-                } else {
-                    baseline = arc_from_chord_height(start, end, quantity.metres);
-                }
-            }
             auto candidate = *selected;
-            const auto& original_baseline=selected->properties.at("baseline");
-            if (original_baseline.at("start")!=point_json(baseline.start) ||
-                original_baseline.at("end")!=point_json(baseline.end) ||
-                original_baseline.at("sweep_radians")!=baseline.sweep_radians)
-                clear_wall_length_input(candidate);
-            auto& stored_baseline = candidate.properties["baseline"];
-            stored_baseline["start"] = point_json(baseline.start);
-            stored_baseline["end"] = point_json(baseline.end);
-            stored_baseline["sweep_radians"] = baseline.sweep_radians;
-            auto curve_input = candidate.extensions.value("curve_input", json::object());
-            if (!curve_input.is_object()) curve_input = json::object();
-            curve_input["version"] = 2;
-            curve_input["construction"] = construction_key.toStdString();
-            curve_input["measure"] = expression.toStdString();
-            curve_input["normalized_measure"] = normalized_measure;
-            curve_input["measure_value"] = stored_measure;
-            curve_input["clockwise"] = clockwise;
-            curve_input["start"] = point_json(start);
-            curve_input["end"] = point_json(end);
-            const auto derived_sweep = angle_from_radians(baseline.sweep_radians);
-            curve_input["sweep"] = construction_key == QStringLiteral("angle")
-                ? expression.toStdString() : derived_sweep.original_expression;
-            curve_input["normalized_sweep"] = derived_sweep.normalized_expression;
-            curve_input["radians"] = baseline.sweep_radians;
-            candidate.extensions["curve_input"] = std::move(curve_input);
-            preserve_wall_curve_construction(candidate, *selected);
+            // Classification-only input never reconstructs geometry or adds a
+            // chord receipt to a wall originally authored by its tangent.
+            if (!preserve_curve_input) {
+                if (!std::isfinite(start.x) || !std::isfinite(start.y) ||
+                    !std::isfinite(end.x) || !std::isfinite(end.y) ||
+                    std::hypot(end.x - start.x, end.y - start.y) <= 1e-7) {
+                    throw std::invalid_argument("Wall arc endpoints must be finite and distinct.");
+                }
+                const auto expression = measure.trimmed();
+                if (expression.isEmpty()) throw std::invalid_argument("Wall arc defining measure is required.");
+                auto construction_key = construction.trimmed().toLower();
+                if (construction_key == QStringLiteral("sweep")) construction_key = QStringLiteral("angle");
+                if (construction_key == QStringLiteral("arc-length") || construction_key == QStringLiteral("length"))
+                    construction_key = QStringLiteral("arc_length");
+                else if (construction_key == QStringLiteral("arc-height") || construction_key == QStringLiteral("height"))
+                    construction_key = QStringLiteral("arc_height");
+                if (construction_key != QStringLiteral("angle") &&
+                    construction_key != QStringLiteral("arc_length") &&
+                    construction_key != QStringLiteral("arc_height")) {
+                    throw std::invalid_argument(
+                        "Wall arc construction must be angle, arc_length, or arc_height.");
+                }
+                Segment baseline;
+                std::string normalized_measure;
+                double stored_measure = 0.0;
+                bool clockwise = false;
+                if (construction_key == QStringLiteral("angle")) {
+                    const auto angle = parse_angle(expression.toUtf8().toStdString());
+                    baseline = arc_from_chord_angle(start, end, angle.radians);
+                    normalized_measure = angle.normalized_expression;
+                    stored_measure = angle.radians;
+                } else {
+                    const auto quantity = parse_quantity(
+                        expression.toUtf8().toStdString(), m_metric_units ? Unit::metre : Unit::foot);
+                    if (!std::isfinite(quantity.metres) || quantity.metres == 0.0)
+                        throw std::invalid_argument("Wall arc measure must be finite and nonzero.");
+                    stored_measure = quantity.metres;
+                    normalized_measure = format_quantity(quantity, Unit::metre);
+                    if (construction_key == QStringLiteral("arc_length")) {
+                        clockwise = quantity.metres < 0.0;
+                        baseline = arc_from_chord_arc_length(start, end,
+                                                             std::abs(quantity.metres), clockwise);
+                    } else {
+                        baseline = arc_from_chord_height(start, end, quantity.metres);
+                    }
+                }
+                const auto& original_baseline=selected->properties.at("baseline");
+                if (original_baseline.at("start")!=point_json(baseline.start) ||
+                    original_baseline.at("end")!=point_json(baseline.end) ||
+                    original_baseline.at("sweep_radians")!=baseline.sweep_radians)
+                    clear_wall_length_input(candidate);
+                auto& stored_baseline = candidate.properties["baseline"];
+                stored_baseline["start"] = point_json(baseline.start);
+                stored_baseline["end"] = point_json(baseline.end);
+                stored_baseline["sweep_radians"] = baseline.sweep_radians;
+                auto curve_input = candidate.extensions.value("curve_input", json::object());
+                if (!curve_input.is_object()) curve_input = json::object();
+                curve_input["version"] = 2;
+                curve_input["construction"] = construction_key.toStdString();
+                curve_input["measure"] = expression.toStdString();
+                curve_input["normalized_measure"] = normalized_measure;
+                curve_input["measure_value"] = stored_measure;
+                curve_input["clockwise"] = clockwise;
+                curve_input["start"] = point_json(start);
+                curve_input["end"] = point_json(end);
+                const auto derived_sweep = angle_from_radians(baseline.sweep_radians);
+                curve_input["sweep"] = construction_key == QStringLiteral("angle")
+                    ? expression.toStdString() : derived_sweep.original_expression;
+                curve_input["normalized_sweep"] = derived_sweep.normalized_expression;
+                curve_input["radians"] = baseline.sweep_radians;
+                candidate.extensions["curve_input"] = std::move(curve_input);
+                preserve_wall_curve_construction(candidate, *selected);
+            }
+            if (classification) {
+                const auto value = classification->trimmed();
+                candidate.properties["classification"] = value.isEmpty()
+                    ? std::string("interior") : value.toStdString();
+            }
 
             const auto snapshot = m_document->snapshot();
             std::vector<const Entity*> openings;
@@ -13089,6 +13104,10 @@ public:
             if (!read_document_wall(candidate, openings, wall, diagnostic))
                 throw std::invalid_argument(diagnostic);
             validate_wall_semantics(wall);
+            if (candidate == *selected) {
+                clearError();
+                return true;
+            }
             if (!applyEntity(std::move(candidate), "edit curved wall", revision)) return false;
             m_selected_id = QString::fromStdString(selected->id);
             refresh();
@@ -17726,6 +17745,11 @@ public:
             if (changed) { clearError(); boundaryDraftChanged(); }
             return changed;
         }
+        if (m_tool == CanvasTool::wall && m_pending_wall_start && !m_wall_chain_has_segments) {
+            // The uncommitted anchor belongs to drawing, not document history.
+            finishWallChain();
+            return true;
+        }
         if (!(m_recovery_ledger.empty() ? m_document->can_undo() : m_project_workspace->can_undo())) {
             return false;
         }
@@ -17738,7 +17762,7 @@ public:
                 requireWorkspaceDocument();
                 auto edit = m_project_workspace->prepare_undo();
                 commitWorkspaceEdit(edit);
-                restoreWorkspaceBoundaryDraft();
+                restoreWorkspaceBoundaryDraft(true);
             }
             // Keep the inspector context across edits that leave the selected
             // entity in the document. Creation and deletion commands already
@@ -17751,6 +17775,7 @@ public:
                 m_selected_id.clear();
             }
             clearError();
+            synchronizeWallChainWithHistory();
             refresh();
             return true;
         } catch (const std::exception& error) {
@@ -17781,7 +17806,7 @@ public:
                 requireWorkspaceDocument();
                 auto edit = m_project_workspace->prepare_redo();
                 commitWorkspaceEdit(edit);
-                restoreWorkspaceBoundaryDraft();
+                restoreWorkspaceBoundaryDraft(true);
             }
             if (!selection_before.isEmpty() &&
                 has_entity(*m_document, selection_before)) {
@@ -17790,6 +17815,7 @@ public:
                 m_selected_id.clear();
             }
             clearError();
+            synchronizeWallChainWithHistory();
             refresh();
             return true;
         } catch (const std::exception& error) {
@@ -29120,8 +29146,10 @@ private:
     }
 
     void refreshActions() {
-        m_undo_action->setEnabled(m_boundary_session ? m_boundary_session->can_undo() :
-            m_recovery_ledger.empty() ? m_document->can_undo() : m_project_workspace->can_undo());
+        const bool wall_anchor = m_tool == CanvasTool::wall && m_pending_wall_start.has_value();
+        m_undo_action->setEnabled(m_document->is_editable() && (wall_anchor ||
+            (m_boundary_session ? m_boundary_session->can_undo() :
+             m_recovery_ledger.empty() ? m_document->can_undo() : m_project_workspace->can_undo())));
         m_redo_action->setEnabled(m_restored_boundary_navigation && m_project_workspace->can_redo() ? true :
             m_boundary_session ? m_boundary_session->can_redo() :
             m_recovery_ledger.empty() ? m_document->can_redo() : m_project_workspace->can_redo());
@@ -29560,8 +29588,16 @@ private:
         return QString::fromStdString(id);
     }
 
-    void restoreWorkspaceBoundaryDraft() {
+    void restoreWorkspaceBoundaryDraft(bool preserve_wall_chain = false) {
         const auto active = m_project_workspace->active_boundary();
+        // Wall authoring is immediately committed rather than a workspace
+        // boundary draft. History navigation must retain its owner identities
+        // until synchronizeWallChainWithHistory reads the restored document.
+        if (preserve_wall_chain && !active && m_tool == CanvasTool::wall &&
+            m_pending_wall_start && m_document->is_editable()) {
+            syncToolControls();
+            return;
+        }
         clearPreview(false);
         m_tool = CanvasTool::select;
         if (active && m_document->is_editable() &&
@@ -29859,8 +29895,10 @@ private:
                 m_wall_chain_anchor = point;
                 m_wall_chain_has_segments = false;
                 m_wall_chain_previous_id.clear();
+                m_wall_chain_owner_ids.clear();
                 m_wall_input_preferences = {};
                 refreshWallPreview(point);
+                refreshActions();
                 owner->statusBar()->showMessage(QStringLiteral("Wall start recorded  •  click the end point"));
                 return;
             }
@@ -29905,6 +29943,12 @@ private:
                 if (m_selected_id == id) (void)selectEntity({}, false);
                 const auto chain_anchor = m_wall_chain_anchor;
                 const auto preferences = m_wall_input_preferences;
+                auto chain_owners = m_wall_chain_owner_ids;
+                const auto current = m_document->snapshot();
+                chain_owners.removeIf([&](const QString& owner_id) {
+                    return !current.entities().contains(owner_id.toStdString());
+                });
+                chain_owners.append(id);
                 if (m_tool == CanvasTool::wall && m_wall_chain_has_segments && chain_anchor &&
                     point.x == chain_anchor->x && point.y == chain_anchor->y) {
                     finishWallChain();
@@ -29916,6 +29960,7 @@ private:
                     m_wall_chain_anchor = chain_anchor;
                     m_wall_chain_has_segments = true;
                     m_wall_chain_previous_id = id;
+                    m_wall_chain_owner_ids = std::move(chain_owners);
                     m_wall_input_preferences = preferences;
                     refreshWallPreview(point);
                     owner->statusBar()->showMessage(QStringLiteral("Click the next wall end • Esc finishes the chain"));
@@ -30079,6 +30124,7 @@ private:
         m_drawing_input_wall_start.reset();
         m_drawing_input_wall_anchor.reset();
         m_drawing_input_wall_previous_id.clear();
+        m_drawing_input_wall_owner_ids.clear();
         m_drawing_input_wall_has_segments = false;
     }
 
@@ -30090,6 +30136,7 @@ private:
         m_drawing_input_wall_start = m_pending_wall_start;
         m_drawing_input_wall_anchor = m_wall_chain_anchor;
         m_drawing_input_wall_previous_id = m_wall_chain_previous_id;
+        m_drawing_input_wall_owner_ids = m_wall_chain_owner_ids;
         m_drawing_input_wall_has_segments = m_wall_chain_has_segments;
         m_drawing_input_boundary = m_boundary_session
             ? std::optional{m_boundary_session->view()} : std::nullopt;
@@ -30164,6 +30211,7 @@ private:
                     m_drawing_input_wall_start->x != m_pending_wall_start->x ||
                     m_drawing_input_wall_start->y != m_pending_wall_start->y ||
                     m_drawing_input_wall_previous_id != m_wall_chain_previous_id ||
+                    m_drawing_input_wall_owner_ids != m_wall_chain_owner_ids ||
                     m_drawing_input_wall_has_segments != m_wall_chain_has_segments ||
                     m_drawing_input_wall_anchor.has_value() != m_wall_chain_anchor.has_value() ||
                     (m_wall_chain_anchor && (m_drawing_input_wall_anchor->x != m_wall_chain_anchor->x ||
@@ -30198,8 +30246,52 @@ private:
 
     // Resolve chain context from current authoritative geometry, never a
     // retained baseline that could have become stale after undo or editing.
+    QStringList liveWallChainOwners(const DocumentSnapshot& snapshot) const {
+        QStringList live;
+        bool missing = false;
+        for (const auto& id : m_wall_chain_owner_ids) {
+            const auto found = snapshot.entities().find(id.toStdString());
+            if (found == snapshot.entities().end()) { missing = true; continue; }
+            if (missing || found->second.type != "wall")
+                throw std::invalid_argument("The drawing chain changed outside its history. Start a new chain.");
+            live.append(id);
+        }
+        return live;
+    }
+
+    void synchronizeWallChainWithHistory() {
+        if (m_tool != CanvasTool::wall || !m_pending_wall_start || !m_wall_chain_anchor) return;
+        resetDrawingInputContext();
+        if (m_drawing_input) m_drawing_input->clearInput();
+        try {
+            const auto snapshot = m_document->snapshot();
+            const auto live = liveWallChainOwners(snapshot);
+            auto endpoint = *m_wall_chain_anchor;
+            for (const auto& id : live) {
+                const auto baseline = read_required_segment(snapshot.entities().at(id.toStdString()).properties, "baseline");
+                if (!baseline || baseline->start.x != endpoint.x || baseline->start.y != endpoint.y)
+                    throw std::invalid_argument("The drawing chain's connected geometry changed. Start a new chain.");
+                endpoint = baseline->end;
+            }
+            m_pending_wall_start = endpoint;
+            m_wall_chain_previous_id = live.isEmpty() ? QString{} : live.back();
+            m_wall_chain_has_segments = !live.isEmpty();
+            refreshWallPreview(m_last_cursor);
+        } catch (const std::exception& error) {
+            // Undo/redo already succeeded. End only its invalid authoring context.
+            finishWallChain();
+            setError(QStringLiteral("Drawing chain ended: %1").arg(QString::fromUtf8(error.what())));
+        }
+    }
+
     std::optional<Segment> previousWallSegment(const DocumentSnapshot& snapshot) const {
-        if (!m_wall_chain_has_segments) return std::nullopt;
+        const auto live = liveWallChainOwners(snapshot);
+        if (!m_wall_chain_has_segments) {
+            if (!live.isEmpty()) throw std::invalid_argument("The wall drawing history changed. Start a new chain.");
+            return std::nullopt;
+        }
+        if (live.isEmpty() || live.back() != m_wall_chain_previous_id)
+            throw std::invalid_argument("The wall drawing history changed. Start a new chain.");
         const auto found = snapshot.entities().find(m_wall_chain_previous_id.toStdString());
         if (found == snapshot.entities().end() || found->second.type != "wall")
             throw std::invalid_argument("The previous wall no longer exists. Finish this chain and start again.");
@@ -30224,6 +30316,7 @@ private:
         const auto start = m_pending_wall_start;
         const auto anchor = m_wall_chain_anchor;
         const auto previous_id = m_wall_chain_previous_id;
+        const auto chain_owners = m_wall_chain_owner_ids;
         const auto has_segments = m_wall_chain_has_segments;
         const auto selection = m_selected_ids;
         const auto thickness_text = m_wall_draw_thickness ? m_wall_draw_thickness->text() : QString{};
@@ -30265,6 +30358,7 @@ private:
                 current.entities() != snapshot.entities() || current.assets() != snapshot.assets() ||
                 !same_point(m_pending_wall_start, start) || !same_point(m_wall_chain_anchor, anchor) ||
                 m_wall_chain_previous_id != previous_id || m_wall_chain_has_segments != has_segments ||
+                m_wall_chain_owner_ids != chain_owners ||
                 (m_wall_draw_thickness && m_wall_draw_thickness->text() != thickness_text) ||
                 (m_wall_draw_height && m_wall_draw_height->text() != height_text)) {
                 setError(QStringLiteral("The project or wall drawing context changed. Reopen precise input."));
@@ -30280,8 +30374,10 @@ private:
                 m_wall_chain_anchor = chain->anchor;
                 m_wall_chain_has_segments = false;
                 m_wall_chain_previous_id.clear();
+                m_wall_chain_owner_ids.clear();
                 syncToolControls();
                 refreshWallPreview(chain->anchor);
+                refreshActions();
                 clearError();
                 restore_canvas_focus();
                 return;
@@ -30309,6 +30405,11 @@ private:
             m_wall_chain_anchor = anchor;
             m_wall_chain_has_segments = true;
             m_wall_chain_previous_id = id;
+            m_wall_chain_owner_ids = chain_owners;
+            m_wall_chain_owner_ids.removeIf([&](const QString& owner_id) {
+                return !current.entities().contains(owner_id.toStdString());
+            });
+            m_wall_chain_owner_ids.append(id);
             if (preferences) m_wall_input_preferences = *preferences;
             refreshWallPreview(edge.end);
             clearError();
@@ -30462,6 +30563,7 @@ private:
         m_wall_chain_anchor.reset();
         m_wall_chain_has_segments = false;
         m_wall_chain_previous_id.clear();
+        m_wall_chain_owner_ids.clear();
         m_wall_input_preferences = {};
         m_redefine_boundary_id.reset();
         m_restored_boundary_navigation = false;
@@ -30498,6 +30600,7 @@ private:
         m_wall_chain_anchor.reset();
         m_wall_chain_has_segments = false;
         m_wall_chain_previous_id.clear();
+        m_wall_chain_owner_ids.clear();
         m_wall_input_preferences = {};
         updateDrawingInput();
         m_measurementCanvas->setWallPreview(std::nullopt);
@@ -30508,6 +30611,7 @@ private:
         }
         if (m_architecture_hint) m_architecture_hint->hide();
         clearError();
+        refreshActions();
         owner->statusBar()->showMessage(kept_segments
             ? QStringLiteral("Wall chain finished. Committed walls were kept.")
             : QStringLiteral("Unfinished wall start cancelled."), 4000);
@@ -31604,12 +31708,14 @@ private:
                                      throw std::invalid_argument("Curve measure is required.");
                                  const auto construction_key = construction->currentData().toString();
                                  if (editing) {
-                                     if (start_x->text().trimmed() == x_text.trimmed() &&
+                                     const bool unchanged_curve_input =
+                                         start_x->text().trimmed() == x_text.trimmed() &&
                                          start_y->text().trimmed() == y_text.trimmed() &&
                                          end_x->text().trimmed() == end_x_text.trimmed() &&
                                          end_y->text().trimmed() == end_y_text.trimmed() &&
                                          construction_key == initial_construction &&
-                                         sweep->text().trimmed() == initial_sweep.trimmed() &&
+                                         sweep->text().trimmed() == initial_sweep.trimmed();
+                                     if (unchanged_curve_input &&
                                          classification->text().trimmed() == initial_classification.trimmed()) {
                                          clearError();
                                          dialog.accept();
@@ -31617,7 +31723,7 @@ private:
                                      }
                                      if (!editSelectedCurvedWallFromConstruction(
                                              first, second, construction_key, sweep->text(),
-                                             context.revision)) {
+                                             context.revision, classification->text(), unchanged_curve_input)) {
                                          status->setText(lastError());
                                          return;
                                      }
@@ -32244,12 +32350,14 @@ private:
     std::optional<Vec2> m_drawing_input_wall_start;
     std::optional<Vec2> m_drawing_input_wall_anchor;
     QString m_drawing_input_wall_previous_id;
+    QStringList m_drawing_input_wall_owner_ids;
     bool m_drawing_input_wall_has_segments{};
     CanvasTool m_drawing_input_tool{CanvasTool::select};
     Workspace m_drawing_input_workspace{Workspace::measurement};
     std::optional<Vec2> m_wall_chain_anchor;
     bool m_wall_chain_has_segments{};
     QString m_wall_chain_previous_id;
+    QStringList m_wall_chain_owner_ids;
     BoundaryInputPreferences m_wall_input_preferences;
     QString m_pending_opening_kind;
     QString m_pending_opening_symbol_id;

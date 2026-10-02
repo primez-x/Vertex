@@ -2164,6 +2164,24 @@ void test_physical_wall_precision_anchor_relative_and_modal_guards() {
                 replay_context.at("expected_start") == arc.properties.at("baseline").at("end") &&
                 replay_context.at("tolerance_metres").get<double>() > 0,
             "relative wall provenance must persist its explicit historical replay context");
+    send_key(*drawing, Qt::Key_Z, Qt::ControlModifier);
+    require(drawing->wallPreview() && same_point(drawing->wallPreview()->start, wall_baseline(arc).end),
+            "Undo during a curved chain resumes at the retained arc endpoint");
+    send_key(*drawing, Qt::Key_Z, Qt::ControlModifier);
+    require(drawing->wallPreview() && same_point(drawing->wallPreview()->start, wall_baseline(relative).end),
+            "Undoing the arc resumes at its preceding straight wall");
+    send_key(*drawing, Qt::Key_Y, Qt::ControlModifier);
+    require(drawing->wallPreview() && same_point(drawing->wallPreview()->start, wall_baseline(arc).end),
+            "Redo restores the analytical arc endpoint for continuation");
+    const auto replacement = enter(2, {{"Length", "2 m"}, {"Turn", "90 deg"}});
+    require(replacement.properties.at("baseline") == tangent_relative.properties.at("baseline") &&
+                replacement.properties.at("original_drawing_input_context").at("previous_segment") ==
+                    arc.properties.at("baseline") && !window.document().can_redo(),
+            "a new relative turn after Redo uses the restored arc tangent and replaces the undone branch");
+    send_key(*drawing, Qt::Key_Z, Qt::ControlModifier);
+    send_key(*drawing, Qt::Key_Y, Qt::ControlModifier);
+    require(drawing->wallPreview() && same_point(drawing->wallPreview()->start, endpoint),
+            "the replacement curved-chain branch remains usable through keyboard history");
     const auto chain = window.document().snapshot();
     drive_boundary_modal(window, *drawing, Qt::Key_D, [&](QDialog* modal) { modal->reject(); });
     require_same_document(chain, window.document().snapshot(), "cancelled precision input must retain the wall chain");
@@ -2241,6 +2259,164 @@ void test_precision_curve_editor_preserves_unedited_geometry() {
         require(after.properties.at("original_drawing_input") == wall.properties.at("original_drawing_input") &&
                     after.properties.at("original_drawing_input_context") == wall.properties.at("original_drawing_input_context"),
                 "curve editing must preserve the original input and its historical context");
+    }
+}
+
+void test_wall_curve_properties_classification() {
+    for (const bool metric : {false, true}) {
+        MainWindow window;
+        prepare_window(window);
+        window.setMetricUnits(metric);
+        QApplication::setActiveWindow(&window);
+        process_events();
+        auto* drawing = canvas(window, QStringLiteral("measurementPlanCanvas"));
+        send_click(*drawing, {0, 0});
+        const auto before_creation = window.document().snapshot();
+        drive_boundary_modal(window, *drawing, Qt::Key_D, [&](QDialog* modal) {
+            auto* input = dynamic_cast<sketch::desktop::BoundaryInputDialog*>(modal);
+            require(input, "classification fixture must use original D tangent construction");
+            input->findChild<QComboBox*>("boundaryInputMethod")->setCurrentIndex(7);
+            input->findChild<QLineEdit*>("boundaryInputTangent")->setText("13 deg");
+            input->findChild<QLineEdit*>("boundaryInputArcLength")->setText("4.125 m");
+            input->findChild<QLineEdit*>("boundaryInputSweep")->setText("37 deg");
+            require(input->submit(), "classification fixture tangent arc must validate");
+        });
+        const auto created = single_new_wall(before_creation, window.document().snapshot());
+        const auto wall_id = QString::fromStdString(created.id);
+        send_key(*drawing, Qt::Key_Escape);
+        require(window.selectEntity(wall_id), "classification fixture wall must be selected");
+        const auto opening_id = window.createHostedOpening("window", "0.5 m", "0.4 m", "0.5 m", "1 m");
+        require(!opening_id.isEmpty(), "curve classification fixture needs a real hosted opening");
+        auto decorated = window.document().snapshot().entities().at(created.id);
+        decorated.extensions["vendor_curve"] = nlohmann::json{{"preserve", true}};
+        window.document().apply(sketch::ApplyEntityChanges{window.document().revision(),
+            {sketch::EntityChange::upsert(decorated)}, {}, "decorate curve classification fixture"});
+        require(window.selectEntity(wall_id), "decorated curve must remain selectable");
+        const auto initial = window.document().snapshot();
+        std::string editor_stage = "unchanged Apply";
+        const auto invoke_editor = [&](const std::function<void(QDialog*)>& respond) {
+            // Each scenario starts with an explicit user selection. Give the
+            // properties button the focus a real pointer activation receives;
+            // offscreen modal reactivation otherwise focuses the navigator's
+            // default property row after a programmatic click.
+            require(window.selectEntity(wall_id), "curve property scenario must explicitly select its target");
+            auto* edit = window.findChild<QAbstractButton*>("editCurvedWall");
+            require(edit && edit->isEnabled(), std::string("curve properties ") + editor_stage +
+                " must expose the editor; selected=" + window.selectedEntityId().toStdString() +
+                ", editable=" + (window.document().is_editable() ? "true" : "false") +
+                ", metric=" + (metric ? "true" : "false"));
+            drive_boundary_modal(window, *drawing, 0, respond, "curve properties editor must open",
+                                 Qt::NoModifier, [&] { edit->setFocus(Qt::MouseFocusReason); edit->click(); });
+        };
+        const auto apply = [](QDialog* modal) {
+            auto* buttons = modal->findChild<QDialogButtonBox*>("curvedWallButtons");
+            require(buttons, "curve properties editor must expose Apply");
+            buttons->button(QDialogButtonBox::Apply)->click();
+        };
+        invoke_editor([&](QDialog* modal) {
+            apply(modal);
+            require(modal->result() == QDialog::Accepted, "unchanged curve Apply must accept");
+            require(window.selectedEntityId() == wall_id,
+                    "unchanged curve Apply must retain the target selection before modal reactivation");
+        });
+        require_same_document(initial, window.document().snapshot(), "unchanged curve Apply must be a no-op");
+        editor_stage = "cancel";
+        invoke_editor([&](QDialog* modal) {
+            modal->findChild<QLineEdit*>("curvedWallClassification")->setText("cancelled class");
+            modal->reject();
+        });
+        require_same_document(initial, window.document().snapshot(), "cancel must discard classification input");
+        editor_stage = "stale units";
+        invoke_editor([&](QDialog* modal) {
+            modal->findChild<QLineEdit*>("curvedWallClassification")->setText("stale units class");
+            window.setMetricUnits(!metric);
+            apply(modal);
+            require(modal->result() != QDialog::Accepted, "unit changes must reject the curve property command");
+            modal->reject();
+        });
+        require_same_document(initial, window.document().snapshot(), "stale units must not publish classification");
+        window.setMetricUnits(metric);
+        editor_stage = "stale selection";
+        invoke_editor([&](QDialog* modal) {
+            modal->findChild<QLineEdit*>("curvedWallClassification")->setText("stale selection class");
+            require(window.selectEntity(opening_id), "selection guard fixture must select the hosted opening");
+            apply(modal);
+            require(modal->result() != QDialog::Accepted, "selection changes must reject curve property Apply");
+            modal->reject();
+        });
+        require_same_document(initial, window.document().snapshot(), "stale selection must not publish classification");
+        editor_stage = "classification only";
+        invoke_editor([&](QDialog* modal) {
+            modal->findChild<QLineEdit*>("curvedWallClassification")->setText("  exterior  ");
+            apply(modal);
+            require(modal->result() == QDialog::Accepted, "classification-only edit must accept");
+        });
+        const auto classified = window.document().snapshot();
+        require(classified.revision() == initial.revision() + 1 &&
+                    classified.entities().at(created.id).properties.at("classification") == "exterior",
+                "actual curved-wall modal must commit changed classification in exactly one command");
+        auto expected_wall = initial.entities().at(created.id);
+        expected_wall.properties["classification"] = "exterior";
+        require(classified.entities().at(created.id) == expected_wall,
+                "classification alone must preserve EXACT baseline, original D tangent receipts and every extension");
+        for (const auto& [id, entity] : initial.entities())
+            if (id != created.id) require(classified.entities().at(id) == entity,
+                "classification must preserve hosted openings and all other entities");
+        require(window.undoCommand() && window.document().snapshot().entities() == initial.entities() &&
+                    window.redoCommand() && window.document().snapshot().entities() == classified.entities(),
+                "classification-only curve change must undo and redo atomically");
+        QTemporaryDir directory;
+        require(directory.isValid(), "curve property persistence needs a temporary project");
+        const auto path = directory.filePath("curve-properties.bldproj");
+        require(window.saveProjectAs(path) && window.openProject(path) &&
+                    window.document().snapshot().entities() == classified.entities(),
+                "classification-only curve change and original tangent provenance must survive reopening");
+        require(window.selectEntity(wall_id), "reopened curve must remain editable");
+        const auto before_combined = window.document().snapshot();
+        editor_stage = "combined sweep and classification";
+        invoke_editor([&](QDialog* modal) {
+            modal->findChild<QLineEdit*>("curvedWallClassification")->setText("load bearing");
+            modal->findChild<QLineEdit*>("curvedWallSweep")->setText("45 deg");
+            apply(modal);
+            require(modal->result() == QDialog::Accepted, "combined classification and sweep edit must accept");
+        });
+        const auto combined = window.document().snapshot();
+        const auto& changed = combined.entities().at(created.id);
+        require(combined.revision() == before_combined.revision() + 1 &&
+                    changed.properties.at("classification") == "load bearing" &&
+                    wall_baseline(changed).sweep_radians == sketch::parse_angle("45 deg").radians,
+                "combined curve and classification edit must persist both fields in one command");
+        require(same_point(wall_baseline(changed).start, wall_baseline(decorated).start) &&
+                    same_point(wall_baseline(changed).end, wall_baseline(decorated).end) &&
+                    changed.properties.at("original_drawing_input") == decorated.properties.at("original_drawing_input") &&
+                    changed.properties.at("original_drawing_input_context") == decorated.properties.at("original_drawing_input_context") &&
+                    changed.extensions.at("vendor_curve") == decorated.extensions.at("vendor_curve"),
+                "combined edit must retain untouched exact coordinates and historical tangent provenance");
+        for (const auto& [id, entity] : before_combined.entities())
+            if (id != created.id) require(combined.entities().at(id) == entity,
+                "combined edit must retain hosted openings, layers and unrelated entities");
+        require(window.undoCommand() && window.document().snapshot().entities() == before_combined.entities() &&
+                    window.redoCommand() && window.document().snapshot().entities() == combined.entities(),
+                "combined curve properties must undo and redo in one command");
+        require(window.saveProjectAs(path) && window.openProject(path) &&
+                    window.document().snapshot().entities() == combined.entities(),
+                "combined curve properties must survive reopening");
+        require(window.selectEntity(wall_id), "combined curve must remain selected for source guard fixture");
+        std::optional<DocumentSnapshot> intervening;
+        editor_stage = "stale document";
+        invoke_editor([&](QDialog* modal) {
+            modal->findChild<QLineEdit*>("curvedWallClassification")->setText("stale document class");
+            auto opening = window.document().snapshot().entities().at(opening_id.toStdString());
+            opening.extensions["vendor_change"] = true;
+            window.document().apply(sketch::ApplyEntityChanges{window.document().revision(),
+                {sketch::EntityChange::upsert(opening)}, {}, "curve property stale source fixture"});
+            intervening = window.document().snapshot();
+            apply(modal);
+            require(modal->result() != QDialog::Accepted, "changed document must reject curve property Apply");
+            modal->reject();
+        });
+        require(intervening.has_value(), "curve source guard must exercise an intervening document change");
+        require_same_document(*intervening, window.document().snapshot(), "stale property Apply must preserve intervening work");
     }
 }
 
@@ -2622,6 +2798,12 @@ int main(int argc, char** argv) {
     QApplication application(argc, argv);
     try {
         install_test_font();
+        if (application.arguments().contains(QStringLiteral("--wall-curve-properties-only"))) {
+            test_precision_curve_editor_preserves_unedited_geometry();
+            test_wall_curve_properties_classification();
+            std::cout << "Curved wall property workflows passed\n";
+            return 0;
+        }
         if (application.arguments().contains(QStringLiteral("--wall-placement-guard-only"))) {
             test_wall_precision_preserves_pending_text_placement();
             std::cout << "Wall precision placement guards passed\n";
@@ -2689,6 +2871,7 @@ int main(int argc, char** argv) {
         run_test("physical_wall_precision_methods_and_persistence", test_physical_wall_precision_methods_and_persistence);
         run_test("physical_wall_precision_anchor_relative_and_modal_guards", test_physical_wall_precision_anchor_relative_and_modal_guards);
         run_test("precision_curve_editor_preserves_unedited_geometry", test_precision_curve_editor_preserves_unedited_geometry);
+        run_test("wall_curve_properties_classification", test_wall_curve_properties_classification);
         run_test("wall_precision_preserves_pending_text_placement", test_wall_precision_preserves_pending_text_placement);
         run_test("inline_measurement_held_enter_does_not_finish", test_inline_measurement_held_enter_does_not_finish);
         run_test("inline_wall_validation_units_enter_and_keypad", test_inline_wall_validation_units_enter_and_keypad);

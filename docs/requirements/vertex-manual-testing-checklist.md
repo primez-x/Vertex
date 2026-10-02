@@ -1,6 +1,6 @@
 # Vertex user testing checklist
 
-317 practical tasks, grouped by how you use the app. This replaces the earlier engineering-oriented checklist. The old 130-item list is preserved separately as engineering-requirements-checklist.md.
+319 practical tasks, grouped by how you use the app. This replaces the earlier engineering-oriented checklist. The old 130-item list is preserved separately as engineering-requirements-checklist.md.
 
 This is a user acceptance list for the intended app, not a claim that every listed action is implemented or working in the current preview. If you cannot find a control, or a feature is absent, mark **Blocked / missing** and describe it. Specialized sections can be skipped if you do not use them or lack the device or sample files.
 
@@ -37,7 +37,7 @@ Start with the workspace, draw a room, close it with the mouse, drag-select it, 
 - Complete a real job (5 tasks)
 - Appraisal square-foot workflow (13 tasks)
 - Custom area details (1 task)
-- Exact keyboard drawing (6 tasks)
+- Exact keyboard drawing (8 tasks)
 - Architectural joins and named views (3 tasks)
 
 ## Start a project and arrange the workspace
@@ -1836,6 +1836,18 @@ drawing; switching modes does not change existing geometry.
 - [ ] **U317 — Turn from the preceding wall and recover from cancelled input**
   - Steps: Draw a wall, press D and choose Relative turn. Enter a length and 90 deg. Repeat after a curved wall. Cancel a proposed next edge, then enter it again. Change Imperial/Metric while the form is open and try adding the pending edge. Finish the chain, undo and redo.
   - Expected: A relative turn uses the preceding wall's ending direction, including the ending tangent of a curve. Cancel retains the accepted walls and current endpoint. Changing units invalidates the pending form instead of reinterpreting it. Accepted walls remain independently undoable.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **U318 — Edit a curved wall's classification**
+  - Steps: In Imperial, create a curved wall with **Draw curved wall** and add a hosted opening, a name and another wall property. Select the wall and open **Edit curve…** in Properties. Change only Classification and Apply; compare the exact endpoints, sweep and arc length before and after. Reopen **Edit curve…**, change both the curve measure and Classification, and Apply once. Undo once, then Redo. Repeat the workflow in Metric.
+  - Expected: Changing only Classification in **Edit curve…** leaves the exact curve geometry unchanged. Changing the curve and Classification together is one undoable operation: one Undo restores both previous values, and Redo restores both new values. Hosted openings remain attached, and the wall name and other properties are retained in both unit systems.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **U319 — Undo and redo while continuing a wall chain**
+  - Steps: In Imperial, start a wall chain and add two edges. Press Ctrl+Z, then Ctrl+Y; press Ctrl+Z twice and confirm the original start point remains active. Add an edge, undo it, add a different one and press Ctrl+Y. Finish the chain. Start another chain and place only its start point, then click toolbar **Undo** before drawing a wall. Repeat in Metric.
+  - Expected: Ctrl+Z removes only the last accepted chain edge and resumes at the retained endpoint where that edge began; Ctrl+Y restores the edge and resumes at its restored end. Undoing all edges returns to the original anchor while keeping the chain active. Adding a different edge after Undo abandons the old redo branch. Toolbar Undo with only an unfinished start point cancels that draft without changing project geometry or history.
   - Result: Not tested
   - Notes: ______________________________
 

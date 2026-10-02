@@ -47,10 +47,15 @@
   field clears that entry and returns focus to the drawing without cancelling
   the outline or deleting walls. Use Ctrl+arrow, Home/End or the mouse to edit
   text without placing an edge.</p>
-  <p>Each accepted wall is one undoable operation. Measurement edges stay in the
-  unfinished outline until it closes. Define First still requires placing each
-  manual dimension before entering another edge. Navigation and grid spacing
-  never round typed lengths.</p>
+  <p>Each accepted wall is one undoable operation. While a wall chain is active,
+  <kbd>Ctrl</kbd>+<kbd>Z</kbd> removes its last edge and resumes at the retained
+  wall's end; <kbd>Ctrl</kbd>+<kbd>Y</kbd> restores that edge and its endpoint. Undoing
+  every edge returns to the original anchor. Adding a different edge after Undo
+  discards the old redo branch. If only the start anchor is present, toolbar
+  <strong>Undo</strong> cancels that unfinished chain without changing earlier
+  project history. Measurement edges stay in the unfinished outline until it
+  closes. Define First still requires placing each manual dimension before
+  entering another edge. Navigation and grid spacing never round typed lengths.</p>
   <p>For an angled or curved wall, press <kbd>D</kbd> on the canvas, or choose
   <strong>Precise input</strong> from the active wall chain's right-click menu.
   Before the first point, D accepts exact start coordinates. After that it
@@ -62,6 +67,11 @@
   creates a physical wall with the chosen thickness and height. Cancel leaves
   the chain unchanged. The same D form remains available for measured
   outlines and exact Define First dimension positions.</p>
+  <p>To edit a curved wall's classification, select it and choose
+  <strong>Edit curve…</strong>. Changing only Classification preserves the exact
+  endpoints, sweep and arc length. You can change the curve and Classification
+  together before applying; one Undo restores both. Hosted openings stay attached,
+  and the wall name and other properties remain in place.</p>
   <p>Wall endpoints authored together in the same floor, layer and design phase
   retain their connection. To change a wall length, use its dimensions and
   constraints editor and review connected movement before applying the edit.</p>

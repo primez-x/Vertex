@@ -172,6 +172,10 @@ void test_wall_connections_respect_layer_and_phase_contexts() {
 void test_interactive_wall_chain_closure_finishes_at_its_start() {
     MainWindow window;
     window.resize(1200, 800);
+    // The fixture's two-metre coordinates belong to the metric grid. In
+    // Imperial, the first click rounds elsewhere and returning to its raw
+    // coordinate is not clicking the actual authored endpoint.
+    window.setMetricUnits(true);
     window.show();
     window.setWorkspace(Workspace::measurement);
     QApplication::processEvents();
@@ -214,6 +218,127 @@ void test_interactive_wall_chain_closure_finishes_at_its_start() {
     click({5.0, 4.0});
     require(wall_ids(window.document().snapshot()).size() == 3,
             "a click after loop closure cannot begin an unintended fourth segment");
+}
+
+void test_active_wall_chain_history_tracks_authoritative_endpoint(bool metric, bool workspace_history) {
+    MainWindow window;
+    window.setAttribute(Qt::WA_DontShowOnScreen);
+    window.resize(1200, 800);
+    window.setMetricUnits(metric);
+    window.show();
+    QApplication::processEvents();
+    auto* canvas = dynamic_cast<PlanCanvas*>(window.findChild<QWidget*>("measurementPlanCanvas"));
+    auto* create_wall = window.findChild<QAction*>("createWall");
+    auto* snap = window.findChild<QToolButton*>("snapTool");
+    require(canvas && create_wall && snap, "active history fixture exposes wall authoring");
+    snap->setChecked(false);
+    create_wall->trigger();
+    const auto undo = [&] {
+        QKeyEvent event(QEvent::KeyPress, Qt::Key_Z, Qt::ControlModifier);
+        return QApplication::sendEvent(canvas,&event);
+    };
+    const auto redo = [&] {
+        QKeyEvent event(QEvent::KeyPress, Qt::Key_Y, Qt::ControlModifier);
+        return QApplication::sendEvent(canvas,&event);
+    };
+    const auto click = [&](Vec2 point) {
+        const auto center = QRectF(canvas->rect()).center();
+        const auto view = canvas->viewCenter();
+        const QPointF screen{center.x()+(point.x-view.x)*canvas->viewScale(),
+                             center.y()-(point.y-view.y)*canvas->viewScale()};
+        QMouseEvent press(QEvent::MouseButtonPress, screen, canvas->mapToGlobal(screen.toPoint()),
+                          Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(canvas,&press);
+        QMouseEvent release(QEvent::MouseButtonRelease, screen, canvas->mapToGlobal(screen.toPoint()),
+                            Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+        QApplication::sendEvent(canvas,&release);
+    };
+    const auto close = [](Vec2 a, Vec2 b) { return std::hypot(a.x-b.x,a.y-b.y)<1e-8; };
+    if (workspace_history) {
+        require(window.beginBoundaryDrawing(BoundaryAuthoringMode::draw_first,"living"),
+                "history fixture first uses the recoverable measured-boundary workflow");
+        QKeyEvent cancel(QEvent::KeyPress,Qt::Key_Escape,Qt::NoModifier);
+        QApplication::sendEvent(canvas,&cancel);
+        create_wall->trigger();
+    }
+    const auto initial = window.document().snapshot();
+    click({0,0});
+    require(undo() && window.document().snapshot().entities()==initial.entities() &&
+                !canvas->wallPreview(),
+            "Undo on an uncommitted wall anchor must cancel drawing without undoing project setup");
+    create_wall->trigger();
+    click({0,0});
+    click({3,0});
+    const auto first = window.document().snapshot();
+    click({3,2});
+    const auto second = window.document().snapshot();
+    require(wall_ids(second).size()==2 && coincident_constraints(second).size()==1,
+            "two live chain edges commit with an exact persisted corner");
+    require(undo() && window.document().snapshot().entities()==first.entities(),
+            "active wall Undo removes its last edge and joint");
+    require(canvas->wallPreview() && close(canvas->wallPreview()->start,{3,0}),
+            "active wall Undo must return the drawing start to the retained wall endpoint");
+    require(redo() && window.document().snapshot().entities()==second.entities() &&
+                canvas->wallPreview() && close(canvas->wallPreview()->start,{3,2}),
+            "active wall Redo must resume from the restored wall endpoint");
+    require(undo() && undo() &&
+                window.document().snapshot().entities()==initial.entities() &&
+                canvas->wallPreview() && close(canvas->wallPreview()->start,{0,0}),
+            "undoing all live edges retains their original drawing anchor");
+    require(redo() && canvas->wallPreview() && close(canvas->wallPreview()->start,{3,0}),
+            "Redo after removing all chain edges restores the first continuation endpoint");
+    click({4,1});
+    const auto replacement = window.document().snapshot();
+    require(window.lastError().isEmpty() && wall_ids(replacement).size()==2 &&
+                coincident_constraints(replacement).size()==1 && !window.document().can_redo(),
+            "redrawing after Undo replaces the branch without stale endpoint ownership");
+    require(undo() && canvas->wallPreview() && close(canvas->wallPreview()->start,{3,0}) &&
+                redo() && canvas->wallPreview() && close(canvas->wallPreview()->start,{4,1}),
+            "replacement branch remains usable through further Undo and Redo");
+    QKeyEvent finish(QEvent::KeyPress,Qt::Key_Escape,Qt::NoModifier);
+    QApplication::sendEvent(canvas,&finish);
+    QTemporaryDir directory;
+    MainWindow reopened;
+    require(directory.isValid() && window.saveProjectAs(directory.filePath("chain-history.bldproj")) &&
+                reopened.openProject(directory.filePath("chain-history.bldproj")) &&
+                reopened.document().snapshot().entities()==replacement.entities(),
+            "continued chain and its connections survive save and reopen");
+}
+
+void test_uncommitted_wall_anchor_toolbar_undo_without_document_history() {
+    MainWindow window;
+    window.setAttribute(Qt::WA_DontShowOnScreen);
+    window.resize(1200,800);
+    window.show();
+    QApplication::processEvents();
+    std::vector<Entity> initial_entities;
+    const auto initial_snapshot = window.document().snapshot();
+    for (const auto& [id,entity] : initial_snapshot.entities()) initial_entities.push_back(entity);
+    window.document() = Document::create(std::move(initial_entities));
+    require(window.selectEntity({}) && !window.document().can_undo(),
+            "anchor toolbar fixture starts with a valid hierarchy and no document undo records");
+    QAction* undo_action = nullptr;
+    for (auto* action : window.findChildren<QAction*>())
+        if (action->text()==QStringLiteral("Undo")) { undo_action=action; break; }
+    auto* create_wall = window.findChild<QAction*>("createWall");
+    auto* canvas = dynamic_cast<PlanCanvas*>(window.findChild<QWidget*>("measurementPlanCanvas"));
+    require(undo_action && create_wall && canvas && !undo_action->isEnabled(),
+            "Undo is disabled before there is a document edit or a drawing anchor");
+    create_wall->trigger();
+    const auto before = window.document().snapshot();
+    const QPointF point=QRectF(canvas->rect()).center();
+    QMouseEvent press(QEvent::MouseButtonPress,point,canvas->mapToGlobal(point.toPoint()),
+                      Qt::LeftButton,Qt::LeftButton,Qt::NoModifier);
+    QMouseEvent release(QEvent::MouseButtonRelease,point,canvas->mapToGlobal(point.toPoint()),
+                        Qt::LeftButton,Qt::NoButton,Qt::NoModifier);
+    QApplication::sendEvent(canvas,&press);
+    QApplication::sendEvent(canvas,&release);
+    require(canvas->wallPreview() && undo_action->isEnabled(),
+            "toolbar Undo must become available for an uncommitted wall anchor without document history");
+    undo_action->trigger();
+    require(!canvas->wallPreview() && window.document().snapshot().entities()==before.entities() &&
+                window.document().revision()==before.revision() && !undo_action->isEnabled(),
+            "toolbar Undo cancels only the anchor and returns to its disabled no-history state");
 }
 
 void test_wall_and_boundary_tools_route_from_architectural_views() {
@@ -421,9 +546,23 @@ int main(int argc, char** argv) {
     const auto font_id = QFontDatabase::addApplicationFont(QStringLiteral(":/fonts/Inter.ttf"));
     if (font_id >= 0) QApplication::setFont(QFont(QFontDatabase::applicationFontFamilies(font_id).front(), 10));
     try {
+        if (application.arguments().contains(QStringLiteral("--active-chain-history-only"))) {
+            for (bool metric : {false, true}) for (bool workspace_history : {false,true})
+                test_active_wall_chain_history_tracks_authoritative_endpoint(metric,workspace_history);
+            std::cout << "Active wall chain history workflow passed\n";
+            return 0;
+        }
+        if (application.arguments().contains(QStringLiteral("--wall-anchor-toolbar-only"))) {
+            test_uncommitted_wall_anchor_toolbar_undo_without_document_history();
+            std::cout << "Wall anchor toolbar workflow passed\n";
+            return 0;
+        }
         test_public_wall_creation_persists_one_atomic_connection();
         test_wall_connections_respect_layer_and_phase_contexts();
         test_interactive_wall_chain_closure_finishes_at_its_start();
+        for (bool metric : {false, true}) for (bool workspace_history : {false,true})
+            test_active_wall_chain_history_tracks_authoritative_endpoint(metric,workspace_history);
+        test_uncommitted_wall_anchor_toolbar_undo_without_document_history();
         test_wall_and_boundary_tools_route_from_architectural_views();
         test_escape_keeps_committed_wall_segments();
         test_sloped_wall_endpoint_snapping_respects_snap_toggle();

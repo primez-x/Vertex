@@ -1146,7 +1146,7 @@
         "scripts/generate_workflow_acceptance_evidence.py",
         "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "Analytical chord, arc-length, arc-height, and angle construction is implemented with retained receipts and area/perimeter tests. Windows now exposes a bounded curved-wall authoring/editing dialog and API for all three defining measures, stores the original input beside the derived analytical sweep, and validates hosted openings through the wall kernel. Full curved-wall edit/render/save-reopen parity fixtures, joins, and production qualification remain open. Deterministic Debug/Release workflow evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
+      "implementation_note": "Analytical chord, arc-length, arc-height, and angle construction is implemented with retained receipts and area/perimeter tests. Windows now exposes a bounded curved-wall authoring/editing dialog and API for all three defining measures, stores the original input beside the derived analytical sweep, and validates hosted openings through the wall kernel. The October 2 wall-edit checkpoint verifies actual modal classification-only and combined curve edits, exact retained geometry and metadata, hosted openings, stale guards, undo/redo and persistence in both unit systems; see docs/verification/wall-edit-history-2026-10-02.md. Full curved-wall edit/render/save-reopen parity fixtures, joins, and production qualification remain open. Deterministic Debug/Release workflow evidence is hash-bound to the named sources and fixtures; this scoped checkpoint does not recertify those historical artifacts."
     },
     {
       "id": "APX-EDIT-001",
@@ -1277,7 +1277,7 @@
         "scripts/generate_workflow_acceptance_evidence.py",
         "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "Document history records accepted classification, calibration, geometry, annotation, architectural, and compound edits as reversible revisions; desktop and storage fixtures exercise undo/redo and save/reopen boundaries. A complete mixed-command byte-equivalence fixture across every supported operation, crash-recovery replay, and production qualification remain open. Current Debug/Release acceptance evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
+      "implementation_note": "Document history records accepted classification, calibration, geometry, annotation, architectural, and compound edits as reversible revisions; desktop and storage fixtures exercise undo/redo and save/reopen boundaries. The October 2 wall-edit checkpoint verifies keyboard history during an active physical wall chain in both unit systems and both document/workspace history paths, curved tangent continuation, branch replacement, save/reopen, and anchor-only toolbar cancellation without document history; see docs/verification/wall-edit-history-2026-10-02.md. A complete mixed-command byte-equivalence fixture across every supported operation, crash-recovery replay, and production qualification remain open. Current historical Debug/Release acceptance evidence remains hash-bound to its named sources and fixtures; this scoped checkpoint does not certify full parity."
     },
     {
       "id": "APX-AREA-001",
