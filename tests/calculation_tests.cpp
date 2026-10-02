@@ -135,6 +135,117 @@ void appraisal_tests() {
     check(empty.property.by_category.size() == 16 && empty.property.gla().total.display.text == "0.00",
           "Empty reports expose all zero-valued categories");
 }
+
+void ansi_policy_tests() {
+    using namespace sketch;
+    const AppraisalPolicy policy{AppraisalPolicyKind::ansi_z765_2021, 1};
+    AppraisalFacts facts{PropertyKind::detached_single_family, MeasurementBasis::exterior,
+        GradeStatus::above, FinishStatus::finished, AccessStatus::direct_interior,
+        CeilingEligibility::unknown, AreaUse::dwelling, BoundaryRole::measured_area};
+    AnsiAppraisalFacts ansi;
+    ansi.measurement = {true, true, AcquisitionIncrement::inch, ""};
+    ansi.any_part_below_grade = false;
+    ansi.year_round_suitable = true;
+    ansi.finish_matches_dwelling = true;
+    ansi.dwelling_identity = DwellingIdentity::primary;
+    ansi.ceiling.kind = CeilingKind::flat;
+    ansi.ceiling.minimum_height_m = 2.1336;
+    facts.ansi = ansi;
+    auto area = room("room", rectangle(0, 0, 10, 10));
+    const auto qualified = [&](const AppraisalFacts& f) { return qualify_appraisal_area(area, f, policy); };
+    check(qualified(facts).qualified && qualified(facts).derived_category == AppraisalAreaCategory::above_grade_finished,
+        "Exactly seven feet qualifies without legacy ceiling approval");
+    facts.ansi->ceiling.minimum_height_m = std::nextafter(2.1336, 0.0);
+    auto result = qualified(facts);
+    check(result.qualified && result.derived_category == AppraisalAreaCategory::above_grade_nonstandard_finished && !result.rule_notes.empty(),
+        "Below seven feet is nonstandard with a reason");
+    facts.ansi->ceiling.minimum_height_m = 2.1336;
+    facts.access = AccessStatus::through_unfinished;
+    check(qualified(facts).derived_category == AppraisalAreaCategory::above_grade_nonstandard_finished,
+        "Through unfinished access is nonstandard");
+    check(!derive_appraisal_category(facts).qualified, "ANSI access token cannot qualify under legacy rules");
+    facts.access = AccessStatus::direct_interior;
+    facts.ansi->any_part_below_grade = true;
+    check(!qualified(facts).qualified, "Contradictory grade requires correction");
+    facts.grade = GradeStatus::unknown;
+    check(qualified(facts).derived_category == AppraisalAreaCategory::below_grade_finished,
+        "Any below-grade portion derives the whole floor below");
+    facts.ansi->any_part_below_grade = false;
+    for (const auto identity : {DwellingIdentity::attached_adu, DwellingIdentity::detached_adu}) {
+        facts.ansi->dwelling_identity = identity;
+        check(qualified(facts).derived_category == AppraisalAreaCategory::adu_above_grade_finished,
+            "Every ADU is separately measured regardless of interior access");
+        facts.finish = FinishStatus::unfinished;
+        check(qualified(facts).derived_category == AppraisalAreaCategory::adu_above_grade_unfinished,
+            "Unfinished ADU remains separate");
+        facts.finish = FinishStatus::finished;
+    }
+    facts.ansi->dwelling_identity = DwellingIdentity::detached_other;
+    check(qualified(facts).derived_category == AppraisalAreaCategory::detached_other_above_grade_finished,
+        "Detached other structure is excluded from primary GLA");
+    facts.ansi->dwelling_identity = DwellingIdentity::primary;
+    facts.ansi->year_round_suitable = false;
+    check(qualified(facts).derived_category == AppraisalAreaCategory::above_grade_unfinished,
+        "Year-round unsuitability cannot inflate finished area");
+    facts.ansi->year_round_suitable = true;
+    facts.measurement_basis = MeasurementBasis::plans;
+    check(!qualified(facts).qualified, "Plans require a limitations statement");
+    facts.ansi->measurement.limitations_statement = "Measurements supplied from building plans; interior not inspected.";
+    check(qualified(facts).qualified, "Plans can carry limitations without guessed measurements");
+    facts.measurement_basis = MeasurementBasis::exterior;
+    for (const auto kind : {PropertyKind::apartment_unit, PropertyKind::multifamily, PropertyKind::light_commercial}) {
+        facts.property_kind = kind;
+        check(!qualified(facts).qualified, "ANSI unsupported property designs are rejected");
+    }
+    facts.property_kind = PropertyKind::manufactured_home;
+    check(qualified(facts).qualified, "Manufactured single-family designs are supported");
+    facts.ansi->ceiling = {};
+    facts.ansi->ceiling.kind = CeilingKind::stairs;
+    facts.ansi->ceiling.stair_from_floor_id = area.floor_id;
+    check(!qualified(facts).qualified, "A room cannot select a stair height waiver");
+    facts.role = BoundaryRole::stair_footprint;
+    check(qualified(facts).derived_category == AppraisalAreaCategory::above_grade_finished,
+        "Stair footprint contributes on descending source floor");
+    facts.ansi->ceiling.stair_from_floor_id = "other-floor";
+    check(!qualified(facts).qualified, "Stair source floor must match contribution floor");
+    facts.role = BoundaryRole::measured_area;
+    facts.ansi->ceiling = {};
+    facts.ansi->ceiling.kind = CeilingKind::sloped;
+    facts.ansi->ceiling.room_boundary_id = area.id;
+    facts.ansi->ceiling.source_geometry_sha256 = "document-layer-verifies-binding";
+    facts.ansi->ceiling.room_floor_area_m2 = 100;
+    facts.ansi->ceiling.at_least_7ft_area_m2 = 49.9;
+    check(qualified(facts).derived_category == AppraisalAreaCategory::above_grade_nonstandard_finished,
+        "49.9 percent sloped room is nonstandard under provisional whole-room denominator");
+    facts.ansi->ceiling.at_least_7ft_area_m2 = 50;
+    check(qualified(facts).derived_category == AppraisalAreaCategory::above_grade_finished && !qualified(facts).rule_notes.empty(),
+        "50 percent sloped room reaches rule threshold and retains interpretation caveat");
+    facts.ansi->ceiling.below_5ft_deduction_ids = {"low"};
+    check(!qualified(facts).qualified, "Scalar ceiling evidence cannot substitute for under-five-foot geometry");
+    area.deductions = {{"low", rectangle(0, 0, 4, 10)}};
+    near(*qualified(facts).physical_square_metres, 60, 1e-7, "Under-five-foot geometry actually subtracts from physical area");
+    facts.ansi->ceiling.at_least_7ft_area_m2 = 61;
+    check(!qualified(facts).qualified, "Seven-foot evidence cannot exceed actual eligible surface");
+    area.deductions.push_back({"aaa-other", rectangle(0, 0, 4, 10)});
+    check(!qualified(facts).qualified, "Low-mask overlap with an earlier deduction cannot enlarge support");
+    area.deductions.back().id = "zzz-other";
+    check(!qualified(facts).qualified, "Renaming an overlapping deduction cannot change ceiling evidence validity");
+    facts.ansi->ceiling.at_least_7ft_area_m2 = 50;
+    facts.ansi->ceiling.room_floor_area_m2 = 99;
+    check(!qualified(facts).qualified, "Room evidence must match current complete-room geometry");
+    const auto profile = ansi_appraisal_profile();
+    check(profile.decimal_places == 0 && profile.display_unit == AreaUnit::square_foot &&
+        builtin_appraisal_profile().decimal_places == 2 &&
+        !builtin_appraisal_profile().classifications.contains("adu_above_grade_finished"),
+        "Opt-in canonical reporting leaves the builtin legacy profile unchanged");
+    auto first = room("first", rectangle(0, 0, 1, 0.151 * 0.09290304));
+    first.classification = "above_grade_finished";
+    auto second = first;
+    second.id = "second";
+    second.boundary = rectangle(2, 0, 1, 0.451 * 0.09290304);
+    const auto totals = calculate_appraisal_areas({first, second}, profile);
+    check(totals.property.gla().total.display.text == "1", "ANSI totals round once after summing unrounded physical areas");
+}
 void declared_policy_tests() {
     using namespace sketch;
     using C = AppraisalAreaCategory;
@@ -335,6 +446,7 @@ int main() {
     try {
         using namespace sketch;
         appraisal_tests();
+        ansi_policy_tests();
         declared_policy_tests();
         CalculationProfile profile{"custom-metric",
                                    1,

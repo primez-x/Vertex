@@ -1445,23 +1445,48 @@ CanvasLabel place_plan_area_label(CanvasLabel label,const Boundary& boundary,
 
 QString format_length(double metres, bool metric);
 
+bool ansi_boundary_dimensions(const DocumentSnapshot& snapshot, const Entity& boundary) {
+    auto property_id = read_string(boundary.properties, "property_id");
+    auto building_id = read_string(boundary.properties, "building_id");
+    if (const auto floor_id = read_string(boundary.properties, "floor_id")) {
+        const auto floor = snapshot.entities().find(*floor_id);
+        if (floor != snapshot.entities().end()) building_id = read_string(floor->second.properties, "building_id");
+    }
+    if (building_id) {
+        const auto building = snapshot.entities().find(*building_id);
+        if (building != snapshot.entities().end()) property_id = read_string(building->second.properties, "property_id");
+    }
+    if (!property_id) return false;
+    const auto property = snapshot.entities().find(*property_id);
+    if (property == snapshot.entities().end()) return false;
+    const auto policy = property->second.properties.find("appraisal_policy");
+    return property->second.properties.value("calculation_workflow", json()) == "appraisal" &&
+        policy != property->second.properties.end() && policy->is_object() && policy->value("policy_kind", json()) == "ansi_z765_2021";
+}
+
 struct DimensionCanvasProjection {
     CanvasLabel label;
     std::optional<CanvasEntity> line;
 };
 
 DimensionCanvasProjection project_boundary_dimension(const BoundaryDimension& dimension,
-    const Entity& boundary, bool metric, bool selected) {
+    const Entity& boundary, bool metric, bool selected, bool ansi = false) {
     const auto resolved=dimension.resolve(boundary);
     QString text;
     std::optional<Boundary> overlay;
     if (resolved.kind==BoundaryDimensionKind::segment_length) {
-        text=format_length(resolved.segment_length_metres,metric);
+        text=ansi ? QStringLiteral("%1 ft").arg(QString::number(std::round(resolved.segment_length_metres / 0.3048 * 10) / 10, 'f', 1))
+                  : format_length(resolved.segment_length_metres,metric);
+        if (ansi && metric) text += QStringLiteral(" (%1 m)").arg(QString::number(resolved.segment_length_metres, 'f', 3));
         overlay=dimension_overlay(resolved.segment,dimension.text_position);
     } else if (resolved.kind==BoundaryDimensionKind::angle) {
         text=format_dimension_angle(resolved.angle_radians);
         overlay=angle_dimension_overlay(decode_identified_boundary_entity(boundary),dimension);
-    } else text=format_dimension_area(resolved.area_square_metres,metric);
+    } else {
+        text=ansi ? QStringLiteral("%1 sq ft").arg(QString::number(std::round(resolved.area_square_metres / 0.09290304), 'f', 0))
+                  : format_dimension_area(resolved.area_square_metres,metric);
+        if (ansi && metric) text += QStringLiteral(" (%1 m²)").arg(QString::number(resolved.area_square_metres, 'f', 2));
+    }
     DimensionCanvasProjection result{{id_from(dimension.id),dimension.text_position,std::move(text),selected},{}};
     result.label.selection_type = QStringLiteral("dimension");
     if (dimension.presentation) {
@@ -1899,6 +1924,66 @@ void appraisal_keys(const json& value, std::initializer_list<std::string_view> k
     }
 }
 
+QComboBox* appraisal_observation(QFormLayout& form, QWidget* parent, const char* name,
+                                const QString& title, const json& evidence, const char* key) {
+    auto* box = new QComboBox(parent); box->setObjectName(QString::fromLatin1(name));
+    box->addItem(QStringLiteral("Undeclared"), QString{});
+    box->addItem(QStringLiteral("Yes"), QStringLiteral("yes"));
+    box->addItem(QStringLiteral("No"), QStringLiteral("no"));
+    if (evidence.is_object() && evidence.contains(key) && evidence.at(key).is_boolean())
+        box->setCurrentIndex(evidence.at(key).get<bool>() ? 1 : 2);
+    form.addRow(title, box); return box;
+}
+
+void save_appraisal_observation(json& target, const char* key, QComboBox* box) {
+    const auto value = box->currentData().toString();
+    target.erase(key);
+    if (!value.isEmpty()) target[key] = value == QStringLiteral("yes");
+}
+
+struct AnsiMeasurementControls {
+    QGroupBox* group{}; QComboBox* inspected{}; QComboBox* direct{};
+    QComboBox* increment{}; QLineEdit* limitations{};
+    void save(json& policy) const {
+        auto evidence = policy.value("ansi", json::object());
+        save_appraisal_observation(evidence, "interior_inspected", inspected);
+        save_appraisal_observation(evidence, "direct_measurement", direct);
+        evidence.erase("acquisition_increment");
+        if (!increment->currentData().toString().isEmpty())
+            evidence["acquisition_increment"] = increment->currentData().toString().toStdString();
+        evidence["limitations_statement"] = limitations->text().trimmed().toStdString();
+        policy["ansi"] = std::move(evidence);
+    }
+};
+
+AnsiMeasurementControls ansi_measurement_controls(QWidget* parent, QVBoxLayout& layout, const json& policy) {
+    AnsiMeasurementControls controls;
+    controls.group = new QGroupBox(QStringLiteral("ANSI measurement evidence"), parent);
+    controls.group->setObjectName(QStringLiteral("ansiMeasurementEvidence"));
+    auto* form = new QFormLayout(controls.group);
+    const auto evidence = policy.value("ansi", json::object());
+    controls.inspected = appraisal_observation(*form, controls.group, "ansiInteriorInspected", QStringLiteral("Interior inspected"), evidence, "interior_inspected");
+    controls.direct = appraisal_observation(*form, controls.group, "ansiDirectMeasurement", QStringLiteral("Direct measurement"), evidence, "direct_measurement");
+    controls.increment = new QComboBox(controls.group); controls.increment->setObjectName(QStringLiteral("ansiAcquisitionIncrement"));
+    controls.increment->addItem(QStringLiteral("Undeclared"), QString{});
+    controls.increment->addItem(QStringLiteral("Nearest inch"), QStringLiteral("inch"));
+    controls.increment->addItem(QStringLiteral("Nearest tenth foot"), QStringLiteral("tenth_foot"));
+    if (evidence.is_object() && evidence.contains("acquisition_increment") && evidence.at("acquisition_increment").is_string())
+        controls.increment->setCurrentIndex(std::max(0, controls.increment->findData(QString::fromStdString(evidence.at("acquisition_increment").get<std::string>()))));
+    form->addRow(QStringLiteral("Measurement increment"), controls.increment);
+    controls.limitations = new QLineEdit(controls.group); controls.limitations->setObjectName(QStringLiteral("ansiLimitationsStatement"));
+    if (evidence.is_object() && evidence.contains("limitations_statement") && evidence.at("limitations_statement").is_string())
+        controls.limitations->setText(QString::fromStdString(evidence.at("limitations_statement").get<std::string>()));
+    controls.limitations->setPlaceholderText(QStringLiteral("Describe inspection or measurement limitations"));
+    form->addRow(QStringLiteral("Limitations"), controls.limitations); layout.addWidget(controls.group);
+    return controls;
+}
+
+bool ansi_property_kind_supported(const QString& value) {
+    return value == QStringLiteral("detached_single_family") || value == QStringLiteral("attached_single_family") ||
+           value == QStringLiteral("manufactured_home");
+}
+
 DeclaredAppraisal read_appraisal_declarations(const json& property, const json& floor,
                                              const json& boundary) {
     DeclaredAppraisal result;
@@ -1913,7 +1998,7 @@ DeclaredAppraisal read_appraisal_declarations(const json& property, const json& 
         target = *parsed;
     };
     const auto policy = property.value("appraisal_policy", json::object());
-    appraisal_keys(policy, {"policy_kind", "version", "property_kind", "measurement_basis"});
+    appraisal_keys(policy, {"policy_kind", "version", "property_kind", "measurement_basis", "ansi"});
     if (!policy.contains("version")) result.missing.push_back(QStringLiteral("Declare policy version."));
     else if (!policy.at("version").is_number_integer() || policy.at("version") != 1)
         throw std::invalid_argument("Unsupported appraisal policy version");
@@ -1921,16 +2006,95 @@ DeclaredAppraisal read_appraisal_declarations(const json& property, const json& 
     token(policy, "property_kind", parse_property_kind, result.facts.property_kind);
     token(policy, "measurement_basis", parse_measurement_basis, result.facts.measurement_basis);
     const auto level = floor.value("appraisal_facts", json::object());
-    appraisal_keys(level, {"grade"});
+    appraisal_keys(level, {"grade", "ansi"});
     token(level, "grade", parse_grade_status, result.facts.grade);
     const auto area = boundary.value("appraisal_facts", json::object());
-    appraisal_keys(area, {"finish", "access", "ceiling_eligibility", "area_use", "boundary_role"});
+    appraisal_keys(area, {"finish", "access", "ceiling_eligibility", "area_use", "boundary_role", "ansi"});
     token(area, "finish", parse_finish_status, result.facts.finish);
     token(area, "access", parse_access_status, result.facts.access);
     token(area, "ceiling_eligibility", parse_ceiling_eligibility, result.facts.ceiling);
     token(area, "area_use", parse_area_use, result.facts.use);
     token(area, "boundary_role", parse_boundary_role, result.facts.role);
+    if (policy.contains("ansi") || level.contains("ansi") || area.contains("ansi") ||
+        result.policy.kind == AppraisalPolicyKind::ansi_z765_2021) {
+        AnsiAppraisalFacts evidence;
+        const auto object = [](const json& owner, const char* key) {
+            const auto value = owner.value(key, json::object());
+            if (!value.is_object()) throw std::invalid_argument(std::string(key) + " must be an object");
+            return value;
+        };
+        const auto boolean = [](const json& value, const char* key, std::optional<bool>& out) {
+            if (!value.contains(key)) return;
+            if (!value.at(key).is_boolean()) throw std::invalid_argument(std::string(key) + " must be boolean");
+            out = value.at(key).get<bool>();
+        };
+        const auto optional_token = [](const json& value, const char* key, auto parser, auto& out) {
+            if (!value.contains(key)) return;
+            if (!value.at(key).is_string()) throw std::invalid_argument(std::string(key) + " must be a string");
+            out = parser(value.at(key).get<std::string>());
+            if (!out) throw std::invalid_argument(std::string("Unknown appraisal ") + key);
+        };
+        const auto text = [](const json& value, const char* key) {
+            if (!value.contains(key)) return std::string{};
+            if (!value.at(key).is_string()) throw std::invalid_argument(std::string(key) + " must be a string");
+            return value.at(key).get<std::string>();
+        };
+        const auto measurement = object(policy, "ansi");
+        appraisal_keys(measurement, {"interior_inspected", "direct_measurement", "acquisition_increment", "limitations_statement"});
+        boolean(measurement, "interior_inspected", evidence.measurement.interior_inspected);
+        boolean(measurement, "direct_measurement", evidence.measurement.direct_measurement);
+        optional_token(measurement, "acquisition_increment", parse_acquisition_increment, evidence.measurement.acquisition_increment);
+        evidence.measurement.limitations_statement = text(measurement, "limitations_statement");
+        const auto floor_evidence = object(level, "ansi");
+        appraisal_keys(floor_evidence, {"any_part_below_grade"});
+        boolean(floor_evidence, "any_part_below_grade", evidence.any_part_below_grade);
+        const auto area_evidence = object(area, "ansi");
+        appraisal_keys(area_evidence, {"year_round_suitable", "finish_matches_dwelling", "dwelling_identity", "ceiling"});
+        boolean(area_evidence, "year_round_suitable", evidence.year_round_suitable);
+        boolean(area_evidence, "finish_matches_dwelling", evidence.finish_matches_dwelling);
+        optional_token(area_evidence, "dwelling_identity", parse_dwelling_identity, evidence.dwelling_identity);
+        const auto ceiling = object(area_evidence, "ceiling");
+        appraisal_keys(ceiling, {"kind", "minimum_height_m", "at_least_7ft_area_m2", "room_floor_area_m2", "below_5ft_deduction_ids", "stair_from_floor_id", "room_boundary_id", "source_geometry_sha256"});
+        optional_token(ceiling, "kind", parse_ceiling_kind, evidence.ceiling.kind);
+        const auto number = [&](const char* key, std::optional<double>& out) {
+            if (!ceiling.contains(key)) return;
+            if (!ceiling.at(key).is_number()) throw std::invalid_argument(std::string(key) + " must be numeric");
+            const auto value = ceiling.at(key).get<double>();
+            if (!std::isfinite(value) || value < 0) throw std::invalid_argument(std::string(key) + " must be finite and nonnegative");
+            out = value;
+        };
+        number("minimum_height_m", evidence.ceiling.minimum_height_m);
+        number("at_least_7ft_area_m2", evidence.ceiling.at_least_7ft_area_m2);
+        number("room_floor_area_m2", evidence.ceiling.room_floor_area_m2);
+        evidence.ceiling.stair_from_floor_id = text(ceiling, "stair_from_floor_id");
+        evidence.ceiling.room_boundary_id = text(ceiling, "room_boundary_id");
+        evidence.ceiling.source_geometry_sha256 = text(ceiling, "source_geometry_sha256");
+        if (ceiling.contains("below_5ft_deduction_ids")) {
+            if (!ceiling.at("below_5ft_deduction_ids").is_array()) throw std::invalid_argument("below_5ft_deduction_ids must be an array");
+            std::set<std::string> ids;
+            for (const auto& id : ceiling.at("below_5ft_deduction_ids")) {
+                if (!id.is_string() || id.get<std::string>().empty() || !ids.insert(id.get<std::string>()).second)
+                    throw std::invalid_argument("Choose each low-height boundary once");
+                evidence.ceiling.below_5ft_deduction_ids.push_back(id.get<std::string>());
+            }
+        }
+        if (evidence.ceiling.kind) {
+            const auto kind = *evidence.ceiling.kind;
+            if ((kind != CeilingKind::flat && ceiling.contains("minimum_height_m")) ||
+                (kind != CeilingKind::stairs && ceiling.contains("stair_from_floor_id")) ||
+                (kind != CeilingKind::sloped && (ceiling.contains("at_least_7ft_area_m2") || ceiling.contains("room_floor_area_m2") ||
+                 ceiling.contains("below_5ft_deduction_ids") || ceiling.contains("room_boundary_id") || ceiling.contains("source_geometry_sha256"))))
+                throw std::invalid_argument("Ceiling evidence does not match its declared kind");
+        }
+        result.facts.ansi = std::move(evidence);
+    }
+    if (result.policy.kind == AppraisalPolicyKind::ansi_z765_2021) {
+        result.missing.removeAll(QStringLiteral("Declare grade."));
+        result.missing.removeAll(QStringLiteral("Declare ceiling_eligibility."));
+    }
     if (area.contains("boundary_role") && result.facts.role != BoundaryRole::measured_area) {
+        if (result.policy.kind == AppraisalPolicyKind::ansi_z765_2021 && result.facts.role == BoundaryRole::stair_footprint)
+            return result;
         for (const auto* key : {"grade", "finish", "access", "ceiling_eligibility", "area_use"})
             result.missing.removeAll(QStringLiteral("Declare %1.").arg(QString::fromLatin1(key)));
     }
@@ -2214,7 +2378,11 @@ std::string appraisal_category_label(AppraisalAreaCategory category) {
     case AppraisalAreaCategory::commercial_common: return "Commercial common";
     case AppraisalAreaCategory::commercial_service: return "Commercial service";
     }
-    throw std::invalid_argument("Unknown appraisal category");
+    auto label = QString::fromUtf8(appraisal_category_name(category).data());
+    label.replace(QLatin1Char('_'), QLatin1Char(' '));
+    if (label.startsWith(QStringLiteral("adu "))) label.replace(0, 3, QStringLiteral("ADU"));
+    else if (!label.isEmpty()) label[0] = label[0].toUpper();
+    return label.toStdString();
 }
 
 double appraisal_total_square_metres(const AppraisalTotals& totals) {
@@ -6291,6 +6459,10 @@ public:
             QWidget#appraisalDetailsContent, QWidget#appraisalDetailsViewport,
             QScrollArea#appraisalDetailsScroll { background: $surface; }
             QWidget#appraisalDetailsPanel QLabel { color: $foreground; }
+            QDialog#appraisalFactsDialog QLabel, QDialog#appraisalSetupDialog QLabel,
+            QDialog#appraisalFactsDialog QCheckBox, QDialog#appraisalSetupDialog QCheckBox {
+                color: $foreground; background: transparent; }
+            QWidget#appraisalFactsContent, QWidget#appraisalFactsViewport { background: $background; }
             QLabel#appraisalDetailsGla { font-size: 26px; font-weight: 700; }
             QWidget#appraisalDetailsPanel QPushButton { padding: 5px 8px; }
 
@@ -7650,7 +7822,8 @@ public:
                         const auto decoded=decode_boundary_dimension_entity(entity);
                         if (!decoded.supported()) throw std::invalid_argument(decoded.unsupported_reason);
                         auto projection=project_boundary_dimension(*decoded.dimension,
-                            snapshot.entities().at(decoded.dimension->boundary_id),m_metric_units,selected);
+                            snapshot.entities().at(decoded.dimension->boundary_id),m_metric_units,selected,
+                            ansi_boundary_dimensions(snapshot, snapshot.entities().at(decoded.dimension->boundary_id)));
                         if (projection.line) {
                             if (!selected) projection.line->type=QStringLiteral("source");
                             geometry.push_back(std::move(*projection.line));
@@ -15001,7 +15174,8 @@ public:
                     const auto& dimension=*decoded.dimension;
                     if (candidate.at(dimension.boundary_id)==source.entities().at(dimension.boundary_id)) continue;
                     const auto projection=project_boundary_dimension(dimension,
-                        candidate.at(dimension.boundary_id),metric_units,item.selected);
+                        candidate.at(dimension.boundary_id),metric_units,item.selected,
+                        ansi_boundary_dimensions(source, candidate.at(dimension.boundary_id)));
                     if (!projection.line) continue;
                     proposed.segments=projection.line->segments;
                     proposed.holes.clear();
@@ -15171,7 +15345,8 @@ public:
                     const auto& dimension=*decoded.dimension;
                     if (candidate.at(dimension.boundary_id)==source.entities().at(dimension.boundary_id)) continue;
                     auto projected=project_boundary_dimension(dimension,
-                        candidate.at(dimension.boundary_id),metric_units,label.selected).label;
+                        candidate.at(dimension.boundary_id),metric_units,label.selected,
+                        ansi_boundary_dimensions(source, candidate.at(dimension.boundary_id))).label;
                     // Keep visibility and view-specific typography from the retained scene.
                     auto proposed=label;
                     proposed.position=view_context
@@ -18617,6 +18792,8 @@ public:
             const bool declared_appraisal = workflow == "appraisal" &&
                 property->properties.contains("appraisal_policy");
             const auto parent_scope = area_scope_name(entity->properties);
+            const bool nested_appraisal = declared_appraisal && parent_scope == "building" &&
+                ansi_boundary_dimensions(snapshot, *entity);
             if (declared_appraisal && entity->type == "room_boundary") {
                 throw std::invalid_argument("Architectural room boundaries are independent of appraisal deductions.");
             }
@@ -18678,7 +18855,7 @@ public:
                     throw std::invalid_argument("Deduction boundary " + id + " is invalid: " +
                                                 diagnostics.front().message);
                 }
-                if (!read_deduction_ids(found->second.properties).empty()) {
+                if (!nested_appraisal && !read_deduction_ids(found->second.properties).empty()) {
                     throw std::invalid_argument("A deduction boundary cannot contain another deduction.");
                 }
                 deductions.push_back({id, boundary});
@@ -18693,6 +18870,30 @@ public:
                 properties.erase("deduction_ids");
             } else {
                 properties["deduction_ids"] = deduction_ids_json(deduction_ids);
+            }
+            if (nested_appraisal) {
+                auto candidate = entities;
+                candidate.at(entity->id).properties = properties;
+                std::set<std::string> active, complete;
+                std::function<void(const std::string&)> validate = [&](const std::string& id) {
+                    if (!active.insert(id).second) throw std::invalid_argument("Cyclic appraisal deductions are not allowed.");
+                    const auto& node = candidate.at(id);
+                    std::vector<AreaDeduction> children;
+                    for (const auto& child_id : read_deduction_ids(node.properties)) {
+                        const auto child = candidate.find(child_id);
+                        if (child == candidate.end() || !is_closed_boundary_entity(child->second.type) ||
+                            child->second.type == "room_boundary" || area_scope_name(child->second.properties) == "site" ||
+                            read_string(child->second.properties, "floor_id") != floor_id)
+                            throw std::invalid_argument("Nested deductions must be measurement areas on the same building floor.");
+                        if (!complete.contains(child_id)) validate(child_id);
+                        children.push_back({child_id, read_boundary(child->second.properties)});
+                    }
+                    MeasurementArea partition{id, *building_id, *floor_id, "physical", read_boundary(node.properties),
+                        std::move(children), read_stored_factor(node.properties).rational, AreaScope::building};
+                    (void)calculate_area(partition, profile);
+                    active.erase(id);complete.insert(id);
+                };
+                validate(entity->id);
             }
             return editSelectedProperties(std::move(properties), "edit area deductions");
         } catch (const std::exception& error) {
@@ -18719,11 +18920,37 @@ public:
                 throw std::invalid_argument("Selected boundary needs a valid floor");
             auto floor = snapshot.entities().at(*floor_id);
             const auto declarations = json::parse(declarations_json.toStdString());
-            appraisal_keys(declarations, {"appraisal_policy", "grade", "appraisal_facts"});
+            appraisal_keys(declarations, {"appraisal_policy", "grade", "floor_appraisal_facts", "appraisal_facts", "deduction_ids"});
             updated_property.properties["appraisal_policy"] = declarations.at("appraisal_policy");
-            floor.properties["appraisal_facts"] = json{{"grade", declarations.at("grade")}};
+            if (declarations.contains("floor_appraisal_facts")) {
+                if (declarations.contains("grade")) throw std::invalid_argument("Provide floor facts or grade, not both");
+                floor.properties["appraisal_facts"] = declarations.at("floor_appraisal_facts");
+            } else {
+                auto floor_facts = floor.properties.value("appraisal_facts", json::object());
+                floor_facts["grade"] = declarations.at("grade");
+                floor.properties["appraisal_facts"] = std::move(floor_facts);
+            }
             boundary.properties["appraisal_facts"] = declarations.at("appraisal_facts");
+            if (declarations.contains("deduction_ids")) {
+                boundary.properties["deduction_ids"] = declarations.at("deduction_ids");
+                std::vector<AreaDeduction> deductions;
+                for (const auto& id : read_deduction_ids(boundary.properties)) {
+                    const auto found = snapshot.entities().find(id);
+                    if (id == boundary.id || found == snapshot.entities().end() || !is_closed_boundary_entity(found->second.type) ||
+                        read_string(found->second.properties, "floor_id") != floor_id ||
+                        !read_deduction_ids(found->second.properties).empty())
+                        throw std::invalid_argument("Low-height deductions must be distinct, unnested boundaries on this floor");
+                    deductions.push_back({id, read_boundary(found->second.properties)});
+                }
+                const CalculationProfile physical{"physical", 1, AreaUnit::square_metre, 2, {{"physical", {false, false}}}};
+                (void)calculate_area(MeasurementArea{boundary.id, read_string(floor.properties, "building_id").value_or(""), *floor_id,
+                    "physical", read_boundary(boundary.properties), deductions, {1, 1}, AreaScope::building}, physical);
+            }
             (void)read_appraisal_declarations(updated_property.properties, floor.properties, boundary.properties);
+            const auto& next_policy = updated_property.properties.at("appraisal_policy");
+            if (next_policy.value("policy_kind", std::string{}) == "ansi_z765_2021" &&
+                !ansi_property_kind_supported(QString::fromStdString(next_policy.value("property_kind", std::string{}))))
+                throw std::invalid_argument("ANSI Z765 applies to detached or attached single-family and manufactured homes");
             applyDocumentCommand(ApplyEntityChanges{
                 .expected_revision = expected_revision.value_or(snapshot.revision()),
                 .entity_changes = {EntityChange::upsert(std::move(updated_property)),
@@ -18761,7 +18988,9 @@ public:
             setError(QStringLiteral("Appraisal facts: %1").arg(QString::fromUtf8(error.what())));
             return;
         }
-        const auto snapshot = m_document->snapshot();
+        const auto facts_document = m_document;
+        const auto snapshot = facts_document->snapshot();
+        const auto facts_digest = entity_map_digest(snapshot.entities());
         const auto selected_id = selected->id;
         const auto floor_id = read_string(selected->properties, "floor_id");
         const auto floor = floor_id ? snapshot.entities().find(*floor_id) : snapshot.entities().end();
@@ -18772,14 +19001,19 @@ public:
         QDialog dialog(owner);
         dialog.setObjectName(QStringLiteral("appraisalFactsDialog"));
         dialog.setWindowTitle(QStringLiteral("Edit appraisal facts"));
+        styleDialog(dialog);
         auto* layout = new QVBoxLayout(&dialog);
         auto* note = new QLabel(QStringLiteral("Property and grade declarations affect all areas on that property/floor.\n"
             "Declare observed facts; names and elevations are not evidence.\n"
-            "Vertex policy qualification does not certify ANSI or BOMA compliance."), &dialog);
+            "ANSI observations must describe the current geometry. Incomplete evidence withholds totals."), &dialog);
         note->setWordWrap(true);
         layout->addWidget(note);
-        auto* form = new QFormLayout;
-        layout->addLayout(form);
+        auto* scroll = new QScrollArea(&dialog); scroll->setWidgetResizable(true); scroll->setFrameShape(QFrame::NoFrame);
+        auto* content = new QWidget(scroll);content->setObjectName(QStringLiteral("appraisalFactsContent"));
+        scroll->viewport()->setObjectName(QStringLiteral("appraisalFactsViewport"));
+        auto* content_layout = new QVBoxLayout(content);
+        scroll->setWidget(content); layout->addWidget(scroll); scroll->setMinimumHeight(400);
+        auto* form = new QFormLayout; content_layout->addLayout(form);
         const auto policy = property->properties.value("appraisal_policy", json::object());
         const auto facts = selected->properties.value("appraisal_facts", json::object());
         const auto level = snapshot.entities().at(*floor_id).properties.value("appraisal_facts", json::object());
@@ -18795,6 +19029,7 @@ public:
                 text[0] = text[0].toUpper();
                 if (token == QStringLiteral("residential_declared")) text = QStringLiteral("Residential declared-facts policy");
                 if (token == QStringLiteral("light_commercial_declared")) text = QStringLiteral("Light commercial declared-facts policy");
+                if (token == QStringLiteral("ansi_z765_2021")) text = QStringLiteral("ANSI Z765-2021");
                 if (token == QStringLiteral("detached_single_family")) text = QStringLiteral("Detached single-family");
                 if (token == QStringLiteral("attached_single_family")) text = QStringLiteral("Attached single-family");
                 if (token == QStringLiteral("commercial_occupiable")) text = QStringLiteral("Occupiable");
@@ -18802,43 +19037,175 @@ public:
                 if (token == QStringLiteral("commercial_service")) text = QStringLiteral("Service");
                 box->addItem(text, token);
             }
-            if (source.is_object() && source.contains(key) && source.at(key).is_string())
-                box->setCurrentIndex(std::max(0, box->findData(QString::fromStdString(source.at(key).get<std::string>()))));
+            if (source.is_object() && source.contains(key) && source.at(key).is_string()) {
+                const auto token = QString::fromStdString(source.at(key).get<std::string>());
+                auto index = box->findData(token);
+                if (index < 0) { box->addItem(QStringLiteral("Unsupported: %1").arg(token), token); index = box->count()-1; }
+                box->setCurrentIndex(index);
+            }
             form->addRow(label, box);
             return box;
         };
-        auto* kind = combo(QStringLiteral("Policy"), "policy_kind", policy, {"residential_declared", "light_commercial_declared"});
+        auto* kind = combo(QStringLiteral("Policy"), "policy_kind", policy, {"residential_declared", "light_commercial_declared", "ansi_z765_2021"});
         auto* property_kind = combo(QStringLiteral("Property kind"), "property_kind", policy,
             {"detached_single_family", "attached_single_family", "manufactured_home", "apartment_unit", "multifamily", "light_commercial"});
         auto* basis = combo(QStringLiteral("Measurement basis"), "measurement_basis", policy, {"exterior", "interior_perimeter", "plans", "unknown"});
         auto* grade = combo(QStringLiteral("Floor grade (partly below = below)"), "grade", level, {"above", "below", "unknown"});
         auto* finish = combo(QStringLiteral("Finish"), "finish", facts, {"finished", "unfinished", "unknown"});
-        auto* access = combo(QStringLiteral("Access"), "access", facts, {"direct_interior", "noncontinuous", "unknown"});
+        auto* access = combo(QStringLiteral("Access"), "access", facts, {"direct_interior", "through_unfinished", "noncontinuous", "unknown"});
         auto* ceiling = combo(QStringLiteral("Ceiling eligibility"), "ceiling_eligibility", facts, {"standard", "nonstandard", "unknown"});
         auto* use = combo(QStringLiteral("Area use"), "area_use", facts,
             {"dwelling", "garage", "carport", "porch", "patio", "deck", "commercial_occupiable", "commercial_common", "commercial_service", "other_non_living"});
         auto* role = combo(QStringLiteral("Boundary role"), "boundary_role", facts, {"measured_area", "open_to_below", "stair_footprint", "other_void"});
+        const auto measurement = ansi_measurement_controls(content, *content_layout, policy);
+        auto* ansi_group = new QGroupBox(QStringLiteral("ANSI floor and area evidence"), content);
+        ansi_group->setObjectName(QStringLiteral("ansiAreaEvidence")); content_layout->addWidget(ansi_group);
+        auto* ansi_form = new QFormLayout(ansi_group);
+        const auto area_evidence = facts.value("ansi", json::object());
+        const auto floor_evidence = level.value("ansi", json::object());
+        const auto ceiling_evidence = area_evidence.value("ceiling", json::object());
+        auto* below = appraisal_observation(*ansi_form, ansi_group, "ansiAnyPartBelowGrade", QStringLiteral("Any part of floor below grade"), floor_evidence, "any_part_below_grade");
+        auto* year_round = appraisal_observation(*ansi_form, ansi_group, "ansiYearRoundSuitable", QStringLiteral("Suitable for year-round use"), area_evidence, "year_round_suitable");
+        auto* matching = appraisal_observation(*ansi_form, ansi_group, "ansiFinishMatchesDwelling", QStringLiteral("Finish matches dwelling"), area_evidence, "finish_matches_dwelling");
+        auto* identity = new QComboBox(ansi_group); identity->setObjectName(QStringLiteral("ansiDwellingIdentity"));
+        identity->addItem(QStringLiteral("Undeclared"), QString{});
+        for (const auto& [label, token] : std::initializer_list<std::pair<const char*,const char*>>{
+            {"Primary dwelling","primary"},{"Attached ADU (separate)","attached_adu"},{"Detached ADU (separate)","detached_adu"},{"Other detached structure","detached_other"}})
+            identity->addItem(QString::fromLatin1(label), QString::fromLatin1(token));
+        if (area_evidence.contains("dwelling_identity") && area_evidence.at("dwelling_identity").is_string())
+            identity->setCurrentIndex(std::max(0, identity->findData(QString::fromStdString(area_evidence.at("dwelling_identity").get<std::string>()))));
+        ansi_form->addRow(QStringLiteral("Dwelling identity"), identity);
+        auto* ceiling_kind = new QComboBox(ansi_group); ceiling_kind->setObjectName(QStringLiteral("ansiCeilingKind"));
+        ceiling_kind->addItem(QStringLiteral("Undeclared"), QString{});
+        ceiling_kind->addItem(QStringLiteral("Flat ceiling"), QStringLiteral("flat"));
+        ceiling_kind->addItem(QStringLiteral("Sloped ceiling — complete room"), QStringLiteral("sloped"));
+        ceiling_kind->addItem(QStringLiteral("Stair footprint"), QStringLiteral("stairs"));
+        if (ceiling_evidence.contains("kind") && ceiling_evidence.at("kind").is_string())
+            ceiling_kind->setCurrentIndex(std::max(0, ceiling_kind->findData(QString::fromStdString(ceiling_evidence.at("kind").get<std::string>()))));
+        ansi_form->addRow(QStringLiteral("Ceiling type"), ceiling_kind);
+        auto* minimum = new QLineEdit(ansi_group); minimum->setObjectName(QStringLiteral("ansiMinimumHeight"));
+        minimum->setPlaceholderText(QStringLiteral("Observed minimum, e.g. 7 ft or 2.2 m"));
+        if (ceiling_evidence.contains("minimum_height_m") && ceiling_evidence.at("minimum_height_m").is_number())
+            minimum->setText(QString::number(ceiling_evidence.at("minimum_height_m").get<double>(), 'g', 17) + QStringLiteral(" m"));
+        ansi_form->addRow(QStringLiteral("Minimum ceiling height (ft)"), minimum);
+        auto* high = new QLineEdit(ansi_group); high->setObjectName(QStringLiteral("ansiAtLeast7ftArea"));
+        high->setPlaceholderText(QStringLiteral("Observed area at least 7 ft high, in sq ft"));
+        if (ceiling_evidence.contains("at_least_7ft_area_m2") && ceiling_evidence.at("at_least_7ft_area_m2").is_number())
+            high->setText(QString::number(ceiling_evidence.at("at_least_7ft_area_m2").get<double>() / 0.09290304, 'g', 17));
+        ansi_form->addRow(QStringLiteral("At least 7 ft high (sq ft)"), high);
+        auto* low = new QListWidget(ansi_group); low->setObjectName(QStringLiteral("ansiBelow5ftDeductions")); low->setMaximumHeight(110);
+        std::set<std::string> old_low;
+        if (ceiling_evidence.contains("below_5ft_deduction_ids") && ceiling_evidence.at("below_5ft_deduction_ids").is_array())
+            for (const auto& value : ceiling_evidence.at("below_5ft_deduction_ids")) if (value.is_string()) old_low.insert(value.get<std::string>());
+        for (const auto& [id, candidate] : snapshot.entities()) {
+            if (id == selected_id || !is_closed_boundary_entity(candidate.type) || read_string(candidate.properties, "floor_id") != floor_id) continue;
+            const auto candidate_facts = candidate.properties.value("appraisal_facts", json::object());
+            if (!old_low.contains(id) && candidate_facts.value("boundary_role", std::string{}) != "other_void") continue;
+            auto* item = new QListWidgetItem(QString::fromStdString(candidate.properties.value("name", id)), low);
+            item->setData(Qt::UserRole, QString::fromStdString(id)); item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
+            item->setCheckState(old_low.contains(id) ? Qt::Checked : Qt::Unchecked);
+        }
+        for (const auto& id : old_low) if (!snapshot.entities().contains(id)) {
+            auto* item = new QListWidgetItem(QStringLiteral("Unavailable: %1").arg(QString::fromStdString(id)), low);
+            item->setData(Qt::UserRole, QString::fromStdString(id)); item->setFlags(item->flags() | Qt::ItemIsUserCheckable); item->setCheckState(Qt::Checked);
+        }
+        ansi_form->addRow(QStringLiteral("Actual below-5-ft boundaries"), low);
+        auto* confirm = new QCheckBox(QStringLiteral("Confirm observations for this complete room and its current deductions"), ansi_group);
+        confirm->setObjectName(QStringLiteral("ansiConfirmRoomGeometry")); ansi_form->addRow(confirm);
+        auto* stair = new QComboBox(ansi_group); stair->setObjectName(QStringLiteral("ansiStairFromFloor"));
+        stair->addItem(QStringLiteral("Undeclared"), QString{});
+        for (const auto& [id, candidate] : snapshot.entities()) if (candidate.type == "floor")
+            stair->addItem(QString::fromStdString(candidate.properties.value("name", id)), QString::fromStdString(id));
+        if (ceiling_evidence.contains("stair_from_floor_id") && ceiling_evidence.at("stair_from_floor_id").is_string())
+            stair->setCurrentIndex(std::max(0, stair->findData(QString::fromStdString(ceiling_evidence.at("stair_from_floor_id").get<std::string>()))));
+        ansi_form->addRow(QStringLiteral("Floor from which stairs descend"), stair);
+        const auto show_field = [=](QWidget* field, bool visible) { field->setVisible(visible); if (auto* label = ansi_form->labelForField(field)) label->setVisible(visible); };
+        const auto update_evidence = [=] {
+            const bool ansi = kind->currentData().toString() == QStringLiteral("ansi_z765_2021");
+            measurement.group->setVisible(ansi); ansi_group->setVisible(ansi);
+            form->setRowVisible(grade, !ansi);form->setRowVisible(ceiling, !ansi);
+            const auto type = ceiling_kind->currentData().toString();
+            show_field(minimum, type == QStringLiteral("flat"));
+            for (QWidget* field : std::array<QWidget*,3>{high, low, confirm}) show_field(field, type == QStringLiteral("sloped"));
+            show_field(stair, type == QStringLiteral("stairs"));
+        };
+        QObject::connect(kind, &QComboBox::currentIndexChanged, &dialog, update_evidence);
+        QObject::connect(ceiling_kind, &QComboBox::currentIndexChanged, &dialog, update_evidence); update_evidence();
         auto* error = new QLabel(&dialog);
         error->setWordWrap(true);
         layout->addWidget(error);
         auto* buttons = new QDialogButtonBox(QDialogButtonBox::Save | QDialogButtonBox::Cancel, &dialog);
+        buttons->setObjectName(QStringLiteral("appraisalFactsButtons"));
         layout->addWidget(buttons);
         QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
         QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, [&] {
-            if (m_selected_id.toStdString() != selected_id) { error->setText(QStringLiteral("Selection changed; reopen this dialog.")); return; }
-            json declaration{{"appraisal_policy", json{{"version", 1}}}, {"grade", "unknown"}, {"appraisal_facts", json::object()}};
+            if (m_selected_id.toStdString() != selected_id || m_document != facts_document || m_document->revision() != snapshot.revision() ||
+                entity_map_digest(m_document->snapshot().entities()) != facts_digest) { error->setText(QStringLiteral("Selection or project changed; reopen this dialog.")); return; }
+            try {
+            json declaration{{"appraisal_policy", policy}, {"floor_appraisal_facts", level}, {"appraisal_facts", facts}};
+            declaration["appraisal_policy"]["version"] = 1;
             const auto save = [](json& target, const char* key, QComboBox* box) {
+                target.erase(key);
                 if (!box->currentData().toString().isEmpty()) target[key] = box->currentData().toString().toStdString();
             };
             save(declaration["appraisal_policy"], "policy_kind", kind);
             save(declaration["appraisal_policy"], "property_kind", property_kind);
             save(declaration["appraisal_policy"], "measurement_basis", basis);
-            if (!grade->currentData().toString().isEmpty()) declaration["grade"] = grade->currentData().toString().toStdString();
+            save(declaration["floor_appraisal_facts"], "grade", grade);
             for (auto* box : {finish, access, ceiling, use, role})
                 save(declaration["appraisal_facts"], box->objectName().toStdString().c_str(), box);
+            if (kind->currentData().toString() == QStringLiteral("ansi_z765_2021")) {
+                measurement.save(declaration["appraisal_policy"]);
+                auto level_ansi = floor_evidence; save_appraisal_observation(level_ansi, "any_part_below_grade", below);
+                declaration["floor_appraisal_facts"]["ansi"] = level_ansi;
+                // The observed below-grade flag is authoritative; do not retain a contradictory legacy grade.
+                declaration["floor_appraisal_facts"].erase("grade");
+                if (level_ansi.contains("any_part_below_grade"))
+                    declaration["floor_appraisal_facts"]["grade"] = level_ansi.at("any_part_below_grade").get<bool>() ? "below" : "above";
+                declaration["appraisal_facts"].erase("ceiling_eligibility");
+                auto area_ansi = area_evidence;
+                save_appraisal_observation(area_ansi, "year_round_suitable", year_round);
+                save_appraisal_observation(area_ansi, "finish_matches_dwelling", matching);
+                save(area_ansi, "dwelling_identity", identity);
+                json observed = json::object(); save(observed, "kind", ceiling_kind);
+                const auto type = ceiling_kind->currentData().toString();
+                if (type == QStringLiteral("flat") && !minimum->text().trimmed().isEmpty()) {
+                    const auto metres = parse_quantity(minimum->text().trimmed().toStdString(), Unit::foot).metres;
+                    if (!std::isfinite(metres) || metres < 0) throw std::invalid_argument("Minimum height must be finite and nonnegative");
+                    observed["minimum_height_m"] = metres;
+                } else if (type == QStringLiteral("sloped")) {
+                    if (!confirm->isChecked()) throw std::invalid_argument("Confirm the observed values against this complete room and its current geometry before saving");
+                    std::set<std::string> links;
+                    for (const auto& id : read_deduction_ids(selected->properties)) if (!old_low.contains(id)) links.insert(id);
+                    std::vector<std::string> low_ids;
+                    for (int i=0; i<low->count(); ++i) if (low->item(i)->checkState() == Qt::Checked) {
+                        const auto id = low->item(i)->data(Qt::UserRole).toString().toStdString(); low_ids.push_back(id); links.insert(id);
+                    }
+                    std::vector<AreaDeduction> deductions;
+                    for (const auto& id : links) {
+                        const auto found = snapshot.entities().find(id);
+                        if (found == snapshot.entities().end()) throw std::invalid_argument("A selected deduction is unavailable");
+                        deductions.push_back({id, read_boundary(found->second.properties)});
+                    }
+                    const auto boundary = read_boundary(selected->properties);
+                    observed["room_boundary_id"] = selected_id;
+                    observed["room_floor_area_m2"] = std::abs(signed_area(boundary));
+                    observed["source_geometry_sha256"] = appraisal_ceiling_geometry_digest(boundary, deductions);
+                    observed["below_5ft_deduction_ids"] = low_ids;
+                    declaration["deduction_ids"] = std::vector<std::string>(links.begin(), links.end());
+                    if (!high->text().trimmed().isEmpty()) {
+                        bool ok = false; const auto feet = high->text().trimmed().toDouble(&ok);
+                        if (!ok || !std::isfinite(feet) || feet < 0) throw std::invalid_argument("At-least-7-ft area must be a finite, nonnegative number of square feet");
+                        observed["at_least_7ft_area_m2"] = feet * 0.09290304;
+                    }
+                } else if (type == QStringLiteral("stairs")) save(observed, "stair_from_floor_id", stair);
+                area_ansi["ceiling"] = observed; declaration["appraisal_facts"]["ansi"] = area_ansi;
+            }
             if (editSelectedAppraisalFacts(QString::fromStdString(declaration.dump()), snapshot.revision())) dialog.accept();
             else error->setText(m_last_error);
+            } catch (const std::exception& exception) { error->setText(QString::fromUtf8(exception.what())); }
         });
+        dialog.resize(620, 780);
         dialog.exec();
     }
 
@@ -21935,7 +22302,7 @@ public:
             enabled->setChecked(workflow == "appraisal" || !property->properties.contains("appraisal_policy"));
             layout->addWidget(enabled);
             auto* note = new QLabel(QStringLiteral("Declare the property policy and measurement basis. Floor and area facts are edited from each area. "
-                "Declared-facts policy version 1 does not establish ANSI or BOMA compliance."), &dialog);
+                "ANSI Z765-2021 is an opt-in evidence profile for single-family homes; results depend on complete observations and geometry."), &dialog);
             note->setWordWrap(true);layout->addWidget(note);
             auto* form = new QFormLayout;layout->addLayout(form);
             const auto combo = [&](const char* name, const QString& title, const char* key,
@@ -21948,12 +22315,13 @@ public:
                     if (value != policy.end() && value->is_string()) {
                         const auto index = box->findData(QString::fromStdString(value->get<std::string>()));
                         if (index >= 0) box->setCurrentIndex(index);
+                        else { const auto token = QString::fromStdString(value->get<std::string>()); box->addItem(QStringLiteral("Unsupported: %1").arg(token), token); box->setCurrentIndex(box->count()-1); }
                     }
                 }
                 form->addRow(title,box);return box;
             };
             auto* kind = combo("appraisalSetupPolicy",QStringLiteral("Policy"),"policy_kind",
-                {{"Residential declared facts","residential_declared"},{"Light commercial declared facts","light_commercial_declared"}});
+                {{"Residential declared facts","residential_declared"},{"Light commercial declared facts","light_commercial_declared"},{"ANSI Z765-2021 evidence profile","ansi_z765_2021"}});
             auto* property_kind = combo("appraisalSetupPropertyKind",QStringLiteral("Property kind"),"property_kind",
                 {{"Detached single-family","detached_single_family"},{"Attached single-family","attached_single_family"},
                  {"Manufactured home","manufactured_home"},{"Apartment unit","apartment_unit"},{"Multifamily","multifamily"},{"Light commercial","light_commercial"}});
@@ -21964,6 +22332,13 @@ public:
             unsigned initial_precision = 2;
             try { initial_precision = appraisal_display_profile(property->properties).decimal_places; } catch (const std::exception&) {}
             precision->setValue(static_cast<int>(initial_precision));form->addRow(QStringLiteral("Area decimal places"),precision);
+            const auto measurement = ansi_measurement_controls(&dialog, *layout, policy);
+            const auto update_policy = [&] {
+                const bool ansi = kind->currentData().toString() == QStringLiteral("ansi_z765_2021");
+                measurement.group->setVisible(ansi); precision->setEnabled(!ansi);
+                precision->setToolTip(ansi ? QStringLiteral("ANSI totals use whole square feet; dimensions use tenths of a foot.") : QString{});
+            };
+            QObject::connect(kind, &QComboBox::currentIndexChanged, &dialog, update_policy); update_policy();
             // Missing declarations remain explicit; opening Setup never infers observed facts.
             const auto update_enabled = [=](bool value) {
                 kind->setEnabled(value);property_kind->setEnabled(value);basis->setEnabled(value);
@@ -21987,12 +22362,20 @@ public:
                     property_kind->currentData().toString().isEmpty() || basis->currentData().toString().isEmpty())) {
                     error->setText(QStringLiteral("Choose the policy, property kind and measurement basis before enabling appraisal."));return;
                 }
-                json declaration{{"version",1}};
+                if (kind->currentData().toString() == QStringLiteral("ansi_z765_2021") &&
+                    !ansi_property_kind_supported(property_kind->currentData().toString())) {
+                    error->setText(QStringLiteral("ANSI Z765 is available for detached or attached single-family and manufactured homes.")); return;
+                }
+                json declaration = policy.is_object() ? policy : json::object(); declaration["version"] = 1;
                 for (const auto& [key,box] : std::initializer_list<std::pair<const char*,QComboBox*>>{
                     {"policy_kind",kind},{"property_kind",property_kind},{"measurement_basis",basis}}) {
                     const auto token = box->currentData().toString();
+                    declaration.erase(key);
                     if (!token.isEmpty()) declaration[key] = token.toStdString();
                 }
+                if (kind->currentData().toString() == QStringLiteral("ansi_z765_2021")) measurement.save(declaration);
+                try { (void)read_appraisal_declarations(json{{"appraisal_policy", declaration}}, json::object(), json::object()); }
+                catch (const std::exception& exception) { error->setText(QString::fromUtf8(exception.what())); return; }
                 if (setCalculationWorkflow(enabled->isChecked() ? QStringLiteral("appraisal") : QStringLiteral("measurement"),
                     enabled->isChecked() ? std::optional<json>{std::move(declaration)} : std::nullopt,
                     static_cast<unsigned>(precision->value()))) dialog.accept();
@@ -27410,7 +27793,7 @@ private:
                     if (source == snapshot.entities().end())
                         throw std::invalid_argument("source boundary is missing");
                     auto projection=project_boundary_dimension(dimension,source->second,
-                        m_metric_units,id_from(id)==m_selected_id);
+                        m_metric_units,id_from(id)==m_selected_id, ansi_boundary_dimensions(snapshot, source->second));
                     if (dimension.presentation && !dimension.presentation->visible) continue;
                     if (projection.line) all_geometry.push_back(std::move(*projection.line));
                     all_labels.push_back(std::move(projection.label));
@@ -29316,10 +29699,13 @@ private:
                 declared_report = build_appraisal_document_report(
                     snapshot, property->id, display_profile.display_unit, &phase_visible_ids);
             }
+            const bool declared_ansi = declared_report && declared_report->policy &&
+                declared_report->policy->kind == AppraisalPolicyKind::ansi_z765_2021;
             std::set<std::string, std::less<>> referenced_deductions;
             std::set<std::string, std::less<>> building_referenced_deductions;
             for (const auto& [id, entity] : entities) {
                 if (!is_closed_boundary_entity(entity.type)) continue;
+                if (declared_ansi) continue; // Core validates the complete nested dependency graph.
                 if (declared && entity.type == "room_boundary") continue;
                 if (!phase_visible_ids.contains(id)) continue;
                 const auto parent_scope = area_scope_name(entity.properties);
@@ -29400,6 +29786,9 @@ private:
                 if (!is_closed_boundary_entity(entity.type)) {
                     continue;
                 }
+                // Building diagnostics share Details/PDF's authoritative projection.
+                // Site inspection remains independent of appraisal qualification.
+                if (declared_ansi && area_scope_name(entity.properties) != "site") continue;
                 if (declared && entity.type == "room_boundary") continue;
                 if (!phase_visible_ids.contains(id)) {
                     continue;
@@ -29530,7 +29919,8 @@ private:
                         selected_qualified_exclusion = true;
                 }
                 set_appraisal_qualification(all_qualified
-                    ? QStringLiteral("Qualified under declared Vertex policy v1; no ANSI/BOMA certification.")
+                    ? (declared_ansi ? QStringLiteral("Vertex rule checks passed; final ANSI validation pending.")
+                                     : QStringLiteral("Qualified under declared Vertex policy v1; no ANSI/BOMA certification."))
                     : QStringLiteral("Unqualified\n") + qualification_reasons.join(QLatin1Char('\n')));
                 if (const auto found = qualifications.find(selected->id); found != qualifications.end()) {
                     const auto& q = found->second;
@@ -29583,6 +29973,12 @@ private:
                 report = calculate_areas(areas, display_profile);
             }
             if (selected_exclusion) report.areas.push_back(calculate_area(*selected_exclusion, display_profile));
+            if (declared_ansi) {
+                const auto selected_trace = std::find_if(declared_report->boundaries.begin(), declared_report->boundaries.end(),
+                    [&](const auto& boundary) { return boundary.boundary_id == selected->id; });
+                if (selected_trace != declared_report->boundaries.end() && selected_trace->exclusion && selected_trace->measurement)
+                    report.areas.push_back(*selected_trace->measurement);
+            }
             if (selected_site_area) report.areas.push_back(calculate_area(*selected_site_area, display_profile));
             const auto selected_result = std::find_if(
                 report.areas.begin(), report.areas.end(), [&](const AreaCalculation& result) {
@@ -29606,7 +30002,8 @@ private:
             m_calculation_net_value->setText(format_area(net));
             m_calculation_factored_value->setText(format_area(factored));
             m_calculation_perimeter_value->setText(
-                format_length(selected_result->perimeter_metres, m_metric_units));
+                declared_ansi ? QStringLiteral("%1 ft").arg(QString::number(selected_result->perimeter_metres / 0.3048, 'f', 1))
+                              : format_length(selected_result->perimeter_metres, m_metric_units));
             m_calculation_deductions_list->clear();
             if (selected_result->deductions.empty()) {
                 auto* item = new QListWidgetItem(QStringLiteral("None"), m_calculation_deductions_list);

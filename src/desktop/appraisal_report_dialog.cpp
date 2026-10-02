@@ -54,14 +54,25 @@ QString words(std::string_view token) {
     if (!result.isEmpty()) result[0]=result[0].toUpper();
     return result;
 }
+bool ansi(const AppraisalDocumentReport& report) {
+    return report.policy && report.policy->kind==AppraisalPolicyKind::ansi_z765_2021;
+}
 CalculationProfile profile(const AppraisalDocumentReport& report,bool metric) {
+    if(ansi(report))return ansi_appraisal_profile();
     auto value=builtin_appraisal_profile();
     value.display_unit=metric ? AreaUnit::square_metre : AreaUnit::square_foot;
     value.decimal_places=report.display_decimal_places;
     return value;
 }
 QString area(double square_metres,const AppraisalDocumentReport& report,bool metric) {
-    return text(display_area(square_metres,profile(report,metric)).text)+(metric ? QStringLiteral(" m²") : QStringLiteral(" sq ft"));
+    return text(display_area(square_metres,profile(report,metric)).text)+(metric && !ansi(report) ? QStringLiteral(" m²") : QStringLiteral(" sq ft"));
+}
+QString length(double metres,const AppraisalDocumentReport& report,bool metric) {
+    return QString::number(metric && !ansi(report)?metres:metres/0.3048,'f',ansi(report)?1:report.display_decimal_places)+
+        (metric && !ansi(report)?QStringLiteral(" m"):QStringLiteral(" ft"));
+}
+QString boolean(const std::optional<bool>& value) {
+    return value?(*value?QStringLiteral("Yes"):QStringLiteral("No")):QStringLiteral("Undeclared");
 }
 QString factor(const ExactRational& value) {
     return QStringLiteral("%1/%2").arg(value.numerator).arg(value.denominator);
@@ -74,6 +85,32 @@ QString category(const AppraisalBoundaryStatus& status) {
 }
 QString row(const QString& label,const QString& value) {
     return QStringLiteral("<tr><td>%1</td><td align='right'>%2</td></tr>").arg(label.toHtmlEscaped(),value.toHtmlEscaped());
+}
+QString measurement_declarations(const AnsiMeasurementDeclarations& value) {
+    return row(QStringLiteral("Interior inspected"),boolean(value.interior_inspected))+
+        row(QStringLiteral("Direct measurement"),boolean(value.direct_measurement))+
+        row(QStringLiteral("Acquisition increment"),value.acquisition_increment?words(acquisition_increment_name(*value.acquisition_increment)):QStringLiteral("Undeclared"))+
+        row(QStringLiteral("Limitations statement"),value.limitations_statement.empty()?QStringLiteral("Undeclared"):text(value.limitations_statement));
+}
+QString ansi_facts(const AppraisalFacts& facts,const AppraisalDocumentReport& report,bool metric) {
+    if(!facts.ansi)return {};
+    const auto& value=*facts.ansi;const auto& ceiling=value.ceiling;
+    auto rows=row(QStringLiteral("Any part below grade"),boolean(value.any_part_below_grade))+
+        row(QStringLiteral("Year-round suitable"),boolean(value.year_round_suitable))+
+        row(QStringLiteral("Finish matches dwelling"),boolean(value.finish_matches_dwelling))+
+        row(QStringLiteral("Dwelling identity"),value.dwelling_identity?words(dwelling_identity_name(*value.dwelling_identity)):QStringLiteral("Undeclared"))+
+        row(QStringLiteral("Ceiling type"),ceiling.kind?words(ceiling_kind_name(*ceiling.kind)):QStringLiteral("Undeclared"));
+    if(ceiling.minimum_height_m)rows+=row(QStringLiteral("Minimum ceiling height"),length(*ceiling.minimum_height_m,report,metric));
+    if(ceiling.at_least_7ft_area_m2)rows+=row(QStringLiteral("Ceiling area at least 7 ft"),area(*ceiling.at_least_7ft_area_m2,report,metric));
+    if(ceiling.room_floor_area_m2)rows+=row(QStringLiteral("Room floor area"),area(*ceiling.room_floor_area_m2,report,metric));
+    if(ceiling.kind==CeilingKind::sloped) {
+        QStringList ids;for(const auto& id:ceiling.below_5ft_deduction_ids)ids.push_back(text(id));
+        rows+=row(QStringLiteral("Actual below-5-ft deduction sources"),ids.isEmpty()?QStringLiteral("None declared"):ids.join(QStringLiteral(", ")))+
+            row(QStringLiteral("Room boundary source"),text(ceiling.room_boundary_id))+
+            row(QStringLiteral("Ceiling geometry SHA-256"),text(ceiling.source_geometry_sha256));
+    }
+    if(ceiling.kind==CeilingKind::stairs)rows+=row(QStringLiteral("Stair from floor source"),text(ceiling.stair_from_floor_id));
+    return QStringLiteral("<h3>ANSI source facts</h3><table width='100%' border='1' cellspacing='0'>%1</table>").arg(rows);
 }
 QString shell(const QString& content) {
     return QStringLiteral("<html><head><style>body{font-family:Inter;font-size:10pt;color:#17212b;}"
@@ -114,13 +151,14 @@ QString declaration(const DocumentSnapshot& source,const std::string& owner_id,c
     return html+QStringLiteral("</table>");
 }
 QString summary(const DocumentSnapshot& source,const AppraisalDocumentReport& report,bool metric) {
-    auto html=QStringLiteral("<h1>Appraisal area report</h1><h2>%1</h2>").arg(name(source,report.property_id).toHtmlEscaped());
+    auto html=QStringLiteral("<h1>%1</h1><h2>%2</h2>").arg(ansi(report)?QStringLiteral("MEASUREMENT SUMMARY"):QStringLiteral("Appraisal area report"),name(source,report.property_id).toHtmlEscaped());
     const auto& property=source.entities().at(report.property_id);
     if (const auto subject=property.properties.find("subject");subject!=property.properties.end() && subject->is_object()) {
         const auto address=subject->find("address");
         if(address!=subject->end() && address->is_string()) html+=QStringLiteral("<p>%1</p>").arg(escaped(address->get<std::string>()));
     }
-    html+=QStringLiteral("<p class='muted'>Project revision %1 · %2 · Display precision %3 decimal places</p>")
+    if(ansi(report))html+=QStringLiteral("<p class='muted'>Project revision %1 · Canonical whole square feet · Dimensions to 0.1 ft</p>").arg(source.revision());
+    else html+=QStringLiteral("<p class='muted'>Project revision %1 · %2 · Display precision %3 decimal places</p>")
         .arg(source.revision()).arg(metric ? QStringLiteral("Metric") : QStringLiteral("Imperial")).arg(report.display_decimal_places);
     html+=QStringLiteral("<p class='muted'>Document: %1 · Property: %2</p>").arg(escaped(source.document_id()),escaped(report.property_id));
     html+=QStringLiteral("<p class='muted'>Source entities SHA-256: %1</p>").arg(escaped(report.source_entities_sha256));
@@ -143,7 +181,9 @@ QString summary(const DocumentSnapshot& source,const AppraisalDocumentReport& re
     if (!report.qualified || !report.calculation) {
         html+=QStringLiteral("<p><b>Unqualified — automatic property totals withheld.</b></p><p>Individual measurements below are diagnostics and do not constitute qualified totals.</p>");
     } else {
-        html+=QStringLiteral("<p>Qualified under the declared Vertex policy v1. This is not ANSI/BOMA certification.</p>");
+        html+=ansi(report)?QStringLiteral("<p>Vertex rule checks passed for the declared ANSI Z765-2021 profile. This measurement summary is not a full UAD report or ANSI approval / certification.</p>"):
+            QStringLiteral("<p>Qualified under the declared Vertex policy v1. This is not ANSI/BOMA certification.</p>");
+        if(ansi(report))html+=QStringLiteral("<p><b>Primary dwelling GLA: %1</b></p>").arg(area(report.calculation->property.gla().total.square_metres,report,metric).toHtmlEscaped());
         html+=QStringLiteral("<table width='100%' border='1' cellspacing='0'><tr><th align='left'>Category</th><th align='right'>Area</th></tr>");
         double total=0.0;
         for (const auto& [kind,bucket]:report.calculation->property.by_category) {
@@ -153,12 +193,34 @@ QString summary(const DocumentSnapshot& source,const AppraisalDocumentReport& re
         }
         html+=row(QStringLiteral("All measured categories total"),area(total,report,metric))+QStringLiteral("</table>");
         html+=QStringLiteral("<p class='muted'>Finished above-grade area is a separate category. The all-categories total includes garages and other measured uses; it is not a living-area total. Totals sum unrounded contributions and round once.</p>");
-        html+=QStringLiteral("<table width='100%' border='1' cellspacing='0'><tr><th align='left'>Building / floor</th><th align='right'>All categories</th></tr>");
+        html+=QStringLiteral("<table width='100%' border='1' cellspacing='0'><tr><th align='left'>Building / floor%1</th><th align='right'>%2</th></tr>")
+            .arg(ansi(report)?QStringLiteral(" / category"):QString{},ansi(report)?QStringLiteral("Area"):QStringLiteral("All categories"));
         for(const auto& [scope,totals]:report.calculation->by_floor) {
-            double amount=0.0;for(const auto& [kind,bucket]:totals.by_category){(void)kind;amount+=bucket.total.square_metres;}
-            html+=row(name(source,scope.first)+QStringLiteral(" / ")+name(source,scope.second),area(amount,report,metric));
+            if(ansi(report)) {
+                for(const auto& [kind,bucket]:totals.by_category)if(bucket.total.square_metres!=0)
+                    html+=row(name(source,scope.first)+QStringLiteral(" / ")+name(source,scope.second)+QStringLiteral(" / ")+words(appraisal_category_name(kind)),area(bucket.total.square_metres,report,metric));
+            } else {
+                double amount=0.0;for(const auto& [kind,bucket]:totals.by_category){(void)kind;amount+=bucket.total.square_metres;}
+                html+=row(name(source,scope.first)+QStringLiteral(" / ")+name(source,scope.second),area(amount,report,metric));
+            }
         }
         html+=QStringLiteral("</table>");
+        if(ansi(report) && metric) {
+            auto diagnostic=builtin_appraisal_profile();diagnostic.display_unit=AreaUnit::square_metre;
+            html+=QStringLiteral("<p class='muted'>Supplemental metric diagnostic — primary dwelling GLA: %1 m². Canonical report remains in square feet.</p>")
+                .arg(text(display_area(report.calculation->property.gla().total.square_metres,diagnostic).text));
+        }
+    }
+    if(ansi(report)) {
+        html+=QStringLiteral("<h3>ANSI profile and unresolved normative validation</h3><p>Profile: %1 v%2. ADU and detached-other identities remain separate from primary dwelling GLA.</p>")
+            .arg(text(ansi_appraisal_profile().id).toHtmlEscaped()).arg(ansi_appraisal_profile().version);
+        if(report.ansi_measurement)html+=QStringLiteral("<table width='100%' border='1' cellspacing='0'>%1</table>").arg(measurement_declarations(*report.ansi_measurement));
+        for(const auto& limitation:report.policy_limitations)html+=QStringLiteral("<p>%1</p>").arg(escaped(limitation));
+        if(!report.policy_evidence.empty()) {
+            html+=QStringLiteral("<p>Public rule guidance:</p><ul>");
+            for(const auto& evidence:report.policy_evidence)html+=QStringLiteral("<li><a href='%1'>%1</a></li>").arg(escaped(evidence));
+            html+=QStringLiteral("</ul>");
+        }
     }
     if(!report.issues.empty()) {
         html+=QStringLiteral("<h2>Issues to resolve</h2><ul>");
@@ -186,6 +248,7 @@ QString boundary_details(const DocumentSnapshot& source,const AppraisalDocumentR
             html+=QStringLiteral("<p>%1</p>").arg(values.join(QStringLiteral(" · ")).toHtmlEscaped());
         }
     }
+    if(ansi(report) && status.facts)html+=ansi_facts(*status.facts,report,metric);
     if(status.measurement) {
         const auto& value=*status.measurement;
         html+=QStringLiteral("<p>%1 / %2</p>").arg(name(source,value.building_id).toHtmlEscaped(),name(source,value.floor_id).toHtmlEscaped());
@@ -199,11 +262,25 @@ QString boundary_details(const DocumentSnapshot& source,const AppraisalDocumentR
         html+=row(QStringLiteral("Exact factor"),factor(value.factor));
         html+=row(QStringLiteral("Adjusted area: physical net × factor"),area(value.factored_square_metres,report,metric));
         const auto displayed=display_area(value.factored_square_metres,profile(report,metric));
-        const auto suffix=metric ? QStringLiteral(" m²") : QStringLiteral(" sq ft");
+        const auto suffix=metric && !ansi(report) ? QStringLiteral(" m²") : QStringLiteral(" sq ft");
         html+=row(QStringLiteral("Unrounded adjusted value"),QString::number(displayed.unrounded,'g',17)+suffix);
         html+=row(QStringLiteral("Display rounding change"),QString::number(displayed.rounding_delta,'g',12)+suffix);
-        html+=row(QStringLiteral("Boundary perimeter"),QString::number(metric ? value.perimeter_metres : value.perimeter_metres/0.3048,'f',report.display_decimal_places)+(metric ? QStringLiteral(" m") : QStringLiteral(" ft")));
+        html+=row(QStringLiteral("Boundary perimeter"),length(value.perimeter_metres,report,metric));
         html+=QStringLiteral("</table>");
+        if(ansi(report) && entity!=source.entities().end()) {
+            const auto geometry=entity->second.properties.find("boundary");
+            if(geometry!=entity->second.properties.end() && geometry->is_array()) {
+                html+=QStringLiteral("<h3>Boundary dimensions</h3><p>");std::size_t index=0;
+                try {for(const auto& edge:*geometry) {
+                    const auto& start=edge.at("start");const auto& end=edge.at("end");
+                    const Segment segment{{start.at(0).get<double>(),start.at(1).get<double>()},
+                        {end.at(0).get<double>(),end.at(1).get<double>()},edge.at("sweep_radians").get<double>()};
+                    html+=QStringLiteral("%1%2: %3<br>").arg(segment.sweep_radians==0?QStringLiteral("Edge "):QStringLiteral("Arc "))
+                        .arg(++index).arg(length(segment_length(segment),report,metric));
+                }}catch(const std::exception&) {html+=QStringLiteral("Dimensions unavailable.");}
+                html+=QStringLiteral("</p>");
+            }
+        }
         if(!value.deductions.empty()) {
             html+=QStringLiteral("<h3>Deduction provenance</h3><table width='100%' border='1' cellspacing='0'><tr><th align='left'>Source</th><th align='right'>Requested</th><th align='right'>Applied</th></tr>");
             for(const auto& deduction:value.deductions) {
@@ -221,6 +298,11 @@ QString boundary_details(const DocumentSnapshot& source,const AppraisalDocumentR
     if(!status.qualification.issues.empty()) {
         html+=QStringLiteral("<ul>");for(const auto& issue:status.qualification.issues)
             html+=QStringLiteral("<li>%1: %2</li>").arg(escaped(issue.code),escaped(issue.message));
+        html+=QStringLiteral("</ul>");
+    }
+    if(ansi(report) && !status.qualification.rule_notes.empty()) {
+        html+=QStringLiteral("<h3>Classification reasons and rule limitations</h3><ul>");
+        for(const auto& note:status.qualification.rule_notes)html+=QStringLiteral("<li>%1</li>").arg(escaped(note));
         html+=QStringLiteral("</ul>");
     }
     return html;
@@ -350,7 +432,8 @@ struct AppraisalReportDialog::Impl {
         areas->clear();detail->clear();error->clear();error->hide();locate->setEnabled(false);
         const auto* report=selected();export_pdf->setEnabled(report!=nullptr);
         if(!report) {summary_view->clear();issues->clear();state->setText(QStringLiteral("No property available"));return;}
-        state->setText(QStringLiteral("Revision %1 · %2").arg(source.revision()).arg(!report->configured ? QStringLiteral("Workflow not enabled") : report->qualified ? QStringLiteral("Qualified") : QStringLiteral("Totals withheld")));
+        state->setText(QStringLiteral("Revision %1 · %2").arg(source.revision()).arg(!report->configured ? QStringLiteral("Workflow not enabled") :
+            report->qualified ? (ansi(*report)?QStringLiteral("Vertex rule checks passed"):QStringLiteral("Qualified")) : QStringLiteral("Totals withheld")));
         summary_view->setHtml(appraisal_report_html(source,*report,metric,false));
         QString issue_text=QStringLiteral("<h2>Issues</h2>");
         if(report->issues.empty()) issue_text+=QStringLiteral("<p>No qualification issues in this projection.</p>");

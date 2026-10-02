@@ -1,6 +1,6 @@
 # Vertex user testing checklist
 
-331 practical tasks, grouped by how you use the app (including U100a). This replaces the earlier engineering-oriented checklist. The old 130-item list is preserved separately as engineering-requirements-checklist.md.
+335 practical tasks, grouped by how you use the app (including U100a). This replaces the earlier engineering-oriented checklist. The old 130-item list is preserved separately as engineering-requirements-checklist.md.
 
 This is a user acceptance list for the intended app, not a claim that every listed action is implemented or working in the current preview. If you cannot find a control, or a feature is absent, mark **Blocked / missing** and describe it. Specialized sections can be skipped if you do not use them or lack the device or sample files.
 
@@ -42,6 +42,8 @@ Start with the workspace, draw a room, close it with the mouse, drag-select it, 
 - Connected boundary edits and exterior source repair (3 tasks)
 - Appraisal area copying (1 task)
 - Appraisal area rotation and reflection (1 task)
+- Project appraisal details (1 task)
+- ANSI-oriented measurements (4 tasks)
 
 ## Start a project and arrange the workspace
 
@@ -1919,6 +1921,32 @@ drawing; switching modes does not change existing geometry.
 - [ ] **U330 — Read GLA and floor contributions without selecting an object**
   - Steps: Open the left panel's **Details** tab with nothing selected. Use **Setup** to enable appraisal and declare the property kind and measurement basis; cancel once, then save. Select an area row, inspect its dimensions and deductions, and use **Edit facts** to supply missing observations. Check the GLA and separate garage/below-grade totals. Use **Show on canvas** and **Full report**. Switch Imperial/Metric, hide a layer, edit a qualifying area's dimensions, Undo, save and reopen.
   - Expected: Details remains accessible without a canvas selection. Required facts are explained and totals are withheld until qualified. GLA and separate totals agree with the current authoritative report; hiding a layer does not change them. Area rows expose current dimensions, perimeter and the gross/deduction/net breakdown. Edits and units refresh the display. Setup Cancel changes nothing; Save is undoable. The actual calculation policy and unverified ANSI status are clear; the application does not imply ANSI approval.
+  - Result: Not tested
+  - Notes: ______________________________
+
+## ANSI-oriented measurements
+
+- [ ] **U331 — Enable ANSI-oriented rules and read the actual GLA**
+  - Steps: Open **Details > Setup**, choose **ANSI Z765-2021**, a single-family property and Exterior measurement. Declare inspection, direct measurement and the acquisition increment; cancel once, then save. Draw a 10 ft by 10 ft measurement area. In **Edit facts**, declare above grade, finished, direct interior access, primary dwelling, year-round suitability, comparable finish and a flat minimum ceiling height of 7 ft. Check Details, then switch the workspace to Metric and open **Full report**.
+  - Expected: Cancel changes nothing and saved setup/facts are undoable. Details shows 100 sq ft of primary GLA and 10.0 ft analytical edges in either workspace. Metric equivalents are supplementary. The actual profile, passed Vertex rule checks and pending final-standard validation are visible; no ANSI approval is asserted.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **U332 — Keep below-grade, low ceilings and ADUs out of primary GLA**
+  - Steps: With ANSI-oriented appraisal enabled, declare a finished area with a flat 6 ft 11 in ceiling. Inspect its category and reason. Change it to 7 ft and inspect again. Mark its floor partly below grade. Add another finished measured area and identify it as an ADU, then check Details and Full report. Undo the declarations one at a time.
+  - Expected: Low flat ceilings report nonstandard finished area with a reason; 7 ft satisfies the implemented flat-height rule. Any partly below floor is reported wholly below grade. ADU area stays separate from primary GLA. All measurements and category changes update without a separate Calculate action.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **U333 — Record a sloped room and actual low-height exclusions**
+  - Steps: Draw a complete measured room and contained areas representing portions below 5 ft; link these as deductions. In Edit facts choose Sloped, record the measured area at least 7 ft high and select the real low-height deductions. Save and inspect the room's gross, excluded and net areas and rule notes. Change the room outline, including a change that keeps its area equal, then inspect Details. Undo the geometry edit.
+  - Expected: Low-height portions use actual drawn geometry and subtract only their union. Evidence binds the complete room and its exclusions. Geometry changes withhold stale ceiling qualification until observations are updated; Undo restores the original evidence and measurements. The provisional sloped-room denominator and unresolved final-standard interpretation are visible rather than presented as approval.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **U334 — Inspect and print the measurement evidence**
+  - Steps: Select an area row in Details and inspect edge lengths, perimeter, gross, deductions, net, classification reasons and ceiling evidence. Open Full report and export its PDF. Save and reopen the project and compare the figures. Hide the area's canvas layer and check the totals again.
+  - Expected: Details and PDF show the same current analytical dimensions and canonical square-foot results, inspection/method declarations, limitations and separate ADU/nonstandard areas. Reopening preserves the evidence. Hiding a layer does not change totals. Output identifies itself as a measurement summary and does not claim a complete UAD appraisal report.
   - Result: Not tested
   - Notes: ______________________________
 

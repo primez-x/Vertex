@@ -136,12 +136,14 @@ std::string_view appraisal_policy_kind_name(AppraisalPolicyKind value) {
     switch (value) {
     case AppraisalPolicyKind::residential_declared: return "residential_declared";
     case AppraisalPolicyKind::light_commercial_declared: return "light_commercial_declared";
+    case AppraisalPolicyKind::ansi_z765_2021: return "ansi_z765_2021";
     }
     throw std::invalid_argument("Unknown appraisal_policy_kind");
 }
 std::optional<AppraisalPolicyKind> parse_appraisal_policy_kind(std::string_view token) {
     if (token == "residential_declared") return AppraisalPolicyKind::residential_declared;
     if (token == "light_commercial_declared") return AppraisalPolicyKind::light_commercial_declared;
+    if (token == "ansi_z765_2021") return AppraisalPolicyKind::ansi_z765_2021;
     return std::nullopt;
 }
 
@@ -218,6 +220,7 @@ std::string_view access_status_name(AccessStatus value) {
     case AccessStatus::direct_interior: return "direct_interior";
     case AccessStatus::noncontinuous: return "noncontinuous";
     case AccessStatus::unknown: return "unknown";
+    case AccessStatus::through_unfinished: return "through_unfinished";
     }
     throw std::invalid_argument("Unknown access_status");
 }
@@ -225,6 +228,7 @@ std::optional<AccessStatus> parse_access_status(std::string_view token) {
     if (token == "direct_interior") return AccessStatus::direct_interior;
     if (token == "noncontinuous") return AccessStatus::noncontinuous;
     if (token == "unknown") return AccessStatus::unknown;
+    if (token == "through_unfinished") return AccessStatus::through_unfinished;
     return std::nullopt;
 }
 
@@ -293,8 +297,151 @@ std::string_view appraisal_policy_id(AppraisalPolicy policy) {
     (void)appraisal_policy_kind_name(policy.kind);
     if (policy.version != 1)
         throw std::invalid_argument("Unsupported appraisal policy version");
+    if (policy.kind == AppraisalPolicyKind::ansi_z765_2021) return "vertex-ansi-z765-2021-v1";
     return policy.kind == AppraisalPolicyKind::residential_declared ?
         "vertex-residential-declared-v1" : "vertex-light-commercial-declared-v1";
+}
+
+std::string_view acquisition_increment_name(AcquisitionIncrement value) {
+    switch (value) { case AcquisitionIncrement::inch: return "inch";
+    case AcquisitionIncrement::tenth_foot: return "tenth_foot"; }
+    throw std::invalid_argument("Unknown acquisition increment");
+}
+std::optional<AcquisitionIncrement> parse_acquisition_increment(std::string_view token) {
+    if (token == "inch") return AcquisitionIncrement::inch;
+    if (token == "tenth_foot") return AcquisitionIncrement::tenth_foot;
+    return std::nullopt;
+}
+std::string_view dwelling_identity_name(DwellingIdentity value) {
+    switch (value) { case DwellingIdentity::primary: return "primary";
+    case DwellingIdentity::attached_adu: return "attached_adu";
+    case DwellingIdentity::detached_adu: return "detached_adu";
+    case DwellingIdentity::detached_other: return "detached_other"; }
+    throw std::invalid_argument("Unknown dwelling identity");
+}
+std::optional<DwellingIdentity> parse_dwelling_identity(std::string_view token) {
+    if (token == "primary") return DwellingIdentity::primary;
+    if (token == "attached_adu") return DwellingIdentity::attached_adu;
+    if (token == "detached_adu") return DwellingIdentity::detached_adu;
+    if (token == "detached_other") return DwellingIdentity::detached_other;
+    return std::nullopt;
+}
+std::string_view ceiling_kind_name(CeilingKind value) {
+    switch (value) { case CeilingKind::flat: return "flat";
+    case CeilingKind::sloped: return "sloped"; case CeilingKind::stairs: return "stairs"; }
+    throw std::invalid_argument("Unknown ceiling kind");
+}
+std::optional<CeilingKind> parse_ceiling_kind(std::string_view token) {
+    if (token == "flat") return CeilingKind::flat;
+    if (token == "sloped") return CeilingKind::sloped;
+    if (token == "stairs") return CeilingKind::stairs;
+    return std::nullopt;
+}
+
+namespace {
+AppraisalQualification derive_ansi(const AppraisalFacts& f, ExactRational factor) {
+    AppraisalQualification r{"vertex-ansi-z765-2021-v1", 1};
+    auto issue = [&](std::string code, std::string message) { r.issues.push_back({std::move(code), std::move(message)}); };
+    if (factor.numerator != factor.denominator) issue("factor_not_unity", "ANSI physical area requires a unity factor.");
+    if (f.property_kind != PropertyKind::detached_single_family &&
+        f.property_kind != PropertyKind::attached_single_family && f.property_kind != PropertyKind::manufactured_home)
+        issue("property_kind_incompatible", "ANSI applies to attached, detached and manufactured single-family dwellings.");
+    if (f.measurement_basis != MeasurementBasis::exterior && f.measurement_basis != MeasurementBasis::plans)
+        issue("measurement_basis_incompatible", "ANSI requires exterior measurements or a declared plans basis.");
+    if (!f.ansi) { issue("ansi_facts_missing", "Declare ANSI measurement, floor and area evidence."); return r; }
+    const auto& a = *f.ansi;
+    if (a.dwelling_identity) (void)dwelling_identity_name(*a.dwelling_identity);
+    if (a.ceiling.kind) (void)ceiling_kind_name(*a.ceiling.kind);
+    if (!a.measurement.interior_inspected) issue("interior_inspected_missing", "Declare whether the interior was inspected.");
+    if (!a.measurement.direct_measurement) issue("direct_measurement_missing", "Declare whether the dwelling was directly measured.");
+    if (!a.measurement.acquisition_increment) issue("acquisition_increment_missing", "Declare inch or tenth-foot acquisition precision.");
+    else (void)acquisition_increment_name(*a.measurement.acquisition_increment);
+    if ((f.measurement_basis == MeasurementBasis::plans || a.measurement.interior_inspected == false ||
+         a.measurement.direct_measurement == false) &&
+        a.measurement.limitations_statement.find_first_not_of(" \t\r\n") == std::string::npos)
+        issue("limitations_statement_missing", "Explain measurement limitations for plans, an uninspected interior or indirect measurements.");
+    if (!a.any_part_below_grade) issue("floor_grade_missing", "Declare whether any part of this floor is below grade.");
+    const bool below = a.any_part_below_grade.value_or(false);
+    if (f.grade != GradeStatus::unknown && f.grade != (below ? GradeStatus::below : GradeStatus::above))
+        issue("grade_contradiction", "Floor grade contradicts any_part_below_grade; resolve the declarations.");
+    if (f.use == AreaUse::commercial_occupiable || f.use == AreaUse::commercial_common || f.use == AreaUse::commercial_service)
+        issue("area_use_incompatible", "Commercial uses are outside this ANSI single-family policy.");
+    const bool measured = f.role == BoundaryRole::measured_area || f.role == BoundaryRole::stair_footprint;
+    if (f.role == BoundaryRole::stair_footprint && a.ceiling.kind != CeilingKind::stairs)
+        issue("stair_evidence_required", "An ANSI stair footprint must declare stairs and its descending source floor.");
+    if (a.ceiling.kind == CeilingKind::stairs && f.role != BoundaryRole::stair_footprint)
+        issue("stair_role_required", "Only a descending stair footprint may use the stairs ceiling case.");
+    if (a.ceiling.kind == CeilingKind::stairs && a.ceiling.stair_from_floor_id.empty())
+        issue("stair_source_missing", "Stairs require the floor from which they descend.");
+    std::optional<AppraisalAreaCategory> category;
+    if (measured && f.use == AreaUse::dwelling) {
+        if (!a.dwelling_identity) issue("dwelling_identity_missing", "Declare primary dwelling, attached ADU, detached ADU or other detached structure.");
+        else (void)dwelling_identity_name(*a.dwelling_identity);
+        if (f.finish == FinishStatus::unknown) issue("finish_unknown", "Declare finished or unfinished area.");
+        bool finished = f.finish == FinishStatus::finished;
+        bool nonstandard = false;
+        if (finished) {
+            if (!a.year_round_suitable || !a.finish_matches_dwelling) issue("finish_evidence_missing", "Declare year-round suitability and finish comparable to the dwelling.");
+            if (a.year_round_suitable == false || a.finish_matches_dwelling == false) {
+                finished = false;
+                r.rule_notes.push_back("Reported unfinished because year-round suitability or comparable finish is not satisfied.");
+            }
+            if (f.access == AccessStatus::unknown) issue("access_unknown", "Declare finished area access.");
+            if (!a.ceiling.kind) issue("ceiling_kind_missing", "Declare flat, sloped or stairs ceiling evidence.");
+            else {
+                (void)ceiling_kind_name(*a.ceiling.kind);
+                if (*a.ceiling.kind == CeilingKind::flat) {
+                    if (!a.ceiling.minimum_height_m || !std::isfinite(*a.ceiling.minimum_height_m) || *a.ceiling.minimum_height_m < 0)
+                        issue("ceiling_height_missing", "Flat ceilings require a finite nonnegative minimum height in metres.");
+                    else {
+                        nonstandard = *a.ceiling.minimum_height_m < 2.1336;
+                        if (nonstandard) r.rule_notes.push_back("Nonstandard finished: minimum flat ceiling height is below seven feet.");
+                    }
+                } else if (*a.ceiling.kind == CeilingKind::sloped) {
+                    const auto high = a.ceiling.at_least_7ft_area_m2, room = a.ceiling.room_floor_area_m2;
+                    if (!high || !room || !std::isfinite(*high) || !std::isfinite(*room) || *high < 0 || *room <= 0 || *high > *room)
+                        issue("sloped_ceiling_evidence_invalid", "Sloped ceilings require valid room floor and at-least-seven-foot areas.");
+                    else {
+                        nonstandard = *high < *room * 0.5;
+                        if (nonstandard) r.rule_notes.push_back("Nonstandard finished: less than half the provisional whole-room denominator reaches seven feet.");
+                    }
+                    r.rule_notes.push_back("Sloped ceiling denominator uses complete room geometry before below-five-foot exclusions. This interpretation is provisional because final publisher ANSI text has not been verified.");
+                }
+            }
+            nonstandard = nonstandard || f.access == AccessStatus::through_unfinished;
+            if (f.access == AccessStatus::through_unfinished) r.rule_notes.push_back("Nonstandard finished: access passes through unfinished space.");
+        }
+        const auto identity = a.dwelling_identity.value_or(DwellingIdentity::primary);
+        const bool separate_adu = identity == DwellingIdentity::detached_adu || identity == DwellingIdentity::attached_adu;
+        const bool detached = identity == DwellingIdentity::detached_other;
+        if (separate_adu || detached) {
+            if (detached) category = !finished ? (below ? AppraisalAreaCategory::detached_other_below_grade_unfinished : AppraisalAreaCategory::detached_other_above_grade_unfinished) :
+                nonstandard ? (below ? AppraisalAreaCategory::detached_other_below_grade_nonstandard_finished : AppraisalAreaCategory::detached_other_above_grade_nonstandard_finished) :
+                (below ? AppraisalAreaCategory::detached_other_below_grade_finished : AppraisalAreaCategory::detached_other_above_grade_finished);
+            else category = !finished ? (below ? AppraisalAreaCategory::adu_below_grade_unfinished : AppraisalAreaCategory::adu_above_grade_unfinished) :
+                nonstandard ? (below ? AppraisalAreaCategory::adu_below_grade_nonstandard_finished : AppraisalAreaCategory::adu_above_grade_nonstandard_finished) :
+                (below ? AppraisalAreaCategory::adu_below_grade_finished : AppraisalAreaCategory::adu_above_grade_finished);
+        } else if (!finished) category = below ? AppraisalAreaCategory::below_grade_unfinished : AppraisalAreaCategory::above_grade_unfinished;
+        else if (f.access == AccessStatus::noncontinuous) {
+            if (below) issue("noncontinuous_below_grade", "Primary noncontinuous finished area must be above grade.");
+            category = AppraisalAreaCategory::noncontinuous_finished;
+        } else if (nonstandard) category = below ? AppraisalAreaCategory::below_grade_nonstandard_finished : AppraisalAreaCategory::above_grade_nonstandard_finished;
+        else category = below ? AppraisalAreaCategory::below_grade_finished : AppraisalAreaCategory::above_grade_finished;
+    } else if (measured) {
+        switch (f.use) {
+        case AreaUse::garage: category = AppraisalAreaCategory::garage; break;
+        case AreaUse::carport: category = AppraisalAreaCategory::carport; break;
+        case AreaUse::porch: category = AppraisalAreaCategory::porch; break;
+        case AreaUse::patio: category = AppraisalAreaCategory::patio; break;
+        case AreaUse::deck: category = AppraisalAreaCategory::deck; break;
+        case AreaUse::other_non_living: category = AppraisalAreaCategory::other_non_living; break;
+        default: break;
+        }
+    }
+    r.qualified = r.issues.empty();
+    if (r.qualified) r.derived_category = category;
+    return r;
+}
 }
 
 AppraisalQualification derive_appraisal_category(const AppraisalFacts& f, AppraisalPolicy policy,
@@ -313,11 +460,14 @@ AppraisalQualification derive_appraisal_category(const AppraisalFacts& f, Apprai
     (void)boundary_role_name(f.role);
     if (factor.denominator <= 0 || factor.numerator < 0)
         throw std::invalid_argument("Area factor must be nonnegative with a positive denominator");
+    if (policy.kind == AppraisalPolicyKind::ansi_z765_2021) return derive_ansi(f, factor);
     auto issue = [&](std::string code, std::string message) {
         result.issues.push_back({std::move(code), std::move(message)});
     };
     if (factor.numerator != factor.denominator)
         issue("factor_not_unity", "Qualified physical area requires a factor exactly equal to one.");
+    if (f.access == AccessStatus::through_unfinished)
+        issue("access_incompatible", "Through-unfinished access requires the ANSI policy.");
     const bool residential = policy.kind == AppraisalPolicyKind::residential_declared;
     if ((residential && (f.property_kind == PropertyKind::multifamily ||
                          f.property_kind == PropertyKind::light_commercial)) ||
@@ -391,6 +541,41 @@ AppraisalQualification qualify_appraisal_area(const MeasurementArea& area, const
     const auto calculation = calculate_area(measured, physical);
     result.physical_square_metres = calculation.net_square_metres;
     result.adjusted_square_metres = calculation.factored_square_metres;
+    if (policy.kind == AppraisalPolicyKind::ansi_z765_2021 && facts.ansi) {
+        const auto& ceiling = facts.ansi->ceiling;
+        auto fail = [&](std::string code, std::string message) {
+            result.issues.push_back({std::move(code), std::move(message)});
+        };
+        if (ceiling.kind == CeilingKind::stairs && ceiling.stair_from_floor_id != area.floor_id)
+            fail("stair_source_floor_mismatch", "Stairs must be included on the floor from which they descend.");
+        if (ceiling.kind == CeilingKind::sloped) {
+            if (ceiling.room_boundary_id != area.id)
+                fail("room_anchor_mismatch", "Sloped ceiling evidence must identify this complete room boundary.");
+            if (ceiling.source_geometry_sha256.empty())
+                fail("ceiling_geometry_binding_missing", "Bind sloped ceiling observations to current room and deduction geometry.");
+            if (ceiling.room_floor_area_m2 && std::abs(*ceiling.room_floor_area_m2 - calculation.base_square_metres) > tolerance(calculation.base_square_metres))
+                fail("room_geometry_mismatch", "Sloped ceiling room area must match this complete room boundary's current physical geometry.");
+            std::set<std::string> unique;
+            auto low_geometry = measured;
+            low_geometry.deductions.clear();
+            for (const auto& id : ceiling.below_5ft_deduction_ids) {
+                if (id.empty() || !unique.insert(id).second) { fail("low_ceiling_deduction_invalid", "Below-five-foot IDs must be unique and nonempty."); continue; }
+                const auto found = std::find_if(calculation.deductions.begin(), calculation.deductions.end(), [&](const auto& d) { return d.id == id; });
+                if (found == calculation.deductions.end()) fail("low_ceiling_deduction_missing", "Below-five-foot geometry must be linked as a real contained deduction: " + id);
+                else {
+                    const auto source = std::find_if(area.deductions.begin(), area.deductions.end(), [&](const auto& d) { return d.id == id; });
+                    low_geometry.deductions.push_back(*source);
+                }
+            }
+            const double low = calculate_area(low_geometry, physical).deducted_square_metres;
+            if (ceiling.at_least_7ft_area_m2 && *ceiling.at_least_7ft_area_m2 > calculation.base_square_metres - low + tolerance(calculation.base_square_metres))
+                fail("high_ceiling_area_exceeds_support", "At-least-seven-foot area exceeds room geometry after below-five-foot exclusions.");
+            if (ceiling.at_least_7ft_area_m2 && *ceiling.at_least_7ft_area_m2 > calculation.net_square_metres + tolerance(calculation.base_square_metres))
+                fail("high_ceiling_area_exceeds_candidate", "At-least-seven-foot area exceeds this room's current net candidate geometry.");
+        }
+        result.qualified = result.issues.empty();
+        if (!result.qualified) result.derived_category.reset();
+    }
     if (area.scope != AreaScope::building) {
         result.issues.push_back({"scope_incompatible", "Declared appraisal policies require building scope."});
         result.qualified = false;
@@ -413,10 +598,19 @@ double AppraisalTotals::nonstandard_finished_square_metres() const {
 CalculationProfile builtin_appraisal_profile() {
     CalculationProfile profile{"vertex-appraisal", 1, AreaUnit::square_foot, 2, {}};
     for (const auto& [category, name] : detail::appraisal_category_tokens) {
-        if (category != AppraisalAreaCategory::none)
+        if (category != AppraisalAreaCategory::none && category <= AppraisalAreaCategory::commercial_service)
             profile.classifications.emplace(std::string(name), ClassificationRule{
                 true, category == AppraisalAreaCategory::above_grade_finished, category});
     }
+    return profile;
+}
+
+CalculationProfile ansi_appraisal_profile() {
+    CalculationProfile profile{"vertex-ansi-z765-2021-v1", 1, AreaUnit::square_foot, 0, {}};
+    for (const auto& [category, name] : detail::appraisal_category_tokens)
+        if (category != AppraisalAreaCategory::none && category != AppraisalAreaCategory::commercial_occupiable &&
+            category != AppraisalAreaCategory::commercial_common && category != AppraisalAreaCategory::commercial_service)
+            profile.classifications.emplace(std::string(name), ClassificationRule{true, category == AppraisalAreaCategory::above_grade_finished, category});
     return profile;
 }
 
@@ -438,6 +632,7 @@ AppraisalCalculationReport calculate_appraisal_areas(const std::vector<Measureme
             for (const auto& [category, name] : detail::appraisal_category_tokens) {
                 if (category == AppraisalAreaCategory::none)
                     continue;
+                if (profile.id != "vertex-ansi-z765-2021-v1" && category > AppraisalAreaCategory::commercial_service) continue;
                 const auto value = values.find(category);
                 const auto provenance = ids.find(category);
                 result.by_category.emplace(category, AppraisalAreaBucket{

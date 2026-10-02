@@ -73,6 +73,155 @@ const sketch::AppraisalBoundaryStatus& status(const sketch::AppraisalDocumentRep
     return *found;
 }
 
+sketch::Boundary rectangle_geometry(double x, double y, double w, double h) {
+    return {{{x, y}, {x + w, y}, 0}, {{x + w, y}, {x + w, y + h}, 0},
+        {{x + w, y + h}, {x, y + h}, 0}, {{x, y + h}, {x, y}, 0}};
+}
+
+std::vector<Entity> ansi_fixture_entities() {
+    auto entities = fixture_entities();
+    entities.front().properties["appraisal_policy"]["policy_kind"] = "ansi_z765_2021";
+    entities.front().properties["appraisal_policy"]["ansi"] = {
+        {"interior_inspected", true}, {"direct_measurement", true}, {"acquisition_increment", "inch"}};
+    entities[2].properties["appraisal_facts"]["ansi"] = {{"any_part_below_grade", false}};
+    entities.back().properties["appraisal_facts"].erase("ceiling_eligibility");
+    entities.back().properties["appraisal_facts"]["ansi"] = {
+        {"year_round_suitable", true}, {"finish_matches_dwelling", true}, {"dwelling_identity", "primary"},
+        {"ceiling", {{"kind", "flat"}, {"minimum_height_m", 2.1336}}}};
+    return entities;
+}
+
+void ansi_declarations_and_canonical_reporting() {
+    auto entities = ansi_fixture_entities();
+    entities.front().properties["calculation_profile"] = {{"decimal_places", 6}};
+    auto report = sketch::build_appraisal_document_report(sketch::Document::create(entities).snapshot(), "property-1", sketch::AreaUnit::square_metre);
+    require(report.qualified && report.calculation && report.policy && report.policy->kind == sketch::AppraisalPolicyKind::ansi_z765_2021 &&
+        report.ansi_measurement && report.policy_evidence.size() == 3 && !report.policy_limitations.empty(),
+        "ANSI report must expose actual declarations, public evidence and verification limits");
+    require(report.display_decimal_places == 0 && report.calculation->property.gla().total.display.text == "100" &&
+        report.calculation->property.gla().total.display.unit == sketch::AreaUnit::square_foot && status(report, "area-1").facts,
+        "ANSI canonical whole-square-foot report remains independent of metric diagnostic caller and persisted decimals");
+    auto changed = entities;
+    changed.front().properties["appraisal_policy"]["ansi"].erase("interior_inspected");
+    report = sketch::build_appraisal_document_report(sketch::Document::create(changed).snapshot(), "property-1");
+    require(!report.qualified && status(report, "area-1").measurement, "Missing ANSI declaration retains valid physical diagnostic but blocks totals");
+    changed = entities;
+    changed.front().properties["appraisal_policy"]["ansi"]["direct_measurement"] = "yes";
+    report = sketch::build_appraisal_document_report(sketch::Document::create(changed).snapshot(), "property-1");
+    require(!report.qualified && !status(report, "area-1").measurement, "Malformed boolean evidence cannot acquire a plausible trace");
+    changed = entities;
+    changed.front().properties["appraisal_policy"]["measurement_basis"] = "plans";
+    report = sketch::build_appraisal_document_report(sketch::Document::create(changed).snapshot(), "property-1");
+    require(!report.qualified, "Plans require a limitations declaration");
+    changed.front().properties["appraisal_policy"]["ansi"]["limitations_statement"] = "Measured from supplied building plans.";
+    report = sketch::build_appraisal_document_report(sketch::Document::create(changed).snapshot(), "property-1");
+    require(report.qualified, "Explicit plans limitations can satisfy rule checks");
+    changed = entities;
+    changed[2].properties["appraisal_facts"]["ansi"]["any_part_below_grade"] = true;
+    report = sketch::build_appraisal_document_report(sketch::Document::create(changed).snapshot(), "property-1");
+    require(!report.qualified, "Grade contradiction is actionable");
+    changed[2].properties["appraisal_facts"].erase("grade");
+    report = sketch::build_appraisal_document_report(sketch::Document::create(changed).snapshot(), "property-1");
+    require(report.qualified && report.calculation->property.gla().total.square_metres == 0 &&
+        report.calculation->property.by_category.at(sketch::AppraisalAreaCategory::below_grade_finished).total.square_metres > 0,
+        "Whole-floor below-grade fact replaces arbitrary elevation inference");
+    changed = entities;
+    changed.front().properties["appraisal_policy"]["policy_kind"] = "residential_declared";
+    changed.back().properties["appraisal_facts"]["ceiling_eligibility"] = "standard";
+    report = sketch::build_appraisal_document_report(sketch::Document::create(changed).snapshot(), "property-1");
+    require(report.qualified && !report.ansi_measurement && report.calculation->calculation.profile_id == "vertex-appraisal",
+        "Switching legacy preserves stored ANSI evidence without changing declared-v1 qualification");
+    changed.back().properties["appraisal_facts"].erase("ceiling_eligibility");
+    report = sketch::build_appraisal_document_report(sketch::Document::create(changed).snapshot(), "property-1");
+    require(!report.qualified, "Stored ANSI evidence cannot substitute for missing strict legacy declarations");
+}
+
+void ansi_nested_partitions_and_ceiling_binding() {
+    auto entities = ansi_fixture_entities();
+    entities.back().properties["boundary"] = square(0, 0, 10);
+    entities.back().properties["deduction_ids"] = {"room-2"};
+    auto room = entities.back();
+    room.id = "room-2";
+    room.properties["boundary"] = square(1, 1, 6);
+    room.properties["deduction_ids"] = {"low-3"};
+    room.properties["appraisal_facts"]["ansi"]["ceiling"] = {
+        {"kind", "sloped"}, {"at_least_7ft_area_m2", 18}, {"room_floor_area_m2", 36},
+        {"below_5ft_deduction_ids", {"low-3"}}, {"room_boundary_id", room.id},
+        {"source_geometry_sha256", sketch::appraisal_ceiling_geometry_digest(rectangle_geometry(1, 1, 6, 6),
+            {{"low-3", rectangle_geometry(1, 1, 2, 2)}})}};
+    auto low = entities.back();
+    low.id = "low-3";
+    low.properties["boundary"] = square(1, 1, 2);
+    low.properties.erase("deduction_ids");
+    low.properties["appraisal_facts"] = {{"boundary_role", "other_void"}};
+    entities.push_back(room);
+    entities.push_back(low);
+    auto report = sketch::build_appraisal_document_report(sketch::Document::create(entities).snapshot(), "property-1");
+    require(report.qualified && report.calculation && !status(report, "room-2").qualification.rule_notes.empty(),
+        "Nested ANSI floor/room/exclusion partition must carry ceiling interpretation caveat");
+    near(report.calculation->property.gla().total.square_metres, 96, 1e-7,
+        "Parent removes full child and child adds only its own net; below-five-foot geometry disappears exactly once");
+    near(status(report, "area-1").measurement->net_square_metres, 64, 1e-7, "Parent owns remaining floor region");
+    near(status(report, "room-2").measurement->net_square_metres, 32, 1e-7, "Sloped room physically removes below-five-foot strip");
+    auto changed = entities;
+    changed[5].properties["boundary"] = square(0, 1, 6);
+    report = sketch::build_appraisal_document_report(sketch::Document::create(changed).snapshot(), "property-1");
+    require(!report.qualified && std::any_of(status(report, "room-2").qualification.issues.begin(),
+        status(report, "room-2").qualification.issues.end(), [](const auto& issue) { return issue.code == "stale_ceiling_evidence"; }),
+        "Same-area valid shape movement invalidates bound ceiling observations");
+    changed = entities;
+    changed[6].properties["deduction_ids"] = {"room-2"};
+    report = sketch::build_appraisal_document_report(sketch::Document::create(changed).snapshot(), "property-1");
+    require(!report.qualified && !report.calculation, "Nested deduction cycles cannot yield totals");
+    std::set<std::string, std::less<>> visible_ids;
+    for (const auto& value : entities) if (value.id != "low-3") visible_ids.insert(value.id);
+    report = sketch::build_appraisal_document_report(sketch::Document::create(entities).snapshot(), "property-1",
+        sketch::AreaUnit::square_foot, &visible_ids);
+    require(!report.qualified && !status(report, "area-1").measurement && !status(report, "room-2").measurement,
+        "Hidden nested deduction invalidates every ancestor geometry trace");
+    changed = entities;
+    auto sibling = room;
+    sibling.id = "overlapping-room";
+    sibling.properties.erase("deduction_ids");
+    sibling.properties["appraisal_facts"]["ansi"]["ceiling"] = {{"kind", "flat"}, {"minimum_height_m", 2.1336}};
+    changed[4].properties["deduction_ids"].push_back(sibling.id);
+    changed.push_back(sibling);
+    report = sketch::build_appraisal_document_report(sketch::Document::create(changed).snapshot(), "property-1");
+    require(!report.qualified && !report.calculation, "Overlapping sibling measured regions cannot double-count under nested partitions");
+    changed = entities;
+    changed[5].properties["appraisal_facts"]["ansi"]["ceiling"]["below_5ft_deduction_ids"] = {"area-1"};
+    report = sketch::build_appraisal_document_report(sketch::Document::create(changed).snapshot(), "property-1");
+    require(!report.qualified, "Below-five-foot references must be actual contained exclusion deductions");
+    changed = entities;
+    changed.front().properties["appraisal_policy"]["policy_kind"] = "residential_declared";
+    for (auto& value : changed) if (value.type == "measurement_boundary") value.properties["appraisal_facts"]["ceiling_eligibility"] = "standard";
+    report = sketch::build_appraisal_document_report(sketch::Document::create(changed).snapshot(), "property-1");
+    require(!report.qualified, "Nested deductions remain unsupported by frozen declared-v1 contract");
+}
+
+void ansi_stairs_and_adu_totals() {
+    auto entities = ansi_fixture_entities();
+    entities.back().properties["boundary"] = square(0, 0, 10);
+    entities.back().properties["deduction_ids"] = {"stairs"};
+    auto stairs = entities.back();
+    stairs.id = "stairs";
+    stairs.properties["boundary"] = square(1, 1, 2);
+    stairs.properties.erase("deduction_ids");
+    stairs.properties["appraisal_facts"]["boundary_role"] = "stair_footprint";
+    stairs.properties["appraisal_facts"]["ansi"]["ceiling"] = {{"kind", "stairs"}, {"stair_from_floor_id", "floor-1"}};
+    entities.push_back(stairs);
+    auto report = sketch::build_appraisal_document_report(sketch::Document::create(entities).snapshot(), "property-1");
+    require(report.qualified && !status(report, "stairs").exclusion, "ANSI descending stairs remain a measured contribution");
+    near(report.calculation->property.gla().total.square_metres, 100, 1e-7, "Stair footprint is included on descending source floor");
+    for (const auto identity : {"attached_adu", "detached_adu", "detached_other"}) {
+        auto changed = ansi_fixture_entities();
+        changed.back().properties["appraisal_facts"]["ansi"]["dwelling_identity"] = identity;
+        report = sketch::build_appraisal_document_report(sketch::Document::create(changed).snapshot(), "property-1");
+        require(report.qualified && report.calculation->property.gla().total.square_metres == 0,
+            "ADU and detached-structure contributions never inflate primary GLA");
+    }
+}
+
 void qualified_document_recalculates_from_geometry() {
     auto entities = fixture_entities();
     entities.push_back(entity("room-1", "room_boundary",
@@ -624,6 +773,9 @@ void malformed_projection_data_withholds_totals() {
 int main() {
     try {
         qualified_document_recalculates_from_geometry();
+        ansi_declarations_and_canonical_reporting();
+        ansi_nested_partitions_and_ceiling_binding();
+        ansi_stairs_and_adu_totals();
         declaration_and_factor_failures_retain_physical_traces();
         overlapping_void_deductions_expose_requested_and_applied_amounts();
         exclusion_only_report_retains_measurement_without_totals();

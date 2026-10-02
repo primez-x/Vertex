@@ -65,6 +65,58 @@ QPushButton* button(AppraisalDetailsPanel& panel,const char* object) {
     auto* value=panel.findChild<QPushButton*>(QString::fromLatin1(object));
     require(value!=nullptr,"expected named detail action");return value;
 }
+void ansi_canonical_units_declarations_and_curve_dimensions() {
+    auto entities=fixture();
+    auto& policy=entities.front().properties["appraisal_policy"];
+    policy["policy_kind"]="ansi_z765_2021";
+    policy["ansi"]={{"interior_inspected",true},{"direct_measurement",true},
+        {"acquisition_increment","tenth_foot"},{"limitations_statement","Interior inspected; no inaccessible areas."}};
+    entities[2].properties["appraisal_facts"]["ansi"]={{"any_part_below_grade",false}};
+    entities.back().properties["appraisal_facts"]["ansi"]={{"year_round_suitable",true},
+        {"finish_matches_dwelling",true},{"dwelling_identity","primary"},
+        {"ceiling",{{"kind","flat"},{"minimum_height_m",2.4384}}}};
+    auto adu=entities.back();adu.id="adu";adu.properties["name"]="Guest ADU";
+    adu.properties["boundary"]=square(8,0,3.048);
+    adu.properties["appraisal_facts"]["ansi"]["dwelling_identity"]="attached_adu";entities.push_back(adu);
+    AppraisalDetailsPanel panel;auto document=sketch::Document::create(entities);
+    panel.setDocument(document.snapshot(),"p",true);panel.setSelectedBoundary("a");
+    require(panel.report() && panel.report()->qualified && label(panel,"appraisalDetailsGla")=="100 sq ft",
+        "ANSI primary GLA remains canonical whole square feet in metric workspace and excludes ADU");
+    const auto totals=label(panel,"appraisalDetailsTotals");
+    require(totals.contains("ADU",Qt::CaseInsensitive) && totals.contains("100 sq ft") && totals.contains("Supplemental metric diagnostic"),
+        "ANSI keeps ADU category separate and clearly labels metric diagnostic totals");
+    const auto policy_text=label(panel,"appraisalDetailsPolicy");
+    require(policy_text.contains("Interior inspected") && policy_text.contains("Direct measurement") &&
+        policy_text.contains("Tenth foot") && policy_text.contains("no inaccessible areas"),"ANSI property declarations are visible");
+    require(label(panel,"appraisalDetailsStandards").contains("normative",Qt::CaseInsensitive),
+        "ANSI rule qualification retains explicit unresolved normative validation");
+    const auto trace=label(panel,"appraisalDetailsTrace");
+    require(trace.contains("40.0 ft") && trace.contains("10.0 ft") && trace.contains("8.0 ft") &&
+        trace.contains("Year-round suitable") && trace.contains("Finish matches dwelling") && trace.contains("Primary"),
+        "ANSI tenth-foot dimensions and retained source facts are visible");
+    entities[4].properties["boundary"]=json::array({{{"start",{-.3048,0}},{"end",{.3048,0}},{"sweep_radians",std::acos(-1.0)}},
+        {{"start",{.3048,0}},{"end",{-.3048,0}},{"sweep_radians",std::acos(-1.0)}}});
+    document=sketch::Document::create(entities);panel.setDocument(document.snapshot(),"p",true);
+    const auto curved=label(panel,"appraisalDetailsTrace");
+    require(curved.contains("6.3 ft") && curved.contains("Arc 1: 3.1 ft") && curved.contains("Arc 2: 3.1 ft"),
+        "ANSI curve dimensions use analytical arc length and tenth-foot presentation");
+    entities[4].properties["boundary"]=square(0,0,3.048);
+    entities[4].properties["appraisal_facts"]["access"]="through_unfinished";
+    document=sketch::Document::create(entities);panel.setDocument(document.snapshot(),"p",true);
+    require(panel.report()->qualified && label(panel,"appraisalDetailsGla")=="0 sq ft" &&
+        label(panel,"appraisalDetailsTrace").contains("access passes through unfinished space"),
+        "nonstandard finished area shows its real classification reason without inflating primary GLA");
+    entities[4].properties["appraisal_facts"]["access"]="direct_interior";
+    entities[4].properties["appraisal_facts"]["boundary_role"]="stair_footprint";
+    entities[4].properties["appraisal_facts"]["ansi"]["ceiling"]={{"kind","stairs"},{"stair_from_floor_id","f"}};
+    document=sketch::Document::create(entities);panel.setDocument(document.snapshot(),"p",true);
+    require(panel.report()->qualified && label(panel,"appraisalDetailsTrace").contains("Stair from floor source") &&
+        label(panel,"appraisalDetailsTrace").contains("Stairs"),"descending stair source floor is visible");
+    entities.front().properties["appraisal_policy"]["ansi"].erase("direct_measurement");
+    document=sketch::Document::create(entities);panel.setDocument(document.snapshot(),"p",true);
+    require(!panel.report()->qualified && label(panel,"appraisalDetailsGla")=="Totals unavailable",
+        "missing ANSI source declaration withholds prominent total");
+}
 void qualified_units_refresh_and_callbacks() {
     AppraisalDetailsPanel panel;
     auto entities=fixture();auto document=sketch::Document::create(entities);
@@ -291,7 +343,7 @@ int main(int argc,char** argv) {
     try {
         require(QFontDatabase::addApplicationFont(QStringLiteral(":/fonts/Inter.ttf"))>=0,"bundled Inter font loads for native Details capture");
         app.setFont(QFont(QStringLiteral("Inter"),10));
-        qualified_units_refresh_and_callbacks();undeclared_and_invalid_measurements();
+        ansi_canonical_units_declarations_and_curve_dimensions();qualified_units_refresh_and_callbacks();undeclared_and_invalid_measurements();
         categories_floors_deductions_and_phase();stale_wall_sources();native_main_window_details();native_stale_context_withholds_actions_and_totals();
         std::cout<<"appraisal_details_panel_tests passed\n";return 0;
     } catch(const std::exception& failure) {std::cerr<<"appraisal_details_panel_tests: "<<failure.what()<<'\n';return 1;}

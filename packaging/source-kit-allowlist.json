@@ -1563,6 +1563,10 @@
     },
     {
       "category": "docs",
+      "path": "docs/plans/2026-10-02-ansi-appraisal-visibility.md"
+    },
+    {
+      "category": "docs",
       "path": "docs/product-scope.md"
     },
     {
@@ -2292,6 +2296,10 @@
     {
       "category": "docs",
       "path": "docs/verification/annotation-instance-clipboard-2026-10-01.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/verification/ansi-appraisal-visibility-2026-10-02.md"
     },
     {
       "category": "docs",
@@ -3868,6 +3876,10 @@
     {
       "category": "source",
       "path": "tests/annotation_entity_codec_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/ansi_appraisal_desktop_tests.cpp"
     },
     {
       "category": "source",

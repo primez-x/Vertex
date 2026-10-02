@@ -16,6 +16,7 @@
 #include <QPdfDocument>
 #include <QPdfSelection>
 #include <QPushButton>
+#include <QStandardPaths>
 #include <QStringList>
 #include <QTabWidget>
 #include <QTemporaryDir>
@@ -23,6 +24,7 @@
 #include <QTextDocument>
 #include <QTimer>
 #include <QTreeWidget>
+#include <QUuid>
 
 #include <algorithm>
 #include <cmath>
@@ -109,6 +111,41 @@ void set_precision(MainWindow& window,unsigned precision) {
     property.properties["calculation_profile"]["decimal_places"]=precision;
     window.document().apply(sketch::ApplyEntityChanges{source.revision(),{sketch::EntityChange::upsert(property)}, {},"report display precision fixture"});
 }
+void ansi_report_html_pdf_canonical_units_and_evidence() {
+    using nlohmann::json;using sketch::Entity;
+    const auto make=[](const char* id,const char* type,json properties){return Entity{id,type,std::move(properties),false,json::object()};};
+    json boundary=json::array();for(const auto& edge:square(0,0,3.048))boundary.push_back(
+        {{"start",{edge.start.x,edge.start.y}},{"end",{edge.end.x,edge.end.y}},{"sweep_radians",edge.sweep_radians}});
+    std::vector<Entity> entities={make("p","property",{{"name","ANSI Home"},{"calculation_workflow","appraisal"},
+        {"appraisal_policy",{{"policy_kind","ansi_z765_2021"},{"version",1},{"property_kind","detached_single_family"},
+            {"measurement_basis","exterior"},{"ansi",{{"interior_inspected",true},{"direct_measurement",true},
+                {"acquisition_increment","inch"},{"limitations_statement","All rooms inspected <verified>."}}}}}}),
+        make("b","building",{{"name","Main"},{"property_id","p"}}),
+        make("f","floor",{{"name","Ground"},{"building_id","b"},{"appraisal_facts",{{"grade","above"},{"ansi",{{"any_part_below_grade",false}}}}}}),
+        make("l","layer",{{"floor_id","f"}}),
+        make("a","measurement_boundary",{{"name","Primary room"},{"property_id","p"},{"building_id","b"},{"floor_id","f"},{"layer_id","l"},
+            {"calculation_scope","building"},{"boundary",boundary},{"appraisal_facts",{{"finish","finished"},{"access","direct_interior"},
+                {"area_use","dwelling"},{"boundary_role","measured_area"},{"ansi",{{"year_round_suitable",true},{"finish_matches_dwelling",true},
+                    {"dwelling_identity","primary"},{"ceiling",{{"kind","flat"},{"minimum_height_m",2.4384}}}}}}}})};
+    auto document=sketch::Document::create(entities);const auto source=document.snapshot();
+    const auto report=sketch::build_appraisal_document_report(source,"p",sketch::AreaUnit::square_metre);
+    require(report.qualified,"ANSI report fixture qualifies under declared rule checks");
+    const auto html=sketch::desktop::appraisal_report_html(source,report,true,true);
+    require(html.contains("MEASUREMENT SUMMARY") && html.contains("100 sq ft") && !html.contains("100.00 sq ft") &&
+        html.contains("40.0 ft") && html.contains("10.0 ft") && html.contains("Supplemental metric diagnostic"),
+        "ANSI HTML uses canonical areas and tenth-foot dimensions with clearly supplemental metric display");
+    require(html.contains("Interior inspected") && html.contains("Direct measurement") && html.contains("Inch") &&
+        html.contains("Year-round suitable") && html.contains("Finish matches dwelling") && html.contains("Primary") &&
+        html.contains("8.0 ft") && html.contains("normative",Qt::CaseInsensitive) && html.contains("&lt;verified&gt;"),
+        "ANSI HTML exposes source declarations and truthful escaped validation limitations");
+    QTemporaryDir directory;require(directory.isValid(),"ANSI PDF fixture directory");QString error;
+    const auto path=directory.filePath("ansi-measurement.pdf");
+    require(sketch::desktop::write_appraisal_report_pdf(source,report,true,path,error),"ANSI PDF exports authoritative report");
+    const auto contents=pdf_text(path);
+    require(contents.contains("MEASUREMENT SUMMARY") && contents.contains("100 sq ft") && contents.contains("40.0 ft") &&
+        contents.contains("Interior inspected") && contents.contains("Direct measurement") && contents.contains("All rooms inspected <verified>.") &&
+        contents.contains("normative",Qt::CaseInsensitive),"actual reopened PDF retains canonical measurements and declarations");
+}
 void actual_report_summary_audit_navigation_and_refresh() {
     QTemporaryDir directory;require(directory.isValid(),"report fixture needs isolated local directory");
     MainWindow window({},nullptr,directory.filePath("text-library.json"));const auto ids=fixture(window);
@@ -183,8 +220,15 @@ void display_precision_unqualified_diagnostics_and_invalid_trace() {
         require(parent.text(4)=="861.1 sq ft" && parent.text(6)=="430.6 sq ft" &&
             child<QTextBrowser>(dialog,"appraisalReportSummary").toPlainText().contains("Display precision 1"),"actual report must use active units and configured precision on physical/adjusted amounts");});
     const auto source=window.document().snapshot();auto parent=source.entities().at(ids.parent.toStdString());parent.properties["wall_measurement_source"]={{"version",99}};
-    window.document().apply(sketch::ApplyEntityChanges{source.revision(),{sketch::EntityChange::upsert(parent)}, {},"invalid measurement source fixture"});
-    report_action(window,[&](auto& dialog){auto& tree=child<QTreeWidget>(dialog,"appraisalReportAreas");tree.setCurrentItem(&row(tree,ids.parent));
+    bool refused=false;
+    try { window.document().apply(sketch::ApplyEntityChanges{source.revision(),{sketch::EntityChange::upsert(parent)}, {},"invalid measurement source fixture"}); }
+    catch(const sketch::DocumentError&) { refused=true; }
+    require(refused && window.document().snapshot().entities()==source.entities(),"ordinary editing cannot inject an unsupported exterior source");
+    std::vector<sketch::Entity> imported;
+    for(const auto& [id,entity]:source.entities())imported.push_back(id==parent.id?parent:entity);
+    auto diagnostic_document=std::make_shared<sketch::Document>(sketch::Document::create(imported));
+    MainWindow diagnostic_window(diagnostic_document,nullptr,directory.filePath("diagnostic-library.json"));
+    report_action(diagnostic_window,[&](auto& dialog){auto& tree=child<QTreeWidget>(dialog,"appraisalReportAreas");tree.setCurrentItem(&row(tree,ids.parent));
         const auto& invalid=row(tree,ids.parent);for(int column=2;column<7;++column)require(invalid.text(column)==QString::fromUtf8("—"),"stale source must suppress every current numeric audit field");
         const auto detail=child<QTextBrowser>(dialog,"appraisalReportDetail").toPlainText();require(detail.contains("Current measurement unavailable") && !detail.contains("Gross boundary area"),"stale detail must explain missing trace without plausible numeric geometry");});
 }
@@ -298,10 +342,12 @@ void paginated_pdf_escaping_and_atomic_destination_failures() {
 }
 
 int main(int argc,char** argv) {
-    sketch::testing::noninteractive_errors();QApplication app(argc,argv);
+    sketch::testing::noninteractive_errors();QStandardPaths::setTestModeEnabled(true);QApplication app(argc,argv);
+    QCoreApplication::setOrganizationName(QStringLiteral("VertexTests"));
+    QCoreApplication::setApplicationName(QStringLiteral("Vertex-appraisal-report-test-")+QUuid::createUuid().toString(QUuid::WithoutBraces));
     try {
         require(QFontDatabase::addApplicationFont(QStringLiteral(":/fonts/Inter.ttf"))>=0,"bundled font must load for actual report rendering");app.setFont(QFont(QStringLiteral("Inter"),10));
-        actual_report_summary_audit_navigation_and_refresh();display_precision_unqualified_diagnostics_and_invalid_trace();
+        ansi_report_html_pdf_canonical_units_and_evidence();actual_report_summary_audit_navigation_and_refresh();display_precision_unqualified_diagnostics_and_invalid_trace();
         active_design_phase_report_scope();undeclared_policy_and_malformed_area_remain_inspectable();
         paginated_pdf_escaping_and_atomic_destination_failures();
         std::cout<<"appraisal_report_desktop_tests passed\n";return 0;

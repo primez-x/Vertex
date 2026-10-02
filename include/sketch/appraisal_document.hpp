@@ -18,6 +18,7 @@ struct AppraisalBoundaryStatus {
     // Its presence does not imply qualification or an aggregate contribution.
     // Stale sources and invalid geometry/dependencies never expose a trace.
     std::optional<AreaCalculation> measurement{};
+    std::optional<AppraisalFacts> facts;
 };
 
 // A revision-bound projection of one property's declared appraisal workflow.
@@ -40,14 +41,22 @@ struct AppraisalDocumentReport {
     // history are not inputs to this numeric projection.
     std::string source_document_id;
     std::string source_entities_sha256;
+    std::optional<AnsiMeasurementDeclarations> ansi_measurement;
+    std::vector<std::string> policy_evidence;
+    std::vector<std::string> policy_limitations;
 };
 
-// Appraisal eligibility always uses the built-in policy. Persisted display
-// settings contribute only decimal_places (integer 0..6, default 2); the caller
-// chooses the unit. Malformed display settings throw invalid_argument.
+// Declared-v1 eligibility uses the unchanged built-in policy. Its persisted
+// display settings contribute only decimal_places (0..6, default 2). ANSI uses
+// the separate canonical whole-square-foot profile regardless of caller unit.
 [[nodiscard]] CalculationProfile appraisal_display_profile(
     const nlohmann::json& property_properties,
     AreaUnit display_unit = AreaUnit::square_foot);
+
+// Geometry-only binding for ceiling observations. Sorts deduction IDs and
+// includes their shapes; independent of presentation and the evidence itself.
+[[nodiscard]] std::string appraisal_ceiling_geometry_digest(
+    const Boundary& boundary, const std::vector<AreaDeduction>& deductions);
 
 // visible_entity_ids is a semantic design-phase mask. Presentation filters
 // must not be supplied here because hiding an item in the workspace cannot

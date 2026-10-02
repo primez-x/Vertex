@@ -7,6 +7,7 @@
 #include <cmath>
 #include <cstdint>
 #include <iterator>
+#include <functional>
 #include <limits>
 #include <map>
 #include <numeric>
@@ -168,7 +169,7 @@ Declarations declarations(const Entity& property, const Entity& floor,
         target = *parsed;
     };
     const auto policy = declaration_object(property.properties, "appraisal_policy");
-    exact_keys(policy, {"policy_kind", "version", "property_kind", "measurement_basis"});
+    exact_keys(policy, {"policy_kind", "version", "property_kind", "measurement_basis", "ansi"});
     if (!policy.contains("version")) result.missing.push_back("Declare policy version.");
     else if (!policy.at("version").is_number_integer() || policy.at("version") != 1)
         throw std::invalid_argument("unsupported appraisal policy version");
@@ -179,16 +180,80 @@ Declarations declarations(const Entity& property, const Entity& floor,
     token(policy, "property_kind", parse_property_kind, result.facts.property_kind);
     token(policy, "measurement_basis", parse_measurement_basis, result.facts.measurement_basis);
     const auto level = declaration_object(floor.properties, "appraisal_facts");
-    exact_keys(level, {"grade"});
+    exact_keys(level, {"grade", "ansi"});
     token(level, "grade", parse_grade_status, result.facts.grade);
     const auto area = declaration_object(boundary.properties, "appraisal_facts");
-    exact_keys(area, {"finish", "access", "ceiling_eligibility", "area_use", "boundary_role"});
+    exact_keys(area, {"finish", "access", "ceiling_eligibility", "area_use", "boundary_role", "ansi"});
     token(area, "finish", parse_finish_status, result.facts.finish);
     token(area, "access", parse_access_status, result.facts.access);
     token(area, "ceiling_eligibility", parse_ceiling_eligibility, result.facts.ceiling);
     token(area, "area_use", parse_area_use, result.facts.use);
     token(area, "boundary_role", parse_boundary_role, result.facts.role);
-    if (area.contains("boundary_role") && result.facts.role != BoundaryRole::measured_area) {
+    const bool ansi = result.policy && result.policy->kind == AppraisalPolicyKind::ansi_z765_2021;
+    if (policy.contains("ansi") || level.contains("ansi") || area.contains("ansi") || ansi) {
+        AnsiAppraisalFacts evidence;
+        const auto measurement = declaration_object(policy, "ansi");
+        exact_keys(measurement, {"interior_inspected", "direct_measurement", "acquisition_increment", "limitations_statement"});
+        const auto boolean = [](const Json& object, const char* key, std::optional<bool>& target) {
+            if (!object.contains(key)) return;
+            if (!object.at(key).is_boolean()) throw std::invalid_argument(std::string(key) + " must be boolean");
+            target = object.at(key).get<bool>();
+        };
+        const auto optional_token = [&](const Json& object, const char* key, auto parser, auto& target) {
+            if (!object.contains(key)) return;
+            if (!object.at(key).is_string()) throw std::invalid_argument(std::string(key) + " must be a string");
+            target = parser(object.at(key).get<std::string>());
+            if (!target) throw std::invalid_argument(std::string("unknown appraisal ") + key);
+        };
+        boolean(measurement, "interior_inspected", evidence.measurement.interior_inspected);
+        boolean(measurement, "direct_measurement", evidence.measurement.direct_measurement);
+        optional_token(measurement, "acquisition_increment", parse_acquisition_increment, evidence.measurement.acquisition_increment);
+        evidence.measurement.limitations_statement = text(measurement, "limitations_statement").value_or("");
+        const auto floor_evidence = declaration_object(level, "ansi");
+        exact_keys(floor_evidence, {"any_part_below_grade"});
+        boolean(floor_evidence, "any_part_below_grade", evidence.any_part_below_grade);
+        const auto area_evidence = declaration_object(area, "ansi");
+        exact_keys(area_evidence, {"year_round_suitable", "finish_matches_dwelling", "dwelling_identity", "ceiling"});
+        boolean(area_evidence, "year_round_suitable", evidence.year_round_suitable);
+        boolean(area_evidence, "finish_matches_dwelling", evidence.finish_matches_dwelling);
+        optional_token(area_evidence, "dwelling_identity", parse_dwelling_identity, evidence.dwelling_identity);
+        const auto ceiling = declaration_object(area_evidence, "ceiling");
+        exact_keys(ceiling, {"kind", "minimum_height_m", "at_least_7ft_area_m2", "room_floor_area_m2", "below_5ft_deduction_ids", "stair_from_floor_id", "room_boundary_id", "source_geometry_sha256"});
+        optional_token(ceiling, "kind", parse_ceiling_kind, evidence.ceiling.kind);
+        const auto number = [](const Json& object, const char* key, std::optional<double>& target) {
+            if (!object.contains(key)) return;
+            if (!object.at(key).is_number()) throw std::invalid_argument(std::string(key) + " must be numeric");
+            const auto value = object.at(key).get<double>();
+            if (!std::isfinite(value) || value < 0) throw std::invalid_argument(std::string(key) + " must be finite and nonnegative");
+            target = value;
+        };
+        number(ceiling, "minimum_height_m", evidence.ceiling.minimum_height_m);
+        number(ceiling, "at_least_7ft_area_m2", evidence.ceiling.at_least_7ft_area_m2);
+        number(ceiling, "room_floor_area_m2", evidence.ceiling.room_floor_area_m2);
+        evidence.ceiling.stair_from_floor_id = text(ceiling, "stair_from_floor_id").value_or("");
+        evidence.ceiling.room_boundary_id = text(ceiling, "room_boundary_id").value_or("");
+        evidence.ceiling.source_geometry_sha256 = text(ceiling, "source_geometry_sha256").value_or("");
+        if (ceiling.contains("below_5ft_deduction_ids")) {
+            Entity temporary;
+            temporary.properties = {{"deduction_ids", ceiling.at("below_5ft_deduction_ids")}};
+            evidence.ceiling.below_5ft_deduction_ids = deduction_ids(temporary);
+        }
+        if (evidence.ceiling.kind) {
+            const auto kind = *evidence.ceiling.kind;
+            if ((kind != CeilingKind::flat && ceiling.contains("minimum_height_m")) ||
+                (kind != CeilingKind::stairs && ceiling.contains("stair_from_floor_id")) ||
+                (kind != CeilingKind::sloped && (ceiling.contains("at_least_7ft_area_m2") || ceiling.contains("room_floor_area_m2") ||
+                 ceiling.contains("below_5ft_deduction_ids") || ceiling.contains("room_boundary_id") || ceiling.contains("source_geometry_sha256"))))
+                throw std::invalid_argument("ceiling evidence keys do not match the declared ceiling kind");
+        }
+        result.facts.ansi = std::move(evidence);
+    }
+    if (ansi) {
+        std::erase(result.missing, "Declare grade.");
+        std::erase(result.missing, "Declare ceiling_eligibility.");
+    }
+    if (area.contains("boundary_role") && result.facts.role != BoundaryRole::measured_area &&
+        !(ansi && result.facts.role == BoundaryRole::stair_footprint)) {
         // Voids have no dwelling finish/access/use to declare. Supplied values
         // were still parsed above, so malformed declarations remain errors.
         for (const auto* key : {"grade", "finish", "access", "ceiling_eligibility", "area_use"})
@@ -280,7 +345,11 @@ bool belongs_to_other_property(const DocumentSnapshot& document, const Entity& b
 
 CalculationProfile appraisal_display_profile(
     const nlohmann::json& property_properties, AreaUnit display_unit) {
-    auto profile = builtin_appraisal_profile();
+    const auto policy = property_properties.find("appraisal_policy");
+    const bool ansi = policy != property_properties.end() && policy->is_object() &&
+        policy->value("policy_kind", Json()) == "ansi_z765_2021";
+    auto profile = ansi ? ansi_appraisal_profile() : builtin_appraisal_profile();
+    if (ansi) return profile;
     profile.display_unit = display_unit;
     const auto configuration = property_properties.find("calculation_profile");
     if (configuration == property_properties.end()) return profile;
@@ -304,6 +373,24 @@ CalculationProfile appraisal_display_profile(
     throw std::invalid_argument("calculation_profile.decimal_places must be an integer from 0 to 6");
 }
 
+std::string appraisal_ceiling_geometry_digest(const Boundary& boundary, const std::vector<AreaDeduction>& deductions) {
+    const auto encode = [](const Boundary& shape) {
+        auto result = Json::array();
+        for (const auto& edge : shape) result.push_back({{"start", {edge.start.x, edge.start.y}},
+            {"end", {edge.end.x, edge.end.y}}, {"sweep_radians", edge.sweep_radians}});
+        return result;
+    };
+    std::map<std::string, Entity, std::less<>> binding;
+    binding.emplace("room", Entity{"room", "ceiling_geometry", {{"boundary", encode(boundary)}}, false, Json::object()});
+    for (const auto& deduction : deductions) {
+        const auto key = "deduction:" + deduction.id;
+        if (deduction.id.empty() || binding.contains(key))
+            throw std::invalid_argument("Ceiling geometry binding needs unique deduction IDs");
+        binding.emplace(key, Entity{key, "ceiling_deduction", {{"boundary", encode(deduction.boundary)}}, false, Json::object()});
+    }
+    return entity_map_digest(binding);
+}
+
 AppraisalDocumentReport build_appraisal_document_report(
     const DocumentSnapshot& document, const std::string& property_id,
     AreaUnit display_unit,
@@ -321,6 +408,23 @@ AppraisalDocumentReport build_appraisal_document_report(
         throw std::invalid_argument("calculation_workflow must be measurement or appraisal");
     result.configured = workflow == "appraisal";
     if (!result.configured) return result;
+    try {
+        Entity empty;
+        empty.properties = Json::object();
+        const auto property_declaration = declarations(property->second, empty, empty);
+        result.policy = property_declaration.policy;
+        if (result.policy && result.policy->kind == AppraisalPolicyKind::ansi_z765_2021) {
+            result.ansi_measurement = property_declaration.facts.ansi->measurement;
+            result.policy_evidence = {"https://singlefamily.fanniemae.com/media/30266/display",
+                "https://selling-guide.fanniemae.com/sel/b4-1.3-05/improvements-section-appraisal-report",
+                "https://singlefamily.fanniemae.com/media/document/pdf/fannie-mae-selling-guide-supplement-uniform-appraisal-dataset-uad-36-policy"};
+            result.policy_limitations = {
+                "Rule checks use public Fannie Mae guidance. Final publisher ANSI Z765-2021 text has not been obtained or verified; this report is not compliance certification.",
+                "Sloped-ceiling threshold currently uses the complete room boundary before below-five-foot exclusions. The final standard's denominator remains unresolved; sloped rule results require review.",
+                "All ADUs are measured separately. This measurement summary does not implement a full UAD appraisal form or legacy UAD 2.6 ADU combination."};
+        }
+    } catch (const std::exception& error) { result.issues.push_back(error.what()); }
+    const bool ansi_policy = result.policy && result.policy->kind == AppraisalPolicyKind::ansi_z765_2021;
     CalculationProfile profile;
     std::optional<std::string> display_error;
     try {
@@ -389,6 +493,8 @@ AppraisalDocumentReport build_appraisal_document_report(
             if (display_error) throw std::invalid_argument(*display_error);
             const auto declared = declarations(property->second, *owner.floor, *entity);
             result.policy = declared.policy;
+            const bool exclusion = declared.facts.role != BoundaryRole::measured_area &&
+                !(ansi_policy && declared.facts.role == BoundaryRole::stair_footprint);
             if (!wall_measurement_source_current(document, *entity) ||
                 !wall_measurement_sources_visible(*entity, visible_entity_ids)) {
                 auto qualification = declared.policy
@@ -402,13 +508,43 @@ AppraisalDocumentReport build_appraisal_document_report(
                 qualification.issues.push_back({
                     "stale_measurement_source",
                     "Exterior measurement is stale; refresh exterior measurement from source walls before producing appraisal totals."});
-                const bool exclusion = declared.facts.role != BoundaryRole::measured_area;
                 result.boundaries.push_back({entity->id, exclusion, std::move(qualification)});
+                result.boundaries.back().facts = declared.facts;
                 result.issues.push_back(entity->id +
                     ": Exterior measurement is stale; refresh exterior measurement from source walls before producing appraisal totals.");
                 continue;
             }
             std::vector<AreaDeduction> deductions;
+            if (ansi_policy) {
+                std::set<std::string> active, complete;
+                std::function<void(const Entity&)> visit = [&](const Entity& node) {
+                    if (!active.insert(node.id).second) throw std::invalid_argument("cyclic appraisal deduction dependency: " + node.id);
+                    std::vector<AreaDeduction> child_geometry;
+                    for (const auto& id : deduction_ids(node)) {
+                        const auto child = document.entities().find(id);
+                        if (child == document.entities().end() || !boundary_type(child->second.type))
+                            throw std::invalid_argument("deduction " + id + " is unavailable");
+                        if (!visible(visible_entity_ids, id))
+                            throw std::invalid_argument("deduction " + id + " is hidden by the active design phase");
+                        const auto child_owner = context(document, child->second, property_id);
+                        if (child_owner.floor->id != floor_id || child_owner.building->id != building_id || scope(child->second) == "site")
+                            throw std::invalid_argument("nested deduction " + id + " must share the parent building floor and scope");
+                        if (!wall_measurement_source_current(document, child->second) ||
+                            !wall_measurement_sources_visible(child->second, visible_entity_ids))
+                            throw std::invalid_argument("nested deduction " + id + " has stale or phase-hidden measurement sources");
+                        if (!complete.contains(id)) visit(child->second);
+                        child_geometry.push_back({id, geometry(child->second)});
+                    }
+                    // Every descendant is a real contained partition, even
+                    // when its ancestor removes the descendant's whole shape.
+                    MeasurementArea dependency{node.id, building_id, floor_id, "unqualified", geometry(node),
+                        std::move(child_geometry), factor(node.properties), AreaScope::building};
+                    (void)calculate_area(dependency, profile);
+                    active.erase(node.id);
+                    complete.insert(node.id);
+                };
+                visit(*entity);
+            }
             for (const auto& deduction_id : deduction_ids(*entity)) {
                 const auto deduction = document.entities().find(deduction_id);
                 if (deduction == document.entities().end() || !boundary_type(deduction->second.type))
@@ -422,13 +558,19 @@ AppraisalDocumentReport build_appraisal_document_report(
                     throw std::invalid_argument("deduction " + deduction_id + " must share its parent floor and building");
                 if (scope(deduction->second) == "site")
                     throw std::invalid_argument("site boundary " + deduction_id + " cannot be a building deduction");
-                if (!deduction_ids(deduction->second).empty())
+                if (!ansi_policy && !deduction_ids(deduction->second).empty())
                     throw std::invalid_argument("deduction " + deduction_id + " cannot contain another deduction");
                 if (!wall_measurement_source_current(document, deduction->second) ||
                     !wall_measurement_sources_visible(deduction->second, visible_entity_ids))
                     throw std::invalid_argument("deduction " + deduction_id +
                         " has a stale exterior measurement; refresh exterior measurement from source walls");
                 deductions.push_back({deduction_id, geometry(deduction->second)});
+                if (ansi_policy && declared.facts.ansi &&
+                    std::find(declared.facts.ansi->ceiling.below_5ft_deduction_ids.begin(), declared.facts.ansi->ceiling.below_5ft_deduction_ids.end(), deduction_id) != declared.facts.ansi->ceiling.below_5ft_deduction_ids.end()) {
+                    const auto low = declarations(property->second, *deduction_owner.floor, deduction->second);
+                    if (low.facts.role != BoundaryRole::other_void || !deduction_ids(deduction->second).empty())
+                        throw std::invalid_argument("below-five-foot deduction " + deduction_id + " must be an exclusion without child deductions");
+                }
             }
             MeasurementArea area{entity->id, building_id, floor_id, "unqualified",
                                  geometry(*entity), std::move(deductions),
@@ -446,12 +588,17 @@ AppraisalDocumentReport build_appraisal_document_report(
                 if (area.factor.numerator != area.factor.denominator)
                     qualification.issues.push_back({"factor_not_unity", "Qualified physical area requires a factor exactly equal to one."});
             }
+            if (ansi_policy && declared.facts.ansi && declared.facts.ansi->ceiling.kind == CeilingKind::sloped &&
+                declared.facts.ansi->ceiling.source_geometry_sha256 != appraisal_ceiling_geometry_digest(area.boundary, area.deductions)) {
+                qualification.issues.push_back({"stale_ceiling_evidence", "Sloped ceiling evidence does not match current room and deduction geometry; remeasure and confirm it."});
+                qualification.qualified = false;
+            }
             for (const auto& missing : declared.missing)
                 qualification.issues.push_back({"undeclared", missing});
             qualification.qualified = qualification.qualified && declared.missing.empty();
             if (!qualification.qualified) qualification.derived_category.reset();
-            const bool exclusion = declared.facts.role != BoundaryRole::measured_area;
             result.boundaries.push_back({entity->id, exclusion, qualification, std::move(diagnostic)});
+            result.boundaries.back().facts = declared.facts;
             if (qualification.qualified && !exclusion) {
                 if (!qualification.derived_category)
                     throw std::invalid_argument("qualified measured area has no derived category");

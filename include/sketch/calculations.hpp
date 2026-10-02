@@ -31,7 +31,13 @@ enum class AppraisalAreaCategory {
     noncontinuous_finished,
     commercial_occupiable,
     commercial_common,
-    commercial_service
+    commercial_service,
+    adu_above_grade_finished, adu_above_grade_unfinished,
+    adu_below_grade_finished, adu_below_grade_unfinished,
+    adu_above_grade_nonstandard_finished, adu_below_grade_nonstandard_finished,
+    detached_other_above_grade_finished, detached_other_above_grade_unfinished,
+    detached_other_below_grade_finished, detached_other_below_grade_unfinished,
+    detached_other_above_grade_nonstandard_finished, detached_other_below_grade_nonstandard_finished
 };
 
 // Stable persistence tokens; unknown strings return nullopt, invalid enums throw.
@@ -51,7 +57,19 @@ inline constexpr std::pair<AppraisalAreaCategory, std::string_view> appraisal_ca
     {AppraisalAreaCategory::noncontinuous_finished, "noncontinuous_finished"},
     {AppraisalAreaCategory::commercial_occupiable, "commercial_occupiable"},
     {AppraisalAreaCategory::commercial_common, "commercial_common"},
-    {AppraisalAreaCategory::commercial_service, "commercial_service"}};
+    {AppraisalAreaCategory::commercial_service, "commercial_service"},
+    {AppraisalAreaCategory::adu_above_grade_finished, "adu_above_grade_finished"},
+    {AppraisalAreaCategory::adu_above_grade_unfinished, "adu_above_grade_unfinished"},
+    {AppraisalAreaCategory::adu_below_grade_finished, "adu_below_grade_finished"},
+    {AppraisalAreaCategory::adu_below_grade_unfinished, "adu_below_grade_unfinished"},
+    {AppraisalAreaCategory::adu_above_grade_nonstandard_finished, "adu_above_grade_nonstandard_finished"},
+    {AppraisalAreaCategory::adu_below_grade_nonstandard_finished, "adu_below_grade_nonstandard_finished"},
+    {AppraisalAreaCategory::detached_other_above_grade_finished, "detached_other_above_grade_finished"},
+    {AppraisalAreaCategory::detached_other_above_grade_unfinished, "detached_other_above_grade_unfinished"},
+    {AppraisalAreaCategory::detached_other_below_grade_finished, "detached_other_below_grade_finished"},
+    {AppraisalAreaCategory::detached_other_below_grade_unfinished, "detached_other_below_grade_unfinished"},
+    {AppraisalAreaCategory::detached_other_above_grade_nonstandard_finished, "detached_other_above_grade_nonstandard_finished"},
+    {AppraisalAreaCategory::detached_other_below_grade_nonstandard_finished, "detached_other_below_grade_nonstandard_finished"}};
 }
 // Token parsing is also needed by offline document/history validation, which
 // must not depend on the architectural solid calculation engine.
@@ -61,18 +79,21 @@ inline constexpr std::pair<AppraisalAreaCategory, std::string_view> appraisal_ca
     return std::nullopt;
 }
 
-enum class AppraisalPolicyKind { residential_declared, light_commercial_declared };
+enum class AppraisalPolicyKind { residential_declared, light_commercial_declared, ansi_z765_2021 };
 enum class PropertyKind { detached_single_family, attached_single_family, manufactured_home,
                           apartment_unit, multifamily, light_commercial };
 enum class MeasurementBasis { exterior, interior_perimeter, plans, unknown };
 // Below includes any level with even a portion below grade.
 enum class GradeStatus { above, below, unknown };
 enum class FinishStatus { finished, unfinished, unknown };
-enum class AccessStatus { direct_interior, noncontinuous, unknown };
+enum class AccessStatus { direct_interior, noncontinuous, unknown, through_unfinished };
 enum class CeilingEligibility { standard, nonstandard, unknown };
 enum class AreaUse { dwelling, garage, carport, porch, patio, deck, commercial_occupiable,
                      commercial_common, commercial_service, other_non_living };
 enum class BoundaryRole { measured_area, open_to_below, stair_footprint, other_void };
+enum class AcquisitionIncrement { inch, tenth_foot };
+enum class DwellingIdentity { primary, attached_adu, detached_adu, detached_other };
+enum class CeilingKind { flat, sloped, stairs };
 
 #define SKETCH_DECLARE_FACT_TOKENS(Type, name) \
     [[nodiscard]] std::string_view name##_name(Type value); \
@@ -86,6 +107,9 @@ SKETCH_DECLARE_FACT_TOKENS(AccessStatus, access_status)
 SKETCH_DECLARE_FACT_TOKENS(CeilingEligibility, ceiling_eligibility)
 SKETCH_DECLARE_FACT_TOKENS(AreaUse, area_use)
 SKETCH_DECLARE_FACT_TOKENS(BoundaryRole, boundary_role)
+SKETCH_DECLARE_FACT_TOKENS(AcquisitionIncrement, acquisition_increment)
+SKETCH_DECLARE_FACT_TOKENS(DwellingIdentity, dwelling_identity)
+SKETCH_DECLARE_FACT_TOKENS(CeilingKind, ceiling_kind)
 #undef SKETCH_DECLARE_FACT_TOKENS
 
 struct AppraisalPolicy {
@@ -93,6 +117,31 @@ struct AppraisalPolicy {
     unsigned version{1};
 };
 [[nodiscard]] std::string_view appraisal_policy_id(AppraisalPolicy policy);
+
+struct AnsiMeasurementDeclarations {
+    std::optional<bool> interior_inspected;
+    std::optional<bool> direct_measurement;
+    std::optional<AcquisitionIncrement> acquisition_increment;
+    std::string limitations_statement;
+};
+struct AnsiCeilingFacts {
+    std::optional<CeilingKind> kind;
+    std::optional<double> minimum_height_m;
+    std::optional<double> at_least_7ft_area_m2;
+    std::optional<double> room_floor_area_m2;
+    std::vector<std::string> below_5ft_deduction_ids;
+    std::string stair_from_floor_id;
+    std::string room_boundary_id;
+    std::string source_geometry_sha256;
+};
+struct AnsiAppraisalFacts {
+    AnsiMeasurementDeclarations measurement;
+    std::optional<bool> any_part_below_grade;
+    std::optional<bool> year_round_suitable;
+    std::optional<bool> finish_matches_dwelling;
+    std::optional<DwellingIdentity> dwelling_identity;
+    AnsiCeilingFacts ceiling;
+};
 
 struct AppraisalFacts {
     PropertyKind property_kind{PropertyKind::detached_single_family};
@@ -103,6 +152,7 @@ struct AppraisalFacts {
     CeilingEligibility ceiling{CeilingEligibility::unknown};
     AreaUse use{AreaUse::dwelling};
     BoundaryRole role{BoundaryRole::measured_area};
+    std::optional<AnsiAppraisalFacts> ansi;
 };
 
 struct QualificationIssue {
@@ -118,10 +168,12 @@ struct AppraisalQualification {
     // Net physical geometry after deductions, before factor. Absent until measured.
     std::optional<double> physical_square_metres;
     std::optional<double> adjusted_square_metres;
+    // Explanatory rule interpretations and reasons; never external approval.
+    std::vector<std::string> rule_notes;
 };
-// Qualification covers only Vertex's declared-facts contract, not ANSI/BOMA or
-// lender certification. Invalid enum values throw; unknown facts produce issues.
-// Non-measured roles have no standalone contribution and need no dwelling facts.
+// Qualification is an application rule check, never ANSI/BOMA or lender
+// certification. Invalid enum values throw; unknown facts produce issues.
+// ANSI stair footprints contribute; other exclusion roles need no dwelling facts.
 [[nodiscard]] AppraisalQualification derive_appraisal_category(
     const AppraisalFacts& facts, AppraisalPolicy policy = {}, ExactRational factor = {1, 1});
 
@@ -235,6 +287,9 @@ struct AppraisalCalculationReport {
 
 // Application policy, not a measurement-standard compliance assertion.
 [[nodiscard]] CalculationProfile builtin_appraisal_profile();
+// Opt-in rule checks based on public Fannie Mae guidance; no certification.
+// Canonical report is whole square feet; retained geometry remains unrounded.
+[[nodiscard]] CalculationProfile ansi_appraisal_profile();
 // Reuses calculate_areas validation and unrounded factored values. Only building
 // scope and explicitly mapped categories contribute; GLA is above-grade finished.
 [[nodiscard]] AppraisalCalculationReport calculate_appraisal_areas(

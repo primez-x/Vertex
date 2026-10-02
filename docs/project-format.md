@@ -196,7 +196,7 @@ construction transforms, v15 fixed-chord boundary curvature edits, v16
 reviewed exterior wall-source replacements, and v17 explicit fresh-topology
 boundary replacements, v18 measured group rigid transforms, and v19 coordinated
 physical wall/exterior measurement changes, and v20 mixed ordinary object/asset
-and exterior changes, plus v4 through v20 archives through
+and exterior changes, plus v4 through v21 archives through
 recovery-aware APIs.
 Under-versioned semantic data and versions above 20 reject. Legacy-only history
 is still written as v1. Unknown boundary entity
@@ -651,7 +651,7 @@ unknown project `format_version` is rejected rather than opened unsafely.
 ## SQLite schema
 
 The SQLite `application_id` is `0x50535444` (`PSTD`). `user_version` and metadata
-`format_version` are equal and range from `1` through `20`, according to the
+`format_version` are equal and range from `1` through `21`, according to the
 retained semantics. The baseline application tables below are shared; later
 versions add the proof columns and recovery data documented in this file.
 
@@ -1312,3 +1312,52 @@ this is smaller than the standalone asset size limit. Exact unchanged asset
 upserts need no retained supplement. Large changed assets combined with a wall
 edit therefore require further storage work; this is an implementation gap,
 not removal of portable reference imagery from the production scope.
+
+### ANSI-oriented appraisal evidence (v21)
+
+The opt-in `appraisal_policy.policy_kind: "ansi_z765_2021"` has policy version
+one and calculation profile `vertex-ansi-z765-2021-v1`. Existing declared
+residential and light-commercial profiles retain their previous behavior.
+This is a versioned Vertex rule implementation, not ANSI approval or a complete
+UAD reporting contract. Rule evidence and unresolved normative interpretations
+are part of the measurement summary.
+
+The property policy's `ansi` object records `interior_inspected` and
+`direct_measurement` booleans, `acquisition_increment` (`inch` or `tenth_foot`),
+and `limitations_statement`. A floor's `appraisal_facts.ansi` records
+`any_part_below_grade`; it must agree with the declared whole-level `grade`.
+Missing observations remain undeclared; they are not assumed true.
+
+An area's `appraisal_facts.ansi` records `year_round_suitable`,
+`finish_matches_dwelling`, `dwelling_identity` (`primary`, `attached_adu`,
+`detached_adu`, `detached_other`) and `ceiling`. Ceiling `kind` is `flat`,
+`sloped` or `stairs`. Flat evidence has `minimum_height_m`. Sloped evidence has
+`at_least_7ft_area_m2`, `room_floor_area_m2`, `room_boundary_id`,
+`source_geometry_sha256`, and `below_5ft_deduction_ids`. Heights and areas are
+stored in metres and square metres, independently of workspace display units.
+Stairs have `stair_from_floor_id` and must have `stair_footprint` boundary role.
+Access additionally supports `through_unfinished` for the new profile.
+
+Sloped evidence binds the complete room boundary and deduction geometry using
+the versioned deterministic ceiling geometry digest. Referenced low-height
+areas must be real contained geometric deductions in `deduction_ids`; scalar
+area declarations never replace exclusion geometry. Geometry changes invalidate
+the evidence rather than silently preserving measured proportions. ANSI room
+partitions can have nested deductions; cyclic graphs, incompatible floor context
+and overlaps that would double-count area remain errors. A parent removes the
+whole child footprint and the child contributes only its own net category area.
+
+Primary, ADU and detached-other categories are separate. The canonical report
+rounds aggregate square feet once to whole square feet; boundary dimensions use
+tenths of a foot. Display rounding does not change stored geometry. The sloped
+denominator currently uses gross room geometry and remains explicitly
+provisional pending verification against the final publisher standard.
+
+These semantics use existing entity JSON and require native format 21 and
+extraction version 19 even when retained only in undone or deleted history.
+Earlier readers must refuse them rather than edit away the observations. A
+recomputed digest does not permit lowering the reader floor. Unrelated vendor
+properties outside the property/floor/boundary appraisal namespaces remain
+opaque and do not raise this floor. Older documents retain their existing
+minimum format and digest representations. Extraction is a documented data
+export and does not itself provide project import.

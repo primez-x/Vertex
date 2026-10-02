@@ -2624,6 +2624,52 @@ void test_reviewed_exterior_source_reader_floor() {
   }
 }
 
+void test_ansi_appraisal_reader_floor_retains_history() {
+    TempDirectory temp;
+    auto property = entity("ansi-property", "property", {{"name", "Appraisal"}});
+    auto document = Document::create({property});
+    require(ProjectStore::required_format_version(document.snapshot()) == 1,
+        "ordinary legacy property must not require the new appraisal reader");
+    property.properties["appraisal_policy"] = {{"policy_kind", "ansi_z765_2021"}, {"version", 1},
+        {"property_kind", "detached_single_family"}, {"measurement_basis", "exterior"},
+        {"ansi", {{"interior_inspected", true}, {"direct_measurement", true},
+            {"acquisition_increment", "inch"}, {"limitations_statement", ""}}}};
+    document.apply(ApplyEntityChanges{0, {EntityChange::upsert(property)}, {}, "Declare measurement rules"});
+    auto changed = document.snapshot();
+    auto deleted = Document::fork(changed);
+    deleted.apply(ApplyEntityChanges{deleted.revision(), {EntityChange::erase(property.id)}, {}, "Remove property"});
+    document.undo(document.revision());
+    for (const auto& snapshot : {changed, document.snapshot(), deleted.snapshot()}) {
+        require(ProjectStore::required_format_version(snapshot) == 21,
+            "current, undone and deleted ANSI evidence must require reader21");
+        const auto path = temp.path / ("ansi-" + sketch::make_stable_id() + ".bldproj");
+        (void)ProjectStore::save(path, snapshot);
+        const auto reopened = ProjectStore::load(path).document.snapshot();
+        require(reopened.entities() == snapshot.entities() && reopened.history().size() == snapshot.history().size(),
+            "native appraisal evidence and retained history must reopen exactly");
+        execute_sql(path, "PRAGMA user_version=20; UPDATE metadata SET value='20' WHERE key='format_version'");
+        rewrite_logical_digest(path);
+        const auto hash = ProjectStore::file_sha256(path);
+        require_error([&] { (void)ProjectStore::load(path); }, StorageErrorCode::unsupported_format,
+            "recomputed logical digest must not downgrade retained appraisal evidence");
+        require(ProjectStore::file_sha256(path) == hash, "rejected appraisal downgrade preserves source bytes");
+    }
+    for (const auto& evidence : {
+        entity("ansi-floor", "floor", {{"appraisal_facts", {{"ansi", {{"any_part_below_grade", true}}}}}}),
+        entity("ansi-area", "measurement_boundary", {{"boundary", nlohmann::json::array({
+            {{"start", {0,0}}, {"end", {2,0}}, {"sweep_radians", 0}},
+            {{"start", {2,0}}, {"end", {2,2}}, {"sweep_radians", 0}},
+            {{"start", {2,2}}, {"end", {0,2}}, {"sweep_radians", 0}},
+            {{"start", {0,2}}, {"end", {0,0}}, {"sweep_radians", 0}}})},
+            {"appraisal_facts", {{"ansi", {{"ceiling", {{"kind", "flat"}}}}}}}})})
+        require(ProjectStore::required_format_version(Document::create({evidence}).snapshot()) == 21,
+            "floor and area evidence independently require the new reader");
+    auto opaque = entity("vendor", "generic", {{"appraisal_facts", {{"ansi", {}}}},
+        {"appraisal_policy", {{"policy_kind", "ansi_z765_2021"}}}});
+    require(ProjectStore::required_format_version(Document::create({opaque}).snapshot()) == 1,
+        "unrelated vendor field collision stays opaque in its original format");
+}
+
 void test_native_room_topology_is_validated_on_restore() {
     TempDirectory temp;
     const auto path = temp.path / "room.bldproj";
@@ -2654,6 +2700,7 @@ void test_native_room_topology_is_validated_on_restore() {
 int main() {
     sketch::testing::noninteractive_errors();
     try {
+        test_ansi_appraisal_reader_floor_retains_history();
         test_rigid_group_storage_and_history_floors();
         test_live_exterior_source_storage_and_history_floor();
         test_live_exterior_source_storage_and_history_floor(true);
