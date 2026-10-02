@@ -1,6 +1,6 @@
 # Vertex user testing checklist
 
-302 practical tasks, grouped by how you use the app. This replaces the earlier engineering-oriented checklist. The old 130-item list is preserved separately as engineering-requirements-checklist.md.
+305 practical tasks, grouped by how you use the app. This replaces the earlier engineering-oriented checklist. The old 130-item list is preserved separately as engineering-requirements-checklist.md.
 
 This is a user acceptance list for the intended app, not a claim that every listed action is implemented or working in the current preview. If you cannot find a control, or a feature is absent, mark **Blocked / missing** and describe it. Specialized sections can be skipped if you do not use them or lack the device or sample files.
 
@@ -1727,6 +1727,27 @@ drawing; switching modes does not change existing geometry.
 - [ ] **U302 — Place a calculated area label where it is readable**
   - Steps: Create and qualify a small appraisal area, then furnish a larger area until its interior is crowded. Double-click an area, choose **Place label** in Area attributes and click a clear position on the canvas. Choose **Automatic** to restore automatic placement. Repeat placement but press Escape before clicking. Undo, redo, save and reopen, then export the plan PDF.
   - Expected: Names and calculated values remain visible; a label that cannot fit inside has a leader to its area. Placement changes only the label position. The click does not draw a wall or start a shape. Escape preserves the previous position. Reopening and PDF retain the manual placement; editing the boundary still updates the calculated value. Automatic restores normal placement. A read-only project refuses placement edits.
+  - Result: Not tested
+  - Notes: ______________________________
+
+## Appraisal reports and plan sheets
+
+- [ ] **U303 — Inspect an area's calculation and its deductions**
+  - Steps: Qualify a 10 ft by 10 ft dwelling area. Create an internal 5 ft by 5 ft garage, declare Garage use and subtract it from the dwelling. Open **Tools > Appraisal area report…**. In **Areas and deductions**, select the dwelling and expand its deduction row. Select the garage, then click **Show on canvas**.
+  - Expected: The dwelling has 100 sq ft gross, 25 sq ft deducted, 75 sq ft net and factor 1/1. The garage contributes 25 sq ft to its own category. The detail identifies source areas, requested/applied deductions, perimeter, floor grade, property policy and rounding. Show on canvas selects the garage without editing it. Hiding a layer does not change the report's quantities.
+  - Also try: Change a source while the report is open. Export or Show on canvas must ask you to Refresh. A non-unity factor exposes physical and adjusted diagnostics while property totals remain withheld.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **U304 — Export the complete appraisal calculation report**
+  - Steps: Create enough qualified non-overlapping areas to require several pages. Give the final area a long descriptive name. Open the report and choose **Export PDF…**. Reopen the PDF and inspect the first, middle and final pages. Repeat in Metric units and with a missing required appraisal fact.
+  - Expected: Every area and its calculation details appear, including the final area. Names wrap, quantities use the chosen units and precision, and pages identify the project revision. Missing facts show specific issues and withhold qualified totals. Export leaves the project unchanged and refuses to overwrite the open project or its recovery file.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **U305 — Add a plan sheet with an appraisal summary**
+  - Steps: Draw a qualified appraisal plan. Open **Sheet layout…**, select a horizontal plan and click **Create appraisal plan sheet**. Cancel once, then repeat and accept. Adjust scale if needed. Undo, redo, save, reopen and export the drawing set to PDF.
+  - Expected: Cancel adds nothing. Accept adds one A3 page with a large plan and separate area summary while preserving the previous sheets. One Undo removes the entire addition; Redo restores it. Reopening and PDF retain both placements and the qualified quantities. A summary too long for its box identifies omitted rows and points to the complete report.
   - Result: Not tested
   - Notes: ______________________________
 

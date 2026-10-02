@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <limits>
 #include <stdexcept>
 
 namespace sketch::desktop {
@@ -38,6 +39,8 @@ struct SheetLayoutDialog::Impl {
     QComboBox* new_schedule{};
     QPushButton* add_viewport{};
     QPushButton* add_schedule{};
+    QComboBox* appraisal_plan{};
+    QPushButton* add_appraisal_sheet{};
     QPushButton* remove_selected{};
     std::array<QLineEdit*, 4> bounds{};
     QLineEdit* scale{};
@@ -204,6 +207,88 @@ struct SheetLayoutDialog::Impl {
         } while (exists);
         return id;
     }
+    bool horizontalPlan(const CoordinatedView& view) const {
+        constexpr double tolerance = 1e-9;
+        return view.kind == CoordinatedViewKind::plan &&
+            std::abs(view.direction[0]) <= tolerance &&
+            std::abs(view.direction[1]) <= tolerance &&
+            std::abs(std::abs(view.direction[2]) - 1.0) <= tolerance &&
+            std::abs(view.up[2]) <= tolerance;
+    }
+    bool addAppraisalSheet(const QString& plan_view_id) {
+        try {
+            const auto id = plan_view_id.toStdString();
+            const auto view = std::find_if(model.views().begin(), model.views().end(),
+                [&](const auto& candidate) { return candidate.id == id && horizontalPlan(candidate); });
+            if (view == model.views().end())
+                throw std::invalid_argument("Choose a horizontal plan view for the appraisal sheet.");
+            if (placement_index >= 0 && !apply()) return false;
+
+            std::vector<std::string> schedule_ids = model.schedule_ids();
+            if (std::find(schedule_ids.begin(), schedule_ids.end(), "appraisal-areas") == schedule_ids.end())
+                schedule_ids.push_back("appraisal-areas");
+            auto registered = SheetViewModel::create(model.views(), model.sheets(),
+                std::move(schedule_ids), model.sheet_order());
+
+            std::string sheet_id;
+            do {
+                sheet_id = "sheet-" + QUuid::createUuid().toString(QUuid::WithoutBraces).toStdString();
+            } while (std::any_of(registered.sheets().begin(), registered.sheets().end(),
+                         [&](const auto& sheet) { return sheet.id == sheet_id; }) ||
+                     std::any_of(registered.views().begin(), registered.views().end(),
+                         [&](const auto& item) { return item.id == sheet_id; }));
+            std::string number = "AP-101";
+            for (unsigned suffix = 101; ; ++suffix) {
+                number = "AP-" + std::to_string(suffix);
+                if (std::none_of(registered.sheets().begin(), registered.sheets().end(),
+                        [&](const auto& sheet) { return sheet.number == number; })) break;
+                if (suffix == std::numeric_limits<unsigned>::max())
+                    throw std::invalid_argument("No appraisal sheet number is available.");
+            }
+            const auto unique_id = [&](bool viewport) {
+                std::string value;
+                do {
+                    value = (viewport ? "viewport-" : "schedule-placement-") +
+                        QUuid::createUuid().toString(QUuid::WithoutBraces).toStdString();
+                } while (std::any_of(registered.sheets().begin(), registered.sheets().end(),
+                             [&](const auto& sheet) {
+                                 return std::any_of(sheet.viewports.begin(), sheet.viewports.end(),
+                                            [&](const auto& placement) { return placement.id == value; }) ||
+                                        std::any_of(sheet.schedules.begin(), sheet.schedules.end(),
+                                            [&](const auto& placement) { return placement.id == value; });
+                             }));
+                return value;
+            };
+
+            DrawingSheet addition;
+            addition.id = sheet_id;
+            addition.number = std::move(number);
+            addition.width_mm = 420.0;
+            addition.height_mm = 297.0;
+            if (!registered.sheets().empty()) addition.title_block = registered.sheets().front().title_block;
+            addition.title_block.title = "Appraisal plan and area summary";
+            addition.viewports.push_back({unique_id(true), id, {10.0, 10.0, 250.0, 250.0}, 100.0});
+            addition.schedules.push_back({unique_id(false), "appraisal-areas", {270.0, 10.0, 140.0, 250.0}});
+            model = registered.with_added_sheet(std::move(addition));
+
+            const auto added = std::find_if(model.sheets().begin(), model.sheets().end(),
+                [&](const auto& sheet) { return sheet.id == sheet_id; });
+            if (added == model.sheets().end()) throw std::logic_error("Appraisal sheet was not added.");
+            QSignalBlocker blocker(sheets);
+            sheets->clear();
+            for (const auto& sheet : model.sheets())
+                sheets->addItem(QStringLiteral("%1 — %2 [%3]").arg(text(sheet.number),
+                    text(sheet.title_block.title), text(sheet.id)), text(sheet.id));
+            sheet_index = sheets->findData(text(sheet_id));
+            sheets->setCurrentIndex(sheet_index);
+            loadSheet();
+            error->clear();
+            return true;
+        } catch (const std::exception& exception) {
+            error->setText(QString::fromUtf8(exception.what()));
+            return false;
+        }
+    }
     void add(bool viewport) {
         if (placement_index >= 0 && !apply()) return;
         try {
@@ -275,6 +360,20 @@ SheetLayoutDialog::SheetLayoutDialog(const SheetViewModel& model, const QString&
     auto* schedule_row = new QHBoxLayout;
     schedule_row->addWidget(p.new_schedule); schedule_row->addWidget(p.add_schedule);
     form->addRow(QStringLiteral("Registered schedule"), schedule_row);
+    p.appraisal_plan = new QComboBox(this);
+    p.appraisal_plan->setObjectName(QStringLiteral("appraisalSheetPlanView"));
+    for (const auto& view : model.views()) {
+        if (p.horizontalPlan(view))
+            p.appraisal_plan->addItem(QStringLiteral("%1 [%2]").arg(text(view.name), text(view.id)), text(view.id));
+    }
+    p.add_appraisal_sheet = new QPushButton(QStringLiteral("Create appraisal plan sheet"), this);
+    p.add_appraisal_sheet->setObjectName(QStringLiteral("addAppraisalSheet"));
+    p.add_appraisal_sheet->setAutoDefault(false);
+    p.add_appraisal_sheet->setEnabled(p.appraisal_plan->count() > 0);
+    auto* appraisal_row = new QHBoxLayout;
+    appraisal_row->addWidget(p.appraisal_plan);
+    appraisal_row->addWidget(p.add_appraisal_sheet);
+    form->addRow(QStringLiteral("Appraisal sheet preset"), appraisal_row);
     p.remove_selected = new QPushButton(QStringLiteral("Remove selected"), this);
     p.remove_selected->setObjectName("sheetLayoutRemoveSelected"); p.remove_selected->setAutoDefault(false);
     form->addRow(p.remove_selected);
@@ -305,6 +404,9 @@ SheetLayoutDialog::SheetLayoutDialog(const SheetViewModel& model, const QString&
     connect(p.buttons->button(QDialogButtonBox::Apply), &QPushButton::clicked, this, [this] { (void)applyCurrentEdit(); });
     connect(p.add_viewport, &QPushButton::clicked, this, [this] { impl_->add(true); });
     connect(p.add_schedule, &QPushButton::clicked, this, [this] { impl_->add(false); });
+    connect(p.add_appraisal_sheet, &QPushButton::clicked, this, [this] {
+        (void)impl_->addAppraisalSheet(impl_->appraisal_plan->currentData().toString());
+    });
     connect(p.remove_selected, &QPushButton::clicked, this, [this] { impl_->remove(); });
     connect(p.sheets, &QComboBox::currentIndexChanged, this, [this](int index) {
         if (!impl_->changeSheet(index)) { QSignalBlocker block(impl_->sheets); impl_->sheets->setCurrentIndex(impl_->sheet_index); }
@@ -332,6 +434,9 @@ bool SheetLayoutDialog::selectSchedulePlacement(const QString& id) {
         if (impl_->placements->itemData(i).toString() == id && !impl_->placements->itemData(i, Qt::UserRole + 1).toBool())
             return impl_->changePlacement(i);
     return false;
+}
+bool SheetLayoutDialog::addAppraisalSheet(const QString& plan_view_id) {
+    return impl_->addAppraisalSheet(plan_view_id);
 }
 QString SheetLayoutDialog::selectedSheetId() const {
     return impl_->sheet() ? text(impl_->sheet()->id) : QString{};

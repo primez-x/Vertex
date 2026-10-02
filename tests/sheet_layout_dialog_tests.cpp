@@ -11,6 +11,8 @@
 #include <QLineEdit>
 #include <QPushButton>
 #include <QDialogButtonBox>
+#include <QPdfDocument>
+#include <QSize>
 #include <QTemporaryDir>
 #include <QTimer>
 #include <algorithm>
@@ -21,6 +23,10 @@ namespace {
 void require(bool valid, const char* message) {
     if (!valid) throw std::runtime_error(message);
 }
+sketch::Boundary square(double x, double y, double side) {
+    return {{{x,y},{x+side,y},0},{{x+side,y},{x+side,y+side},0},
+            {{x+side,y+side},{x,y+side},0},{{x,y+side},{x,y},0}};
+}
 sketch::SheetViewModel fixture() {
     sketch::DrawingSheet a;
     a.id = "sheet-a"; a.number = "A101";
@@ -29,7 +35,12 @@ sketch::SheetViewModel fixture() {
     a.schedules = {{"schedule-a", "rooms", {10, 120, 100, 50}},
                    {"schedule-b", "rooms", {120, 120, 100, 50}}};
     auto b = a; b.id = "sheet-b"; b.number = "A102";
-    return sketch::SheetViewModel::create({{"plan", "Floor plan"}, {"section", "Section"}},
+    sketch::CoordinatedView plan;
+    plan.id = "plan"; plan.name = "Floor plan";
+    sketch::CoordinatedView section;
+    section.id = "section"; section.name = "Section";
+    section.kind = sketch::CoordinatedViewKind::section;
+    return sketch::SheetViewModel::create({plan, section},
                                           {a, b}, {"rooms", "doors", "appraisal-areas"});
 }
 void field(sketch::desktop::SheetLayoutDialog& dialog, const char* name, const char* text) {
@@ -107,6 +118,101 @@ void testPlacementLifecycle() {
     click(protected_dialog, "sheetLayoutRemoveSelected");
     require(protected_dialog.workingModel().to_json() == protected_before &&
             !protected_dialog.findChild<QLabel*>("sheetLayoutError")->text().isEmpty(), "callout protection failed");
+}
+
+void testAppraisalSheetPreset() {
+    auto source = fixture();
+    auto occupied_number = source.sheets().front();
+    occupied_number.number = "AP-101";
+    source = source.with_sheet(occupied_number);
+    sketch::CoordinatedView tilted;
+    tilted.id = "tilted-plan"; tilted.name = "Tilted plan";
+    tilted.kind = sketch::CoordinatedViewKind::plan;
+    tilted.direction = {1, 0, 0}; tilted.up = {0, 0, 1};
+    auto views = source.views();views.push_back(tilted);
+    source = sketch::SheetViewModel::create(std::move(views),source.sheets(),source.schedule_ids(),source.sheet_order());
+    const auto source_json = source.to_json();
+
+    sketch::desktop::SheetLayoutDialog dialog(source, "sheet-a");
+    auto* chooser = dialog.findChild<QComboBox*>("appraisalSheetPlanView");
+    auto* button = dialog.findChild<QPushButton*>("addAppraisalSheet");
+    require(chooser && button && chooser->count() == 1 &&
+            chooser->currentData().toString() == "plan" && button->isEnabled(),
+            "appraisal preset must offer only horizontal plan views");
+    button->click();
+    auto find_sheet = [&](const std::string& number) {
+        return std::find_if(dialog.workingModel().sheets().begin(), dialog.workingModel().sheets().end(),
+            [&](const auto& sheet) { return sheet.number == number; });
+    };
+    auto first = find_sheet("AP-102");
+    require(first != dialog.workingModel().sheets().end(), "preset did not skip the occupied AP-101 number");
+    require(first->width_mm == 420 && first->height_mm == 297 &&
+            first->title_block.title == "Appraisal plan and area summary" &&
+            first->viewports.size() == 1 && first->schedules.size() == 1,
+            "preset page metadata or placement count is wrong");
+    require(first->viewports[0].view_id == "plan" && first->viewports[0].bounds == sketch::SheetRect{10,10,250,250} &&
+            first->viewports[0].scale_denominator == 100 &&
+            first->schedules[0].schedule_id == "appraisal-areas" &&
+            first->schedules[0].bounds == sketch::SheetRect{270,10,140,250},
+            "preset plan or appraisal placement geometry is wrong");
+    require(first->viewports[0].bounds.x_mm + first->viewports[0].bounds.width_mm <
+                first->schedules[0].bounds.x_mm &&
+            first->schedules[0].bounds.x_mm + first->schedules[0].bounds.width_mm <= first->width_mm &&
+            first->viewports[0].bounds.y_mm + first->viewports[0].bounds.height_mm <= first->height_mm &&
+            first->schedules[0].bounds.y_mm + first->schedules[0].bounds.height_mm <= first->height_mm,
+            "preset placements overlap or leave the page");
+    require(dialog.workingModel().schedule_ids().end() !=
+                std::find(dialog.workingModel().schedule_ids().begin(), dialog.workingModel().schedule_ids().end(),
+                          "appraisal-areas"),
+            "preset failed to register the appraisal schedule");
+    for (const auto& original : source.sheets()) {
+        const auto kept = std::find_if(dialog.workingModel().sheets().begin(), dialog.workingModel().sheets().end(),
+            [&](const auto& sheet) { return sheet.id == original.id; });
+        require(kept != dialog.workingModel().sheets().end() && *kept == original,
+                "preset changed an existing sheet");
+    }
+    require(dialog.workingModel().views() == source.views(), "preset changed shared views");
+    auto expected_schedule_ids = source.schedule_ids();
+    require(dialog.workingModel().schedule_ids() == expected_schedule_ids,
+            "preset changed a schedule registry that already contained appraisal");
+    const auto first_id = first->id;
+    const auto first_viewport_id = first->viewports[0].id;
+    const auto first_schedule_id = first->schedules[0].id;
+    button->click();
+    require(find_sheet("AP-103") != dialog.workingModel().sheets().end(),
+            "repeated preset did not allocate the next available number");
+    const auto second = find_sheet("AP-103");
+    require(second->id != first_id && second->viewports[0].id != first_viewport_id &&
+            second->schedules[0].id != first_schedule_id,
+            "repeated preset reused a sheet or placement identity");
+    dialog.reject();
+    require(!dialog.acceptedModel() && source.to_json() == source_json,
+            "cancel published the staged appraisal sheets or changed source");
+
+    const auto missing_schedule = sketch::SheetViewModel::create(
+        source.views(), source.sheets(), {"rooms", "doors"}, source.sheet_order());
+    sketch::desktop::SheetLayoutDialog accepted(missing_schedule, "sheet-a");
+    require(accepted.addAppraisalSheet("plan"), "preset could not add its missing appraisal schedule");
+    accepted.accept();
+    require(accepted.acceptedModel() &&
+            std::find(accepted.acceptedModel()->schedule_ids().begin(),
+                      accepted.acceptedModel()->schedule_ids().end(), "appraisal-areas") !=
+                accepted.acceptedModel()->schedule_ids().end() &&
+            sketch::SheetViewModel::from_json(accepted.acceptedModel()->to_json()).to_json() ==
+                accepted.acceptedModel()->to_json(),
+            "accepted appraisal preset did not register and round-trip its model");
+
+    sketch::CoordinatedView elevation;
+    elevation.id = "elevation"; elevation.name = "Elevation";
+    elevation.kind = sketch::CoordinatedViewKind::elevation;
+    auto empty_page = source.sheets().front();empty_page.viewports.clear();empty_page.schedules.clear();empty_page.callouts.clear();
+    const auto no_plan = sketch::SheetViewModel::create({elevation, tilted}, {empty_page}, {"rooms"});
+    sketch::desktop::SheetLayoutDialog unavailable(no_plan, "sheet-a");
+    auto* unavailable_button = unavailable.findChild<QPushButton*>("addAppraisalSheet");
+    require(unavailable_button && !unavailable_button->isEnabled() &&
+            !unavailable.addAppraisalSheet("tilted-plan") &&
+            unavailable.workingModel().to_json() == no_plan.to_json(),
+            "preset accepted an elevation/tilted plan or changed a model without a horizontal plan");
 }
 
 sketch::SheetViewModel windowSheetModel(const sketch::desktop::MainWindow& window) {
@@ -226,6 +332,90 @@ void testMainWindowCommitsPlacementLifecycle() {
                 windowSheetModel(reopened).to_json() == expected->to_json(),
             "lifecycle placement set did not survive save and reopen");
 }
+
+void testMainWindowAppraisalSheetPresetLifecycleAndPdf() {
+    QTemporaryDir directory;
+    require(directory.isValid(), "appraisal sheet fixture needs an isolated directory");
+    sketch::desktop::MainWindow window;
+    const auto area_id = window.createBoundary(square(0, 0, 3.048));
+    require(!area_id.isEmpty(), "appraisal sheet fixture needs an actual plan boundary");
+    auto* workflow = window.findChild<QComboBox*>(QStringLiteral("calculationWorkflow"));
+    require(workflow && workflow->findData(QStringLiteral("appraisal")) >= 0,
+            "appraisal sheet fixture needs the appraisal workflow control");
+    workflow->setCurrentIndex(workflow->findData(QStringLiteral("appraisal")));
+    require(window.editSelectedAppraisalFacts(QStringLiteral(
+        R"({"appraisal_policy":{"policy_kind":"residential_declared","version":1,"property_kind":"detached_single_family","measurement_basis":"exterior"},"grade":"above","appraisal_facts":{"finish":"finished","access":"direct_interior","ceiling_eligibility":"standard","area_use":"dwelling","boundary_role":"measured_area"}})")),
+        "appraisal sheet fixture must use a declared qualified area");
+
+    const auto before_model = windowSheetModel(window);
+    const auto source_sheet = before_model.sheets().front();
+    const auto revision = window.document().revision();
+    auto* action = window.findChild<QAction*>(QStringLiteral("sheetLayoutManager"));
+    require(action, "appraisal sheet preset must be reachable through the real layout command");
+    QString callback_error;
+    bool accepted = false;
+    QTimer::singleShot(0, [&] {
+        auto* dialog = dynamic_cast<sketch::desktop::SheetLayoutDialog*>(QApplication::activeModalWidget());
+        try {
+            require(dialog && dialog->selectedSheetId() == QString::fromStdString(source_sheet.id),
+                    "layout command must open the actual dialog on the selected source sheet");
+            auto* button = dialog->findChild<QPushButton*>(QStringLiteral("addAppraisalSheet"));
+            require(button && button->isEnabled(), "actual dialog must expose its enabled appraisal preset");
+            button->click();
+            require(dialog->selectedSheetId() != QString::fromStdString(source_sheet.id),
+                    "preset must stage and select a new sheet in the dialog");
+            dialog->accept();
+            accepted = dialog->acceptedModel().has_value();
+        } catch (const std::exception& error) {
+            callback_error = QString::fromUtf8(error.what());
+            if (dialog && dialog->isVisible()) dialog->reject();
+        }
+    });
+    action->trigger();
+    require(callback_error.isEmpty(), callback_error.toUtf8().constData());
+    require(accepted && window.document().revision() == revision + 1,
+            "accepted preset must commit one normal sheet-model command");
+    const auto after_model = windowSheetModel(window);
+    const auto created = std::find_if(after_model.sheets().begin(), after_model.sheets().end(),
+        [](const auto& sheet) { return sheet.number == "AP-101"; });
+    require(created != after_model.sheets().end() && created->viewports.size() == 1 &&
+            created->viewports[0].view_id == "view-plan" && created->schedules.size() == 1 &&
+            created->schedules[0].schedule_id == "appraisal-areas",
+            "MainWindow did not commit the actual plan and appraisal summary placements");
+    const auto appraisal_sheet_id = QString::fromStdString(created->id);
+    require(window.undoCommand() && windowSheetModel(window).to_json() == before_model.to_json(),
+            "preset must undo as one command without changing the original sheet graph");
+    require(window.redoCommand() && windowSheetModel(window).to_json() == after_model.to_json(),
+            "preset must redo the same complete sheet graph");
+
+    const auto project = directory.filePath(QStringLiteral("appraisal-sheet-preset.bldproj"));
+    require(window.saveProjectAs(project), "preset project must save");
+    sketch::desktop::MainWindow reopened;
+    require(reopened.openProject(project), "preset project must reopen in a new MainWindow");
+    const auto reopened_model = windowSheetModel(reopened);
+    require(reopened_model.to_json() == after_model.to_json(),
+            "save/reopen must retain the preset view and appraisal schedule graph");
+    require(reopened.selectOutputSheet(appraisal_sheet_id), "appraisal output sheet must remain selectable after reopen");
+    const auto pdf_path = directory.filePath(QStringLiteral("appraisal-sheet-preset.pdf"));
+    require(reopened.exportDrawingSetPdf(pdf_path), "preset drawing set must export as an actual PDF");
+    QPdfDocument pdf;
+    require(pdf.load(pdf_path) == QPdfDocument::Error::None && pdf.pageCount() == 2,
+            "drawing-set PDF must include the original and appraisal sheets");
+    const auto page_text = pdf.getAllText(1).text();
+    require(page_text.contains(QStringLiteral("APPRAISAL AREA SUMMARY")) &&
+            page_text.contains(QStringLiteral("Appraisal plan and area summary")) &&
+            !pdf.render(1, QSize(1000, 707)).isNull(),
+            "appraisal sheet PDF must expose its real schedule, title, and renderable plan page");
+    const auto capture_dir = qEnvironmentVariable("VERTEX_TEST_CAPTURE_DIR");
+    if (!capture_dir.isEmpty()) {
+        require(QDir().mkpath(capture_dir) &&
+                pdf.render(1, QSize(1200, 848)).save(QDir(capture_dir).filePath(
+                    QStringLiteral("appraisal-sheet-preset.png"))),
+                "optional appraisal sheet PDF page capture must save");
+    }
+    require(window.document().revision() >= revision + 1 && window.document().snapshot().entities().contains(area_id.toStdString()),
+            "sheet preset output must retain its source project geometry");
+}
 }
 
 int main(int argc, char** argv) {
@@ -309,8 +499,10 @@ int main(int argc, char** argv) {
                 !empty_dialog.findChild<QPushButton*>("sheetLayoutAddSchedule")->isEnabled(),
                 "add controls enabled without source registry entries");
         testMainWindowCommitsSelectedSheetPlacement();
+        testAppraisalSheetPreset();
         testPlacementLifecycle();
         testMainWindowCommitsPlacementLifecycle();
+        testMainWindowAppraisalSheetPresetLifecycleAndPdf();
         std::cout << "sheet layout dialog checks passed\n";
         return 0;
     } catch (const std::exception& error) {

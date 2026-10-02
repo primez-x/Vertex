@@ -28,6 +28,17 @@ section edges from supported building solids; see
 `docs/architectural-projections.md` for its explicit boundary and remaining
 integration work.
 
+The Sheet layout dialog offers **Create appraisal plan sheet**, with a chooser
+limited to horizontal plan views. The preset adds an A3 landscape sheet with a
+250 by 250 mm plan viewport at 1:100 and a separate 140 by 250 mm appraisal
+summary. It preserves existing sheets and view definitions, assigns a unique
+AP-101-and-up number, and registers the appraisal schedule when needed. Cancel
+discards the staged page; accepting commits one undoable edit. Scale and bounds
+remain editable for the actual property. Appraisal rows wrap within their
+placement; overflow identifies the complete **Appraisal area report**, whose
+separate PDF includes the full paginated calculation audit. The plan sheet is a
+presentation preset, not measurement-standard certification.
+
 The Drawing sheets dialog also manages the page collection. A new page is
 created through the typed model with a validated size, copied project
 title-block context, and one independently scaled viewport for each

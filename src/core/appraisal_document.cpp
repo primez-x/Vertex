@@ -1,11 +1,13 @@
 #include "sketch/appraisal_document.hpp"
 #include "sketch/boundary_entity.hpp"
 #include "sketch/wall_measurement.hpp"
+#include "sketch/document_digest.hpp"
 
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <limits>
+#include <map>
 #include <numeric>
 #include <set>
 #include <stdexcept>
@@ -281,6 +283,8 @@ AppraisalDocumentReport build_appraisal_document_report(
     AppraisalDocumentReport result;
     result.revision = document.revision();
     result.property_id = property_id;
+    result.source_document_id = document.document_id();
+    result.source_entities_sha256 = entity_map_digest(document.entities());
     const auto property = document.entities().find(property_id);
     if (property == document.entities().end() || property->second.type != "property")
         throw std::invalid_argument("appraisal property does not exist");
@@ -346,6 +350,7 @@ AppraisalDocumentReport build_appraisal_document_report(
 
     profile.classifications["unqualified"] = {false, false, AppraisalAreaCategory::none};
     std::vector<MeasurementArea> areas;
+    std::map<std::string, MeasurementArea, std::less<>> measurements;
     for (const auto* entity : candidates) {
         try {
             if (scope(*entity) == "site") continue;
@@ -386,6 +391,10 @@ AppraisalDocumentReport build_appraisal_document_report(
                     throw std::invalid_argument("site boundary " + deduction_id + " cannot be a building deduction");
                 if (!deduction_ids(deduction->second).empty())
                     throw std::invalid_argument("deduction " + deduction_id + " cannot contain another deduction");
+                if (!wall_measurement_source_current(document, deduction->second) ||
+                    !wall_measurement_sources_visible(deduction->second, visible_entity_ids))
+                    throw std::invalid_argument("deduction " + deduction_id +
+                        " has a stale exterior measurement; refresh exterior measurement from source walls");
                 deductions.push_back({deduction_id, geometry(deduction->second)});
             }
             MeasurementArea area{entity->id, building_id, floor_id, "unqualified",
@@ -398,6 +407,15 @@ AppraisalDocumentReport build_appraisal_document_report(
             if (!qualification.qualified) qualification.derived_category.reset();
             const bool exclusion = declared.facts.role != BoundaryRole::measured_area;
             result.boundaries.push_back({entity->id, exclusion, qualification});
+            if (qualification.qualified && !exclusion) {
+                if (!qualification.derived_category)
+                    throw std::invalid_argument("qualified measured area has no derived category");
+                area.classification = std::string(appraisal_category_name(*qualification.derived_category));
+            }
+            // Retain only inputs whose geometry and dependencies were validated
+            // by qualification. They can still be individually inspected when
+            // declarations or property-wide aggregation prevent totals.
+            measurements.emplace(entity->id, area);
             if (!qualification.qualified) {
                 for (const auto& issue : qualification.issues)
                     result.issues.push_back(entity->id + ": " + issue.message);
@@ -408,9 +426,6 @@ AppraisalDocumentReport build_appraisal_document_report(
                     result.issues.push_back(entity->id + ": exclusion must be linked as a deduction");
                 continue;
             }
-            if (!qualification.derived_category)
-                throw std::invalid_argument("qualified measured area has no derived category");
-            area.classification = std::string(appraisal_category_name(*qualification.derived_category));
             areas.push_back(std::move(area));
         } catch (const std::exception& error) {
             result.issues.push_back(entity->id + ": " + error.what());
@@ -421,8 +436,6 @@ AppraisalDocumentReport build_appraisal_document_report(
               [](const auto& left, const auto& right) {
                   return left.boundary_id < right.boundary_id;
               });
-    std::sort(result.issues.begin(), result.issues.end());
-    result.issues.erase(std::unique(result.issues.begin(), result.issues.end()), result.issues.end());
     result.qualified = result.issues.empty();
     if (result.qualified) {
         try {
@@ -432,6 +445,32 @@ AppraisalDocumentReport build_appraisal_document_report(
             result.issues.push_back(error.what());
         }
     }
+    for (auto& boundary : result.boundaries) {
+        if (result.calculation) {
+            const auto& calculated = result.calculation->calculation.areas;
+            const auto found = std::find_if(calculated.begin(), calculated.end(), [&](const auto& value) {
+                return value.area_id == boundary.boundary_id;
+            });
+            if (found != calculated.end()) {
+                boundary.measurement = *found;
+                continue;
+            }
+        }
+        const auto input = measurements.find(boundary.boundary_id);
+        if (input == measurements.end()) continue;
+        try {
+            // Exclusions never enter areas. An unqualified trace uses the
+            // explicit noncontributing classification rather than inventing a
+            // category; valid individual categories survive global failures.
+            boundary.measurement = calculate_area(input->second, profile);
+        } catch (const std::exception& error) {
+            result.qualified = false;
+            result.calculation.reset();
+            result.issues.push_back(boundary.boundary_id + ": " + error.what());
+        }
+    }
+    std::sort(result.issues.begin(), result.issues.end());
+    result.issues.erase(std::unique(result.issues.begin(), result.issues.end()), result.issues.end());
     return result;
 }
 

@@ -1,4 +1,5 @@
 #include "sketch/appraisal_document.hpp"
+#include "sketch/wall_measurement.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -64,6 +65,14 @@ std::vector<Entity> fixture_entities() {
     };
 }
 
+const sketch::AppraisalBoundaryStatus& status(const sketch::AppraisalDocumentReport& report,
+                                             std::string_view id) {
+    const auto found = std::find_if(report.boundaries.begin(), report.boundaries.end(),
+        [&](const auto& value) { return value.boundary_id == id; });
+    require(found != report.boundaries.end(), "expected boundary status must be inspectable");
+    return *found;
+}
+
 void qualified_document_recalculates_from_geometry() {
     auto entities = fixture_entities();
     entities.push_back(entity("room-1", "room_boundary",
@@ -84,6 +93,17 @@ void qualified_document_recalculates_from_geometry() {
             "automatic GLA must retain square-foot output and source provenance");
     require(report.display_decimal_places == 2,
             "legacy appraisal properties must retain two display decimals");
+    const auto& trace = status(report, "area-1").measurement;
+    require(trace && trace->area_id == "area-1" && trace->building_id == "building-1" &&
+                trace->floor_id == "floor-1" && trace->classification == "above_grade_finished" &&
+                trace->profile_id == "vertex-appraisal" && trace->profile_version == 1 &&
+                trace->factor.numerator == 1 && trace->factor.denominator == 1 &&
+                trace->deductions.empty() && trace->display.text == "100.00",
+            "qualified status must expose the aggregate's full measured trace and provenance");
+    near(trace->base_square_metres, 9.290304, 1e-8, "trace must retain gross geometry");
+    near(trace->perimeter_metres, 12.192, 1e-8, "trace must retain analytical perimeter");
+    near(trace->net_square_metres, 9.290304, 1e-8, "trace must retain physical net");
+    near(trace->factored_square_metres, 9.290304, 1e-8, "unity factor must retain physical amount");
 }
 
 void display_precision_rounds_aggregate_from_physical_amounts() {
@@ -118,10 +138,167 @@ void display_precision_rounds_aggregate_from_physical_amounts() {
                  "display precision must preserve each physical area");
             require(area.display.text == area_text,
                     "individual appraisal areas must use the same display precision");
+            const auto& trace = status(report, area.area_id).measurement;
+            require(trace && trace->display.text == area_text &&
+                        trace->display.unit == sketch::AreaUnit::square_foot,
+                    "boundary traces must honor persisted precision without rounding physical quantities");
+            near(trace->display.unrounded, 1.51, 1e-9, "trace display must retain unrounded amount");
+            near(trace->display.rounding_delta, trace->display.rounded - 1.51, 1e-9,
+                 "trace must expose its presentation rounding delta");
         }
         require(document.snapshot().entities() == before.entities() &&
                     document.snapshot().revision() == before.revision(),
                 "reporting must leave the exact document snapshot unchanged");
+    }
+}
+
+void declaration_and_factor_failures_retain_physical_traces() {
+    for (const bool nonunity : {false, true}) {
+        auto entities = fixture_entities();
+        entities.back().properties["boundary"] = square(0, 0, 3);
+        if (nonunity) {
+            entities.back().properties["factor_numerator"] = 2;
+            entities.back().properties["factor_denominator"] = 3;
+        } else entities.back().properties["appraisal_facts"].erase("finish");
+        const auto document = sketch::Document::create(std::move(entities));
+        const auto before = document.snapshot();
+        const auto report = sketch::build_appraisal_document_report(before, "property-1", sketch::AreaUnit::square_metre);
+        const auto& boundary = status(report, "area-1");
+        require(!report.qualified && !report.calculation && !boundary.qualification.qualified &&
+                    !boundary.qualification.derived_category && boundary.measurement &&
+                    boundary.measurement->classification == "unqualified",
+                "valid physical trace must not qualify missing declarations or an adjusted factor");
+        const auto& trace = *boundary.measurement;
+        near(trace.base_square_metres, 9, 1e-9, "unqualified trace retains gross area");
+        near(trace.perimeter_metres, 12, 1e-9, "unqualified trace retains perimeter");
+        near(trace.net_square_metres, 9, 1e-9, "unqualified trace retains physical net");
+        near(trace.factored_square_metres, nonunity ? 6 : 9, 1e-9, "unqualified trace exposes adjustment separately");
+        require(trace.factor.numerator == (nonunity ? 2 : 1) && trace.factor.denominator == (nonunity ? 3 : 1) &&
+                    trace.display.text == (nonunity ? "6.00" : "9.00") &&
+                    boundary.qualification.physical_square_metres && boundary.qualification.adjusted_square_metres,
+                "exact factor, adjusted display and existing qualification diagnostics must remain inspectable");
+        near(*boundary.qualification.physical_square_metres, 9, 1e-9, "qualification physical diagnostic stays unchanged");
+        near(*boundary.qualification.adjusted_square_metres, nonunity ? 6 : 9, 1e-9, "qualification adjusted diagnostic stays unchanged");
+        require(std::any_of(boundary.qualification.issues.begin(), boundary.qualification.issues.end(),
+                    [&](const auto& issue) { return issue.code == (nonunity ? "factor_not_unity" : "undeclared"); }),
+                "trace must retain the reason totals were withheld");
+        require(document.snapshot().entities() == before.entities(), "trace reporting must remain a pure projection");
+    }
+}
+
+void overlapping_void_deductions_expose_requested_and_applied_amounts() {
+    auto entities = fixture_entities();
+    entities.back().properties["boundary"] = square(0, 0, 4);
+    entities.back().properties["deduction_ids"] = json::array({"void-b", "void-a"});
+    for (const auto& [id, x] : std::vector<std::pair<std::string, double>>{{"void-a", .5}, {"void-b", 1.5}})
+        entities.push_back(entity(id, "measurement_boundary",
+            {{"property_id", "property-1"}, {"building_id", "building-1"}, {"floor_id", "floor-1"},
+             {"layer_id", "layer-1"}, {"boundary", square(x, .5, 2)},
+             {"appraisal_facts", {{"boundary_role", "other_void"}}}}));
+    const auto document = sketch::Document::create(std::move(entities));
+    const auto report = sketch::build_appraisal_document_report(document.snapshot(), "property-1", sketch::AreaUnit::square_metre);
+    require(report.qualified && report.calculation && report.calculation->calculation.areas.size() == 1 &&
+                report.calculation->property.gla().area_ids == std::vector<std::string>{"area-1"},
+            "linked void traces must never become standalone aggregate contributions");
+    require(status(report, "area-1").measurement.has_value(), "parent must retain its deduction trace");
+    const auto& measured = *status(report, "area-1").measurement;
+    require(measured.deductions.size() == 2 && measured.deductions[0].id == "void-a" && measured.deductions[1].id == "void-b",
+            "deduction trace must expose deterministic marginal attribution independent of input order");
+    near(measured.deductions[0].requested_square_metres, 4, 1e-9, "first void requested area");
+    near(measured.deductions[0].applied_square_metres, 4, 1e-9, "first void applied area");
+    near(measured.deductions[1].requested_square_metres, 4, 1e-9, "overlapping void requested area");
+    near(measured.deductions[1].applied_square_metres, 2, 1e-9, "overlapping void applies only remaining area");
+    near(measured.deducted_square_metres, 6, 1e-9, "overlap must be deducted only once");
+    near(measured.net_square_metres, 10, 1e-9, "parent trace retains physical net after union deductions");
+    near(report.calculation->property.gla().total.square_metres, 10, 1e-9, "void traces do not inflate GLA");
+    for (const auto* id : {"void-a", "void-b"}) {
+        const auto& excluded = status(report, id);
+        require(excluded.exclusion && excluded.qualification.qualified && excluded.measurement &&
+                    excluded.measurement->display.text == "4.00", "each linked exclusion remains independently inspectable");
+        near(excluded.measurement->net_square_metres, 4, 1e-9, "void's own physical trace remains complete");
+    }
+}
+
+void exclusion_only_report_retains_measurement_without_totals() {
+    auto entities = fixture_entities();
+    entities.back().properties["appraisal_facts"] = {{"boundary_role", "other_void"}};
+    const auto document = sketch::Document::create(std::move(entities));
+    const auto report = sketch::build_appraisal_document_report(document.snapshot(), "property-1");
+    const auto& excluded = status(report, "area-1");
+    require(!report.qualified && !report.calculation && excluded.exclusion &&
+                excluded.qualification.qualified && excluded.measurement && excluded.measurement->display.text == "100.00",
+            "an unlinked exclusion remains measurable but cannot supply property totals");
+    near(excluded.measurement->net_square_metres, 9.290304, 1e-8, "exclusion-only report retains valid physical geometry");
+    require(std::any_of(report.issues.begin(), report.issues.end(), [](const auto& issue) {
+        return issue.find("exclusion must be linked") != std::string::npos;
+    }), "individual measurement cannot bypass the exclusion linkage requirement");
+}
+
+void global_overlap_withholds_totals_but_retains_individual_traces() {
+    auto entities = fixture_entities();auto second = entities.back();second.id = "area-2";
+    second.properties["boundary"] = square(1, 0, 3.048);entities.push_back(std::move(second));
+    const auto document = sketch::Document::create(std::move(entities));
+    const auto report = sketch::build_appraisal_document_report(document.snapshot(), "property-1");
+    require(!report.qualified && !report.calculation && std::any_of(report.issues.begin(), report.issues.end(),
+        [](const auto& issue) { return issue.find("overlap") != std::string::npos; }), "same-floor overlap must withhold property totals");
+    for (const auto* id : {"area-1", "area-2"}) {
+        const auto& boundary = status(report, id);
+        require(boundary.qualification.qualified && boundary.measurement && boundary.measurement->display.text == "100.00",
+            "global aggregation failure must retain valid individual qualification and measurement");
+        near(boundary.measurement->net_square_metres, 9.290304, 1e-8, "global overlap must not corrupt individual geometry");
+    }
+}
+
+void stale_sources_and_invalid_dependencies_expose_no_current_trace() {
+    auto entities = fixture_entities();
+    std::vector<std::string> ids;
+    for (const auto& edge : square(0, 0, 3.048)) {
+        const auto id = "wall-" + std::to_string(ids.size());ids.push_back(id);
+        entities.push_back(entity(id, "wall", {{"baseline", edge}, {"thickness_m", .2}, {"height_m", 3}, {"elevation_m", 0},
+            {"property_id", "property-1"}, {"building_id", "building-1"}, {"floor_id", "floor-1"}, {"layer_id", "layer-1"}}));
+    }
+    const auto walls = sketch::Document::create(entities);
+    const auto derived = sketch::derive_exterior_wall_measurement(walls.snapshot(), ids);
+    auto& area = entities[4];area.properties["boundary"] = json::array();
+    for (const auto& edge : derived.boundary) area.properties["boundary"].push_back(
+        {{"start", {edge.start.x, edge.start.y}}, {"end", {edge.end.x, edge.end.y}}, {"sweep_radians", edge.sweep_radians}});
+    area.properties["wall_measurement_source"] = derived.source;
+    const auto current = sketch::Document::create(entities);
+    require(status(sketch::build_appraisal_document_report(current.snapshot(), "property-1"), "area-1").measurement.has_value(),
+        "current wall-derived outline must expose an inspectable trace");
+    std::set<std::string, std::less<>> visible;
+    for (const auto& item : entities) if (item.id != ids.front()) visible.insert(item.id);
+    const auto phase = sketch::build_appraisal_document_report(current.snapshot(), "property-1", sketch::AreaUnit::square_foot, &visible);
+    require(!phase.qualified && !phase.calculation && !status(phase, "area-1").measurement,
+        "phase-hidden source wall must not expose stale numeric measurement");
+    entities[5].properties["thickness_m"] = .4;
+    const auto stale = sketch::Document::create(entities);
+    const auto report = sketch::build_appraisal_document_report(stale.snapshot(), "property-1");
+    const auto& invalid = status(report, "area-1");
+    require(!report.qualified && !report.calculation && !invalid.measurement && !invalid.qualification.qualified &&
+        !invalid.qualification.physical_square_metres && !invalid.qualification.adjusted_square_metres,
+        "stale wall source must never advertise numeric traces or physical diagnostics as current");
+    auto parent = fixture_entities().back();parent.id = "parent-area";
+    parent.properties["boundary"] = square(-1, -1, 6);
+    parent.properties["deduction_ids"] = json::array({"area-1"});
+    entities[4].properties["appraisal_facts"] = {{"boundary_role", "other_void"}};
+    entities.push_back(std::move(parent));
+    const auto stale_child = sketch::Document::create(std::move(entities));
+    const auto child_report = sketch::build_appraisal_document_report(stale_child.snapshot(), "property-1");
+    require(!child_report.qualified && !child_report.calculation && !status(child_report, "area-1").measurement &&
+        std::none_of(child_report.boundaries.begin(), child_report.boundaries.end(), [](const auto& boundary) {
+            return boundary.boundary_id == "parent-area" && boundary.measurement.has_value();
+        }) && std::any_of(child_report.issues.begin(), child_report.issues.end(), [](const auto& issue) {
+            return issue.find("deduction area-1") != std::string::npos && issue.find("stale") != std::string::npos;
+        }), "a stale deduction dependency must not yield plausible parent physical net");
+    for (const bool bad_geometry : {false, true}) {
+        auto broken = fixture_entities();
+        if (bad_geometry) broken.back().properties["boundary"][0]["sweep_radians"] = "bad";
+        else broken.back().properties["deduction_ids"] = json::array({"missing-deduction"});
+        const auto document = sketch::Document::create(std::move(broken));
+        const auto failure = sketch::build_appraisal_document_report(document.snapshot(), "property-1");
+        require(!failure.qualified && !failure.calculation && !failure.issues.empty() && failure.boundaries.empty(),
+            "malformed candidates must retain existing issue-only failure without invented qualification or plausible trace");
     }
 }
 
@@ -339,6 +516,11 @@ void malformed_projection_data_withholds_totals() {
 int main() {
     try {
         qualified_document_recalculates_from_geometry();
+        declaration_and_factor_failures_retain_physical_traces();
+        overlapping_void_deductions_expose_requested_and_applied_amounts();
+        exclusion_only_report_retains_measurement_without_totals();
+        global_overlap_withholds_totals_but_retains_individual_traces();
+        stale_sources_and_invalid_dependencies_expose_no_current_trace();
         display_precision_rounds_aggregate_from_physical_amounts();
         display_profile_preserves_fixed_appraisal_semantics();
         display_precision_cannot_qualify_facts_or_change_eligibility();

@@ -17,6 +17,9 @@ public:
     bool selectSheet(const QString& id);
     bool selectViewport(const QString& id);
     bool selectSchedulePlacement(const QString& id);
+    // Stages a new A3 appraisal sheet in the detached working model. The
+    // source model remains unchanged until the caller commits acceptedModel().
+    bool addAppraisalSheet(const QString& plan_view_id);
     [[nodiscard]] QString selectedSheetId() const;
     [[nodiscard]] const SheetViewModel& workingModel() const;
     [[nodiscard]] const std::optional<SheetViewModel>& acceptedModel() const;

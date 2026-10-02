@@ -14,6 +14,10 @@ struct AppraisalBoundaryStatus {
     std::string boundary_id;
     bool exclusion{};
     AppraisalQualification qualification;
+    // Current validated geometry, including deductions and presentation rounding.
+    // Its presence does not imply qualification or an aggregate contribution.
+    // Stale sources and invalid geometry/dependencies never expose a trace.
+    std::optional<AreaCalculation> measurement{};
 };
 
 // A revision-bound projection of one property's declared appraisal workflow.
@@ -29,6 +33,11 @@ struct AppraisalDocumentReport {
     std::vector<std::string> issues;
     std::optional<AppraisalCalculationReport> calculation;
     unsigned display_decimal_places{2};
+    // Provenance for the calculation's actual inputs. Every geometry, hierarchy,
+    // policy/fact, display and phase record lives in the entity map. Assets and
+    // history are not inputs to this numeric projection.
+    std::string source_document_id;
+    std::string source_entities_sha256;
 };
 
 // Appraisal eligibility always uses the built-in policy. Persisted display

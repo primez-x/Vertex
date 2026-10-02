@@ -24,6 +24,7 @@
 #include "sketch/desktop/boundary_input_dialog.hpp"
 #include "sketch/desktop/sheet_layout_dialog.hpp"
 #include "sketch/desktop/text_library_dialog.hpp"
+#include "sketch/desktop/appraisal_report_dialog.hpp"
 #include "sketch/boundary_commit.hpp"
 #include "sketch/area_subtraction.hpp"
 #include "sketch/boundary_construction.hpp"
@@ -3414,6 +3415,107 @@ public:
 
     [[nodiscard]] Document& document() noexcept { return *m_document; }
     [[nodiscard]] const Document& document() const noexcept { return *m_document; }
+    [[nodiscard]] std::vector<AppraisalDocumentReport> appraisalReportsForSnapshot(const DocumentSnapshot& source) const {
+        std::vector<AppraisalDocumentReport> reports;
+        std::optional<std::set<std::string,std::less<>>> semantic_visibility;
+        std::optional<std::string> phase_error;
+        try {semantic_visibility=visible_project_entities_with_phase(source,ProjectViewFilter{});}
+        catch(const std::exception& error){phase_error=error.what();}
+        for(const auto& [id,entity]:source.entities()) {
+            if(entity.type!="property") continue;
+            AppraisalDocumentReport report;report.revision=source.revision();report.property_id=id;
+            report.source_document_id=source.document_id();report.source_entities_sha256=entity_map_digest(source.entities());
+            try {
+                report=build_appraisal_document_report(source,id,m_metric_units ? AreaUnit::square_metre : AreaUnit::square_foot,
+                    semantic_visibility ? &*semantic_visibility : nullptr);
+                if(report.configured && phase_error) {
+                    report.qualified=false;report.calculation.reset();
+                    for(auto& boundary:report.boundaries) {
+                        boundary.measurement.reset();boundary.qualification.qualified=false;
+                        boundary.qualification.derived_category.reset();boundary.qualification.physical_square_metres.reset();
+                        boundary.qualification.adjusted_square_metres.reset();
+                        boundary.qualification.issues.push_back({"phase_unavailable","Design phase visibility is unavailable: "+*phase_error});
+                    }
+                    report.issues.push_back("Design phase visibility is unavailable: "+*phase_error);
+                }
+            } catch(const std::exception& error) {
+                report.configured=true;report.issues.push_back("Appraisal report could not be produced: "+std::string(error.what()));
+            }
+            reports.push_back(std::move(report));
+        }
+        return reports;
+    }
+
+    bool exportAppraisalReportPdf(const QString& path,const QString& property_id,std::optional<Revision> expected_revision) {
+        try {
+            const auto source=m_document->snapshot();
+            if(expected_revision && source.revision()!=*expected_revision)
+                throw std::invalid_argument("The project changed after this report was opened. Refresh the report before exporting.");
+            if(m_boundary_session || m_pending_wall_start)
+                throw std::invalid_argument("Finish or cancel the current drawing before exporting its appraisal report.");
+            if(QFileInfo(path).suffix().compare(QStringLiteral("pdf"),Qt::CaseInsensitive)!=0)
+                throw std::invalid_argument("Choose a PDF destination ending in .pdf.");
+            const auto destination=filesystem_path(QFileInfo(path).absoluteFilePath());
+            const auto protected_source=[&](const std::filesystem::path& source_path) {
+                if(source_path.empty())return false;
+                std::error_code error;
+                if(std::filesystem::equivalent(destination,source_path,error) && !error)return true;
+                return same_filesystem_path(std::filesystem::weakly_canonical(destination),std::filesystem::weakly_canonical(source_path));
+            };
+            if(protected_source(m_file_path) || protected_source(m_autosave_path))
+                throw std::invalid_argument("Choose an output path separate from the project and its recovery copy.");
+            const auto reports=appraisalReportsForSnapshot(source);
+            const auto wanted=property_id.isEmpty() ? (propertyEntity() ? id_from(propertyEntity()->id) : QString{}) : property_id;
+            const auto report=std::find_if(reports.begin(),reports.end(),[&](const auto& value){return value.property_id==wanted.toStdString();});
+            if(report==reports.end()) throw std::invalid_argument("Choose a property available in the current project.");
+            QString error;
+            if(!write_appraisal_report_pdf(source,*report,m_metric_units,path,error)) throw std::runtime_error(error.toStdString());
+            clearError();owner->statusBar()->showMessage(QStringLiteral("Appraisal report exported."),5000);return true;
+        } catch(const std::exception& error) {
+            setError(QStringLiteral("Appraisal report: %1").arg(QString::fromUtf8(error.what())));return false;
+        }
+    }
+
+    void showAppraisalReport() {
+        try {
+            auto source_document=m_document;
+            auto source=source_document->snapshot();
+            auto report_units=m_metric_units;
+            auto source_digest=document_snapshot_digest(source);
+            AppraisalReportDialog dialog(source,appraisalReportsForSnapshot(source),report_units,owner);
+            styleDialog(dialog);
+            const auto unchanged=[&](Revision revision) {
+                if(m_document!=source_document || m_document->revision()!=revision || m_metric_units!=report_units ||
+                    document_snapshot_digest(m_document->snapshot())!=source_digest) {
+                    dialog.showError(QStringLiteral("The project or report settings changed. Refresh the report to continue."));return false;
+                }
+                return true;
+            };
+            dialog.setRefreshRequested([&]{
+                try {
+                    source_document=m_document;source=source_document->snapshot();report_units=m_metric_units;
+                    source_digest=document_snapshot_digest(source);
+                    dialog.setReports(source,appraisalReportsForSnapshot(source),report_units);
+                } catch(const std::exception& error){dialog.showError(QString::fromUtf8(error.what()));}
+            });
+            dialog.setExportRequested([&](const QString& property,Revision revision){
+                if(!unchanged(revision)) return;
+                auto path=QFileDialog::getSaveFileName(&dialog,QStringLiteral("Export appraisal report"),QStringLiteral("appraisal-report.pdf"),QStringLiteral("PDF files (*.pdf)"));
+                if(path.isEmpty()) return;
+                if(QFileInfo(path).suffix().isEmpty()) path+=QStringLiteral(".pdf");
+                if(!unchanged(revision)) return;
+                if(!exportAppraisalReportPdf(path,property,revision)) dialog.showError(lastError());
+            });
+            dialog.setLocateRequested([&](const QString& boundary,Revision revision){
+                if(!unchanged(revision)) return;
+                if(selectEntity(boundary)) {dialog.accept();clearError();}
+                else dialog.showError(lastError());
+            });
+            dialog.exec();
+        } catch(const std::exception& error) {
+            setError(QStringLiteral("Appraisal report: %1").arg(QString::fromUtf8(error.what())));
+        }
+    }
     [[nodiscard]] DocumentScheduleProjection scheduleSnapshot() const {
         const auto source = m_document->snapshot();
         DocumentScheduleProjection projection;
@@ -3454,6 +3556,7 @@ public:
                     AppraisalDocumentReport failed;
                     failed.revision = source.revision();
                     failed.property_id = id;
+                    failed.source_document_id=source.document_id();failed.source_entities_sha256=entity_map_digest(source.entities());
                     failed.configured = true;
                     failed.issues.push_back(
                         "Appraisal report could not be produced: " + std::string(error.what()));
@@ -17649,8 +17752,6 @@ public:
                 else if (schedule_name.contains(QStringLiteral("appraisal"))) kind = ScheduleRowKind::appraisal;
                 QString heading = schedule_name.isEmpty() ? QStringLiteral("SCHEDULE")
                                                             : schedule_name.toUpper() + QStringLiteral(" SCHEDULE");
-                if (kind == ScheduleRowKind::appraisal)
-                    heading = QStringLiteral("APPRAISAL AREA SUMMARY");
                 std::vector<const ScheduleRow*> rows;
                 if (kind) {
                     for (const auto& row : schedule_projection.snapshot.rows) {
@@ -17659,6 +17760,10 @@ public:
                             (material_schedule && row.kind == ScheduleRowKind::material_summary))
                             rows.push_back(&row);
                     }
+                }
+                if(kind==ScheduleRowKind::appraisal) {
+                    render_appraisal_summary_schedule(painter,schedule_rect,paper_scale,rows,m_metric_units);
+                    continue;
                 }
                 painter.save();
                 painter.setClipRect(schedule_rect);
@@ -17703,31 +17808,15 @@ public:
                     if (index < static_cast<int>(rows.size())) {
                         const auto& row = *rows[static_cast<std::size_t>(index)];
                         const auto& cells = row.cells;
-                        if (row.kind == ScheduleRowKind::appraisal) {
-                            const auto label = cells.find("label");
-                            const auto area = cells.find("area");
-                            const auto status = cells.find("status");
-                            if (label != cells.end()) text = schedule_value_text(label->second.value);
-                            if (area != cells.end() &&
-                                std::holds_alternative<ScheduleQuantity>(area->second.value)) {
-                                const auto quantity = std::get<ScheduleQuantity>(area->second.value);
-                                text += QStringLiteral("  %1")
-                                            .arg(format_appraisal_area(quantity.value, m_metric_units,
-                                                area->second.display_decimal_places.value_or(2)));
-                            } else if (status != cells.end()) {
-                                text += QStringLiteral("  %1").arg(schedule_value_text(status->second.value));
-                            }
-                        } else {
-                            text = QStringLiteral("%1  %2")
-                                       .arg(QString::fromStdString(row.mark),
-                                            QString::fromStdString(row.object_id));
-                            int appended = 0;
-                            for (const auto& [column, cell] : cells) {
-                                if (appended++ == 2) break;
-                                text += QStringLiteral("  %1: %2")
-                                            .arg(QString::fromStdString(column),
-                                                 schedule_value_text(cell.value));
-                            }
+                        text = QStringLiteral("%1  %2")
+                                   .arg(QString::fromStdString(row.mark),
+                                        QString::fromStdString(row.object_id));
+                        int appended = 0;
+                        for (const auto& [column, cell] : cells) {
+                            if (appended++ == 2) break;
+                            text += QStringLiteral("  %1: %2")
+                                        .arg(QString::fromStdString(column),
+                                             schedule_value_text(cell.value));
                         }
                     }
                     if (text.isEmpty() && index == 0) text = QStringLiteral("No rows");
@@ -19953,14 +20042,17 @@ public:
             const auto record = decode_sheet_model(source);
             if (!record || record->model.sheets().empty())
                 throw std::invalid_argument("No typed drawing sheet is available.");
+            const auto source_sheet_id=outputSheetId();
             SheetLayoutDialog dialog(with_appraisal_schedule_registered(record->model),
-                                     outputSheetId(), owner);
+                                     source_sheet_id, owner);
             styleDialog(dialog);
             if (dialog.exec() != QDialog::Accepted || !modalContextUnchanged(context) ||
                 !dialog.acceptedModel()) return;
             const auto selected_sheet = dialog.selectedSheetId();
             const auto replacement = *dialog.acceptedModel();
-            if (!applySheetModelMutation(QStringLiteral("Edit sheet layout"), selected_sheet,
+            // The dialog can select a newly staged page. Validate the original
+            // sheet as the transaction anchor, then select the committed page.
+            if (!applySheetModelMutation(QStringLiteral("Edit sheet layout"), source_sheet_id,
                                          [replacement](const SheetViewModel&) {
                                              return replacement;
                                          })) {
@@ -21578,6 +21670,7 @@ public:
              [this] { showReferenceCalibration(); }},
             {QStringLiteral("Trace selected reference"), [this] { beginReferenceTrace(); }},
             {QStringLiteral("Open schedules"), [this] { showSchedules(); }},
+            {QStringLiteral("Appraisal area report"), [this] { showAppraisalReport(); }},
             {QStringLiteral("Edit drawing sheet settings"), [this] { showSheetSettings(); }},
             {QStringLiteral("Edit sheet layout"), [this] { showSheetLayoutManager(); }},
             {QStringLiteral("Edit architectural view settings"),
@@ -22949,6 +23042,9 @@ private:
         export_set_action->setObjectName(QStringLiteral("exportDrawingSetPdf"));
         QObject::connect(export_set_action, &QAction::triggered, owner,
                          [this] { exportDrawingSetFromDialog(); });
+        auto* appraisal_report_action=more_menu->addAction(QStringLiteral("Appraisal area report…"));
+        appraisal_report_action->setObjectName(QStringLiteral("appraisalReport"));
+        QObject::connect(appraisal_report_action,&QAction::triggered,owner,[this]{showAppraisalReport();});
         auto* print_sheet_action = more_menu->addAction(QStringLiteral("Print selected sheet (draft)…"));
         print_sheet_action->setObjectName(QStringLiteral("printSelectedSheet"));
         QObject::connect(print_sheet_action, &QAction::triggered, owner,
@@ -32054,6 +32150,10 @@ void MainWindow::showAppraisalFacts() { m_impl->showAppraisalFacts(); }
 bool MainWindow::exportDrawingSetPdf(const QString& path) {
     return m_impl->exportDrawingSetPdf(path);
 }
+bool MainWindow::exportAppraisalReportPdf(const QString& path,const QString& property_id,std::optional<Revision> expected_revision) {
+    return m_impl->exportAppraisalReportPdf(path,property_id,expected_revision);
+}
+void MainWindow::showAppraisalReport() {m_impl->showAppraisalReport();}
 
 bool MainWindow::exportDraftSvg(const QString& path) {
     return m_impl->exportDraftSvg(path);

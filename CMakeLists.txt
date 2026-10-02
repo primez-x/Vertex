@@ -618,7 +618,8 @@ if(SKETCH_BUILD_DESKTOP)
   endif()
   add_library(sketch_desktop src/desktop/main_window.cpp
     src/desktop/building_object_dialog.cpp src/desktop/hosted_opening_dialog.cpp src/desktop/constraint_dialog.cpp
-    src/desktop/constraint_preview_canvas.cpp src/desktop/text_library_dialog.cpp)
+    src/desktop/constraint_preview_canvas.cpp src/desktop/text_library_dialog.cpp
+    src/desktop/appraisal_report_dialog.cpp)
   target_link_libraries(sketch_desktop PUBLIC sketch_text_library)
   target_link_libraries(sketch_desktop PUBLIC sketch_hosted_opening_plan)
   target_include_directories(sketch_desktop PUBLIC include PRIVATE src/desktop)
@@ -653,12 +654,18 @@ if(SKETCH_BUILD_DESKTOP)
     qt_add_resources(wall_dimension_desktop_tests wall_dimension_test_fonts PREFIX "/fonts" BASE assets/fonts
       FILES assets/fonts/Inter.ttf)
     add_test(NAME wall_dimension_desktop COMMAND wall_dimension_desktop_tests)
+    add_executable(appraisal_report_desktop_tests tests/appraisal_report_desktop_tests.cpp)
+    target_link_libraries(appraisal_report_desktop_tests PRIVATE sketch_desktop)
+    qt_add_resources(appraisal_report_desktop_tests appraisal_report_test_fonts PREFIX "/fonts" BASE assets/fonts
+      FILES assets/fonts/Inter.ttf)
+    add_test(NAME appraisal_report_desktop COMMAND appraisal_report_desktop_tests)
     if(MSVC)
       target_compile_options(text_library_tests PRIVATE /W4 /permissive- /utf-8)
       target_compile_options(text_library_desktop_tests PRIVATE /W4 /permissive- /utf-8)
       target_compile_options(wall_dimension_desktop_tests PRIVATE /W4 /permissive- /utf-8)
+      target_compile_options(appraisal_report_desktop_tests PRIVATE /W4 /permissive- /utf-8)
     endif()
-    set_tests_properties(text_library text_library_desktop wall_dimension_desktop PROPERTIES
+    set_tests_properties(text_library text_library_desktop wall_dimension_desktop appraisal_report_desktop PROPERTIES
       ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_PLUGIN_PATH=${SKETCH_QT_PREFIX}/plugins"
       ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${SKETCH_QT_BIN};PATH=path_list_prepend:${CMAKE_SOURCE_DIR}/.deps/native/x64-windows/$<IF:$<CONFIG:Debug>,debug/bin,bin>")
     add_executable(reference_import_tests tests/reference_import_tests.cpp)

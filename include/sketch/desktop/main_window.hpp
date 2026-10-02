@@ -629,6 +629,11 @@ public:
     [[nodiscard]] bool exportDraftPdf(const QString& path);
     // Exports every persisted drawing sheet as one ordered multipage PDF.
     [[nodiscard]] bool exportDrawingSetPdf(const QString& path);
+    // Complete revision-bound calculation audit; valid unqualified measurements
+    // are diagnostics and never become qualified property totals.
+    [[nodiscard]] bool exportAppraisalReportPdf(const QString& path,const QString& property_id = {},
+        std::optional<Revision> expected_revision = std::nullopt);
+    void showAppraisalReport();
     [[nodiscard]] bool exportDraftSvg(const QString& path);
     [[nodiscard]] bool exportDraftImage(const QString& path);
     [[nodiscard]] bool exportNativeViewImage(const QString& path);
