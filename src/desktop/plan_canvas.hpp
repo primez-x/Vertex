@@ -190,6 +190,11 @@ struct CanvasLabel {
     // Derived area presentation; both positions are model-space metres.
     std::optional<Vec2> leader_start;
     std::optional<Vec2> plan_label_offset;
+    // Empty or generic sans-serif retains the bundled workspace font.
+    QString font_family;
+    // Authored model-space plan anchor; unlike derived plan_only labels,
+    // these remain selectable and have normal annotation transform handles.
+    bool model_plan{false};
 };
 
 // Exact geometric totals from the candidate document, used only while editing.

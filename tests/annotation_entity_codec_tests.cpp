@@ -60,6 +60,17 @@ int main() {
         const auto path = std::filesystem::temp_directory_path() /
             "vertex-annotation-entity.bldproj";
         std::filesystem::remove(path);
+
+        auto plan_state=state;
+        plan_state.labels.front().model_plan=true;
+        auto plan_entity=sketch::make_annotation_entity("plan-annotations",plan_state);
+        auto plan_document=sketch::Document::create({plan_entity});
+        (void)sketch::ProjectStore::save(path,plan_document.snapshot());
+        const auto plan_reopened=sketch::ProjectStore::load(path).document.snapshot();
+        require(plan_reopened.entities().at("plan-annotations")==plan_entity &&
+            sketch::decode_annotation_entity(plan_reopened.entities().at("plan-annotations")).labels.front().model_plan,
+            "native project save/reopen must retain version 5 plan anchors");
+        std::filesystem::remove(path);
         (void)sketch::ProjectStore::save(path, document.snapshot());
         const auto reopened = sketch::ProjectStore::load(path).document.snapshot();
         const auto reopened_state = sketch::decode_annotation_entity(

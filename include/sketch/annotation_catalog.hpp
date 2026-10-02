@@ -50,6 +50,9 @@ struct LabelInstance {
     AnnotationStyle style;
     AnnotationPlacement placement;
     bool visible{true};
+    // World XY anchor rendered in horizontal plans only. Legacy labels keep
+    // view-overlay XY when false. Rotation remains relative to the view.
+    bool model_plan{false};
 };
 
 struct PresentationOverride {

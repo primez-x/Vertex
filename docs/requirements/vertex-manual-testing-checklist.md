@@ -764,7 +764,8 @@ drawing; switching modes does not change existing geometry.
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U130 — Reuse a saved text-library entry**
-  - Expected: The expected text is inserted and can be customized for that instance.
+  - Steps: In the Library tab, click + Text. Click New, name the entry "Finished basement", choose a category, enter two lines of text, and choose a font, text height, color and emphasis. Save it. Search for its name and use Insert; click the canvas to place it. Insert a second copy. Double-click the first placed label and change its text. Reopen + Text, edit the saved entry and Save, then insert a third copy. Delete the library entry, save the project, close it, and reopen it.
+  - Expected: All three placed labels retain their own text, style and positions; editing the library affects future insertions only. Searching and category filtering find the saved entry. A built-in entry offers Save copy and cannot be overwritten. While Insert is active, dragging pans without placing; Escape cancels without changing the drawing. Reopening the project retains labels even after their library entry is deleted.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 

@@ -1110,10 +1110,16 @@ json encode_annotation_state(const AnnotationState& state, const std::vector<Sym
     validate_annotation_state(state,catalog);
     const bool label_placements = std::any_of(state.overrides.begin(), state.overrides.end(),
         [](const auto& value) { return value.plan_label_offset.has_value() || value.inherit_appearance; });
-    json j{{"version",label_placements ? 4 : 3},{"catalog_revision",kSymbolCatalogRevision},
+    const auto model_plan = std::any_of(state.labels.begin(),state.labels.end(),
+        [](const auto& label){return label.model_plan;});
+    json j{{"version",model_plan ? 5 : label_placements ? 4 : 3},{"catalog_revision",kSymbolCatalogRevision},
            {"labels",json::array()},{"symbols",json::array()},{"overrides",json::array()}};
-    for (const auto& l : state.labels) j["labels"].push_back({{"id",l.id},{"template_id",l.template_id},{"content",l.content},
-        {"style",encode_style(l.style)},{"placement",encode_placement(l.placement)},{"visible",l.visible}});
+    for (const auto& l : state.labels) {
+        json label{{"id",l.id},{"template_id",l.template_id},{"content",l.content},
+            {"style",encode_style(l.style)},{"placement",encode_placement(l.placement)},{"visible",l.visible}};
+        if(l.model_plan) label["model_plan"]=true;
+        j["labels"].push_back(std::move(label));
+    }
     for (const auto& s : state.symbols) {
         const auto& definition = s.definition ? *s.definition : *std::find_if(catalog.begin(), catalog.end(),
             [&](const auto& entry) { return entry.id == s.symbol_id; });
@@ -1140,7 +1146,7 @@ AnnotationState decode_annotation_state(const json& j, const std::vector<SymbolD
     try {
         check(j.at("version").is_number_integer() &&
                   (j.at("version") == 1 || j.at("version") == 2 ||
-                   j.at("version") == 3 || j.at("version") == 4),
+                   j.at("version") == 3 || j.at("version") == 4 || j.at("version") == 5),
               "Unsupported annotation version");
         const bool pinned = j.at("version") != 1;
         const bool independent_transform = j.at("version").get<int>() >= 3;
@@ -1153,9 +1159,13 @@ AnnotationState decode_annotation_state(const json& j, const std::vector<SymbolD
         for (const char* key : {"labels","symbols","overrides"})
             check(j.at(key).is_array() && j.at(key).size() <= 100000, "Invalid annotation collection");
         AnnotationState state;
-        for (const auto& l : j.at("labels")) state.labels.push_back({l.at("id").get<std::string>(),
-            l.at("template_id").get<std::string>(),l.at("content").get<std::string>(),decode_style(l.at("style")),
-            decode_placement(l.at("placement")),l.at("visible").get<bool>()});
+        for (const auto& l : j.at("labels")) {
+            check(!l.contains("model_plan") || (j.at("version")==5 && l.at("model_plan").is_boolean()),
+                "Plan-anchored labels require annotation version 5 and a boolean mode");
+            state.labels.push_back({l.at("id").get<std::string>(),
+                l.at("template_id").get<std::string>(),l.at("content").get<std::string>(),decode_style(l.at("style")),
+                decode_placement(l.at("placement")),l.at("visible").get<bool>(),l.value("model_plan",false)});
+        }
         for (const auto& s : j.at("symbols")) {
             check(s.is_object() && s.size() == (independent_transform ? 11 : pinned ? 7 : 5),
                   "Invalid symbol instance keys");
@@ -1211,7 +1221,7 @@ AnnotationState decode_annotation_state(const json& j, const std::vector<SymbolD
             if (o.contains("paper_line_width_mm")) value.paper_line_width_mm = o.at("paper_line_width_mm").get<double>();
             if (o.contains("hatch_scale")) value.hatch_scale = o.at("hatch_scale").get<double>();
             if (o.contains("plan_label_offset_m")) {
-                check(j.at("version") == 4, "Area label placement requires annotation version 4");
+                check(j.at("version").get<int>() >= 4, "Area label placement requires annotation version 4 or later");
                 const auto& offset = o.at("plan_label_offset_m");
                 check(offset.is_array() && offset.size() == 2 &&
                       offset[0].is_number() && offset[1].is_number(),
@@ -1219,8 +1229,8 @@ AnnotationState decode_annotation_state(const json& j, const std::vector<SymbolD
                 value.plan_label_offset = Vec2{offset[0].get<double>(), offset[1].get<double>()};
             }
             if (o.contains("inherit_appearance")) {
-                check(j.at("version") == 4 && o.at("inherit_appearance").is_boolean(),
-                      "Area appearance inheritance requires a version 4 boolean");
+                check(j.at("version").get<int>() >= 4 && o.at("inherit_appearance").is_boolean(),
+                      "Area appearance inheritance requires a version 4 or later boolean");
                 value.inherit_appearance = o.at("inherit_appearance").get<bool>();
             }
             state.overrides.push_back(std::move(value));

@@ -23,6 +23,7 @@
 #include "sketch/desktop/constraint_dialog.hpp"
 #include "sketch/desktop/boundary_input_dialog.hpp"
 #include "sketch/desktop/sheet_layout_dialog.hpp"
+#include "sketch/desktop/text_library_dialog.hpp"
 #include "sketch/boundary_commit.hpp"
 #include "sketch/area_subtraction.hpp"
 #include "sketch/boundary_construction.hpp"
@@ -2642,9 +2643,9 @@ void project_plan_model_labels(std::vector<CanvasLabel>& labels,
     if (!horizontal_plan_frame(frame)) return;
     for (auto& label : labels) {
         const auto found = snapshot.entities().find(label.id.toStdString());
-        // Generated model labels follow their projected geometry. Explicit
-        // annotations retain the existing view-overlay coordinate convention.
-        if (label.plan_only || (found != snapshot.entities().end() && found->second.type == "dimension")) {
+          // Plan-anchored labels follow model geometry. Legacy explicit
+          // annotations retain their saved view-overlay coordinate convention.
+        if (label.plan_only || label.model_plan || (found != snapshot.entities().end() && found->second.type == "dimension")) {
             label.position = project_plan_point(label.position, frame);
             if (label.leader_start) label.leader_start=project_plan_point(*label.leader_start,frame);
         }
@@ -3240,8 +3241,8 @@ class MainWindow::Impl {
     };
 
 public:
-    Impl(MainWindow* window, std::shared_ptr<Document> document)
-        : owner(window), m_document(std::move(document)) {
+    Impl(MainWindow* window, std::shared_ptr<Document> document,QString text_library_path)
+        : owner(window), m_document(std::move(document)),m_text_library_path(std::move(text_library_path)) {
         initialize_vertex_symbol_resources();
         // The product contract is local-first.  Declare the four required
         // capabilities explicitly at the native application boundary and
@@ -3582,7 +3583,7 @@ public:
             }
             if (offset) {
                 (*record)["plan_label_offset_m"]=json::array({offset->x,offset->y});
-                raw["version"]=4;
+                raw["version"]=std::max(4,raw.at("version").get<int>());
             } else record->erase("plan_label_offset_m");
             validate_annotation_entity(updated);
             if (owner_id && updated==source.entities().at(*owner_id)) {clearError(); return true;}
@@ -3618,6 +3619,7 @@ public:
                 [&](const auto& value){return value.id==m_selected_id && value.avoid_components && !value.text.isEmpty();});
             if (m_selected_ids.size()!=1 || label==canvas->labels().end())
                 throw std::invalid_argument("Select one area or room with a plan label.");
+            cancelTextPlacement();
             cancelPlanLabelPlacement();
             m_plan_label_context=captureModalContext();
             const auto workspace=m_workspace;
@@ -3807,7 +3809,8 @@ public:
                                 if (record.at("target_kind") != "area" || record.at("target_id") != selected->id) return false;
                                 if (record.contains("plan_label_offset_m")) {
                                     record["inherit_appearance"]=true;
-                                    updated.properties.at("state")["version"]=4;
+                                    auto& version=updated.properties.at("state").at("version");
+                                    version=std::max(4,version.get<int>());
                                     return false;
                                 }
                                 return true;
@@ -9873,8 +9876,28 @@ public:
         return true;
     }
 
-    QString createAnnotationLabel(const QString& template_id, const QString& content,
-                                  Vec2 position) {
+    static void validateTextPlacementEntry(const TextLibraryEntry& entry) {
+        auto candidate = entry;
+        const auto builtins = default_label_templates();
+        if (std::any_of(builtins.begin(), builtins.end(), [&](const auto& value) { return value.id == entry.id; }))
+            candidate.id = "user-text-builtin-" + entry.id;
+        validate_text_library(TextLibraryDocument{1,{candidate}});
+    }
+
+    TextLibraryStore& textLibraryStore() {
+        if (!m_text_library) {
+            if (m_text_library_path.isEmpty())
+                m_text_library_path=QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation)+
+                    QStringLiteral("/text-library.json");
+            if (!QDir().mkpath(QFileInfo(m_text_library_path).absolutePath()))
+                throw std::runtime_error("The text library folder cannot be opened.");
+            m_text_library=std::make_unique<TextLibraryStore>(m_text_library_path);
+        }
+        return *m_text_library;
+    }
+
+    QString createAnnotationLabelFromEntry(const TextLibraryEntry& entry,const QString& content,
+                                          Vec2 position,bool model_plan=false) {
         try {
             if (!m_document->is_editable()) {
                 throw std::invalid_argument("This document is read-only.");
@@ -9892,25 +9915,31 @@ public:
             if (annotation == source.entities().end()) {
                 throw std::invalid_argument("The project has no annotation state entity.");
             }
-            const auto templates = default_label_templates();
-            const auto wanted = template_id.trimmed().toStdString();
-            const auto definition = std::find_if(
-                templates.begin(), templates.end(),
-                [&](const auto& candidate) { return candidate.id == wanted; });
-            if (definition == templates.end()) {
-                throw std::invalid_argument("Unknown annotation label template.");
-            }
-            auto state = decode_annotation_entity(annotation->second);
-            auto label = instantiate_label(*definition, new_id("label"));
+            validateTextPlacementEntry(entry);
+            const auto original_state=decode_annotation_entity(annotation->second);
+            auto label = instantiate_label({entry.id,entry.category,entry.content}, new_id("label"));
+            label.style=entry.style;
             if (!content.trimmed().isEmpty()) {
                 label.content = content.toStdString();
             }
             label.placement.position = position;
             label.placement.layer_id = context->layer_id;
-            state.labels.push_back(label);
+            label.model_plan=model_plan;
+            AnnotationState addition;
+            addition.labels.push_back(label);
+            auto updated=annotation->second;
+            if(model_plan) {
+                upgrade_annotation_transform_version(updated,original_state);
+                updated.properties.at("state")["version"]=5;
+            }
+            // A new instance must not re-encode unrelated pinned artwork,
+            // vendor metadata or existing presentation records.
+            updated.properties.at("state").at("labels").push_back(
+                encode_annotation_state(addition,desktop_symbol_catalog()).at("labels").at(0));
+            validate_annotation_entity(updated);
             const auto command = ApplyEntityChanges{
                 source.revision(),
-                {EntityChange::upsert(make_annotation_entity(annotation->second.id, state))},
+                {EntityChange::upsert(std::move(updated))},
                 {}, "Add annotation label"};
             (void)Document::preview_command(source, command);
             applyDocumentCommand(command);
@@ -10028,23 +10057,19 @@ public:
                     throw std::invalid_argument("Annotation font family must be between 1 and 256 characters.");
                 const auto height_mm = parse_finite(
                     text_height_mm, "Annotation text height must be finite millimetres.");
-                if (!(height_mm > 0.0) || height_mm > 1000.0)
-                    throw std::invalid_argument("Annotation text height must be greater than 0 and no more than 1000 mm.");
+                if (!(height_mm > 0.0) || height_mm > 100000.0)
+                    throw std::invalid_argument("Annotation text height must be greater than 0 and no more than 100000 mm.");
                 replacement_style = AnnotationStyle{
                     family, height_mm / 1000.0, 0.0,
                     stroke_color.trimmed().toStdString(), fill_color.trimmed().toStdString(),
                     "none", bold, italic};
             }
             const auto source = authoringSnapshot();
-            auto annotation = std::find_if(source.entities().begin(), source.entities().end(),
-                                            [](const auto& entry) {
-                                                return entry.second.type == kAnnotationEntityType;
-                                            });
-            if (annotation == source.entities().end()) {
-                throw std::invalid_argument("The project has no annotation state entity.");
-            }
-            auto state = decode_annotation_entity(annotation->second);
             const auto wanted = annotation_id.trimmed().toStdString();
+            const auto parent = annotation_parent_for_child(source, wanted);
+            if (!parent) throw std::invalid_argument("Annotation was not found.");
+            const auto& annotation = source.entities().at(*parent);
+            auto state = decode_annotation_entity(annotation);
             bool found = false;
             for (auto& label : state.labels) {
                 if (label.id != wanted) continue;
@@ -10096,9 +10121,32 @@ public:
                 }
             }
             if (!found) throw std::invalid_argument("Annotation was not found.");
+            auto updated = annotation;
+            if (width || depth || flip_horizontal || flip_vertical)
+                upgrade_annotation_transform_version(updated, state);
+            // Edit only this child's known values. Re-encoding the owner would
+            // discard opaque imported metadata and replace unrelated artwork.
+            auto& raw = annotation_child_record(updated, wanted);
+            const auto encoded = encode_annotation_state(state, desktop_symbol_catalog());
+            for (const auto* collection : {"labels", "symbols"}) {
+                for (const auto& record : encoded.at(collection)) {
+                    if (record.at("id").get<std::string>() != wanted) continue;
+                    raw.at("placement").update(record.at("placement"));
+                    raw["visible"] = record.at("visible");
+                    if (record.contains("content")) raw["content"] = record.at("content");
+                    if (replacement_style) raw.at("style").update(record.at("style"));
+                    if (record.contains("definition")) {
+                        if (width) raw["width_scale"] = record.at("width_scale");
+                        if (depth) raw["depth_scale"] = record.at("depth_scale");
+                        if (flip_horizontal) raw["flip_horizontal"] = record.at("flip_horizontal");
+                        if (flip_vertical) raw["flip_vertical"] = record.at("flip_vertical");
+                    }
+                }
+            }
+            validate_annotation_entity(updated);
             const auto command = ApplyEntityChanges{
                 source.revision(),
-                {EntityChange::upsert(make_annotation_entity(annotation->second.id, state))},
+                {EntityChange::upsert(std::move(updated))},
                 {}, "Edit annotation"};
             (void)Document::preview_command(source, command);
             applyDocumentCommand(command);
@@ -10792,6 +10840,7 @@ public:
 
     bool beginBoundaryDrawing(BoundaryAuthoringMode mode, QString classification,
                               QString subtract_target = {}) {
+        if (m_text_placement_context) cancelTextPlacement();
         if (m_plan_label_context) cancelPlanLabelPlacement();
         if (m_workspace != Workspace::measurement) {
             setWorkspace(Workspace::measurement);
@@ -13014,8 +13063,17 @@ public:
                 std::size_t moved = 0;
                 for (auto& label : state.labels) {
                     if (!annotation_owners.contains(label.id) || annotation_owners.at(label.id) != owner_id) continue;
-                    label.placement.position.x += delta.x;
-                    label.placement.position.y += delta.y;
+                    auto label_delta=delta;
+                    if(label.model_plan && canvas==m_architecturalCanvas) {
+                        const auto frame=canvasTransformPlanFrame(source);
+                        if(frame) {
+                            const auto right=plan_view_right(*frame),up=plan_view_up(*frame);
+                            label_delta={right.x*delta.x+up.x*delta.y,
+                                         right.y*delta.x+up.y*delta.y};
+                        }
+                    }
+                    label.placement.position.x += label_delta.x;
+                    label.placement.position.y += label_delta.y;
                     if (source.entities().contains(label.id))
                         throw std::invalid_argument("Selection identity is ambiguous between an annotation and a model object.");
                     model_ids.removeAll(id_from(label.id));
@@ -17285,7 +17343,7 @@ public:
                 };
                 std::vector<CanvasLabel> labels;
                 for (const auto& label : m_measurementCanvas->labels())
-                    if (includes(label.id) && (!label.plan_only || view_kind == BuildingViewKind::plan))
+                    if (includes(label.id) && (!(label.plan_only || label.model_plan) || view_kind == BuildingViewKind::plan))
                         labels.push_back(label);
                 if (view_kind == BuildingViewKind::plan)
                     project_plan_model_labels(labels, snapshot, architectural_view_context(*view).frame);
@@ -20238,6 +20296,81 @@ public:
             .arg(m_opening_style->currentText()));
     }
 
+    QString createAnnotationLabel(const QString& template_id,const QString& content,Vec2 position) {
+        try {
+            const auto wanted=template_id.trimmed().toStdString();
+            const auto builtins=default_label_templates();
+            for (const auto& entry:builtins) {
+                if (entry.id==wanted)
+                    return createAnnotationLabelFromEntry({entry.id,entry.content,entry.category,entry.content,{}},content,position);
+            }
+            auto& store=textLibraryStore();
+            store.reload();
+            for (const auto& entry:store.entries())
+                if (entry.id==wanted) return createAnnotationLabelFromEntry(entry,content,position);
+            throw std::invalid_argument("Unknown annotation label template.");
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Annotation label: %1").arg(QString::fromUtf8(error.what())));
+            return {};
+        }
+    }
+
+    void cancelTextPlacement() {
+        const bool active = m_text_placement_context.has_value();
+        m_text_placement_context.reset();
+        m_measurementCanvas->setPointPlacementRequested({});
+        m_architecturalCanvas->setPointPlacementRequested({});
+        if (active) owner->statusBar()->clearMessage();
+    }
+
+    bool beginTextPlacement(const TextLibraryEntry& entry) {
+        try {
+            if (!m_document->is_editable()) throw std::invalid_argument("This document is read-only.");
+            if (m_boundary_session || m_pending_wall_start || !m_pending_symbol_id.isEmpty() || !m_pending_opening_kind.isEmpty())
+                throw std::invalid_argument("Finish or cancel the current drawing before placing text.");
+            validateTextPlacementEntry(entry);
+            if (!requireDrawingContext()) return false;
+            auto* canvas=m_workspace==Workspace::measurement ? m_measurementCanvas : m_architecturalCanvas;
+            const auto view=boundaryVertexViewContext(canvas,authoringSnapshot());
+            cancelPlanLabelPlacement();
+            cancelTextPlacement();
+            m_text_placement_context=captureModalContext();
+            const auto workspace=m_workspace;
+            const auto named_view=m_active_named_view;
+            const auto kind=m_architectural_view_kind;
+            canvas->setPointPlacementRequested([this,entry,view,workspace,named_view,kind](Vec2 point) {
+                const auto context=m_text_placement_context;
+                cancelTextPlacement();
+                if (!context || !modalContextUnchanged(*context)) return;
+                if (workspace!=m_workspace || named_view!=m_active_named_view || kind!=m_architectural_view_kind) {
+                    setError(QStringLiteral("The view changed while placing text. Start placement again.")); return;
+                }
+                if (view) point=unproject_plan_point(point,view->frame);
+                (void)createAnnotationLabelFromEntry(entry,{},point,true);
+            });
+            canvas->setFocus();
+            clearError();
+            owner->statusBar()->showMessage(QStringLiteral("Click to place text; Esc cancels."));
+            return true;
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Text placement: %1").arg(QString::fromUtf8(error.what())));
+            return false;
+        }
+    }
+
+    void showTextLibrary() {
+        try {
+            const auto context=captureModalContext();
+            auto& store=textLibraryStore();
+            store.reload();
+            TextLibraryDialog dialog(store,m_metric_units,owner);
+            if (dialog.exec()!=QDialog::Accepted || !dialog.selectedEntry() || !modalContextUnchanged(context)) return;
+            (void)beginTextPlacement(*dialog.selectedEntry());
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Text library: %1").arg(QString::fromUtf8(error.what())));
+        }
+    }
+
     bool prepareHostedOpening(const SymbolDefinition& definition, double scale = 1.0) {
         if (!is_hosted_opening_symbol(definition)) return false;
         const auto width = catalog_opening_width(definition) * scale;
@@ -21190,6 +21323,7 @@ public:
             {QStringLiteral("Measurement workspace"), [this] { setWorkspace(Workspace::measurement); }},
             {QStringLiteral("Architectural workspace"), [this] { setWorkspace(Workspace::architectural); }},
             {QStringLiteral("Add labels and symbols"), [this] { showAnnotationEditor(); }},
+            {QStringLiteral("Text library"), [this] { showTextLibrary(); }},
             {QStringLiteral("Add angle or area dimension"), [this] { showDimensionCreator(); }},
             {QStringLiteral("Import reference image"), [this] { showReferenceImport(); }},
             {QStringLiteral("Open project resources"), [this] { showProjectResources(); }},
@@ -23248,8 +23382,9 @@ private:
         QObject::connect(m_object_button, &QToolButton::clicked, owner,
                          [this] { showBuildingObjectDialog(false); });
         auto* text_button = new QToolButton(components_header);
+        text_button->setObjectName(QStringLiteral("openTextLibrary"));
         text_button->setText(QStringLiteral("+ Text"));
-        text_button->setToolTip(QStringLiteral("Create a text label at the current cursor position"));
+        text_button->setToolTip(QStringLiteral("Choose or edit reusable text, then click to place it"));
         text_button->setAutoRaise(true);
         components_header_layout->addWidget(text_button);
         symbols_layout->addWidget(components_header);
@@ -23327,12 +23462,7 @@ private:
         QObject::connect(m_symbol_list, &QListWidget::itemActivated, owner,
                          [this](QListWidgetItem* item) { armSymbolPlacement(item); });
         QObject::connect(text_button, &QToolButton::clicked, owner, [this] {
-            bool accepted = false;
-            const auto text = QInputDialog::getText(owner, QStringLiteral("Add text"),
-                QStringLiteral("Text"), QLineEdit::Normal, {}, &accepted).trimmed();
-            if (!accepted || text.isEmpty()) return;
-            const auto id = createAnnotationLabel(QStringLiteral("note"), text, m_last_cursor);
-            if (id.isEmpty()) setError(lastError());
+            showTextLibrary();
         });
         populateSymbolLibrary();
 
@@ -25278,6 +25408,8 @@ private:
                     }
                     canvas_label.bold = label.style.bold;
                     canvas_label.italic = label.style.italic;
+                    canvas_label.font_family = QString::fromStdString(label.style.font_family);
+                    canvas_label.model_plan = label.model_plan;
                     canvas_label.fill_color = QColor(QString::fromStdString(label.style.fill_color));
                     canvas_label.fill_pattern = QString::fromStdString(label.style.fill_pattern);
                     canvas_label.show_background = label.style.fill_pattern != "none";
@@ -26289,7 +26421,7 @@ private:
             project_plan_model_labels(labels, snapshot, frame);
         }
         if (m_architectural_view_kind != BuildingViewKind::plan) {
-            std::erase_if(labels, [](const auto& label) { return label.plan_only; });
+            std::erase_if(labels, [](const auto& label) { return label.plan_only || label.model_plan; });
         }
         if (m_architectural_view_kind == BuildingViewKind::section) {
             if (const auto record = decode_sheet_model(snapshot)) {
@@ -28839,6 +28971,10 @@ private:
     }
 
     void cancelTool() {
+        if (m_text_placement_context) {
+            cancelTextPlacement();
+            return;
+        }
         if (m_plan_label_context) {
             cancelPlanLabelPlacement();
             return;
@@ -28901,6 +29037,7 @@ private:
     }
 
     void setTool(CanvasTool tool) {
+        if (m_text_placement_context) cancelTextPlacement();
         if (m_plan_label_context) cancelPlanLabelPlacement();
         if (m_pending_wall_start) {
             if (tool == m_tool) return;
@@ -30554,6 +30691,9 @@ private:
 
     MainWindow* owner{};
     std::shared_ptr<Document> m_document;
+    QString m_text_library_path;
+    std::unique_ptr<TextLibraryStore> m_text_library;
+    std::optional<ModalContext> m_text_placement_context;
     std::unique_ptr<ProjectWorkspace> m_project_workspace;
     RecoveryLedger m_recovery_ledger;
     std::uint64_t m_saved_workspace_epoch{};
@@ -30908,8 +31048,8 @@ private:
     QAction* m_about_action{};
 };
 
-MainWindow::MainWindow(std::shared_ptr<Document> document, QWidget* parent)
-    : QMainWindow(parent), m_impl(std::make_unique<Impl>(this, std::move(document))) {}
+MainWindow::MainWindow(std::shared_ptr<Document> document, QWidget* parent,QString text_library_path)
+    : QMainWindow(parent), m_impl(std::make_unique<Impl>(this, std::move(document),std::move(text_library_path))) {}
 
 MainWindow::~MainWindow() = default;
 
@@ -31454,6 +31594,8 @@ QString MainWindow::createAnnotationLabel(const QString& template_id, const QStr
                                           Vec2 position) {
     return m_impl->createAnnotationLabel(template_id, content, position);
 }
+void MainWindow::showTextLibrary() { m_impl->showTextLibrary(); }
+bool MainWindow::beginTextPlacement(const TextLibraryEntry& entry) { return m_impl->beginTextPlacement(entry); }
 
 QString MainWindow::createAnnotationSymbol(const QString& symbol_id, Vec2 position) {
     return m_impl->createAnnotationSymbol(symbol_id, position);

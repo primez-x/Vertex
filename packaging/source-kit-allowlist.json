@@ -2159,6 +2159,10 @@
     },
     {
       "category": "docs",
+      "path": "docs/superpowers/plans/2026-10-01-editable-text-library.md"
+    },
+    {
+      "category": "docs",
       "path": "docs/superpowers/plans/2026-10-01-exterior-wall-networks.md"
     },
     {
@@ -2196,6 +2200,10 @@
     {
       "category": "docs",
       "path": "docs/terrain-surfaces.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/text-library-format.md"
     },
     {
       "category": "docs",
@@ -2292,6 +2300,10 @@
     {
       "category": "docs",
       "path": "docs/verification/shared-topology-admission-2026-09-30.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/verification/text-library-2026-10-01.md"
     },
     {
       "category": "docs",
@@ -2532,6 +2544,10 @@
     {
       "category": "source",
       "path": "include/sketch/desktop/sheet_layout_dialog.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/desktop/text_library_dialog.hpp"
     },
     {
       "category": "source",
@@ -2776,6 +2792,10 @@
     {
       "category": "source",
       "path": "include/sketch/terrain_surface.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/text_library.hpp"
     },
     {
       "category": "source",
@@ -3507,6 +3527,10 @@
     },
     {
       "category": "source",
+      "path": "src/core/text_library.cpp"
+    },
+    {
+      "category": "source",
       "path": "src/core/typed_relationships.cpp"
     },
     {
@@ -3656,6 +3680,10 @@
     {
       "category": "source",
       "path": "src/desktop/sheet_layout_dialog.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/desktop/text_library_dialog.cpp"
     },
     {
       "category": "source",
@@ -4404,6 +4432,14 @@
     {
       "category": "source",
       "path": "tests/test_workflow_acceptance_evidence.py"
+    },
+    {
+      "category": "source",
+      "path": "tests/text_library_desktop_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/text_library_tests.cpp"
     },
     {
       "category": "source",

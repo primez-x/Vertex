@@ -443,6 +443,19 @@ int main() {
     state.overrides.push_back({"area","area-1",{},false});
     state.overrides.push_back({"output_view","print-1",{},true});
     auto encoded = encode_annotation_state(state,catalog);
+    auto plan_state=state;
+    plan_state.labels.front().model_plan=true;
+    plan_state.overrides.front().plan_label_offset=Vec2{.25,-.5};
+    auto plan_wire=encode_annotation_state(plan_state,catalog);
+    require(plan_wire.at("version")==5 && plan_wire.at("labels").at(0).at("model_plan")==true &&
+        encode_annotation_state(decode_annotation_state(plan_wire,catalog),catalog)==plan_wire,
+        "plan anchoring and existing area offsets must round-trip together as version 5");
+    for(const auto version:{1,2,3,4}) {
+        auto old=plan_wire;old["version"]=version;
+        rejected([&]{(void)decode_annotation_state(old,catalog);});
+    }
+    auto invalid_plan=plan_wire;invalid_plan["labels"][0]["model_plan"]="true";
+    rejected([&]{(void)decode_annotation_state(invalid_plan,catalog);});
     require(encoded.at("catalog_revision") == kSymbolCatalogRevision,
             "Annotation state must pin the symbol catalog revision");
     const auto decoded = decode_annotation_state(nlohmann::json::parse(encoded.dump()),catalog);
@@ -504,7 +517,7 @@ int main() {
     rejected([&]{(void)placed_symbol_preview(catalog.front(),{{},0,0.001});});
     auto malformed = encoded; malformed["version"] = 1.0;
     rejected([&]{(void)decode_annotation_state(malformed,catalog);});
-    malformed = encoded; malformed["version"] = 5;
+    malformed = encoded; malformed["version"] = 6;
     rejected([&]{(void)decode_annotation_state(malformed,catalog);});
     malformed = encoded; malformed["labels"][0]["visible"] = "false";
     rejected([&]{(void)decode_annotation_state(malformed,catalog);});

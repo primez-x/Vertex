@@ -8,6 +8,7 @@
 #include "sketch/boundary_authoring_session.hpp"
 #include "sketch/assistance_engine.hpp"
 #include "sketch/workspace_accessibility.hpp"
+#include "sketch/text_library.hpp"
 
 #include <QMainWindow>
 #include <QString>
@@ -28,7 +29,8 @@ enum class Workspace {
 // direct Document edits to those archives cannot yet be saved through this shell.
 class MainWindow final : public QMainWindow {
 public:
-    explicit MainWindow(std::shared_ptr<Document> document = {}, QWidget* parent = nullptr);
+    explicit MainWindow(std::shared_ptr<Document> document = {}, QWidget* parent = nullptr,
+                        QString text_library_path = {});
     ~MainWindow() override;
 
     MainWindow(const MainWindow&) = delete;
@@ -538,6 +540,10 @@ public:
     [[nodiscard]] QString createAnnotationLabel(const QString& template_id,
                                                 const QString& content,
                                                 Vec2 position);
+    // User text entries copy their wording/style into independent annotations.
+    // The optional constructor path chooses a portable local library file.
+    void showTextLibrary();
+    [[nodiscard]] bool beginTextPlacement(const TextLibraryEntry& entry);
     // `symbol_id` may be a full catalog variant ID or a case-insensitive
     // family alias; aliases resolve to the deterministic nominal `-w2-d2`
     // variant before the symbol instance is persisted.

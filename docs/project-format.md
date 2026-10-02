@@ -1,5 +1,19 @@
 # Vertex project formats v1 through v14
 
+Reusable text templates use a separate [local text-library format](text-library-format.md).
+Placed labels store their complete content and style in the project; opening or
+editing them does not require that library file.
+
+Annotation state version 5 adds optional label `model_plan: true`: its position
+is a world XY anchor rendered only in horizontal plans, projected through each
+plan frame. Rotation remains view-relative for readable, consistent text.
+Absence keeps the legacy view-overlay convention. The field is refused in
+versions 1–4; old readers refuse version 5 rather than silently misplacing it.
+Version 5 retains the version 4 area-presentation and version 3 symbol schemas.
+Encoding uses version 5 when any plan-anchored label exists, version 4 for area
+placement overrides, otherwise version 3. Raw edits may retain a higher known
+version after its last optional record is removed. The SQLite layout is unchanged.
+
 ## Unfinished Auto-Subtract drawing
 
 An unfinished drawing with an explicit parent uses active recovery envelope
@@ -29,12 +43,12 @@ finite model-space metre offsets from the owner's derived plan-label anchor.
 Only `target_kind: "area"` admits this field. It controls the placement of
 derived names and quantities; it does not store a numeric area value or change
 geometry. An explicit zero offset is a manual centered placement. Absence
-restores automatic placement. Annotation state version 4 is required when an
+restores automatic placement. Annotation state version 4 or later is required when an
 offset is present; versions 1–3 cannot admit it. Placement-only records may
 also carry `inherit_appearance: true` (only for an area target), so positioning
 a label retains semantic colors, fills and linework. Explicit appearance edits
 remove this flag. Version 4 retains the version 3 symbol representation. States
-without offsets or appearance inheritance continue to encode as version 3,
+without offsets, appearance inheritance or plan-anchored labels encode as version 3,
 and future unknown versions remain unsupported.
 
 Area presentation overrides optionally carry `paper_line_width_mm` (finite,

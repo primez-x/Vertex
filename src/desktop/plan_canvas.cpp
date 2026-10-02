@@ -142,6 +142,9 @@ struct LabelLayout {
 
 LabelLayout label_layout(const CanvasLabel& label, QFont base_font,
                          const QPaintDevice* device, double scale, double dpi) {
+    if (!label.font_family.isEmpty() &&
+        label.font_family.compare(QStringLiteral("sans-serif"), Qt::CaseInsensitive) != 0)
+        base_font.setFamily(label.font_family);
     const auto paper_pixels = label.paper_height_mm * dpi / 25.4;
     const bool paper = std::isfinite(paper_pixels) && paper_pixels > 0.0 &&
                        paper_pixels <= std::numeric_limits<int>::max();
@@ -2313,7 +2316,7 @@ const std::vector<CanvasLabel>& PlanCanvas::positionedLabels(
                   << label.scale << label.text_height_metres << label.paper_height_mm
                   << label.color << label.bold << label.italic << label.fill_color
                   << label.fill_pattern << label.show_background << label.avoid_components
-                  << label.plan_only << label.selection_type;
+                  << label.plan_only << label.selection_type << label.font_family << label.model_plan;
         point_key(label.position);
         signature << label.leader_start.has_value() << label.plan_label_offset.has_value();
         if (label.leader_start) point_key(*label.leader_start);
