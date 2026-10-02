@@ -309,6 +309,26 @@ QString boundary_details(const DocumentSnapshot& source,const AppraisalDocumentR
 }
 } // namespace
 
+QString appraisal_schedule_area_text(const ScheduleRow& row, bool metric) {
+    const auto amount=row.cells.find("area");
+    if(amount==row.cells.end()) return {};
+    const auto* quantity=std::get_if<ScheduleQuantity>(&amount->second.value);
+    if(!quantity || quantity->unit!=ScheduleUnit::square_metre) return {};
+    AppraisalDocumentReport report;report.display_decimal_places=amount->second.display_decimal_places.value_or(2);
+    const auto policy=row.cells.find("policy_kind");
+    if(policy!=row.cells.end() && std::holds_alternative<std::string>(policy->second.value) &&
+        std::get<std::string>(policy->second.value)=="ansi_z765_2021")
+        report.policy=AppraisalPolicy{AppraisalPolicyKind::ansi_z765_2021,1};
+    auto displayed=area(quantity->value,report,metric);
+    displayed.replace(QStringLiteral(" sq ft"),QStringLiteral(" ft²"));
+    if(metric && ansi(report)) {
+        auto supplemental=builtin_appraisal_profile();supplemental.display_unit=AreaUnit::square_metre;
+        displayed+=QStringLiteral(" (supplemental: %1 m²)")
+            .arg(text(display_area(quantity->value,supplemental).text));
+    }
+    return displayed;
+}
+
 void render_appraisal_summary_schedule(QPainter& painter,const QRectF& bounds,
     double pixels_per_mm,const std::vector<const ScheduleRow*>& rows,bool metric) {
     if(!(pixels_per_mm>0) || bounds.width()<=0 || bounds.height()<=0)return;
@@ -324,10 +344,7 @@ void render_appraisal_summary_schedule(QPainter& painter,const QRectF& bounds,
         const auto label=row_value->cells.find("label");if(label!=row_value->cells.end() && std::holds_alternative<std::string>(label->second.value))content=text(std::get<std::string>(label->second.value));
         const auto amount=row_value->cells.find("area");const auto status=row_value->cells.find("status");
         if(amount!=row_value->cells.end() && std::holds_alternative<ScheduleQuantity>(amount->second.value)) {
-            AppraisalDocumentReport report;report.display_decimal_places=amount->second.display_decimal_places.value_or(2);
-            auto displayed=area(std::get<ScheduleQuantity>(amount->second.value).value,report,metric);
-            if(!metric) displayed.replace(QStringLiteral(" sq ft"),QStringLiteral(" ft²"));
-            content+=QStringLiteral("  ")+displayed;
+            content+=QStringLiteral("  ")+appraisal_schedule_area_text(*row_value,metric);
         } else if(status!=row_value->cells.end() && std::holds_alternative<std::string>(status->second.value))content+=QStringLiteral("  ")+text(std::get<std::string>(status->second.value));
         const auto measured=metrics.boundingRect(QRectF(0,0,width,100000),Qt::TextWordWrap|Qt::AlignLeft,content);
         const auto height=std::max(6*pixels_per_mm,measured.height()+2*pixels_per_mm);

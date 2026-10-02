@@ -9,6 +9,10 @@
 
 namespace sketch::desktop {
 
+// Shared per-property policy presentation for the table and printed schedule.
+// Returns empty for rows without a square-metre area quantity.
+[[nodiscard]] QString appraisal_schedule_area_text(const ScheduleRow& row, bool metric);
+
 // Readable bounded summary placement; overflow points to the complete report.
 void render_appraisal_summary_schedule(QPainter& painter,const QRectF& bounds,
     double pixels_per_mm,const std::vector<const ScheduleRow*>& rows,bool metric);

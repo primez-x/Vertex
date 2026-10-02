@@ -1141,16 +1141,6 @@ QString format_dimension_area(double square_metres, bool metric) {
         .arg(square_metres / square_metres_per_square_foot, 0, 'f', 1);
 }
 
-QString format_appraisal_area(double square_metres, bool metric, unsigned decimal_places = 2) {
-    if (!std::isfinite(square_metres)) return QStringLiteral("—");
-    auto profile = builtin_appraisal_profile();
-    profile.display_unit = metric ? AreaUnit::square_metre : AreaUnit::square_foot;
-    profile.decimal_places = decimal_places;
-    const auto display = display_area(square_metres, profile);
-    return QString::fromStdString(display.text) +
-        (metric ? QStringLiteral(" m²") : QStringLiteral(" ft²"));
-}
-
 std::optional<Vec2> dimension_tangent_at_vertex(const IdentifiedSegment& identified,
                                                 std::string_view vertex_id) {
     const auto& segment = identified.segment;
@@ -2394,12 +2384,25 @@ double appraisal_total_square_metres(const AppraisalTotals& totals) {
     return static_cast<double>(result);
 }
 
+void bind_appraisal_schedule_policy(ScheduleRow& row, const AppraisalDocumentReport& report) {
+    if (!report.policy) return;
+    const std::vector<ScheduleSourceRef> sources{{report.property_id, "appraisal_policy"}};
+    row.cells.emplace("policy_kind", ScheduleCell{
+        std::string(appraisal_policy_kind_name(report.policy->kind)), false, sources,
+        "Measurement policy retained for this property's appraisal output"});
+    const auto profile = report.policy->kind == AppraisalPolicyKind::ansi_z765_2021
+        ? ansi_appraisal_profile() : builtin_appraisal_profile();
+    row.cells.emplace("profile_id", ScheduleCell{profile.id, false, sources,
+        "Calculation profile retained for this property's appraisal output"});
+}
+
 ScheduleRow appraisal_text_row(const AppraisalDocumentReport& report, std::string suffix,
                                std::string mark, std::string label, std::string value) {
     ScheduleRow row;
     row.object_id = "appraisal:" + report.property_id + ':' + std::move(suffix);
     row.mark = std::move(mark);
     row.kind = ScheduleRowKind::appraisal;
+    bind_appraisal_schedule_policy(row, report);
     row.cells.emplace("label", ScheduleCell{std::move(label), false,
         {{report.property_id, "appraisal_policy"}},
         "Description derived from the declared property appraisal workflow"});
@@ -2419,6 +2422,7 @@ ScheduleRow appraisal_area_row(const AppraisalDocumentReport& report, std::strin
     row.object_id = "appraisal:" + report.property_id + ':' + std::move(suffix);
     row.mark = std::move(mark);
     row.kind = ScheduleRowKind::appraisal;
+    bind_appraisal_schedule_policy(row, report);
     row.cells.emplace("area", ScheduleCell{
         ScheduleQuantity{square_metres, ScheduleUnit::square_metre}, false, sources,
         "Automatic area from authoritative boundary geometry, deductions and declared facts",
@@ -2450,9 +2454,15 @@ std::vector<ScheduleRow> appraisal_schedule_rows(const AppraisalDocumentReport& 
                                           std::move(status)));
         return rows;
     }
-    rows.push_back(appraisal_text_row(
-        report, "status", "STATUS", "Qualification",
-        "Qualified under declared Vertex policy v1; no ANSI/BOMA certification"));
+    const bool ansi = report.policy && report.policy->kind == AppraisalPolicyKind::ansi_z765_2021;
+    std::string qualification = ansi
+        ? "Vertex rule checks passed; ANSI Z765-2021 v1; final standards validation pending."
+        : "Qualified under declared Vertex policy v1; no ANSI/BOMA certification";
+    if (ansi && std::any_of(report.boundaries.begin(), report.boundaries.end(), [](const auto& boundary) {
+            return boundary.facts && boundary.facts->ansi &&
+                boundary.facts->ansi->ceiling.kind == CeilingKind::sloped;
+        })) qualification += " Sloped-room denominator remains provisional.";
+    rows.push_back(appraisal_text_row(report, "status", "STATUS", "Qualification", std::move(qualification)));
     for (const auto& [category, bucket] : report.calculation->property.by_category) {
         if (bucket.total.square_metres <= 0.0) continue;
         const auto token = appraisal_category_name(category);
@@ -6460,7 +6470,8 @@ public:
             QScrollArea#appraisalDetailsScroll { background: $surface; }
             QWidget#appraisalDetailsPanel QLabel { color: $foreground; }
             QDialog#appraisalFactsDialog QLabel, QDialog#appraisalSetupDialog QLabel,
-            QDialog#appraisalFactsDialog QCheckBox, QDialog#appraisalSetupDialog QCheckBox {
+            QDialog#appraisalFactsDialog QCheckBox, QDialog#appraisalSetupDialog QCheckBox,
+            QDialog#boundaryGeometryDialog QLabel, QDialog#boundaryGeometryDialog QCheckBox {
                 color: $foreground; background: transparent; }
             QWidget#appraisalFactsContent, QWidget#appraisalFactsViewport { background: $background; }
             QLabel#appraisalDetailsGla { font-size: 26px; font-weight: 700; }
@@ -21466,6 +21477,7 @@ public:
         const auto projection = scheduleSnapshot();
         QDialog dialog(owner);
         styleDialog(dialog);
+        dialog.setObjectName(QStringLiteral("scheduleDialog"));
         dialog.setWindowTitle(QStringLiteral("Schedules"));
         dialog.setModal(true);
         dialog.resize(780, 480);
@@ -21506,8 +21518,7 @@ public:
                     const auto* quantity = std::get_if<ScheduleQuantity>(&cell->second.value);
                     text = row.kind == ScheduleRowKind::appraisal && quantity &&
                            quantity->unit == ScheduleUnit::square_metre
-                        ? format_appraisal_area(quantity->value, m_metric_units,
-                            cell->second.display_decimal_places.value_or(2))
+                        ? appraisal_schedule_area_text(row, m_metric_units)
                         : schedule_value_text(cell->second.value);
                     if (!cell->second.editable) {
                         tooltip = QStringLiteral("Calculated: %1")
@@ -25278,6 +25289,7 @@ private:
         m_project_resources_action = new QAction(QStringLiteral("Project resources…"), owner);
         m_project_resources_action->setObjectName(QStringLiteral("projectResources"));
         m_schedule_action = new QAction(QStringLiteral("Schedules"), owner);
+        m_schedule_action->setObjectName(QStringLiteral("openSchedules"));
         m_sheet_action = new QAction(QStringLiteral("Sheet settings"), owner);
         m_viewport_action = new QAction(QStringLiteral("Sheet layout manager…"), owner);
         m_viewport_action->setObjectName(QStringLiteral("sheetLayoutManager"));
@@ -32744,7 +32756,8 @@ public:
             dialog.resize(720, 700);
             auto* layout = new QVBoxLayout(&dialog);
             auto* help = new QLabel(QStringLiteral(
-                "Length edits preserve the curve sweep. Curvature reconstruction keeps both endpoints fixed."), &dialog);
+                "Length and vertex edits preserve curve sweeps. Curvature reconstruction keeps both endpoints fixed. "
+                "Vertex X/Y are absolute plan coordinates; bare values use the current length units."), &dialog);
             help->setWordWrap(true);
             layout->addWidget(help);
             auto* form = new QFormLayout;
@@ -32764,8 +32777,25 @@ public:
             operation->addItem(QStringLiteral("Curve angle"), QStringLiteral("angle"));
             operation->addItem(QStringLiteral("Curve height"), QStringLiteral("height"));
             operation->addItem(QStringLiteral("Curve arc length"), QStringLiteral("arc_length"));
+            operation->addItem(QStringLiteral("Vertex position"), QStringLiteral("vertex"));
             if (curve_mode) operation->setCurrentIndex(1);
             form->addRow(QStringLiteral("Edit"), operation);
+            auto* corner = new QComboBox(&dialog);
+            corner->setObjectName(QStringLiteral("boundaryVertex"));
+            corner->setAccessibleName(QStringLiteral("Boundary corner"));
+            for (std::size_t index = 0; index < boundary.segments.size(); ++index) {
+                corner->addItem(QStringLiteral("Corner %1").arg(index + 1),
+                    id_from(boundary.segments[index].start_vertex_id));
+            }
+            form->addRow(QStringLiteral("Corner"), corner);
+            auto* x = new QLineEdit(&dialog);
+            x->setObjectName(QStringLiteral("boundaryVertexX"));
+            x->setAccessibleName(QStringLiteral("Exact vertex X coordinate"));
+            auto* y = new QLineEdit(&dialog);
+            y->setObjectName(QStringLiteral("boundaryVertexY"));
+            y->setAccessibleName(QStringLiteral("Exact vertex Y coordinate"));
+            form->addRow(context.metric_units ? QStringLiteral("X (m)") : QStringLiteral("X (ft)"), x);
+            form->addRow(context.metric_units ? QStringLiteral("Y (m)") : QStringLiteral("Y (ft)"), y);
             auto* length = new QLineEdit(&dialog);
             length->setObjectName(QStringLiteral("boundaryEdgeLength"));
             auto* value_label = new QLabel(QStringLiteral("New length"), &dialog);
@@ -32798,6 +32828,7 @@ public:
                 "Curved edges retain their signed sweep during length editing."));
             form->addRow(related);
             layout->addLayout(form);
+            layout->setAlignment(form, Qt::AlignTop);
             auto* preview = new PlanCanvas(&dialog);
             preview->setObjectName(QStringLiteral("boundaryGeometryPreview"));
             preview->setAccessibleName(QStringLiteral("Original and proposed boundary geometry"));
@@ -32809,8 +32840,8 @@ public:
             preview->setSelectionTransformEnabled(false, false);
             preview->setMetricUnits(context.metric_units);
             layout->addWidget(preview, 1);
-            layout->addWidget(new QLabel(QStringLiteral(
-                "Gray: original    Blue: proposed    Green: fixed point"), &dialog));
+            auto* legend = new QLabel(&dialog);
+            layout->addWidget(legend);
             auto* summary = new QLabel(&dialog);
             summary->setObjectName(QStringLiteral("boundaryGeometrySummary"));
             summary->setWordWrap(true);
@@ -32847,6 +32878,10 @@ public:
             const auto point_text = [&](Vec2 point) {
                 return QStringLiteral("(%1, %2)").arg(format_length(point.x, context.metric_units),
                     format_length(point.y, context.metric_units));
+            };
+            const auto coordinate_input_text = [&](double metres) {
+                return QString::number(context.metric_units ? metres : metres / 0.3048, 'g', 17) +
+                    (context.metric_units ? QStringLiteral(" m") : QStringLiteral(" ft"));
             };
             const auto add_row = [&](const QString& name, const QString& before, const QString& after) {
                 const auto row = changes->rowCount();
@@ -32886,12 +32921,28 @@ public:
                         throw std::invalid_argument("Choose a boundary edge.");
                     const auto& original_edge = boundary.segments[static_cast<std::size_t>(index)];
                     const auto mode = operation->currentData().toString();
-                    const bool curve = mode != QStringLiteral("length");
+                    const bool vertex = mode == QStringLiteral("vertex");
+                    const bool curve = !vertex && mode != QStringLiteral("length");
+                    const auto corner_index = corner->currentIndex();
+                    if (vertex && (corner_index < 0 || static_cast<std::size_t>(corner_index) >= boundary.segments.size()))
+                        throw std::invalid_argument("Choose a boundary corner.");
                     BoundaryGeometryEdit edit;
                     edit.boundary_id = selected->id;
                     edit.target_id = original_edge.segment_id;
                     edit.kind = curve ? BoundaryGeometryEditKind::reconstruct_arc : BoundaryGeometryEditKind::resize_segment;
-                    if (curve) {
+                    if (vertex) {
+                        edit.kind = BoundaryGeometryEditKind::move_vertex;
+                        edit.target_id = corner->currentData().toString().toStdString();
+                        const auto input_unit = context.metric_units ? Unit::metre : Unit::foot;
+                        const auto original_point = boundary.segments[static_cast<std::size_t>(corner_index)].segment.start;
+                        const auto coordinate = [&](const QString& text, double original) {
+                            // Keep an untouched axis bit-for-bit, including a feet conversion round trip.
+                            return text.trimmed() == coordinate_input_text(original) ? original
+                                : parse_quantity(text.toStdString(), input_unit).metres;
+                        };
+                        edit.target_position = {coordinate(x->text(), original_point.x),
+                                                coordinate(y->text(), original_point.y)};
+                    } else if (curve) {
                         ConstructionReceipt receipt;
                         receipt.segment_id = original_edge.segment_id;
                         receipt.start = original_edge.segment.start;
@@ -32925,14 +32976,27 @@ public:
                         : boundaryGeometryCommand(source,edit,related->isChecked());
                     const auto proposed = Document::preview_command(source, command);
                     const auto& proposed_entity = proposed.entities().at(selected->id);
+                    if (vertex) {
+                        for (const auto& [id, before_owner] : source.entities()) {
+                            if (!before_owner.properties.contains("wall_measurement_source")) continue;
+                            // Related corners can move a different measured owner. Protect every
+                            // current source correspondence, not only the selected boundary.
+                            if (id != selected->id && !wall_measurement_source_current(source, before_owner)) continue;
+                            const auto found = proposed.entities().find(id);
+                            if (found == proposed.entities().end() ||
+                                !wall_measurement_source_current(proposed, found->second))
+                                throw std::invalid_argument("This corner or a related measured boundary is derived from physical source walls. "
+                                    "Edit the source walls or review replacement sources to keep the measured boundary current.");
+                        }
+                    }
                     const auto after = decode_identified_boundary_entity(proposed_entity);
                     const auto after_geometry = boundary_geometry(after);
                     std::vector<CanvasEntity> geometry{
                         geometry_entity(QStringLiteral("boundary-preview-before"), original_geometry, original_color),
                         geometry_entity(QStringLiteral("boundary-preview-after"), after_geometry, proposed_color)};
                     std::vector<CanvasLabel> labels;
-                    const auto anchor = anchor_endpoint == BoundaryFixedEndpoint::start
-                        ? original_edge.segment.start : original_edge.segment.end;
+                    const auto anchor = vertex ? boundary.segments[static_cast<std::size_t>(corner_index)].segment.start
+                        : anchor_endpoint == BoundaryFixedEndpoint::start ? original_edge.segment.start : original_edge.segment.end;
                     const auto marker_size = std::max(0.035, perimeter(original_geometry) * 0.004);
                     geometry.push_back(geometry_entity(QStringLiteral("boundary-preview-anchor"),
                         {{{anchor.x-marker_size, anchor.y}, {anchor.x+marker_size, anchor.y}, 0},
@@ -33049,10 +33113,17 @@ public:
                     preview->setEntities(std::move(geometry));
                     preview->setLabels(std::move(labels));
                     preview->fitView();
-                    summary->setText(QStringLiteral("Edge: %1 → %2\nAnalytical boundary area: %3 → %4    Perimeter: %5 → %6")
-                        .arg(format_length(segment_length(original_edge.segment), context.metric_units),
-                            format_length(segment_length(after.segments[static_cast<std::size_t>(index)].segment), context.metric_units),
-                            format_dimension_area(std::abs(signed_area(original_geometry)), context.metric_units),
+                    const auto target_summary = vertex
+                        ? QStringLiteral("Corner %1: %2 → %3").arg(corner_index + 1)
+                            .arg(QStringLiteral("(%1, %2)").arg(coordinate_input_text(anchor.x), coordinate_input_text(anchor.y)),
+                                QStringLiteral("(%1, %2)").arg(
+                                    coordinate_input_text(after.segments[static_cast<std::size_t>(corner_index)].segment.start.x),
+                                    coordinate_input_text(after.segments[static_cast<std::size_t>(corner_index)].segment.start.y)))
+                        : QStringLiteral("Edge: %1 → %2")
+                            .arg(format_length(segment_length(original_edge.segment), context.metric_units),
+                                format_length(segment_length(after.segments[static_cast<std::size_t>(index)].segment), context.metric_units));
+                    summary->setText(target_summary + QStringLiteral("\nAnalytical boundary area: %1 → %2    Perimeter: %3 → %4")
+                        .arg(format_dimension_area(std::abs(signed_area(original_geometry)), context.metric_units),
                             format_dimension_area(std::abs(signed_area(after_geometry)), context.metric_units),
                             format_length(perimeter(original_geometry), context.metric_units),
                             format_length(perimeter(after_geometry), context.metric_units)));
@@ -33068,17 +33139,26 @@ public:
                 if (index < 0 || static_cast<std::size_t>(index) >= boundary.segments.size()) return;
                 const auto& segment = boundary.segments[static_cast<std::size_t>(index)].segment;
                 const auto mode = operation->currentData().toString();
-                const bool curve = mode != QStringLiteral("length");
-                fixed->setEnabled(!curve);
-                fixed->setVisible(!curve);
-                if (auto* label = form->labelForField(fixed)) label->setVisible(!curve);
-                connected->setEnabled(!curve);
-                connected->setVisible(!curve);
+                const bool vertex = mode == QStringLiteral("vertex");
+                const bool curve = !vertex && mode != QStringLiteral("length");
+                const auto show_field = [&](QWidget* field, bool visible) {
+                    form->setRowVisible(field, visible);
+                };
+                show_field(edge, !vertex);
+                show_field(corner, vertex);
+                show_field(x, vertex);
+                show_field(y, vertex);
+                show_field(length, !vertex);
+                fixed->setEnabled(!curve && !vertex);
+                show_field(fixed, !curve && !vertex);
+                connected->setEnabled(!curve && !vertex);
+                show_field(connected, !curve && !vertex);
                 related->setEnabled(!curve);
-                related->setVisible(!curve);
-                clockwise->setVisible(mode == QStringLiteral("arc_length"));
-                chord->setVisible(curve);
-                if (auto* label = form->labelForField(chord)) label->setVisible(curve);
+                show_field(related, !curve);
+                legend->setText(vertex ? QStringLiteral("Gray: original    Blue: proposed    Green: original corner")
+                    : QStringLiteral("Gray: original    Blue: proposed    Green: fixed point"));
+                show_field(clockwise, mode == QStringLiteral("arc_length"));
+                show_field(chord, curve);
                 chord->setText(format_length(std::hypot(segment.end.x-segment.start.x, segment.end.y-segment.start.y), context.metric_units));
                 clockwise->setChecked(segment.sweep_radians < 0);
                 value_label->setText(mode == QStringLiteral("angle") ? QStringLiteral("Signed sweep angle") :
@@ -33098,11 +33178,23 @@ public:
                 }
                 length->selectAll();
             };
+            const auto refresh_coordinates = [&] {
+                const auto index = corner->currentIndex();
+                if (index < 0 || static_cast<std::size_t>(index) >= boundary.segments.size()) return;
+                const auto point = boundary.segments[static_cast<std::size_t>(index)].segment.start;
+                const QSignalBlocker block_x(x), block_y(y);
+                x->setText(coordinate_input_text(point.x));
+                y->setText(coordinate_input_text(point.y));
+            };
             QObject::connect(edge, &QComboBox::currentIndexChanged, &dialog,
                              [&](int) { refresh_length(); update_preview(); });
             QObject::connect(length, &QLineEdit::textChanged, &dialog, update_preview);
             QObject::connect(operation, &QComboBox::currentIndexChanged, &dialog,
-                             [&](int) { refresh_length(); update_preview(); });
+                             [&](int) { refresh_coordinates(); refresh_length(); update_preview(); });
+            QObject::connect(corner, &QComboBox::currentIndexChanged, &dialog,
+                             [&](int) { refresh_coordinates(); update_preview(); });
+            QObject::connect(x, &QLineEdit::textChanged, &dialog, update_preview);
+            QObject::connect(y, &QLineEdit::textChanged, &dialog, update_preview);
             QObject::connect(clockwise, &QCheckBox::toggled, &dialog, update_preview);
             QObject::connect(fixed, &QComboBox::currentIndexChanged, &dialog, update_preview);
             QObject::connect(connected, &QCheckBox::toggled, &dialog, update_preview);
@@ -33138,6 +33230,7 @@ public:
                 if (candidate && !context_unchanged()) clear_preview(lastError());
             });
             context_timer.start();
+            refresh_coordinates();
             refresh_length();
             update_preview();
             dialog.exec();

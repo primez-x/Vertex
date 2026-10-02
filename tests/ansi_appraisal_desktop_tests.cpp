@@ -3,9 +3,11 @@
 #include "sketch/desktop/appraisal_report_dialog.hpp"
 #include "sketch/appraisal_document.hpp"
 #include "sketch/boundary_entity.hpp"
+#include "sketch/sheet_view_entity_codec.hpp"
 #include "../src/desktop/plan_canvas.hpp"
 #include "support/noninteractive_errors.hpp"
 #include <QApplication>
+#include <QAction>
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDialog>
@@ -14,11 +16,14 @@
 #include <QListWidget>
 #include <QLabel>
 #include <QDir>
+#include <QFile>
 #include <QFont>
 #include <QFontDatabase>
 #include <QPixmap>
+#include <QPdfDocument>
 #include <QStandardPaths>
 #include <QTabWidget>
+#include <QTableWidget>
 #include <QUuid>
 #include <QPushButton>
 #include <QTemporaryDir>
@@ -52,6 +57,91 @@ void dialog(MainWindow& window, const char* name, const std::function<void()>& o
         if (value && value->isVisible()) value->reject();
     });
     open(); if (failure) std::rethrow_exception(failure); require(found, "dialog opened");
+}
+void check_saved_appraisal_sheet(MainWindow& window, const QString& area, const QString& directory) {
+    auto source = window.document().snapshot();
+    auto sheet_entity = source.entities().at("sheet-view-1");
+    const auto model = sketch::decode_sheet_view_entity(sheet_entity);
+    auto sheet = model.sheets().front();
+    sheet.schedules = {{"ansi-area-summary", "appraisal-areas", {270, 10, 140, 250}}};
+    require(!sheet.viewports.empty(), "saved appraisal sheet has a plan viewport");
+    sheet.viewports.front().bounds = {10, 10, 250, 250};
+    auto schedules = model.schedule_ids();
+    if (std::find(schedules.begin(), schedules.end(), "appraisal-areas") == schedules.end())
+        schedules.push_back("appraisal-areas");
+    sheet_entity.properties["model"] = sketch::SheetViewModel::create(model.views(), {sheet}, schedules).to_json();
+    window.document().apply(sketch::ApplyEntityChanges{source.revision(),
+        {sketch::EntityChange::upsert(sheet_entity)}, {}, "appraisal sheet precision fixture"});
+    require(window.selectEntity(area) && window.selectOutputSheet(QString::fromStdString(sheet.id)),
+        "refresh persisted appraisal sheet from the current document");
+    const auto project_path = QDir(directory).filePath("ansi-sheet.bldproj");
+    require(window.saveProjectAs(project_path) && window.openProject(project_path),
+        "ANSI sheet and policy survive native reopening");
+    for (const bool metric : {false, true}) {
+        window.setMetricUnits(metric);
+        require(window.selectEntity(area), "refresh ANSI sheet unit presentation");
+        const auto projection = window.scheduleSnapshot();
+        bool policy_found = false;
+        for (const auto& row : projection.snapshot.rows) {
+            if (row.kind != sketch::ScheduleRowKind::appraisal) continue;
+            const auto policy = row.cells.find("policy_kind");
+            require(policy != row.cells.end() && std::holds_alternative<std::string>(policy->second.value) &&
+                std::get<std::string>(policy->second.value) == "ansi_z765_2021",
+                "appraisal sheet rows retain their actual measurement policy");
+            policy_found = true;
+        }
+        require(policy_found, "ANSI sheet has actual appraisal rows");
+        auto* schedules_action = window.findChild<QAction*>(QStringLiteral("openSchedules"));
+        require(schedules_action, "ordinary Schedules action exists");
+        dialog(window, "scheduleDialog", [&] { schedules_action->trigger(); }, [&](QDialog& value) {
+            auto& table = child<QTableWidget>(value, "scheduleTable");
+            int label_column = -1, area_column = -1;
+            for (int i = 0; i < table.columnCount(); ++i) {
+                if (table.horizontalHeaderItem(i)->text() == "label") label_column = i;
+                if (table.horizontalHeaderItem(i)->text() == "area") area_column = i;
+            }
+            require(label_column >= 0 && area_column >= 0, "schedule table has area and label columns");
+            bool found = false;
+            for (int i = 0; i < table.rowCount(); ++i) {
+                if (table.item(i, label_column)->text() != "Above-grade finished (GLA)") continue;
+                const auto displayed = table.item(i, area_column)->text();
+                require(displayed.startsWith("100 ft²") &&
+                    displayed.contains("supplemental: 9.29 m²") == metric,
+                    "actual schedule table matches canonical GLA and supplementary metric output");
+                found = true;
+            }
+            require(found, "ordinary schedule table contains the actual GLA category");
+            value.reject();
+        });
+        const auto path = QDir(directory).filePath(metric ? "ansi-sheet-metric.pdf" : "ansi-sheet-imperial.pdf");
+        require(window.exportDraftPdf(path), "ANSI persisted plan sheet exports through the ordinary PDF path");
+        QPdfDocument pdf;
+        require(pdf.load(path) == QPdfDocument::Error::None && pdf.pageCount() == 1,
+            "actual appraisal sheet PDF loads");
+        const auto text = pdf.getAllText(0).text().simplified();
+        require(text.contains("Above-grade finished (GLA) 100 ft²") ||
+                text.contains("Above-grade finished (GLA) 100 sq ft"),
+            "actual ANSI schedule GLA row reports whole square feet in either workspace");
+        require(!text.contains("100.00"),
+            "canonical ANSI sheet totals do not fall back to workspace rounding");
+        require(text.contains("ANSI") && text.contains("validation pending"),
+            "saved sheet identifies its policy and pending standards validation");
+        require(text.contains(metric ? "10.0 ft (3.048 m)" : "10.0 ft"),
+            "plan dimensions and schedule retain the canonical measurement presentation");
+        const auto capture = qEnvironmentVariable("VERTEX_TEST_CAPTURE_DIR");
+        if (!capture.isEmpty()) {
+            require(QDir().mkpath(capture), "create isolated saved-sheet capture directory");
+            const auto image = pdf.render(0, QSize(1680, 1188));
+            require(!image.isNull() && image.save(QDir(capture).filePath(
+                metric ? "ansi-sheet-metric.png" : "ansi-sheet-imperial.png")), "render actual ANSI plan sheet");
+            QFile original(path), saved(QDir(capture).filePath(
+                metric ? "ansi-sheet-metric.pdf" : "ansi-sheet-imperial.pdf"));
+            require(original.open(QIODevice::ReadOnly) && saved.open(QIODevice::WriteOnly | QIODevice::Truncate),
+                "open isolated ANSI plan PDF capture");
+            const auto bytes = original.readAll();
+            require(!bytes.isEmpty() && saved.write(bytes) == bytes.size(), "retain actual ANSI plan PDF");
+        }
+    }
 }
 void setup_and_facts() {
     QTemporaryDir fixture; require(fixture.isValid(), "isolated fixture");
@@ -112,6 +202,7 @@ void setup_and_facts() {
     auto& canvas = child<sketch::desktop::PlanCanvas>(window, "measurementPlanCanvas");
     const auto dimension_label = std::find_if(canvas.labels().begin(), canvas.labels().end(), [&](const auto& label) { return label.id == dimension; });
     require(dimension_label != canvas.labels().end() && dimension_label->text == "10.0 ft (3.048 m)", "ANSI dimensions retain canonical tenth-foot value with supplementary metric");
+    check_saved_appraisal_sheet(window, area, directory.path());
     sketch::Boundary low_shape{{{0.2,0.2},{1.2,0.2},0},{{1.2,0.2},{1.2,1.2},0},{{1.2,1.2},{0.2,1.2},0},{{0.2,1.2},{0.2,0.2},0}};
     const auto low_area = window.createBoundary(low_shape); require(!low_area.isEmpty(), "actual low-height geometry");
     const auto low_source = window.document().snapshot();

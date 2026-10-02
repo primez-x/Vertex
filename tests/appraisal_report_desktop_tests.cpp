@@ -15,6 +15,7 @@
 #include <QPainter>
 #include <QPdfDocument>
 #include <QPdfSelection>
+#include <QPdfWriter>
 #include <QPushButton>
 #include <QStandardPaths>
 #include <QStringList>
@@ -105,6 +106,49 @@ QString pdf_text(const QString& path,bool capture_pages=false) {
         }
     }
     return result.simplified();
+}
+void sheet_summary_preserves_per_row_policy_and_status() {
+    QTemporaryDir directory;require(directory.isValid(),"sheet renderer needs local PDF directory");
+    sketch::ScheduleRow ansi_row;ansi_row.kind=sketch::ScheduleRowKind::appraisal;
+    ansi_row.cells["label"].value=std::string("ANSI primary dwelling GLA");
+    ansi_row.cells["area"].value=sketch::ScheduleQuantity{100.0,sketch::ScheduleUnit::square_metre};
+    ansi_row.cells["area"].display_decimal_places=3;
+    ansi_row.cells["policy_kind"].value=std::string("ansi_z765_2021");
+    ansi_row.cells["profile_id"].value=sketch::ansi_appraisal_profile().id;
+    auto legacy=ansi_row;legacy.cells.erase("policy_kind");legacy.cells.erase("profile_id");
+    legacy.cells["label"].value=std::string("Legacy category");legacy.cells["area"].display_decimal_places=1;
+    auto malformed=legacy;malformed.cells["label"].value=std::string("Malformed policy diagnostic");
+    malformed.cells["policy_kind"].value=true;
+    auto status=ansi_row;status.cells.erase("area");status.cells["label"].value=std::string("ANSI rule status");
+    status.cells["status"].value=std::string("Unqualified: totals withheld. Vertex rule checks are not ANSI approval / certification.");
+    const std::vector<const sketch::ScheduleRow*> rows{&ansi_row,&legacy,&malformed,&status};
+    auto render=[&](bool metric,bool overflow) {
+        const auto path=directory.filePath(QStringLiteral("sheet-%1-%2.pdf").arg(metric).arg(overflow));
+        {
+            QPdfWriter writer(path);writer.setResolution(144);
+            QPainter painter(&writer);require(painter.isActive(),"sheet summary PDF painter must start");
+            sketch::desktop::render_appraisal_summary_schedule(painter,
+                QRectF(0,0,writer.width(),overflow?110.0:writer.height()),144.0/25.4,rows,metric);
+            require(painter.end(),"sheet summary PDF painter must finish");
+        }
+        return pdf_text(path);
+    };
+    for(const bool metric:{true,false}) {
+        const auto content=render(metric,false);
+        require(content.contains(QStringLiteral("ANSI primary dwelling GLA 1076 ft²")),
+            "ANSI sheet row must use canonical whole square feet in either workspace unit mode");
+        require(content.contains(metric?QStringLiteral("Legacy category 100.0 m²"):QStringLiteral("Legacy category 1076.4 ft²")),
+            "mixed legacy sheet row must retain its own workspace units and precision");
+        require(content.contains(metric?QStringLiteral("Malformed policy diagnostic 100.0 m²"):QStringLiteral("Malformed policy diagnostic 1076.4 ft²")),
+            "nontext policy cells must not be interpreted as ANSI");
+        require(content.contains("Unqualified: totals withheld") && content.contains("not ANSI approval / certification"),
+            "sheet status must preserve withheld totals and avoid approval implication");
+        require(content.contains("supplemental: 100.00 m²")==metric,
+            "metric ANSI sheet row must label its metric quantity as supplemental");
+        const auto overflow=render(metric,true);
+        require(overflow.contains("more rows") && overflow.contains("complete Appraisal area report"),
+            "bounded sheet overflow must direct readers to the complete report");
+    }
 }
 void set_precision(MainWindow& window,unsigned precision) {
     const auto source=window.document().snapshot();auto property=source.entities().at("property-1");
@@ -347,7 +391,7 @@ int main(int argc,char** argv) {
     QCoreApplication::setApplicationName(QStringLiteral("Vertex-appraisal-report-test-")+QUuid::createUuid().toString(QUuid::WithoutBraces));
     try {
         require(QFontDatabase::addApplicationFont(QStringLiteral(":/fonts/Inter.ttf"))>=0,"bundled font must load for actual report rendering");app.setFont(QFont(QStringLiteral("Inter"),10));
-        ansi_report_html_pdf_canonical_units_and_evidence();actual_report_summary_audit_navigation_and_refresh();display_precision_unqualified_diagnostics_and_invalid_trace();
+        sheet_summary_preserves_per_row_policy_and_status();ansi_report_html_pdf_canonical_units_and_evidence();actual_report_summary_audit_navigation_and_refresh();display_precision_unqualified_diagnostics_and_invalid_trace();
         active_design_phase_report_scope();undeclared_policy_and_malformed_area_remain_inspectable();
         paginated_pdf_escaping_and_atomic_destination_failures();
         std::cout<<"appraisal_report_desktop_tests passed\n";return 0;

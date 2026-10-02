@@ -172,6 +172,13 @@
   stay fixed. Review the original/proposed outlines and changed dimensions, area
   and perimeter before Apply. Invalid topology or conflicting locked measurements
   disables Apply and explains the problem.</p>
+  <p>To correct an exact corner on a completed measured boundary, choose
+  <strong>Vertex position</strong> in the geometry editor. Choose the corner and
+  enter its <strong>X</strong> and <strong>Y</strong> coordinates. Bare values use
+  the workspace units; explicit units such as <code>2 in</code> or
+  <code>50 mm</code> are also accepted. Review the actual candidate before Apply.
+  Cancel preserves the outline; Apply is one undoable edit. Related locked
+  geometry and wall-source correspondence must remain valid.</p>
   <p>When an edited curved edge has related objects, leave
   <strong>Move related objects</strong> checked to update them with the boundary.
   Turning it off can be refused if it would leave connected geometry invalid.</p>
@@ -261,6 +268,10 @@
   placements for the property, then accept. The bounded summary refers to the
   complete report when there are more rows than fit. Cancel leaves the project
   unchanged; accepting is one undoable edit.</p>
+  <p>For an ANSI-oriented property, the sheet summary retains canonical whole
+  square feet in either workspace. Metric equivalents are supplementary.
+  The summary names the actual profile and pending final-standard validation,
+  consistent with Details and the complete measurement summary.</p>
 
   <h2>Wall measurements</h2>
   <p>Double-click a wall, or right-click it and choose <strong>Wall measurement</strong>.

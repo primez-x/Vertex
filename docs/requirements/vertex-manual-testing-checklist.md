@@ -1950,6 +1950,20 @@ drawing; switching modes does not change existing geometry.
   - Result: Not tested
   - Notes: ______________________________
 
+## Exact corner corrections and appraisal sheets
+
+- [ ] **U335 — Correct a completed corner with exact coordinates**
+  - Steps: Close a measurement area. Open its geometry editor, choose Vertex position, select a corner and enter X and Y. Preview the change, then cancel once. Repeat and apply it. Check connected geometry, Undo/Redo, save and reopen. Repeat in Metric and Imperial; try an explicit unit such as `2 in` while Metric is selected.
+  - Expected: The editor shows the current corner coordinates and the actual proposed outline. Cancel preserves the drawing. Apply updates that corner and its validated relationships in one Undo step. Invalid outlines or locked/conflicting geometry are refused with an explanation. The entered coordinates survive reopening.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **U336 — Print ANSI-oriented totals on a saved plan sheet**
+  - Steps: With ANSI-oriented appraisal configured and a qualifying 10 ft by 10 ft area, create an appraisal plan sheet including its area summary. Save and reopen, then export the plan PDF in Imperial and Metric. Compare the sheet's dimensions, GLA and profile status with Details and Full report.
+  - Expected: Both PDFs show the canonical 100 square feet and 10.0 ft dimensions. Metric values may appear as supplementary measurements. The sheet identifies the actual profile and pending final-standard validation; its totals do not switch to ordinary workspace rounding. Saved sheets remain consistent with the current area calculations.
+  - Result: Not tested
+  - Notes: ______________________________
+
 ## Issue report template
 
 - Task ID(s):
