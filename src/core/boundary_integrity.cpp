@@ -129,7 +129,7 @@ IdentifiedBoundary apply_geometry_edit(const IdentifiedBoundary& source,
         }
         const auto replacement = decode_identified_boundary_entity(Entity{source.id, source.type,
             {{"boundary_model_version", 1}, {"segments", edit.replacement_segments}}, false, nlohmann::json::object()});
-        if (replacement.segments.size() == source.segments.size()) {
+        if (!edit.fresh_topology && replacement.segments.size() == source.segments.size()) {
             if (!edit.replacement_child_mapping.empty() || !edit.replacement_removed_reference_ids.empty())
                 throw std::invalid_argument("Reference decisions require changed boundary topology");
             for (std::size_t i = 0; i < source.segments.size(); ++i)
@@ -144,7 +144,7 @@ IdentifiedBoundary apply_geometry_edit(const IdentifiedBoundary& source,
             }
             for (const auto& edge : replacement.segments)
                 if (retired.contains(edge.segment_id) || retired.contains(edge.start_vertex_id) || retired.contains(edge.end_vertex_id))
-                    throw std::invalid_argument("Changed-count redefinition requires fresh child identities");
+                    throw std::invalid_argument("Fresh-topology redefinition requires entirely new child identities");
             std::set<std::string> old_segments, old_vertices, new_segments, new_vertices;
             for (const auto& edge : source.segments) {
                 old_segments.insert(edge.segment_id);
@@ -655,7 +655,7 @@ static std::map<std::string, Entity, std::less<>> edited_boundary_entities_impl(
             {"operations", nlohmann::json::array()}};
         metadata.properties.erase("boundary_authoring");
     }
-    if (replacement_source && !had_derivation &&
+    if ((replacement_source || edit.fresh_topology) && !had_derivation &&
         !metadata.extensions.contains("boundary_geometry_derivation")) {
         metadata.extensions["boundary_geometry_derivation"] = {
             {"version", 2}, {"source_boundary", {
@@ -703,7 +703,7 @@ static std::map<std::string, Entity, std::less<>> edited_boundary_entities_impl(
     auto result = source;
     result.at(edit.boundary_id) = std::move(encoded);
     if (!batch && edit.kind == BoundaryGeometryEditKind::redefine_boundary) {
-        const auto topology_changed = edited.segments.size() != decode_identified_boundary_entity(original).segments.size();
+        const auto topology_changed = edit.fresh_topology || edited.segments.size() != decode_identified_boundary_entity(original).segments.size();
         const Entity* automatic_template = nullptr;
         std::vector<std::string> retired_dimensions;
         const std::set<std::string> removed_references(edit.replacement_removed_reference_ids.begin(),

@@ -12551,6 +12551,29 @@ public:
             changes->setWordWrap(true);
             changes->setTextFormat(Qt::PlainText);
             layout->addWidget(changes);
+            auto* details_toggle = new QToolButton(&dialog);
+            details_toggle->setObjectName(QStringLiteral("wallMeasurementSourceDetailsToggle"));
+            details_toggle->setText(QStringLiteral("Source details"));
+            details_toggle->setCheckable(true);
+            details_toggle->setArrowType(Qt::RightArrow);
+            details_toggle->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+            layout->addWidget(details_toggle,0,Qt::AlignLeft);
+            auto* details_scroll = new QScrollArea(&dialog);
+            details_scroll->setObjectName(QStringLiteral("wallMeasurementSourceDetailsScroll"));
+            details_scroll->setWidgetResizable(true);
+            details_scroll->setMaximumHeight(120);
+            auto* details = new QLabel(details_scroll);
+            details->setObjectName(QStringLiteral("wallMeasurementSourceDetails"));
+            details->setWordWrap(true);
+            details->setTextFormat(Qt::PlainText);
+            details->setTextInteractionFlags(Qt::TextSelectableByMouse);
+            details_scroll->setWidget(details);
+            details_scroll->hide();
+            layout->addWidget(details_scroll);
+            QObject::connect(details_toggle,&QToolButton::toggled,&dialog,[=](bool expanded) {
+                details_toggle->setArrowType(expanded ? Qt::DownArrow : Qt::RightArrow);
+                details_scroll->setVisible(expanded);
+            });
             auto* preview = new PlanCanvas(&dialog);
             preview->setObjectName(QStringLiteral("wallMeasurementSourcePreview"));
             preview->setGridEnabled(false);
@@ -12615,6 +12638,9 @@ public:
                 candidate_snapshot.reset();
                 buttons->button(QDialogButtonBox::Apply)->setEnabled(false);
                 changes->clear();
+                changes->setToolTip({});
+                details->clear();
+                details_toggle->setEnabled(false);
                 show_geometry(std::nullopt);
                 try {
                     if (!unchanged()) throw std::invalid_argument("The project, selection, workspace, drawing or units changed. Cancel and reopen this review.");
@@ -12627,17 +12653,37 @@ public:
                             entity.properties.contains("wall_measurement_source") &&
                             sameWallMeasurementSource(entity.properties.at("wall_measurement_source"),derived.source))
                             throw std::invalid_argument("Another exterior measurement already owns these source walls. Select that measurement to review it.");
-                    QStringList added, removed;
+                    QStringList added, removed, added_details, removed_details, proposed_details;
                     const auto wall_label = [&](const std::string& id) {
                         const auto found = source.entities().find(id);
-                        const auto name = found == source.entities().end() ? std::optional<std::string>{}
-                            : read_string(found->second.properties,"name");
-                        return name ? QStringLiteral("%1 (%2)").arg(QString::fromStdString(*name),QString::fromStdString(id))
-                                    : QString::fromStdString(id);
+                        if (found == source.entities().end()) return QStringLiteral("Deleted wall");
+                        const auto name = QString::fromStdString(read_string(found->second.properties,"name").value_or("Wall"));
+                        const auto baseline = read_required_segment(found->second.properties,"baseline");
+                        return baseline ? QStringLiteral("%1 · %2%3").arg(name,
+                            format_length(segment_length(*baseline),context.metric_units),
+                            baseline->sweep_radians == 0.0 ? QString{} : QStringLiteral(" · curved")) : name;
                     };
-                    for (const auto& id : ids) if (!original_ids.contains(id)) added.push_back(wall_label(id));
+                    const auto wall_detail = [&](const std::string& id) {
+                        return QStringLiteral("%1 · %2").arg(wall_label(id),QString::fromStdString(id));
+                    };
+                    for (const auto& id : ids) {
+                        proposed_details.push_back(wall_detail(id));
+                        if (!original_ids.contains(id)) {
+                            added.push_back(wall_label(id));
+                            added_details.push_back(wall_detail(id));
+                        }
+                    }
                     for (const auto& id : original_ids)
-                        if (std::find(ids.begin(),ids.end(),id) == ids.end()) removed.push_back(wall_label(id));
+                        if (std::find(ids.begin(),ids.end(),id) == ids.end()) {
+                            removed.push_back(wall_label(id));
+                            removed_details.push_back(wall_detail(id));
+                        }
+                    const auto readable_walls = [](const QStringList& walls) {
+                        if (walls.isEmpty()) return QStringLiteral("None");
+                        auto summary = walls.mid(0,3).join(QStringLiteral(", "));
+                        if (walls.size() > 3) summary += QStringLiteral(" · %1 more").arg(walls.size()-3);
+                        return summary;
+                    };
                     const auto resolved = resolve_vertical_placement(source,source.entities().at(ids.front()));
                     const auto elevation = read_finite_number(resolved.properties,
                         resolved.properties.contains("elevation_m") ? "elevation_m" : "elevation");
@@ -12651,16 +12697,20 @@ public:
                              original_elevation ? format_length(*original_elevation,context.metric_units)
                                                 : QStringLiteral("original unavailable"),
                              format_length(*elevation,context.metric_units),
-                             added.isEmpty() ? QStringLiteral("None") : added.join(QStringLiteral(", ")),
-                             removed.isEmpty() ? QStringLiteral("None") : removed.join(QStringLiteral(", "))));
+                             readable_walls(added),readable_walls(removed)));
+                    details->setText(QStringLiteral("Added walls:\n%1\n\nRemoved walls:\n%2\n\nProposed shell sources:\n%3")
+                        .arg(added_details.isEmpty() ? QStringLiteral("None") : added_details.join(QLatin1Char('\n')),
+                             removed_details.isEmpty() ? QStringLiteral("None") : removed_details.join(QLatin1Char('\n')),
+                             proposed_details.join(QLatin1Char('\n'))));
+                    changes->setToolTip(details->text());
+                    details_toggle->setEnabled(true);
                     show_geometry(derived.boundary);
-                    topology_changed = original_geometry.size() != derived.boundary.size();
                     const bool equivalent = uniquelyEquivalentExterior(original_geometry,derived.boundary);
-                    if (!topology_changed && !equivalent)
-                        throw std::invalid_argument("The exterior geometry changed with the same edge count. Restore the original shell geometry before repairing sources; child identities cannot be assigned safely by edge order.");
+                    topology_changed = !equivalent;
                     no_op = equivalent && sameWallMeasurementSource(provenance,derived.source) &&
                         wall_measurement_source_current(source,*selected);
-                    auto command = boundaryRedefinitionCommand(source,equivalent ? original_geometry : derived.boundary,{});
+                    auto command = boundaryRedefinitionCommand(source,equivalent ? original_geometry : derived.boundary,
+                        {},nullptr,topology_changed);
                     command.edit.replacement_wall_source_ids = ids;
                     if (!topology_changed) candidate_snapshot = Document::preview_command(source,command);
                     else {
@@ -12675,8 +12725,8 @@ public:
                     }
                     candidate = std::move(command);
                     status->setText(no_op ? QStringLiteral("These sources and exterior are already current. Apply closes without changing history.")
-                        : topology_changed ? QStringLiteral("Apply reviews attached edge and corner references before committing the replacement.")
-                                           : QStringLiteral("The exterior matches uniquely. Apply preserves its edge, corner and dimension identities."));
+                        : topology_changed ? QStringLiteral("The exterior changed. Apply lets you choose which dimensions and relationships stay attached to the new edges and corners.")
+                                           : QStringLiteral("The exterior matches. Dimensions and corner relationships stay attached when these sources are replaced."));
                     buttons->button(QDialogButtonBox::Apply)->setEnabled(true);
                 } catch (const std::exception& error) { status->setText(QString::fromUtf8(error.what())); }
             };
@@ -17198,7 +17248,7 @@ public:
 
     EditBoundaryGeometry boundaryRedefinitionCommand(
         const DocumentSnapshot& source, const Boundary& boundary, const QString& classification,
-        const json& replacement_authoring = nullptr) {
+        const json& replacement_authoring = nullptr, bool fresh_topology = false) {
         const auto found = source.entities().find(m_selected_id.toStdString());
         if (found == source.entities().end() || !is_closed_boundary_entity(found->second.type))
             throw std::invalid_argument("Select an identified closed boundary first.");
@@ -17206,7 +17256,7 @@ public:
         const auto diagnostics = validate_boundary(boundary);
         if (!diagnostics.empty()) throw std::invalid_argument(diagnostics.front().message);
         auto replacement = original;
-        const bool topology_changed = original.segments.size() != boundary.size();
+        const bool topology_changed = fresh_topology || original.segments.size() != boundary.size();
         if (topology_changed) {
             replacement.segments.clear();
             std::vector<std::string> vertices;
@@ -17221,6 +17271,7 @@ public:
         edit.boundary_id = original.id;
         edit.target_id = original.id;
         edit.kind = BoundaryGeometryEditKind::redefine_boundary;
+        edit.fresh_topology = fresh_topology;
         edit.replacement_segments = encode_identified_boundary_entity(replacement).properties.at("segments");
         edit.replacement_authoring = replacement_authoring;
         const auto name = classification.trimmed();
@@ -17250,7 +17301,7 @@ public:
         const DocumentSnapshot& source, EditBoundaryGeometry command) {
         const auto& target_entity = source.entities().at(command.edit.boundary_id);
         const auto original = decode_identified_boundary_entity(target_entity);
-        if (original.segments.size() == command.edit.replacement_segments.size()) return command;
+        if (!command.edit.fresh_topology && original.segments.size() == command.edit.replacement_segments.size()) return command;
         auto replacement_entity = target_entity;
         replacement_entity.properties["segments"] = command.edit.replacement_segments;
         const auto replacement = decode_identified_boundary_entity(replacement_entity);
@@ -17465,7 +17516,7 @@ public:
                 }
                 candidate = std::move(proposed);
                 candidate_snapshot = snapshot;
-                status->setText(QStringLiteral("All retained references resolve against the replacement. Apply commits these choices together."));
+                status->setText(QStringLiteral("Kept dimensions and corner relationships stay attached to your chosen edges and corners. Apply commits these choices together."));
                 buttons->button(QDialogButtonBox::Apply)->setEnabled(true);
             } catch (const std::exception& error) {
                 status->setText(QString::fromUtf8(error.what()));

@@ -1,4 +1,4 @@
-# Vertex project formats v1 through v16
+# Vertex project formats v1 through v17
 
 ## Original typed wall input
 
@@ -192,10 +192,10 @@ translation history, v6 transform history, v7 boundary-coordinate edit
 history, v8 boundary-constraint transactions, v9 measured group translations,
 v10 curved endpoint constraints, v11 straight wall-only intent, v12 physical
 arc-length locks, v13 direct physical curve-length inputs, and v14 rigid curve
-construction transforms, v15 fixed-chord boundary curvature edits, and v16
-reviewed exterior wall-source replacements, plus v4 through v16 archives through
-recovery-aware APIs.
-Under-versioned semantic data and versions above 16 reject. Legacy-only history
+construction transforms, v15 fixed-chord boundary curvature edits, v16
+reviewed exterior wall-source replacements, and v17 explicit fresh-topology
+boundary replacements, plus v4 through v17 archives through recovery-aware APIs.
+Under-versioned semantic data and versions above 17 reject. Legacy-only history
 is still written as v1. Unknown boundary entity
 versions in v2 remain preserved read-only. See `boundary-entity-format.md`.
 Version 2 also recognizes `dimension` entities. Segment-length dimensions refer
@@ -1195,13 +1195,22 @@ when no original walls survive and the owner has no explicit elevation, the
 original plane is unavailable. Replacement walls still must share one coherent
 effective plane and the resolved original hierarchy and phase.
 
-The desktop retains existing child identities only for a uniquely equivalent
-cyclic/directional outline. Changed geometry with equal edge count refuses rather
-than guessing correspondence. Different edge counts use explicit reference
-mapping/removal decisions and regenerate automatic length dimensions.
+### Fresh-topology redefinition (v17)
 
-This intent anywhere in retained, undone or deleted history, or an imported
-version-2 derivation, requires native format 16. Under-versioned archives reject
-even when their digests are recomputed. JSON/assets extraction advertises exchange
-version 14. Files without these new semantics retain their previous required
-format and representation; extraction remains separate from project import.
+Redefinition intent version 4 adds `fresh_topology: true` and requires both
+reference-plan fields plus `replacement_wall_source_ids`; the source ID array may
+be empty for a generic redraw. Earlier intent versions retain their existing
+wire shapes and format floors. A v4 intent is valid only for boundary
+redefinition. It assigns fresh segment and vertex IDs to the replacement
+topology, disjoint from every old child ID, rather than guessing correspondence
+by order. For changed geometry with equal edge count, the desktop opens the
+reference planner so supported manual dimensions and constraints can be mapped
+or removed explicitly; automatic dimensions are regenerated. Different edge
+counts continue to use explicit reference mapping/removal decisions and regenerate
+automatic length dimensions.
+
+This intent anywhere in retained, undone or deleted history, or in an imported
+derivation, requires native format 17. Under-versioned archives reject even when
+their digests are recomputed. JSON/assets extraction advertises exchange version
+15. Files without these new semantics retain their previous required format and
+representation; extraction remains separate from project import.

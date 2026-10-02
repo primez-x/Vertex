@@ -137,6 +137,7 @@ void test_translation_export(const std::filesystem::path& root) {
 }
 
 void test_reviewed_source_export_floor(const std::filesystem::path& root) {
+ for (const bool fresh : {false,true}) {
   sketch::IdentifiedBoundary boundary{"imported-source-area", "measurement_boundary", {}};
   const sketch::Vec2 points[]{{0,0},{4,0},{4,3},{0,3}};
   for (std::size_t i = 0; i < 4; ++i)
@@ -148,22 +149,33 @@ void test_reviewed_source_export_floor(const std::filesystem::path& root) {
   edit.kind = sketch::BoundaryGeometryEditKind::redefine_boundary;
   edit.replacement_segments = owner.properties.at("segments");
   edit.replacement_wall_source_ids = {"historical-wall-0", "historical-wall-1", "historical-wall-2", "historical-wall-3"};
+  const auto origin = owner.properties;
+  if (fresh) {
+    for (std::size_t i = 0; i < edit.replacement_segments.size(); ++i) {
+      edit.replacement_segments[i]["segment_id"] = "fresh-exchange-edge-" + std::to_string(i);
+      edit.replacement_segments[i]["start_vertex_id"] = "fresh-exchange-corner-" + std::to_string(i);
+      edit.replacement_segments[i]["end_vertex_id"] = "fresh-exchange-corner-" + std::to_string((i+1)%4);
+    }
+    auto wire = sketch::encode_boundary_geometry_edit(edit);wire["version"] = 4;wire["fresh_topology"] = true;
+    edit = sketch::decode_boundary_geometry_edit(wire);
+    owner.properties["segments"] = edit.replacement_segments;
+  }
   auto records = nlohmann::json::array();
   for (const auto& id : edit.replacement_wall_source_ids)
     records.push_back({{"id", id}, {"context", nlohmann::json::object()}});
   owner.properties["wall_measurement_source"] = {{"version", 1}, {"basis", "exterior"}, {"walls", records}};
-  owner.extensions["boundary_geometry_derivation"] = {{"version", 2}, {"source_boundary", owner.properties},
+  owner.extensions["boundary_geometry_derivation"] = {{"version", 2}, {"source_boundary", origin},
     {"operations", nlohmann::json::array({{{"kind", "geometry_edit"}, {"value", sketch::encode_boundary_geometry_edit(edit)}}})}};
-  owner.extensions["boundary_geometry_derivation"]["source_boundary"].erase("wall_measurement_source");
   auto document = sketch::Document::create({owner});
-  check(document.snapshot().history().size() == 1 && sketch::ProjectStore::required_format_version(document.snapshot()) == 16,
+  check(document.snapshot().history().size() == 1 && sketch::ProjectStore::required_format_version(document.snapshot()) == (fresh ? 17U : 16U),
     "imported topology source intent must retain its native floor without originating history or current walls");
-  const auto destination = root / "reviewed-source-import";
+  const auto destination = root / (fresh ? "fresh-source-import" : "reviewed-source-import");
   sketch::extract_project(document.snapshot(), destination);
   std::ifstream input(destination / "project.json");
   const auto exported = nlohmann::json::parse(input);
-  check(exported.at("exchange_version") == 14, "retained imported source redefinition requires exchange fourteen");
+  check(exported.at("exchange_version") == (fresh ? 15 : 14), "retained imported source redefinition requires the appropriate exchange reader floor");
   check(document.snapshot().entities().at(owner.id) == owner, "source extraction must preserve the imported analytical proof");
+ }
 }
 
 void test_curved_constraint_export_floor(const std::filesystem::path& root) {

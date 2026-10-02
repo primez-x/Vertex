@@ -50,6 +50,9 @@ struct BoundaryGeometryEdit {
     // Explicitly reviewed exterior-wall source replacement; never generic
     // caller-supplied source JSON. Only valid on a boundary redefinition.
     std::vector<std::string> replacement_wall_source_ids;
+    // Explicit reviewed redraw intent. All child identities are fresh even
+    // when the replacement has the same number of edges as the old outline.
+    bool fresh_topology{};
 
     bool operator==(const BoundaryGeometryEdit& other) const {
         return boundary_id == other.boundary_id && kind == other.kind &&
@@ -65,7 +68,8 @@ struct BoundaryGeometryEdit {
             replacement_child_mapping == other.replacement_child_mapping &&
             replacement_removed_reference_ids == other.replacement_removed_reference_ids &&
             arc_construction == other.arc_construction &&
-            replacement_wall_source_ids == other.replacement_wall_source_ids;
+            replacement_wall_source_ids == other.replacement_wall_source_ids &&
+            fresh_topology == other.fresh_topology;
     }
 };
 
@@ -87,7 +91,7 @@ inline void validate_boundary_geometry_edit(const BoundaryGeometryEdit& edit) {
         (!edit.replacement_segments.is_null() || !edit.replacement_authoring.is_null() ||
          !edit.replacement_properties.empty() || !edit.replacement_dimension_ids.empty() ||
          !edit.replacement_child_mapping.empty() || !edit.replacement_removed_reference_ids.empty() ||
-         !edit.replacement_wall_source_ids.empty()))
+         !edit.replacement_wall_source_ids.empty() || edit.fresh_topology))
         throw std::invalid_argument("Boundary coordinate edit contains redefinition fields");
     if (edit.kind != BoundaryGeometryEditKind::reconstruct_arc && edit.arc_construction)
         throw std::invalid_argument("Boundary geometry edit contains arc reconstruction fields");
@@ -164,7 +168,8 @@ inline void validate_boundary_geometry_edit(const BoundaryGeometryEdit& edit) {
         if (edit.replacement_segments.dump().size() + edit.replacement_authoring.dump().size() +
             edit.replacement_properties.dump().size() + nlohmann::json(edit.replacement_dimension_ids).dump().size() +
             reference_plan_bytes + (edit.replacement_wall_source_ids.empty() ? std::size_t{0} :
-                nlohmann::json(edit.replacement_wall_source_ids).dump().size()) >
+                nlohmann::json(edit.replacement_wall_source_ids).dump().size()) +
+            (edit.fresh_topology ? std::size_t{40} : std::size_t{0}) >
             1024 * 1024 - 4096)
             throw std::invalid_argument("Boundary redefinition exceeds the persisted proof budget");
     } else if (edit.kind == BoundaryGeometryEditKind::reconstruct_arc) {
@@ -212,6 +217,13 @@ inline nlohmann::json encode_boundary_geometry_edit(const BoundaryGeometryEdit& 
             result["replacement_child_mapping"] = edit.replacement_child_mapping;
             result["replacement_removed_reference_ids"] = edit.replacement_removed_reference_ids;
         }
+        if (edit.fresh_topology) {
+            result["version"] = 4;
+            result["fresh_topology"] = true;
+            result["replacement_wall_source_ids"] = edit.replacement_wall_source_ids;
+            result["replacement_child_mapping"] = edit.replacement_child_mapping;
+            result["replacement_removed_reference_ids"] = edit.replacement_removed_reference_ids;
+        }
         return result;
     }
     if (edit.kind == BoundaryGeometryEditKind::reconstruct_arc) {
@@ -229,16 +241,17 @@ inline nlohmann::json encode_boundary_geometry_edit(const BoundaryGeometryEdit& 
 
 inline BoundaryGeometryEdit decode_boundary_geometry_edit(const nlohmann::json& value) {
     if (!value.is_object() || !value.contains("version") ||
-        !value.at("version").is_number_integer() || (value.at("version") != 1 && value.at("version") != 2 && value.at("version") != 3) ||
+        !value.at("version").is_number_integer() || (value.at("version") != 1 && value.at("version") != 2 && value.at("version") != 3 && value.at("version") != 4) ||
         !value.contains("kind") || !value.at("kind").is_string() ||
         !value.contains("boundary_id") || !value.at("boundary_id").is_string()) {
         throw std::invalid_argument("Boundary geometry edit envelope is invalid");
     }
     const auto kind = value.at("kind").get<std::string>();
-    const bool wall_source_replacement = value.at("version") == 3;
+    const bool fresh_topology = value.at("version") == 4;
+    const bool wall_source_replacement = value.at("version") == 3 || fresh_topology;
     const bool reference_plan = value.at("version") == 2 || wall_source_replacement;
     if (reference_plan && kind != "redefine_boundary")
-        throw std::invalid_argument("Boundary redefinition versions two and three require redefinition intent");
+        throw std::invalid_argument("Boundary redefinition versions two through four require redefinition intent");
     BoundaryGeometryEdit result;
     result.boundary_id = value.at("boundary_id").get<std::string>();
     if (kind == "move_vertex") {
@@ -295,6 +308,7 @@ inline BoundaryGeometryEdit decode_boundary_geometry_edit(const nlohmann::json& 
             expected.insert("replacement_removed_reference_ids");
         }
         if (wall_source_replacement) expected.insert("replacement_wall_source_ids");
+        if (fresh_topology) expected.insert("fresh_topology");
         std::set<std::string> actual;
         for (const auto& [key, ignored] : value.items()) { (void)ignored; actual.insert(key); }
         if (actual != expected || !value.at("replacement_dimension_ids").is_array())
@@ -305,6 +319,11 @@ inline BoundaryGeometryEdit decode_boundary_geometry_edit(const nlohmann::json& 
         result.replacement_authoring = value.at("replacement_authoring");
         result.replacement_properties = value.at("replacement_properties");
         result.replacement_dimension_ids = value.at("replacement_dimension_ids").get<std::vector<std::string>>();
+        if (fresh_topology) {
+            if (!value.at("fresh_topology").is_boolean() || value.at("fresh_topology") != true)
+                throw std::invalid_argument("Version four redefinition requires explicit fresh topology");
+            result.fresh_topology = true;
+        }
         if (reference_plan) {
             result.replacement_child_mapping = value.at("replacement_child_mapping");
             if (!value.at("replacement_removed_reference_ids").is_array())
@@ -314,7 +333,7 @@ inline BoundaryGeometryEdit decode_boundary_geometry_edit(const nlohmann::json& 
                 throw std::invalid_argument("Version two redefinition requires explicit reference decisions");
         }
         if (wall_source_replacement) {
-            if (!value.at("replacement_wall_source_ids").is_array() || value.at("replacement_wall_source_ids").empty())
+            if (!value.at("replacement_wall_source_ids").is_array() || (!fresh_topology && value.at("replacement_wall_source_ids").empty()))
                 throw std::invalid_argument("Version three redefinition requires explicit replacement wall sources");
             result.replacement_wall_source_ids = value.at("replacement_wall_source_ids").get<std::vector<std::string>>();
         }

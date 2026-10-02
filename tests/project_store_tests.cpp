@@ -2392,6 +2392,7 @@ void test_reopen_preserves_redo_navigation_and_named_abandoned_branch() {
 }
 
 void test_reviewed_exterior_source_reader_floor() {
+  for (const bool fresh : {false,true}) {
     TempDirectory temp;
     std::vector<Entity> entities{
         entity("source-property", "property"),
@@ -2424,26 +2425,40 @@ void test_reviewed_exterior_source_reader_floor() {
     edit.kind = sketch::BoundaryGeometryEditKind::redefine_boundary;
     edit.replacement_segments = owner.properties.at("segments");
     edit.replacement_wall_source_ids = ids;
+    if (fresh) {
+        for (std::size_t i = 0; i < edit.replacement_segments.size(); ++i) {
+            edit.replacement_segments[i]["segment_id"] = "fresh-storage-edge-" + std::to_string(i);
+            edit.replacement_segments[i]["start_vertex_id"] = "fresh-storage-corner-" + std::to_string(i);
+            edit.replacement_segments[i]["end_vertex_id"] = "fresh-storage-corner-" + std::to_string((i + 1) % edit.replacement_segments.size());
+        }
+        auto wire = sketch::encode_boundary_geometry_edit(edit);
+        wire["version"] = 4; wire["fresh_topology"] = true;
+        edit = sketch::decode_boundary_geometry_edit(wire);
+    }
     document.apply(sketch::EditBoundaryGeometry{document.revision(), edit});
     const auto repaired = document.snapshot();
     std::vector<Entity> imported_values;
     for (const auto& [id, value] : repaired.entities()) { (void)id; imported_values.push_back(value); }
     auto imported = Document::create(imported_values);
+    auto deleted = Document::fork(repaired);
+    deleted.apply(ApplyEntityChanges{deleted.revision(), {EntityChange::erase(owner.id)}, {}, "Delete measured owner later"});
     document.undo(document.revision());
-    for (const auto& snapshot : {repaired, document.snapshot(), imported.snapshot()}) {
-        require(ProjectStore::required_format_version(snapshot) == 16,
-            "current, undone and imported reviewed source intent must require reader sixteen");
+    for (const auto& snapshot : {repaired, document.snapshot(), imported.snapshot(), deleted.snapshot()}) {
+        require(ProjectStore::required_format_version(snapshot) == (fresh ? 17U : 16U),
+            "current, undone and imported reviewed source intent must retain its required reader floor");
         const auto path = temp.path / ("source-" + sketch::make_stable_id() + ".bldproj");
         (void)ProjectStore::save(path, snapshot);
         require(ProjectStore::load(path).document.snapshot().entities() == snapshot.entities(),
             "reviewed source reader sixteen must reopen all retained states");
-        execute_sql(path, "PRAGMA user_version=15; UPDATE metadata SET value='15' WHERE key='format_version'");
+        const auto downgraded_version = fresh ? "16" : "15";
+        execute_sql(path, std::string("PRAGMA user_version=") + downgraded_version + "; UPDATE metadata SET value='" + downgraded_version + "' WHERE key='format_version'");
         rewrite_logical_digest(path);
         const auto original_hash = ProjectStore::file_sha256(path);
         require_error([&] { (void)ProjectStore::load(path); }, StorageErrorCode::unsupported_format,
             "recomputed digest cannot downgrade current, undone or imported source intent");
         require(ProjectStore::file_sha256(path) == original_hash, "refused source downgrade must preserve the file");
     }
+  }
 }
 
 void test_native_room_topology_is_validated_on_restore() {

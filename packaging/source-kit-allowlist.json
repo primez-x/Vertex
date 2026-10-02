@@ -2227,6 +2227,10 @@
     },
     {
       "category": "docs",
+      "path": "docs/superpowers/plans/2026-10-02-explicit-same-count-reference-repair.md"
+    },
+    {
+      "category": "docs",
       "path": "docs/superpowers/plans/2026-10-02-exterior-measurement-source-repair.md"
     },
     {
@@ -2368,6 +2372,10 @@
     {
       "category": "docs",
       "path": "docs/verification/plan-label-placement-2026-10-01.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/verification/same-count-source-repair-2026-10-02.md"
     },
     {
       "category": "docs",
