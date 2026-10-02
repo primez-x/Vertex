@@ -1,6 +1,6 @@
 # Vertex user testing checklist
 
-323 practical tasks, grouped by how you use the app (including U100a). This replaces the earlier engineering-oriented checklist. The old 130-item list is preserved separately as engineering-requirements-checklist.md.
+324 practical tasks, grouped by how you use the app (including U100a). This replaces the earlier engineering-oriented checklist. The old 130-item list is preserved separately as engineering-requirements-checklist.md.
 
 This is a user acceptance list for the intended app, not a claim that every listed action is implemented or working in the current preview. If you cannot find a control, or a feature is absent, mark **Blocked / missing** and describe it. Specialized sections can be skipped if you do not use them or lack the device or sample files.
 
@@ -40,6 +40,7 @@ Start with the workspace, draw a room, close it with the mouse, drag-select it, 
 - Exact keyboard drawing (8 tasks)
 - Architectural joins and named views (3 tasks)
 - Connected boundary edits and exterior source repair (3 tasks)
+- Appraisal area copying (1 task)
 
 ## Start a project and arrange the workspace
 
@@ -1867,6 +1868,12 @@ drawing; switching modes does not change existing geometry.
 - [ ] **U322 — Map a manual dimension when replacing changed exterior geometry**
   - Steps: Create a four-sided exterior measurement from walls, declare its appraisal facts, and add a manual dimension to one boundary edge. Delete and redraw the shell with one corner moved, keeping four sides. Open **Replace source walls…**, choose the new shell, and review the changed outline and source counts. In the reference planner, cancel once and confirm the measurement is unchanged. Reopen repair, map the manual dimension to its intended new edge, then Apply. Inspect the new area and perimeter, Undo and Redo, and save and reopen.
   - Expected: Changed geometry with an equal number of edges still asks you to choose the manual dimension's intended new edge. Cancel leaves the original measurement and dimension intact. Apply replaces the measured outline, retains the dimension at its chosen location, and updates area/perimeter and qualified totals. Undo/Redo and reopening preserve the chosen replacement and mapping.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **U323 — Copy an appraisal area with its deduction**
+  - Steps: Declare a dwelling area and a contained garage deduction with appraisal facts. Select the parent and choose **Clone**; place the copy without overlapping the original. Check both appraisal totals, then change the copied garage boundary and check the totals again. Undo and Redo, save and reopen. Next, select only the parent, use Copy and Paste, and drag the pasted group clear of the original; verify its deduction and totals.
+  - Expected: Each copy includes the required garage boundary and deduction relationship, preserving the parent's net area, category and appearance. Editing the copied garage changes only the copied parent's net. The original parent, garage, appearance and totals remain unchanged. Undo/Redo and reopening retain the copies and their deduction links. Copy and Paste of the parent also carries the required deduction so the pasted group can be placed without overlap and qualified independently.
   - Result: Not tested
   - Notes: ______________________________
 

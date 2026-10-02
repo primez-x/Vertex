@@ -289,6 +289,7 @@ void remap_entity_references(Entity& entity,
         reference(properties.at("material_assignment"), "catalog_id");
     if (entity.type == "boundary" || entity.type == "measurement_boundary" ||
         entity.type == "room_boundary") {
+        reference(properties,"deduction_ids");
         if (properties.contains("segments")) {
             for (auto& segment : properties.at("segments")) {
                 for (const auto* key : {"segment_id", "start_vertex_id", "end_vertex_id"})
@@ -303,6 +304,12 @@ void remap_entity_references(Entity& entity,
                     for (const auto* key : {"property_id","building_id","floor_id","layer_id","phase_id"})
                         reference(wall.at("context"),key);
                 }
+        }
+        if (properties.contains("boundary_authoring")) {
+            const auto decoded = decode_boundary_receipt_envelope(properties.at("boundary_authoring"));
+            if (!decoded.supported()) throw std::invalid_argument(decoded.diagnostic);
+            properties["boundary_authoring"] = encode_boundary_receipt_envelope(
+                transformed_boundary_construction(*decoded.record,{},remap));
         }
         if (entity.extensions.contains("boundary_geometry_derivation")) {
             auto& derivation = entity.extensions.at("boundary_geometry_derivation");
@@ -366,6 +373,21 @@ void remap_entity_references(Entity& entity,
     if (entity.type == "dimension" && properties.contains("target")) {
         reference(properties.at("target"), "entity_id");
         reference(properties.at("target"), "segment_id");
+        reference(properties.at("target"), "second_segment_id");
+        reference(properties.at("target"), "vertex_id");
+    }
+    if (entity.type == "constraint" && properties.contains("bindings")) {
+        for (auto& binding : properties.at("bindings"))
+            for (const auto* key : {"owner_id","segment_id","vertex_id"}) reference(binding,key);
+        // These schema owner sets are canonical; fresh IDs can change their
+        // sort order while opaque constraint metadata remains untouched.
+        for (const auto* key : {"wall_ids","entity_ids"})
+            if (properties.contains(key)) {
+                auto owners=properties.at(key).get<std::vector<std::string>>();
+                std::sort(owners.begin(),owners.end());
+                owners.erase(std::unique(owners.begin(),owners.end()),owners.end());
+                properties[key]=owners;
+            }
     }
     if (entity.type == kAnnotationEntityType) {
         auto& state = properties.at("state");
@@ -3574,6 +3596,7 @@ class MainWindow::Impl {
         std::shared_ptr<std::optional<VertexPreviewProjection>> result;
         std::optional<WallGeometryMoveIntent> wall_geometry_move;
         QFont label_font;
+        std::shared_ptr<const DocumentSnapshot> entities_move_candidate;
     };
 
 public:
@@ -4634,7 +4657,9 @@ public:
     std::pair<Command, std::string> makeWallTransformCommand(const DocumentSnapshot& source, const Entity& original,
                                 const QString& rotation_degrees, bool flip_horizontal,
                                 bool flip_vertical, const QString& offset_x,
-                                const QString& offset_y, bool clone) {
+                                const QString& offset_y, bool clone,
+                                const std::optional<PlanarTransform>& transform_override = std::nullopt,
+                                std::map<std::string,std::string,std::less<>>* clone_graph_ids = nullptr) {
         auto graph = clipboard_entities_for_selection(source, original.id);
         std::vector<const Entity*> openings;
         for (const auto& entity : graph) if (entity.type == "opening") openings.push_back(&entity);
@@ -4655,16 +4680,19 @@ public:
         const auto radians = degrees * std::numbers::pi / 180.0;
         const Vec2 pivot{std::midpoint(wall.baseline.start.x, wall.baseline.end.x),
                          std::midpoint(wall.baseline.start.y, wall.baseline.end.y)};
-        const PlanarTransform transform{pivot, radians, flip_horizontal, flip_vertical, translation};
+        const PlanarTransform transform = transform_override.value_or(
+            PlanarTransform{pivot, radians, flip_horizontal, flip_vertical, translation});
         const auto baseline = transform_segment(wall.baseline, transform);
-        const bool reflected = flip_horizontal != flip_vertical;
+        const bool reflected = transform.flip_horizontal != transform.flip_vertical;
         if (!clone && !reflected)
             return {wallGeometryCommand(source, {{original.id,baseline.start,baseline.end}},
                 "Transform wall and connected corners"), original.id};
         wall.baseline = baseline;
         validate_wall_semantics(wall);
         std::map<std::string, std::string, std::less<>> identities;
-        if (clone) for (const auto& entity : graph) identities.emplace(entity.id, new_id(entity.type));
+        if (clone) for (const auto& entity : graph)
+            identities.emplace(entity.id,clone_graph_ids && clone_graph_ids->contains(entity.id)
+                ? clone_graph_ids->at(entity.id) : new_id(entity.type));
         std::vector<EntityChange> changes;
         for (auto entity : graph) {
             if (entity.type == "wall") {
@@ -4695,6 +4723,7 @@ public:
             if (clone || entity != source.entities().at(entity.id))
                 changes.push_back(EntityChange::upsert(std::move(entity)));
         }
+        if (clone_graph_ids) clone_graph_ids->insert(identities.begin(),identities.end());
         return {ApplyEntityChanges{source.revision(), std::move(changes), {},
             clone ? "Clone transformed wall" : "Transform wall"},
             clone ? identities.at(original.id) : original.id};
@@ -4837,10 +4866,286 @@ public:
         }
     }
 
+    Command makeSelectionGeometryTranslationCommand(const DocumentSnapshot& source,
+        QStringList model_ids, Vec2 offset, std::vector<EntityChange> changes = {}) {
+        std::vector<Entity> selected_roots;
+        for (const auto& id : model_ids) {
+            const auto found = source.entities().find(id.toStdString());
+            if (found == source.entities().end()) throw std::invalid_argument("A selected object no longer exists.");
+            for (const auto& entity : clipboard_entities_for_selection(source,found->first)) selected_roots.push_back(entity);
+        }
+        const auto graph = independentAreaCopyGraph(source,std::move(selected_roots));
+        std::vector<BoundaryTranslation> translations;
+        std::vector<std::string> walls;
+        std::vector<ArchitecturalOperation> operations;
+        for (const auto& entity : graph) {
+            if ((is_closed_boundary_entity(entity.type) || entity.type == "wall") && !model_ids.contains(id_from(entity.id)))
+                model_ids.push_back(id_from(entity.id));
+            if (entity.type == "constraint") {
+                const auto decoded = decode_constraint_entity(entity);
+                if (!decoded.supported()) throw std::invalid_argument(decoded.unsupported_reason);
+                if (!decoded.constraint->anchor) continue;
+                auto constraint = *decoded.constraint;
+                constraint.anchor->x += offset.x;
+                constraint.anchor->y += offset.y;
+                changes.push_back(EntityChange::upsert(encode_constraint_entity(constraint,&entity)));
+            }
+        }
+        for (const auto& id : model_ids) {
+            const auto& entity = source.entities().at(id.toStdString());
+            if (is_closed_boundary_entity(entity.type)) {
+                if (entity.properties.contains("boundary_authoring") || entity.extensions.contains("boundary_geometry_derivation"))
+                    translations.push_back({entity.id,offset});
+                else {
+                    const auto built = makeBoundaryTransformCommand(source,entity,{},false,false,{}, {},false,
+                        offset,std::nullopt,false);
+                    const auto* ordinary = std::get_if<ApplyEntityChanges>(&built.first);
+                    if (!ordinary) throw std::invalid_argument("The selected boundary cannot be translated in a group.");
+                    changes.insert(changes.end(),ordinary->entity_changes.begin(),ordinary->entity_changes.end());
+                }
+                continue;
+            }
+            if (!can_transform_architectural_entity_type(entity.type))
+                throw std::invalid_argument("This selected object does not support movement.");
+            walls.push_back(entity.id);
+            ArchitecturalOperation operation{ArchitecturalAction::transform,entity.id};
+            operation.transform = ArchitecturalTransform{offset.x,offset.y,0.0,0.0,1.0};
+            operations.push_back(std::move(operation));
+        }
+        if (!operations.empty()) {
+            const auto transaction = ArchitecturalTransaction::create(new_id("architectural-tx"),
+                std::to_string(source.revision()),std::move(walls),std::move(operations),"Move area source walls");
+            auto wall_changes = architectural_transaction_command(source,transaction,source.revision());
+            changes.insert(changes.end(),std::make_move_iterator(wall_changes.entity_changes.begin()),
+                std::make_move_iterator(wall_changes.entity_changes.end()));
+        }
+        const Command command = translations.empty()
+            ? Command{ApplyEntityChanges{source.revision(),std::move(changes),{},"Move selected objects"}}
+            : Command{TranslateBoundaries{source.revision(),std::move(translations),std::move(changes),"Move selected objects"}};
+        const auto candidate = Document::preview_command(source,command);
+        for (const auto& id : model_ids) {
+            const auto& entity = source.entities().at(id.toStdString());
+            if (is_closed_boundary_entity(entity.type) && !wall_measurement_source_current(candidate,candidate.entities().at(entity.id)))
+                throw std::invalid_argument("The moved exterior no longer matches its supporting walls. The move was not applied.");
+        }
+        return command;
+    }
+
+    std::pair<Command,std::string> makeIndependentAreaTranslationCommand(
+        const DocumentSnapshot& source, const Entity& original, Vec2 offset) {
+        return {makeSelectionGeometryTranslationCommand(source,{id_from(original.id)},offset),original.id};
+    }
+
+    static Boundary alignedExteriorForCopy(const Boundary& original, const Boundary& proposed) {
+        if (!uniquelyEquivalentExterior(original,proposed))
+            throw std::invalid_argument("The copied source walls do not reproduce the transformed exterior precisely. The copy was not applied.");
+        const auto close = [](double a,double b) {
+            return std::abs(a-b) <= std::min(default_geometry_tolerance_metres*0.01,
+                64.0*std::numeric_limits<double>::epsilon()*std::max({1.0,std::abs(a),std::abs(b)}));
+        };
+        for (std::size_t offset = 0; offset < proposed.size(); ++offset)
+            for (const bool reversed : {false,true}) {
+                Boundary aligned;
+                for (std::size_t i = 0; i < proposed.size(); ++i) {
+                    auto edge = proposed[reversed ? (offset+proposed.size()-i)%proposed.size() : (offset+i)%proposed.size()];
+                    if (reversed) { std::swap(edge.start,edge.end); edge.sweep_radians = -edge.sweep_radians; }
+                    const auto& old = original[i];
+                    if (!close(old.start.x,edge.start.x) || !close(old.start.y,edge.start.y) ||
+                        !close(old.end.x,edge.end.x) || !close(old.end.y,edge.end.y) || !close(old.sweep_radians,edge.sweep_radians)) break;
+                    aligned.push_back(edge);
+                }
+                if (aligned.size() == original.size()) return aligned;
+            }
+        throw std::invalid_argument("The copied exterior correspondence is unavailable.");
+    }
+
+    ApplyEntityChanges validateIndependentAreaCopy(const DocumentSnapshot& source, ApplyEntityChanges command) const {
+        std::set<std::string,std::less<>> copied_ids;
+        std::set<std::string,std::less<>> copied_geometry_ids;
+        std::set<std::string,std::less<>> copied_wall_ids;
+        bool contains_copied_area = false;
+        for (const auto& change : command.entity_changes)
+            if (change.kind == EntityChangeKind::upsert && !source.entities().contains(change.entity.id)) {
+                copied_ids.insert(change.entity.id);
+                if (is_closed_boundary_entity(change.entity.type)) contains_copied_area = true;
+                if (is_closed_boundary_entity(change.entity.type) || can_transform_architectural_entity_type(change.entity.type) ||
+                    change.entity.type == "opening" || can_recognize_boundary_dimension_entity_type(change.entity.type))
+                    copied_geometry_ids.insert(change.entity.id);
+                if (change.entity.type == "wall") copied_wall_ids.insert(change.entity.id);
+                if (change.entity.type == kAnnotationEntityType) {
+                    const auto state=decode_annotation_entity(change.entity);
+                    for (const auto& label : state.labels) copied_geometry_ids.insert(label.id);
+                    for (const auto& symbol : state.symbols) copied_geometry_ids.insert(symbol.id);
+                }
+            }
+        for (const auto& change : command.entity_changes) {
+            if (contains_copied_area && change.kind == EntityChangeKind::upsert) {
+                const auto& entity = change.entity;
+                if (entity.type == "opening" && !copied_wall_ids.contains(read_string(entity.properties,"wall_id").value_or("")))
+                    throw std::invalid_argument("A copied opening must include its independently copied wall.");
+                if (can_recognize_boundary_dimension_entity_type(entity.type)) {
+                    const auto decoded = decode_boundary_dimension_entity(entity);
+                    if (!decoded.supported()) throw std::invalid_argument(decoded.unsupported_reason);
+                    if (!copied_geometry_ids.contains(decoded.dimension->boundary_id))
+                        throw std::invalid_argument("A copied dimension must belong to an independently copied object.");
+                }
+                if (entity.type == kAnnotationEntityType)
+                    for (const auto& record : entity.properties.at("state").at("overrides"))
+                        if (!copied_geometry_ids.contains(record.at("target_id").get<std::string>()))
+                            throw std::invalid_argument("Copied appearance must belong to an independently copied object.");
+            }
+            if (contains_copied_area && change.kind == EntityChangeKind::upsert && change.entity.type == "constraint") {
+                const auto decoded = decode_constraint_entity(change.entity);
+                if (!decoded.supported()) throw std::invalid_argument(decoded.unsupported_reason);
+                for (const auto& binding : decoded.constraint->bindings)
+                    if (!copied_ids.contains(binding.owner_id))
+                        throw std::invalid_argument("A copied locked relationship must belong entirely to the copied objects.");
+            }
+            if (change.kind != EntityChangeKind::upsert || !is_closed_boundary_entity(change.entity.type)) continue;
+            for (const auto& id : read_deduction_ids(change.entity.properties))
+                if (!copied_ids.contains(id)) throw std::invalid_argument("A copied parent must contain an independent copied deduction.");
+            if (change.entity.properties.contains("wall_measurement_source"))
+                for (const auto& record : change.entity.properties.at("wall_measurement_source").at("walls"))
+                    if (!copied_ids.contains(record.at("id").get<std::string>()))
+                        throw std::invalid_argument("A copied exterior measurement must contain its independently copied source walls.");
+        }
+        auto candidate = Document::preview_command(source,command);
+        for (auto& change : command.entity_changes) {
+            if (change.kind != EntityChangeKind::upsert || !is_closed_boundary_entity(change.entity.type) ||
+                !change.entity.properties.contains("wall_measurement_source")) continue;
+            std::vector<std::string> walls;
+            for (const auto& record : change.entity.properties.at("wall_measurement_source").at("walls"))
+                walls.push_back(record.at("id").get<std::string>());
+            const auto derived = derive_exterior_wall_measurement(candidate,walls);
+            // New copied owners receive the canonical context of their copied
+            // physical walls. Historical construction inputs remain intact.
+            change.entity.properties["wall_measurement_source"] = derived.source;
+            candidate = Document::preview_command(source,command);
+            if (!wall_measurement_source_current(candidate,change.entity)) {
+                auto model = decode_identified_boundary_entity(change.entity);
+                const auto aligned = alignedExteriorForCopy(boundary_geometry(model),derived.boundary);
+                for (std::size_t i = 0; i < aligned.size(); ++i) model.segments[i].segment = aligned[i];
+                BoundaryGeometryEdit edit;
+                edit.boundary_id = change.entity.id;
+                edit.target_id = change.entity.id;
+                edit.kind = BoundaryGeometryEditKind::redefine_boundary;
+                edit.replacement_segments = encode_identified_boundary_entity(model).properties.at("segments");
+                edit.replacement_wall_source_ids = walls;
+                const auto normalized = Document::preview_command(candidate,EditBoundaryGeometry{candidate.revision(),edit});
+                // Fold the detached typed normalization into the single final
+                // command, including any recalculated bound dimensions.
+                for (auto& target : command.entity_changes)
+                    if (target.kind == EntityChangeKind::upsert && normalized.entities().contains(target.entity.id))
+                        target.entity = normalized.entities().at(target.entity.id);
+                candidate = Document::preview_command(source,command);
+            }
+            if (!wall_measurement_source_current(candidate,candidate.entities().at(change.entity.id)))
+                throw std::invalid_argument("A copied exterior measurement is not current with its copied walls.");
+        }
+        const auto organization=organize_project(candidate);
+        for (const auto& change : command.entity_changes) {
+            if (change.kind != EntityChangeKind::upsert || !is_closed_boundary_entity(change.entity.type)) continue;
+            const auto& copied_owner = candidate.entities().at(change.entity.id);
+            const auto owner_context=organization.drawing_context(copied_owner.id);
+            std::vector<AreaDeduction> deductions;
+            for (const auto& id : read_deduction_ids(copied_owner.properties)) {
+                const auto found = candidate.entities().find(id);
+                if (found == candidate.entities().end() || !is_closed_boundary_entity(found->second.type))
+                    throw std::invalid_argument("A copied deduction is unavailable.");
+                const auto deduction_context=organization.drawing_context(id);
+                if (owner_context || deduction_context) {
+                    if (!owner_context || !deduction_context ||
+                        owner_context->property_id != deduction_context->property_id ||
+                        owner_context->building_id != deduction_context->building_id ||
+                        owner_context->floor_id != deduction_context->floor_id)
+                        throw std::invalid_argument("A copied deduction must share its parent's property, building and floor.");
+                } else {
+                    // Preserve unorganized standalone boundaries without
+                    // inventing hierarchy; their explicit contexts must agree.
+                    for (const auto* key : {"property_id","building_id","floor_id"})
+                        if (read_string(copied_owner.properties,key) != read_string(found->second.properties,key))
+                            throw std::invalid_argument("A copied deduction must share its parent's drawing context.");
+                }
+                deductions.push_back({id,read_boundary(found->second.properties)});
+            }
+            if (deductions.empty()) continue;
+            const CalculationProfile profile{"independent-area-copy",1,AreaUnit::square_metre,2,{{"physical",{false,false}}}};
+            (void)calculate_area(MeasurementArea{copied_owner.id,owner_context ? owner_context->building_id : read_string(copied_owner.properties,"building_id").value_or("copy-preview"),
+                owner_context ? owner_context->floor_id : read_string(copied_owner.properties,"floor_id").value_or("copy-preview"),"physical",read_boundary(copied_owner.properties),
+                deductions,read_stored_factor(copied_owner.properties).rational},profile);
+        }
+        return command;
+    }
+
+    std::pair<Command,std::string> makeIndependentAreaCloneCommand(
+        const DocumentSnapshot& source, const Entity& original, const PlanarTransform& transform) {
+        const auto graph = independentAreaCopyGraph(source,clipboard_entities_for_selection(source,original.id));
+        std::map<std::string,std::string,std::less<>> identities;
+        for (const auto& entity : graph) identities.emplace(entity.id,new_id(entity.type));
+        std::map<std::string,Entity,std::less<>> copied;
+        for (const auto& entity : graph) {
+            if (!is_closed_boundary_entity(entity.type) && entity.type != "wall") continue;
+            const auto built = entity.type == "wall"
+                ? makeWallTransformCommand(source,entity,{},false,false,{}, {},true,transform,&identities)
+                : makeBoundaryTransformCommand(source,entity,{},false,false,{}, {},true,std::nullopt,transform,false,&identities);
+            const auto* changes = std::get_if<ApplyEntityChanges>(&built.first);
+            if (!changes) throw std::invalid_argument("The area copy did not produce a detached geometry command.");
+            for (const auto& change : changes->entity_changes) {
+                if (change.kind != EntityChangeKind::upsert) throw std::invalid_argument("An area copy cannot remove source geometry.");
+                copied.insert_or_assign(change.entity.id,change.entity);
+            }
+        }
+        for (const auto& entity : graph) {
+            if (entity.type == "constraint") {
+                const auto decoded = decode_constraint_entity(entity);
+                if (!decoded.supported()) throw std::invalid_argument(decoded.unsupported_reason);
+                auto constraint = *decoded.constraint;
+                constraint.id = identities.at(entity.id);
+                for (auto& binding : constraint.bindings) {
+                    binding.owner_id = identities.at(binding.owner_id);
+                    if (!binding.segment_id.empty()) binding.segment_id = identities.at(binding.segment_id);
+                    if (!binding.vertex_id.empty()) binding.vertex_id = identities.at(binding.vertex_id);
+                }
+                if (constraint.anchor) constraint.anchor = transform_point(*constraint.anchor,transform);
+                if (constraint.relation == ConstraintRelationKind::horizontal || constraint.relation == ConstraintRelationKind::vertical) {
+                    if (std::abs(std::remainder(transform.rotation_radians,std::numbers::pi/2)) > 1e-12)
+                        throw std::invalid_argument("Horizontal or vertical locked relationships require a quarter-turn rotation when copied.");
+                    if (std::llround(transform.rotation_radians/(std::numbers::pi/2))%2 != 0)
+                        constraint.relation = constraint.relation == ConstraintRelationKind::horizontal
+                            ? ConstraintRelationKind::vertical : ConstraintRelationKind::horizontal;
+                }
+                auto metadata = entity;
+                metadata.id = constraint.id;
+                remap_entity_references(metadata,identities);
+                copied.insert_or_assign(constraint.id,encode_constraint_entity(constraint,&metadata));
+            } else if (entity.type == kAnnotationEntityType) {
+                auto annotation = entity;
+                annotation.id = identities.at(entity.id);
+                remap_entity_references(annotation,identities);
+                const PlanarTransform linear{{},transform.rotation_radians,transform.flip_horizontal,transform.flip_vertical,{}};
+                for (auto& record : annotation.properties.at("state").at("overrides"))
+                    if (record.contains("plan_label_offset_m")) {
+                        const auto offset = read_point(record.at("plan_label_offset_m"));
+                        if (!offset) throw std::invalid_argument("The copied area label offset is invalid.");
+                        const auto moved = transform_point(*offset,linear);
+                        record["plan_label_offset_m"] = json::array({moved.x,moved.y});
+                    }
+                validate_annotation_entity(annotation);
+                copied.insert_or_assign(annotation.id,std::move(annotation));
+            }
+        }
+        ApplyEntityChanges command{source.revision(),{}, {},"Clone area with independent deductions and source walls"};
+        for (auto& [id,entity] : copied) command.entity_changes.push_back(EntityChange::upsert(std::move(entity)));
+        return {validateIndependentAreaCopy(source,std::move(command)),identities.at(original.id)};
+    }
+
     std::pair<Command, std::string> makeBoundaryTransformCommand(
         const DocumentSnapshot& source, Entity original, const QString& rotation_degrees,
         bool flip_horizontal, bool flip_vertical, const QString& offset_x,
-        const QString& offset_y, bool clone, std::optional<Vec2> canvas_offset = std::nullopt) {
+        const QString& offset_y, bool clone, std::optional<Vec2> canvas_offset = std::nullopt,
+        const std::optional<PlanarTransform>& transform_override = std::nullopt,
+        bool independent_copy = true,
+        std::map<std::string,std::string,std::less<>>* clone_graph_ids = nullptr) {
         const auto version = inspect_boundary_entity_version(original);
         if (version.format == BoundaryEntityFormat::unsupported_version) {
             throw std::invalid_argument(
@@ -4885,8 +5190,16 @@ public:
             : Vec2{parse_offset(offset_x), parse_offset(offset_y)};
         if (!std::isfinite(offset.x) || !std::isfinite(offset.y))
             throw std::invalid_argument("Boundary offsets must be finite.");
-        const PlanarTransform requested_transform{
-            pivot, radians, flip_horizontal, flip_vertical, offset};
+        const PlanarTransform requested_transform = transform_override.value_or(
+            PlanarTransform{pivot, radians, flip_horizontal, flip_vertical, offset});
+        if (clone && independent_copy)
+            return makeIndependentAreaCloneCommand(source,original,requested_transform);
+        if (!clone && independent_copy &&
+            (!read_deduction_ids(original.properties).empty() || original.properties.contains("wall_measurement_source"))) {
+            if (requested_transform.rotation_radians != 0.0 || requested_transform.flip_horizontal || requested_transform.flip_vertical)
+                throw std::invalid_argument("Rotate or reflect an independent copy of this area. An existing area with deductions or source walls can be translated together.");
+            return makeIndependentAreaTranslationCommand(source,original,requested_transform.offset);
+        }
         if (!clone && (original.properties.contains("boundary_authoring") ||
                        original.extensions.contains("boundary_geometry_derivation"))) {
             if (radians != 0.0 || flip_horizontal || flip_vertical)
@@ -4894,17 +5207,17 @@ public:
                     {original.id, requested_transform}}, original.id};
             return {TranslateBoundary{source.revision(), {original.id, offset}}, original.id};
         }
-        if (std::abs(radians) > 0.0)
-            transformed = rotate_boundary(transformed, pivot, radians);
-        if (flip_horizontal)
-            transformed = flip_boundary(transformed, pivot, BoundaryFlipAxis::vertical);
-        if (flip_vertical)
-            transformed = flip_boundary(transformed, pivot, BoundaryFlipAxis::horizontal);
+        if (std::abs(requested_transform.rotation_radians) > 0.0)
+            transformed = rotate_boundary(transformed, requested_transform.pivot, requested_transform.rotation_radians);
+        if (requested_transform.flip_horizontal)
+            transformed = flip_boundary(transformed, requested_transform.pivot, BoundaryFlipAxis::vertical);
+        if (requested_transform.flip_vertical)
+            transformed = flip_boundary(transformed, requested_transform.pivot, BoundaryFlipAxis::horizontal);
         for (auto& edge : transformed.segments) {
-            edge.segment.start.x += offset.x;
-            edge.segment.start.y += offset.y;
-            edge.segment.end.x += offset.x;
-            edge.segment.end.y += offset.y;
+            edge.segment.start.x += requested_transform.offset.x;
+            edge.segment.start.y += requested_transform.offset.y;
+            edge.segment.end.x += requested_transform.offset.x;
+            edge.segment.end.y += requested_transform.offset.y;
         }
         const auto append_dimensions = [&](std::vector<EntityChange>& changes,
             const std::map<std::string, std::string, std::less<>>& identities) {
@@ -4917,7 +5230,7 @@ public:
                 if (clone) {
                     dimension.id = identities.at(id);
                     dimension.boundary_id = identities.at(original.id);
-                    dimension.segment_id = identities.at(dimension.segment_id);
+                    if (!dimension.segment_id.empty()) dimension.segment_id = identities.at(dimension.segment_id);
                     if (!dimension.secondary_segment_id.empty())
                         dimension.secondary_segment_id = identities.at(
                             dimension.secondary_segment_id);
@@ -4963,7 +5276,8 @@ public:
                 ids.segment_ids.push_back(new_id("segment"));
                 ids.vertex_ids.push_back(new_id("vertex"));
             }
-            const auto clone_id = new_id("boundary");
+            const auto clone_id = clone_graph_ids && clone_graph_ids->contains(original.id)
+                ? clone_graph_ids->at(original.id) : new_id("boundary");
             auto cloned = clone_boundary(transformed, clone_id, ids, {});
             // Validate identity retirement as well as geometry changes before
             // remapping. Unknown receipts must not be silently discarded or
@@ -4971,7 +5285,9 @@ public:
             auto identity_check = cloned;
             identity_check.id = original.id;
             (void)encode_identified_boundary_entity(identity_check, &original);
-            std::map<std::string, std::string, std::less<>> identities{{original.id, clone_id}};
+            auto identities = clone_graph_ids ? *clone_graph_ids
+                : std::map<std::string,std::string,std::less<>>{};
+            identities[original.id] = clone_id;
             for (std::size_t index = 0; index < transformed.segments.size(); ++index) {
                 identities.emplace(transformed.segments[index].segment_id, ids.segment_ids[index]);
                 identities.emplace(transformed.segments[index].start_vertex_id, ids.vertex_ids[index]);
@@ -5163,8 +5479,8 @@ public:
                             "Boundary geometry derivation operation kind is unsupported");
                     }
                 }
-                if (radians != 0.0 || flip_horizontal || flip_vertical ||
-                    offset.x != 0.0 || offset.y != 0.0) {
+                if (requested_transform.rotation_radians != 0.0 || requested_transform.flip_horizontal || requested_transform.flip_vertical ||
+                    requested_transform.offset.x != 0.0 || requested_transform.offset.y != 0.0) {
                     operations.push_back({{"kind", "transform"},
                         {"value", encode_boundary_transform(
                             BoundaryTransformation{clone_id, requested_transform})}});
@@ -5182,6 +5498,7 @@ public:
                 encoded.extensions["boundary_geometry_derivation"] = std::move(*derivation);
             std::vector<EntityChange> changes{EntityChange::upsert(std::move(encoded))};
             append_dimensions(changes, identities);
+            if (clone_graph_ids) *clone_graph_ids = identities;
             return {ApplyEntityChanges{
                 .expected_revision = revision,
                 .entity_changes = std::move(changes),
@@ -14200,6 +14517,87 @@ public:
         return true;
     }
 
+    struct SelectionTranslationParts {
+        QStringList model_ids;
+        std::vector<EntityChange> presentation_changes;
+        Vec2 model_delta;
+    };
+
+    SelectionTranslationParts prepareSelectionTranslation(const DocumentSnapshot& source,
+        const QStringList& ids, Vec2 delta, PlanCanvas* canvas) {
+        auto model_ids = ids;
+        std::vector<EntityChange> presentation_changes;
+        const auto annotation_owners = annotation_selection_owners(source, ids);
+
+        for (const auto& [owner_id, annotation_owner] : source.entities()) {
+            if (annotation_owner.type != kAnnotationEntityType) continue;
+            auto state = decode_annotation_entity(annotation_owner);
+            auto candidate = annotation_owner;
+            std::size_t moved = 0;
+            for (auto& label : state.labels) {
+                if (!annotation_owners.contains(label.id) || annotation_owners.at(label.id) != owner_id) continue;
+                auto label_delta=delta;
+                if(label.model_plan && canvas==m_architecturalCanvas) {
+                    const auto frame=canvasTransformPlanFrame(source);
+                    if(frame) {
+                        const auto right=plan_view_right(*frame),up=plan_view_up(*frame);
+                        label_delta={right.x*delta.x+up.x*delta.y,
+                                     right.y*delta.x+up.y*delta.y};
+                    }
+                }
+                label.placement.position.x += label_delta.x;
+                label.placement.position.y += label_delta.y;
+                if (source.entities().contains(label.id))
+                    throw std::invalid_argument("Selection identity is ambiguous between an annotation and a model object.");
+                model_ids.removeAll(id_from(label.id));
+                auto& placement = annotation_child_record(candidate, label.id).at("placement");
+                placement["x"] = label.placement.position.x;
+                placement["y"] = label.placement.position.y;
+                ++moved;
+            }
+            for (auto& symbol : state.symbols) {
+                if (!annotation_owners.contains(symbol.id) || annotation_owners.at(symbol.id) != owner_id) continue;
+                symbol.placement.position.x += delta.x;
+                symbol.placement.position.y += delta.y;
+                if (source.entities().contains(symbol.id))
+                    throw std::invalid_argument("Selection identity is ambiguous between an annotation and a model object.");
+                model_ids.removeAll(id_from(symbol.id));
+                auto& placement = annotation_child_record(candidate, symbol.id).at("placement");
+                placement["x"] = symbol.placement.position.x;
+                placement["y"] = symbol.placement.position.y;
+                ++moved;
+            }
+            if (moved != 0) {
+                validate_annotation_entity(candidate);
+                presentation_changes.push_back(EntityChange::upsert(std::move(candidate)));
+            }
+        }
+
+        // Reference images and presentation instances share the same final
+        // command with model owners; no part of a mixed selection commits
+        // until the complete candidate passes document admission.
+        for (const auto& id : model_ids) {
+            const auto found = source.entities().find(id.toStdString());
+            if (found == source.entities().end() || found->second.type != "reference_asset") continue;
+            auto candidate = found->second;
+            const auto position = read_point(candidate.properties.value("position_m",json::array()));
+            if (!position) throw std::invalid_argument("The selected reference has no valid position.");
+            candidate.properties["position_m"] = json::array({position->x+delta.x,position->y+delta.y});
+            presentation_changes.push_back(EntityChange::upsert(std::move(candidate)));
+        }
+        model_ids.erase(std::remove_if(model_ids.begin(),model_ids.end(),[&](const auto& id) {
+            const auto found = source.entities().find(id.toStdString());
+            return found != source.entities().end() && found->second.type == "reference_asset";
+        }),model_ids.end());
+        auto model_delta=delta;
+        if (const auto frame=canvasTransformPlanFrame(source)) {
+            const auto right=plan_view_right(*frame),up=plan_view_up(*frame);
+            model_delta={delta.x*right.x+delta.y*up.x,delta.x*right.y+delta.y*up.y};
+        }
+        return {std::move(model_ids),std::move(presentation_changes),model_delta};
+    }
+
+
     bool moveSelectionBy(const QStringList& requested_ids, Vec2 delta, PlanCanvas* canvas = nullptr) {
         if (!m_document->is_editable()) {
             setError(QStringLiteral("This document is read-only."));
@@ -14219,70 +14617,9 @@ public:
                 if (!id.isEmpty() && !ids.contains(id)) ids.push_back(id);
             if (ids.isEmpty()) throw std::invalid_argument("Select an object to move.");
             const auto source = authoringSnapshot();
-            auto model_ids = ids;
-            std::vector<EntityChange> presentation_changes;
-            const auto annotation_owners = annotation_selection_owners(source, ids);
-
-            for (const auto& [owner_id, annotation_owner] : source.entities()) {
-                if (annotation_owner.type != kAnnotationEntityType) continue;
-                auto state = decode_annotation_entity(annotation_owner);
-                auto candidate = annotation_owner;
-                std::size_t moved = 0;
-                for (auto& label : state.labels) {
-                    if (!annotation_owners.contains(label.id) || annotation_owners.at(label.id) != owner_id) continue;
-                    auto label_delta=delta;
-                    if(label.model_plan && canvas==m_architecturalCanvas) {
-                        const auto frame=canvasTransformPlanFrame(source);
-                        if(frame) {
-                            const auto right=plan_view_right(*frame),up=plan_view_up(*frame);
-                            label_delta={right.x*delta.x+up.x*delta.y,
-                                         right.y*delta.x+up.y*delta.y};
-                        }
-                    }
-                    label.placement.position.x += label_delta.x;
-                    label.placement.position.y += label_delta.y;
-                    if (source.entities().contains(label.id))
-                        throw std::invalid_argument("Selection identity is ambiguous between an annotation and a model object.");
-                    model_ids.removeAll(id_from(label.id));
-                    auto& placement = annotation_child_record(candidate, label.id).at("placement");
-                    placement["x"] = label.placement.position.x;
-                    placement["y"] = label.placement.position.y;
-                    ++moved;
-                }
-                for (auto& symbol : state.symbols) {
-                    if (!annotation_owners.contains(symbol.id) || annotation_owners.at(symbol.id) != owner_id) continue;
-                    symbol.placement.position.x += delta.x;
-                    symbol.placement.position.y += delta.y;
-                    if (source.entities().contains(symbol.id))
-                        throw std::invalid_argument("Selection identity is ambiguous between an annotation and a model object.");
-                    model_ids.removeAll(id_from(symbol.id));
-                    auto& placement = annotation_child_record(candidate, symbol.id).at("placement");
-                    placement["x"] = symbol.placement.position.x;
-                    placement["y"] = symbol.placement.position.y;
-                    ++moved;
-                }
-                if (moved != 0) {
-                    validate_annotation_entity(candidate);
-                    presentation_changes.push_back(EntityChange::upsert(std::move(candidate)));
-                }
-            }
-
-            // Reference images and presentation instances share the same final
-            // command with model owners; no part of a mixed selection commits
-            // until the complete candidate passes document admission.
-            for (const auto& id : model_ids) {
-                const auto found = source.entities().find(id.toStdString());
-                if (found == source.entities().end() || found->second.type != "reference_asset") continue;
-                auto candidate = found->second;
-                const auto position = read_point(candidate.properties.value("position_m",json::array()));
-                if (!position) throw std::invalid_argument("The selected reference has no valid position.");
-                candidate.properties["position_m"] = json::array({position->x+delta.x,position->y+delta.y});
-                presentation_changes.push_back(EntityChange::upsert(std::move(candidate)));
-            }
-            model_ids.erase(std::remove_if(model_ids.begin(),model_ids.end(),[&](const auto& id) {
-                const auto found = source.entities().find(id.toStdString());
-                return found != source.entities().end() && found->second.type == "reference_asset";
-            }),model_ids.end());
+            auto parts=prepareSelectionTranslation(source,ids,delta,canvas);
+            auto model_ids=std::move(parts.model_ids);
+            auto presentation_changes=std::move(parts.presentation_changes);
             if (model_ids.isEmpty()) {
                 const Command command = ApplyEntityChanges{source.revision(),std::move(presentation_changes),{},
                     ids.size()==1 ? "Move presentation object" : "Move presentation objects"};
@@ -14293,27 +14630,17 @@ public:
                 return true;
             }
 
-            // Architectural named plans project model geometry, while placed
-            // annotations and reference overlays above retain canvas coordinates.
-            // Convert a vector directly so a distant view origin cannot reduce
-            // translation precision through subtracting two large positions.
-            auto model_delta = delta;
-            if (const auto frame = canvasTransformPlanFrame(source)) {
-                const auto right = plan_view_right(*frame);
-                const auto up = plan_view_up(*frame);
-                model_delta = {delta.x*right.x+delta.y*up.x,
-                               delta.x*right.y+delta.y*up.y};
-            }
+            const auto model_delta=parts.model_delta;
+            if (canvas && (!m_wall_move_source || m_wall_move_document!=m_document ||
+                m_wall_move_canvas!=canvas || m_wall_move_source->revision()!=source.revision() ||
+                m_wall_move_source->entities()!=source.entities()))
+                throw std::invalid_argument("The project changed during this drag. Try the move again.");
             const bool only_walls = presentation_changes.empty() &&
                 std::all_of(model_ids.begin(), model_ids.end(), [&](const auto& id) {
                     const auto found = source.entities().find(id.toStdString());
                     return found != source.entities().end() && found->second.type == "wall";
                 });
             if (only_walls) {
-                if (canvas && (!m_wall_move_source || m_wall_move_document!=m_document ||
-                    m_wall_move_canvas!=canvas || m_wall_move_source->revision()!=source.revision() ||
-                    m_wall_move_source->entities()!=source.entities()))
-                    throw std::invalid_argument("The project changed during this wall drag. Try the move again.");
                 ConstraintAuthoringIntent intent;
                 intent.wall_geometry_move = wallTranslationIntent(source, model_ids, model_delta);
                 intent.message = model_ids.size() == 1 ? "Move wall and connected corners" : "Move walls and connected corners";
@@ -14324,59 +14651,8 @@ public:
                 refresh();
                 return true;
             }
-            std::vector<BoundaryTranslation> translations;
-            std::vector<std::string> roots;
-            std::vector<ArchitecturalOperation> operations;
-            roots.reserve(model_ids.size());
-            operations.reserve(model_ids.size());
-            for (const auto& id : model_ids) {
-                const auto found = source.entities().find(id.toStdString());
-                if (found == source.entities().end())
-                    throw std::invalid_argument("A selected object no longer exists.");
-                if (is_closed_boundary_entity(found->second.type)) {
-                    if (found->second.properties.contains("boundary_authoring") ||
-                        found->second.extensions.contains("boundary_geometry_derivation")) {
-                        // Measured translations retain the full model vector;
-                        // no quantity-string round trip alters a pointer delta.
-                        translations.push_back({found->first,model_delta});
-                        continue;
-                    }
-                    const auto [command, root] = makeBoundaryTransformCommand(
-                        source, found->second, {}, false, false, {}, {}, false, model_delta);
-                    (void)root;
-                    if (const auto* ordinary = std::get_if<ApplyEntityChanges>(&command)) {
-                        presentation_changes.insert(presentation_changes.end(),
-                            ordinary->entity_changes.begin(), ordinary->entity_changes.end());
-                    } else {
-                        throw std::invalid_argument("The selected boundary cannot be translated in a group.");
-                    }
-                    continue;
-                }
-                if (!can_transform_architectural_entity_type(found->second.type))
-                    throw std::invalid_argument("This selected object does not support movement.");
-                roots.push_back(found->first);
-                ArchitecturalOperation operation{ArchitecturalAction::transform, found->first};
-                operation.transform = ArchitecturalTransform{model_delta.x, model_delta.y, 0.0, 0.0, 1.0};
-                operations.push_back(std::move(operation));
-            }
-            if (!operations.empty()) {
-                const auto transaction = ArchitecturalTransaction::create(
-                    new_id("architectural-tx"), std::to_string(source.revision()),
-                    std::move(roots), std::move(operations),
-                    ids.size() == 1 ? "Move architectural object" : "Move architectural objects");
-                auto command = architectural_transaction_command(
-                    source, transaction, source.revision());
-                presentation_changes.insert(presentation_changes.end(),
-                    std::make_move_iterator(command.entity_changes.begin()),
-                    std::make_move_iterator(command.entity_changes.end()));
-            }
-
-            const Command command = translations.empty()
-                ? Command{ApplyEntityChanges{source.revision(), std::move(presentation_changes), {},
-                    ids.size() == 1 ? "Move selected object" : "Move selected objects"}}
-                : Command{TranslateBoundaries{source.revision(), std::move(translations),
-                    std::move(presentation_changes), "Move selected objects"}};
-            (void)Document::preview_command(source, command);
+            const auto command = makeSelectionGeometryTranslationCommand(source,model_ids,model_delta,
+                std::move(presentation_changes));
             applyDocumentCommand(command);
             clearError();
             refresh();
@@ -14488,6 +14764,27 @@ public:
         const std::optional<ArchitecturalViewContext>& view_context, const QFont& label_font) {
         try {
             const auto& candidate = candidate_snapshot.entities();
+            std::map<std::string,Vec2,std::less<>> annotation_deltas;
+            for (const auto& [id,entity] : candidate) {
+                if (entity.type != kAnnotationEntityType || !source.entities().contains(id) || entity == source.entities().at(id)) continue;
+                const auto before=decode_annotation_entity(source.entities().at(id));
+                const auto after=decode_annotation_entity(entity);
+                const auto record_delta=[&](const auto& original,const auto& proposed,bool model_plan) {
+                    auto start=original.placement.position,end=proposed.placement.position;
+                    if (model_plan && view_context) {
+                        start=project_plan_point(start,view_context->frame);
+                        end=project_plan_point(end,view_context->frame);
+                    }
+                    if (start.x != end.x || start.y != end.y)
+                        annotation_deltas.emplace(proposed.id,Vec2{end.x-start.x,end.y-start.y});
+                };
+                for (const auto& label : after.labels)
+                    if (const auto old=std::find_if(before.labels.begin(),before.labels.end(),[&](const auto& value){return value.id==label.id;});old!=before.labels.end())
+                        record_delta(*old,label,label.model_plan);
+                for (const auto& symbol : after.symbols)
+                    if (const auto old=std::find_if(before.symbols.begin(),before.symbols.end(),[&](const auto& value){return value.id==symbol.id;});old!=before.symbols.end())
+                        record_delta(*old,symbol,false);
+            }
             const auto area_projection = appraisal_plan_area_projection(candidate_snapshot, metric_units);
             const auto& area_values = area_projection.values;
             const auto wall_regions=wall_dimension_exterior_regions(candidate_snapshot);
@@ -14551,7 +14848,24 @@ public:
             for (const auto& [item_id, item] : projection_sources) {
                 (void)item_id;
                 const auto found=candidate.find(item.id.toStdString());
-                if (found==candidate.end()) continue;
+                if (found==candidate.end()) {
+                    const auto moved=annotation_deltas.find(item.id.toStdString());
+                    if (moved==annotation_deltas.end()) continue;
+                    auto proposed=item;
+                    const auto shift=[&](Vec2& point){point.x+=moved->second.x;point.y+=moved->second.y;};
+                    const auto shift_path=[&](Boundary& path){for(auto& edge:path){shift(edge.start);shift(edge.end);}};
+                    shift_path(proposed.segments);
+                    shift_path(proposed.snap_segments);
+                    shift_path(proposed.hit_segments);
+                    if(proposed.stroke_segments) shift_path(*proposed.stroke_segments);
+                    for(auto& hole:proposed.holes) shift_path(hole);
+                    for(auto& point:proposed.snap_points) shift(point);
+                    for(auto& handle:proposed.vertex_handles) shift(handle.position);
+                    if(proposed.resize_frame) shift(proposed.resize_frame->center);
+                    if(proposed.svg_symbol) shift(proposed.svg_symbol->position);
+                    result.entities.push_back(std::move(proposed));
+                    continue;
+                }
                 const auto& entity=found->second;
                 auto proposed=item;
                 bool world_paths = true;
@@ -14590,6 +14904,9 @@ public:
                             if (handle.id.toStdString()==edge.start_vertex_id) handle.position=edge.segment.start;
                 } else if (const auto wall=changed_walls.find(entity.id);wall!=changed_walls.end()) {
                     proposed.snap_points={wall->second.baseline.start,wall->second.baseline.end};
+                    proposed.snap_segments={wall->second.baseline};
+                    if (view_context) proposed.snap_segments=project_plan_path(
+                        std::move(proposed.snap_segments),view_context->frame);
                     if (view_context) for (auto& point : proposed.snap_points)
                         point=project_plan_point(point,view_context->frame);
                     if (shape_projection) {
@@ -14705,7 +15022,19 @@ public:
                 [](const auto& first,const auto& second){return first.id<second.id;});
             for (const auto& label : candidate_labels) {
                 const auto found=candidate.find(label.id.toStdString());
-                if (found==candidate.end()) continue;
+                if (found==candidate.end()) {
+                    if (const auto moved=annotation_deltas.find(label.id.toStdString());moved!=annotation_deltas.end()) {
+                        auto proposed=label;
+                        proposed.position.x+=moved->second.x;
+                        proposed.position.y+=moved->second.y;
+                        if(proposed.leader_start) {
+                            proposed.leader_start->x+=moved->second.x;
+                            proposed.leader_start->y+=moved->second.y;
+                        }
+                        result.labels.push_back(std::move(proposed));
+                    }
+                    continue;
+                }
                 const auto& entity=found->second;
                 if (const auto changed = changed_walls.find(entity.id); changed != changed_walls.end()) {
                     const auto& wall = changed->second;
@@ -14801,11 +15130,15 @@ public:
         const auto view_context=request.view_context;
         const auto wall_move=request.wall_geometry_move;
         const auto label_font=request.label_font;
+        const auto entities_move_candidate=request.entities_move_candidate;
         m_vertex_preview_sequence=m_vertex_preview_queue.enqueue(
-            [source,retained,eligible,labels,appraisal_area_ids,metric_units,label_footprints,component_bounds,result,id,vertex,position,view_context,wall_move,label_font]
+            [source,retained,eligible,labels,appraisal_area_ids,metric_units,label_footprints,component_bounds,result,id,vertex,position,view_context,wall_move,label_font,entities_move_candidate]
             (const RegenerationCancellationToken& cancellation) {
                 if (!cancellation.is_cancelled()) {
-                    if (wall_move) {
+                    if (entities_move_candidate) {
+                        *result=computeConstraintGeometryProjection(*source,*entities_move_candidate,*retained,
+                            *eligible,*labels,metric_units,*appraisal_area_ids,*label_footprints,*component_bounds,view_context,label_font);
+                    } else if (wall_move) {
                         ConstraintAuthoringIntent intent;
                         intent.wall_geometry_move=*wall_move;
                         const auto preview=preview_constraint_authoring(*source,intent);
@@ -14953,17 +15286,19 @@ public:
             m_wall_move_source->revision()!=m_document->revision()) return std::vector<CanvasEntity>{};
         if (!m_vertex_preview_source || m_vertex_preview_document!=m_document ||
             m_vertex_preview_canvas!=canvas || m_vertex_preview_source->revision()!=m_document->revision()) {
-            const auto source=authoringSnapshot();
-            if (!std::all_of(ids.begin(),ids.end(),[&](const auto& id) {
-                const auto found=source.entities().find(id.toStdString());
-                return found!=source.entities().end() && found->second.type=="wall";
-            })) return std::nullopt;
-            captureConstraintGeometryPreview(canvas,source.revision());
+            captureConstraintGeometryPreview(canvas,m_wall_move_source->revision());
         }
-        if (!std::all_of(ids.begin(),ids.end(),[&](const auto& id) {
+        if (!m_vertex_preview_source || m_vertex_preview_source->entities()!=m_wall_move_source->entities())
+            return std::vector<CanvasEntity>{};
+        const bool only_walls=std::all_of(ids.begin(),ids.end(),[&](const auto& id) {
             const auto found=m_vertex_preview_source->entities().find(id.toStdString());
             return found!=m_vertex_preview_source->entities().end() && found->second.type=="wall";
+        });
+        if (!only_walls && !std::any_of(ids.begin(),ids.end(),[&](const auto& id) {
+            const auto found=m_vertex_preview_source->entities().find(id.toStdString());
+            return found!=m_vertex_preview_source->entities().end() && is_closed_boundary_entity(found->second.type);
         })) return std::nullopt;
+        const auto canvas_delta=delta;
         if (m_vertex_preview_view_context) {
             const auto right=plan_view_right(m_vertex_preview_view_context->frame);
             const auto up=plan_view_up(m_vertex_preview_view_context->frame);
@@ -14974,7 +15309,20 @@ public:
             m_vertex_preview_eligible,m_vertex_preview_labels,m_vertex_preview_appraisal_area_ids,
             m_vertex_preview_label_footprints,m_vertex_preview_component_bounds,m_metric_units,{}, {}, {},
             m_vertex_preview_view_context,std::make_shared<std::optional<VertexPreviewProjection>>(),
-            wallTranslationIntent(*m_vertex_preview_source,ids,delta)};
+            std::nullopt};
+        try {
+            if (only_walls) request.wall_geometry_move=wallTranslationIntent(*m_vertex_preview_source,ids,delta);
+            else {
+                auto parts=prepareSelectionTranslation(*m_vertex_preview_source,ids,canvas_delta,canvas);
+                const auto command=makeSelectionGeometryTranslationCommand(*m_vertex_preview_source,
+                    std::move(parts.model_ids),parts.model_delta,std::move(parts.presentation_changes));
+                request.entities_move_candidate=std::make_shared<DocumentSnapshot>(
+                    Document::preview_command(*m_vertex_preview_source,command));
+            }
+        } catch (const std::exception&) {
+            (void)canvas->completeEntitiesMovePreview(serial,std::nullopt);
+            return std::nullopt;
+        }
         request.label_font=canvas->font();
         if (m_running_vertex_preview) {
             (void)m_vertex_preview_queue.cancel(m_vertex_preview_sequence);
@@ -15012,17 +15360,17 @@ public:
             auto request=std::move(*m_running_vertex_preview);
             m_running_vertex_preview.reset();
             if (request.canvas && request.document==m_document && request.source->revision()!=m_document->revision() &&
-                request.wall_geometry_move)
+                (request.wall_geometry_move || request.entities_move_candidate))
                 (void)request.canvas->completeEntitiesMovePreview(request.serial,std::nullopt);
             else if (request.canvas && request.document==m_document && request.source->revision()==m_document->revision()) {
                 if (completion.succeeded() && *request.result) {
                     auto& projection=**request.result;
-                    if (request.wall_geometry_move)
+                    if (request.wall_geometry_move || request.entities_move_candidate)
                         (void)request.canvas->completeEntitiesMovePreview(request.serial,
                             std::move(projection.entities),std::move(projection.labels));
                     else (void)request.canvas->completeBoundaryVertexPreview(request.serial,
                         std::move(projection.entities),std::move(projection.labels),projection.metrics);
-                } else if (request.wall_geometry_move)
+                } else if (request.wall_geometry_move || request.entities_move_candidate)
                     (void)request.canvas->completeEntitiesMovePreview(request.serial,std::nullopt);
                 else (void)request.canvas->completeBoundaryVertexPreview(request.serial,std::nullopt);
             }
@@ -15031,10 +15379,10 @@ public:
             auto request=std::move(*m_pending_vertex_preview);
             m_pending_vertex_preview.reset();
             if (request.canvas && request.document==m_document && request.source->revision()==m_document->revision() &&
-                (request.wall_geometry_move ? request.canvas->entitiesMovePreviewSerial()
+                ((request.wall_geometry_move || request.entities_move_candidate) ? request.canvas->entitiesMovePreviewSerial()
                     : request.canvas->boundaryVertexPreviewSerial())==request.serial)
                 startVertexPreviewJob(std::move(request));
-            else if (request.canvas && request.document==m_document && request.wall_geometry_move)
+            else if (request.canvas && request.document==m_document && (request.wall_geometry_move || request.entities_move_candidate))
                 (void)request.canvas->completeEntitiesMovePreview(request.serial,std::nullopt);
         }
         if (!m_running_vertex_preview && !m_pending_vertex_preview) m_vertex_preview_timer->stop();
@@ -15467,6 +15815,82 @@ public:
         }
     }
 
+    std::vector<Entity> independentAreaCopyGraph(const DocumentSnapshot& snapshot,
+                                                std::vector<Entity> graph) const {
+        if (std::none_of(graph.begin(),graph.end(),[](const auto& entity) { return is_closed_boundary_entity(entity.type); }))
+            return graph;
+        std::set<std::string, std::less<>> ids;
+        for (const auto& entity : graph) ids.insert(entity.id);
+        const auto add = [&](const Entity& entity) {
+            if (ids.insert(entity.id).second) graph.push_back(entity);
+            if (graph.size() > kMaximumClipboardEntities)
+                throw std::invalid_argument("The independent area copy exceeds the clipboard entity limit.");
+        };
+        const auto add_geometry = [&](const std::string& id) {
+            if (!snapshot.entities().contains(id))
+                throw std::invalid_argument("A required area copy dependency is unavailable: " + id);
+            const auto dependency = clipboard_entities_for_selection(snapshot,id);
+            if (dependency.empty()) throw std::invalid_argument("A required area copy dependency is unsupported: " + id);
+            for (const auto& entity : dependency) add(entity);
+        };
+        for (std::size_t cursor = 0; cursor < graph.size(); ++cursor) {
+            const auto entity = graph[cursor];
+            if (!is_closed_boundary_entity(entity.type)) continue;
+            for (const auto& id : read_deduction_ids(entity.properties)) {
+                const auto found = snapshot.entities().find(id);
+                if (found == snapshot.entities().end() || !is_closed_boundary_entity(found->second.type))
+                    throw std::invalid_argument("A copied deduction is missing or is not a closed area: " + id);
+                if (!read_deduction_ids(found->second.properties).empty())
+                    throw std::invalid_argument("A copied deduction cannot contain another deduction.");
+                add_geometry(id);
+            }
+            if (!entity.properties.contains("wall_measurement_source")) continue;
+            if (!wall_measurement_source_current(snapshot,entity))
+                throw std::invalid_argument("An exterior measurement is stale. Repair or refresh its sources before copying it.");
+            for (const auto& wall : entity.properties.at("wall_measurement_source").at("walls"))
+                add_geometry(wall.at("id").get<std::string>());
+        }
+        for (const auto& [id, entity] : snapshot.entities()) {
+            if (entity.type != "constraint") continue;
+            const auto decoded = decode_constraint_entity(entity);
+            if (!decoded.supported()) {
+                if (entity.properties.contains("bindings") && entity.properties.at("bindings").is_array())
+                    for (const auto& binding : entity.properties.at("bindings"))
+                        if (ids.contains(binding.value("owner_id",std::string{})))
+                            throw std::invalid_argument(decoded.unsupported_reason);
+                continue;
+            }
+            const auto& bindings = decoded.constraint->bindings;
+            if (!std::any_of(bindings.begin(),bindings.end(),[&](const auto& binding) { return ids.contains(binding.owner_id); })) continue;
+            if (!std::all_of(bindings.begin(),bindings.end(),[&](const auto& binding) { return ids.contains(binding.owner_id); }))
+                throw std::invalid_argument("A copied area has a locked relationship to geometry outside its required dependencies. Review that relationship before copying.");
+            add(entity);
+        }
+        for (const auto& [id, entity] : snapshot.entities()) {
+            if (entity.type != kAnnotationEntityType) continue;
+            const auto& records = entity.properties.at("state").at("overrides");
+            auto owned = json::array();
+            for (const auto& record : records)
+                if (ids.contains(record.at("target_id").get<std::string>())) owned.push_back(record);
+            if (owned.empty()) continue;
+            const auto existing = std::find_if(graph.begin(),graph.end(),[&](const auto& item) { return item.id == id; });
+            if (existing != graph.end()) {
+                auto& overrides = existing->properties.at("state").at("overrides");
+                for (const auto& record : owned)
+                    if (std::find(overrides.begin(),overrides.end(),record) == overrides.end()) overrides.push_back(record);
+            } else {
+                auto subset = entity;
+                subset.required = false;
+                subset.properties["state"]["labels"] = json::array();
+                subset.properties["state"]["symbols"] = json::array();
+                subset.properties["state"]["overrides"] = std::move(owned);
+                validate_annotation_entity(subset);
+                add(subset);
+            }
+        }
+        return graph;
+    }
+
     std::vector<Entity> clipboardSelectionGraph(const DocumentSnapshot& snapshot,
                                                 bool allow_dimension_removal = false) const {
         std::vector<Entity> result;
@@ -15521,7 +15945,7 @@ public:
     }
 
     std::string clipboardSelectionPayload(const DocumentSnapshot& snapshot) const {
-        auto entities = clipboardSelectionGraph(snapshot);
+        auto entities = independentAreaCopyGraph(snapshot,clipboardSelectionGraph(snapshot));
         if (entities.empty()) {
             throw std::invalid_argument(
                 "Select supported geometry, an area, an architectural object, or annotations.");
@@ -16697,6 +17121,11 @@ public:
                 throw std::invalid_argument(
                     "Select supported geometry, an area, or an architectural object to cut.");
             }
+            const auto independent = independentAreaCopyGraph(source,entities);
+            for (const auto& dependency : independent)
+                if ((is_closed_boundary_entity(dependency.type) || dependency.type == "wall") &&
+                    std::none_of(entities.begin(),entities.end(),[&](const auto& entity) { return entity.id == dependency.id; }))
+                    throw std::invalid_argument("Select the area's deductions and supporting walls to cut them together, or use Copy to preserve the originals.");
             const ApplyEntityChanges command{
                 source.revision(), selectionRemovalChanges(source, entities), {}, "Cut selection"};
             const auto authored = augmentAuthoredCommand(Command{command});
@@ -16906,8 +17335,8 @@ public:
                 }
                 changes.push_back(EntityChange::upsert(std::move(entity)));
             }
-            const ApplyEntityChanges command{
-                source.revision(), std::move(changes), {}, "Paste selection"};
+            const auto command = validateIndependentAreaCopy(source,ApplyEntityChanges{
+                source.revision(), std::move(changes), {}, "Paste selection"});
             (void)Document::preview_command(source, command);
             applyDocumentCommand(command);
             m_selected_ids = pasted_roots;
@@ -26083,10 +26512,20 @@ private:
                 if (!m_wall_move_source || m_wall_move_document!=m_document || m_wall_move_canvas!=canvas ||
                     m_wall_move_source->revision()!=m_document->revision())
                     throw std::invalid_argument("The project changed during this wall drag. Try the move again.");
+                const auto canvas_delta=delta;
                 if (m_vertex_preview_view_context) {
                     const auto right=plan_view_right(m_vertex_preview_view_context->frame);
                     const auto up=plan_view_up(m_vertex_preview_view_context->frame);
                     delta={delta.x*right.x+delta.y*up.x,delta.x*right.y+delta.y*up.y};
+                }
+                if (std::any_of(ids.begin(),ids.end(),[&](const auto& id) {
+                    const auto found=m_wall_move_source->entities().find(id.toStdString());
+                    return found!=m_wall_move_source->entities().end() && is_closed_boundary_entity(found->second.type);
+                })) {
+                    auto parts=prepareSelectionTranslation(*m_wall_move_source,ids,canvas_delta,canvas);
+                    (void)makeSelectionGeometryTranslationCommand(*m_wall_move_source,
+                        std::move(parts.model_ids),parts.model_delta,std::move(parts.presentation_changes));
+                    throw std::invalid_argument("The area move could not be previewed. The project was not changed.");
                 }
                 ConstraintAuthoringIntent intent;
                 intent.wall_geometry_move=wallTranslationIntent(*m_wall_move_source,ids,delta);

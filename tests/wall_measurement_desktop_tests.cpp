@@ -1,9 +1,11 @@
 #include "sketch/annotation_entity_codec.hpp"
+#include "sketch/appraisal_document.hpp"
 #include "sketch/boundary_dimension.hpp"
 #include "sketch/boundary_entity.hpp"
 #include "sketch/constraint_entity.hpp"
 #include "sketch/desktop/main_window.hpp"
 #include "sketch/document_wall.hpp"
+#include "sketch/document_digest.hpp"
 #include "sketch/geometry.hpp"
 #include "sketch/vertical_levels.hpp"
 #include "sketch/wall_measurement.hpp"
@@ -15,13 +17,17 @@
 #include <QDir>
 #include <QFontDatabase>
 #include <QCheckBox>
+#include <QClipboard>
 #include <QComboBox>
 #include <QDialog>
 #include <QDialogButtonBox>
+#include <QElapsedTimer>
+#include <QEventLoop>
 #include <QDoubleSpinBox>
 #include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
+#include <QMouseEvent>
 #include <QPushButton>
 #include <QPdfDocument>
 #include <QStandardPaths>
@@ -1301,9 +1307,316 @@ void changed_same_count_sources_review_manual_references(bool metric, bool curve
     const auto pasted=window.document().snapshot();
     std::optional<sketch::Entity> pasted_owner;
     for (const auto& [id,value] : pasted.entities())
-        if (!after.entities().contains(id) && value.type=="measurement_boundary") pasted_owner=value;
+        if (!after.entities().contains(id) && value.type=="measurement_boundary" &&
+            value.properties.contains("wall_measurement_source")) pasted_owner=value;
     require(pasted_owner && sketch::wall_measurement_source_current(pasted,*pasted_owner),
         "pasted fresh-topology source proof agrees with its remapped physical walls");
+}
+
+void appraisal_area_clone_retains_its_calculation_dependencies(bool metric, bool sourced, bool commercial) {
+    sketch::desktop::MainWindow window;
+    window.setAttribute(Qt::WA_DontShowOnScreen);
+    window.resize(1200,800);
+    window.show();
+    QApplication::processEvents();
+    window.setMetricUnits(metric);
+    choose_appraisal_workflow(window);
+    const auto declarations=[&](bool deduction) {
+        if (!commercial) return appraisal_declarations(deduction ? "garage" : "dwelling");
+        return QStringLiteral(R"({"appraisal_policy":{"policy_kind":"light_commercial_declared","version":1,"property_kind":"light_commercial","measurement_basis":"exterior"},"grade":"above","appraisal_facts":{"finish":"finished","access":"direct_interior","ceiling_eligibility":"standard","area_use":"%1","boundary_role":"measured_area"}})")
+            .arg(deduction ? "commercial_service" : "commercial_occupiable");
+    };
+    QString unrelated_wall;
+    if (sourced) unrelated_wall=window.createStraightWall({0,-3},{4,-3});
+    QString source_opening;
+    QString area;
+    if (sourced) {
+        const auto walls=rectangle_walls(window);
+        require(window.selectEntity(walls.front()),"select source wall for the hosted-window fixture");
+        source_opening=window.createHostedOpening("window","1 m","0.8 m","0.8 m","1.2 m");
+        require(!source_opening.isEmpty(),"copy fixture includes a genuinely hosted window");
+        select_walls(window,walls);
+        area=window.createMeasurementBoundaryFromSelectedWalls();
+    } else area=window.createBoundary({{{0,0},{4,0},0},{{4,0},{4,3},0},
+        {{4,3},{0,3},0},{{0,3},{0,0},0}},"finished");
+    require(!area.isEmpty() && window.selectEntity(area) && window.editSelectedAppraisalFacts(declarations(false)),
+        "clone fixture begins with a declared appraisal parent");
+    if (commercial) {
+        const auto deduction_layer=window.createLayer("floor-1","Service measurements");
+        require(!deduction_layer.isEmpty() && window.setActiveLayer(deduction_layer),
+            "valid deduction fixture uses a separate layer on the same floor");
+    }
+    const auto garage=window.createBoundary({{{1,1},{2,1},0},{{2,1},{2,2},0},
+        {{2,2},{1,2},0},{{1,2},{1,1},0}},"garage");
+    require(!garage.isEmpty() && window.selectEntity(garage) && window.editSelectedAppraisalFacts(declarations(true)) &&
+        window.applySelectedAutoSubtract(area),"clone fixture has a declared garage or service-area deduction");
+    set_area_name(window,area,"Independent appraisal copy");
+    set_area_appearance(window,area);
+    if (sourced) {
+        bool styled=false;
+        for (auto entity : annotation_entities(window.document().snapshot())) {
+            auto& overrides=entity.properties.at("state").at("overrides");
+            for (const auto& record : overrides)
+                if (record.at("target_id")==area.toStdString()) {
+                    auto opening_style=record;
+                    opening_style["target_kind"]="object";
+                    opening_style["target_id"]=source_opening.toStdString();
+                    overrides.push_back(std::move(opening_style));
+                    sketch::validate_annotation_entity(entity);
+                    window.document().apply(sketch::ApplyEntityChanges{window.document().revision(),
+                        {sketch::EntityChange::upsert(entity)},{},"Styled hosted window fixture"});
+                    styled=true;
+                    break;
+                }
+            if (styled) break;
+        }
+        require(styled,"hosted opening fixture has a genuine persisted appearance override");
+    }
+    const auto before=window.document().snapshot();
+    std::string property_id;
+    for (const auto& [id,value] : before.entities()) if (value.type=="property") property_id=id;
+    const auto original_report=sketch::build_appraisal_document_report(before,property_id);
+    require(original_report.qualified && original_report.calculation,"original parent and garage have qualified totals");
+    const auto original_trace=std::find_if(original_report.calculation->calculation.areas.begin(),
+        original_report.calculation->calculation.areas.end(),[&](const auto& trace){return trace.area_id==area.toStdString();});
+    require(original_trace!=original_report.calculation->calculation.areas.end() &&
+        std::abs(original_trace->net_square_metres-(analytical_area(before.entities().at(area.toStdString()))-1.0))<1e-8,
+        "original net is its analytical exterior minus exactly one square metre");
+    require(window.selectEntity(area),"select parent for a translated independent copy");
+    if (!window.transformSelectedBoundary("0",false,false,"10 m","0 m",true))
+        throw std::runtime_error("Appraisal clone refused: "+window.lastError().toStdString());
+    const auto after=window.document().snapshot();
+    std::optional<sketch::Entity> cloned_owner;
+    for (const auto& [id,value] : after.entities())
+        if (!before.entities().contains(id) && value.type=="measurement_boundary" && value.properties.contains("deduction_ids"))
+            cloned_owner=value;
+    require(cloned_owner && cloned_owner->properties.at("deduction_ids").size()==1,"copied parent retains exactly one deduction");
+    const auto cloned_garage=cloned_owner->properties.at("deduction_ids").front().get<std::string>();
+    require(cloned_garage!=garage.toStdString() && !before.entities().contains(cloned_garage) && after.entities().contains(cloned_garage),
+        "copying a parent must copy its deduction instead of sharing the original garage");
+    for (const auto* key : {"name","appraisal_facts","factor"})
+        require(cloned_owner->properties.at(key)==before.entities().at(area.toStdString()).properties.at(key),
+            "copied parent retains its name, declarations and exact factor");
+    const auto appearance = [&](const sketch::DocumentSnapshot& snapshot,const std::string& target) {
+        for (const auto& entity : annotation_entities(snapshot))
+            for (auto value : entity.properties.at("state").at("overrides"))
+                if (value.at("target_id")==target) { value.erase("target_id"); return value; }
+        return nlohmann::json{};
+    };
+    require(!appearance(before,area.toStdString()).is_null() &&
+        appearance(after,cloned_owner->id)==appearance(before,area.toStdString()),"copied parent retains its owned appearance override");
+    const auto report=sketch::build_appraisal_document_report(after,property_id);
+    require(report.qualified && report.calculation,"copied appraisal dependencies remain current and qualified");
+    const auto parent_category=commercial ? sketch::AppraisalAreaCategory::commercial_occupiable :
+        sketch::AppraisalAreaCategory::above_grade_finished;
+    const auto child_category=commercial ? sketch::AppraisalAreaCategory::commercial_service :
+        sketch::AppraisalAreaCategory::garage;
+    require(std::abs(report.calculation->property.by_category.at(parent_category).total.square_metres-
+        2*original_report.calculation->property.by_category.at(parent_category).total.square_metres)<1e-8 &&
+        std::abs(report.calculation->property.by_category.at(child_category).total.square_metres-2)<1e-8 &&
+        report.calculation->calculation.areas.size()==4,
+        "property category totals count each independently copied net and garage exactly once");
+    const auto trace=std::find_if(report.calculation->calculation.areas.begin(),report.calculation->calculation.areas.end(),
+        [&](const auto& value){return value.area_id==cloned_owner->id;});
+    require(trace!=report.calculation->calculation.areas.end() && std::abs(trace->net_square_metres-original_trace->net_square_metres)<1e-8 &&
+        trace->deductions.size()==1 && trace->deductions.front().id==cloned_garage,
+        "copied net area uses the copied garage once and matches the original unrounded net");
+    require(after.entities().at(area.toStdString())==before.entities().at(area.toStdString()) &&
+        after.entities().at(garage.toStdString())==before.entities().at(garage.toStdString()) &&
+        after.revision()==before.revision()+1,"copy is one edit and does not alter original calculations or geometry");
+    if (sourced) {
+        require(sketch::wall_measurement_source_current(after,*cloned_owner),"copied exterior uses its own current physical walls");
+        for (const auto& wall : cloned_owner->properties.at("wall_measurement_source").at("walls"))
+            require(!before.entities().contains(wall.at("id").get<std::string>()),"copied exterior provenance never retains original wall IDs");
+        std::size_t copied_openings=0;
+        for (const auto& [id,entity] : after.entities())
+            if (!before.entities().contains(id) && entity.type=="opening") {
+                require(appearance(after,id)==appearance(before,source_opening.toStdString()),
+                    "copied hosted window preserves its own independent appearance");
+                ++copied_openings;
+            }
+        require(copied_openings==1,"required hosted window is copied once with its physical host");
+    }
+    require(window.undoCommand() && window.document().snapshot().entities()==before.entities() && window.redoCommand() &&
+        window.document().snapshot().entities()==after.entities(),"copy dependencies undo and redo atomically");
+    QTemporaryDir directory;
+    sketch::desktop::MainWindow reopened;
+    require(directory.isValid() && window.saveProjectAs(directory.filePath("appraisal-copy.bldproj")) &&
+        reopened.openProject(directory.filePath("appraisal-copy.bldproj")) && reopened.document().snapshot().entities()==after.entities() &&
+        sketch::build_appraisal_document_report(reopened.document().snapshot(),property_id).qualified,
+        "copied dependencies and qualified totals survive save and reopen");
+    require(window.selectEntity(QString::fromStdString(cloned_garage)),"select only the copied garage for editing");
+    const auto child=sketch::decode_identified_boundary_entity(after.entities().at(cloned_garage));
+    const auto shrink_corner=[&](std::size_t index,sketch::Vec2 delta) {
+        const auto start=child.segments[index].segment.start;
+        return window.moveSelectedBoundaryVertex(QString::fromStdString(child.segments[index].start_vertex_id),
+            {start.x+delta.x,start.y+delta.y});
+    };
+    require(shrink_corner(1,{-.2,0}) && shrink_corner(2,{-.2,-.2}) && shrink_corner(3,{0,-.2}),
+        "copied garage corners remain independently editable");
+    const auto edited=window.document().snapshot();
+    const auto edited_report=sketch::build_appraisal_document_report(edited,property_id);
+    require(edited_report.qualified && edited_report.calculation &&
+        edited.entities().at(garage.toStdString())==before.entities().at(garage.toStdString()),
+        "editing the copied deduction does not alter the original garage or disable valid totals");
+    const auto edited_trace=std::find_if(edited_report.calculation->calculation.areas.begin(),
+        edited_report.calculation->calculation.areas.end(),[&](const auto& value){return value.area_id==cloned_owner->id;});
+    require(edited_trace!=edited_report.calculation->calculation.areas.end() &&
+        std::abs(edited_trace->net_square_metres-original_trace->net_square_metres-.36)<1e-8 &&
+        std::abs(analytical_area(edited.entities().at(cloned_garage))-.64)<1e-8,
+        "copy net increases by exactly the copied garage's independent reduction");
+    require(std::abs(edited_report.calculation->property.by_category.at(parent_category).total.square_metres-
+        report.calculation->property.by_category.at(parent_category).total.square_metres-.36)<1e-8 &&
+        std::abs(edited_report.calculation->property.by_category.at(child_category).total.square_metres-1.64)<1e-8,
+        "property totals move the copied deduction's exact area between categories without double counting");
+    for (int index=0;index<3;++index) require(window.undoCommand(),"undo each copied garage corner edit");
+    require(window.document().snapshot().entities()==after.entities() && window.undoCommand() &&
+        window.document().snapshot().entities()==before.entities(),"return to the original drawing for clipboard copy");
+    require(window.selectEntity(area),"select parent for a quarter-turn independent copy");
+    if (!window.transformSelectedBoundary("90",false,false,"10 m","10 m",true))
+        throw std::runtime_error("Rotated appraisal clone refused: "+window.lastError().toStdString());
+    const auto rotated=window.document().snapshot();
+    const auto rotated_id=window.selectedEntityId().toStdString();
+    const auto rotated_report=sketch::build_appraisal_document_report(rotated,property_id);
+    require(rotated.entities().contains(rotated_id) && rotated_report.qualified && rotated_report.calculation,
+        "quarter-turn copied parent and dependencies retain qualified totals");
+    const auto rotated_trace=std::find_if(rotated_report.calculation->calculation.areas.begin(),
+        rotated_report.calculation->calculation.areas.end(),[&](const auto& value){return value.area_id==rotated_id;});
+    require(rotated_trace!=rotated_report.calculation->calculation.areas.end() &&
+        std::abs(rotated_trace->net_square_metres-original_trace->net_square_metres)<1e-8,
+        "quarter-turn copy preserves the independent net area");
+    if (sourced) require(sketch::wall_measurement_source_current(rotated,rotated.entities().at(rotated_id)),
+        "quarter-turn copy uses accurately rotated physical source walls");
+    require(window.undoCommand() && window.document().snapshot().entities()==before.entities(),
+        "rotated copy is a single reversible edit");
+    require(window.selectEntity(area) && window.copySelection(),"copy only the original parent through actual clipboard actions");
+    if (sourced) {
+        auto* clipboard=QGuiApplication::clipboard();
+        const auto valid=clipboard->text();
+        auto payload=nlohmann::json::parse(valid.toStdString());
+        bool changed_host=false;
+        for (auto& entity : payload.at("entities"))
+            if (entity.at("type")=="opening") {
+                entity["properties"]["wall_id"]=unrelated_wall.toStdString();
+                changed_host=true;
+            }
+        require(changed_host,"malformed area clipboard fixture contains a real hosted window");
+        const auto unchanged=window.document().snapshot();
+        const auto digest=sketch::document_snapshot_digest(unchanged);
+        clipboard->setText(QString::fromStdString(payload.dump()));
+        require(!window.pasteSelection() && !window.lastError().isEmpty() &&
+            window.document().revision()==unchanged.revision() &&
+            window.document().snapshot().entities()==unchanged.entities() &&
+            window.document().snapshot().history().size()==unchanged.history().size() &&
+            sketch::document_snapshot_digest(window.document().snapshot())==digest,
+            "incomplete area payload cannot attach a copied opening to an original host or partially alter history");
+        clipboard->setText(valid);
+    }
+    require(window.pasteSelection(),"paste the complete original parent graph");
+    const auto pasted=window.document().snapshot();
+    const auto pasted_id=window.selectedEntityId().toStdString();
+    require(pasted.entities().contains(pasted_id) && pasted.entities().at(pasted_id).type=="measurement_boundary",
+        "pasting keeps the copied parent as the user selection");
+    const auto pasted_child=pasted.entities().at(pasted_id).properties.at("deduction_ids").front().get<std::string>();
+    require(!before.entities().contains(pasted_child) && pasted_child!=cloned_garage && pasted.entities().contains(pasted_child),
+        "clipboard copy remaps the required deduction independently");
+    const auto pasted_report=sketch::build_appraisal_document_report(pasted,property_id);
+    const auto pasted_status=std::find_if(pasted_report.boundaries.begin(),pasted_report.boundaries.end(),
+        [&](const auto& value){return value.boundary_id==pasted_id;});
+    require(pasted_status!=pasted_report.boundaries.end() && pasted_status->qualification.qualified && pasted_status->measurement &&
+        std::abs(pasted_status->measurement->net_square_metres-original_trace->net_square_metres)<1e-8,
+        "copied relationships remain valid even when initial overlapping placement withholds property totals");
+    auto* canvas=dynamic_cast<sketch::desktop::PlanCanvas*>(window.findChild<QWidget*>("measurementPlanCanvas"));
+    require(canvas && window.selectEntity(QString::fromStdString(pasted_id)),"select the pasted parent on the actual canvas");
+    window.fitView();
+    canvas->setSnapEnabled(false);
+    canvas->setWallSnapEnabled(false);
+    const auto pasted_boundary=analytical_boundary(pasted.entities().at(pasted_id));
+    const auto bounds=sketch::boundary_bounds(pasted_boundary);
+    const sketch::Vec2 model_start{bounds.minimum.x+3,bounds.minimum.y+1.5};
+    const auto desired_scale=std::min(30.0,(canvas->width()*.5-24)/
+        (std::abs(model_start.x+10-canvas->viewCenter().x)+1));
+    canvas->zoomBy(desired_scale/canvas->viewScale(),QRectF(canvas->rect()).center());
+    const auto pixel=[&](sketch::Vec2 point) {
+        const auto center=QRectF(canvas->rect()).center();
+        const auto view=canvas->viewCenter();
+        return QPointF(center.x()+(point.x-view.x)*canvas->viewScale(),center.y()-(point.y-view.y)*canvas->viewScale());
+    };
+    const auto from=pixel(model_start),to=pixel({model_start.x+10,model_start.y});
+    require(canvas->rect().contains(from.toPoint()) && canvas->rect().contains(to.toPoint()),"copy move uses points visible inside the canvas");
+    QMouseEvent press(QEvent::MouseButtonPress,from,from,Qt::LeftButton,Qt::LeftButton,Qt::NoModifier);
+    QMouseEvent move(QEvent::MouseMove,to,to,Qt::NoButton,Qt::LeftButton,Qt::NoModifier);
+    QMouseEvent release(QEvent::MouseButtonRelease,to,to,Qt::LeftButton,Qt::NoButton,Qt::NoModifier);
+    QApplication::sendEvent(canvas,&press);
+    QApplication::sendEvent(canvas,&move);
+    QElapsedTimer preview_wait;
+    preview_wait.start();
+    while ((canvas->entitiesMovePreviewPending() || canvas->entitiesMovePreview().empty()) && preview_wait.elapsed()<10000)
+        QCoreApplication::processEvents(QEventLoop::AllEvents,50);
+    require(!canvas->entitiesMovePreviewPending() && !canvas->entitiesMovePreview().empty() &&
+        window.document().snapshot().entities()==pasted.entities() && window.document().revision()==pasted.revision(),
+        "selected parent has a complete transient dependency preview before release");
+    const auto preview=canvas->entitiesMovePreview();
+    std::set<std::string> moving_ids{pasted_id,pasted_child};
+    if (sourced) {
+        for (const auto& wall : pasted.entities().at(pasted_id).properties.at("wall_measurement_source").at("walls"))
+            moving_ids.insert(wall.at("id").get<std::string>());
+        for (const auto& [id,entity] : pasted.entities())
+            if (entity.type=="opening" && moving_ids.contains(entity.properties.at("wall_id").get<std::string>())) moving_ids.insert(id);
+    }
+    for (const auto& id : moving_ids) {
+        const auto rendered=std::find_if(canvas->entities().begin(),canvas->entities().end(),
+            [&](const auto& entity){return entity.id.toStdString()==id;});
+        const auto proposed=std::find_if(preview.begin(),preview.end(),
+            [&](const auto& entity){return entity.id.toStdString()==id;});
+        require(rendered!=canvas->entities().end() && proposed!=preview.end(),
+            "parent drag preview contains every required deduction, wall and hosted opening");
+        // Coincident original/pasted walls have joined outlines that change
+        // when the copy separates. Their authoritative baselines still follow
+        // the exact rigid gesture; that is the invariant to compare here.
+        const auto& old_geometry=rendered->type=="wall" ? rendered->snap_segments : rendered->segments;
+        const auto& next_geometry=proposed->type=="wall" ? proposed->snap_segments : proposed->segments;
+        require(!old_geometry.empty() && old_geometry.size()==next_geometry.size(),"required preview retains analytical geometry");
+        for (std::size_t index=0;index<old_geometry.size();++index) {
+            const auto& old=old_geometry[index];
+            const auto& next=next_geometry[index];
+            require(std::abs(next.start.x-old.start.x-10)<1e-8 && std::abs(next.end.x-old.end.x-10)<1e-8 &&
+                std::abs(next.start.y-old.start.y)<1e-8 && std::abs(next.end.y-old.end.y)<1e-8 &&
+                std::abs(next.sweep_radians-old.sweep_radians)<1e-10,
+                "transient required-group geometry matches the pending rigid drag: id="+id+
+                "; index="+std::to_string(index)+"; dx="+std::to_string(next.start.x-old.start.x)+
+                "; dy="+std::to_string(next.start.y-old.start.y));
+        }
+    }
+    QApplication::sendEvent(canvas,&release);
+    QElapsedTimer wait;
+    wait.start();
+    while (window.document().revision()==pasted.revision() && wait.elapsed()<10000)
+        QCoreApplication::processEvents(QEventLoop::AllEvents,50);
+    const auto moved=window.document().snapshot();
+    require(moved.revision()==pasted.revision()+1,"dragging the selected parent moves its dependent geometry once");
+    const auto moved_report=sketch::build_appraisal_document_report(moved,property_id);
+    require(moved_report.qualified && moved_report.calculation &&
+        moved.entities().at(area.toStdString())==before.entities().at(area.toStdString()) &&
+        moved.entities().at(garage.toStdString())==before.entities().at(garage.toStdString()),
+        "moving the pasted parent also moves only its required copied group and restores nonoverlapping totals");
+    if (sourced) require(sketch::wall_measurement_source_current(moved,moved.entities().at(pasted_id)),
+        "pasted parent drag preserves current physical wall provenance");
+    capture(window,QStringLiteral("appraisal-copy-%1-%2-%3").arg(metric ? "metric" : "imperial")
+        .arg(sourced ? "walls" : "drawn").arg(commercial ? "commercial" : "residential"));
+    require(window.undoCommand() && window.document().snapshot().entities()==pasted.entities() && window.redoCommand() &&
+        window.document().snapshot().entities()==moved.entities(),"copied group canvas movement undoes and redoes atomically");
+    if (sourced) {
+        const auto missing_wall=moved.entities().at(pasted_id).properties.at("wall_measurement_source").at("walls").front().at("id").get<std::string>();
+        require(window.selectEntity(QString::fromStdString(missing_wall)) && window.deleteSelection() &&
+            window.selectEntity(QString::fromStdString(pasted_id)),"prepare a genuinely stale source copy without changing original walls");
+        const auto stale=window.document().snapshot();
+        require(!window.transformSelectedBoundary("0",false,false,"20 m","0 m",true) && !window.lastError().isEmpty() &&
+            window.document().snapshot().entities()==stale.entities() && window.document().revision()==stale.revision(),
+            "cloning missing physical sources refuses with an explanation and no partial copy");
+        require(!window.copySelection() && !window.lastError().isEmpty() && window.document().snapshot().entities()==stale.entities(),
+            "clipboard copy refuses missing required source walls instead of publishing broken links");
+    }
 }
 
 void plain_source_repair_clones_and_pastes_its_retained_proof() {
@@ -1365,7 +1678,8 @@ void plain_source_repair_clones_and_pastes_its_retained_proof() {
     const auto pasted=window.document().snapshot();
     std::optional<sketch::Entity> pasted_owner;
     for (const auto& [id,value] : pasted.entities())
-        if (!before_paste.entities().contains(id) && value.type=="measurement_boundary") pasted_owner=value;
+        if (!before_paste.entities().contains(id) && value.type=="measurement_boundary" &&
+            value.properties.contains("wall_measurement_source")) pasted_owner=value;
     require(pasted_owner && sketch::wall_measurement_source_current(pasted,*pasted_owner),
         "the pasted owner uses the pasted source walls and remains analytically current");
     std::set<std::string> sources;
@@ -1403,6 +1717,12 @@ int main(int argc, char** argv) {
         QStringLiteral("Vertex-wall-measurement-test-") +
         QUuid::createUuid().toString(QUuid::WithoutBraces));
     try {
+        if (app.arguments().contains("--appraisal-copy-only")) {
+            for (bool metric : {false,true}) for (bool sourced : {false,true}) for (bool commercial : {false,true})
+                appraisal_area_clone_retains_its_calculation_dependencies(metric,sourced,commercial);
+            std::cout << "Appraisal copy dependencies passed\n";
+            return 0;
+        }
         if (app.arguments().contains("--same-count-source-repair-only")) {
             for (bool metric : {false,true}) for (bool curved : {false,true})
                 changed_same_count_sources_review_manual_references(metric,curved);
@@ -1428,6 +1748,8 @@ int main(int argc, char** argv) {
             replaced_wall_sources_repair_existing_appraisal_area(metric,curved);
         split_source_replacement_reviews_manual_references();
         plain_source_repair_clones_and_pastes_its_retained_proof();
+        for (bool metric : {false,true}) for (bool sourced : {false,true}) for (bool commercial : {false,true})
+            appraisal_area_clone_retains_its_calculation_dependencies(metric,sourced,commercial);
         for (bool metric : {false,true}) for (bool curved : {false,true})
             changed_same_count_sources_review_manual_references(metric,curved);
     } catch (const std::exception& error) {

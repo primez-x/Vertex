@@ -1233,6 +1233,7 @@ void test_annotation_transform_legacy_and_ambiguity() {
         }
         auto label = instantiate_label(default_label_templates().front(), "legacy-label");
         label.content = "Retained label";
+        label.placement.position = {0,-2};
         state.labels.push_back(label);
         state.overrides.push_back({"object", "legacy-sibling", {}, true});
         return make_annotation_entity("legacy-owner", state);
@@ -1248,6 +1249,10 @@ void test_annotation_transform_legacy_and_ambiguity() {
     };
     for (const auto version : {1, 2}) {
         desktop::MainWindow window;
+        window.setAttribute(Qt::WA_DontShowOnScreen);
+        window.resize(1200,800);
+        window.show();
+        QApplication::processEvents();
         auto legacy = fixture();
         legacy.required = true;
         legacy.extensions["vendor"] = "preserved";
@@ -1274,13 +1279,21 @@ void test_annotation_transform_legacy_and_ambiguity() {
         const auto frame = canvas->selectionBounds();
         require(frame.has_value(), "legacy symbol exposes independent resize controls");
         const QPointF start(frame->right(), frame->center().y());
+        const auto captures=qEnvironmentVariable("VERTEX_TEST_CAPTURE_DIR");
+        if (!captures.isEmpty()) {
+            require(QDir().mkpath(captures) && canvas->grab().save(QDir(captures).filePath(
+                QStringLiteral("legacy-resize-before-v%1.png").arg(version))),"legacy resize capture saves");
+        }
         drag(canvas, start, start + QPointF(50, 0));
         const auto after = window.document().snapshot();
         const auto& upgraded = after.entities().at(legacy.id);
         const auto decoded = decode_annotation_entity(upgraded);
         require(after.revision() == before.revision() + 1 && upgraded.properties.at("state").at("version") == 3 &&
                 decoded.symbols[0].width_scale > 1 && decoded.symbols[1].width_scale == 1,
-                "v1/v2 independent resize must atomically promote the complete owner to valid v3 without resizing siblings");
+                "v1/v2 independent resize must atomically promote the complete owner to valid v3 without resizing siblings: error="+
+                window.lastError().toStdString()+"; revision="+std::to_string(after.revision())+
+                "; source="+std::to_string(before.revision())+"; version="+upgraded.properties.at("state").at("version").dump()+
+                "; width0="+std::to_string(decoded.symbols[0].width_scale)+"; width1="+std::to_string(decoded.symbols[1].width_scale));
         auto expected = before.entities();
         auto& expected_state = expected.at(legacy.id).properties["state"];
         const auto defaults = encode_annotation_state(decode_annotation_entity(legacy), catalog);
@@ -2411,13 +2424,20 @@ void test_measurement_group_canvas_move_workflow() {
     const auto wall = window.createStraightWall({0,5},{4,5});
     const auto ordinary = window.createBoundary(
         {{{9,-2},{11,-2},0},{{11,-2},{11,-1},0},{{11,-1},{9,-1},0},{{9,-1},{9,-2},0}},"porch");
-    require(!sofa.isEmpty() && !wall.isEmpty() && !ordinary.isEmpty(),
+    const auto label=window.createAnnotationLabel(QString::fromStdString(default_label_templates().front().id),"Moving note",{12,4});
+    QTemporaryDir reference_directory;
+    QImage reference_image(32,24,QImage::Format_ARGB32);
+    reference_image.fill(QColor("#E86A3C"));
+    const auto reference_path=reference_directory.filePath("mixed-reference.png");
+    require(reference_directory.isValid() && reference_image.save(reference_path),"measured mixed reference fixture saves");
+    const auto reference=testing::importOrSeedTrustedReferenceFixture(window,reference_path,reference_image);
+    require(!sofa.isEmpty() && !wall.isEmpty() && !ordinary.isEmpty() && !label.isEmpty() && !reference.isEmpty(),
             "mixed measured group components must create");
     const auto select_group = [&] {
         require(window.selectEntity(QString::fromStdString(first.id)) &&
                     window.selectEntity(QString::fromStdString(second.id),true) &&
                     window.selectEntity(sofa,true) && window.selectEntity(wall,true) &&
-                    window.selectEntity(ordinary,true),
+                    window.selectEntity(ordinary,true) && window.selectEntity(label,true) && window.selectEntity(reference,true),
                 "areas, sofa and wall must select together");
     };
     select_group();
@@ -2446,9 +2466,30 @@ void test_measurement_group_canvas_move_workflow() {
     require(window.document().revision()==source.revision() &&
                 window.document().snapshot().entities()==source.entities(),
             "Escape must cancel the entire measured group preview");
+    const auto wait_for_move = [&](Revision revision) {
+        const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(10);
+        while (window.document().revision()==revision && (canvas->entitiesMovePreviewPending() || window.lastError().isEmpty()) &&
+            std::chrono::steady_clock::now()<deadline) QApplication::processEvents(QEventLoop::AllEvents,20);
+    };
     mouse(QEvent::MouseButtonPress,{1.5,1});
     mouse(QEvent::MouseMove,{3.5,2});
+    const auto preview_deadline=std::chrono::steady_clock::now()+std::chrono::seconds(10);
+    while (canvas->entitiesMovePreviewPending() && std::chrono::steady_clock::now()<preview_deadline)
+        QApplication::processEvents(QEventLoop::AllEvents,20);
+    const auto proposal=canvas->entitiesMovePreview();
+    const auto proposed_sofa=std::find_if(proposal.begin(),proposal.end(),[&](const auto& entity){return entity.id==sofa;});
+    const auto original_sofa=std::find_if(canvas->entities().begin(),canvas->entities().end(),[&](const auto& entity){return entity.id==sofa;});
+    require(!canvas->entitiesMovePreviewPending() && proposed_sofa!=proposal.end() &&
+        original_sofa!=canvas->entities().end() && !proposed_sofa->segments.empty() &&
+        std::abs(proposed_sofa->segments.front().start.x-original_sofa->segments.front().start.x-2)<1e-8 &&
+        std::abs(proposed_sofa->segments.front().start.y-original_sofa->segments.front().start.y-1)<1e-8 &&
+        window.document().snapshot().entities()==source.entities() && window.document().revision()==source.revision(),
+        "mixed measured area and symbol preview is complete and leaves the source unchanged");
+    const auto preview_captures=qEnvironmentVariable("VERTEX_TEST_CAPTURE_DIR");
+    if (!preview_captures.isEmpty()) require(QDir().mkpath(preview_captures) &&
+        canvas->grab().save(QDir(preview_captures).filePath("measured-mixed-preview.png")),"mixed reference and text preview capture saves");
     mouse(QEvent::MouseButtonRelease,{3.5,2});
+    wait_for_move(source.revision());
     const auto moved = window.document().snapshot();
     if (!window.lastError().isEmpty())
         throw std::runtime_error("Measured group drag failed: "+window.lastError().toStdString());
@@ -2497,6 +2538,13 @@ void test_measurement_group_canvas_move_workflow() {
         [](const auto& item) { return item.second.type==kAnnotationEntityType; });
     require(annotations!=moved.entities().end(),"group symbol owner must remain");
     const auto placed = decode_annotation_entity(annotations->second).symbols.front();
+    const auto moved_text=decode_annotation_entity(annotations->second).labels.front();
+    const auto& moved_reference=moved.entities().at(reference.toStdString()).properties.at("position_m");
+    const auto& old_reference=source.entities().at(reference.toStdString()).properties.at("position_m");
+    require(std::abs(moved_text.placement.position.x-14)<1e-8 && std::abs(moved_text.placement.position.y-5)<1e-8 &&
+        std::abs(moved_reference[0].get<double>()-old_reference[0].get<double>()-2)<1e-8 &&
+        std::abs(moved_reference[1].get<double>()-old_reference[1].get<double>()-1)<1e-8,
+        "accepted exact mixed area drag moves text and reference placements in the same atomic command");
     const auto ordinary_before = decode_identified_boundary_entity(source.entities().at(ordinary.toStdString()));
     const auto ordinary_after = decode_identified_boundary_entity(moved.entities().at(ordinary.toStdString()));
     require(std::abs(placed.placement.position.x-11)<1e-8 &&
@@ -2525,6 +2573,7 @@ void test_measurement_group_canvas_move_workflow() {
     mouse(QEvent::MouseButtonPress,{1.5,1});
     mouse(QEvent::MouseMove,{3.5,2});
     mouse(QEvent::MouseButtonRelease,{3.5,2});
+    wait_for_move(window.document().revision());
     require(!window.lastError().isEmpty() && window.document().snapshot().entities()==source.entities(),
             "a conflicting partial move must leave both area and symbol unchanged");
 
@@ -2536,9 +2585,13 @@ void test_measurement_group_canvas_move_workflow() {
     mouse(QEvent::MouseButtonPress,{1.5,1});
     mouse(QEvent::MouseMove,{1.5+large_delta.x,1+large_delta.y});
     mouse(QEvent::MouseButtonRelease,{1.5+large_delta.x,1+large_delta.y});
+    wait_for_move(large_source.revision());
     const auto large_move = window.document().snapshot();
     require(window.lastError().isEmpty() && large_move.revision()==large_source.revision()+1 &&
-                large_move.entities()!=source.entities(),"large fractional mixed movement must commit");
+                large_move.entities()!=source.entities(),"large fractional mixed movement must commit: error="+
+                window.lastError().toStdString()+"; revision="+std::to_string(large_move.revision())+
+                "; source="+std::to_string(large_source.revision())+
+                "; scale="+std::to_string(canvas->viewScale()));
     const auto large_porch = decode_identified_boundary_entity(large_move.entities().at(ordinary.toStdString()));
     require(std::abs(large_porch.segments[0].segment.start.x-9-large_delta.x)<1e-8 &&
                 std::abs(large_porch.segments[0].segment.start.y+2-large_delta.y)<1e-8,
@@ -2588,6 +2641,7 @@ void test_measurement_group_canvas_move_workflow() {
         mouse(QEvent::MouseButtonPress,start);
         mouse(QEvent::MouseMove,{start.x+view_delta.x,start.y+view_delta.y});
         mouse(QEvent::MouseButtonRelease,{start.x+view_delta.x,start.y+view_delta.y});
+        wait_for_move(named_source.revision());
         const auto named_moved = window.document().snapshot();
         if (!window.lastError().isEmpty())
             throw std::runtime_error("Named plan group move failed: "+window.lastError().toStdString());

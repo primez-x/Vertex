@@ -823,7 +823,8 @@ void PlanCanvas::renderSceneWithTransform(QPainter& painter, const QRectF& viewp
 
     for (const auto& reference : m_references) {
         if (!reference.visible) continue;
-        if (!output && m_move_preview_delta && !m_move_preview_exact && m_move_ids.contains(reference.id)) {
+        if (!output && m_move_preview_delta &&
+            (!m_move_preview_exact || !m_move_entities_preview.empty()) && m_move_ids.contains(reference.id)) {
             painter.save();
             painter.translate(m_move_preview_delta->x, m_move_preview_delta->y);
             drawReference(painter, reference);
@@ -1363,7 +1364,11 @@ bool PlanCanvas::completeEntitiesMovePreview(std::uint64_t serial,
     m_move_labels_preview = std::move(labels);
     const bool accepted=result && std::all_of(m_move_ids.begin(),m_move_ids.end(),[&](const auto& id) {
         return std::any_of(m_move_entities_preview.begin(),m_move_entities_preview.end(),
-            [&](const auto& entity) { return entity.id==id; });
+            [&](const auto& entity) { return entity.id==id; }) ||
+            std::any_of(m_move_labels_preview.begin(),m_move_labels_preview.end(),
+                [&](const auto& label) { return label.id==id; }) ||
+            std::any_of(m_references.begin(),m_references.end(),
+                [&](const auto& reference) { return reference.id==id && reference.selected; });
     });
     if (!accepted) { m_move_entities_preview.clear(); m_move_labels_preview.clear(); }
     for (auto& proposed : m_move_entities_preview)
@@ -2183,7 +2188,8 @@ std::optional<QRectF> PlanCanvas::selectionBounds(const QRectF& viewport) const 
         transform.translate(viewport.center().x(), viewport.center().y());
         transform.scale(m_scale, -m_scale);
         auto position = reference.position;
-        if (m_move_preview_delta && !m_move_preview_exact && m_move_ids.contains(reference.id)) {
+        if (m_move_preview_delta && (!m_move_preview_exact || !m_move_entities_preview.empty()) &&
+            m_move_ids.contains(reference.id)) {
             position.x += m_move_preview_delta->x;
             position.y += m_move_preview_delta->y;
         }
