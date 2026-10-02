@@ -49,9 +49,19 @@
   text without placing an edge.</p>
   <p>Each accepted wall is one undoable operation. Measurement edges stay in the
   unfinished outline until it closes. Define First still requires placing each
-  manual dimension before entering another edge. The <kbd>D</kbd> dialog remains
-  available for measured-boundary headings, relative turns, curves and exact
-  dimension positions. Navigation and grid spacing never round typed lengths.</p>
+  manual dimension before entering another edge. Navigation and grid spacing
+  never round typed lengths.</p>
+  <p>For an angled or curved wall, press <kbd>D</kbd> on the canvas, or choose
+  <strong>Precise input</strong> from the active wall chain's right-click menu.
+  Before the first point, D accepts exact start coordinates. After that it
+  offers length/heading, rise/run, relative turn, world endpoint, arc
+  chord/angle, chord/height, chord/length and start-tangent/length/sweep.
+  Angles require a unit such as <code>45 deg</code> or <code>pi/2</code>.
+  A relative turn follows the preceding wall's ending direction; after a
+  curved wall it follows the tangent at that endpoint. Every accepted edge
+  creates a physical wall with the chosen thickness and height. Cancel leaves
+  the chain unchanged. The same D form remains available for measured
+  outlines and exact Define First dimension positions.</p>
   <p>Wall endpoints authored together in the same floor, layer and design phase
   retain their connection. To change a wall length, use its dimensions and
   constraints editor and review connected movement before applying the edit.</p>

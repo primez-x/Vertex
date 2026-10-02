@@ -314,9 +314,11 @@ Ctrl-select compatible architectural objects, placed symbols, labels, and refere
 images, then drag inside the selected bounds to move them together. Release
 commits one undoable edit; Escape cancels. Hosted door/window stations remain
 relative to their walls, and entered wall lengths and curve construction values
-retain their original expressions. Existing hard constraints still apply: moving
-only part of a constrained group rejects the entire move, including its symbols
-and references. A document or selection change during the drag cancels it.
+retain their original expressions. Wall-only drags preview and move connected
+corners through their saved constraints; conflicting locks reject the edit.
+For mixed groups, moving only part of a constrained group rejects the entire
+move, including its symbols and references. A document or selection change
+during the drag cancels it.
 Mixed groups containing measurement boundaries or dependent dimensions still
 require their separate supported editing commands.
 

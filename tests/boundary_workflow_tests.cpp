@@ -6,6 +6,8 @@
 #include "sketch/document_digest.hpp"
 #include "sketch/project_store.hpp"
 #include "sketch/desktop/boundary_input_dialog.hpp"
+#include "sketch/annotation_entity_codec.hpp"
+#include "sketch/text_library.hpp"
 #include "support/noninteractive_errors.hpp"
 #include "../src/desktop/plan_canvas.hpp"
 
@@ -16,7 +18,9 @@
 #include <QCoreApplication>
 #include <QComboBox>
 #include <QCloseEvent>
+#include <QCheckBox>
 #include <QDialog>
+#include <QDialogButtonBox>
 #include <QDir>
 #include <QEventLoop>
 #include <QFileInfo>
@@ -25,6 +29,7 @@
 #include <QFontMetricsF>
 #include <QPainterPath>
 #include <QPixmap>
+#include <QPushButton>
 #include <QKeyEvent>
 #include <QInputDialog>
 #include <QLabel>
@@ -713,7 +718,8 @@ void test_context_change_discards_draft_without_mutating_document() {
 void drive_boundary_modal(MainWindow& window, PlanCanvas& drawing, int key,
                           const std::function<void(QDialog*)>& respond,
                           std::string_view failure = "keyboard command must reach its bounded native modal",
-                          Qt::KeyboardModifiers modifiers = Qt::NoModifier) {
+                          Qt::KeyboardModifiers modifiers = Qt::NoModifier,
+                          const std::function<void()>& invoke = {}) {
     bool responded = false;
     bool expired = false;
     bool precision_modal = false;
@@ -734,7 +740,8 @@ void drive_boundary_modal(MainWindow& window, PlanCanvas& drawing, int key,
     });
     poll.start();
     deadline.start(5000);
-    send_key(drawing, key,modifiers);
+    if (invoke) invoke();
+    else send_key(drawing, key,modifiers);
     poll.stop();
     deadline.stop();
     require(responded && !expired, failure);
@@ -1947,6 +1954,346 @@ void test_inline_measurement_held_enter_does_not_finish() {
             "holding Escape in the length field must not discard the unfinished outline");
 }
 
+void test_physical_wall_precision_heading() {
+    MainWindow window;
+    prepare_window(window);
+    window.setMetricUnits(true);
+    QApplication::setActiveWindow(&window);
+    process_events();
+    auto* drawing = canvas(window, QStringLiteral("measurementPlanCanvas"));
+    auto* thickness = window.findChild<QLineEdit*>(QStringLiteral("wallDrawThickness"));
+    auto* height = window.findChild<QLineEdit*>(QStringLiteral("wallDrawHeight"));
+    require(thickness && height, "wall precision fixture needs physical wall settings");
+    thickness->setText(QStringLiteral("0.2 m"));
+    height->setText(QStringLiteral("3 m"));
+    send_click(*drawing, {0, 0});
+    const auto anchored = window.document().snapshot();
+    drive_boundary_modal(window, *drawing, Qt::Key_D, [&](QDialog* modal) {
+        auto* input = dynamic_cast<sketch::desktop::BoundaryInputDialog*>(modal);
+        require(input, "physical wall precision must share the analytical construction form");
+        input->findChild<QComboBox*>(QStringLiteral("boundaryInputMethod"))->setCurrentIndex(0);
+        input->findChild<QLineEdit*>(QStringLiteral("boundaryInputLength"))->setText(QStringLiteral("2 m"));
+        input->findChild<QLineEdit*>(QStringLiteral("boundaryInputHeading"))->setText(QStringLiteral("45 deg"));
+        capture_inline_widget(*input, QStringLiteral("wall-heading-input.png"));
+        require(input->submit(), "a physical wall length and heading must validate");
+    }, "D on an anchored physical Wall must open precise construction input");
+    const auto after = window.document().snapshot();
+    require(after.revision() == anchored.revision() + 1,
+            "one precise wall must commit one history command");
+    bool found = false;
+    for (const auto& [id, entity] : after.entities()) {
+        if (entity.type != "wall" || anchored.entities().contains(id)) continue;
+        found = true;
+        const auto& baseline = entity.properties.at("baseline");
+        const auto& end = baseline.at("end");
+        require(std::abs(end.at(0).get<double>() - std::sqrt(2.0)) < 1e-12 &&
+                    std::abs(end.at(1).get<double>() - std::sqrt(2.0)) < 1e-12,
+                "45-degree wall must retain exact analytical endpoints without grid rounding");
+        require(entity.properties.at("thickness_m") == 0.2 && entity.properties.at("height_m") == 3.0,
+                "precision must preserve physical wall settings");
+        const auto receipt = sketch::decode_construction_receipt(entity.properties.at("original_drawing_input"));
+        require(receipt.kind == sketch::BoundaryConstructionKind::line_heading &&
+                    receipt.segment_id == id && receipt.heading && receipt.distance &&
+                    receipt.heading->original_expression == "45 deg",
+                "precise wall must retain entered angle and length provenance");
+    }
+    require(found, "accepted heading input must create an actual wall");
+}
+
+Entity single_new_wall(const DocumentSnapshot& before, const DocumentSnapshot& after) {
+    std::optional<Entity> result;
+    require(after.revision() == before.revision() + 1,
+            "one precision submission must publish exactly one wall command");
+    for (const auto& [id, entity] : before.entities()) {
+        require(after.entities().contains(id) && after.entities().at(id) == entity,
+                "creating a precision wall must preserve all existing entities");
+    }
+    for (const auto& [id, entity] : after.entities()) {
+        if (entity.type != "wall" || before.entities().contains(id)) continue;
+        require(!result, "one precise edge must create only one physical wall");
+        result = entity;
+    }
+    require(result.has_value(), "precise construction must publish an actual physical wall");
+    return *result;
+}
+
+sketch::Segment wall_baseline(const Entity& wall) {
+    const auto& baseline = wall.properties.at("baseline");
+    return {{baseline.at("start").at(0).get<double>(), baseline.at("start").at(1).get<double>()},
+            {baseline.at("end").at(0).get<double>(), baseline.at("end").at(1).get<double>()},
+            baseline.at("sweep_radians").get<double>()};
+}
+
+void test_physical_wall_precision_methods_and_persistence() {
+    struct Case {
+        int method;
+        sketch::BoundaryConstructionKind kind;
+        std::map<QString, QString> fields;
+        sketch::Segment expected;
+    };
+    const auto pi = std::numbers::pi;
+    const std::array<Case, 6> cases{{
+        {1, sketch::BoundaryConstructionKind::line_rise_run,
+            {{"Rise", "300 cm"}, {"Run", "125 cm"}}, {{0, 0}, {1.25, 3}, 0}},
+        {3, sketch::BoundaryConstructionKind::line_to_point,
+            {{"EndX", "-2 m"}, {"EndY", "150 cm"}}, {{0, 0}, {-2, 1.5}, 0}},
+        {4, sketch::BoundaryConstructionKind::arc_chord_angle,
+            {{"EndX", "2 m"}, {"EndY", "0 m"}, {"Sweep", "90 deg"}}, {{0, 0}, {2, 0}, pi / 2}},
+        {5, sketch::BoundaryConstructionKind::arc_chord_height,
+            {{"EndX", "2 m"}, {"EndY", "0 m"}, {"Height", "50 cm"}},
+            {{0, 0}, {2, 0}, 4 * std::atan(0.5)}},
+        {6, sketch::BoundaryConstructionKind::arc_chord_length,
+            {{"EndX", "2 m"}, {"EndY", "0 m"}, {"ArcLength", "250 cm"}},
+            sketch::arc_from_chord_arc_length({0, 0}, {2, 0}, 2.5, true)},
+        {7, sketch::BoundaryConstructionKind::arc_start_tangent,
+            {{"Tangent", "0 deg"}, {"ArcLength", "2 m"}, {"Sweep", "90 deg"}},
+            {{0, 0}, {4 / pi, 4 / pi}, pi / 2}}
+    }};
+    for (const bool metric : {false, true}) {
+        for (const auto& example : cases) {
+            MainWindow window;
+            prepare_window(window);
+            window.setMetricUnits(metric);
+            QApplication::setActiveWindow(&window);
+            process_events();
+            auto* drawing = canvas(window, QStringLiteral("measurementPlanCanvas"));
+            window.findChild<QLineEdit*>(QStringLiteral("wallDrawThickness"))->setText("7 in");
+            window.findChild<QLineEdit*>(QStringLiteral("wallDrawHeight"))->setText("9 ft");
+            send_click(*drawing, {0, 0});
+            const auto anchored = window.document().snapshot();
+            drive_boundary_modal(window, *drawing, Qt::Key_D, [&](QDialog* modal) {
+                auto* input = dynamic_cast<sketch::desktop::BoundaryInputDialog*>(modal);
+                require(input && input->windowTitle().contains("wall", Qt::CaseInsensitive),
+                        "physical wall precision must identify its actual object type");
+                input->findChild<QComboBox*>("boundaryInputMethod")->setCurrentIndex(example.method);
+                for (const auto& [suffix, text] : example.fields) {
+                    auto* field = input->findChild<QLineEdit*>(QStringLiteral("boundaryInput") + suffix);
+                    require(field, "precision method must expose its required native input");
+                    field->setText(text);
+                }
+                if (example.method == 6) input->findChild<QCheckBox*>("boundaryInputClockwise")->setChecked(true);
+                if (metric && example.method == 4) capture_inline_widget(*input, QStringLiteral("wall-arc-input.png"));
+                require(input->submit(), "the native physical wall construction must validate");
+            });
+            const auto accepted = window.document().snapshot();
+            const auto wall = single_new_wall(anchored, accepted);
+            const auto baseline = wall_baseline(wall);
+            require(same_point(baseline.start, example.expected.start) &&
+                        std::hypot(baseline.end.x - example.expected.end.x,
+                                   baseline.end.y - example.expected.end.y) < 1e-12 &&
+                        std::abs(baseline.sweep_radians - example.expected.sweep_radians) < 1e-12,
+                    "physical walls must retain the exact line or analytical arc, not a chord approximation");
+            require(std::abs(wall.properties.at("thickness_m").get<double>() - 0.1778) < 1e-12 &&
+                        std::abs(wall.properties.at("height_m").get<double>() - 2.7432) < 1e-12,
+                    "every precision method must use the visible physical wall depth and height");
+            const auto receipt = sketch::decode_construction_receipt(wall.properties.at("original_drawing_input"));
+            require(receipt.kind == example.kind && receipt.segment_id == wall.id,
+                    "all precision methods must preserve their original construction kind and wall identity");
+            const auto replay = sketch::replay_construction_receipt(receipt,
+                sketch::ConstructionReplayContext{baseline.start, std::nullopt, std::nullopt,
+                    sketch::default_geometry_tolerance_metres});
+            require(same_point(replay.segment.start, baseline.start) && same_point(replay.segment.end, baseline.end) &&
+                        replay.segment.sweep_radians == baseline.sweep_radians,
+                    "saved wall input must replay to its original authoritative geometry exactly");
+            if (example.method == 6 || example.method == 7) {
+                const double expected_length = example.method == 6 ? 2.5 : 2.0;
+                require(std::abs(sketch::segment_length(baseline) - expected_length) < 1e-12,
+                        "arc-length entry must remain a real physical arc length");
+            }
+            send_key(*drawing, Qt::Key_Escape);
+            require(window.undoCommand() && window.document().snapshot().entities() == anchored.entities() &&
+                        window.redoCommand() && window.document().snapshot().entities() == accepted.entities(),
+                    "precise wall creation and connections must undo and redo atomically");
+            QTemporaryDir directory;
+            require(directory.isValid(), "wall precision persistence needs a temporary directory");
+            const auto path = directory.filePath("wall-precision.bldproj");
+            require(window.saveProjectAs(path) && window.openProject(path) &&
+                        window.document().snapshot().entities() == accepted.entities(),
+                    "analytical wall geometry, settings and construction provenance must survive reopening");
+            if (metric && example.method == 7) capture_inline_widget(window, "wall-tangent-arc.png");
+        }
+    }
+}
+
+void test_physical_wall_precision_anchor_relative_and_modal_guards() {
+    MainWindow window;
+    prepare_window(window);
+    window.setMetricUnits(true);
+    QApplication::setActiveWindow(&window);
+    process_events();
+    auto* drawing = canvas(window, QStringLiteral("measurementPlanCanvas"));
+    const auto original = window.document().snapshot();
+    drive_boundary_modal(window, *drawing, Qt::Key_D, [&](QDialog* modal) {
+        auto* input = dynamic_cast<sketch::desktop::BoundaryInputDialog*>(modal);
+        require(input && input->windowTitle().contains("wall", Qt::CaseInsensitive),
+                "D before drawing must offer the default Wall's exact start point");
+        input->findChild<QLineEdit*>("boundaryInputEndX")->setText("0 m");
+        input->findChild<QLineEdit*>("boundaryInputEndY")->setText("0 m");
+        require(input->submit(), "keyboard-only wall start must validate");
+    });
+    require_same_document(original, window.document().snapshot(), "exact wall start must not add geometry");
+    const auto enter = [&](int method, const std::map<QString, QString>& fields) {
+        const auto before = window.document().snapshot();
+        drive_boundary_modal(window, *drawing, Qt::Key_D, [&](QDialog* modal) {
+            auto* input = dynamic_cast<sketch::desktop::BoundaryInputDialog*>(modal);
+            require(input, "relative wall chain must use the analytical native form");
+            input->findChild<QComboBox*>("boundaryInputMethod")->setCurrentIndex(method);
+            for (const auto& [suffix, text] : fields)
+                input->findChild<QLineEdit*>(QStringLiteral("boundaryInput") + suffix)->setText(text);
+            require(input->submit(), "a relative wall chain edge must validate");
+        });
+        return single_new_wall(before, window.document().snapshot());
+    };
+    const auto first = enter(0, {{"Length", "2 m"}, {"Heading", "0 deg"}});
+    const auto relative = enter(2, {{"Length", "2 m"}, {"Turn", "90 deg"}});
+    require(std::hypot(wall_baseline(relative).end.x - 2, wall_baseline(relative).end.y - 2) < 1e-12,
+            "relative turns must use the actual preceding straight wall heading");
+    const auto arc = enter(4, {{"EndX", "4 m"}, {"EndY", "2 m"}, {"Sweep", "90 deg"}});
+    const auto tangent_relative = enter(2, {{"Length", "2 m"}, {"Turn", "90 deg"}});
+    const auto endpoint = wall_baseline(tangent_relative).end;
+    require(std::hypot(endpoint.x - (4 - std::sqrt(2.0)), endpoint.y - (2 + std::sqrt(2.0))) < 1e-12,
+            "relative turn after a curved wall must use its ending tangent rather than its chord");
+    const auto receipt = sketch::decode_construction_receipt(tangent_relative.properties.at("original_drawing_input"));
+    const auto replay = sketch::replay_construction_receipt(receipt,
+        sketch::ConstructionReplayContext{wall_baseline(arc).end, wall_baseline(arc), std::nullopt,
+            sketch::default_geometry_tolerance_metres});
+    require(same_point(replay.segment.end, endpoint), "relative wall provenance must replay with its explicit previous baseline");
+    const auto& replay_context = tangent_relative.properties.at("original_drawing_input_context");
+    require(replay_context.at("version") == 1 &&
+                replay_context.at("previous_segment") == arc.properties.at("baseline") &&
+                replay_context.at("expected_start") == arc.properties.at("baseline").at("end") &&
+                replay_context.at("tolerance_metres").get<double>() > 0,
+            "relative wall provenance must persist its explicit historical replay context");
+    const auto chain = window.document().snapshot();
+    drive_boundary_modal(window, *drawing, Qt::Key_D, [&](QDialog* modal) { modal->reject(); });
+    require_same_document(chain, window.document().snapshot(), "cancelled precision input must retain the wall chain");
+    drive_boundary_modal(window, *drawing, Qt::Key_D, [&](QDialog* modal) {
+        auto* input = dynamic_cast<sketch::desktop::BoundaryInputDialog*>(modal);
+        input->findChild<QComboBox*>("boundaryInputMethod")->setCurrentIndex(0);
+        input->findChild<QLineEdit*>("boundaryInputLength")->setText("1 m");
+        input->findChild<QLineEdit*>("boundaryInputHeading")->setText("0 deg");
+        window.setMetricUnits(false);
+        require(input->submit(), "a modal candidate may validate before its stale unit context is rejected");
+    });
+    require_same_document(chain, window.document().snapshot(), "a unit change must invalidate the pending precision command");
+    window.setMetricUnits(true);
+    std::optional<DocumentSnapshot> mutated;
+    drive_boundary_modal(window, *drawing, Qt::Key_D, [&](QDialog* modal) {
+        auto* input = dynamic_cast<sketch::desktop::BoundaryInputDialog*>(modal);
+        input->findChild<QComboBox*>("boundaryInputMethod")->setCurrentIndex(0);
+        input->findChild<QLineEdit*>("boundaryInputLength")->setText("1 m");
+        input->findChild<QLineEdit*>("boundaryInputHeading")->setText("0 deg");
+        auto changed = window.document().snapshot().entities().at(first.id);
+        changed.properties["height_m"] = 3.5;
+        window.document().apply(sketch::ApplyEntityChanges{window.document().revision(),
+            {sketch::EntityChange::upsert(changed)}, {}, "wall precision stale-source fixture"});
+        mutated = window.document().snapshot();
+        require(input->submit(), "source guard is separate from detached construction validation");
+    });
+    require(mutated.has_value(), "stale source fixture must make its explicit mutation");
+    require_same_document(*mutated, window.document().snapshot(), "a changed revision must reject the pending wall command");
+    send_key(*drawing, Qt::Key_Escape);
+    const auto finished = window.document().snapshot();
+    QTemporaryDir directory;
+    require(directory.isValid(), "relative wall provenance needs a temporary project");
+    const auto path = directory.filePath("wall-relative-context.bldproj");
+    require(window.saveProjectAs(path) && window.openProject(path) &&
+                window.document().snapshot().entities() == finished.entities(),
+            "relative wall context must survive reopening alongside the current wall geometry");
+}
+
+void test_precision_curve_editor_preserves_unedited_geometry() {
+    for (const bool metric : {false, true}) {
+        MainWindow window;
+        prepare_window(window);
+        window.setMetricUnits(metric);
+        QApplication::setActiveWindow(&window);
+        process_events();
+        auto* drawing = canvas(window, QStringLiteral("measurementPlanCanvas"));
+        send_click(*drawing, {0, 0});
+        const auto before = window.document().snapshot();
+        drive_boundary_modal(window, *drawing, Qt::Key_D, [&](QDialog* modal) {
+            auto* input = dynamic_cast<sketch::desktop::BoundaryInputDialog*>(modal);
+            require(input, "curve editor fixture needs a precise analytical arc");
+            input->findChild<QComboBox*>("boundaryInputMethod")->setCurrentIndex(7);
+            input->findChild<QLineEdit*>("boundaryInputTangent")->setText("13 deg");
+            input->findChild<QLineEdit*>("boundaryInputArcLength")->setText("2.125 m");
+            input->findChild<QLineEdit*>("boundaryInputSweep")->setText("37 deg");
+            require(input->submit(), "precision-created arc must validate before opening its editor");
+        });
+        const auto wall = single_new_wall(before, window.document().snapshot());
+        send_key(*drawing, Qt::Key_Escape);
+        require(window.selectEntity(QString::fromStdString(wall.id)), "the exact curve must remain selectable");
+        auto* edit = window.findChild<QAbstractButton*>("editCurvedWall");
+        require(edit && edit->isEnabled(), "a selected curved wall must expose its curve editor");
+        drive_boundary_modal(window, *drawing, 0, [&](QDialog* modal) {
+            auto* sweep = modal->findChild<QLineEdit*>("curvedWallSweep");
+            require(sweep && sketch::parse_angle(sweep->text().toStdString()).radians == wall_baseline(wall).sweep_radians,
+                    "curve editor defaults must preserve the exact sweep of a precision-created wall");
+            auto* buttons = modal->findChild<QDialogButtonBox*>("curvedWallButtons");
+            require(buttons, "the actual curve editor must expose Apply");
+            buttons->button(QDialogButtonBox::Apply)->click();
+            require(modal->result() == QDialog::Accepted, "unchanged precise curve values must remain valid");
+        }, "selected curve editor must open", Qt::NoModifier, [&] { edit->click(); });
+        const auto after = window.document().snapshot().entities().at(wall.id);
+        require(after.properties.at("baseline") == wall.properties.at("baseline"),
+                "applying untouched displayed curve coordinates must not round the saved geometry");
+        require(after.properties.at("original_drawing_input") == wall.properties.at("original_drawing_input") &&
+                    after.properties.at("original_drawing_input_context") == wall.properties.at("original_drawing_input_context"),
+                "curve editing must preserve the original input and its historical context");
+    }
+}
+
+void test_wall_precision_preserves_pending_text_placement() {
+    for (const bool start_during_modal : {false, true}) {
+        MainWindow window;
+        prepare_window(window);
+        QApplication::setActiveWindow(&window);
+        process_events();
+        auto* drawing = canvas(window, QStringLiteral("measurementPlanCanvas"));
+        const sketch::TextLibraryEntry entry{"guard-text", "Guard text", "Notes", "Guarded note", {}};
+        const auto original = window.document().snapshot();
+        if (start_during_modal) {
+            drive_boundary_modal(window, *drawing, Qt::Key_D, [&](QDialog* modal) {
+                auto* input = dynamic_cast<sketch::desktop::BoundaryInputDialog*>(modal);
+                require(input, "placement guard fixture needs the Wall anchor form");
+                input->findChild<QLineEdit*>("boundaryInputEndX")->setText("0 m");
+                input->findChild<QLineEdit*>("boundaryInputEndY")->setText("0 m");
+                require(window.beginTextPlacement(entry), "a pending text command must retain its own placement surface");
+                require(input->submit(), "detached anchor input can validate while placement ownership changes");
+            });
+        } else {
+            require(window.beginTextPlacement(entry), "the text placement fixture must start");
+            bool unexpected_modal = false;
+            QTimer::singleShot(0, &window, [&] {
+                if (auto* modal = qobject_cast<QDialog*>(QApplication::activeModalWidget())) {
+                    unexpected_modal = true;
+                    modal->reject();
+                }
+            });
+            send_key(*drawing, Qt::Key_D);
+            require(!unexpected_modal, "D must not start Wall precision while text placement owns canvas clicks");
+        }
+        require_same_document(original, window.document().snapshot(), "competing precision input must change no document data");
+        auto* input_panel = drawing->findChild<QWidget*>("drawingInputPanel");
+        require(input_panel && !input_panel->isVisible(),
+                "refused Wall precision must not install a wall chain over text placement");
+        send_click(*drawing, {1, 1});
+        const auto placed = window.document().snapshot();
+        require(placed.revision() == original.revision() + 1,
+                "the original text placement must still accept its next canvas click");
+        bool found = false;
+        for (const auto& [id, entity] : placed.entities()) {
+            (void)id;
+            require(entity.type != "wall", "the text placement click must not add a wall");
+            if (entity.type != "annotation_state") continue;
+            const auto annotations = sketch::decode_annotation_entity(entity);
+            for (const auto& label : annotations.labels) found |= label.content == "Guarded note";
+        }
+        require(found, "the retained placement must commit the intended text label");
+    }
+}
+
 void test_dimension_presentation_editing() {
     MainWindow window;
     prepare_window(window);
@@ -2275,6 +2622,25 @@ int main(int argc, char** argv) {
     QApplication application(argc, argv);
     try {
         install_test_font();
+        if (application.arguments().contains(QStringLiteral("--wall-placement-guard-only"))) {
+            test_wall_precision_preserves_pending_text_placement();
+            std::cout << "Wall precision placement guards passed\n";
+            return 0;
+        }
+        if (application.arguments().contains(QStringLiteral("--wall-curve-editor-only"))) {
+            test_precision_curve_editor_preserves_unedited_geometry();
+            std::cout << "Precise curve editor workflow passed\n";
+            return 0;
+        }
+        if (application.arguments().contains(QStringLiteral("--wall-precision-only"))) {
+            test_physical_wall_precision_heading();
+            test_physical_wall_precision_methods_and_persistence();
+            test_physical_wall_precision_anchor_relative_and_modal_guards();
+            test_precision_curve_editor_preserves_unedited_geometry();
+            test_wall_precision_preserves_pending_text_placement();
+            std::cout << "Physical wall precision workflows passed\n";
+            return 0;
+        }
         if (application.arguments().contains(QStringLiteral("--inline-drawing-only"))) {
             test_inline_measurement_held_enter_does_not_finish();
             test_inline_wall_cardinal_length_chain();
@@ -2319,6 +2685,11 @@ int main(int argc, char** argv) {
         };
         run_test("unified_pointer_clicks_to_draw_and_drags_to_pan", test_unified_pointer_clicks_to_draw_and_drags_to_pan);
         run_test("inline_wall_cardinal_length_chain", test_inline_wall_cardinal_length_chain);
+        run_test("physical_wall_precision_heading", test_physical_wall_precision_heading);
+        run_test("physical_wall_precision_methods_and_persistence", test_physical_wall_precision_methods_and_persistence);
+        run_test("physical_wall_precision_anchor_relative_and_modal_guards", test_physical_wall_precision_anchor_relative_and_modal_guards);
+        run_test("precision_curve_editor_preserves_unedited_geometry", test_precision_curve_editor_preserves_unedited_geometry);
+        run_test("wall_precision_preserves_pending_text_placement", test_wall_precision_preserves_pending_text_placement);
         run_test("inline_measurement_held_enter_does_not_finish", test_inline_measurement_held_enter_does_not_finish);
         run_test("inline_wall_validation_units_enter_and_keypad", test_inline_wall_validation_units_enter_and_keypad);
         run_test("inline_measurement_receipts_local_history_and_define_first", test_inline_measurement_receipts_local_history_and_define_first);

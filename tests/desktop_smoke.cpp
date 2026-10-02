@@ -2185,10 +2185,22 @@ void test_wall_group_canvas_move_workflow() {
     mouse(QEvent::MouseButtonPress,{0.4,0});
     mouse(QEvent::MouseMove,{2.4,1});
     mouse(QEvent::MouseButtonRelease,{2.4,1});
+    // The exact wall proposal is projected asynchronously. Observe the final
+    // transaction after its queued completion, rather than the release event.
+    const auto move_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (window.document().snapshot().revision() == source.revision() &&
+           window.lastError().isEmpty() && std::chrono::steady_clock::now() < move_deadline) {
+        QApplication::processEvents();
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
     const auto moved = window.document().snapshot();
     require(window.lastError().isEmpty() && moved.revision()==source.revision()+1 &&
                 moved.history().size()==source.history().size()+1,
-            "normal grouped drag must commit one receipt-preserving transaction");
+            "normal grouped drag must commit one receipt-preserving transaction: error=" +
+                window.lastError().toStdString() + "; revision=" + std::to_string(moved.revision()) +
+                "; source=" + std::to_string(source.revision()) + "; history=" +
+                std::to_string(moved.history().size()) + "; source history=" +
+                std::to_string(source.history().size()));
     for (const auto& id : {first,second}) {
         const auto& before = source.entities().at(id.toStdString());
         const auto& after = moved.entities().at(id.toStdString());
@@ -2221,12 +2233,32 @@ void test_wall_group_canvas_move_workflow() {
                 reopened.document().snapshot().entities()==moved.entities(),
             "grouped move receipts and constraints must replay on reopen");
     require(window.undoCommand() && window.selectEntity(first),
-            "partial-connection refusal fixture must restore and select the original wall");
-    mouse(QEvent::MouseButtonPress,{0.4,0});
-    mouse(QEvent::MouseMove,{2.4,1});
-    mouse(QEvent::MouseButtonRelease,{2.4,1});
-    require(!window.lastError().isEmpty() && window.document().snapshot().entities()==source.entities(),
-            "moving one endpoint owner away from an unmoved joined wall must reject atomically");
+            "connected wall fixture must restore and select the original wall");
+    const auto single_source = window.document().snapshot();
+    // Single-object selection exposes endpoint handles. Start in the wall's
+    // middle so this exercises translation rather than endpoint editing.
+    mouse(QEvent::MouseButtonPress,{1.8,0});
+    mouse(QEvent::MouseMove,{3.8,1});
+    mouse(QEvent::MouseButtonRelease,{3.8,1});
+    const auto single_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (window.document().revision() == single_source.revision() &&
+           window.lastError().isEmpty() && std::chrono::steady_clock::now() < single_deadline) {
+        QApplication::processEvents();
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    const auto single_moved = window.document().snapshot();
+    require(window.lastError().isEmpty() && single_moved.revision() == single_source.revision()+1 &&
+                single_moved.history().size() == single_source.history().size()+1,
+            "wall-only movement must publish its connected-corner proposal in one transaction");
+    const auto& single_first = single_moved.entities().at(first.toStdString()).properties.at("baseline");
+    const auto& single_second = single_moved.entities().at(second.toStdString()).properties.at("baseline");
+    require(single_first.at("start") == nlohmann::json::array({2.,1.}) &&
+                single_first.at("end") == single_second.at("start") &&
+                single_moved.entities().at(door.toStdString()) == single_source.entities().at(door.toStdString()) &&
+                single_moved.entities().at(unrelated.toStdString()) == single_source.entities().at(unrelated.toStdString()),
+            "wall-only movement must retain its joint, hosted station and unrelated geometry");
+    require(window.undoCommand() && window.document().snapshot().entities() == source.entities(),
+            "connected-corner movement must undo exactly before the mixed fixture");
 
     const auto sofa = window.createAnnotationSymbol("svg-v2-04_living-sectional-left",{1.5,1.2});
     const auto label = window.createAnnotationLabel("bedroom","Office",{2,2});
@@ -2259,6 +2291,12 @@ void test_wall_group_canvas_move_workflow() {
     mouse(QEvent::MouseButtonPress,{0.4,0});
     mouse(QEvent::MouseMove,{2.4,1});
     mouse(QEvent::MouseButtonRelease,{2.4,1});
+    const auto mixed_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (window.document().snapshot().revision() == mixed_source.revision() &&
+           window.lastError().isEmpty() && std::chrono::steady_clock::now() < mixed_deadline) {
+        QApplication::processEvents();
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
     const auto mixed_moved = window.document().snapshot();
     require(window.lastError().isEmpty() && mixed_moved.revision()==mixed_source.revision()+1 &&
                 mixed_moved.history().size()==mixed_source.history().size()+1,
@@ -2278,10 +2316,14 @@ void test_wall_group_canvas_move_workflow() {
                 mixed_moved.entities().at(metadata.id).required &&
                 mixed_moved.entities().at(metadata.id).extensions==metadata.extensions,
             "mixed move must translate placed annotations and retain the owner envelope");
-    require(mixed_moved.entities().at(reference.toStdString()).properties.at("position_m")==nlohmann::json::array({2.,1.}) &&
+    const auto& moved_reference_position = mixed_moved.entities().at(reference.toStdString()).properties.at("position_m");
+    const auto& source_reference_position = mixed_source.entities().at(reference.toStdString()).properties.at("position_m");
+    require(std::abs(moved_reference_position[0].get<double>() - source_reference_position[0].get<double>() - 2)<1e-8 &&
+                std::abs(moved_reference_position[1].get<double>() - source_reference_position[1].get<double>() - 1)<1e-8 &&
                 mixed_moved.entities().at(door.toStdString())==mixed_source.entities().at(door.toStdString()) &&
                 mixed_moved.assets()==mixed_source.assets(),
-            "mixed move must translate reference placement without changing hosted stations or image assets");
+            "mixed move must translate reference placement without changing hosted stations or image assets: " +
+                moved_reference_position.dump());
     canvas->fitView();
     if (!captures.isEmpty()) require(canvas->grab().save(QDir(captures).filePath("mixed-object-group-move.png")),
                                     "mixed selection move capture must save");
@@ -2296,6 +2338,11 @@ void test_wall_group_canvas_move_workflow() {
     mouse(QEvent::MouseButtonPress,{0.4,0});
     mouse(QEvent::MouseMove,{2.4,1});
     mouse(QEvent::MouseButtonRelease,{2.4,1});
+    const auto mixed_rejection_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (window.lastError().isEmpty() && std::chrono::steady_clock::now() < mixed_rejection_deadline) {
+        QApplication::processEvents();
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
     require(!window.lastError().isEmpty() && window.document().snapshot().entities()==mixed_source.entities(),
             "rejected mixed group must not publish the symbol or image part of its move");
 

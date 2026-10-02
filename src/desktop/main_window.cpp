@@ -12704,6 +12704,17 @@ public:
     QString createStraightWall(Vec2 start, Vec2 end, const QString& classification,
                                std::optional<Revision> expected_revision = std::nullopt,
                                std::optional<ConstructionReceipt> original_input = std::nullopt) {
+        return createPhysicalWall(Segment{start, end, 0.0}, classification,
+                                  expected_revision, std::move(original_input));
+    }
+
+    QString createPhysicalWall(const Segment& baseline, const QString& classification,
+                               std::optional<Revision> expected_revision = std::nullopt,
+                               std::optional<ConstructionReceipt> original_input = std::nullopt,
+                               std::optional<ConstructionReplayContext> original_context = std::nullopt,
+                               json extensions = json::object()) {
+        const auto start = baseline.start;
+        const auto end = baseline.end;
         const auto revision = expected_revision.value_or(m_document->revision());
         const auto drawing_context = requireDrawingContext();
         if (!drawing_context) return {};
@@ -12718,7 +12729,7 @@ public:
             const auto unit = m_metric_units ? Unit::metre : Unit::foot;
             if (m_wall_draw_thickness) thickness = parse_quantity(m_wall_draw_thickness->text().toStdString(), unit).metres;
             if (m_wall_draw_height) height = parse_quantity(m_wall_draw_height->text().toStdString(), unit).metres;
-            validate_wall_semantics(Wall{"", Segment{start, end, 0.0}, thickness, height, 0.0, {}});
+            validate_wall_semantics(Wall{"", baseline, thickness, height, 0.0, {}});
         } catch (const std::exception& error) {
             setError(QStringLiteral("Wall dimensions: %1").arg(QString::fromUtf8(error.what())));
             return {};
@@ -12727,7 +12738,7 @@ public:
         const auto id = id_from(entity_id);
         auto properties = json{{"floor_id", drawing_context->floor_id},
                                {"layer_id", drawing_context->layer_id},
-                               {"baseline", segment_json(Segment{start, end, 0.0})},
+                               {"baseline", segment_json(baseline)},
                                {"thickness_m", thickness},
                                {"height_m", height},
                                {"elevation_m", 0.0},
@@ -12735,21 +12746,30 @@ public:
         add_default_level_placement(properties, *drawing_context);
         try {
             if (original_input) {
+                const auto replay_context = original_context.value_or(ConstructionReplayContext{
+                    start, std::nullopt, std::nullopt, default_geometry_tolerance_metres});
                 const auto replay = replay_construction_receipt(*original_input,
-                    ConstructionReplayContext{start, std::nullopt, std::nullopt,
-                                               default_geometry_tolerance_metres});
+                    replay_context);
                 if (replay.segment.start.x != start.x || replay.segment.start.y != start.y ||
                     replay.segment.end.x != end.x || replay.segment.end.y != end.y ||
-                    replay.segment.sweep_radians != 0.0)
+                    replay.segment.sweep_radians != baseline.sweep_radians)
                     throw std::invalid_argument("The original drawing input does not match the wall baseline.");
                 auto receipt = replay.receipt;
                 receipt.segment_id = entity_id;
                 // Historical input provenance, never a second geometry authority.
                 properties["original_drawing_input"] = encode_construction_receipt(receipt);
+                properties["original_drawing_input_context"] = json{
+                    {"version", 1}, {"expected_start", point_json(replay_context.expected_start)},
+                    {"previous_segment", replay_context.previous_segment
+                        ? segment_json(*replay_context.previous_segment) : json(nullptr)},
+                    {"closure_anchor", replay_context.closure_anchor
+                        ? point_json(*replay_context.closure_anchor) : json(nullptr)},
+                    {"tolerance_metres", replay_context.tolerance_metres}};
             }
             const auto source = authoringSnapshot();
-            const Entity wall{entity_id, "wall", properties, false, json::object()};
-            ApplyEntityChanges command{revision, {EntityChange::upsert(wall)}, {}, "create straight wall"};
+            const Entity wall{entity_id, "wall", properties, false, std::move(extensions)};
+            ApplyEntityChanges command{revision, {EntityChange::upsert(wall)}, {},
+                baseline.sweep_radians == 0.0 ? "create straight wall" : "create curved wall"};
             const auto candidate = Document::preview_command(source, command);
             const auto visible = visible_project_entities_with_phase(source, ProjectViewFilter{});
             using EndpointKey = std::pair<std::string, int>;
@@ -12786,7 +12806,7 @@ public:
                         read_string(entity.properties, "layer_id") != std::optional<std::string>{drawing_context->layer_id}) continue;
                     Wall existing;
                     std::string diagnostic;
-                    if (!read_document_wall(entity, {}, existing, diagnostic) || existing.baseline.sweep_radians != 0.0) continue;
+                    if (!read_document_wall(entity, {}, existing, diagnostic)) continue;
                     for (const auto old_role : {WallEndpointRole::start, WallEndpointRole::end}) {
                         const auto old_point = old_role == WallEndpointRole::start ? existing.baseline.start : existing.baseline.end;
                         // A snap establishes the exact coordinate. Do not infer a
@@ -12943,19 +12963,6 @@ public:
                     baseline = arc_from_chord_height(start, end, quantity.metres);
                 }
             }
-            validate_wall_semantics(Wall{"", baseline, 0.14, 2.4384, 0.0, {}});
-            const auto entity_id = new_id("wall");
-            const auto id = id_from(entity_id);
-            auto properties = json{{"floor_id", drawing_context->floor_id},
-                                   {"layer_id", drawing_context->layer_id},
-                                   {"baseline", segment_json(baseline)},
-                                   {"thickness_m", 0.14},
-                                   {"height_m", 2.4384},
-                                   {"elevation_m", 0.0},
-                                   {"classification", classification.trimmed().isEmpty()
-                                                           ? std::string("interior")
-                                                           : classification.trimmed().toStdString()}};
-            add_default_level_placement(properties, *drawing_context);
             const auto derived_sweep = angle_from_radians(baseline.sweep_radians);
             const auto source_sweep = construction_key == QStringLiteral("angle")
                 ? expression.toStdString() : derived_sweep.original_expression;
@@ -12972,14 +12979,9 @@ public:
                 {"normalized_sweep", derived_sweep.normalized_expression},
                 {"radians", baseline.sweep_radians},
             };
-            if (!applyEntity(Entity{entity_id, "wall", properties, false,
-                                    json{{"curve_input", curve_input}}},
-                             "create curved wall", revision)) {
-                return {};
-            }
-            m_selected_id = id;
-            refresh();
-            return id;
+            return createPhysicalWall(baseline, classification.trimmed().isEmpty()
+                ? QStringLiteral("interior") : classification.trimmed(), revision,
+                std::nullopt, std::nullopt, json{{"curve_input", curve_input}});
         } catch (const std::exception& error) {
             setError(QStringLiteral("Curved wall: %1").arg(QString::fromUtf8(error.what())));
             return {};
@@ -25619,7 +25621,7 @@ private:
             }
             if (m_inspector && m_inspector->isVisible()) positionContextEditor();
         });
-        canvas->setRightClicked([this](Vec2 point, QString target) {
+        canvas->setRightClicked([this, canvas](Vec2 point, QString target) {
             if (!m_pending_opening_kind.isEmpty()) {
                 cancelTool();
                 return;
@@ -25647,8 +25649,14 @@ private:
                     m_symbol_library_status->setText(QStringLiteral("Component placement cancelled."));
                 return;
             }
-            if (m_pending_wall_start) {
+            if (m_tool == CanvasTool::wall || m_pending_wall_start) {
                 QMenu menu(owner);
+                if (m_tool == CanvasTool::wall) {
+                    auto* precise = menu.addAction(QStringLiteral("Precise input…"));
+                    precise->setShortcut(QKeySequence(Qt::Key_D));
+                    QObject::connect(precise, &QAction::triggered, owner,
+                                     [this, canvas] { preciseWallInput(canvas); });
+                }
                 auto* finish = menu.addAction(m_wall_chain_has_segments
                     ? QStringLiteral("Finish wall chain")
                     : QStringLiteral("Cancel wall start"));
@@ -25758,7 +25766,10 @@ private:
             cancelTool();
         });
         canvas->setPreciseInputRequested([this,canvas] {
-            preciseBoundaryInput(canvas);
+            if (m_tool == CanvasTool::wall ||
+                (m_tool == CanvasTool::select && m_creation_mode == DrawingMode::wall))
+                preciseWallInput(canvas);
+            else if (m_tool == CanvasTool::boundary) preciseBoundaryInput(canvas);
         });
         canvas->setDraftUndoRequested([this] {
             (void)undoCommand();
@@ -29847,6 +29858,8 @@ private:
                 m_pending_wall_start = point;
                 m_wall_chain_anchor = point;
                 m_wall_chain_has_segments = false;
+                m_wall_chain_previous_id.clear();
+                m_wall_input_preferences = {};
                 refreshWallPreview(point);
                 owner->statusBar()->showMessage(QStringLiteral("Wall start recorded  •  click the end point"));
                 return;
@@ -29868,8 +29881,22 @@ private:
                 id = createSlopedWall(*m_pending_wall_start, point, rise,
                                       QStringLiteral("interior"), context.revision);
             } else {
-                id = createStraightWall(*m_pending_wall_start, point,
-                                        QStringLiteral("interior"), expected_revision, std::move(original_input));
+                try {
+                    const auto previous = previousWallSegment(m_document->snapshot());
+                    const ConstructionReplayContext replay_context{
+                        *m_pending_wall_start,
+                        original_input && original_input->kind == BoundaryConstructionKind::line_relative_turn
+                            ? previous : std::nullopt,
+                        original_input && original_input->kind == BoundaryConstructionKind::line_closure
+                            ? m_wall_chain_anchor : std::nullopt,
+                        default_geometry_tolerance_metres};
+                    id = createPhysicalWall(Segment{*m_pending_wall_start, point, 0.0},
+                        QStringLiteral("interior"), expected_revision, std::move(original_input),
+                        replay_context);
+                } catch (const std::exception& error) {
+                    setError(QStringLiteral("Wall chain: %1").arg(QString::fromUtf8(error.what())));
+                    return;
+                }
             }
             if (!id.isEmpty()) {
                 // A just-created wall becomes the new chain segment, not a
@@ -29877,6 +29904,7 @@ private:
                 // as a deselect-only gesture.
                 if (m_selected_id == id) (void)selectEntity({}, false);
                 const auto chain_anchor = m_wall_chain_anchor;
+                const auto preferences = m_wall_input_preferences;
                 if (m_tool == CanvasTool::wall && m_wall_chain_has_segments && chain_anchor &&
                     point.x == chain_anchor->x && point.y == chain_anchor->y) {
                     finishWallChain();
@@ -29887,6 +29915,8 @@ private:
                     m_pending_wall_start = point;
                     m_wall_chain_anchor = chain_anchor;
                     m_wall_chain_has_segments = true;
+                    m_wall_chain_previous_id = id;
+                    m_wall_input_preferences = preferences;
                     refreshWallPreview(point);
                     owner->statusBar()->showMessage(QStringLiteral("Click the next wall end • Esc finishes the chain"));
                 } else {
@@ -30047,6 +30077,9 @@ private:
         m_drawing_input_snapshot.reset();
         m_drawing_input_boundary.reset();
         m_drawing_input_wall_start.reset();
+        m_drawing_input_wall_anchor.reset();
+        m_drawing_input_wall_previous_id.clear();
+        m_drawing_input_wall_has_segments = false;
     }
 
     void captureDrawingInput() {
@@ -30055,6 +30088,9 @@ private:
         m_drawing_input_tool = m_tool;
         m_drawing_input_workspace = m_workspace;
         m_drawing_input_wall_start = m_pending_wall_start;
+        m_drawing_input_wall_anchor = m_wall_chain_anchor;
+        m_drawing_input_wall_previous_id = m_wall_chain_previous_id;
+        m_drawing_input_wall_has_segments = m_wall_chain_has_segments;
         m_drawing_input_boundary = m_boundary_session
             ? std::optional{m_boundary_session->view()} : std::nullopt;
         if (m_drawing_input_boundary) m_drawing_input_boundary->pointer.reset();
@@ -30126,7 +30162,12 @@ private:
             } else {
                 if (!m_drawing_input_wall_start || !m_pending_wall_start ||
                     m_drawing_input_wall_start->x != m_pending_wall_start->x ||
-                    m_drawing_input_wall_start->y != m_pending_wall_start->y)
+                    m_drawing_input_wall_start->y != m_pending_wall_start->y ||
+                    m_drawing_input_wall_previous_id != m_wall_chain_previous_id ||
+                    m_drawing_input_wall_has_segments != m_wall_chain_has_segments ||
+                    m_drawing_input_wall_anchor.has_value() != m_wall_chain_anchor.has_value() ||
+                    (m_wall_chain_anchor && (m_drawing_input_wall_anchor->x != m_wall_chain_anchor->x ||
+                                            m_drawing_input_wall_anchor->y != m_wall_chain_anchor->y)))
                     return reject(QStringLiteral("The wall start changed. Clear the length and enter it again."));
                 ConstructionReceipt receipt;
                 receipt.kind = BoundaryConstructionKind::line_rise_run;
@@ -30153,6 +30194,128 @@ private:
         const auto phase=m_boundary_session->phase();
         return phase==BoundaryAuthoringPhase::awaiting_anchor || phase==BoundaryAuthoringPhase::drawing ||
             phase==BoundaryAuthoringPhase::awaiting_dimension;
+    }
+
+    // Resolve chain context from current authoritative geometry, never a
+    // retained baseline that could have become stale after undo or editing.
+    std::optional<Segment> previousWallSegment(const DocumentSnapshot& snapshot) const {
+        if (!m_wall_chain_has_segments) return std::nullopt;
+        const auto found = snapshot.entities().find(m_wall_chain_previous_id.toStdString());
+        if (found == snapshot.entities().end() || found->second.type != "wall")
+            throw std::invalid_argument("The previous wall no longer exists. Finish this chain and start again.");
+        const auto baseline = read_required_segment(found->second.properties, "baseline");
+        if (!baseline || !m_pending_wall_start || baseline->end.x != m_pending_wall_start->x ||
+            baseline->end.y != m_pending_wall_start->y)
+            throw std::invalid_argument("The previous wall endpoint changed. Finish this chain and start again.");
+        return baseline;
+    }
+
+    void preciseWallInput(PlanCanvas* source_canvas = nullptr) {
+        if (!m_document->is_editable() || m_workspace != Workspace::measurement ||
+            !m_pending_symbol_id.isEmpty() || !m_pending_opening_kind.isEmpty() || m_boundary_session ||
+            m_text_placement_context || m_plan_label_context ||
+            (m_tool != CanvasTool::wall &&
+             !(m_tool == CanvasTool::select && m_creation_mode == DrawingMode::wall && m_selected_ids.isEmpty()))) return;
+        const auto context = captureModalContext();
+        const auto snapshot = m_document->snapshot();
+        const auto tool = m_tool;
+        const auto workspace = m_workspace;
+        const auto mode = m_creation_mode;
+        const auto start = m_pending_wall_start;
+        const auto anchor = m_wall_chain_anchor;
+        const auto previous_id = m_wall_chain_previous_id;
+        const auto has_segments = m_wall_chain_has_segments;
+        const auto selection = m_selected_ids;
+        const auto thickness_text = m_wall_draw_thickness ? m_wall_draw_thickness->text() : QString{};
+        const auto height_text = m_wall_draw_height ? m_wall_draw_height->text() : QString{};
+        const QPointer<PlanCanvas> return_canvas = source_canvas ? source_canvas : m_measurementCanvas;
+        const auto restore_canvas_focus = [&] {
+            if (return_canvas && m_workspace == Workspace::measurement &&
+                return_canvas.data() == m_measurementCanvas)
+                return_canvas->setFocus(Qt::OtherFocusReason);
+        };
+        const auto same_point = [](const std::optional<Vec2>& left, const std::optional<Vec2>& right) {
+            return left.has_value() == right.has_value() &&
+                (!left || (left->x == right->x && left->y == right->y));
+        };
+        try {
+            const auto previous = previousWallSegment(snapshot);
+            BoundaryAuthoringSession source(BoundaryAuthoringMode::draw_first);
+            if (start) {
+                if (previous) {
+                    // Analytical seed supplies the previous tangent only to
+                    // the private session. Only its final edge is persisted.
+                    (void)source.anchor(previous->start);
+                    if (previous->sweep_radians == 0.0) (void)source.add_line_to(previous->end);
+                    else (void)source.add_arc_chord_angle(previous->end,
+                        angle_from_radians(previous->sweep_radians));
+                } else (void)source.anchor(*start);
+            }
+            source.set_pointer(m_last_cursor);
+            BoundaryInputDialog dialog(source, context.metric_units, owner,
+                m_wall_input_preferences, BoundaryInputPresentation::wall);
+            const auto result = dialog.exec();
+            restore_canvas_focus();
+            if (result != QDialog::Accepted) return;
+            const auto current = m_document->snapshot();
+            if (!modalContextUnchanged(context) || m_tool != tool || m_workspace != workspace ||
+                m_creation_mode != mode || m_selected_ids != selection ||
+                m_text_placement_context || m_plan_label_context || m_boundary_session ||
+                !m_pending_symbol_id.isEmpty() || !m_pending_opening_kind.isEmpty() ||
+                current.entities() != snapshot.entities() || current.assets() != snapshot.assets() ||
+                !same_point(m_pending_wall_start, start) || !same_point(m_wall_chain_anchor, anchor) ||
+                m_wall_chain_previous_id != previous_id || m_wall_chain_has_segments != has_segments ||
+                (m_wall_draw_thickness && m_wall_draw_thickness->text() != thickness_text) ||
+                (m_wall_draw_height && m_wall_draw_height->text() != height_text)) {
+                setError(QStringLiteral("The project or wall drawing context changed. Reopen precise input."));
+                return;
+            }
+            const auto candidate = dialog.candidate();
+            if (!candidate) return;
+            const auto chain = candidate->active_chain();
+            if (!chain) return;
+            if (!start) {
+                m_tool = CanvasTool::wall;
+                m_pending_wall_start = chain->anchor;
+                m_wall_chain_anchor = chain->anchor;
+                m_wall_chain_has_segments = false;
+                m_wall_chain_previous_id.clear();
+                syncToolControls();
+                refreshWallPreview(chain->anchor);
+                clearError();
+                restore_canvas_focus();
+                return;
+            }
+            if (chain->segments.size() != (previous ? 2U : 1U) || chain->receipts.empty())
+                throw std::invalid_argument("Precise wall input must add exactly one edge.");
+            const auto& edge = chain->segments.back().segment;
+            const auto& receipt = chain->receipts.back();
+            const ConstructionReplayContext replay_context{*start,
+                receipt.kind == BoundaryConstructionKind::line_relative_turn ? previous : std::nullopt,
+                receipt.kind == BoundaryConstructionKind::line_closure ? anchor : std::nullopt,
+                default_geometry_tolerance_metres};
+            const auto id = createPhysicalWall(edge, QStringLiteral("interior"), context.revision,
+                receipt, replay_context);
+            if (id.isEmpty()) return;
+            const auto preferences = dialog.acceptedPreferences();
+            if (m_selected_id == id) (void)selectEntity({}, false);
+            if (has_segments && anchor && edge.end.x == anchor->x && edge.end.y == anchor->y) {
+                finishWallChain();
+                restore_canvas_focus();
+                return;
+            }
+            clearPreview();
+            m_pending_wall_start = edge.end;
+            m_wall_chain_anchor = anchor;
+            m_wall_chain_has_segments = true;
+            m_wall_chain_previous_id = id;
+            if (preferences) m_wall_input_preferences = *preferences;
+            refreshWallPreview(edge.end);
+            clearError();
+            restore_canvas_focus();
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Precise wall input: %1").arg(QString::fromUtf8(error.what())));
+        }
     }
 
     void preciseBoundaryInput(PlanCanvas* source_canvas = nullptr) {
@@ -30298,6 +30461,8 @@ private:
         m_pending_wall_start.reset();
         m_wall_chain_anchor.reset();
         m_wall_chain_has_segments = false;
+        m_wall_chain_previous_id.clear();
+        m_wall_input_preferences = {};
         m_redefine_boundary_id.reset();
         m_restored_boundary_navigation = false;
     }
@@ -30332,6 +30497,8 @@ private:
         m_pending_wall_start.reset();
         m_wall_chain_anchor.reset();
         m_wall_chain_has_segments = false;
+        m_wall_chain_previous_id.clear();
+        m_wall_input_preferences = {};
         updateDrawingInput();
         m_measurementCanvas->setWallPreview(std::nullopt);
         m_architecturalCanvas->setWallPreview(std::nullopt);
@@ -31294,8 +31461,8 @@ private:
         auto initial_sweep = QStringLiteral("90 deg");
         auto initial_classification = QStringLiteral("interior");
         if (editing) {
-            initial_sweep = QStringLiteral("%1 deg")
-                .arg(existing_baseline->sweep_radians * 180.0 / std::numbers::pi, 0, 'g', 12);
+            initial_sweep = QString::fromStdString(
+                angle_from_radians(existing_baseline->sweep_radians).original_expression);
             if (selected) {
                 const auto classification = read_string(selected->properties, "classification");
                 if (classification && !classification->empty())
@@ -31326,7 +31493,7 @@ private:
                             initial_sweep = QString::fromStdString(source_sweep.get<std::string>());
                     }
                 } catch (const std::exception&) {
-                    // A legacy arc without a receipt falls back to degrees.
+                    // A wall without chord provenance retains its exact sweep.
                 }
             }
         }
@@ -31414,25 +31581,40 @@ private:
                                      return;
                                  }
                                  const auto unit = m_metric_units ? Unit::metre : Unit::foot;
-                                 const auto read_coordinate = [&](QLineEdit* field, const char* label) {
+                                 const auto read_coordinate = [&](QLineEdit* field, const char* label,
+                                                                  const QString& initial_text, double original) {
                                      const auto expression = field->text().trimmed();
                                      if (expression.isEmpty())
                                          throw std::invalid_argument(std::string(label) + " is required.");
+                                     // Display rounding is presentation only. Changing another
+                                     // field must not re-enter untouched model coordinates.
+                                     if (editing && expression == initial_text.trimmed()) return original;
                                      const auto value = parse_quantity(expression.toStdString(), unit).metres;
                                      if (!std::isfinite(value))
                                          throw std::invalid_argument(std::string(label) + " must be finite.");
                                      return value;
                                  };
                                  const Vec2 first{
-                                     read_coordinate(start_x, "Start X"),
-                                     read_coordinate(start_y, "Start Y")};
+                                     read_coordinate(start_x, "Start X", x_text, start.x),
+                                     read_coordinate(start_y, "Start Y", y_text, start.y)};
                                  const Vec2 second{
-                                     read_coordinate(end_x, "End X"),
-                                     read_coordinate(end_y, "End Y")};
+                                     read_coordinate(end_x, "End X", end_x_text, end.x),
+                                     read_coordinate(end_y, "End Y", end_y_text, end.y)};
                                  if (sweep->text().trimmed().isEmpty())
                                      throw std::invalid_argument("Curve measure is required.");
                                  const auto construction_key = construction->currentData().toString();
                                  if (editing) {
+                                     if (start_x->text().trimmed() == x_text.trimmed() &&
+                                         start_y->text().trimmed() == y_text.trimmed() &&
+                                         end_x->text().trimmed() == end_x_text.trimmed() &&
+                                         end_y->text().trimmed() == end_y_text.trimmed() &&
+                                         construction_key == initial_construction &&
+                                         sweep->text().trimmed() == initial_sweep.trimmed() &&
+                                         classification->text().trimmed() == initial_classification.trimmed()) {
+                                         clearError();
+                                         dialog.accept();
+                                         return;
+                                     }
                                      if (!editSelectedCurvedWallFromConstruction(
                                              first, second, construction_key, sweep->text(),
                                              context.revision)) {
@@ -32060,10 +32242,15 @@ private:
     std::optional<DocumentSnapshot> m_drawing_input_snapshot;
     std::optional<BoundaryAuthoringState> m_drawing_input_boundary;
     std::optional<Vec2> m_drawing_input_wall_start;
+    std::optional<Vec2> m_drawing_input_wall_anchor;
+    QString m_drawing_input_wall_previous_id;
+    bool m_drawing_input_wall_has_segments{};
     CanvasTool m_drawing_input_tool{CanvasTool::select};
     Workspace m_drawing_input_workspace{Workspace::measurement};
     std::optional<Vec2> m_wall_chain_anchor;
     bool m_wall_chain_has_segments{};
+    QString m_wall_chain_previous_id;
+    BoundaryInputPreferences m_wall_input_preferences;
     QString m_pending_opening_kind;
     QString m_pending_opening_symbol_id;
     std::optional<DoorOperation> m_pending_opening_door_operation;

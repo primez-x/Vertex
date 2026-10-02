@@ -106,9 +106,11 @@ bool has_explicit_angle_unit(const QString& value) {
 class BoundaryInputDialog::Impl {
 public:
     Impl(BoundaryInputDialog* owner, const BoundaryAuthoringSession& source,
-         bool metric_units,const BoundaryInputPreferences& preferences)
+         bool metric_units,const BoundaryInputPreferences& preferences,
+         BoundaryInputPresentation presentation)
         : owner(owner), source(source), metric(metric_units),
-          preferences(preferences.metric_units && *preferences.metric_units!=metric_units ? BoundaryInputPreferences{} : preferences) {
+          preferences(preferences.metric_units && *preferences.metric_units!=metric_units ? BoundaryInputPreferences{} : preferences),
+          wall(presentation == BoundaryInputPresentation::wall) {
         phase=source.phase();
         owner->setObjectName(QStringLiteral("boundaryInputDialog"));
         owner->setWindowTitle(QStringLiteral("Add precise boundary segment"));
@@ -131,6 +133,12 @@ public:
         } else if (phase==BoundaryAuthoringPhase::awaiting_dimension) {
             owner->setWindowTitle(QStringLiteral("Place precise edge dimension"));
             heading->setText(QStringLiteral("Enter the pending dimension's text position, then choose Place dimension."));
+        }
+        if (wall) {
+            owner->setWindowTitle(phase == BoundaryAuthoringPhase::awaiting_anchor
+                ? QStringLiteral("Wall start point") : QStringLiteral("Add precise wall segment"));
+            if (phase == BoundaryAuthoringPhase::drawing)
+                heading->setText(QStringLiteral("Choose how to draw the next physical wall. Its thickness and height come from Wall settings."));
         }
 
         form = new QFormLayout;
@@ -180,7 +188,7 @@ public:
 
         error = new QLabel(owner);
         error->setObjectName(QStringLiteral("boundaryInputError"));
-        error->setAccessibleName(QStringLiteral("Boundary input diagnostic"));
+        error->setAccessibleName(wall ? QStringLiteral("Wall input diagnostic") : QStringLiteral("Boundary input diagnostic"));
         error->setWordWrap(true);
         error->setStyleSheet(QStringLiteral("color:#b44b4b;"));
         error->setVisible(false);
@@ -188,13 +196,13 @@ public:
 
         preview = new QLabel(owner);
         preview->setObjectName(QStringLiteral("boundaryInputPreview"));
-        preview->setAccessibleName(QStringLiteral("Boundary segment preview"));
+        preview->setAccessibleName(wall ? QStringLiteral("Wall segment preview") : QStringLiteral("Boundary segment preview"));
         preview->setWordWrap(true);
         root->addWidget(preview);
 
         status = new QLabel(owner);
         status->setObjectName(QStringLiteral("boundaryInputStatus"));
-        status->setAccessibleName(QStringLiteral("Boundary input status"));
+        status->setAccessibleName(wall ? QStringLiteral("Wall input status") : QStringLiteral("Boundary input status"));
         status->setWordWrap(true);
         status->setTextInteractionFlags(Qt::TextSelectableByMouse);
         root->addWidget(status);
@@ -202,7 +210,8 @@ public:
         buttons = new QDialogButtonBox(QDialogButtonBox::Cancel, owner);
         buttons->setObjectName(QStringLiteral("boundaryInputButtons"));
         const auto action_text=phase==BoundaryAuthoringPhase::awaiting_anchor ? QStringLiteral("Place start point") :
-            phase==BoundaryAuthoringPhase::awaiting_dimension ? QStringLiteral("Place dimension") : QStringLiteral("Add segment");
+            phase==BoundaryAuthoringPhase::awaiting_dimension ? QStringLiteral("Place dimension") :
+            wall ? QStringLiteral("Add wall") : QStringLiteral("Add segment");
         add_button = buttons->addButton(action_text,
                                          QDialogButtonBox::AcceptRole);
         add_button->setObjectName(QStringLiteral("boundaryInputAdd"));
@@ -541,7 +550,8 @@ private:
                 "Pending dimension: place the dimension for this edge before finishing the "
                 "boundary."));
         } else {
-            status->setText(QStringLiteral(
+            status->setText(wall ? QStringLiteral("Ready to add %1. Press D for the next wall or Esc to finish the chain.")
+                                .arg(method_name(method_from(*method))) : QStringLiteral(
                 "Ready to add %1. Press Enter on the drawing to close the area.")
                                 .arg(method_name(method_from(*method))));
         }
@@ -581,6 +591,7 @@ private:
     BoundaryAuthoringPhase phase{};
     bool metric{};
     BoundaryInputPreferences preferences;
+    bool wall{};
     std::optional<BoundaryInputPreferences> accepted_preferences;
     bool loading{true};
     std::optional<BoundaryAuthoringSession> validation_candidate;
@@ -598,8 +609,9 @@ private:
 
 BoundaryInputDialog::BoundaryInputDialog(const BoundaryAuthoringSession& source,
                                          bool metricUnits, QWidget* parent,
-                                         const BoundaryInputPreferences& preferences)
-    : QDialog(parent), m_impl(std::make_unique<Impl>(this, source, metricUnits,preferences)) {}
+                                         const BoundaryInputPreferences& preferences,
+                                         BoundaryInputPresentation presentation)
+    : QDialog(parent), m_impl(std::make_unique<Impl>(this, source, metricUnits,preferences,presentation)) {}
 
 BoundaryInputDialog::~BoundaryInputDialog() = default;
 

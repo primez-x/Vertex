@@ -1,6 +1,6 @@
 # Vertex user testing checklist
 
-314 practical tasks, grouped by how you use the app. This replaces the earlier engineering-oriented checklist. The old 130-item list is preserved separately as engineering-requirements-checklist.md.
+317 practical tasks, grouped by how you use the app. This replaces the earlier engineering-oriented checklist. The old 130-item list is preserved separately as engineering-requirements-checklist.md.
 
 This is a user acceptance list for the intended app, not a claim that every listed action is implemented or working in the current preview. If you cannot find a control, or a feature is absent, mark **Blocked / missing** and describe it. Specialized sections can be skipped if you do not use them or lack the device or sample files.
 
@@ -37,7 +37,7 @@ Start with the workspace, draw a room, close it with the mouse, drag-select it, 
 - Complete a real job (5 tasks)
 - Appraisal square-foot workflow (13 tasks)
 - Custom area details (1 task)
-- Exact keyboard drawing (3 tasks)
+- Exact keyboard drawing (6 tasks)
 - Architectural joins and named views (3 tasks)
 
 ## Start a project and arrange the workspace
@@ -359,7 +359,7 @@ drawing; switching modes does not change existing geometry.
 
 - [ ] **U060 — Move several selected objects together**
   - Steps: Draw and close two measured rooms, then place a sofa and draw a wall. Ctrl-click both rooms, the sofa, and the wall. Drag inside the selected bounds and release. Confirm both rooms and their dimensions move with the sofa and wall. Undo, redo, save, and reopen. Repeat with two joined walls, a text label, and a reference image. For a pair of rooms or walls with a saved coincident-point constraint, select just one owner plus the sofa and try moving it away from the other owner.
-  - Expected: The complete group moves together in one undo step. Room areas, entered measurements, dimension placements, wall lengths, door/window positions along their hosts, symbol sizes, image calibration, and relative placement remain correct after reopening. Moving only part of a constrained group reports the conflict and leaves every selected object unchanged.
+  - Expected: The complete group moves together in one undo step. Room areas, entered measurements, dimension placements, wall lengths, door/window positions along their hosts, symbol sizes, image calibration, and relative placement remain correct after reopening. Moving only part of a constrained mixed group reports the conflict and leaves every selected object unchanged. Wall-only connected movement is tested separately in U289.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
@@ -1818,6 +1818,24 @@ drawing; switching modes does not change existing geometry.
 - [ ] **U314 — Use the drawing keypad and cancel an invalid measurement**
   - Steps: Start a wall, expand 123, enter a length with the keypad and choose a direction. Try zero, a negative length and invalid text. Press Escape in the field, then enter a valid length. Change Imperial/Metric while another entry is pending. Finish the wall chain with Escape on the canvas.
   - Expected: Keypad and keyboard use the same measurement control. Invalid input explains the problem and changes no geometry. Escape clears pending text while retaining committed walls. Changing units clears the pending entry rather than reinterpreting it. The keypad can collapse again to recover drawing space.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **U315 — Start and draw an angled wall with the keyboard**
+  - Steps: Leave Draw set to Wall, set the wall depth and height, and press D before clicking a start point. Enter exact start coordinates. Press D again, choose Length / heading, enter 2 m and 45 deg, and add the wall. Repeat with Rise / run and Line to world coordinate. Try an angle without a unit and cancel once.
+  - Expected: The start point adds no wall. Each accepted edge adds one physical wall using the entered geometry and chosen depth and height, without grid rounding. Invalid input explains the problem. Cancel retains the current chain. Undo, Redo and reopening retain the wall.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **U316 — Draw a physical curved wall from its measurements**
+  - Steps: Start a Wall chain and press D. Draw an arc with chord endpoints and a 90 deg sweep. Repeat using signed chord height, chord/arc length and start tangent/arc length/sweep. Try Clockwise for chord/length. Finish the chain, select a curve, inspect its dimensions, save and reopen. Repeat in Imperial and Metric.
+  - Expected: Each result is a curved wall with the chosen thickness and height, not a straight chord or a decorative symbol. Arc-length input measures along the curve. The selected construction and measurements survive reopening, and one Undo removes the wall and its new endpoint connections together.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **U317 — Turn from the preceding wall and recover from cancelled input**
+  - Steps: Draw a wall, press D and choose Relative turn. Enter a length and 90 deg. Repeat after a curved wall. Cancel a proposed next edge, then enter it again. Change Imperial/Metric while the form is open and try adding the pending edge. Finish the chain, undo and redo.
+  - Expected: A relative turn uses the preceding wall's ending direction, including the ending tangent of a curve. Cancel retains the accepted walls and current endpoint. Changing units invalidates the pending form instead of reinterpreting it. Accepted walls remain independently undoable.
   - Result: Not tested
   - Notes: ______________________________
 

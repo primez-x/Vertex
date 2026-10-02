@@ -2,12 +2,26 @@
 
 ## Original typed wall input
 
-A straight wall created with inline cardinal entry can retain
+A physical wall created with exact drawing input can retain
 `properties.original_drawing_input`, encoded with the existing standalone
-ConstructionReceipt codec. Its kind is `line_rise_run`; one exact Quantity is
-zero and the other retains the entered distance and directional sign. Its
-segment ID is the initial wall ID. Creation replays the receipt and requires
-its endpoints to match the new authoritative baseline exactly.
+ConstructionReceipt codec. Inline cardinal input uses `line_rise_run`; the
+precision form also supports headings, relative turns, world coordinates and
+the four analytical arc constructions. The receipt retains entered Quantity
+and AngleInput expressions. Its segment ID is the initial wall ID. Creation
+replays the receipt and requires its endpoints and sweep to match the new
+authoritative baseline exactly.
+
+Precision wall input also retains `properties.original_drawing_input_context`:
+`version: 1`, `expected_start` as a two-element model-metre array,
+`previous_segment` as the original canonical baseline or null,
+`closure_anchor` as a two-element model-metre array or null, and
+`tolerance_metres`. Only relative-turn receipts retain a `previous_segment`;
+only closure receipts retain a `closure_anchor`. Other receipts store null
+for these unused fields. This preserves the ending tangent needed to
+replay a relative turn after a straight or curved wall. It is a historical
+context, not a live dependency or a replacement for persistent endpoint
+constraints. Older inline walls with a rise/run receipt need only its start
+and the documented geometry tolerance to replay their original input.
 
 This is historical input provenance. The wall's current `baseline` remains the
 geometry authority; later moves or dimension edits can differ from the original

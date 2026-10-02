@@ -3507,7 +3507,8 @@ void PlanCanvas::keyPressEvent(QKeyEvent* event) {
     }
     // Precise input opens a dialog; exclude the entire dispatch even if a
     // supplied callback happens to be nonmodal (for example in an embedder).
-    if (event->key() == Qt::Key_D && m_tool == CanvasTool::boundary) {
+    if (event->key() == Qt::Key_D &&
+        (m_tool == CanvasTool::boundary || m_tool == CanvasTool::wall || m_tool == CanvasTool::select)) {
         resetPerformanceMeasurements();
     } else if ((event->matches(QKeySequence::Undo) && m_draft_undo_requested) ||
                (event->matches(QKeySequence::Redo) && m_draft_redo_requested) ||
@@ -3551,7 +3552,9 @@ void PlanCanvas::keyPressEvent(QKeyEvent* event) {
         event->accept();
         return;
     }
-    if (event->key() == Qt::Key_D && m_tool == CanvasTool::boundary) {
+    if (event->key() == Qt::Key_D && event->modifiers() == Qt::NoModifier &&
+        m_gesture_button == Qt::NoButton && !m_touch_active && !m_move_release_pending &&
+        (m_tool == CanvasTool::boundary || m_tool == CanvasTool::wall || m_tool == CanvasTool::select)) {
         if (m_precise_input_requested) {
             m_precise_input_requested();
         }

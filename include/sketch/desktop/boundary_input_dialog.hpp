@@ -22,6 +22,8 @@ struct BoundaryInputPreferences {
     bool operator==(const BoundaryInputPreferences&) const = default;
 };
 
+enum class BoundaryInputPresentation { boundary, wall };
+
 // Native precision entry for an anchor, analytical edge or pending dimension. The source
 // session belongs to the caller; this dialog only returns a copied session
 // after the requested construction has validated successfully.
@@ -30,7 +32,8 @@ public:
     explicit BoundaryInputDialog(const BoundaryAuthoringSession& source,
                                  bool metricUnits,
                                  QWidget* parent = nullptr,
-                                 const BoundaryInputPreferences& preferences = {});
+                                 const BoundaryInputPreferences& preferences = {},
+                                 BoundaryInputPresentation presentation = BoundaryInputPresentation::boundary);
     ~BoundaryInputDialog() override;
 
     BoundaryInputDialog(const BoundaryInputDialog&) = delete;

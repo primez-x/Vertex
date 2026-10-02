@@ -741,7 +741,7 @@
         "scripts/generate_workflow_acceptance_evidence.py",
         "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "Analytical chord/angle, chord/height, chord/arc-length and start-tangent construction is tested; Windows now exposes interactive endpoint editing for angle, arc-length, and arc-height walls. Boundary curve authoring, joins, and complete parity qualification remain open. Current Debug/Release acceptance evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
+      "implementation_note": "Analytical chord/angle, chord/height, chord/arc-length and start-tangent construction is tested. Native Wall D input now authors all four true arc modes using current thickness and height, exact endpoint joints and independently undoable commands. Original receipts and historical replay context survive save/reopen; untouched curve editing preserves exact coordinates and sweep. Native imperial/metric wall fixtures pass. Complete parity qualification remains open; deterministic acceptance evidence retains its named-source qualification boundary."
     },
     {
       "id": "GEO-BASE-003",
@@ -760,7 +760,7 @@
         "scripts/generate_workflow_acceptance_evidence.py",
         "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "Rise/run, relative-turn, angle, and unit-aware entry are implemented and covered by focused fixtures; complete mapped imperial/metric heading tolerance evidence remains open. Current Debug/Release acceptance evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
+      "implementation_note": "Rise/run, relative-turn, angle and unit-aware entry are implemented. Native Wall D input supports exact anchors and world coordinates; relative turns use the preceding authoritative ending tangent, including curves. Imperial/metric native fixtures cover exact geometry, retained expressions, stale-context rejection, undo/redo and save/reopen. Complete mapped heading tolerance and Apex parity qualification remain open; deterministic acceptance evidence retains its named-source qualification boundary."
     },
     {
       "id": "GEO-BASE-004",
@@ -1057,7 +1057,7 @@
         "scripts/generate_workflow_acceptance_evidence.py",
         "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "Native D entry supports start coordinates, analytical edges and pending Define First dimension positions. Inline distance/cardinal entry now authors exact physical wall chains and measured outlines without opening a modal for each edge. It shares exact Quantity parsing and receipt replay, retains original input, guards stale context, uses per-wall commands and local boundary history, and provides visible direction repeat, cancellation and an expandable keypad. Native fixtures cover feet/inches, metres, fractions, grid bypass, exact endpoint connections, invalid input, unit/selection/source changes, Define First dimension phases, undo/redo and wall save/reopen. Complete keyboard-only editing, physical-input and Apex shortcut qualification remain open. Deterministic workflow evidence retains its named-source qualification boundary."
+      "implementation_note": "Native D entry supports start coordinates, analytical edges and pending Define First dimension positions. Inline distance/cardinal entry now authors exact physical wall chains and measured outlines without opening a modal for each edge. It shares exact Quantity parsing and receipt replay, retains original input, guards stale context, uses per-wall commands and local boundary history, and provides visible direction repeat, cancellation and an expandable keypad. Native fixtures cover feet/inches, metres, fractions, grid bypass, exact endpoint connections, invalid input, unit/selection/source changes, Define First dimension phases, undo/redo and wall save/reopen. Complete keyboard-only editing, physical-input and Apex shortcut qualification remain open. Deterministic workflow evidence retains its named-source qualification boundary. Wall D input now supports exact anchors, all eight analytical methods and relative turns from straight or curved wall tangents, with placement ownership guards and focus restoration after acceptance or cancellation. Five native physical-wall workflows pass; this does not close complete keyboard parity qualification."
     },
     {
       "id": "APX-KEY-002",
