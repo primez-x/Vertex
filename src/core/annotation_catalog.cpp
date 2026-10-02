@@ -1088,7 +1088,8 @@ void validate_annotation_state(const AnnotationState& state, const std::vector<S
     }
     std::set<std::pair<std::string,std::string>> targets;
     for (const auto& o : state.overrides) {
-        check(o.target_kind == "area" || o.target_kind == "object" || o.target_kind == "output_view", "Invalid presentation target kind");
+        check(o.target_kind == "area" || o.target_kind == "object" || o.target_kind == "output_view" ||
+              o.target_kind == "wall_dimension", "Invalid presentation target kind");
         check(!o.target_id.empty() && o.target_id.size() <= 256 && targets.emplace(o.target_kind,o.target_id).second,
               "Invalid or duplicate presentation target");
         style(o.style);
@@ -1098,11 +1099,19 @@ void validate_annotation_state(const AnnotationState& state, const std::vector<S
         check(!o.hatch_scale || (std::isfinite(*o.hatch_scale) &&
                   *o.hatch_scale >= 0.1 && *o.hatch_scale <= 10.0),
               "Invalid presentation hatch scale");
-        check(!o.plan_label_offset || (o.target_kind == "area" &&
+        check(!o.plan_label_offset || ((o.target_kind == "area" || o.target_kind == "wall_dimension") &&
                   std::isfinite(o.plan_label_offset->x) && std::isfinite(o.plan_label_offset->y)),
-              "Invalid area label placement offset");
-        check(!o.inherit_appearance || o.target_kind == "area",
-              "Appearance inheritance requires an area target");
+              "Invalid derived label placement offset");
+        check(!o.inherit_appearance || o.target_kind == "area" || o.target_kind == "wall_dimension",
+              "Appearance inheritance requires an area or wall dimension target");
+        check(o.target_kind != "wall_dimension" || (!o.paper_line_width_mm && !o.hatch_scale),
+              "Wall dimension presentation cannot override wall outlines or hatches");
+        check(!o.paper_text_height_mm || (o.target_kind == "wall_dimension" &&
+              std::isfinite(*o.paper_text_height_mm) && *o.paper_text_height_mm > 0.0 && *o.paper_text_height_mm <= 100.0),
+              "Wall dimension paper text height must be greater than zero and at most 100 mm");
+        check(!o.plan_label_rotation_radians || (o.target_kind == "wall_dimension" &&
+              std::isfinite(*o.plan_label_rotation_radians)),
+              "Wall dimension label rotation must be finite");
     }
 }
 
@@ -1112,7 +1121,10 @@ json encode_annotation_state(const AnnotationState& state, const std::vector<Sym
         [](const auto& value) { return value.plan_label_offset.has_value() || value.inherit_appearance; });
     const auto model_plan = std::any_of(state.labels.begin(),state.labels.end(),
         [](const auto& label){return label.model_plan;});
-    json j{{"version",model_plan ? 5 : label_placements ? 4 : 3},{"catalog_revision",kSymbolCatalogRevision},
+    const auto wall_dimensions = std::any_of(state.overrides.begin(),state.overrides.end(),
+        [](const auto& value){return value.target_kind == "wall_dimension" ||
+            value.paper_text_height_mm.has_value() || value.plan_label_rotation_radians.has_value();});
+    json j{{"version",wall_dimensions ? 6 : model_plan ? 5 : label_placements ? 4 : 3},{"catalog_revision",kSymbolCatalogRevision},
            {"labels",json::array()},{"symbols",json::array()},{"overrides",json::array()}};
     for (const auto& l : state.labels) {
         json label{{"id",l.id},{"template_id",l.template_id},{"content",l.content},
@@ -1137,6 +1149,8 @@ json encode_annotation_state(const AnnotationState& state, const std::vector<Sym
         if (o.plan_label_offset) value["plan_label_offset_m"] =
             json::array({o.plan_label_offset->x, o.plan_label_offset->y});
         if (o.inherit_appearance) value["inherit_appearance"] = true;
+        if (o.paper_text_height_mm) value["paper_text_height_mm"] = *o.paper_text_height_mm;
+        if (o.plan_label_rotation_radians) value["plan_label_rotation_radians"] = *o.plan_label_rotation_radians;
         j["overrides"].push_back(std::move(value));
     }
     return j;
@@ -1146,7 +1160,7 @@ AnnotationState decode_annotation_state(const json& j, const std::vector<SymbolD
     try {
         check(j.at("version").is_number_integer() &&
                   (j.at("version") == 1 || j.at("version") == 2 ||
-                   j.at("version") == 3 || j.at("version") == 4 || j.at("version") == 5),
+                   j.at("version") == 3 || j.at("version") == 4 || j.at("version") == 5 || j.at("version") == 6),
               "Unsupported annotation version");
         const bool pinned = j.at("version") != 1;
         const bool independent_transform = j.at("version").get<int>() >= 3;
@@ -1160,8 +1174,8 @@ AnnotationState decode_annotation_state(const json& j, const std::vector<SymbolD
             check(j.at(key).is_array() && j.at(key).size() <= 100000, "Invalid annotation collection");
         AnnotationState state;
         for (const auto& l : j.at("labels")) {
-            check(!l.contains("model_plan") || (j.at("version")==5 && l.at("model_plan").is_boolean()),
-                "Plan-anchored labels require annotation version 5 and a boolean mode");
+            check(!l.contains("model_plan") || (j.at("version").get<int>()>=5 && l.at("model_plan").is_boolean()),
+                "Plan-anchored labels require annotation version 5 or later and a boolean mode");
             state.labels.push_back({l.at("id").get<std::string>(),
                 l.at("template_id").get<std::string>(),l.at("content").get<std::string>(),decode_style(l.at("style")),
                 decode_placement(l.at("placement")),l.at("visible").get<bool>(),l.value("model_plan",false)});
@@ -1218,20 +1232,33 @@ AnnotationState decode_annotation_state(const json& j, const std::vector<SymbolD
         for (const auto& o : j.at("overrides")) {
             PresentationOverride value{o.at("target_kind").get<std::string>(),
                 o.at("target_id").get<std::string>(),decode_style(o.at("style")),o.at("visible").get<bool>()};
+            check(value.target_kind != "wall_dimension" || j.at("version").get<int>() >= 6,
+                  "Wall dimension presentation requires annotation version 6 or later");
             if (o.contains("paper_line_width_mm")) value.paper_line_width_mm = o.at("paper_line_width_mm").get<double>();
             if (o.contains("hatch_scale")) value.hatch_scale = o.at("hatch_scale").get<double>();
             if (o.contains("plan_label_offset_m")) {
-                check(j.at("version").get<int>() >= 4, "Area label placement requires annotation version 4 or later");
+                check(j.at("version").get<int>() >= 4, "Derived label placement requires annotation version 4 or later");
                 const auto& offset = o.at("plan_label_offset_m");
                 check(offset.is_array() && offset.size() == 2 &&
                       offset[0].is_number() && offset[1].is_number(),
-                      "Area label placement must contain two numeric metre offsets");
+                      "Derived label placement must contain two numeric metre offsets");
                 value.plan_label_offset = Vec2{offset[0].get<double>(), offset[1].get<double>()};
             }
             if (o.contains("inherit_appearance")) {
-                check(j.at("version").get<int>() >= 4 && o.at("inherit_appearance").is_boolean(),
-                      "Area appearance inheritance requires a version 4 or later boolean");
+                check((value.target_kind == "area" || value.target_kind == "wall_dimension") &&
+                      j.at("version").get<int>() >= 4 && o.at("inherit_appearance").is_boolean(),
+                      "Derived appearance inheritance requires an area or wall dimension and a version 4 or later boolean");
                 value.inherit_appearance = o.at("inherit_appearance").get<bool>();
+            }
+            if (o.contains("paper_text_height_mm")) {
+                check(j.at("version").get<int>() >= 6 && o.at("paper_text_height_mm").is_number(),
+                      "Wall dimension paper text height requires annotation version 6 and a number");
+                value.paper_text_height_mm = o.at("paper_text_height_mm").get<double>();
+            }
+            if (o.contains("plan_label_rotation_radians")) {
+                check(j.at("version").get<int>() >= 6 && o.at("plan_label_rotation_radians").is_number(),
+                      "Wall dimension label rotation requires annotation version 6 and a number");
+                value.plan_label_rotation_radians = o.at("plan_label_rotation_radians").get<double>();
             }
             state.overrides.push_back(std::move(value));
         }

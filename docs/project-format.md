@@ -10,9 +10,34 @@ plan frame. Rotation remains view-relative for readable, consistent text.
 Absence keeps the legacy view-overlay convention. The field is refused in
 versions 1–4; old readers refuse version 5 rather than silently misplacing it.
 Version 5 retains the version 4 area-presentation and version 3 symbol schemas.
-Encoding uses version 5 when any plan-anchored label exists, version 4 for area
-placement overrides, otherwise version 3. Raw edits may retain a higher known
+Encoding uses version 6 for wall measurements, otherwise version 5 when any
+plan-anchored label exists, version 4 for area placement overrides, otherwise
+version 3. Raw edits may retain a higher known
 version after its last optional record is removed. The SQLite layout is unchanged.
+
+## Derived wall measurement presentation
+
+Annotation state v6 adds presentation overrides with `target_kind: "wall_dimension"`
+and `target_id` equal to a wall's stable ID. The displayed value is always the
+current analytical baseline length; no copied numeric measurement is stored.
+`visible` suppresses only the measurement, never the wall or its openings.
+Style controls text color, font and emphasis. `inherit_appearance: true` retains
+the derived theme appearance for placement/visibility-only edits.
+
+Optional `plan_label_offset_m: [x, y]` is a finite world XY offset from the
+analytical midpoint. It follows that anchor as wall geometry changes; absence
+restores automatic exterior placement. Optional `paper_text_height_mm` is a
+finite positive value at most 100 mm (the editor permits 0.5–20 mm).
+Optional `plan_label_rotation_radians` is a finite world-plan angle; absence
+retains the upright wall-derived angle. A horizontal named view projects the
+anchor, leader and angle. Pointer placement is inverse-projected before saving.
+Wall measurement records cannot override wall outlines or hatches through
+`paper_line_width_mm` or `hatch_scale`.
+
+The target kind and new fields require v6. That version retains v4 area offsets,
+v5 authored plan labels and v3 symbol transforms. Earlier readers refuse v6;
+earlier states without wall measurements keep their previous encoding versions.
+Raw updates preserve unrelated records, pinned artwork and opaque metadata.
 
 ## Unfinished Auto-Subtract drawing
 
@@ -40,15 +65,15 @@ preserve it. Undo/redo and project history retain the value alongside geometry.
 
 Area presentation overrides may carry `plan_label_offset_m: [x, y]`, two
 finite model-space metre offsets from the owner's derived plan-label anchor.
-Only `target_kind: "area"` admits this field. It controls the placement of
+An area uses `target_kind: "area"` for this field. It controls the placement of
 derived names and quantities; it does not store a numeric area value or change
 geometry. An explicit zero offset is a manual centered placement. Absence
 restores automatic placement. Annotation state version 4 or later is required when an
 offset is present; versions 1–3 cannot admit it. Placement-only records may
-also carry `inherit_appearance: true` (only for an area target), so positioning
+also carry `inherit_appearance: true`, so positioning
 a label retains semantic colors, fills and linework. Explicit appearance edits
 remove this flag. Version 4 retains the version 3 symbol representation. States
-without offsets, appearance inheritance or plan-anchored labels encode as version 3,
+without offsets, appearance inheritance, plan-anchored labels or wall measurements encode as version 3,
 and future unknown versions remain unsupported.
 
 Area presentation overrides optionally carry `paper_line_width_mm` (finite,

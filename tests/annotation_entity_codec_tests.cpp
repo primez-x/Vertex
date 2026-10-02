@@ -71,6 +71,43 @@ int main() {
             sketch::decode_annotation_entity(plan_reopened.entities().at("plan-annotations")).labels.front().model_plan,
             "native project save/reopen must retain version 5 plan anchors");
         std::filesystem::remove(path);
+        auto dimension_state=plan_state;
+        dimension_state.overrides.front().inherit_appearance=true;
+        sketch::PresentationOverride dimension;
+        dimension.target_kind="wall_dimension";
+        dimension.target_id="wall-1";
+        dimension.visible=false;
+        dimension.style.font_family="Inter";
+        dimension.style.stroke_color="#123456";
+        dimension.style.bold=true;
+        dimension.plan_label_offset=sketch::Vec2{-0.5,0.75};
+        dimension.paper_text_height_mm=5.0;
+        dimension.plan_label_rotation_radians=-0.25;
+        dimension.inherit_appearance=true;
+        dimension_state.overrides.push_back(dimension);
+        auto dimension_entity=sketch::make_annotation_entity("dimension-annotations",dimension_state);
+        dimension_entity.required=true;
+        dimension_entity.extensions["vendor_dimension_owner"]={{"retain",17}};
+        dimension_entity.properties["state"]["labels"][0]["vendor_label"]="retain";
+        dimension_entity.properties["state"]["overrides"][0]["vendor_area"]="retain";
+        auto dimension_document=sketch::Document::create({dimension_entity});
+        (void)sketch::ProjectStore::save(path,dimension_document.snapshot());
+        const auto dimension_reopened=sketch::ProjectStore::load(path).document.snapshot();
+        const auto& dimension_saved=dimension_reopened.entities().at("dimension-annotations");
+        const auto dimension_decoded=sketch::decode_annotation_entity(dimension_saved);
+        require(dimension_saved==dimension_entity && dimension_saved.properties.at("state").at("version")==6 &&
+            dimension_decoded.labels.size()==1 && dimension_decoded.overrides.size()==2 &&
+            dimension_decoded.labels.front().model_plan && dimension_decoded.overrides.front().plan_label_offset &&
+            dimension_decoded.overrides.front().inherit_appearance && dimension_decoded.overrides.back().target_kind=="wall_dimension" &&
+            dimension_decoded.overrides.back().paper_text_height_mm==5.0 &&
+            dimension_decoded.overrides.back().plan_label_rotation_radians==-0.25 &&
+            dimension_decoded.overrides.back().plan_label_offset &&
+            dimension_decoded.overrides.back().plan_label_offset->x==-0.5 &&
+            dimension_decoded.overrides.back().inherit_appearance && !dimension_decoded.overrides.back().visible,
+            "Native save/reopen must retain v6 wall callouts, v5 plan anchors, v4 area placements and opaque sibling metadata together");
+        auto future_dimension=dimension_entity;future_dimension.properties["state"]["version"]=7;
+        rejects_document([&]{(void)sketch::Document::create({future_dimension});});
+        std::filesystem::remove(path);
         (void)sketch::ProjectStore::save(path, document.snapshot());
         const auto reopened = sketch::ProjectStore::load(path).document.snapshot();
         const auto reopened_state = sketch::decode_annotation_entity(

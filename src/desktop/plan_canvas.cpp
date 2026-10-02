@@ -2316,7 +2316,8 @@ const std::vector<CanvasLabel>& PlanCanvas::positionedLabels(
                   << label.scale << label.text_height_metres << label.paper_height_mm
                   << label.color << label.bold << label.italic << label.fill_color
                   << label.fill_pattern << label.show_background << label.avoid_components
-                  << label.plan_only << label.selection_type << label.font_family << label.model_plan;
+                  << label.plan_only << label.selection_type << label.font_family << label.model_plan
+                  << label.wall_dimension_manual_rotation;
         point_key(label.position);
         signature << label.leader_start.has_value() << label.plan_label_offset.has_value();
         if (label.leader_start) point_key(*label.leader_start);

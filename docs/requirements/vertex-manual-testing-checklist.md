@@ -775,16 +775,19 @@ drawing; switching modes does not change existing geometry.
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U132 — Move a dimension away from a wall**
+  - Steps: Draw a wall and double-click it, or right-click it and choose Wall measurement. Use Place measurement, then click a clear position away from the wall. Drag while placement is armed to pan; verify that no position is committed until a stationary click. Use Automatic to restore placement. Repeat in a rotated horizontal plan, then save and reopen.
   - Expected: Its association with the measured edge remains clear.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U133 — Edit a dimension's appearance**
+  - Steps: Select the wall's quick properties and set the Wall measurement's text height, color, Bold, Italic and rotation. Apply. Check the same measurement in PDF output, undo/redo and after save/reopen. Change the wall's length and confirm the displayed value updates while its chosen appearance remains.
   - Expected: Text, line style and visibility update as expected.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U134 — Hide and show dimensions**
+  - Steps: In the selected wall's Wall measurement controls, clear Visible and Apply. Confirm the wall and hosted openings remain. Select the wall again, restore Visible and Apply. Export both states, then test undo/redo and save/reopen.
   - Expected: Geometry remains unchanged and the visibility choice is reflected in output.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________

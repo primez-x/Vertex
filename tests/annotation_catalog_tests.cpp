@@ -24,6 +24,95 @@ int main() {
     using namespace sketch;
     const auto catalog = default_symbol_catalog();
     {
+        AnnotationState dimension_state;
+        PresentationOverride dimension;
+        dimension.target_kind="wall_dimension";
+        dimension.target_id="wall-a";
+        dimension.visible=false;
+        dimension.style.font_family="Inter";
+        dimension.style.stroke_color="#123456";
+        dimension.style.bold=true;
+        dimension.plan_label_offset=Vec2{0.75,-0.25};
+        dimension.paper_text_height_mm=4.5;
+        dimension.plan_label_rotation_radians=std::numbers::pi/4;
+        dimension_state.overrides.push_back(dimension);
+        const auto dimension_wire=encode_annotation_state(dimension_state,catalog);
+        require(dimension_wire.at("version")==6 &&
+            encode_annotation_state(decode_annotation_state(dimension_wire,catalog),catalog)==dimension_wire,
+            "Independent automatic wall-dimension presentation must round-trip as annotation v6");
+        AnnotationState minimal_dimension_state;
+        minimal_dimension_state.overrides.push_back({"wall_dimension","wall-default",{},true});
+        const auto minimal_dimension_wire=encode_annotation_state(minimal_dimension_state,catalog);
+        require(minimal_dimension_wire.at("version")==6 &&
+            encode_annotation_state(decode_annotation_state(minimal_dimension_wire,catalog),catalog)==minimal_dimension_wire,
+            "A wall dimension target alone must require v6 without materializing optional settings");
+        for(int version=1;version<=5;++version) {
+            auto legacy=dimension_wire;legacy["version"]=version;
+            rejected([&]{(void)decode_annotation_state(legacy,catalog);});
+        }
+        for(const auto* field:{"paper_text_height_mm","plan_label_rotation_radians"}) {
+            for(const auto invalid:{nlohmann::json("4.5"),nlohmann::json(true),nlohmann::json(nullptr),
+                nlohmann::json(std::numeric_limits<double>::infinity())}) {
+                auto bad=dimension_wire;bad["overrides"][0][field]=invalid;
+                rejected([&]{(void)decode_annotation_state(bad,catalog);});
+            }
+        }
+        for(const auto invalid:{0.0,-1.0,100.001}) {
+            auto bad=dimension_wire;bad["overrides"][0]["paper_text_height_mm"]=invalid;
+            rejected([&]{(void)decode_annotation_state(bad,catalog);});
+        }
+        auto boundary_height=dimension_wire;boundary_height["overrides"][0]["paper_text_height_mm"]=100.0;
+        boundary_height["overrides"][0]["plan_label_rotation_radians"]=-12.0*std::numbers::pi;
+        require(encode_annotation_state(decode_annotation_state(boundary_height,catalog),catalog)==boundary_height,
+            "Wall dimension height accepts its inclusive maximum and finite rotations remain unnormalized");
+        for(const auto* kind:{"area","object","output_view"}) {
+            for(const auto* field:{"paper_text_height_mm","plan_label_rotation_radians"}) {
+                auto bad=dimension_wire;auto& record=bad["overrides"][0];
+                record["target_kind"]=kind;record.erase("plan_label_offset_m");
+                record.erase(field==std::string_view("paper_text_height_mm") ? "plan_label_rotation_radians" : "paper_text_height_mm");
+                rejected([&]{(void)decode_annotation_state(bad,catalog);});
+            }
+        }
+        for(const auto* field:{"hatch_scale","paper_line_width_mm"}) {
+            auto bad=dimension_wire;bad["overrides"][0][field]=1.0;
+            rejected([&]{(void)decode_annotation_state(bad,catalog);});
+        }
+        auto inherited=dimension_wire;inherited["overrides"][0]["inherit_appearance"]=true;
+        require(encode_annotation_state(decode_annotation_state(inherited,catalog),catalog)==inherited,
+            "Placement-only wall dimensions must retain theme-safe appearance inheritance");
+        inherited["overrides"][0]["inherit_appearance"]=false;
+        require(!decode_annotation_state(inherited,catalog).overrides.front().inherit_appearance,
+            "Explicit wall dimension appearance overrides must admit a false inheritance mode");
+        for(const auto* kind:{"object","output_view"}) {
+            for(const auto mode:{false,true}) {
+                auto bad=dimension_wire;auto& record=bad["overrides"][0];record["target_kind"]=kind;
+                record.erase("plan_label_offset_m");record.erase("paper_text_height_mm");record.erase("plan_label_rotation_radians");
+                record["inherit_appearance"]=mode;rejected([&]{(void)decode_annotation_state(bad,catalog);});
+            }
+        }
+        auto bad=dimension_wire;bad["overrides"][0]["plan_label_offset_m"]={1.0,std::numeric_limits<double>::infinity()};
+        rejected([&]{(void)decode_annotation_state(bad,catalog);});
+        bad=dimension_wire;bad["overrides"].push_back(bad["overrides"][0]);
+        rejected([&]{(void)decode_annotation_state(bad,catalog);});
+        bad=dimension_wire;bad["overrides"][0]["style"]["stroke_color"]="invalid";
+        rejected([&]{(void)decode_annotation_state(bad,catalog);});
+        auto mixed=dimension_state;
+        auto label=instantiate_label(default_label_templates().front(),"world-plan-label");label.model_plan=true;
+        mixed.labels.push_back(label);
+        PresentationOverride area;area.target_kind="area";area.target_id="area-a";
+        area.plan_label_offset=Vec2{0.125,0.25};area.inherit_appearance=true;mixed.overrides.push_back(area);
+        const auto mixed_wire=encode_annotation_state(mixed,catalog);
+        require(mixed_wire.at("version")==6 && mixed_wire.at("labels")[0].at("model_plan")==true &&
+            encode_annotation_state(decode_annotation_state(mixed_wire,catalog),catalog)==mixed_wire,
+            "v6 wall dimensions, v5 world-plan text and v4 area placement must coexist without loss");
+        auto invalid_model_plan=mixed_wire;invalid_model_plan["labels"][0]["model_plan"]=1;
+        rejected([&]{(void)decode_annotation_state(invalid_model_plan,catalog);});
+        mixed.overrides.erase(mixed.overrides.begin());
+        require(encode_annotation_state(mixed,catalog).at("version")==5,"removing wall presentation must retain v5 plan labels");
+        mixed.labels.clear();require(encode_annotation_state(mixed,catalog).at("version")==4,"area placement alone must retain v4");
+        mixed.overrides.clear();require(encode_annotation_state(mixed,catalog).at("version")==3,"ordinary annotation state must retain v3");
+    }
+    {
         AnnotationState presentation;
         presentation.overrides.push_back({"area", "room-a", {}, true});
         auto wire = encode_annotation_state(presentation, catalog);
@@ -517,7 +606,7 @@ int main() {
     rejected([&]{(void)placed_symbol_preview(catalog.front(),{{},0,0.001});});
     auto malformed = encoded; malformed["version"] = 1.0;
     rejected([&]{(void)decode_annotation_state(malformed,catalog);});
-    malformed = encoded; malformed["version"] = 6;
+    malformed = encoded; malformed["version"] = 7;
     rejected([&]{(void)decode_annotation_state(malformed,catalog);});
     malformed = encoded; malformed["labels"][0]["visible"] = "false";
     rejected([&]{(void)decode_annotation_state(malformed,catalog);});

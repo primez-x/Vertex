@@ -121,6 +121,8 @@ void exercise(double direction_z, bool depth_slice=false) {
         : window.createHostedOpening("door","0.4 m","0.8 m","0 m","2 m",
             std::nullopt,DoorOperation{});
     require(!door.isEmpty(),"named-plan hosted door fixture");
+    require(window.selectEntity(wall) && window.editSelectedWallDimension("5 m","-1 m","4","#A12B34",true,true,true,"25"),
+        "named-plan joined wall needs independent styled measurement presentation");
     const auto dimension=window.createLengthDimension(QString::fromStdString(area.id),
         QString::fromStdString(initial.segments[0].segment_id),{1.8,-0.5});
     require(!dimension.isEmpty(),"named-plan dependent dimension fixture");
@@ -200,6 +202,14 @@ void exercise(double direction_z, bool depth_slice=false) {
     const auto preview=canvas->boundaryVertexPreviewEntities();
     const auto labels=canvas->boundaryVertexPreviewLabels();
     const auto metrics=canvas->boundaryVertexPreviewMetrics();
+    const auto wall_label=std::find_if(labels.begin(),labels.end(),[&](const auto& value){return value.id==wall;});
+    const Vec2 old_midpoint{(start.x+6.6576)/2,start.y/2};
+    const Vec2 proposed_midpoint{(target.x+6.6576)/2,target.y/2};
+    const Vec2 proposed_text{proposed_midpoint.x+5-old_midpoint.x,proposed_midpoint.y-1-old_midpoint.y};
+    require(wall_label!=labels.end() && close_enough(wall_label->position,project(proposed_text,frame)) &&
+        wall_label->leader_start && close_enough(*wall_label->leader_start,project(proposed_midpoint,frame)) &&
+        wall_label->color==QColor("#A12B34") && wall_label->paper_height_mm==4 && wall_label->bold && wall_label->italic,
+        "live joined-corner preview must retain world-relative wall measurement placement, leader and typography");
     require(std::any_of(labels.begin(),labels.end(),[&](const auto& value) {
                 return value.id.toStdString()==area.id; }) &&
             std::any_of(labels.begin(),labels.end(),[&](const auto& value) { return value.id==dimension; }),
@@ -252,6 +262,10 @@ void exercise(double direction_z, bool depth_slice=false) {
             [&](const auto& value) { return value.id==label.id; });
         require(committed!=canvas->labels().end() && label.text==committed->text && close_enough(label.position,committed->position),
                 "named-plan generated labels must match after commit");
+        if (label.id==wall) require(label.color==committed->color && label.paper_height_mm==committed->paper_height_mm &&
+            label.bold==committed->bold && label.italic==committed->italic && close_enough(label.rotation_radians,committed->rotation_radians) &&
+            label.leader_start && committed->leader_start && close_enough(*label.leader_start,*committed->leader_start),
+            "styled wall measurement preview must agree with committed appearance and its association leader");
     }
     require(window.undoCommand() && window.document().snapshot().entities()==source.entities() &&
                 window.redoCommand() && window.document().snapshot().entities()==after.entities(),

@@ -195,6 +195,9 @@ struct CanvasLabel {
     // Authored model-space plan anchor; unlike derived plan_only labels,
     // these remain selectable and have normal annotation transform handles.
     bool model_plan{false};
+    // Wall text with an explicit world angle keeps that authored orientation;
+    // automatically derived angles stay upright after named-plan projection.
+    bool wall_dimension_manual_rotation{false};
 };
 
 // Exact geometric totals from the candidate document, used only while editing.

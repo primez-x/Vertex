@@ -2175,6 +2175,10 @@
     },
     {
       "category": "docs",
+      "path": "docs/superpowers/plans/2026-10-01-wall-measurement-presentation.md"
+    },
+    {
+      "category": "docs",
       "path": "docs/superpowers/plans/2026-10-01-wall-measurement.md"
     },
     {
@@ -2308,6 +2312,10 @@
     {
       "category": "docs",
       "path": "docs/verification/touch-navigation-and-legacy-upgrade-2026-09-30.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/verification/wall-dimension-presentation-2026-10-01.md"
     },
     {
       "category": "docs",
@@ -4460,6 +4468,10 @@
     {
       "category": "source",
       "path": "tests/wall_corner_canvas_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/wall_dimension_desktop_tests.cpp"
     },
     {
       "category": "source",

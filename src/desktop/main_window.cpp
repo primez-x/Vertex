@@ -2637,17 +2637,128 @@ Vec2 project_plan_point(Vec2 point, const BuildingViewFrame& frame) {
     return {x * right.x + y * right.y, x * up.x + y * up.y};
 }
 
+std::map<std::string,QPainterPath,std::less<>> wall_dimension_exterior_regions(const DocumentSnapshot& snapshot) {
+    std::map<std::string,QPainterPath,std::less<>> regions;
+    for (const auto& [id,entity]:snapshot.entities()) {
+        (void)id;
+        if (!entity.properties.contains("wall_measurement_source") || !wall_measurement_source_current(snapshot,entity)) continue;
+        const auto boundary=read_boundary(entity.properties);
+        if (boundary.empty()) continue;
+        QPainterPath region;region.moveTo(boundary.front().start.x,boundary.front().start.y);
+        for (const auto& edge:boundary) {
+            const auto steps=std::max(1,static_cast<int>(std::ceil(std::abs(edge.sweep_radians)/(.05))));
+            for (int i=1;i<=steps;++i) {
+                const auto point=point_at_segment(edge,static_cast<double>(i)/steps).value();
+                region.lineTo(point.x,point.y);
+            }
+        }
+        region.closeSubpath();
+        for (const auto& wall:entity.properties.at("wall_measurement_source").at("walls"))
+            regions.try_emplace(wall.at("id").get<std::string>(),region);
+    }
+    return regions;
+}
+
+std::map<std::string,PresentationOverride,std::less<>> wall_dimension_presentations(
+    const std::map<std::string,Entity,std::less<>>& entities) {
+    std::map<std::string,PresentationOverride,std::less<>> result;
+    for (const auto& [id,entity]:entities) {
+        (void)id;
+        if (entity.type!=kAnnotationEntityType) continue;
+        for (const auto& value:decode_annotation_entity(entity).overrides) {
+            if (value.target_kind!="wall_dimension") continue;
+            if (!result.emplace(value.target_id,value).second)
+                throw std::invalid_argument("A wall has duplicate measurement presentation records.");
+        }
+    }
+    return result;
+}
+
+std::optional<PresentationOverride> wall_dimension_presentation(
+    const std::map<std::string,Entity,std::less<>>& entities,const std::string& wall_id) {
+    const auto presentations=wall_dimension_presentations(entities);
+    const auto found=presentations.find(wall_id);
+    if (found==presentations.end()) return std::nullopt;
+    return found->second;
+}
+
+CanvasLabel wall_dimension_label(const std::string& id,const Segment& baseline,
+    double thickness,bool metric,bool selected,const std::optional<PresentationOverride>& presentation,
+    const QPainterPath* exterior=nullptr) {
+    const auto midpoint=point_at_segment(baseline,.5);
+    if (!midpoint) throw std::invalid_argument("Wall measurement midpoint is unavailable.");
+    const auto dx=baseline.end.x-baseline.start.x,dy=baseline.end.y-baseline.start.y;
+    const auto chord=std::hypot(dx,dy);
+    if (!(chord>1e-9)) throw std::invalid_argument("Wall measurement needs a nonzero baseline.");
+    Vec2 normal{-dy/chord,dx/chord};
+    const auto clearance=thickness*.5+.14;
+    if (exterior) {
+        const auto positive=exterior->contains(QPointF(midpoint->x+normal.x*clearance,midpoint->y+normal.y*clearance));
+        const auto negative=exterior->contains(QPointF(midpoint->x-normal.x*clearance,midpoint->y-normal.y*clearance));
+        if (positive && !negative) normal={-normal.x,-normal.y};
+    }
+    CanvasLabel label{id_from(id),{midpoint->x+normal.x*clearance,midpoint->y+normal.y*clearance},
+        format_length(segment_length(baseline),metric),selected};
+    label.text_height_metres=.15;
+    label.paper_height_mm=3.5;
+    label.show_background=false;
+    label.plan_only=true;
+    auto angle=std::atan2(dy,dx);
+    while (angle>std::numbers::pi/2) angle-=std::numbers::pi;
+    while (angle<=-std::numbers::pi/2) angle+=std::numbers::pi;
+    label.rotation_radians=angle;
+    label.automatic_linear_placement=CanvasLinearLabelPlacement{baseline,normal,clearance};
+    if (presentation) {
+        const auto& value=*presentation;
+        if (!value.inherit_appearance) {
+            label.color=QColor(QString::fromStdString(value.style.stroke_color));
+            label.bold=value.style.bold;label.italic=value.style.italic;
+            label.font_family=QString::fromStdString(value.style.font_family);
+        }
+        if (value.paper_text_height_mm) label.paper_height_mm=*value.paper_text_height_mm;
+        if (value.plan_label_rotation_radians) {
+            label.rotation_radians=*value.plan_label_rotation_radians;
+            label.wall_dimension_manual_rotation=true;
+        }
+        if (value.plan_label_offset) {
+            label.position={midpoint->x+value.plan_label_offset->x,midpoint->y+value.plan_label_offset->y};
+            if (!std::isfinite(label.position.x) || !std::isfinite(label.position.y))
+                throw std::invalid_argument("Resolved wall measurement position is not finite.");
+            label.automatic_linear_placement.reset();
+            label.leader_start=*midpoint;
+        }
+    }
+    return label;
+}
+
 void project_plan_model_labels(std::vector<CanvasLabel>& labels,
                                const DocumentSnapshot& snapshot,
                                const BuildingViewFrame& frame) {
     if (!horizontal_plan_frame(frame)) return;
     for (auto& label : labels) {
         const auto found = snapshot.entities().find(label.id.toStdString());
-          // Plan-anchored labels follow model geometry. Legacy explicit
-          // annotations retain their saved view-overlay coordinate convention.
+        // Plan-anchored labels follow model geometry. Legacy explicit
+        // annotations retain their saved view-overlay coordinate convention.
         if (label.plan_only || label.model_plan || (found != snapshot.entities().end() && found->second.type == "dimension")) {
             label.position = project_plan_point(label.position, frame);
             if (label.leader_start) label.leader_start=project_plan_point(*label.leader_start,frame);
+            if (found!=snapshot.entities().end() && found->second.type=="wall") {
+                const auto right=plan_view_right(frame),up=plan_view_up(frame);
+                const auto x=std::cos(label.rotation_radians),y=std::sin(label.rotation_radians);
+                label.rotation_radians=std::atan2(up.x*x+up.y*y,right.x*x+right.y*y);
+                if (!label.wall_dimension_manual_rotation) {
+                    while (label.rotation_radians>std::numbers::pi/2) label.rotation_radians-=std::numbers::pi;
+                    while (label.rotation_radians<=-std::numbers::pi/2) label.rotation_radians+=std::numbers::pi;
+                }
+                if (label.automatic_linear_placement) {
+                    auto& placement=*label.automatic_linear_placement;
+                    placement.anchor.start=project_plan_point(placement.anchor.start,frame);
+                    placement.anchor.end=project_plan_point(placement.anchor.end,frame);
+                    placement.anchor.sweep_radians*=right.x*up.y-right.y*up.x;
+                    const auto normal=placement.outward_normal;
+                    placement.outward_normal={right.x*normal.x+right.y*normal.y,up.x*normal.x+up.y*normal.y};
+                }
+            }
         }
     }
 }
@@ -3516,6 +3627,133 @@ public:
         m_architecturalCanvas->setPointPlacementRequested({});
     }
 
+    PresentationOverride selectedWallDimensionPresentation(const DocumentSnapshot& source) const {
+        const auto selected=selectedEntity();
+        if (!selected || selected->type!="wall" || m_selected_ids.size()!=1)
+            throw std::invalid_argument("Select one wall to edit its measurement.");
+        if (const auto value=wall_dimension_presentation(source.entities(),selected->id)) return *value;
+        PresentationOverride value;
+        value.target_kind="wall_dimension";value.target_id=selected->id;value.inherit_appearance=true;
+        return value;
+    }
+
+    bool writeWallDimensionPresentation(PresentationOverride value,std::optional<Revision> expected_revision) {
+        if (!m_document->is_editable()) throw std::invalid_argument("This document is read-only.");
+        if (m_boundary_session || m_pending_wall_start)
+            throw std::invalid_argument("Finish or cancel drawing before editing a wall measurement.");
+        const auto source=authoringSnapshot();
+        if (expected_revision && *expected_revision!=source.revision())
+            throw std::invalid_argument("The project changed while editing the wall measurement. Reselect the wall.");
+        const auto original=selectedWallDimensionPresentation(source);
+        if (value.target_id!=original.target_id || value.target_kind!="wall_dimension")
+            throw std::invalid_argument("The selected wall changed while editing its measurement.");
+        AnnotationState addition;addition.overrides.push_back(value);
+        const auto encoded=encode_annotation_state(addition,desktop_symbol_catalog()).at("overrides").at(0);
+        std::optional<std::string> owner_id,provider_id;
+        for (const auto& [id,entity]:source.entities()) {
+            if (entity.type!=kAnnotationEntityType) continue;
+            if (!owner_id) owner_id=id;
+            for (const auto& item:decode_annotation_entity(entity).overrides) {
+                if (item.target_kind!="wall_dimension" || item.target_id!=value.target_id) continue;
+                if (provider_id) throw std::invalid_argument("This wall has duplicate measurement presentation records.");
+                provider_id=id;owner_id=id;
+            }
+        }
+        if (!provider_id) {
+            AnnotationState defaults;defaults.overrides.push_back(original);
+            if (encode_annotation_state(defaults,desktop_symbol_catalog()).at("overrides").at(0)==encoded) return true;
+        }
+        Entity updated;
+        if (owner_id) updated=source.entities().at(*owner_id);
+        else {
+            std::string id;do {id=new_id("annotations");} while(source.entities().contains(id));
+            updated=make_annotation_entity(id,AnnotationState{});
+        }
+        upgrade_annotation_transform_version(updated,decode_annotation_entity(updated));
+        auto& raw=updated.properties.at("state");
+        raw["version"]=std::max(6,raw.at("version").get<int>());
+        auto& records=raw.at("overrides");
+        auto record=std::find_if(records.begin(),records.end(),[&](const auto& item){
+            return item.at("target_kind")=="wall_dimension" && item.at("target_id")==value.target_id;});
+        if (record==records.end()) records.push_back(encoded);
+        else {
+            record->at("style").update(encoded.at("style"));
+            (*record)["visible"]=value.visible;
+            for (const auto* key:{"plan_label_offset_m","paper_text_height_mm","plan_label_rotation_radians","inherit_appearance"}) {
+                if (encoded.contains(key)) (*record)[key]=encoded.at(key);
+                else record->erase(key);
+            }
+        }
+        validate_annotation_entity(updated);
+        if (owner_id && updated==source.entities().at(*owner_id)) return true;
+        const ApplyEntityChanges command{source.revision(),{EntityChange::upsert(std::move(updated))},{},"Edit wall measurement"};
+        (void)Document::preview_command(source,command);
+        applyDocumentCommand(command);refresh();clearError();return true;
+    }
+
+    bool editSelectedWallDimensionPosition(std::optional<Vec2> position,std::optional<Revision> expected_revision) {
+        try {
+            const auto source=authoringSnapshot();
+            auto value=selectedWallDimensionPresentation(source);
+            const auto& wall=source.entities().at(value.target_id);
+            const auto baseline=read_required_segment(wall.properties,"baseline");
+            if (!baseline) throw std::invalid_argument("Wall measurement baseline is unavailable.");
+            if (position) {
+                const auto midpoint=point_at_segment(*baseline,.5).value();
+                value.plan_label_offset=Vec2{position->x-midpoint.x,position->y-midpoint.y};
+            } else value.plan_label_offset.reset();
+            const auto result=writeWallDimensionPresentation(std::move(value),expected_revision);
+            if(result) clearError();return result;
+        } catch(const std::exception& error) {
+            setError(QStringLiteral("Wall measurement: %1").arg(QString::fromUtf8(error.what())));return false;
+        }
+    }
+
+    bool editSelectedWallDimension(const QString& x,const QString& y,const QString& height_mm,
+        const QString& color,bool bold,bool italic,bool visible,const QString& rotation_degrees,
+        std::optional<Revision> expected_revision) {
+        try {
+            const auto source=authoringSnapshot();
+            auto value=selectedWallDimensionPresentation(source);
+            const auto& wall=source.entities().at(value.target_id);
+            const auto baseline=read_required_segment(wall.properties,"baseline");
+            const auto thickness=read_finite_number(wall.properties,"thickness_m");
+            if (!baseline || !thickness) throw std::invalid_argument("Wall measurement geometry is unavailable.");
+            const auto regions=wall_dimension_exterior_regions(source);
+            const auto exterior=regions.find(wall.id);
+            const auto resolved=wall_dimension_label(wall.id,*baseline,*thickness,m_metric_units,false,value,
+                exterior==regions.end() ? nullptr : &exterior->second);
+            const auto coordinate=[&](const QString& text,double original) {
+                if (text.trimmed()==dimensionCoordinateText(original)) return original;
+                return parse_quantity(text.toStdString(),m_metric_units ? Unit::metre : Unit::foot).metres;
+            };
+            const Vec2 position{coordinate(x,resolved.position.x),coordinate(y,resolved.position.y)};
+            if (position.x!=resolved.position.x || position.y!=resolved.position.y) {
+                const auto midpoint=point_at_segment(*baseline,.5).value();
+                value.plan_label_offset=Vec2{position.x-midpoint.x,position.y-midpoint.y};
+            }
+            const auto finite=[](const QString& expression,const char* diagnostic) {
+                bool ok=false;const auto result=expression.trimmed().toDouble(&ok);
+                if (!ok || !std::isfinite(result)) throw std::invalid_argument(diagnostic);
+                return result;
+            };
+            const auto height=finite(height_mm,"Text height must be finite millimetres.");
+            if (height<.5 || height>20) throw std::invalid_argument("Text height must be between 0.5 and 20 mm.");
+            if (height!=resolved.paper_height_mm || value.paper_text_height_mm) value.paper_text_height_mm=height;
+            const auto chosen_color=color.trimmed().toStdString();
+            if (chosen_color!=value.style.stroke_color || bold!=value.style.bold || italic!=value.style.italic)
+                value.inherit_appearance=false;
+            value.style.stroke_color=chosen_color;value.style.bold=bold;value.style.italic=italic;value.visible=visible;
+            const auto degrees=finite(rotation_degrees,"Rotation must be finite degrees.");
+            if (rotation_degrees.trimmed()!=QString::number(resolved.rotation_radians*180/std::numbers::pi,'g',12))
+                value.plan_label_rotation_radians=degrees*std::numbers::pi/180;
+            const auto result=writeWallDimensionPresentation(std::move(value),expected_revision);
+            if(result) clearError();return result;
+        } catch(const std::exception& error) {
+            setError(QStringLiteral("Wall measurement: %1").arg(QString::fromUtf8(error.what())));return false;
+        }
+    }
+
     bool editSelectedPlanLabelOffset(std::optional<Vec2> position,
                                     std::optional<Revision> expected_revision) {
         try {
@@ -3524,6 +3762,8 @@ public:
             if (expected_revision && *expected_revision!=source.revision())
                 throw std::invalid_argument("The project changed while placing the label. Start placement again.");
             const auto selected=selectedEntity();
+            if (selected && selected->type=="wall")
+                return editSelectedWallDimensionPosition(position,expected_revision);
             if (!selected || m_selected_ids.size()!=1 ||
                 (!is_closed_boundary_entity(selected->type) && selected->type!="room"))
                 throw std::invalid_argument("Select one area or room with a plan label.");
@@ -3617,7 +3857,9 @@ public:
             const auto view=boundaryVertexViewContext(canvas,authoringSnapshot());
             const auto label=std::find_if(canvas->labels().begin(),canvas->labels().end(),
                 [&](const auto& value){return value.id==m_selected_id && value.avoid_components && !value.text.isEmpty();});
-            if (m_selected_ids.size()!=1 || label==canvas->labels().end())
+            const auto selected=selectedEntity();
+            const bool wall=selected && selected->type=="wall";
+            if (m_selected_ids.size()!=1 || (!wall && label==canvas->labels().end()))
                 throw std::invalid_argument("Select one area or room with a plan label.");
             cancelTextPlacement();
             cancelPlanLabelPlacement();
@@ -9930,7 +10172,8 @@ public:
             auto updated=annotation->second;
             if(model_plan) {
                 upgrade_annotation_transform_version(updated,original_state);
-                updated.properties.at("state")["version"]=5;
+                auto& version=updated.properties.at("state").at("version");
+                version=std::max(5,version.get<int>());
             }
             // A new instance must not re-encode unrelated pinned artwork,
             // vendor metadata or existing presentation records.
@@ -13322,6 +13565,8 @@ public:
         try {
             const auto& candidate = candidate_snapshot.entities();
             const auto area_values = appraisal_plan_area_values(candidate_snapshot, metric_units);
+            const auto wall_regions=wall_dimension_exterior_regions(candidate_snapshot);
+            const auto wall_presentations=wall_dimension_presentations(candidate);
             // A worker-local paint device measures candidate text without
             // reading a QWidget from the background projection thread.
             QImage label_device(1, 1, QImage::Format_ARGB32);
@@ -13518,16 +13763,18 @@ public:
                 const auto& entity=found->second;
                 if (const auto changed = changed_walls.find(entity.id); changed != changed_walls.end()) {
                     const auto& wall = changed->second;
-                    const auto midpoint=point_at_segment(wall.baseline,0.5);
-                    if (!midpoint) return std::nullopt;
-                    const auto dx=wall.baseline.end.x-wall.baseline.start.x;
-                    const auto dy=wall.baseline.end.y-wall.baseline.start.y;
-                    const auto chord=std::hypot(dx,dy);
-                    const auto offset=wall.thickness*0.5+0.14;
-                    auto proposed=label;
-                    proposed.position={midpoint->x-dy/chord*offset,midpoint->y+dx/chord*offset};
-                    if (view_context) proposed.position=project_plan_point(proposed.position,view_context->frame);
-                    proposed.text=format_length(segment_length(wall.baseline),metric_units);
+                    const auto configured=wall_presentations.find(entity.id);
+                    const auto presentation=configured==wall_presentations.end() ? std::optional<PresentationOverride>{}
+                        : std::optional<PresentationOverride>{configured->second};
+                    if (presentation && !presentation->visible) continue;
+                    const auto exterior=wall_regions.find(entity.id);
+                    auto proposed=wall_dimension_label(entity.id,wall.baseline,wall.thickness,metric_units,label.selected,presentation,
+                        exterior==wall_regions.end() ? nullptr : &exterior->second);
+                    if (view_context) {
+                        std::vector<CanvasLabel> projected{std::move(proposed)};
+                        project_plan_model_labels(projected,source,view_context->frame);
+                        proposed=std::move(projected.front());
+                    }
                     result.labels.push_back(std::move(proposed));
                 } else if (can_recognize_boundary_dimension_entity_type(entity.type)) {
                     const auto decoded=decode_boundary_dimension_entity(entity);
@@ -23733,6 +23980,7 @@ private:
         inspector_body->setMinimumWidth(0);
         inspector_body->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Preferred);
         auto* inspector_layout = new QVBoxLayout(inspector_body);
+        inspector_layout->setSizeConstraint(QLayout::SetMinimumSize);
         inspector_layout->setContentsMargins(12, 10, 12, 12);
         inspector_layout->setSpacing(8);
         auto* heading_row = new QHBoxLayout;
@@ -23752,6 +24000,7 @@ private:
                          [this] { m_inspector->hide(); });
         m_inspector_context = new QLabel(inspector_body);
         m_inspector_context->setWordWrap(true);
+        m_inspector_context->setSizePolicy(QSizePolicy::Preferred,QSizePolicy::Maximum);
         inspector_layout->addWidget(m_inspector_context);
         m_material_group = new QWidget(inspector_body);
         auto* material_layout = new QVBoxLayout(m_material_group);
@@ -24178,7 +24427,9 @@ private:
 
         m_dimension_properties_group = new QGroupBox(QStringLiteral("Dimension"), inspector_body);
         m_dimension_properties_group->setObjectName(QStringLiteral("dimensionProperties"));
+        m_dimension_properties_group->setSizePolicy(QSizePolicy::Preferred,QSizePolicy::Minimum);
         auto* dimension_form = new QFormLayout(m_dimension_properties_group);
+        dimension_form->setSizeConstraint(QLayout::SetMinimumSize);
         dimension_form->setRowWrapPolicy(QFormLayout::WrapLongRows);
         dimension_form->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
         const auto add_dimension_field = [&](const char* name, const QString& label) {
@@ -24209,7 +24460,25 @@ private:
         dimension_form->addRow(dimension_flags);
         auto* apply_dimension = new QPushButton(QStringLiteral("Apply dimension"), m_dimension_properties_group);
         apply_dimension->setObjectName(QStringLiteral("applyBoundaryDimension"));
+        apply_dimension->setMinimumHeight(28);
         dimension_form->addRow(apply_dimension);
+        auto* wall_measurement_row=new QWidget(m_dimension_properties_group);
+        wall_measurement_row->setObjectName(QStringLiteral("wallMeasurementPlacement"));
+        auto* wall_measurement_layout=new QHBoxLayout(wall_measurement_row);
+        wall_measurement_layout->setContentsMargins(0,0,0,0);
+        auto* place_wall_measurement=new QPushButton(QStringLiteral("Place measurement"),wall_measurement_row);
+        place_wall_measurement->setObjectName(QStringLiteral("placeWallMeasurement"));
+        place_wall_measurement->setMinimumHeight(28);
+        auto* automatic_wall_measurement=new QPushButton(QStringLiteral("Automatic"),wall_measurement_row);
+        automatic_wall_measurement->setObjectName(QStringLiteral("automaticWallMeasurement"));
+        automatic_wall_measurement->setMinimumHeight(28);
+        wall_measurement_layout->addWidget(place_wall_measurement);
+        wall_measurement_layout->addWidget(automatic_wall_measurement);
+        dimension_form->addRow(wall_measurement_row);
+        QObject::connect(place_wall_measurement,&QPushButton::clicked,owner,
+            [this]{(void)beginSelectedPlanLabelPlacement();});
+        QObject::connect(automatic_wall_measurement,&QPushButton::clicked,owner,
+            [this]{(void)resetSelectedPlanLabelPlacement(std::nullopt);});
         m_dimension_error = new QLabel(m_dimension_properties_group);
         m_dimension_error->setObjectName(QStringLiteral("dimensionPropertiesError"));
         m_dimension_error->setWordWrap(true);
@@ -24221,11 +24490,18 @@ private:
                 m_dimension_error->show();
                 return;
             }
-            if (!editBoundaryDimension(m_dimension_edit_context->selected_id,
+            const auto selected=selectedEntity();
+            const auto accepted=selected && selected->type=="wall"
+                ? editSelectedWallDimension(m_dimension_x_edit->text(),m_dimension_y_edit->text(),
+                    m_dimension_height_edit->text(),m_dimension_color_edit->text(),
+                    m_dimension_bold_check->isChecked(),m_dimension_italic_check->isChecked(),
+                    m_dimension_visible_check->isChecked(),m_dimension_rotation_edit->text(),m_dimension_edit_context->revision)
+                : editBoundaryDimension(m_dimension_edit_context->selected_id,
                     m_dimension_x_edit->text(), m_dimension_y_edit->text(), m_dimension_height_edit->text(),
                     m_dimension_color_edit->text(), m_dimension_bold_check->isChecked(),
                     m_dimension_italic_check->isChecked(), m_dimension_visible_check->isChecked(),
-                    m_dimension_rotation_edit->text())) {
+                    m_dimension_rotation_edit->text());
+            if (!accepted) {
                 m_dimension_error->setText(lastError());
                 m_dimension_error->show();
             }
@@ -24726,6 +25002,11 @@ private:
                         auto* length = menu.addAction(QStringLiteral("Change length…"));
                         QObject::connect(length, &QAction::triggered, owner,
                                          [this] { showConstraintEditor(); });
+                        auto* measurement=menu.addAction(QStringLiteral("Wall measurement…"));
+                        QObject::connect(measurement,&QAction::triggered,owner,[this]{
+                            positionContextEditor();
+                            m_inspector->ensureWidgetVisible(m_dimension_properties_group,0,8);
+                        });
                     }
                     if (entity && ConstraintDialog::supportsEntity(*entity)) {
                         auto* constraints = menu.addAction(QStringLiteral("Dimensions and constraints…"));
@@ -24874,26 +25155,18 @@ private:
         std::vector<CanvasReferenceGrid> reference_grids;
         all_geometry.reserve(snapshot.entities().size());
         const auto wall_plans = document_wall_plan_geometry(snapshot.entities());
-        std::map<std::string, QPainterPath, std::less<>> exterior_label_regions;
-        for (const auto& [id, entity] : snapshot.entities()) {
-            (void)id;
-            if (!entity.properties.contains("wall_measurement_source") ||
-                !wall_measurement_source_current(snapshot, entity)) continue;
-            const auto boundary = read_boundary(entity.properties);
-            if (boundary.empty()) continue;
-            QPainterPath region;
-            region.moveTo(boundary.front().start.x, boundary.front().start.y);
-            for (const auto& edge : boundary) region.lineTo(edge.end.x, edge.end.y);
-            region.closeSubpath();
-            for (const auto& wall : entity.properties.at("wall_measurement_source").at("walls"))
-                exterior_label_regions.try_emplace(wall.at("id").get<std::string>(), region);
-        }
+        const auto exterior_label_regions=wall_dimension_exterior_regions(snapshot);
         const auto append_geometry_error = [&](const QString& message) {
             if (!m_plan_geometry_error.isEmpty()) {
                 m_plan_geometry_error += QLatin1Char('\n');
             }
             m_plan_geometry_error += message;
         };
+        std::map<std::string,PresentationOverride,std::less<>> wall_presentations;
+        try {wall_presentations=wall_dimension_presentations(snapshot.entities());}
+        catch(const std::exception& error) {
+            append_geometry_error(QStringLiteral("Wall measurements: %1").arg(QString::fromUtf8(error.what())));
+        }
         std::map<std::string, std::vector<HostedOpening>, std::less<>> openings_by_wall;
         std::map<std::string, std::vector<const Entity*>, std::less<>> opening_entities_by_wall;
         for (const auto& [id, entity] : snapshot.entities()) {
@@ -25193,36 +25466,18 @@ private:
                         wall.slope_rise = slope->get<double>();
                     }
                     validate_wall_semantics(wall);
-                    const auto midpoint = point_at_segment(*baseline, 0.5);
-                    if (midpoint) {
-                        const auto dx = baseline->end.x - baseline->start.x;
-                        const auto dy = baseline->end.y - baseline->start.y;
-                        const auto chord = std::hypot(dx, dy);
-                        Vec2 normal = chord > 1e-9
-                            ? Vec2{-dy / chord, dx / chord} : Vec2{0.0, 1.0};
-                        const auto clearance = *thickness * 0.5 + 0.14;
-                        if (const auto exterior = exterior_label_regions.find(id); exterior != exterior_label_regions.end()) {
-                            const auto positive = exterior->second.contains(QPointF(midpoint->x + normal.x * clearance,
-                                                                                   midpoint->y + normal.y * clearance));
-                            const auto negative = exterior->second.contains(QPointF(midpoint->x - normal.x * clearance,
-                                                                                   midpoint->y - normal.y * clearance));
-                            if (positive && !negative) normal = {-normal.x, -normal.y};
-                        }
-                        CanvasLabel wall_length{id_from(id),
-                            {midpoint->x + normal.x * clearance,
-                             midpoint->y + normal.y * clearance},
-                            format_length(segment_length(*baseline), m_metric_units),
-                            id_from(id) == m_selected_id};
-                        wall_length.text_height_metres = 0.15;
-                        wall_length.paper_height_mm = 3.5;
-                        wall_length.show_background = false;
-                        wall_length.plan_only = true;
-                        auto angle = std::atan2(dy, dx);
-                        while (angle > std::numbers::pi / 2) angle -= std::numbers::pi;
-                        while (angle <= -std::numbers::pi / 2) angle += std::numbers::pi;
-                        wall_length.rotation_radians = angle;
-                        wall_length.automatic_linear_placement = CanvasLinearLabelPlacement{*baseline, normal, clearance};
-                        all_labels.push_back(std::move(wall_length));
+                    try {
+                        const auto configured=wall_presentations.find(id);
+                        const auto presentation=configured==wall_presentations.end() ? std::optional<PresentationOverride>{}
+                            : std::optional<PresentationOverride>{configured->second};
+                        const auto exterior=exterior_label_regions.find(id);
+                        if (!presentation || presentation->visible)
+                            all_labels.push_back(wall_dimension_label(id,*baseline,*thickness,m_metric_units,
+                                id_from(id)==m_selected_id,presentation,
+                                exterior==exterior_label_regions.end() ? nullptr : &exterior->second));
+                    } catch(const std::exception& error) {
+                        append_geometry_error(QStringLiteral("Wall measurement %1: %2")
+                            .arg(id_from(id),QString::fromUtf8(error.what())));
                     }
                 } catch (const std::exception& error) {
                     append_geometry_error(QStringLiteral("Wall %1: %2")
@@ -25470,6 +25725,9 @@ private:
                 }
                 for (const auto& override : state.overrides) {
                     if (override.target_kind == "output_view") continue;
+                    // The wall and its derived measurement share identity, but
+                    // measurement appearance/visibility never affects geometry.
+                    if (override.target_kind == "wall_dimension") continue;
                     if (override.target_kind=="area" && override.plan_label_offset) {
                         for (auto& label:all_labels) {
                             if (label.avoid_components && label.id.toStdString()==override.target_id) {
@@ -27414,6 +27672,39 @@ private:
         m_dimension_edit_context.reset();
         m_dimension_properties_group->hide();
         m_dimension_error->hide();
+        const bool wall_measurement=entity && entity->type=="wall" && m_selected_ids.size()==1;
+        m_dimension_properties_group->setTitle(wall_measurement ? QStringLiteral("Wall measurement") : QStringLiteral("Dimension"));
+        if (auto* placement=owner->findChild<QWidget*>(QStringLiteral("wallMeasurementPlacement")))
+            placement->setVisible(wall_measurement);
+        if (wall_measurement) {
+            try {
+                const auto presentation=selectedWallDimensionPresentation(inspector_snapshot);
+                const auto baseline=read_required_segment(entity->properties,"baseline");
+                const auto thickness=read_finite_number(entity->properties,"thickness_m");
+                if (!baseline || !thickness) throw std::invalid_argument("Wall measurement geometry is unavailable.");
+                const auto regions=wall_dimension_exterior_regions(inspector_snapshot);
+                const auto exterior=regions.find(entity->id);
+                const auto resolved=wall_dimension_label(entity->id,*baseline,*thickness,m_metric_units,false,presentation,
+                    exterior==regions.end() ? nullptr : &exterior->second);
+                m_dimension_x_edit->setText(dimensionCoordinateText(resolved.position.x));
+                m_dimension_y_edit->setText(dimensionCoordinateText(resolved.position.y));
+                const auto hint=m_metric_units ? QStringLiteral("World X/Y, metres unless a unit suffix is entered")
+                    : QStringLiteral("World X/Y, feet unless a unit suffix is entered");
+                m_dimension_x_edit->setToolTip(hint);m_dimension_y_edit->setToolTip(hint);
+                m_dimension_height_edit->setText(QString::number(resolved.paper_height_mm,'g',17));
+                m_dimension_color_edit->setText(QString::fromStdString(presentation.style.stroke_color));
+                m_dimension_rotation_edit->setText(QString::number(resolved.rotation_radians*180/std::numbers::pi,'g',12));
+                m_dimension_bold_check->setChecked(presentation.style.bold);
+                m_dimension_italic_check->setChecked(presentation.style.italic);
+                m_dimension_visible_check->setChecked(presentation.visible);
+                m_dimension_edit_context=captureModalContext();
+                m_dimension_properties_group->setEnabled(editable && !m_boundary_session && !m_pending_wall_start);
+                m_dimension_properties_group->show();
+            } catch(const std::exception& error) {
+                m_dimension_error->setText(QString::fromUtf8(error.what()));
+                m_dimension_error->show();
+            }
+        }
         if (entity && can_recognize_boundary_dimension_entity_type(entity->type)) {
             try {
                 const auto decoded = decode_boundary_dimension_entity(*entity);
@@ -31081,6 +31372,11 @@ bool MainWindow::setSelectedPlanLabelPosition(Vec2 position,std::optional<Revisi
 }
 bool MainWindow::resetSelectedPlanLabelPlacement(std::optional<Revision> revision) {
     return m_impl->resetSelectedPlanLabelPlacement(revision);
+}
+bool MainWindow::editSelectedWallDimension(const QString& x,const QString& y,const QString& height_mm,
+    const QString& color,bool bold,bool italic,bool visible,const QString& rotation_degrees,
+    std::optional<Revision> expected_revision) {
+    return m_impl->editSelectedWallDimension(x,y,height_mm,color,bold,italic,visible,rotation_degrees,expected_revision);
 }
 
 bool MainWindow::editScheduleCell(const QString& object_id, const QString& column,

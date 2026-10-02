@@ -56,7 +56,7 @@ struct LabelInstance {
 };
 
 struct PresentationOverride {
-    std::string target_kind; // area, object, output_view
+    std::string target_kind; // area, object, output_view, wall_dimension
     std::string target_id;
     AnnotationStyle style;
     bool visible{true};
@@ -64,12 +64,15 @@ struct PresentationOverride {
     // existing semantic presentation defaults; neither affects geometry.
     std::optional<double> paper_line_width_mm;
     std::optional<double> hatch_scale;
-    // Model-space label offset from the owning area's derived anchor. It
-    // changes presentation only; the text and area value remain derived.
+    // Model-space label offset from an area's derived anchor or the owning
+    // wall's analytical midpoint. Quantities remain derived from geometry.
     std::optional<Vec2> plan_label_offset;
-    // Placement-only area records retain semantic colors, fills and linework.
-    // Explicit appearance edits remove this inheritance flag.
+    // Placement-only area records retain semantic appearance. Wall dimensions
+    // retain their derived default text style; optional height/rotation apply.
     bool inherit_appearance{false};
+    // Automatic wall-length callouts only, independent of wall geometry.
+    std::optional<double> paper_text_height_mm;
+    std::optional<double> plan_label_rotation_radians;
 };
 
 struct SymbolStroke { Vec2 start; Vec2 end; };
