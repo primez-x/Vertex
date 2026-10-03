@@ -3975,7 +3975,8 @@ std::optional<Vec2> PlanCanvas::directionalDrawingAlignment(
         const bool wall = entity.type == QStringLiteral("wall");
         const bool boundary = entity.type == QStringLiteral("boundary") ||
             entity.type == QStringLiteral("measurement_boundary") ||
-            entity.type == QStringLiteral("room_boundary");
+            entity.type == QStringLiteral("room_boundary") ||
+            entity.type == QStringLiteral("measurement_linework");
         if ((!wall && !boundary) || entity.svg_symbol) continue;
         if (!intersections_only) {
             for (const auto point : entity.snap_points) {
@@ -4244,6 +4245,8 @@ bool PlanCanvas::matchesSelectionType(const QString& type) const {
     if (type == QStringLiteral("dimension") || type == QStringLiteral("dimension_line"))
         return m_selection_filter == CanvasSelectionFilter::dimensions;
     if (type == QStringLiteral("symbol")) return m_selection_filter == CanvasSelectionFilter::symbols;
+    if (type == QStringLiteral("measurement_linework"))
+        return m_selection_filter == CanvasSelectionFilter::objects;
     if (type == QStringLiteral("wall") || type == QStringLiteral("opening") ||
         type == QStringLiteral("door") || type == QStringLiteral("window") ||
         type == QStringLiteral("slab") || type == QStringLiteral("roof") ||

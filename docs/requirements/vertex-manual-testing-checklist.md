@@ -300,7 +300,8 @@ drawing; switching modes does not change existing geometry.
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U049 — Jump to another point without drawing a connecting edge**
-  - Expected: The next segment begins where intended without a stray line.
+  - Steps: Choose Measured lines in Draw. Click a start and two endpoints, then finish with Enter. Select the stroke, choose Tools → Jump to measured or boundary vertex and choose a saved vertex. Click a new endpoint and finish. Repeat using Tools → Lift measured pen while drawing, then click a new starting point. Save and reopen; Undo and Redo the accepted edges.
+  - Expected: Jump starts the next independent stroke at the exact chosen vertex. Lift measured pen allows a separate starting point. Neither adds a connecting edge, wall thickness or area total. Previously committed edges remain when Enter, stationary right-click or Escape finishes a stroke.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
@@ -319,7 +320,8 @@ drawing; switching modes does not change existing geometry.
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U052 — Create an area from existing closed linework**
-  - Expected: The resulting area matches the existing geometry without duplicate stray edges.
+  - Steps: Choose Measured lines in Draw. Draw three sides of a rectangle, entering one of those sides with D (distance and heading) instead of clicking, then press A for the closing side. Select the finished stroke, choose Tools → Detect closed areas and choose its classification. Open the third left-panel tab, Details, and inspect the new area's edge lengths, perimeter and area. Repeat detection, then Undo, Redo, save and reopen. Also try a loose stub, a crossing separator and a smaller closed loop inside the rectangle.
+  - Expected: Detection creates measured areas from the closed faces in the selected stroke's floor/layer context while keeping all source strokes. One Undo removes the newly defined areas together. Repeating detection adds no identical area. Loose lines alone add no appraisal total; nested holes are refused with an explanation. Details shows measurements and appraisal results according to the project's setup and recorded facts.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 

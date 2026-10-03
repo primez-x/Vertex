@@ -4,6 +4,7 @@
 #include "sketch/annotation_entity_codec.hpp"
 #include "sketch/boundary_dimension.hpp"
 #include "sketch/boundary_entity.hpp"
+#include "sketch/measurement_linework.hpp"
 #include "sketch/document_wall.hpp"
 #include "sketch/hosted_opening_geometry.hpp"
 #include "sketch/door_operation.hpp"
@@ -199,6 +200,8 @@ std::optional<DxfPolyline> dxf_polyline_from_boundary(const Boundary& boundary,
         result.vertices.push_back({{segment.start.x, segment.start.y},
                                     bulge == 0.0 ? 0.0 : bulge});
     }
+    if (!result.closed)
+        result.vertices.push_back({{boundary.back().end.x, boundary.back().end.y}, 0.0});
     return result;
 }
 
@@ -421,6 +424,34 @@ void export_native_entity(const DocumentSnapshot& document, const Entity& entity
         return;
     }
     const auto layer = layer_for(document, entity, result.diagnostics);
+    if (entity.type == "measurement_linework") {
+        try {
+            const auto decoded = decode_measurement_linework_model(entity.properties.at("model"));
+            if (!decoded.supported()) {
+                diagnostic(result.diagnostics, entity.id, entity.type, "measurement_linework_model_unsupported");
+                return;
+            }
+            const auto replay = replay_measurement_linework(*decoded.model);
+            Boundary geometry;
+            geometry.reserve(replay.edges.size());
+            for (const auto& edge : replay.edges) geometry.push_back(edge.segment);
+            if (geometry.size() == 1) {
+                add_segment_as_dxf(result.drawing, geometry.front(), layer,
+                    result.diagnostics, entity.id, entity.type);
+            } else if (const auto polyline = dxf_polyline_from_boundary(geometry, replay.closed, layer)) {
+                result.drawing.polylines.push_back(*polyline);
+            } else {
+                diagnostic(result.diagnostics, entity.id, entity.type, "measurement_linework_geometry_not_representable");
+                return;
+            }
+            // Plain DXF carries exact analytical geometry, but cannot carry the
+            // native receipt expressions, topology IDs, or future extensions.
+            diagnostic(result.diagnostics, entity.id, entity.type, "measurement_linework_inputs_not_representable");
+        } catch (const std::exception&) {
+            diagnostic(result.diagnostics, entity.id, entity.type, "measurement_linework_geometry_not_representable");
+        }
+        return;
+    }
     if (can_recognize_boundary_entity_type(entity.type)) {
         const auto boundary = read_entity_boundary(entity);
         if (!boundary) {

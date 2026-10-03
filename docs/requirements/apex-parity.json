@@ -829,7 +829,7 @@
         "scripts/generate_workflow_acceptance_evidence.py",
         "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "Selected-boundary cursor jump, exact closure, alignment/snap and logical shortcut mappings have bounded geometry/UI foundations. B matches bay returns; X/Y propose original-start coordinate alignment and A closes the actual outline. Ctrl+Arrow advances through visible structural endpoint coordinates; Ctrl+Shift+Arrow proposes actual analytical line/arc ray intersections. Enter accepts the revision-bound proposal through ordinary geometry/history; Define First retains manual dimensions. The disconnected open-linework point-jump workflow, other keyboard semantics, physical shortcut qualification, native Apex compatibility and production parity remain open. Historical evidence retains its named-source qualification boundary."
+      "implementation_note": "Selected-boundary cursor jump, exact closure, alignment/snap and logical shortcut mappings have bounded geometry/UI foundations. B matches bay returns; X/Y propose original-start coordinate alignment and A closes the actual outline. Ctrl+Arrow advances through visible structural endpoint coordinates; Ctrl+Shift+Arrow proposes actual analytical line/arc ray intersections. Enter accepts the revision-bound proposal through ordinary geometry/history; Define First retains manual dimensions. Measured-line pen lifting and exact stable-vertex jumps now start independent strokes without a joining edge; A closure and Enter acceptance use retained receipts/history. Other keyboard semantics, same-stroke Undo continuation, physical shortcut qualification, native Apex compatibility and production parity remain open. Historical evidence retains its named-source qualification boundary."
     },
     {
       "id": "GEO-CON-001",
@@ -1034,10 +1034,17 @@
         "tests/measurement_linework_document_tests.cpp",
         "docs/plans/2026-10-03-measurement-linework.md",
         "docs/verification/measurement-linework-2026-10-03.md",
+        "include/sketch/measurement_area_graph.hpp",
+        "src/core/measurement_area_graph.cpp",
+        "tests/measurement_area_graph_tests.cpp",
+        "tests/measurement_linework_desktop_tests.cpp",
+        "tests/measurement_linework_area_desktop_tests.cpp",
+        "tests/measurement_linework_exchange_tests.cpp",
+        "docs/verification/measurement-linework-canvas-2026-10-03.md",
         "scripts/generate_workflow_acceptance_evidence.py",
         "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "Closed-outline Draw First authoring, atomic commit, dimensions, visibility, undo/redo and native save/reopen paths exist. Source review of the official tutorial additionally establishes loose separator lines and pen-up relocation before later area definition. A first-class measurement_linework model now retains open or closed receipt-derived strokes, curves, crossings and retracing with document/context admission and real history/storage coverage. Canvas authoring, disconnected point jumping, dimensions/edit/output/recovery adapters, derived graph noding and later area definition remain open; this prerequisite does not certify Draw First parity. Historical workflow evidence retains its named-source qualification boundary."
+      "implementation_note": "Closed-outline Draw First authoring, atomic commit, dimensions, visibility, undo/redo and native save/reopen paths exist. Source review of the official tutorial additionally establishes loose separator lines and pen-up relocation before later area definition. A first-class measurement_linework model now retains open or closed receipt-derived strokes, curves, crossings and retracing with document/context admission and real history/storage coverage. The desktop now exposes Measured lines as the third Draw choice with Wall still default, per-edge receipt commits, D distance/heading, finish retaining committed edges, pen lifting, exact stable-vertex jumps, A closure and Enter alignment acceptance. Same-context analytical graph noding and classified derived measurement boundaries retain source lineage and commit in one Undo operation; repeat detection avoids identical geometry. Retained canvas/dimensions/snap/output and analytical DXF export are integrated, with native typed-expression/identity loss diagnostics and opaque unsupported models. Nine focused checks pass in the measurement-linework-canvas-20261003 records. Final rebuild and five affected desktop checks pass; root inspected the native canvas and actual PDF. Closed measured-stroke dimensions face outward and follow project/ANSI-profile display units without altering exact geometry. Same-stroke Undo continuation, stroke transforms/editing, combined rise/run/relative-turn/curve UI, nested holes, real native Apex roundtrips, full production qualification and ANSI certification remain open. Historical workflow evidence retains its named-source qualification boundary."
     },
     {
       "id": "APX-WF-002",

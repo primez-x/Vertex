@@ -178,10 +178,37 @@ the precision pointer without dirtying the project.
 The separate `measurement_linework` model retains open measured strokes with
 individual construction receipts. It deliberately does not relax a closed
 boundary's topology contract or pretend that pointer motion starts a new edge.
-Its document admission and storage are prerequisites for disconnected Draw
-First authoring. Canvas jump/pen-state integration and derived area-face noding
-remain open; U049 is not fulfilled by this model alone. See the
-[implementation plan](plans/2026-10-03-measurement-linework.md).
+The desktop now exposes **Measured lines** as the third Draw choice; physical
+Wall remains the default. Clicks commit retained exact edges individually. **D**
+accepts a distance and a counterclockwise heading from +X. Enter, stationary
+right-click or Escape finishes the stroke while keeping committed edges.
+**Tools → Lift measured pen** starts an independent stroke. Select a saved
+stroke and use **Tools → Jump to measured or boundary vertex** to relocate to
+its exact stable vertex without adding a connecting edge. **A** closes a stroke;
+Enter accepts an alignment proposal through the ordinary receipt/history path.
+
+With a stroke selected, **Tools → Detect closed areas** collects measured strokes
+in the same property/building/floor/layer context, asks for classification, and
+creates real `measurement_boundary` entities in one undoable transaction. Source
+strokes remain intact. Derived edges retain source owner/segment IDs, parameter
+intervals and traversal direction. Repeating detection skips identical derived
+geometry; changed geometry with already-used lineage requires explicit review.
+
+`measurement_area_graph.hpp` nodes analytical straight and circular-arc crossings,
+T junctions and coincident overlap, deduplicating retracing with all source uses.
+Bridges and open stubs do not create faces. Nested cycles requiring holes and
+ill-conditioned contacts/arcs reject explicitly. Limits are 2048 sources, 16384
+represented stations/derived edges and 65536 processed contacts. Tolerance sets
+the minimum usable edge length and never merges nearby geometry.
+
+Retained strokes project into the canvas, dimensions, snapping and shared output.
+DXF exports analytical lines/arcs and explicitly diagnoses loss of native typed
+expressions and identities. Unsupported receipt models stay opaque rather than
+becoming guessed geometry. See the [canvas plan](plans/2026-10-03-measurement-linework-canvas.md)
+and [verification checkpoint](verification/measurement-linework-canvas-2026-10-03.md).
+Same-stroke continuation after Undo, stroke transforms/editing, combined rise/run,
+relative-turn/curve input UI, nested holes and real native Apex roundtrips remain
+scoped gaps. This checkpoint does not certify full production or ANSI compliance.
 Physical key preset verification, editable shortcut persistence, and broader
 semantic dependency migration remain open. Callers must not replace a document
 entity with a geometry result while silently dropping its owned semantics;

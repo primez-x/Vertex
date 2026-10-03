@@ -1,6 +1,7 @@
 #include "sketch/desktop/main_window.hpp"
 #include "sketch/project_store.hpp"
 #include "sketch/project_workspace.hpp"
+#include "sketch/measurement_linework.hpp"
 #include "../src/desktop/plan_canvas.hpp"
 #include "support/noninteractive_errors.hpp"
 
@@ -149,6 +150,18 @@ void endpoint_coordinates_advance_exactly_without_artwork_or_grid_targets() {
     canvas.setEntities({structural("boundary", {{{origin.x+1e-10, 10}, {4, 10}, 0}})});
     target(canvas, origin, 1, 0, false, Vec2{origin.x+1e-10, origin.y},
         "representable endpoint coordinates are never rounded to a grid or metre tolerance");
+}
+void independent_measurement_strokes_are_analytical_alignment_targets() {
+    PlanCanvas canvas;
+    const Vec2 origin{0.01317, -0.01931};
+    auto stroke = structural("measurement_linework", {{{1.24567, -3}, {1.24567, 4}, 0}});
+    stroke.snap_points = {{1.24567, -3}, {1.24567, 4}};
+    stroke.snap_segments = stroke.segments;
+    canvas.setEntities({stroke});
+    target(canvas, origin, 1, 0, false, Vec2{1.24567, origin.y},
+        "loose measured stroke endpoints participate in Ctrl-arrow alignment");
+    target(canvas, origin, 1, 0, true, Vec2{1.24567, origin.y},
+        "loose measured stroke analytical span participates in Ctrl-Shift-arrow intersection");
 }
 void intersections_use_actual_ray_contacts_and_accepted_draft_geometry() {
     PlanCanvas canvas;
@@ -444,6 +457,35 @@ const DrawingWitness& selected_directional(const PlanCanvas& canvas, Vec2 start,
     require(std::count_if(witnesses.begin(), witnesses.end(), [](const auto& value) { return value.selected; }) == 1,
         "only the active directional proposal is selected");
     return *found;
+}
+void native_measured_lines_accept_alignment_and_automatic_closure() {
+    MainWindow window;
+    auto& canvas=native_canvas(window);
+    require(window.beginMeasurementLinework() && window.appendMeasurementLineworkPoint({1,-2}) &&
+        window.appendMeasurementLineworkPoint({1,2}), "create loose alignment target");
+    window.finishMeasurementLinework();
+    require(window.beginMeasurementLinework() && window.appendMeasurementLineworkPoint({0,0}),
+        "start independent measured stroke for alignment");
+    canvas.setFocus(); events();
+    key(canvas,Qt::Key_Right,Qt::ControlModifier); events();
+    selected_directional(canvas,{0,0},{1,0},window.lastError());
+    const auto source=window.document().snapshot();
+    key(canvas,Qt::Key_Return); events();
+    require(window.document().revision()==source.revision()+1, "Enter accepts measured-line alignment without ending the stroke");
+    require(window.appendMeasurementLineworkPoint({1,1}) && window.appendMeasurementLineworkPoint({0,1}),
+        "drawing continues after aligned measured edge");
+    const auto before_close=window.document().snapshot();
+    canvas.setFocus(); events();
+    key(canvas,Qt::Key_A); events();
+    require(window.document().revision()==before_close.revision()+1, "A closes measured linework without accessing a boundary session");
+    bool found=false;
+    const auto closed_snapshot = window.document().snapshot();
+    for(const auto& [id,entity]:closed_snapshot.entities()) if(entity.type=="measurement_linework") {
+        const auto model=*decode_measurement_linework_model(entity.properties.at("model")).model;
+        if(model.closed) { found=true; require(model.edges.size()==4 && model.edges.back().receipt.kind==BoundaryConstructionKind::line_closure,
+            "automatic measured closure retains its exact closure receipt"); }
+    }
+    require(found,"closed measured stroke survives actual native A command");
 }
 void repeated_native_proposals_and_boundary_phases(bool boundary, bool manual, bool first_side) {
     std::cout << "native directional: boundary=" << boundary << " manual=" << manual
@@ -808,6 +850,8 @@ int main(int argc, char** argv) {
             "native directional rendering loads the bundled font");
         app.setFont(QFont("Inter", 10));
         endpoint_coordinates_advance_exactly_without_artwork_or_grid_targets();
+        independent_measurement_strokes_are_analytical_alignment_targets();
+        native_measured_lines_accept_alignment_and_automatic_closure();
         intersections_use_actual_ray_contacts_and_accepted_draft_geometry();
         directional_wall_baselines_are_independent_of_mouse_snap_geometry();
         distant_origins_order_targets_by_exact_world_coordinate();

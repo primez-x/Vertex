@@ -174,6 +174,20 @@ public:
     // classification if none is supplied; Draw First classifies after closure.
     [[nodiscard]] bool beginBoundaryDrawing(BoundaryAuthoringMode mode,
                                             QString classification = {});
+    // Independent loose measured strokes. Starting/relocating the pen does
+    // not create geometry; every edge appends one exact receipt through normal
+    // document history. Finish retains committed edges. All edits validate the
+    // captured document/revision and complete drawing context.
+    [[nodiscard]] bool beginMeasurementLinework();
+    [[nodiscard]] bool appendMeasurementLineworkPoint(Vec2 point,
+        std::optional<Revision> expected_revision = std::nullopt);
+    [[nodiscard]] bool appendMeasurementLineworkHeading(const QString& distance,
+        const QString& heading, std::optional<Revision> expected_revision = std::nullopt);
+    void finishMeasurementLinework();
+    [[nodiscard]] bool relocateMeasurementLinework(Vec2 point,
+        std::optional<Revision> expected_revision = std::nullopt);
+    [[nodiscard]] bool jumpMeasurementLineworkVertex(const QString& entity_id,
+        const QString& vertex_id, Revision expected_revision);
     [[nodiscard]] bool beginAutoSubtractBoundary(const QString& target_id,
                                                  QString classification = {});
     [[nodiscard]] bool applySelectedAutoSubtract(const QString& target_id,
@@ -248,10 +262,11 @@ public:
     // Opens the same dimension editor used by native 3D double-click and the
     // room context menu. It previews without mutating document history.
     void showRoomVolumeDimensions();
-    // Detects all simple bounded faces in the selected wall's floor/layer
-    // graph and creates one independent room boundary per face in one atomic
-    // Document command. Open wall stubs are ignored; invalid segment graphs
-    // fail before mutation.
+    // Detects bounded faces in the selected wall's floor/layer graph, creating
+    // room boundaries. For a selected measured stroke, nodes the layer's exact
+    // linework and creates classified measurement boundaries with source
+    // lineage. All new faces commit atomically; existing identical measured
+    // faces are retained rather than duplicated. Invalid graphs fail unchanged.
     [[nodiscard]] QStringList detectRoomBoundariesFromExistingWalls(
         QString classification = QStringLiteral("room"),
         std::optional<Revision> expected_revision = std::nullopt);
