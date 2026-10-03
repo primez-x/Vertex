@@ -1029,4 +1029,23 @@ provide the same operations without remembering their keys.
 Alignment uses visible model geometry, independent of zoom and grid spacing.
 Symbol artwork, annotations, reference images, grid lines, and the unaccepted
 rubber band are not structural targets. These operations do not implement
-disconnected open measurement linework or the complete Apex keyboard preset.
+the complete Apex keyboard preset. Disconnected receipt-based strokes use the
+separate **Measured lines** choice in Draw.
+
+## Measured-line drawing history
+
+Each side in an active Measured lines stroke is a document operation. Ctrl+Z
+removes its latest side and restores the pen at the preceding exact endpoint;
+Ctrl+Y restores that side and advances the pen. Undoing every side returns to the
+original anchor without retaining an empty stroke entity. Undo at that
+uncommitted anchor cancels only the local start point, leaving earlier document
+operations intact. Drawing a different side after Undo replaces the abandoned
+Redo branch while keeping the retained stroke, vertex and receipt identities.
+
+The live session records revision identities and compares complete entities and
+assets against retained document history before and after navigation. Changed
+context, foreign edits or failed transitions end that session instead of
+reviving an obsolete pen. Redo with no available side leaves a validated current
+stroke active. Explicit Finish, Enter, Escape and stationary
+right-click keep committed geometry but end drawing. Native reopen restores
+ordinary saved geometry and history, without automatically resuming authoring.

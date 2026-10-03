@@ -2184,6 +2184,14 @@ drawing; switching modes does not change existing geometry.
   - Result: Not tested
   - Notes: ______________________________
 
+- [ ] **U368 — Undo a measured line and keep drawing from the restored endpoint**
+  - Steps: Choose Measured lines in Draw. Start a stroke and place three sides. Press Ctrl+Z once; check that the last side disappears and the drawing preview starts at the previous endpoint. Press Ctrl+Y and place another side. Undo back to the starting point, Redo the sides, then Undo once and draw a different side. Repeat using typed distances and angles. Finish with Enter, Escape or a stationary right-click; save and reopen.
+  - Expected: Each Undo removes one committed side and leaves the pen at its exact previous position. Redo restores the same side and moves the pen to its endpoint. Continuing after Undo keeps the existing stroke and replaces its abandoned Redo branch. Earlier typed measurements stay unchanged. Undo at an uncommitted starting point cancels only that point. Finishing or reopening does not restart drawing unexpectedly.
+  - Also try: Change the active layer or workspace before using history, and make an unrelated edit before Undo.
+  - Expected: History still navigates the document, but an obsolete drawing session cannot resume on the wrong layer, workspace or geometry.
+  - Result: Not tested
+  - Notes: ______________________________
+
 ## Issue report template
 
 - Task ID(s):

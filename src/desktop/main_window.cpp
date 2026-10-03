@@ -12758,9 +12758,11 @@ public:
             clearPreview();
             LineworkDrawing drawing;
             drawing.document = m_document;
+            drawing.document_id = m_document->snapshot().document_id();
             drawing.revision = m_document->revision();
             drawing.context = *context;
             drawing.model.stroke_id = new_id("measured-stroke");
+            drawing.history_revisions.push_back(drawing.revision);
             m_linework_drawing = std::move(drawing);
             m_creation_mode = DrawingMode::measured_lines;
             if (m_drawing_mode_combo) {
@@ -12795,6 +12797,81 @@ public:
             : replay_measurement_linework(drawing.model).edges.back().segment.end;
     }
 
+    const RevisionRecord& lineworkHistoryCheckpoint(const DocumentSnapshot& snapshot,
+                                                   std::size_t index) const {
+        const auto& drawing = *m_linework_drawing;
+        if (snapshot.document_id() != drawing.document_id || index >= drawing.history_revisions.size())
+            throw std::invalid_argument("The measured stroke's history source changed.");
+        const auto revision = drawing.history_revisions[index];
+        const auto found = std::find_if(snapshot.history().begin(), snapshot.history().end(),
+            [revision](const auto& record) { return record.revision == revision; });
+        if (found == snapshot.history().end())
+            throw std::invalid_argument("The measured stroke's history checkpoint is unavailable.");
+        return *found;
+    }
+
+    void requireLineworkHistorySource() const {
+        requireLineworkDrawing();
+        const auto snapshot = m_document->snapshot();
+        const auto& drawing = *m_linework_drawing;
+        const auto& checkpoint = lineworkHistoryCheckpoint(snapshot, drawing.history_index);
+        if (snapshot.entities() != checkpoint.entities || snapshot.assets() != checkpoint.assets)
+            throw std::invalid_argument("The measured stroke's document history changed.");
+        const auto found = checkpoint.entities.find(drawing.model.stroke_id);
+        if (drawing.history_index == 0) {
+            if (!drawing.model.edges.empty() || found != checkpoint.entities.end())
+                throw std::invalid_argument("The measured stroke's anchor history changed.");
+        } else if (found == checkpoint.entities.end() || found->second.type != "measurement_linework" ||
+                   found->second.properties.at("model") != encode_measurement_linework_model(drawing.model)) {
+            throw std::invalid_argument("The measured stroke's receipt history changed.");
+        }
+    }
+
+    void synchronizeLineworkWithHistory(bool redo) {
+        if (!m_linework_drawing) return;
+        try {
+            const auto snapshot = m_document->snapshot();
+            auto& drawing = *m_linework_drawing;
+            const auto context = organize_project(snapshot).drawing_context(m_active_layer_id.toStdString());
+            if (drawing.document != m_document || !m_document->is_editable() ||
+                m_workspace != Workspace::measurement || m_tool != CanvasTool::boundary ||
+                !context || *context != drawing.context || (!redo && drawing.history_index == 0))
+                throw std::invalid_argument("The measured stroke's drawing context changed.");
+            const auto index = redo ? drawing.history_index + 1 : drawing.history_index - 1;
+            const auto& checkpoint = lineworkHistoryCheckpoint(snapshot, index);
+            // Only an exact transition belonging to this live session may move
+            // its pen. Document history remains authoritative for all other edits.
+            if (snapshot.entities() != checkpoint.entities || snapshot.assets() != checkpoint.assets)
+                throw std::invalid_argument("History navigation did not restore this stroke's next edge checkpoint.");
+            auto model = drawing.model;
+            if (index == 0) {
+                model.edges.clear(); model.closed = false;
+            } else {
+                const auto found = checkpoint.entities.find(model.stroke_id);
+                if (found == checkpoint.entities.end() || found->second.type != "measurement_linework")
+                    throw std::invalid_argument("The measured stroke's history entity is unavailable.");
+                const auto decoded = decode_measurement_linework_model(found->second.properties.at("model"));
+                if (!decoded.model || decoded.model->stroke_id != model.stroke_id || decoded.model->closed ||
+                    decoded.model->edges.size() != index || decoded.model->anchor.x != model.anchor.x ||
+                    decoded.model->anchor.y != model.anchor.y)
+                    throw std::invalid_argument("The measured stroke's history receipts changed.");
+                model = *decoded.model;
+            }
+            drawing.model = std::move(model);
+            drawing.history_index = index;
+            drawing.revision = snapshot.revision();
+            drawing.pen_vertex = index == 0 ? drawing.anchor_vertex : drawing.model.edges.back().end_vertex_id;
+            m_last_cursor = lineworkPen();
+            resetDrawingInputContext();
+            if (m_drawing_input) m_drawing_input->clearInput();
+            updateDrawingInput(); refreshLineworkPreview();
+        } catch (const std::exception& error) {
+            // Navigation succeeded; abandon only the incompatible authoring session.
+            finishMeasurementLinework();
+            setError(QStringLiteral("Measured stroke ended: %1").arg(QString::fromUtf8(error.what())));
+        }
+    }
+
     bool appendLineworkReceipt(ConstructionReceipt receipt,
                                std::optional<Revision> expected_revision = std::nullopt) {
         try {
@@ -12827,10 +12904,15 @@ public:
                 entity = found->second;
                 entity.properties["model"] = encode_measurement_linework_model(candidate);
             }
+            auto history_revisions = drawing.history_revisions;
+            history_revisions.resize(drawing.history_index + 2);
             if (!applyEntity(std::move(entity), "append measured line", drawing.revision)) return false;
             m_linework_drawing->model = std::move(candidate);
             m_linework_drawing->revision = m_document->revision();
             m_linework_drawing->pen_vertex = end_vertex;
+            history_revisions.back() = m_document->revision();
+            m_linework_drawing->history_revisions = std::move(history_revisions);
+            ++m_linework_drawing->history_index;
             m_last_cursor = edge.segment.end;
             refresh();
             if (closed) finishMeasurementLinework();
@@ -21032,13 +21114,18 @@ public:
     bool undoCommand() {
         clearDrawingAlignment();
         if (!m_document->is_editable()) {
+            if (m_linework_drawing) finishMeasurementLinework();
             setError(QStringLiteral("This document is read-only."));
             return false;
         }
         if (m_linework_drawing) {
-            const bool uncommitted = m_linework_drawing->model.edges.empty();
-            finishMeasurementLinework();
-            if (uncommitted) return true;
+            try { requireLineworkHistorySource(); }
+            catch (const std::exception&) { finishMeasurementLinework(); }
+            if (m_linework_drawing && m_linework_drawing->model.edges.empty()) {
+                // The original anchor is local even after Undo of the first edge.
+                finishMeasurementLinework();
+                return true;
+            }
         }
         if (m_boundary_session) {
             const bool changed = m_boundary_session->undo();
@@ -21051,6 +21138,7 @@ public:
             return true;
         }
         if (!(m_recovery_ledger.empty() ? m_document->can_undo() : m_project_workspace->can_undo())) {
+            if (m_linework_drawing) finishMeasurementLinework();
             return false;
         }
         try {
@@ -21075,10 +21163,12 @@ public:
                 m_selected_id.clear();
             }
             clearError();
+            synchronizeLineworkWithHistory(false);
             synchronizeWallChainWithHistory();
             refresh();
             return true;
         } catch (const std::exception& error) {
+            if (m_linework_drawing) finishMeasurementLinework();
             setError(QStringLiteral("Undo failed: %1").arg(QString::fromUtf8(error.what())));
             return false;
         }
@@ -21087,16 +21177,22 @@ public:
     bool redoCommand() {
         clearDrawingAlignment();
         if (!m_document->is_editable()) {
+            if (m_linework_drawing) finishMeasurementLinework();
             setError(QStringLiteral("This document is read-only."));
             return false;
         }
-        if (m_linework_drawing) finishMeasurementLinework();
+        if (m_linework_drawing) {
+            try { requireLineworkHistorySource(); }
+            catch (const std::exception&) { finishMeasurementLinework(); }
+        }
         if (m_boundary_session && !(m_restored_boundary_navigation && m_project_workspace->can_redo())) {
             const bool changed = m_boundary_session->redo();
             if (changed) { clearError(); boundaryDraftChanged(); }
             return changed;
         }
         if (!(m_recovery_ledger.empty() ? m_document->can_redo() : m_project_workspace->can_redo())) {
+            // A validated current session can keep drawing when there is no
+            // Redo entry. The source check above already retired stale sessions.
             return false;
         }
         try {
@@ -21117,10 +21213,12 @@ public:
                 m_selected_id.clear();
             }
             clearError();
+            synchronizeLineworkWithHistory(true);
             synchronizeWallChainWithHistory();
             refresh();
             return true;
         } catch (const std::exception& error) {
+            if (m_linework_drawing) finishMeasurementLinework();
             setError(QStringLiteral("Redo failed: %1").arg(QString::fromUtf8(error.what())));
             return false;
         }
@@ -33785,7 +33883,8 @@ private:
 
     void refreshActions() {
         const bool wall_anchor = m_tool == CanvasTool::wall && m_pending_wall_start.has_value();
-        m_undo_action->setEnabled(m_document->is_editable() && (wall_anchor ||
+        const bool linework_anchor = m_linework_drawing && m_linework_drawing->has_anchor;
+        m_undo_action->setEnabled(m_document->is_editable() && (wall_anchor || linework_anchor ||
             (m_boundary_session ? m_boundary_session->can_undo() :
              m_recovery_ledger.empty() ? m_document->can_undo() : m_project_workspace->can_undo())));
         m_redo_action->setEnabled(m_restored_boundary_navigation && m_project_workspace->can_redo() ? true :
@@ -34282,11 +34381,11 @@ private:
 
     void restoreWorkspaceBoundaryDraft(bool preserve_wall_chain = false) {
         const auto active = m_project_workspace->active_boundary();
-        // Wall authoring is immediately committed rather than a workspace
-        // boundary draft. History navigation must retain its owner identities
-        // until synchronizeWallChainWithHistory reads the restored document.
-        if (preserve_wall_chain && !active && m_tool == CanvasTool::wall &&
-            m_pending_wall_start && m_document->is_editable()) {
+        // Immediately committed drawing sessions retain their identities until
+        // history synchronization validates the restored document and pen.
+        if (preserve_wall_chain && !active && m_document->is_editable() &&
+            ((m_tool == CanvasTool::wall && m_pending_wall_start) ||
+             (m_tool == CanvasTool::boundary && m_linework_drawing))) {
             syncToolControls();
             return;
         }
@@ -37342,9 +37441,13 @@ private:
     Vec2 m_last_cursor{};
     struct LineworkDrawing {
         std::shared_ptr<Document> document;
+        std::string document_id;
         Revision revision{};
         DrawingContext context;
         MeasurementLinework model;
+        // Exact immutable history records own the models and document maps.
+        std::vector<Revision> history_revisions;
+        std::size_t history_index{};
         bool has_anchor{};
         std::string anchor_vertex;
         std::string pen_vertex;

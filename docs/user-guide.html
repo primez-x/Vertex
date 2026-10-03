@@ -57,6 +57,17 @@
   project history. Measurement edges stay in the unfinished outline until it
   closes. Define First still requires placing each manual dimension before
   entering another edge. Navigation and grid spacing never round typed lengths.</p>
+  <p>Choose <strong>Measured lines</strong> in Draw to create an open stroke or
+  separators before defining areas. Every placed side commits immediately.
+  While the stroke is active, <kbd>Ctrl</kbd>+<kbd>Z</kbd> removes one side and
+  restores the pen at the previous endpoint; <kbd>Ctrl</kbd>+<kbd>Y</kbd> restores
+  that side and its endpoint. Undoing all sides returns to the original anchor.
+  Draw a different side after Undo to replace the abandoned redo branch.
+  Enter, Escape or a stationary right-click finishes the stroke and keeps
+  committed sides. Undo at an uncommitted anchor cancels only that anchor.
+  Reopening a project does not resume drawing. To assign a closed region an
+  area classification, select the saved linework and use
+  <strong>Tools &gt; Detect closed areas</strong>.</p>
   <p>Moving focus to another control ends the current drag, including a move
   still waiting for its exact preview. A late result cannot apply that drag.
   Unfinished wall or measurement outlines and armed component placement remain
