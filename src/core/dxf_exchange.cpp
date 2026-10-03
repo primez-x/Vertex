@@ -541,10 +541,12 @@ std::string export_dxf_ascii(const DxfDrawing& d, const DxfExchangeLimits& l) {
         w.begin("DIMENSION", v.layer, "AcDbDimension");
         w.put(10, v.dimension_line.x); w.put(20, v.dimension_line.y); w.put(30, 0.0);
         w.xy(v.text_position, 11, 21); w.put(31, 0.0);
+        w.put(70, "0"); w.put(1, v.text);
+        w.put(100, "AcDbAlignedDimension");
         w.xy(v.extension_start, 13, 23); w.put(33, 0.0);
         w.xy(v.extension_end, 14, 24); w.put(34, 0.0);
-        w.put(70, "0"); w.put(50, v.rotation_degrees); w.put(1, v.text);
-        w.put(100, "AcDbAlignedDimension");
+        w.put(50, v.rotation_degrees);
+        w.put(100, "AcDbRotatedDimension");
     }
     std::size_t hatch_vertices = vertices;
     for (const auto& v : d.hatches) {

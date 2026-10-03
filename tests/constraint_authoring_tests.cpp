@@ -9,6 +9,7 @@
 #include "sketch/project_store.hpp"
 #include "sketch/vertical_levels.hpp"
 #include "sketch/model_phases.hpp"
+#include "sketch/project_organization.hpp"
 #include "support/noninteractive_errors.hpp"
 
 #include <algorithm>
@@ -3274,6 +3275,87 @@ void test_exterior_corner_retained_legacy_tangent_source() {
     require(wall_measurement_source_current(candidate,candidate.entities().at("area")),"legacy tangent inverse retained a stale analytical outline");
 }
 
+void test_batched_vertical_placement_preserves_exact_results_and_validation() {
+    auto entities = exterior_corner_fixture().snapshot().entities();
+    const VerticalLevelGraph levels({{"ground",0},{"upper",3}},{{"storey","ground","upper"}});
+    entities.emplace("levels",Entity{"levels","vertical_levels",{{"model",json::parse(levels.serialize())}}});
+    entities.emplace("upper-floor",Entity{"upper-floor","floor",{{"building_id","building"},
+        {"vertical_level_binding",{{"version",1},{"graph_id","levels"},{"level_id","upper"}}}}});
+    entities.emplace("upper-layer",Entity{"upper-layer","layer",{{"floor_id","upper-floor"}}});
+    auto placed_wall = wall("level-wall",{20,0},{22,0});
+    placed_wall.properties["property_id"] = "property";
+    placed_wall.properties["building_id"] = "building";
+    placed_wall.properties["floor_id"] = "upper-floor";
+    placed_wall.properties["layer_id"] = "upper-layer";
+    placed_wall.properties["elevation_m"] = 0.125;
+    placed_wall.properties["vertical_placement"] = {{"version",1},{"mode","level"},{"offset_m",0.375}};
+    entities.emplace(placed_wall.id,placed_wall);
+    for (const auto& type : {"column","beam","room","slab"}) {
+        auto placed = placed_wall;
+        placed.id = std::string("level-") + type;
+        placed.type = type;
+        if (placed.type == "column") placed.properties["base_center_m"] = {1.0,2.0,0.125};
+        if (placed.type == "beam") {
+            placed.properties["start_m"] = {1.0,2.0,0.125};
+            placed.properties["end_m"] = {3.0,4.0,0.625};
+        }
+        entities.emplace(placed.id,std::move(placed));
+    }
+    auto absolute = placed_wall;
+    absolute.id = "absolute-wall";
+    absolute.properties["vertical_placement"]["mode"] = "absolute";
+    entities.emplace(absolute.id,absolute);
+    const auto original = entities;
+    const std::vector<std::string> ids{"bottom","absolute-wall","level-wall","level-column","level-beam","level-room","level-slab"};
+    const auto resolved = resolve_vertical_placements(entities,ids);
+    require(resolved.size() == ids.size(),"batch placement lost a selected owner");
+    for (const auto& id : ids)
+        require(resolved.at(id) == resolve_vertical_placement(entities,entities.at(id)),
+            "batch placement changed singular derived entity bytes");
+    require(entities == original,"batch placement mutated authoritative entities");
+    require_near(resolved.at("level-wall").properties.at("elevation_m").get<double>(),3.5,0,
+        "batch placement missed level elevation and offset");
+    require_near(resolved.at("level-beam").properties.at("end_m").at(2).get<double>(),4.0,0,
+        "batch placement failed to translate both beam endpoints");
+    entities.at("levels").properties["model"] = json::parse(levels.with_elevation("upper",6).serialize());
+    const auto fresh = resolve_vertical_placements(entities,ids);
+    require_near(fresh.at("level-wall").properties.at("elevation_m").get<double>(),6.5,0,
+        "batch placement reused a stale level elevation");
+    require_near(resolved.at("level-wall").properties.at("elevation_m").get<double>(),3.5,0,
+        "later batch placement altered earlier derived entities");
+    require(resolve_vertical_placements(entities,std::vector<std::string>{}).empty(),
+        "empty placement selection returned unrelated entities");
+    const auto rejects_like_singular = [&](const auto& malformed, const std::string& id) {
+        std::string singular_error, batch_error;
+        try { (void)resolve_vertical_placement(malformed,malformed.at(id)); }
+        catch (const std::exception& error) { singular_error = error.what(); }
+        try { (void)resolve_vertical_placements(malformed,std::vector<std::string>{id}); }
+        catch (const std::exception& error) { batch_error = error.what(); }
+        require(!singular_error.empty() && batch_error == singular_error,
+            "batch placement weakened singular malformed-input validation");
+    };
+    for (unsigned failure = 0; failure < 7; ++failure) {
+        auto malformed = original;
+        auto& properties = malformed.at("level-wall").properties;
+        if (failure == 0) properties["vertical_placement"]["mode"] = "unknown";
+        if (failure == 1) properties["vertical_placement"]["offset_m"] = 1e10;
+        if (failure == 2) malformed.at("upper-floor").properties.erase("vertical_level_binding");
+        if (failure == 3) malformed.erase("levels");
+        if (failure == 4) malformed.at("levels").properties["model"] = json::object();
+        if (failure == 5) properties["elevation_m"] = "invalid";
+        if (failure == 6) malformed.at("upper-floor").properties["vertical_level_binding"]["level_id"] = "missing";
+        rejects_like_singular(malformed,"level-wall");
+    }
+    auto malformed_beam = original;
+    malformed_beam.at("level-beam").properties["end_m"] = {1.0,2.0,"invalid"};
+    rejects_like_singular(malformed_beam,"level-beam");
+    rejects_like_singular(original,"missing-owner");
+    auto unselected = original;
+    unselected.at("level-wall").properties["vertical_placement"]["mode"] = "unknown";
+    require(resolve_vertical_placements(unselected,std::vector<std::string>{"bottom"}).at("bottom") == original.at("bottom"),
+        "batch placement validated an unselected owner's placement");
+}
+
 void test_exterior_corner_scaled_level_bound_contact_graph() {
     auto entities = exterior_corner_fixture(0,0,false,true).snapshot().entities();
     const VerticalLevelGraph levels({{"ground",0},{"upper",3}},{{"storey","ground","upper"}});
@@ -3306,9 +3388,36 @@ void test_exterior_corner_scaled_level_bound_contact_graph() {
         "scaled contact candidate left its source owner stale");
 }
 
+void test_batched_contact_failures_keep_original_first_diagnostic() {
+    const auto original = exterior_corner_fixture().snapshot().entities();
+    const auto failure = [](const auto& entities) {
+        try { (void)exterior_corner_physical_contact_graph(entities); }
+        catch (const std::exception& error) { return std::string(error.what()); }
+        return std::string{};
+    };
+    // These owners sort before the later placement failure. Previously each
+    // owner completed context, placement and geometry validation in that order.
+    for (unsigned kind = 0; kind < 3; ++kind) {
+        auto invalid = original;
+        auto first = wall("a-invalid",{20,0},{21,0});
+        if (kind == 0) first.properties["height_m"] = "bad height";
+        if (kind == 1) first.properties["layer_id"] = "missing-layer";
+        if (kind == 2) first.properties["baseline"]["end"] = {20.0,0.0};
+        invalid.emplace(first.id,first);
+        const auto expected = failure(invalid);
+        require(!expected.empty(),"first malformed contact owner must fail");
+        auto later = wall("z-invalid",{30,0},{31,0});
+        later.properties["vertical_placement"] = {{"version",1},{"mode","unknown"},{"offset_m",0}};
+        invalid.emplace(later.id,later);
+        require(failure(invalid) == expected,"batch contact validation reordered first context or geometry diagnostic");
+    }
+}
+
 int main() {
     sketch::testing::noninteractive_errors();
     try {
+        test_batched_vertical_placement_preserves_exact_results_and_validation();
+        test_batched_contact_failures_keep_original_first_diagnostic();
         test_exterior_corner_inverse_curve_lineage_and_replay();
         test_exterior_corner_partitions_constraints_and_refusals();
         test_exterior_corner_cross_layer_locked_partition_chain();

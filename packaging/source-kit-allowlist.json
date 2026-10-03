@@ -1571,6 +1571,10 @@
     },
     {
       "category": "docs",
+      "path": "docs/plans/2026-10-02-corner-responsiveness-and-dxf-layer-review.md"
+    },
+    {
+      "category": "docs",
       "path": "docs/plans/2026-10-02-source-corner-editing.md"
     },
     {
@@ -2364,6 +2368,10 @@
     {
       "category": "docs",
       "path": "docs/verification/connected-wall-motion-2026-10-01.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/verification/corner-responsiveness-and-dxf-layer-review-20261002.md"
     },
     {
       "category": "docs",

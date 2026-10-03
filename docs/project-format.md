@@ -604,6 +604,28 @@ provenance record and is not drawing geometry. Editable candidates keep their
 source layer and primitive in `extensions.dxf_source`. Removing or replacing
 the source record never changes the mapped geometry.
 
+Hosted openings always retain `wall_id` as their physical host. Without an
+explicit `layer_id`, their drawing context and hierarchy parent inherit the
+wall. An explicit valid layer on that same property/building/floor may provide
+a separate drawing layer; if it differs from the wall's layer, that layer is
+the opening's hierarchy parent and visibility context. The physical floor,
+level, station and world elevation still come from the wall. Missing,
+malformed, unresolved or different-floor layer references remain diagnostics;
+they never establish another physical host or shift the opening.
+
+The desktop source receipt additionally records `layer_reviewed` and a
+`layer_mapping` array. Each entry contains `source_layer`, destination
+`floor_id` and `layer_id`, `created_layer`, and `editable_item_count`. These
+fields are provenance; editable entities use their ordinary floor/layer
+properties and annotation children use `placement.layer_id`. New destination
+layers, geometry, annotations and retained source are committed together.
+The mapper's intermediate annotation entity carries
+`extensions.dxf_annotation_layers`, an object from reconstructed child IDs to
+effective CAD layer names, so labels and dimensions can be routed before
+annotation merging. Native wall/opening candidates also retain their INSERT
+layer in `extensions.dxf_source`. This opaque metadata does not change the
+native container version or historical command interpretation.
+
 An imported IFC may retain its original STEP bytes as an asset referenced by an
 `ifc_source` entity. The record follows the same provenance shape as
 `dxf_source`, with IFC4 format, source filename, mapped candidate count, and

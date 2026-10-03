@@ -4,6 +4,7 @@
 
 #include <map>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -43,7 +44,9 @@ struct ProjectOrganization {
 };
 
 // Derived organization only. Existing world-coordinate geometry is untouched.
-// Hosted openings inherit their wall's placement; all other non-container
+// Hosted openings inherit their wall's physical placement; an explicit valid
+// layer on that same floor can override drawing organization/visibility.
+// All other non-container
 // objects resolve their explicit layer/floor/building/property references.
 [[nodiscard]] ProjectOrganization organize_project(const DocumentSnapshot& snapshot);
 // The same resolver for a retained revision's entity map. Derived indexing only;
@@ -60,5 +63,12 @@ struct ProjectOrganization {
                                                 const Entity& entity);
 [[nodiscard]] Entity resolve_vertical_placement(
     const std::map<std::string, Entity, std::less<>>& entities, const Entity& entity);
+
+// Resolve only the requested owners, with the same validation and exact derived
+// copies as the singular resolver. The organization is derived lazily once from
+// this entity map and retained only for this call; no cross-snapshot cache is used.
+[[nodiscard]] std::map<std::string, Entity, std::less<>> resolve_vertical_placements(
+    const std::map<std::string, Entity, std::less<>>& entities,
+    std::span<const std::string> entity_ids);
 
 }  // namespace sketch

@@ -217,8 +217,7 @@ std::optional<PreparedNativeGeometry> prepare_native_geometry(
                                                          operation);
                 if (cancelled && cancelled()) return std::nullopt;
                 mesh_shape(shape);
-                const bool visible = !visible_ids || visible_ids->contains(id) ||
-                                     visible_ids->contains(wall_id);
+                const bool visible = !visible_ids || visible_ids->contains(id);
                 solids.emplace(id, PreparedNativeSolid{std::move(content), shape,
                                 presentation_color, material_color, visible});
                 if (progress) progress(solids.size());

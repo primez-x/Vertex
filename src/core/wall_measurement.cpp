@@ -1210,13 +1210,22 @@ std::vector<PhysicalContact> physical_contacts(const std::map<std::string, Entit
             if (!active.contains(entity_id) || active.at(entity_id) == ModelPhase::demolished)
                 unavailable.insert(entity_id);
     }
+    std::vector<std::string> active_wall_ids;
     for (const auto& [id, entity] : original) {
         if (entity.type != "wall" || !entity.properties.contains("baseline") || unavailable.contains(id)) continue;
+        active_wall_ids.push_back(id);
+    }
+    const auto checked_context = [&](const std::string& id) {
+        const auto& entity = original.at(id);
         const auto context = organization.drawing_context(id);
         if (!context && (entity.properties.contains("property_id") || entity.properties.contains("building_id") ||
             entity.properties.contains("floor_id") || entity.properties.contains("layer_id")))
             reject("Physical wall contact has unresolved drawing context: " + id);
-        const auto placement = resolve_vertical_placement(original, entity);
+        return context;
+    };
+    const auto append_wall = [&](const std::string& id, const Entity& placement) {
+        const auto& entity = original.at(id);
+        const auto context = checked_context(id);
         auto field = placement.properties.find("elevation_m");
         if (field == placement.properties.end()) field = placement.properties.find("elevation");
         const auto low = field == placement.properties.end() ? 0.0 : number(*field, "Wall elevation");
@@ -1225,7 +1234,21 @@ std::vector<PhysicalContact> physical_contacts(const std::map<std::string, Entit
         walls.emplace(id, PhysicalWall{baseline(entity.properties), context ? context->property_id : "",
             context ? context->building_id : "", context ? context->floor_id : "",
             entity.properties.value("phase_id", Json(nullptr)), low, high});
-    }
+    };
+    const auto placements = [&] {
+        try { return resolve_vertical_placements(original,active_wall_ids); }
+        catch (...) {
+            // Preserve the original first diagnostic when several walls are
+            // malformed. The normal path batches placement; only rejection
+            // replays context/placement/geometry validation in owner order.
+            for (const auto& id : active_wall_ids) {
+                (void)checked_context(id);
+                append_wall(id,resolve_vertical_placement(original,original.at(id)));
+            }
+            throw;
+        }
+    }();
+    for (const auto& id : active_wall_ids) append_wall(id,placements.at(id));
     std::vector<PhysicalContact> contacts;
     for (const auto& [id, wall] : walls)
         for (const auto& [host_id, host] : walls) {

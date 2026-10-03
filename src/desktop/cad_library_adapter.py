@@ -74,7 +74,20 @@ class _DxfWriter:
         from ezdxf.lldxf.tagwriter import TagCollector
         collector = TagCollector(dxfversion="AC1027", write_handles=False, optional=False)
         entity.export_dxf(collector)
+        # Do not turn an unstyled source dimension into a styled one through
+        # ezdxf's generated defaults. Explicit source fields remain present
+        # for the strict mapper to assess, including unsupported styles.
+        absent_dimension_defaults = set()
+        if entity.dxftype() == "DIMENSION":
+            absent_dimension_defaults = {
+                code for code, attribute in ((3, "dimstyle"),
+                                             (71, "attachment_point"),
+                                             (280, "version"))
+                if not entity.dxf.hasattr(attribute)
+            }
         for tag in collector.tags:
+            if tag.code in absent_dimension_defaults:
+                continue
             # Virtual/rebuilt entities have no handle/owner. Omit identifiers
             # consistently; they are not source identities in this candidate.
             if tag.code in (5, 330):

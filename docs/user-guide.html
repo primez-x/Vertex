@@ -339,6 +339,22 @@
   dimensions, labels, or commands; suggestions are marked unverified and require an
   explicit acceptance before they enter project history.</p>
 
+  <h2>CAD interchange</h2>
+  <p>Choose <strong>Import DXF</strong> from Tools. Before importing, review each
+  CAD layer and choose its destination building, floor and layer. By default,
+  source names are preserved on the active floor: matching layers are reused
+  and missing layers are created. You can route individual source layers to
+  existing layers on other floors. Coordinates and elevations stay as drawn;
+  floor assignment does not reposition the imported geometry.</p>
+  <p>Imported text uses its chosen layer too. Hosted doors and windows must use
+  the same floor as their wall, although they can use different layers. Cancel
+  changes nothing; the complete import, including new layers, is one Undo.
+  Original DXF bytes, source-layer mapping and import diagnostics remain in the
+  project. Supported native wall/opening blocks remain editable; ordinary
+  symbol linework imports as geometry. Unsupported records are reported and
+  retained in the source asset. The adjacent fidelity report records the
+  mapping and limitations when it can be written.</p>
+
   <h2>Output</h2>
   <p>Use <strong>Print preview</strong>, <strong>Export draft PDF</strong>, or
   <strong>Export draft SVG</strong>. Choose the paper size in the sheet/output settings and

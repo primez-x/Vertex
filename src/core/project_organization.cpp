@@ -374,8 +374,24 @@ private:
                                result.issues);
         check_optional_matches(entity, "floor_id", "floor", result.context.floor_id,
                                result.issues);
-        check_optional_matches(entity, "layer_id", "layer", result.context.layer_id,
-                               result.issues);
+        if (read_reference(entity, "layer_id").present) {
+            std::string layer_id;
+            Resolution layer;
+            if (!require_reference(entity, "layer_id", "layer", layer_id, layer, result.issues)) {
+                result.valid = false;
+                return result;
+            }
+            if (layer.context.property_id != wall.context.property_id ||
+                layer.context.building_id != wall.context.building_id ||
+                layer.context.floor_id != wall.context.floor_id) {
+                add_issue(result.issues, "opening drawing layer must share its host wall's property, building and floor");
+            } else if (layer_id != result.context.layer_id) {
+                // Physical hosting remains wall_id. A separate valid drawing
+                // layer affects organization and visibility, never world Z.
+                result.context.layer_id = layer_id;
+                result.parent_id = layer_id;
+            }
+        }
         if (!result.issues.empty()) {
             result.valid = false;
         }
@@ -584,8 +600,10 @@ Entity resolve_vertical_placement(const DocumentSnapshot& snapshot,
     return resolve_vertical_placement(snapshot.entities(), entity);
 }
 
-Entity resolve_vertical_placement(const std::map<std::string, Entity, std::less<>>& entities,
-                                  const Entity& entity) {
+namespace {
+Entity resolve_vertical_placement_impl(const std::map<std::string, Entity, std::less<>>& entities,
+                                      const Entity& entity,
+                                      std::optional<ProjectOrganization>& organization) {
     if (!entity.properties.is_object()) {
         return entity;
     }
@@ -615,8 +633,8 @@ Entity resolve_vertical_placement(const std::map<std::string, Entity, std::less<
         throw std::invalid_argument("level placement is supported only for 3D objects and slabs");
     }
 
-    const auto organization = organize_project(entities);
-    const auto context = organization.drawing_context(entity.id);
+    if (!organization) organization = organize_project(entities);
+    const auto context = organization->drawing_context(entity.id);
     if (!context || context->floor_id.empty()) {
         throw std::invalid_argument("level placement requires a valid bound floor context");
     }
@@ -699,6 +717,23 @@ Entity resolve_vertical_placement(const std::map<std::string, Entity, std::less<
     if (entity.type == "beam") {
         (void)translate_vector_z("end_m");
     }
+    return result;
+}
+}  // namespace
+
+Entity resolve_vertical_placement(const std::map<std::string, Entity, std::less<>>& entities,
+                                  const Entity& entity) {
+    std::optional<ProjectOrganization> organization;
+    return resolve_vertical_placement_impl(entities,entity,organization);
+}
+
+std::map<std::string, Entity, std::less<>> resolve_vertical_placements(
+    const std::map<std::string, Entity, std::less<>>& entities,
+    std::span<const std::string> entity_ids) {
+    std::optional<ProjectOrganization> organization;
+    std::map<std::string, Entity, std::less<>> result;
+    for (const auto& id : entity_ids)
+        result.insert_or_assign(id,resolve_vertical_placement_impl(entities,entities.at(id),organization));
     return result;
 }
 

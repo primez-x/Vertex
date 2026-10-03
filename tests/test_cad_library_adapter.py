@@ -85,6 +85,38 @@ def area(loop):
 
 
 class DxfAdapterTests(unittest.TestCase):
+    @staticmethod
+    def plain_dimension_bytes(common_tags=""):
+        # Minimal rotated dimension in the same bounded form as Vertex export.
+        return ("0\nSECTION\n2\nHEADER\n9\n$ACADVER\n1\nAC1027\n"
+                "9\n$INSUNITS\n70\n6\n0\nENDSEC\n0\nSECTION\n2\nENTITIES\n"
+                "0\nDIMENSION\n100\nAcDbEntity\n8\nDimensions\n100\nAcDbDimension\n"
+                "10\n2\n20\n1\n30\n0\n11\n2\n21\n1.5\n31\n0\n70\n0\n"
+                "1\nFour metres\n" + common_tags +
+                "100\nAcDbAlignedDimension\n13\n0\n23\n0\n33\n0\n"
+                "14\n4\n24\n0\n34\n0\n50\n30\n100\nAcDbRotatedDimension\n"
+                "0\nENDSEC\n0\nEOF\n").encode()
+
+    def test_plain_dimension_keeps_geometry_without_generated_style(self):
+        result = adapter.normalize_dxf(self.plain_dimension_bytes())
+        text = result["normalized_text"]
+        parsed = ezdxf.read(io.StringIO(text)).modelspace()[0]
+        self.assertEqual(tuple(parsed.dxf.defpoint2), (0, 0, 0))
+        self.assertEqual(tuple(parsed.dxf.defpoint3), (4, 0, 0))
+        self.assertEqual(parsed.dxf.angle, 30)
+        self.assertEqual(parsed.dxf.layer, "Dimensions")
+        self.assertEqual(parsed.dxf.text, "Four metres")
+        for code in (3, 71, 280):
+            self.assertNotIn(f"\n{code}\n", text)
+
+    def test_explicit_dimension_style_metadata_is_never_erased(self):
+        for source_tags, expected_tag in (("3\nCustomStyle\n", "3\nCustomStyle\n"),
+                                          ("71\n5\n", "71\n5\n"),
+                                          ("280\n0\n", "280\n0\n")):
+            with self.subTest(source_tags=source_tags):
+                result = adapter.normalize_dxf(self.plain_dimension_bytes(source_tags))
+                self.assertIn(expected_tag, result["normalized_text"])
+
     def test_binary_line_is_r2013_ascii_with_coordinates(self):
         doc = ezdxf.new("R2013")
         doc.modelspace().add_line((1,2), (4,6))

@@ -152,6 +152,7 @@
 #include <QStyledItemDelegate>
 #include <QStatusBar>
 #include <QStandardPaths>
+#include <QStandardItemModel>
 #include <QSplitter>
 #include <QSpinBox>
 #include <QTabWidget>
@@ -214,6 +215,42 @@ using json = nlohmann::json;
 constexpr std::size_t kMaximumClipboardBytes = 4ULL * 1024ULL * 1024ULL;
 constexpr std::size_t kMaximumClipboardEntities = 128;
 constexpr std::string_view kClipboardFormat = "sketch.document.clipboard";
+
+class DxfLayerDestinationDelegate final : public QStyledItemDelegate {
+public:
+    DxfLayerDestinationDelegate(QAbstractItemModel* destinations, QObject* parent)
+        : QStyledItemDelegate(parent), destinations_(destinations) {}
+
+    QWidget* createEditor(QWidget* parent, const QStyleOptionViewItem&,
+                          const QModelIndex&) const override {
+        auto* choice = new QComboBox(parent);
+        choice->setObjectName(QStringLiteral("dxfImportDestinationEditor"));
+        choice->setModel(destinations_);
+        auto* delegate = const_cast<DxfLayerDestinationDelegate*>(this);
+        QObject::connect(choice, qOverload<int>(&QComboBox::activated), choice,
+                         [delegate, choice](int) {
+            emit delegate->commitData(choice);
+            emit delegate->closeEditor(choice);
+        });
+        return choice;
+    }
+
+    void setEditorData(QWidget* editor, const QModelIndex& index) const override {
+        auto* choice = qobject_cast<QComboBox*>(editor);
+        if (choice) choice->setCurrentIndex(choice->findData(index.data(Qt::UserRole)));
+    }
+
+    void setModelData(QWidget* editor, QAbstractItemModel* model,
+                      const QModelIndex& index) const override {
+        const auto* choice = qobject_cast<QComboBox*>(editor);
+        if (!choice || choice->currentIndex() < 0) return;
+        model->setData(index, choice->currentData(), Qt::UserRole);
+        model->setData(index, choice->currentText(), Qt::DisplayRole);
+    }
+
+private:
+    QAbstractItemModel* destinations_;
+};
 
 void add_default_level_placement(json& properties, const DrawingContext& context) {
     if (!properties.is_object() || properties.contains("vertical_placement") ||
@@ -20954,7 +20991,7 @@ public:
         }
     }
 
-    bool importDxf(const QString& path) {
+    bool importDxf(const QString& path, bool review_layers = false) {
         if (path.trimmed().isEmpty()) {
             setError(QStringLiteral("Choose a DXF file to import."));
             return false;
@@ -20976,6 +21013,7 @@ public:
                 throw std::runtime_error("The DXF import worker did not attest its sandbox controls.");
             const auto source = authoringSnapshot();
             if (!m_document->is_editable()) throw std::invalid_argument("This document is read-only.");
+            const auto source_document = m_document;
 
             std::string layer_id = m_active_layer_id.toStdString();
             auto layer = source.entities().find(layer_id);
@@ -20990,53 +21028,240 @@ public:
             if (floor_id.empty()) throw std::invalid_argument("The target drawing layer has no floor.");
 
             std::vector<EntityChange> changes;
+            struct DxfDestination { std::string floor_id; std::string layer_id; };
+            std::map<std::string, DxfDestination, std::less<>> destinations;
+            std::map<std::string, std::size_t, std::less<>> source_layer_counts;
+            json layer_mapping = json::array();
+            const auto source_layer = [](const Entity& entity, const std::string& child_id = {}) {
+                if (!child_id.empty() && entity.extensions.contains("dxf_annotation_layers")) {
+                    const auto& layers = entity.extensions.at("dxf_annotation_layers");
+                    const auto found = layers.find(child_id);
+                    if (found != layers.end() && found->is_string() && !found->get<std::string>().empty())
+                        return found->get<std::string>();
+                }
+                if (entity.extensions.contains("dxf_source")) {
+                    const auto& evidence = entity.extensions.at("dxf_source");
+                    if (evidence.is_object() && evidence.contains("layer") && evidence.at("layer").is_string()) {
+                        const auto name = evidence.at("layer").get<std::string>();
+                        if (!name.empty()) return name;
+                    }
+                }
+                return std::string("0");
+            };
+            for (const auto& candidate : mapped.entities) {
+                if (candidate.type == kAnnotationEntityType) {
+                    const auto state = decode_annotation_entity(candidate);
+                    for (const auto& item : state.labels) ++source_layer_counts[source_layer(candidate, item.id)];
+                    for (const auto& item : state.symbols) ++source_layer_counts[source_layer(candidate, item.id)];
+                } else ++source_layer_counts[source_layer(candidate)];
+            }
+            std::set<std::string, std::less<>> reserved_ids;
+            for (const auto& [id, entity] : source.entities()) { (void)entity; reserved_ids.insert(id); }
+            for (const auto& [id, asset] : source.assets()) { (void)asset; reserved_ids.insert(id); }
+            const auto allocate_id = [&](const std::string& kind) {
+                auto id = new_id(kind);
+                while (!reserved_ids.insert(id).second) id = new_id(kind);
+                return id;
+            };
+            if (review_layers) {
+                const auto organization = organize_project(source);
+                const auto active_context = organization.drawing_context(layer_id);
+                if (!active_context || !active_context->complete())
+                    throw std::invalid_argument("Choose a drawing layer with a valid building and floor before importing DXF.");
+                QDialog dialog(owner);
+                dialog.setObjectName(QStringLiteral("dxfImportLayerDialog"));
+                dialog.setWindowTitle(QStringLiteral("Import DXF layers"));
+                dialog.resize(850, 420);
+                auto* destination_model = new QStandardItemModel(&dialog);
+                destination_model->setObjectName(QStringLiteral("dxfImportDestinationModel"));
+                auto* create_choice = new QStandardItem(QStringLiteral("Create source-named layer: %1 / %2")
+                    .arg(QString::fromStdString(organization.nodes.at(active_context->building_id).name),
+                         QString::fromStdString(organization.nodes.at(active_context->floor_id).name)));
+                create_choice->setData(QString{}, Qt::UserRole);
+                destination_model->appendRow(create_choice);
+                std::map<std::string, DxfDestination, std::less<>> valid_destinations;
+                std::map<std::string, int, std::less<>> active_floor_defaults;
+                for (const auto& [id, entity] : source.entities()) {
+                    if (entity.type != "layer") continue;
+                    const auto context = organization.drawing_context(id);
+                    if (!context || !context->complete()) continue;
+                    auto* option = new QStandardItem(QStringLiteral("%1 / %2 / %3")
+                        .arg(QString::fromStdString(organization.nodes.at(context->building_id).name),
+                             QString::fromStdString(organization.nodes.at(context->floor_id).name),
+                             QString::fromStdString(entity.properties.value("name", id))));
+                    option->setData(QString::fromStdString(id), Qt::UserRole);
+                    destination_model->appendRow(option);
+                    valid_destinations.emplace(id, DxfDestination{context->floor_id, id});
+                    if (context->floor_id == floor_id)
+                        active_floor_defaults.emplace(entity.properties.value("name", std::string{}), destination_model->rowCount() - 1);
+                }
+                auto* layout = new QVBoxLayout(&dialog);
+                auto* explanation = new QLabel(QStringLiteral(
+                    "Choose a destination for each CAD layer. New layers are created on the active floor. "
+                    "Coordinates and elevations stay as drawn. Openings must share their host wall's floor."), &dialog);
+                explanation->setWordWrap(true);
+                layout->addWidget(explanation);
+                if (!mapped.diagnostics.empty() || source_layer_counts.empty()) {
+                    auto* notes = new QLabel(source_layer_counts.empty()
+                        ? QStringLiteral("No editable items could be reconstructed. This import will keep the original DXF and its import notes.")
+                        : QStringLiteral("Import notes: %1. Some source content may not be fully editable. The original DXF will be kept with this import.")
+                            .arg(static_cast<qulonglong>(mapped.diagnostics.size())), &dialog);
+                    notes->setObjectName(QStringLiteral("dxfImportNotes"));
+                    notes->setWordWrap(true);
+                    layout->addWidget(notes);
+                }
+                auto* table = new QTableWidget(static_cast<int>(source_layer_counts.size()), 3, &dialog);
+                table->setObjectName(QStringLiteral("dxfImportLayerTable"));
+                table->setHorizontalHeaderLabels({QStringLiteral("CAD layer"), QStringLiteral("Editable items"),
+                                                  QStringLiteral("Destination: Building / Floor / Layer")});
+                table->setEditTriggers(QAbstractItemView::EditKeyPressed);
+                table->setItemDelegateForColumn(2, new DxfLayerDestinationDelegate(destination_model, table));
+                QObject::connect(table, &QTableWidget::clicked, table, [table](const QModelIndex& index) {
+                    if (index.column() == 2) table->edit(index);
+                });
+                table->verticalHeader()->hide();
+                table->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
+                table->horizontalHeader()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
+                table->horizontalHeader()->setSectionResizeMode(2, QHeaderView::Stretch);
+                layout->addWidget(table);
+                int row = 0;
+                for (const auto& [name, count] : source_layer_counts) {
+                    table->setItem(row, 0, new QTableWidgetItem(QString::fromStdString(name)));
+                    table->setItem(row, 1, new QTableWidgetItem(QString::number(static_cast<qulonglong>(count))));
+                    table->item(row, 0)->setFlags(table->item(row, 0)->flags() & ~Qt::ItemIsEditable);
+                    table->item(row, 1)->setFlags(table->item(row, 1)->flags() & ~Qt::ItemIsEditable);
+                    const auto existing_default = active_floor_defaults.find(name);
+                    const auto option = existing_default == active_floor_defaults.end() ? 0 : existing_default->second;
+                    auto* choice = new QTableWidgetItem(destination_model->item(option)->text());
+                    choice->setData(Qt::UserRole, destination_model->item(option)->data(Qt::UserRole));
+                    choice->setToolTip(QStringLiteral("Click to choose a destination layer."));
+                    table->setItem(row++, 2, choice);
+                }
+                auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+                buttons->button(QDialogButtonBox::Ok)->setText(source_layer_counts.empty()
+                    ? QStringLiteral("Keep source") : QStringLiteral("Import"));
+                QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+                QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+                layout->addWidget(buttons);
+                if (dialog.exec() != QDialog::Accepted) return false;
+                const auto current = authoringSnapshot();
+                if (m_document != source_document || current.document_id() != source.document_id() ||
+                    current.revision() != source.revision() || current.history().size() != source.history().size() ||
+                    current.entities() != source.entities() || current.assets() != source.assets() ||
+                    !m_document->is_editable())
+                    throw std::invalid_argument("The document changed while reviewing DXF layers. Reopen Import DXF and review the current destinations.");
+                row = 0;
+                for (const auto& [name, count] : source_layer_counts) {
+                    const auto* choice = table->item(row++, 2);
+                    if (!choice || !choice->data(Qt::UserRole).isValid())
+                        throw std::invalid_argument("Choose a valid destination for every CAD layer.");
+                    auto destination_id = choice->data(Qt::UserRole).toString().toStdString();
+                    const auto create = destination_id.empty();
+                    std::string destination_floor = floor_id;
+                    if (create) {
+                        destination_id = allocate_id("layer");
+                        auto created = Entity::create("layer", {{"name", name}, {"floor_id", floor_id}});
+                        created.id = destination_id;
+                        changes.push_back(EntityChange::upsert(std::move(created)));
+                    } else {
+                        const auto target = valid_destinations.find(destination_id);
+                        if (target == valid_destinations.end())
+                            throw std::invalid_argument("Choose an existing drawing layer with a valid building and floor.");
+                        destination_floor = target->second.floor_id;
+                    }
+                    destinations.emplace(name, DxfDestination{destination_floor, destination_id});
+                    layer_mapping.push_back({{"source_layer", name}, {"floor_id", destination_floor},
+                        {"layer_id", destination_id}, {"created_layer", create}, {"editable_item_count", count}});
+                }
+            } else {
+                for (const auto& [name, count] : source_layer_counts) {
+                    destinations.emplace(name, DxfDestination{floor_id, layer_id});
+                    layer_mapping.push_back({{"source_layer", name}, {"floor_id", floor_id},
+                        {"layer_id", layer_id}, {"created_layer", false}, {"editable_item_count", count}});
+                }
+            }
+            for (const auto& candidate : mapped.entities) {
+                if (candidate.type != "opening") continue;
+                const auto host_id = candidate.properties.value("wall_id", std::string{});
+                const auto host = std::find_if(mapped.entities.begin(), mapped.entities.end(),
+                    [&](const auto& item) { return item.id == host_id && item.type == "wall"; });
+                if (host == mapped.entities.end()) throw std::invalid_argument("An imported opening has no imported host wall.");
+                if (destinations.at(source_layer(candidate)).floor_id != destinations.at(source_layer(*host)).floor_id)
+                    throw std::invalid_argument("Opening CAD layer '" + source_layer(candidate) + "' and host wall CAD layer '" +
+                        source_layer(*host) + "' must be assigned to the same floor. Review their destinations.");
+            }
             std::vector<std::string> imported_boundary_ids;
             std::map<std::string, std::string, std::less<>> identities;
             for (const auto& candidate : mapped.entities) {
                 if (candidate.type == "boundary" || candidate.type == "wall" || candidate.type == "opening")
-                    identities.emplace(candidate.id, new_id(candidate.type));
+                    identities.emplace(candidate.id, allocate_id(candidate.type));
             }
             const auto existing_annotation = std::find_if(source.entities().begin(), source.entities().end(),
                 [](const auto& item) { return item.second.type == kAnnotationEntityType; });
             std::optional<AnnotationState> merged_annotations;
+            json annotation_extensions = json::object();
             if (existing_annotation != source.entities().end()) {
                 merged_annotations = decode_annotation_entity(existing_annotation->second);
+                annotation_extensions = existing_annotation->second.extensions;
             }
+            std::map<std::string, std::string, std::less<>> annotation_identities;
+            std::set<std::string, std::less<>> annotation_ids;
+            if (merged_annotations) {
+                for (const auto& item : merged_annotations->labels) annotation_ids.insert(item.id);
+                for (const auto& item : merged_annotations->symbols) annotation_ids.insert(item.id);
+            }
+            // Merge children before geometry so dimension links can use the final child IDs.
             for (const auto& candidate : mapped.entities) {
-                if (candidate.type == "annotation_state") {
-                    const auto imported_state = decode_annotation_entity(candidate);
-                    if (!merged_annotations) merged_annotations = imported_state;
-                    else {
-                        std::set<std::string, std::less<>> ids;
-                        for (const auto& item : merged_annotations->labels) ids.insert(item.id);
-                        for (const auto& item : merged_annotations->symbols) ids.insert(item.id);
-                        for (auto item : imported_state.labels) {
-                            while (!ids.insert(item.id).second) item.id = new_id("label");
-                            merged_annotations->labels.push_back(std::move(item));
-                        }
-                        for (auto item : imported_state.symbols) {
-                            while (!ids.insert(item.id).second) item.id = new_id("symbol");
-                            merged_annotations->symbols.push_back(std::move(item));
-                        }
+                if (candidate.type == kAnnotationEntityType) {
+                    auto imported_state = decode_annotation_entity(candidate);
+                    if (!merged_annotations) merged_annotations = AnnotationState{};
+                    const auto prepare_child = [&](auto& item, const std::string& kind) {
+                        const auto original_id = item.id;
+                        const auto name = source_layer(candidate, original_id);
+                        item.placement.layer_id = destinations.at(name).layer_id;
+                        while (!annotation_ids.insert(item.id).second) item.id = allocate_id(kind);
+                        annotation_identities.emplace(original_id, item.id);
+                        annotation_extensions["dxf_annotation_layers"][item.id] = name;
+                    };
+                    for (auto item : imported_state.labels) {
+                        prepare_child(item, "label");
+                        merged_annotations->labels.push_back(std::move(item));
                     }
-                    continue;
+                    for (auto item : imported_state.symbols) {
+                        prepare_child(item, "symbol");
+                        merged_annotations->symbols.push_back(std::move(item));
+                    }
                 }
+            }
+            std::string selected_import_layer;
+            for (const auto& candidate : mapped.entities) {
+                if (candidate.type == kAnnotationEntityType) continue;
                 const auto identity = identities.find(candidate.id);
                 if (identity == identities.end())
                     throw std::invalid_argument("DXF mapping produced an unsupported native entity.");
                 auto imported = candidate;
                 imported.id = identity->second;
                 remap_entity_references(imported, identities);
-                imported.properties["floor_id"] = floor_id;
-                imported.properties["layer_id"] = layer_id;
+                if (imported.extensions.contains("dxf_dimension")) {
+                    auto& dimension = imported.extensions["dxf_dimension"];
+                    const auto annotation_id = dimension.value("annotation_id", std::string{});
+                    if (const auto remapped = annotation_identities.find(annotation_id); remapped != annotation_identities.end())
+                        dimension["annotation_id"] = remapped->second;
+                }
+                const auto& destination = destinations.at(source_layer(candidate));
+                imported.properties["floor_id"] = destination.floor_id;
+                imported.properties["layer_id"] = destination.layer_id;
+                if (selected_import_layer.empty()) selected_import_layer = destination.layer_id;
                 imported_boundary_ids.push_back(imported.id);
                 changes.push_back(EntityChange::upsert(std::move(imported)));
             }
             if (merged_annotations) {
                 const auto annotation_id = existing_annotation != source.entities().end()
                     ? existing_annotation->second.id : "annotations-" + new_id("dxf");
-                changes.push_back(EntityChange::upsert(
-                    make_annotation_entity(annotation_id, *merged_annotations)));
+                auto annotation = make_annotation_entity(annotation_id, *merged_annotations);
+                if (existing_annotation != source.entities().end()) annotation.required = existing_annotation->second.required;
+                annotation.extensions = std::move(annotation_extensions);
+                changes.push_back(EntityChange::upsert(std::move(annotation)));
             }
 
             std::vector<std::byte> source_bytes;
@@ -21053,6 +21278,8 @@ public:
                  {"source_path", info.fileName().toStdString()},
                  {"isolated_import", true},
                  {"mapped_entity_count", mapped.entities.size()}, {"diagnostics", json::array()}});
+            source_entity.properties["layer_reviewed"] = review_layers;
+            source_entity.properties["layer_mapping"] = layer_mapping;
             for (const auto& item : mapped.diagnostics)
                 source_entity.properties["diagnostics"].push_back({{"source_id", item.source_id},
                     {"source_kind", item.source_kind}, {"code", item.code}});
@@ -21062,7 +21289,7 @@ public:
             validateImportedHostedGeometry(Document::preview_command(source, command), imported_boundary_ids);
             applyDocumentCommand(command);
             if (!imported_boundary_ids.empty()) m_selected_id = id_from(imported_boundary_ids.front());
-            m_active_layer_id = id_from(layer_id);
+            m_active_layer_id = id_from(review_layers && !selected_import_layer.empty() ? selected_import_layer : layer_id);
             clearError();
             refresh();
             const auto report_path = path + QStringLiteral(".fidelity.json");
@@ -21070,6 +21297,8 @@ public:
             json report{{"format", "DXF R2013"}, {"mapped_entity_count", mapped.entities.size()},
                         {"source_retention_required", mapped.source_retention_required},
                         {"diagnostics", json::array()}};
+            report["layer_reviewed"] = review_layers;
+            report["layer_mapping"] = layer_mapping;
             for (const auto& item : mapped.diagnostics)
                 report["diagnostics"].push_back({{"source_id", item.source_id},
                     {"source_kind", item.source_kind}, {"code", item.code}});
@@ -23937,7 +24166,7 @@ public:
             {QStringLiteral("Import DXF"), [this] {
                 const auto selected = QFileDialog::getOpenFileName(
                     owner, QStringLiteral("Import DXF"), {}, QStringLiteral("DXF drawing (*.dxf *.DXF)"));
-                if (!selected.isEmpty()) importDxf(selected);
+                if (!selected.isEmpty()) importDxf(selected, true);
             }},
             {QStringLiteral("Export DXF"), [this] {
                 const auto selected = QFileDialog::getSaveFileName(
@@ -35214,6 +35443,10 @@ bool MainWindow::exportDxf(const QString& path) {
 
 bool MainWindow::importDxf(const QString& path) {
     return m_impl->importDxf(path);
+}
+
+bool MainWindow::importDxfWithLayerReview(const QString& path) {
+    return m_impl->importDxf(path, true);
 }
 
 bool MainWindow::exportIfc(const QString& path) {

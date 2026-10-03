@@ -94,6 +94,48 @@ void test_terrain_surface_placement_is_explicit() {
             "property-level terrain surfaces should remain navigable without a fabricated layer");
 }
 
+void test_hosted_opening_separate_drawing_layer() {
+    const auto document = sketch::Document::create({
+        make_entity("site", "property"),
+        make_entity("building", "building", {{"property_id", "site"}}),
+        make_entity("floor", "floor", {{"building_id", "building"}}),
+        make_entity("other-floor", "floor", {{"building_id", "building"}}),
+        make_entity("walls", "layer", {{"floor_id", "floor"}}),
+        make_entity("doors", "layer", {{"floor_id", "floor"}}),
+        make_entity("other-layer", "layer", {{"floor_id", "other-floor"}}),
+        make_entity("wall", "wall", {{"layer_id", "walls"}, {"elevation_m", 3.5}}),
+        make_entity("inherited", "opening", {{"wall_id", "wall"}}),
+        make_entity("same-layer", "opening", {{"wall_id", "wall"}, {"layer_id", "walls"}}),
+        make_entity("separate", "opening", {{"wall_id", "wall"}, {"layer_id", "doors"}, {"floor_id", "floor"}}),
+        make_entity("wrong-floor", "opening", {{"wall_id", "wall"}, {"layer_id", "other-layer"}}),
+    });
+    const auto before = document.snapshot();
+    const auto organization = sketch::organize_project(before);
+    require(organization.drawing_context("separate") == sketch::DrawingContext{"site","building","floor","doors"} &&
+            organization.nodes.at("separate").parent_id == "doors" && organization.nodes.at("separate").issues.empty(),
+            "a hosted opening can use a separate valid drawing layer on its physical host floor");
+    for (const auto* id : {"inherited", "same-layer"})
+        require(organization.drawing_context(id) == organization.drawing_context("wall") &&
+                organization.nodes.at(id).parent_id == "wall", "inherited host organization remains unchanged");
+    for (const auto* id : {"wrong-floor"})
+        require(!organization.drawing_context(id) && !organization.nodes.at(id).issues.empty() &&
+                organization.nodes.at(id).parent_id.empty(), "invalid drawing layers cannot change physical hosting");
+    require(document.snapshot().entities() == before.entities() &&
+            before.entities().at("separate").properties.at("wall_id") == "wall" &&
+            before.entities().at("wall").properties.at("elevation_m") == 3.5,
+            "drawing layer resolution never changes the host relationship or world elevation");
+    auto malformed = before.entities();
+    malformed.emplace("missing-layer",make_entity("missing-layer", "opening",
+        {{"wall_id", "wall"}, {"layer_id", "missing"}}));
+    malformed.emplace("malformed-layer",make_entity("malformed-layer", "opening",
+        {{"wall_id", "wall"}, {"layer_id", 42}}));
+    const auto malformed_organization = sketch::organize_project(malformed);
+    for (const auto* id : {"missing-layer","malformed-layer"})
+        require(!malformed_organization.drawing_context(id) &&
+                !malformed_organization.nodes.at(id).issues.empty(),
+                "the derived resolver also diagnoses missing and malformed references in retained entity maps");
+}
+
 void test_inconsistent_membership_stays_visible() {
     const auto document = sketch::Document::create({
         make_entity("site", "property"),
@@ -366,6 +408,7 @@ int main() {
     try {
         test_real_hierarchy_and_host_membership();
         test_terrain_surface_placement_is_explicit();
+        test_hosted_opening_separate_drawing_layer();
         test_inconsistent_membership_stays_visible();
         test_unknown_optional_references_are_safe_and_diagnostic();
         test_redundant_property_and_building_links_must_agree();

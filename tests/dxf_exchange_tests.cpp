@@ -39,6 +39,16 @@ void run() {
               imported.drawing.dimensions.at(0).text_position.y == 3.5 &&
               imported.drawing.dimensions.at(0).text == "7 m",
           "linear dimension lost");
+    const auto dimension_begin = encoded.find("0\nDIMENSION\n");
+    const auto aligned_subclass = encoded.find("100\nAcDbAlignedDimension\n", dimension_begin);
+    const auto extension_points = encoded.find("13\n", dimension_begin);
+    const auto rotation_angle = encoded.find("50\n", aligned_subclass);
+    const auto rotated_subclass = encoded.find("100\nAcDbRotatedDimension\n", dimension_begin);
+    check(dimension_begin != std::string::npos && aligned_subclass != std::string::npos &&
+              extension_points != std::string::npos && rotation_angle != std::string::npos &&
+              rotated_subclass != std::string::npos && aligned_subclass < extension_points &&
+              extension_points < rotation_angle && rotation_angle < rotated_subclass,
+          "dimension extension points must belong to their DXF subclass");
     check(imported.drawing.hatches.at(0).boundary.size() == 4 &&
               imported.drawing.hatches.at(0).solid,
           "solid hatch lost");

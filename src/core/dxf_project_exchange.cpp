@@ -675,7 +675,7 @@ void import_direct_geometry(const DxfDrawing& drawing, DxfProjectImportResult& r
 }
 
 void import_labels(const std::vector<DxfLabel>& labels, AnnotationState& state,
-                   std::size_t& counter) {
+                   std::size_t& counter, Json& source_layers) {
     for (const auto& label : labels) {
         LabelInstance item;
         item.id = "dxf-label-" + std::to_string(++counter);
@@ -686,13 +686,15 @@ void import_labels(const std::vector<DxfLabel>& labels, AnnotationState& state,
         item.style.fill_color = "#FFFFFF";
         item.placement.position = {label.position.x, label.position.y};
         item.placement.rotation_radians = radians_from_degrees(label.rotation_degrees);
+        source_layers[item.id] = label.layer;
         state.labels.push_back(std::move(item));
     }
 }
 
 void import_dimensions(const std::vector<DxfDimension>& dimensions,
                        DxfProjectImportResult& result, AnnotationState& annotations,
-                       std::size_t& boundary_counter, std::size_t& label_counter) {
+                       std::size_t& boundary_counter, std::size_t& label_counter,
+                       Json& source_layers) {
     for (const auto& dimension : dimensions) {
         const Boundary extension{{{dimension.extension_start.x, dimension.extension_start.y},
                                   {dimension.extension_end.x, dimension.extension_end.y}, 0.0}};
@@ -717,6 +719,7 @@ void import_dimensions(const std::vector<DxfDimension>& dimensions,
         label.style.fill_color = "#FFFFFF";
         label.placement.position = {dimension.text_position.x, dimension.text_position.y};
         label.placement.rotation_radians = radians_from_degrees(dimension.rotation_degrees);
+        source_layers[label.id] = dimension.layer;
         annotations.labels.push_back(std::move(label));
         diagnostic(result.diagnostics, {}, "DIMENSION", "dimension_associativity_unbound");
     }
@@ -725,7 +728,7 @@ void import_dimensions(const std::vector<DxfDimension>& dimensions,
 void import_inserts(const DxfDrawing& drawing, const std::set<std::size_t>& native_inserts,
                     DxfProjectImportResult& result,
                     std::size_t& boundary_counter, std::size_t& label_counter,
-                    AnnotationState& annotations) {
+                    AnnotationState& annotations, Json& source_layers) {
     for (std::size_t insert_index = 0; insert_index < drawing.inserts.size(); ++insert_index) {
         if (native_inserts.contains(insert_index)) continue;
         const auto& insert = drawing.inserts[insert_index];
@@ -734,12 +737,15 @@ void import_inserts(const DxfDrawing& drawing, const std::set<std::size_t>& nati
         if (block == drawing.blocks.end()) continue;
         const InsertTransform transform{{insert.insertion.x, insert.insertion.y}, insert.scale_x,
             insert.scale_y, radians_from_degrees(insert.rotation_degrees), block->base};
+        const auto effective_layer = [&](const std::string& layer) -> const std::string& {
+            return layer.empty() || layer == "0" ? insert.layer : layer;
+        };
         for (const auto& line : block->lines) {
             const DxfPoint start = transform_point(line.start, transform);
             const DxfPoint end = transform_point(line.end, transform);
             result.entities.push_back(imported_boundary("dxf-boundary-" + std::to_string(++boundary_counter),
                 Boundary{{{start.x, start.y}, {end.x, end.y}, 0.0}}, "dxf_insert_line",
-                insert.layer, "INSERT"));
+                effective_layer(line.layer), "INSERT"));
         }
         for (const auto& arc : block->arcs) {
             if (std::abs(std::abs(transform.scale_x) - std::abs(transform.scale_y)) > 1e-10) {
@@ -753,7 +759,7 @@ void import_inserts(const DxfDrawing& drawing, const std::set<std::size_t>& nati
             transformed.end = {transformed_end.x, transformed_end.y};
             if (transform.scale_x * transform.scale_y < 0.0) transformed.sweep_radians = -transformed.sweep_radians;
             result.entities.push_back(imported_boundary("dxf-boundary-" + std::to_string(++boundary_counter),
-                Boundary{transformed}, "dxf_insert_arc", insert.layer, "INSERT"));
+                Boundary{transformed}, "dxf_insert_arc", effective_layer(arc.layer), "INSERT"));
         }
         for (const auto& polyline : block->polylines) {
             auto source = polyline_boundary(polyline);
@@ -764,16 +770,16 @@ void import_inserts(const DxfDrawing& drawing, const std::set<std::size_t>& nati
             }
             result.entities.push_back(imported_boundary("dxf-boundary-" + std::to_string(++boundary_counter),
                 *transformed, polyline.closed ? "dxf_insert_polyline_closed" : "dxf_insert_polyline_open",
-                insert.layer, "INSERT"));
+                effective_layer(polyline.layer), "INSERT"));
         }
         std::vector<DxfLabel> labels;
         labels.reserve(block->labels.size());
         for (const auto& label : block->labels) {
             const auto position = transform_point(label.position, transform);
             labels.push_back({position, label.height * std::abs(transform.scale_x),
-                label.rotation_degrees + insert.rotation_degrees, label.text, insert.layer});
+                label.rotation_degrees + insert.rotation_degrees, label.text, effective_layer(label.layer)});
         }
-        import_labels(labels, annotations, label_counter);
+        import_labels(labels, annotations, label_counter, source_layers);
     }
 }
 
@@ -933,7 +939,11 @@ std::set<std::size_t> import_native_graphs(const DxfDrawing& drawing, bool sourc
                 while (!allocated_ids.insert(fresh).second) fresh = make_stable_id();
                 ids.emplace(item->entity.id, std::move(fresh));
             }
-            for (const auto* item : group) detached.push_back(detached_native_entity(item->entity, ids));
+            for (const auto* item : group) {
+                auto entity = detached_native_entity(item->entity, ids);
+                entity.extensions["dxf_source"] = source_extension(drawing.inserts.at(item->insert_index).layer, "INSERT");
+                detached.push_back(std::move(entity));
+            }
             const auto document = Document::create(detached).snapshot();
             for (const auto* item : group) {
                 const auto& block = *item->block;
@@ -1029,13 +1039,16 @@ DxfProjectImportResult import_project_dxf(std::string_view bytes,
     std::size_t boundary_counter = 0;
     import_direct_geometry(parsed.drawing, result, boundary_counter);
     AnnotationState annotations;
+    Json annotation_layers = Json::object();
     std::size_t label_counter = 0;
-    import_labels(parsed.drawing.labels, annotations, label_counter);
-    import_dimensions(parsed.drawing.dimensions, result, annotations, boundary_counter, label_counter);
-    import_inserts(parsed.drawing, native_inserts, result, boundary_counter, label_counter, annotations);
+    import_labels(parsed.drawing.labels, annotations, label_counter, annotation_layers);
+    import_dimensions(parsed.drawing.dimensions, result, annotations, boundary_counter, label_counter, annotation_layers);
+    import_inserts(parsed.drawing, native_inserts, result, boundary_counter, label_counter, annotations, annotation_layers);
     if (!annotations.labels.empty()) {
         try {
-            result.entities.push_back(make_annotation_entity("dxf-annotations", annotations));
+            auto entity = make_annotation_entity("dxf-annotations", annotations);
+            entity.extensions["dxf_annotation_layers"] = std::move(annotation_layers);
+            result.entities.push_back(std::move(entity));
         } catch (const std::exception&) {
             diagnostic(result.diagnostics, "dxf-annotations", "ANNOTATION", "annotation_reconstruction_failed");
         }

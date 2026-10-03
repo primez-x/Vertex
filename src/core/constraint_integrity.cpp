@@ -707,11 +707,14 @@ void validate_exterior_corner_edit_topology(const Entities& before,const Entitie
             for (const auto& owner : model.entity_ids())
                 if (!active.contains(owner) || active.at(owner) == ModelPhase::demolished) unavailable.insert(owner);
         }
+        std::vector<std::string> active_wall_ids;
         for (const auto& [id,entity] : entities) {
             if (!topology_physical_wall(entity)) continue;
             if (unavailable.contains(id)) result.erase(id);
-            else result.at(id) = resolve_vertical_placement(entities,entity);
+            else active_wall_ids.push_back(id);
         }
+        for (auto& [id,placement] : resolve_vertical_placements(entities,active_wall_ids))
+            result.at(id) = std::move(placement);
         return result;
     };
     const auto active_before = active_physical(before), active_after = active_physical(after);

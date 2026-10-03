@@ -12,10 +12,12 @@
 #include <algorithm>
 #include <cmath>
 #include <iostream>
+#include <map>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <stdexcept>
+#include <set>
 #include <string>
 
 namespace {
@@ -751,6 +753,49 @@ void test_native_architectural_sources_are_bounded() {
           "unbounded source coordinates must be rejected before native solid or section work");
 }
 
+void test_import_source_layer_lineage() {
+    using namespace sketch;
+    DxfDrawing drawing;
+    drawing.insertion_units = 6;
+    drawing.lines.push_back({{0,0},{2,0},"Exterior"});
+    drawing.labels.push_back({{0,1},0.2,0,"Room name","Names"});
+    drawing.dimensions.push_back({{0,0},{2,0},{0,0.5},{1,0.5},0,"2 m","Dimensions"});
+    drawing.blocks.push_back({"Fixture",{0,0},
+        {{{0,0},{1,0},"0"},{{0,1},{1,1},"Details"}}, {}, {},
+        {{{0,2},0.2,0,"Inherited label","0"},{{0,3},0.2,0,"Explicit label","Notes"}}});
+    drawing.inserts.push_back({"Fixture",{5,0},1,1,0,"Fixtures"});
+    const auto imported = import_project_dxf(export_dxf_ascii(drawing));
+    std::set<std::string> layers;
+    for (const auto& entity : imported.entities) {
+        if (entity.type == "boundary") layers.insert(entity.extensions.at("dxf_source").at("layer").get<std::string>());
+        if (entity.type != "annotation_state") continue;
+        const auto annotations = decode_annotation_entity(entity);
+        const auto& lineage = entity.extensions.at("dxf_annotation_layers");
+        check(lineage.size() == annotations.labels.size(), "every reconstructed label has explicit source layer lineage");
+        const std::map<std::string,std::string> expected{{"Room name","Names"},{"2 m","Dimensions"},
+            {"Inherited label","Fixtures"},{"Explicit label","Notes"}};
+        for (const auto& label : annotations.labels)
+            check(lineage.at(label.id) == expected.at(label.content), "direct, dimension and inserted labels retain effective CAD layers");
+    }
+    check(layers == std::set<std::string>{"Exterior","Dimensions","Fixtures","Details"},
+        "block layer zero inherits insertion layer while explicit child layers remain distinct");
+
+    auto native = export_project_dxf(native_hosted_document(false).snapshot()).drawing;
+    std::map<std::string,std::string> expected;
+    for (auto& insert : native.inserts) {
+        const auto block = std::find_if(native.blocks.begin(),native.blocks.end(),[&](const auto& value){return value.name==insert.block_name;});
+        check(block != native.blocks.end(), "native fixture block exists");
+        const auto id = nlohmann::json::parse(block->vertex_entity_json).at("id").get<std::string>();
+        insert.layer = "Source " + id;
+        expected.emplace(id,insert.layer);
+    }
+    const auto mapped = import_project_dxf(export_dxf_ascii(native));
+    check(mapped.complete() && mapped.entities.size() == expected.size(), "native host graph remains editable with distinct insertion layers");
+    for (const auto& entity : mapped.entities)
+        check(entity.extensions.at("dxf_source").at("layer") == expected.at(entity.extensions.at("vertex_dxf_source").at("id").get<std::string>()),
+            "native walls and openings retain their actual INSERT source layer");
+}
+
 } // namespace
 
 int main() {
@@ -766,6 +811,7 @@ int main() {
         test_window_layout_native_correspondence();
         test_legacy_native_wall_candidates_are_canonical();
         test_native_architectural_sources_are_bounded();
+        test_import_source_layer_lineage();
         std::cout << "DXF project exchange tests passed\n";
         return 0;
     } catch (const std::exception& error) {

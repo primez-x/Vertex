@@ -169,9 +169,11 @@ mapper reports a limitation, so a desktop adapter can retain the original DXF
 bytes alongside the editable candidates.
 
 This mapping is a deterministic native-project slice, not Apex native-file
-compatibility or full CAD fidelity. The desktop transaction adapter, active
-floor/layer assignment, original-source asset retention, and clean-machine
-interoperability evidence remain production-gate work.
+compatibility or full CAD fidelity. The desktop transaction adapter retains the
+original source asset and commits the import atomically. The actual Import DXF
+action reviews source-layer destinations before insertion; the direct
+programmatic API retains its active-layer default. Clean-machine and external
+consumer interoperability evidence remain production-gate work.
 
 ## Native project mapping for IFC
 
@@ -227,8 +229,16 @@ at most 255 bytes). Editable reconstruction requires metre units, identity
 INSERT, a complete host graph, and agreement with every supported primitive.
 Unsupported block contents, geometry drift, bad profiles, incomplete relationships
 or transformed inserts fall back to inert plan geometry with source retention.
-Desktop import remaps identities and assigns the active floor/layer atomically,
-then validates the newly imported wall and manufactured assembly solids.
+Desktop import remaps identities and assigns the reviewed floor/layer
+destinations atomically, then validates the newly imported wall and manufactured
+assembly solids. A hosted opening and its wall must share the destination floor.
+Source names default to matching layers on the active floor or new layers
+created in the same transaction. Geometry coordinates and elevations remain
+unchanged. The receipt and adjacent fidelity report record the mapping.
+Imported label/dimension children retain their effective CAD-layer names for
+destination assignment. In flattened INSERTs, layer-zero children inherit the
+insertion layer and explicit nonzero child layers remain distinct, following
+the [Autodesk block property rules](https://help.autodesk.com/cloudhelp/2026/ENU/AutoCAD-Core/files/GUID-25E9F20C-D146-426C-8815-37DF48D2D33F.htm).
 This is 2D plan exchange. Manufactured frame/panel/glazing sections and actual
 leaf swing arcs use a versioned depiction marker; exact regeneration is required
 before native metadata activates. Older approximate depictions remain inert.

@@ -154,6 +154,33 @@ void test_stale_filters_and_snapshot_determinism() {
             "visibility derivation must not mutate the original snapshot or document history");
 }
 
+void test_separate_opening_layer_uses_ordinary_visibility() {
+    const auto document = sketch::Document::create({
+        entity("site", "property"), entity("building", "building", {{"property_id","site"}}),
+        entity("floor", "floor", {{"building_id","building"}}),
+        entity("walls", "layer", {{"floor_id","floor"}}),
+        entity("doors", "layer", {{"floor_id","floor"}}),
+        entity("wall", "wall", {{"layer_id","walls"}}),
+        entity("inherited", "opening", {{"wall_id","wall"}}),
+        entity("separate", "opening", {{"wall_id","wall"},{"layer_id","doors"}}),
+    });
+    const auto source = document.snapshot();
+    ProjectViewFilter filter;
+    filter.hidden_layer_ids.insert("doors");
+    auto visible = sketch::visible_project_entities(source,filter);
+    require(!visible.contains("separate") && visible.contains("wall") && visible.contains("inherited"),
+            "a separate opening layer can be hidden without hiding its physical host");
+    filter.hidden_layer_ids = {"walls"};
+    visible = sketch::visible_project_entities(source,filter);
+    require(visible.contains("separate") && !visible.contains("wall") && !visible.contains("inherited"),
+            "inherited openings follow host layer visibility while an explicit layer remains independent");
+    filter.hidden_floor_ids.insert("floor");
+    visible = sketch::visible_project_entities(source,filter);
+    require(!visible.contains("separate") && !visible.contains("inherited") && !visible.contains("wall"),
+            "all hosted openings obey their shared physical floor mask");
+    require(document.snapshot().entities() == source.entities(), "visibility never changes hosted geometry");
+}
+
 void test_join_presentation_visibility_transitions() {
     for (const std::string kind : {"wall", "roof"}) {
         auto document = sketch::Document::create({
@@ -220,6 +247,7 @@ int main() {
         test_default_visibility_and_hierarchy_masks();
         test_host_and_unresolved_contexts_remain_visible();
         test_stale_filters_and_snapshot_determinism();
+        test_separate_opening_layer_uses_ordinary_visibility();
         test_join_presentation_visibility_transitions();
         std::cout << "Project visibility tests passed\n";
         return 0;

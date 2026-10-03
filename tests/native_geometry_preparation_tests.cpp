@@ -5,6 +5,7 @@
 #include "sketch/vertical_levels.hpp"
 #include "sketch/terrain_surface.hpp"
 #include "sketch/opening_assembly.hpp"
+#include "sketch/project_visibility.hpp"
 #include "support/noninteractive_errors.hpp"
 #include <BRep_Tool.hxx>
 #include <TopExp_Explorer.hxx>
@@ -192,6 +193,43 @@ void test_terrain_identity() {
           "terrain point elevation must invalidate prepared geometry identity");
 }
 
+void test_opening_assembly_obeys_its_drawing_layer_and_floor() {
+    auto wall = walls(1).snapshot().entities().begin()->second;
+    wall.id = "wall";
+    wall.properties["layer_id"] = "walls";
+    Entity opening{"opening","opening",{{"wall_id","wall"},{"layer_id","windows"},
+        {"opening_kind","window"},{"offset_m",1.0},{"width_m",1.0},
+        {"sill_m",0.2},{"height_m",2.1},
+        {"opening_assembly",opening_assembly_json(default_opening_assembly(OpeningAssemblyKind::window))}}};
+    const auto document = Document::create({
+        {"site","property",nlohmann::json::object()},
+        {"building","building",{{"property_id","site"}}},
+        {"floor","floor",{{"building_id","building"}}},
+        {"walls","layer",{{"floor_id","floor"}}},
+        {"windows","layer",{{"floor_id","floor"}}},wall,opening});
+    const auto source = document.snapshot();
+    const auto with_filter = [&](ProjectViewFilter filter) {
+        auto prepared = prepare_native_geometry(source,visible_project_entities(source,filter));
+        check(prepared && prepared->errors.empty() && prepared->solids.contains("opening"),
+            "filtered native window must retain valid prepared geometry and host relationship");
+        return std::move(*prepared);
+    };
+    ProjectViewFilter filter;
+    filter.hidden_layer_ids.insert("windows");
+    const auto hidden_window = with_filter(filter);
+    check(hidden_window.solids.at("wall").visible && !hidden_window.solids.at("opening").visible,
+        "a visible host cannot override the hidden opening assembly layer");
+    filter.hidden_layer_ids = {"walls"};
+    const auto hidden_host = with_filter(filter);
+    check(!hidden_host.solids.at("wall").visible && hidden_host.solids.at("opening").visible,
+        "independent opening assembly layer remains visible when wall layer is hidden");
+    filter.hidden_floor_ids.insert("floor");
+    const auto hidden_floor = with_filter(filter);
+    check(!hidden_floor.solids.at("wall").visible && !hidden_floor.solids.at("opening").visible,
+        "shared floor mask hides both actual native solids");
+    check(document.snapshot().entities() == source.entities(), "native visibility does not alter source geometry");
+}
+
 void test_worker_failure_recovery() {
     NativeGeometryRegenerator worker([](const DocumentSnapshot& snapshot,
         std::optional<NativeGeometryVisibleIds> visible, const std::function<bool()>&) {
@@ -220,6 +258,7 @@ int main() {
         test_coalescing();
         test_assembly_identity();
         test_resolved_join_and_opening_identity();
+        test_opening_assembly_obeys_its_drawing_layer_and_floor();
         test_terrain_identity();
         test_worker_failure_recovery();
         auto document = walls(12);

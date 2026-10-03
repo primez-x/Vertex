@@ -1374,7 +1374,8 @@ drawing; switching modes does not change existing geometry.
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U241 — Import a DXF drawing**
-  - Expected: Lines, arcs, text and supported blocks arrive at the correct scale.
+  - Steps: Choose Import DXF with a drawing containing several CAD layers and text. Review its layers, assign them to existing project layers on two floors, and import. Check the geometry and text on each layer. Undo, Redo, save and reopen. Repeat and cancel the layer review.
+  - Expected: Supported lines, arcs, text and blocks arrive at the correct scale and on the chosen layers. Floor assignment preserves source coordinates and elevations. Text follows its assigned layer. One Undo restores the pre-import document; save/reopen preserves the mapping and source. Cancel changes nothing. Unsupported content is reported and its original bytes retained.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
@@ -1975,6 +1976,18 @@ drawing; switching modes does not change existing geometry.
 - [ ] **U338 — Drag an exterior corner with attached walls and openings**
   - Steps: Add a partition attached to an exterior wall and a hosted door or window. Derive the exterior measurement. Select it and drag a corner handle, checking the live walls and measurements. Release, Undo and Redo. Try a change that makes an opening too large for its host and a change conflicting with a fixed measurement.
   - Expected: The live preview and committed geometry agree. Partitions stay attached and hosted openings follow their physical wall. A refused edit preserves the entire drawing and history. The accepted change updates the measured exterior and its calculation in one Undo step.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **U339 — Keep CAD source layers when importing**
+  - Steps: Import a DXF with several named layers. Accept the proposed destinations. Check that missing source-named layers appear on the active floor. Import it again and check that matching layers are reused. Undo each import and reopen the saved project.
+  - Expected: Source layers remain distinct. Matching layers are reused instead of duplicated. Newly created layers and their contents undo together. Source bytes and the chosen mappings remain in the saved project.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **U340 — Assign imported doors and windows with their walls**
+  - Steps: Import a Vertex DXF containing a wall and hosted door or window on separate CAD layers. Assign those layers to different floors and try Import. Repeat with two destination layers on the same floor.
+  - Expected: The different-floor assignment is refused with an explanation and changes nothing. The same-floor assignment imports editable walls and openings on the chosen layers, preserving their source coordinates, elevation, size and host relationship. Hiding the opening's layer hides it independently; hiding their shared floor hides both.
   - Result: Not tested
   - Notes: ______________________________
 
