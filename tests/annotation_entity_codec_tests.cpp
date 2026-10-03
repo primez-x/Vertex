@@ -105,8 +105,45 @@ int main() {
             dimension_decoded.overrides.back().plan_label_offset->x==-0.5 &&
             dimension_decoded.overrides.back().inherit_appearance && !dimension_decoded.overrides.back().visible,
             "Native save/reopen must retain v6 wall callouts, v5 plan anchors, v4 area placements and opaque sibling metadata together");
-        auto future_dimension=dimension_entity;future_dimension.properties["state"]["version"]=7;
+        auto future_dimension=dimension_entity;future_dimension.properties["state"]["version"]=8;
         rejects_document([&]{(void)sketch::Document::create({future_dimension});});
+        std::filesystem::remove(path);
+        auto palette_state = dimension_state;
+        const auto palette_svg = sketch::filter_symbol_catalog(sketch::default_symbol_catalog(),
+            "Basin Oval", "01_bathroom").front();
+        palette_state.symbols.push_back({"palette-symbol", palette_svg.id,
+            {{8.0, 9.0}, 0.7, 1.3, "layer-ground"}, {}, false});
+        auto& palette_symbol = palette_state.symbols.back();
+        palette_symbol.definition = palette_svg;
+        palette_symbol.pinned_svg = "<svg xmlns=\"http://www.w3.org/2000/svg\"><path d=\"M0 0L1 1\"/></svg>";
+        palette_symbol.width_scale = 0.5;
+        palette_symbol.depth_scale = 1.8;
+        palette_symbol.flip_horizontal = true;
+        palette_symbol.svg_palette = sketch::SymbolSvgPalette{"white-outline-2", "#A1b2C3", "#456789"};
+        auto palette_entity = sketch::make_annotation_entity("palette-annotations", palette_state);
+        palette_entity.required = true;
+        palette_entity.extensions["vendor_palette_owner"] = {{"retain", 18}};
+        palette_entity.properties["state"]["labels"][0]["vendor_label"] = "retain";
+        palette_entity.properties["state"]["overrides"][0]["vendor_area"] = "retain";
+        const auto palette_document = sketch::Document::create({palette_entity});
+        (void)sketch::ProjectStore::save(path, palette_document.snapshot());
+        const auto palette_saved = sketch::ProjectStore::load(path).document.snapshot().entities().at("palette-annotations");
+        const auto palette_reopened = sketch::decode_annotation_entity(palette_saved);
+        require(palette_saved == palette_entity && palette_saved.properties.at("state").at("version") == 7 &&
+                palette_reopened.symbols.back().svg_palette == palette_symbol.svg_palette &&
+                palette_reopened.symbols.back().pinned_svg == palette_symbol.pinned_svg &&
+                !palette_reopened.symbols.front().svg_palette && palette_reopened.labels.front().model_plan &&
+                palette_reopened.overrides.back().paper_text_height_mm == 5.0,
+            "Native save/reopen retains v7 palettes, exact artwork, transforms and opaque sibling metadata with older presentation features");
+        auto malformed_palette_entity = palette_entity;
+        malformed_palette_entity.properties["state"]["symbols"][1]["svg_palette"] = nullptr;
+        rejects_document([&] { (void)sketch::Document::create({malformed_palette_entity}); });
+        malformed_palette_entity = palette_entity;
+        malformed_palette_entity.properties["state"]["symbols"][1]["svg_palette"]["extra"] = true;
+        rejects_document([&] { (void)sketch::Document::create({malformed_palette_entity}); });
+        malformed_palette_entity = palette_entity;
+        malformed_palette_entity.properties["state"]["version"] = 6;
+        rejects_document([&] { (void)sketch::Document::create({malformed_palette_entity}); });
         std::filesystem::remove(path);
         (void)sketch::ProjectStore::save(path, document.snapshot());
         const auto reopened = sketch::ProjectStore::load(path).document.snapshot();
@@ -127,6 +164,7 @@ int main() {
         historical.symbols.front().definition->artwork_revision = 99;
         historical.symbols.front().pinned_svg = "<svg xmlns=\"http://www.w3.org/2000/svg\"><path d=\"M0 0L1 1\"/></svg>";
         historical.symbols.front().visible = false;
+        historical.symbols.front().svg_palette = sketch::SymbolSvgPalette{};
         auto historical_entity = sketch::make_annotation_entity("annotations", historical);
         historical_entity.extensions["owner_context"] = "retain-me";
         historical_entity.required = true;

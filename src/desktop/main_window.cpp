@@ -27,6 +27,7 @@
 #include "sketch/desktop/text_library_dialog.hpp"
 #include "sketch/desktop/appraisal_report_dialog.hpp"
 #include "sketch/desktop/appraisal_details_panel.hpp"
+#include "sketch/desktop/symbol_svg_palette.hpp"
 #include "sketch/boundary_commit.hpp"
 #include "sketch/area_subtraction.hpp"
 #include "sketch/boundary_construction.hpp"
@@ -11639,6 +11640,86 @@ public:
         }
     }
 
+    bool editSymbolSvgPalette(const QString& symbol_id, std::optional<SymbolSvgPalette> palette,
+                             std::optional<Revision> expected_revision = std::nullopt) {
+        try {
+            const auto source=authoringSnapshot();
+            if(!source.is_editable())throw std::invalid_argument("This document is read-only.");
+            if(expected_revision && *expected_revision!=source.revision())
+                throw std::invalid_argument("The component changed. Reopen its colors.");
+            const auto id=symbol_id.toStdString();const auto parent=annotation_parent_for_child(source,id);
+            if(!parent)throw std::invalid_argument("The component is unavailable.");
+            const auto& original=source.entities().at(*parent);auto state=decode_annotation_entity(original);
+            const auto symbol=std::find_if(state.symbols.begin(),state.symbols.end(),[&](const auto& value){return value.id==id;});
+            if(symbol==state.symbols.end())throw std::invalid_argument("Choose an SVG component.");
+            if(symbol->svg_palette==palette){clearError();return true;}
+            if(palette) {
+                const auto definition=resolved_symbol_definition(*symbol,desktop_symbol_catalog());
+                if(!definition.svg_asset)throw std::invalid_argument("Update this component's artwork before editing SVG colors.");
+                const auto bytes=symbol->pinned_svg.empty()?load_symbol_svg(*definition.svg_asset):QByteArray::fromStdString(symbol->pinned_svg);
+                const auto rendered=colored_symbol_svg(bytes,*palette);
+                if(!QSvgRenderer(rendered).isValid())throw std::invalid_argument("The component's colored artwork cannot be rendered.");
+            }
+            symbol->svg_palette=std::move(palette);validate_annotation_state(state,desktop_symbol_catalog());
+            auto updated=original;
+            if(symbol->svg_palette)upgrade_annotation_transform_version(updated,state);
+            auto& raw=annotation_child_record(updated,id);
+            if(symbol->svg_palette) {
+                const auto encoded=encode_annotation_state(state,desktop_symbol_catalog());
+                for(const auto& record:encoded.at("symbols"))if(record.at("id")==id)raw["svg_palette"]=record.at("svg_palette");
+                updated.properties.at("state")["version"]=7;
+            } else raw.erase("svg_palette");
+            validate_annotation_entity(updated);
+            const ApplyEntityChanges command{source.revision(),{EntityChange::upsert(std::move(updated))},{},
+                symbol->svg_palette?"Edit component colors":"Use library component colors"};
+            (void)Document::preview_command(source,command);applyDocumentCommand(command);clearError();refresh();return true;
+        }catch(const std::exception& failure){setError(QStringLiteral("Component colors: %1").arg(QString::fromUtf8(failure.what())));return false;}
+    }
+
+    void showSymbolColors() {
+        try {
+            const auto context=captureModalContext();const auto source=authoringSnapshot();
+            const auto id=m_selected_id;const auto parent=annotation_parent_for_child(source,id.toStdString());
+            if(!parent)throw std::invalid_argument("Select an SVG component.");
+            const auto state=decode_annotation_entity(source.entities().at(*parent));
+            const auto found=std::find_if(state.symbols.begin(),state.symbols.end(),[&](const auto& value){return value.id==id.toStdString();});
+            if(found==state.symbols.end())throw std::invalid_argument("Select an SVG component.");
+            const auto initial=found->svg_palette.value_or(SymbolSvgPalette{});
+            QDialog dialog(owner);styleDialog(dialog);
+            if(owner->testAttribute(Qt::WA_DontShowOnScreen))dialog.setAttribute(Qt::WA_DontShowOnScreen);
+            dialog.setObjectName(QStringLiteral("symbolColorsDialog"));dialog.setWindowTitle(QStringLiteral("Component colors"));
+            auto* layout=new QVBoxLayout(&dialog);auto* form=new QFormLayout;layout->addLayout(form);
+            auto* inherit=new QCheckBox(QStringLiteral("Use library colors"),&dialog);
+            inherit->setObjectName(QStringLiteral("symbolColorsInherit"));form->addRow(inherit);
+            const auto field=[&](const QString& title,const char* name,const std::string& value) {
+                auto* row=new QWidget(&dialog);auto* line=new QHBoxLayout(row);line->setContentsMargins(0,0,0,0);
+                auto* edit=new QLineEdit(QString::fromStdString(value),row);edit->setObjectName(QString::fromLatin1(name));
+                line->addWidget(edit,1);auto* choose=new QPushButton(QStringLiteral("Choose…"),row);line->addWidget(choose);
+                choose->setAccessibleName(QStringLiteral("Choose %1 color").arg(title.toLower()));
+                const auto swatch=[edit,choose]{QPixmap image(14,14);const QColor color(edit->text());image.fill(color.isValid()?color:Qt::transparent);choose->setIcon(QIcon(image));};
+                QObject::connect(edit,&QLineEdit::textChanged,&dialog,swatch);swatch();
+                QObject::connect(choose,&QPushButton::clicked,&dialog,[&,edit,title]{const auto color=QColorDialog::getColor(QColor(edit->text()),&dialog,title);if(color.isValid())edit->setText(color.name());});
+                QObject::connect(inherit,&QCheckBox::toggled,row,[row](bool value){row->setEnabled(!value);});
+                form->addRow(title,row);return edit;
+            };
+            auto* outline=field(QStringLiteral("Outline"),"symbolColorsOutline",initial.outline_color);
+            auto* surface=field(QStringLiteral("Surface"),"symbolColorsSurface",initial.surface_color);
+            surface->setToolTip(QStringLiteral("Shading is retained. Glass, recessed surfaces and dark details keep their original colors."));
+            inherit->setChecked(!found->svg_palette);
+            auto* error=new QLabel(&dialog);error->setObjectName(QStringLiteral("symbolColorsError"));error->setWordWrap(true);layout->addWidget(error);
+            auto* buttons=new QDialogButtonBox(QDialogButtonBox::Apply|QDialogButtonBox::Cancel,&dialog);layout->addWidget(buttons);
+            QObject::connect(buttons,&QDialogButtonBox::rejected,&dialog,&QDialog::reject);
+            QObject::connect(buttons->button(QDialogButtonBox::Apply),&QPushButton::clicked,&dialog,[&] {
+                if(!modalContextUnchanged(context)||m_selected_id!=id){error->setText(QStringLiteral("The document or selection changed. Reopen component colors."));return;}
+                std::optional<SymbolSvgPalette> palette;
+                if(!inherit->isChecked())palette=SymbolSvgPalette{initial.profile,outline->text().trimmed().toStdString(),surface->text().trimmed().toStdString()};
+                if(!editSymbolSvgPalette(id,std::move(palette),source.revision())){error->setText(lastError());return;}
+                dialog.accept();
+            });
+            dialog.exec();
+        }catch(const std::exception& failure){setError(QStringLiteral("Component colors: %1").arg(QString::fromUtf8(failure.what())));}
+    }
+
     bool deleteAnnotation(const QString& annotation_id) {
         try {
             if (!m_document->is_editable()) {
@@ -15786,14 +15867,9 @@ public:
             const auto found=m_vertex_preview_source->entities().find(id.toStdString());
             return found!=m_vertex_preview_source->entities().end() && found->second.type=="wall";
         });
-        // A mixed wall/presentation move also owns an exact proposal: its
-        // unselected exterior measurements must follow the physical sources
-        // before the gesture is released.
-        if (!only_walls && !std::any_of(ids.begin(),ids.end(),[&](const auto& id) {
-            const auto found=m_vertex_preview_source->entities().find(id.toStdString());
-            return found!=m_vertex_preview_source->entities().end() &&
-                (found->second.type=="wall" || is_closed_boundary_entity(found->second.type));
-        })) return std::nullopt;
+        // Every configured move provider supplies an exact proposal, including
+        // annotation-only groups. Mixed proposals also regenerate unselected
+        // exterior measurements from their physical sources before committing.
         const auto canvas_delta=delta;
         if (m_vertex_preview_view_context) {
             const auto right=plan_view_right(m_vertex_preview_view_context->frame);
@@ -27141,6 +27217,10 @@ private:
         m_symbol_depth_edit = new QLineEdit(m_annotation_group);
         m_symbol_depth_edit->setObjectName(QStringLiteral("symbolDepth"));
         annotation_layout->addRow(QStringLiteral("Depth"), m_symbol_depth_edit);
+        m_symbol_colors_button=new QPushButton(QStringLiteral("Colors…"),m_annotation_group);
+        m_symbol_colors_button->setObjectName(QStringLiteral("symbolColorsButton"));
+        annotation_layout->addRow(m_symbol_colors_button);
+        QObject::connect(m_symbol_colors_button,&QPushButton::clicked,owner,[this]{showSymbolColors();});
         m_symbol_flip_horizontal = new QCheckBox(QStringLiteral("Flip horizontally"), m_annotation_group);
         m_symbol_flip_horizontal->setObjectName(QStringLiteral("symbolFlipHorizontal"));
         annotation_layout->addRow(m_symbol_flip_horizontal);
@@ -28691,6 +28771,16 @@ private:
                             : QByteArray::fromStdString(symbol.pinned_svg);
                         svg_symbol.artwork_sha256 = QCryptographicHash::hash(
                             svg_symbol.document, QCryptographicHash::Sha256).toHex();
+                        svg_symbol.svg_palette=symbol.svg_palette;
+                        if(symbol.svg_palette) {
+                            try {
+                                const auto colored=colored_symbol_svg(svg_symbol.document,*symbol.svg_palette);
+                                if(!QSvgRenderer(colored).isValid())throw std::invalid_argument("colored artwork cannot be rendered");
+                            }catch(const std::exception& failure){
+                                m_plan_geometry_error+=QStringLiteral("Component %1 colors: %2. Reset colors or update its artwork.\n")
+                                    .arg(id_from(symbol.id),QString::fromUtf8(failure.what()));
+                            }
+                        }
                         svg_symbol.view_box = QRectF(asset.view_box[0], asset.view_box[1],
                                                     asset.view_box[2], asset.view_box[3]);
                         svg_symbol.footprint_view_box =
@@ -28703,6 +28793,8 @@ private:
                         svg_symbol.flip_horizontal = symbol.flip_horizontal;
                         svg_symbol.flip_vertical = symbol.flip_vertical;
                         canvas_symbol.svg_symbol = std::move(svg_symbol);
+                    } else if(symbol.svg_palette) {
+                        m_plan_geometry_error+=QStringLiteral("Component %1 has saved colors but its SVG artwork is unavailable. Reset colors or update its artwork.\n").arg(id_from(symbol.id));
                     }
                     all_geometry.push_back(std::move(canvas_symbol));
                 }
@@ -31244,6 +31336,9 @@ private:
                 m_annotation_layout->setRowVisible(m_annotation_scale_edit, text_label);
                 m_annotation_layout->setRowVisible(m_symbol_width_edit, !text_label);
                 m_annotation_layout->setRowVisible(m_symbol_depth_edit, !text_label);
+                const bool svg_component=selected_annotation_symbol && selected_annotation_symbol->definition && selected_annotation_symbol->definition->svg_asset;
+                m_annotation_layout->setRowVisible(m_symbol_colors_button,svg_component);
+                m_symbol_colors_button->setEnabled(svg_component && m_document->is_editable());
                 m_annotation_layout->setRowVisible(m_symbol_flip_horizontal, !text_label);
                 m_annotation_layout->setRowVisible(m_symbol_flip_vertical, !text_label);
                 m_annotation_layout->setRowVisible(m_annotation_content_edit, text_label);
@@ -35078,6 +35173,7 @@ private:
     QGroupBox* m_annotation_group{};
     QFormLayout* m_annotation_layout{};
     QWidget* m_annotation_style_flags{};
+    QPushButton* m_symbol_colors_button{};
     QLineEdit* m_annotation_content_edit{};
     QLineEdit* m_annotation_x_edit{};
     QLineEdit* m_annotation_y_edit{};
@@ -35560,6 +35656,11 @@ QString MainWindow::selectedEntityId() const {
 
 bool MainWindow::copySelection() {
     return m_impl->copySelection();
+}
+
+bool MainWindow::editSymbolSvgPalette(const QString& symbol_id,std::optional<SymbolSvgPalette> palette,
+                                    std::optional<Revision> expected_revision) {
+    return m_impl->editSymbolSvgPalette(symbol_id,std::move(palette),expected_revision);
 }
 
 bool MainWindow::cutSelection() {

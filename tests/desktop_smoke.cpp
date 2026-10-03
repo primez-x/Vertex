@@ -1357,6 +1357,8 @@ void test_pasted_annotation_visible_selection() {
     const auto second = source.createAnnotationSymbol("svg-v2-04_living-sectional-left", {4, 0});
     const auto wall = source.createStraightWall({0, -4}, {4, -4});
     require(!first.isEmpty() && !second.isEmpty() && !wall.isEmpty(), "create real SVG instances and mixed geometry");
+    require(source.editSymbolSvgPalette(first,SymbolSvgPalette{"white-outline-2","#202020","#ffccaa"}),
+            "clipboard group fixture retains explicit SVG palette intent");
     auto source_owner = annotation_owner_for_selection(source.document().snapshot(), first);
     source_owner.extensions["clipboard_vendor"] = {{"preserve", true}};
     source_owner.properties["state"]["opaque"] = "retain state";
@@ -1502,6 +1504,11 @@ void test_pasted_annotation_visible_selection() {
     group_mouse(QEvent::MouseButtonPress, start, Qt::LeftButton, Qt::LeftButton);
     group_mouse(QEvent::MouseMove, end, Qt::NoButton, Qt::LeftButton);
     group_mouse(QEvent::MouseButtonRelease, end, Qt::LeftButton, Qt::NoButton);
+    const auto move_deadline=std::chrono::steady_clock::now()+std::chrono::seconds(5);
+    while(group.document().revision()==before_move.revision() && group.lastError().isEmpty() &&
+          std::chrono::steady_clock::now()<move_deadline) {
+        QApplication::processEvents();std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
     const auto moved = group.document().snapshot();
     const auto& original_placement = before_move.entities().at(group_owner.id).properties.at("state").at("symbols")[0].at("placement");
     const auto& moved_placement = moved.entities().at(group_owner.id).properties.at("state").at("symbols")[0].at("placement");

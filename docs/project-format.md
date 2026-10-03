@@ -1,4 +1,27 @@
-# Vertex project formats v1 through v24
+# Vertex project formats v1 through v25
+
+## SVG component colors (v25)
+
+An SVG symbol may retain optional `svg_palette` with exactly `version: 1`,
+`profile: "white-outline-2"`, `outline_color` and `surface_color` in #RRGGBB.
+Absence inherits the exact source appearance. An explicit default-valued palette
+still records authored intent. Unknown profiles, fields, nulls, malformed colors
+and palettes on procedural definitions are rejected.
+
+Any explicit palette emits annotation state 7. Native format 25 and extraction
+version 23 qualify typed annotation state 7 throughout retained Undo/deleted
+history, including preserved version-7 records with no palette. Older files
+keep their previous requirements. Both SQLite markers and the logical digest
+retain the reader floor; a recomputed digest cannot authorize a downgrade.
+Recovery archives preserve the same intent. Extraction is not a project importer.
+
+The palette changes only a derived render copy. Pinned SVG bytes, artwork hashes,
+definitions, geometry, transformations and opaque owner metadata remain intact.
+The profile maps black outline strokes and primary white/light-gray surfaces,
+retaining gradient shading, opacity and protected glass, recess and dark details.
+The XML parser rejects unsupported active content, resources, roles and profiles.
+Unsupported saved artwork is diagnosed and blocks incorrect output until reset
+or explicitly updated. Canvas, sheet and PDF use the same palette-aware renderer.
 
 ## Saved-view drawing appearance (v24)
 

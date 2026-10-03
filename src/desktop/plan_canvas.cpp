@@ -1,8 +1,10 @@
 #include "plan_canvas.hpp"
 #include "sketch/hosted_opening_geometry.hpp"
+#include "sketch/desktop/symbol_svg_palette.hpp"
 
 #include <QApplication>
 #include <QDataStream>
+#include <QCryptographicHash>
 #include <QDialog>
 #include <QDragEnterEvent>
 #include <QDragMoveEvent>
@@ -4564,13 +4566,34 @@ void PlanCanvas::drawEntity(QPainter& painter, const CanvasEntity& entity, bool 
         // not a rendering identity: two saved revisions of one component may
         // intentionally coexist in the same project.
         const auto cacheable = symbol.artwork_sha256.size() == 64;
-        const auto artwork_key = cacheable
-            ? QString::fromLatin1(symbol.artwork_sha256) : QString{};
+        QByteArray render_identity;
+        if (cacheable) {
+            QDataStream identity(&render_identity, QIODevice::WriteOnly);
+            identity << symbol.artwork_sha256 << symbol.svg_palette.has_value();
+            if (symbol.svg_palette) {
+                const auto& palette = *symbol.svg_palette;
+                // Version paint semantics independently from the pinned artwork.
+                identity << quint32(1) << QString::fromStdString(palette.profile)
+                         << QString::fromStdString(palette.outline_color)
+                         << QString::fromStdString(palette.surface_color);
+            }
+        }
+        const auto artwork_key = cacheable ? QString::fromLatin1(
+            QCryptographicHash::hash(render_identity, QCryptographicHash::Sha256).toHex()) : QString{};
         auto renderer = cacheable ? m_svg_renderers.value(artwork_key)
                                   : QSharedPointer<QSvgRenderer>{};
         if (!renderer || !renderer->isValid()) {
-            renderer = QSharedPointer<QSvgRenderer>::create(symbol.document);
-            if (renderer->isValid() && cacheable) {
+            try {
+                // Absent intent keeps the exact historical rendering path.
+                const auto document = symbol.svg_palette
+                    ? colored_symbol_svg(symbol.document, *symbol.svg_palette) : symbol.document;
+                renderer = QSharedPointer<QSvgRenderer>::create(document);
+            } catch (const std::invalid_argument&) {
+                // Scene projection reports invalid persisted palettes. Paint
+                // itself cannot throw or render unvalidated active artwork.
+                renderer.reset();
+            }
+            if (renderer && renderer->isValid() && cacheable) {
                 // Bound memory even while opening many projects or revisions.
                 // Clearing at the limit keeps the policy deterministic and
                 // avoids retaining obsolete project artwork indefinitely.

@@ -2043,6 +2043,18 @@ drawing; switching modes does not change existing geometry.
   - Result: Not tested
   - Notes: ______________________________
 
+- [ ] **U349 — Change one component's colors**
+  - Steps: Place two copies of the same sofa. Double-click one, choose Colors, clear Use library colors and change its Outline and Surface. Apply, then inspect both on the canvas and in PDF. Undo, Redo, copy/paste, save and reopen.
+  - Expected: Only that placed component changes. Its shading, glass/recess details, size and rotation remain intact. Accepted colors survive output and reopening; the copied component retains them.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **U350 — Restore a component's library colors**
+  - Steps: Open Colors on a customized component, change a color and Cancel. Reopen, check Use library colors and Apply. Undo and Redo.
+  - Expected: Cancel leaves the drawing unchanged. Reset restores the original appearance of only that component. Undo restores its custom colors; Redo resets them again.
+  - Result: Not tested
+  - Notes: ______________________________
+
 ## Issue report template
 
 - Task ID(s):

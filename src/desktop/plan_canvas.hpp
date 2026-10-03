@@ -1,6 +1,7 @@
 #pragma once
 
 #include "sketch/geometry.hpp"
+#include "sketch/annotation_catalog.hpp"
 #include "sketch/performance_telemetry.hpp"
 #include "sketch/reference_grid.hpp"
 
@@ -58,6 +59,9 @@ struct CanvasSvgSymbol {
     double depth_metres{};
     bool flip_horizontal{};
     bool flip_vertical{};
+    // Explicit instance paint intent; document and artwork_sha256 always refer
+    // to the untouched source, shared by screen and output derivative rendering.
+    std::optional<SymbolSvgPalette> svg_palette;
 };
 
 // Stable, screen-only edit point supplied by the document projection. Handles

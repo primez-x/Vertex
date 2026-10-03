@@ -15,10 +15,10 @@ recolor or restyle that measurement text. Hidden objects remain in the project
 navigator. Reset removes only the chosen override. Paper line weight and hatch
 scale use the existing optional annotation fields, without a new entity schema.
 
-Output-view appearance is still a workflow/rendering gap. SVG symbol color
-fields are also not yet applied by the artwork renderer; persisted style fields
-alone do not establish that support. A future explicit artwork-palette override
-must preserve pinned SVG bytes, gradients and existing instance appearance.
+Saved-view appearance is owned by its coordinated view. SVG components expose
+**Colors…** in quick properties for a separate per-instance outline/surface
+palette. **Use library colors** removes the selected override. The exact source
+SVG, gradients, protected details and existing instance geometry remain intact.
 
 The twelve label templates can be filtered by case-sensitive content/ID substring
 and exact category. Instances copy content and keep a provenance template ID;
@@ -193,8 +193,11 @@ current instances of the same component can coexist without visual aliasing.
 Stored stroke/fill colors, fill patterns, paper-independent text height,
 bold/italic emphasis, and non-SVG symbol stroke width flow into the shared
 renderer for interactive views and fitted sheet/export scenes. Pinned SVG
-artwork currently retains its authored palette; instance palette overrides
-remain an implementation gap.
+artwork inherits its authored palette unless explicit `svg_palette` intent is
+present. Annotation state 7/native format 25/extraction 23 preserve that intent.
+Canvas and PDF use the same derived copy and palette-aware cache; unsupported
+source profiles refuse editing and block incorrect output. Reset restores the
+original source colors. No catalog or pinned SVG bytes are rewritten.
 
 Area overrides additionally support optional paper outline widths (0.05–10 mm)
 and hatch scales (0.1–10). Old records without these fields retain their defaults.

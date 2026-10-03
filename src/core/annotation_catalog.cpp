@@ -64,6 +64,28 @@ void color(const std::string& c) {
     check(c.size() == 7 && c[0] == '#' && c.find_first_not_of("0123456789abcdefABCDEF", 1) == std::string::npos,
           "Color must be #RRGGBB");
 }
+void svg_palette(const SymbolSvgPalette& palette) {
+    check(palette.profile == "white-outline-2", "Unsupported SVG palette profile");
+    color(palette.outline_color);
+    color(palette.surface_color);
+}
+json encode_svg_palette(const SymbolSvgPalette& palette) {
+    return {{"version", 1}, {"profile", palette.profile},
+        {"outline_color", palette.outline_color}, {"surface_color", palette.surface_color}};
+}
+SymbolSvgPalette decode_svg_palette(const json& value) {
+    check(value.is_object() && value.size() == 4 && value.contains("version") &&
+              value.contains("profile") && value.contains("outline_color") && value.contains("surface_color"),
+          "Invalid SVG palette keys");
+    check(value.at("version").is_number_integer() && value.at("version") == 1,
+          "Unsupported SVG palette version");
+    check(value.at("profile").is_string() && value.at("outline_color").is_string() &&
+              value.at("surface_color").is_string(), "Invalid SVG palette field type");
+    SymbolSvgPalette palette{value.at("profile").get<std::string>(),
+        value.at("outline_color").get<std::string>(), value.at("surface_color").get<std::string>()};
+    svg_palette(palette);
+    return palette;
+}
 void style(const AnnotationStyle& s) {
     check(!s.font_family.empty() && s.font_family.size() <= 256, "Invalid font family");
     check(std::isfinite(s.text_height_metres) && s.text_height_metres > 0 &&
@@ -1079,12 +1101,17 @@ void validate_annotation_state(const AnnotationState& state, const std::vector<S
         auto it = std::find_if(catalog.begin(),catalog.end(),[&](const auto& s) { return s.id == symbol.symbol_id; });
         check(symbol.definition || it != catalog.end(), "Unknown symbol definition");
         check(!symbol.definition || symbol.definition->id == symbol.symbol_id, "Pinned symbol ID mismatch");
+        const auto& definition = symbol.definition ? *symbol.definition : *it;
+        if (symbol.svg_palette) {
+            check(definition.svg_asset.has_value(), "SVG palette requires an SVG-backed definition");
+            svg_palette(*symbol.svg_palette);
+        }
         validate_pinned_svg(symbol.pinned_svg);
         pinned_svg_bytes += symbol.pinned_svg.size();
         check(pinned_svg_bytes <= 33554432 &&
                   (symbol.pinned_svg.empty() || (symbol.definition && symbol.definition->svg_asset)),
               "Invalid pinned SVG payload");
-        (void)transformed_symbol_preview(symbol.definition ? *symbol.definition : *it, symbol);
+        (void)transformed_symbol_preview(definition, symbol);
     }
     std::set<std::pair<std::string,std::string>> targets;
     for (const auto& o : state.overrides) {
@@ -1124,7 +1151,9 @@ json encode_annotation_state(const AnnotationState& state, const std::vector<Sym
     const auto wall_dimensions = std::any_of(state.overrides.begin(),state.overrides.end(),
         [](const auto& value){return value.target_kind == "wall_dimension" ||
             value.paper_text_height_mm.has_value() || value.plan_label_rotation_radians.has_value();});
-    json j{{"version",wall_dimensions ? 6 : model_plan ? 5 : label_placements ? 4 : 3},{"catalog_revision",kSymbolCatalogRevision},
+    const auto svg_palettes = std::any_of(state.symbols.begin(), state.symbols.end(),
+        [](const auto& symbol) { return symbol.svg_palette.has_value(); });
+    json j{{"version",svg_palettes ? 7 : wall_dimensions ? 6 : model_plan ? 5 : label_placements ? 4 : 3},{"catalog_revision",kSymbolCatalogRevision},
            {"labels",json::array()},{"symbols",json::array()},{"overrides",json::array()}};
     for (const auto& l : state.labels) {
         json label{{"id",l.id},{"template_id",l.template_id},{"content",l.content},
@@ -1140,6 +1169,7 @@ json encode_annotation_state(const AnnotationState& state, const std::vector<Sym
             {"definition",encode_symbol_catalog_manifest({definition}).at("entries").at(0)},
             {"pinned_svg",s.pinned_svg}, {"width_scale",s.width_scale}, {"depth_scale",s.depth_scale},
             {"flip_horizontal",s.flip_horizontal}, {"flip_vertical",s.flip_vertical}});
+        if (s.svg_palette) j["symbols"].back()["svg_palette"] = encode_svg_palette(*s.svg_palette);
     }
     for (const auto& o : state.overrides) {
         json value{{"target_kind",o.target_kind},{"target_id",o.target_id},
@@ -1160,7 +1190,8 @@ AnnotationState decode_annotation_state(const json& j, const std::vector<SymbolD
     try {
         check(j.at("version").is_number_integer() &&
                   (j.at("version") == 1 || j.at("version") == 2 ||
-                   j.at("version") == 3 || j.at("version") == 4 || j.at("version") == 5 || j.at("version") == 6),
+                   j.at("version") == 3 || j.at("version") == 4 || j.at("version") == 5 ||
+                   j.at("version") == 6 || j.at("version") == 7),
               "Unsupported annotation version");
         const bool pinned = j.at("version") != 1;
         const bool independent_transform = j.at("version").get<int>() >= 3;
@@ -1181,7 +1212,10 @@ AnnotationState decode_annotation_state(const json& j, const std::vector<SymbolD
                 decode_placement(l.at("placement")),l.at("visible").get<bool>(),l.value("model_plan",false)});
         }
         for (const auto& s : j.at("symbols")) {
-            check(s.is_object() && s.size() == (independent_transform ? 11 : pinned ? 7 : 5),
+            const bool has_palette = s.contains("svg_palette");
+            check(!has_palette || j.at("version") == 7, "SVG palette requires annotation version 7");
+            check(s.is_object() && s.size() == (independent_transform ? 11 : pinned ? 7 : 5) +
+                      (has_palette ? 1 : 0),
                   "Invalid symbol instance keys");
             SymbolInstance instance{s.at("id").get<std::string>(), s.at("symbol_id").get<std::string>(),
                 decode_placement(s.at("placement")),decode_style(s.at("style")),s.at("visible").get<bool>()};
@@ -1191,6 +1225,7 @@ AnnotationState decode_annotation_state(const json& j, const std::vector<SymbolD
                 instance.flip_horizontal = s.at("flip_horizontal").get<bool>();
                 instance.flip_vertical = s.at("flip_vertical").get<bool>();
             }
+            if (has_palette) instance.svg_palette = decode_svg_palette(s.at("svg_palette"));
             if (pinned) {
                 const auto& d = s.at("definition");
                 SymbolDefinition definition;

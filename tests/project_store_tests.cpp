@@ -9,6 +9,7 @@
 #include "sketch/constraint_wall_edit.hpp"
 #include "sketch/wall_measurement.hpp"
 #include "sketch/sheet_view_entity_codec.hpp"
+#include "sketch/annotation_entity_codec.hpp"
 #include "support/noninteractive_errors.hpp"
 #include "support/redraw_angle_fixture.hpp"
 
@@ -2775,6 +2776,55 @@ void test_view_appearance_reader_floor_and_source_integrity() {
         "missing view appearance source is rejected on admission");
 }
 
+void test_svg_palette_reader_floor() {
+    TempDirectory temp;const auto catalog=sketch::default_symbol_catalog();
+    const auto definition=std::find_if(catalog.begin(),catalog.end(),[](const auto& value){return value.svg_asset.has_value();});
+    require(definition!=catalog.end(),"palette storage fixture has SVG source");
+    sketch::SymbolInstance symbol{"palette-symbol",definition->id};symbol.definition=*definition;
+    const auto artwork=std::filesystem::path(__FILE__).parent_path().parent_path()/"assets"/definition->svg_asset->relative_path;
+    std::ifstream input(artwork,std::ios::binary);require(input.good(),"palette fixture reads actual catalog artwork");
+    symbol.pinned_svg=std::string(std::istreambuf_iterator<char>(input),{});
+    sketch::AnnotationState state;state.symbols.push_back(symbol);
+    auto owner=sketch::make_annotation_entity("palette-owner",state);
+    auto document=Document::create({owner});
+    require(ProjectStore::required_format_version(document.snapshot())==1,"absent SVG palette retains legacy native floor");
+    auto preserved=owner;preserved.properties["state"]["version"]=7;
+    require(ProjectStore::required_format_version(Document::create({preserved}).snapshot())==25,"raw annotation7 retains reader25 even when palette absent");
+    state.symbols[0].svg_palette=sketch::SymbolSvgPalette{};
+    owner=sketch::make_annotation_entity(owner.id,state);
+    document.apply(ApplyEntityChanges{document.revision(),{EntityChange::upsert(owner)},{},"Author explicit library-valued colors"});
+    const auto head=document.snapshot();auto deleted=Document::fork(head);
+    sketch::ProjectWorkspace palette_workspace(head);
+    const auto palette_capture=palette_workspace.capture();
+    const auto palette_history=sketch::capture_workspace_history_record(palette_capture);
+    sketch::RecoveryLedger palette_ledger{{"palette-history","workspace_history",
+        sketch::encode_workspace_history_record(palette_capture.document(),palette_history,std::nullopt)}};
+    const auto palette_archive_path=temp.path/"palette-archive.bldproj";
+    (void)ProjectStore::save_archive(palette_archive_path,{palette_capture.document(),palette_ledger,sketch::ArchiveRole::ordinary});
+    const auto palette_archive=ProjectStore::load_archive(palette_archive_path,sketch::ArchiveRole::ordinary);
+    require(palette_archive.supported() && palette_archive.archive->document().entities()==head.entities() &&
+        palette_archive.archive->recovery().size()==1 &&
+        palette_archive.archive->recovery().front().record_id==palette_ledger.front().record_id &&
+        palette_archive.archive->recovery().front().record_kind==palette_ledger.front().record_kind &&
+        palette_archive.archive->recovery().front().envelope==palette_ledger.front().envelope &&
+        ProjectStore::required_format_version(palette_archive.archive->document())==25,
+        "recovery archive preserves palette intent, exact source artwork, history ledger and reader25");
+    deleted.apply(ApplyEntityChanges{deleted.revision(),{EntityChange::erase(owner.id)},{},"Delete palette owner"});
+    document.undo(document.revision());
+    for(const auto& snapshot:{head,document.snapshot(),deleted.snapshot()}) {
+        require(ProjectStore::required_format_version(snapshot)==25,"active, undone and deleted palette history needs native25");
+        const auto path=temp.path/("palette-"+sketch::make_stable_id()+".bldproj");
+        (void)ProjectStore::save(path,snapshot);const auto restored=ProjectStore::load(path).document.snapshot();
+        require(restored.entities()==snapshot.entities() && restored.history().size()==snapshot.history().size(),"palette and exact artwork reopen with retained history");
+        execute_sql(path,"PRAGMA user_version=24; UPDATE metadata SET value='24' WHERE key='format_version'");
+        rewrite_logical_digest(path);const auto hash=ProjectStore::file_sha256(path);
+        require_error([&]{(void)ProjectStore::load(path);},StorageErrorCode::unsupported_format,"a recomputed digest cannot downgrade palette intent");
+        require(ProjectStore::file_sha256(path)==hash,"refused palette downgrade preserves source bytes");
+    }
+    auto vendor=entity("palette-vendor","generic",owner.properties);
+    require(ProjectStore::required_format_version(Document::create({vendor}).snapshot())==1,"vendor palette collision stays opaque");
+}
+
 void test_native_room_topology_is_validated_on_restore() {
     TempDirectory temp;
     const auto path = temp.path / "room.bldproj";
@@ -2806,6 +2856,7 @@ int main() {
     sketch::testing::noninteractive_errors();
     try {
         test_view_appearance_reader_floor_and_source_integrity();
+        test_svg_palette_reader_floor();
         test_ansi_appraisal_reader_floor_retains_history();
         test_automatic_angle_redraw_reader_floor();
         test_rigid_group_storage_and_history_floors();

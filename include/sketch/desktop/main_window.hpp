@@ -9,6 +9,7 @@
 #include "sketch/assistance_engine.hpp"
 #include "sketch/workspace_accessibility.hpp"
 #include "sketch/text_library.hpp"
+#include "sketch/annotation_catalog.hpp"
 
 #include <QMainWindow>
 #include <QString>
@@ -400,6 +401,10 @@ public:
     // a bounded, versioned JSON payload. Clipboard operations never contact a
     // service and do not change document history until paste or cut commits.
     [[nodiscard]] bool copySelection();
+    // Presentation-only SVG colors; absence restores the pinned library art.
+    [[nodiscard]] bool editSymbolSvgPalette(const QString& symbol_id,
+        std::optional<SymbolSvgPalette> palette,
+        std::optional<Revision> expected_revision = std::nullopt);
     [[nodiscard]] bool cutSelection();
     [[nodiscard]] bool pasteSelection();
     // Deletes the selected semantic graph in one guarded, undoable command.

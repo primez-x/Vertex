@@ -11,8 +11,10 @@
 #include "sketch/wall_measurement.hpp"
 #include "sketch/document_digest.hpp"
 #include "sketch/sheet_view_entity_codec.hpp"
+#include "sketch/annotation_entity_codec.hpp"
 #include "support/noninteractive_errors.hpp"
 #include "support/redraw_angle_fixture.hpp"
+#include <algorithm>
 #include <fstream>
 #include <iostream>
 #include <iterator>
@@ -138,6 +140,23 @@ void test_translation_export(const std::filesystem::path& root) {
         batch_json.at("revisions")[constraint_revision].at("boundary_constraint_changes") == sketch::command_to_json(later_constraint) &&
         !batch_json.at("revisions").back().contains("boundary_translations"),
         "exchange must retain exact mixed proofs only on their command rows");
+}
+void test_svg_palette_export_floor(const std::filesystem::path& root) {
+  const auto catalog=sketch::default_symbol_catalog();
+  const auto definition=std::find_if(catalog.begin(),catalog.end(),[](const auto& value){return value.svg_asset.has_value();});
+  check(definition!=catalog.end(),"palette export fixture has SVG definition");
+  sketch::SymbolInstance symbol{"palette-symbol",definition->id};symbol.definition=*definition;symbol.svg_palette=sketch::SymbolSvgPalette{};
+  sketch::AnnotationState state;state.symbols.push_back(symbol);
+  auto owner=sketch::make_annotation_entity("palette-owner",state);auto document=sketch::Document::create({});
+  document.apply(sketch::ApplyEntityChanges{0,{sketch::EntityChange::upsert(owner)},{},"SVG colors"});
+  const auto head=document.snapshot();auto deleted=sketch::Document::fork(head);
+  deleted.apply(sketch::ApplyEntityChanges{deleted.revision(),{sketch::EntityChange::erase(owner.id)},{},"Delete palette"});
+  document.undo(document.revision());int sequence=0;
+  for(const auto& snapshot:{head,document.snapshot(),deleted.snapshot()}) {
+    const auto destination=root/("svg-palette-"+std::to_string(sequence++));sketch::extract_project(snapshot,destination);
+    std::ifstream input(destination/"project.json");const auto encoded=nlohmann::json::parse(input);
+    check(encoded.at("exchange_version")==23 && encoded.at("revisions").size()==snapshot.history().size(),"all palette history requires extraction23");
+  }
 }
 void test_view_appearance_export_floor(const std::filesystem::path& root) {
   sketch::CoordinatedView plan{"plan", "Plan"};
@@ -1112,6 +1131,7 @@ int main() {
           "current, undone and deleted appraisal evidence must advertise exchange19 without dropping history");
     }
     test_view_appearance_export_floor(root);
+    test_svg_palette_export_floor(root);
     test_translation_export(root);
     test_reviewed_source_export_floor(root);
     test_automatic_angle_redraw_export_floor(root);

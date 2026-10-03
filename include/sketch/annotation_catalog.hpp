@@ -103,6 +103,14 @@ struct SymbolDefinition {
     int catalog_revision{kSymbolCatalogRevision};
 };
 
+struct SymbolSvgPalette {
+    std::string profile{"white-outline-2"};
+    std::string outline_color{"#111111"};
+    std::string surface_color{"#ffffff"};
+
+    bool operator==(const SymbolSvgPalette&) const = default;
+};
+
 struct SymbolInstance {
     std::string id;
     std::string symbol_id;
@@ -120,6 +128,8 @@ struct SymbolInstance {
     double depth_scale{1.0};
     bool flip_horizontal{};
     bool flip_vertical{};
+    // Explicit SVG presentation intent; absence retains the original artwork.
+    std::optional<SymbolSvgPalette> svg_palette;
 };
 
 struct AnnotationState {

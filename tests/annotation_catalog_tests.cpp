@@ -24,6 +24,188 @@ int main() {
     using namespace sketch;
     const auto catalog = default_symbol_catalog();
     {
+        const auto svg = filter_symbol_catalog(catalog, "Basin Oval", "01_bathroom").front();
+        AnnotationState palette_state;
+        palette_state.symbols.push_back({"palette-symbol", svg.id,
+            {{4, 7}, 0.8, 1.5, "ground"}, {}, false});
+        auto& symbol = palette_state.symbols.front();
+        symbol.definition = svg;
+        symbol.pinned_svg = "<svg xmlns=\"http://www.w3.org/2000/svg\"><path fill=\"#ffffff\" d=\"M0 0L1 1\"/></svg>";
+        symbol.width_scale = 1.7;
+        symbol.depth_scale = 0.4;
+        symbol.flip_horizontal = symbol.flip_vertical = true;
+        const auto original_wire = encode_annotation_state(palette_state, catalog);
+        require(original_wire.at("version") == 3 && original_wire["symbols"][0].size() == 11 &&
+                !original_wire["symbols"][0].contains("svg_palette") &&
+                !decode_annotation_state(original_wire, catalog).symbols.front().svg_palette,
+            "Absent palettes must retain version 3 representation without materializing defaults");
+        const auto original_geometry = transformed_symbol_preview(svg, symbol);
+        auto palette_wire = original_wire;
+        palette_wire["version"] = 7;
+        palette_wire["symbols"][0]["svg_palette"] = {{"version", 1},
+            {"profile", "white-outline-2"}, {"outline_color", "#123456"},
+            {"surface_color", "#AbCdEf"}};
+        const auto palette_decoded = decode_annotation_state(palette_wire, catalog);
+        require(palette_decoded.symbols.front().svg_palette ==
+                    SymbolSvgPalette{"white-outline-2", "#123456", "#AbCdEf"} &&
+                encode_annotation_state(palette_decoded, catalog) == palette_wire,
+            "Explicit SVG palette must survive version 7 decode and re-encode");
+        auto without_palette = palette_wire;
+        without_palette["version"] = 3;
+        without_palette["symbols"][0].erase("svg_palette");
+        require(without_palette == original_wire &&
+                palette_decoded.symbols.front().pinned_svg == symbol.pinned_svg &&
+                palette_wire["symbols"][0]["definition"] == original_wire["symbols"][0]["definition"],
+            "Palette metadata must preserve exact pinned bytes, hash, definition and instance properties");
+        const auto palette_geometry = transformed_symbol_preview(svg, palette_decoded.symbols.front());
+        require(palette_geometry.size() == original_geometry.size(), "Palette changed preview stroke count");
+        for (std::size_t index = 0; index < original_geometry.size(); ++index) {
+            require(palette_geometry[index].start.x == original_geometry[index].start.x &&
+                    palette_geometry[index].start.y == original_geometry[index].start.y &&
+                    palette_geometry[index].end.x == original_geometry[index].end.x &&
+                    palette_geometry[index].end.y == original_geometry[index].end.y,
+                "Palette must preserve rotated, resized and mirrored geometry exactly");
+        }
+        symbol.svg_palette = SymbolSvgPalette{};
+        const auto defaults_wire = encode_annotation_state(palette_state, catalog);
+        require(defaults_wire.at("version") == 7 && defaults_wire["symbols"][0]["svg_palette"] ==
+                nlohmann::json({{"version", 1}, {"profile", "white-outline-2"},
+                    {"outline_color", "#111111"}, {"surface_color", "#ffffff"}}) &&
+                decode_annotation_state(defaults_wire, catalog).symbols.front().svg_palette == SymbolSvgPalette{},
+            "Explicit default palette colors must remain explicit author intent");
+        auto mixed = palette_state;
+        mixed.symbols.push_back({"procedural-sibling", catalog.front().id, {}, {}, true});
+        const auto mixed_wire = encode_annotation_state(mixed, catalog);
+        require(mixed_wire["symbols"][0].size() == 12 && mixed_wire["symbols"][1].size() == 11 &&
+                !mixed_wire["symbols"][1].contains("svg_palette") &&
+                encode_annotation_state(decode_annotation_state(mixed_wire, catalog), catalog) == mixed_wire,
+            "Version 7 permits palette and uncolored siblings without adding defaults");
+        auto v7_absent = original_wire;
+        v7_absent["version"] = 7;
+        require(encode_annotation_state(decode_annotation_state(v7_absent, catalog), catalog) == original_wire,
+            "Version 7 without an explicit palette retains the legacy encoder version selection");
+        for (const auto version : {3, 4, 5, 6}) {
+            AnnotationState legacy_state = palette_state;
+            legacy_state.symbols.front().svg_palette.reset();
+            if (version >= 4) {
+                legacy_state.overrides.push_back({"area", "area-1", {}, true});
+                legacy_state.overrides.front().plan_label_offset = Vec2{1, 2};
+            }
+            if (version >= 5) {
+                legacy_state.labels.push_back(instantiate_label(default_label_templates().front(), "label-1"));
+                legacy_state.labels.front().model_plan = true;
+            }
+            if (version >= 6) legacy_state.overrides.push_back({"wall_dimension", "wall-1", {}, true});
+            const auto old_wire = encode_annotation_state(legacy_state, catalog);
+            require(old_wire.at("version") == version && !old_wire["symbols"][0].contains("svg_palette") &&
+                    encode_annotation_state(decode_annotation_state(old_wire, catalog), catalog) == old_wire,
+                "Palette absence must preserve each existing version selection and roundtrip");
+            legacy_state.symbols.front().svg_palette = SymbolSvgPalette{};
+            const auto new_wire = encode_annotation_state(legacy_state, catalog);
+            require(new_wire.at("version") == 7 &&
+                    encode_annotation_state(decode_annotation_state(new_wire, catalog), catalog) == new_wire,
+                "Explicit palette takes version 7 precedence over existing presentation features");
+        }
+        for (int version = 1; version <= 6; ++version) {
+            auto old = palette_wire;
+            old["version"] = version;
+            if (version <= 2)
+                for (const auto* key : {"width_scale", "depth_scale", "flip_horizontal", "flip_vertical"})
+                    old["symbols"][0].erase(key);
+            if (version == 1) {
+                old["symbols"][0].erase("definition");
+                old["symbols"][0].erase("pinned_svg");
+            }
+            rejected([&] { (void)decode_annotation_state(old, catalog); });
+        }
+        const auto reject_palette = [&](const nlohmann::json& value) {
+            auto malformed = palette_wire;
+            malformed["symbols"][0]["svg_palette"] = value;
+            rejected([&] { (void)decode_annotation_state(malformed, catalog); });
+        };
+        const auto envelope = palette_wire["symbols"][0]["svg_palette"];
+        for (const auto value : {nlohmann::json(nullptr), nlohmann::json(true), nlohmann::json(1),
+                nlohmann::json("palette"), nlohmann::json::array(), nlohmann::json::object()})
+            reject_palette(value);
+        for (const auto* field : {"version", "profile", "outline_color", "surface_color"}) {
+            auto malformed = envelope;
+            malformed.erase(field);
+            reject_palette(malformed);
+            malformed["unknown"] = "replacement";
+            reject_palette(malformed);
+        }
+        auto extra = envelope;
+        extra["unknown"] = true;
+        reject_palette(extra);
+        for (const auto value : {nlohmann::json(0), nlohmann::json(2), nlohmann::json(-1),
+                nlohmann::json(1.0), nlohmann::json("1"), nlohmann::json(true), nlohmann::json(nullptr)}) {
+            auto malformed = envelope;
+            malformed["version"] = value;
+            reject_palette(malformed);
+        }
+        for (const auto* field : {"profile", "outline_color", "surface_color"}) {
+            for (const auto value : {nlohmann::json(nullptr), nlohmann::json(123), nlohmann::json(true),
+                    nlohmann::json::array(), nlohmann::json::object()}) {
+                auto malformed = envelope;
+                malformed[field] = value;
+                reject_palette(malformed);
+            }
+        }
+        for (const auto* profile : {"", "white-outline-1", "WHITE-OUTLINE-2", "white-outline-2 "}) {
+            auto malformed = envelope;
+            malformed["profile"] = profile;
+            reject_palette(malformed);
+            auto invalid = palette_state;
+            invalid.symbols.front().svg_palette->profile = profile;
+            rejected([&] { validate_annotation_state(invalid, catalog); });
+        }
+        for (const auto* field : {"outline_color", "surface_color"}) {
+            for (const auto* value : {"", "red", "#123", "123456", "#12345678", "#12G456", "#123456 "}) {
+                auto malformed = envelope;
+                malformed[field] = value;
+                reject_palette(malformed);
+                auto invalid = palette_state;
+                if (std::string_view(field) == "outline_color") invalid.symbols.front().svg_palette->outline_color = value;
+                else invalid.symbols.front().svg_palette->surface_color = value;
+                rejected([&] { validate_annotation_state(invalid, catalog); });
+            }
+        }
+        auto unknown_symbol_key = palette_wire;
+        unknown_symbol_key["symbols"][0]["unknown"] = true;
+        rejected([&] { (void)decode_annotation_state(unknown_symbol_key, catalog); });
+        unknown_symbol_key["symbols"][0].erase("id");
+        rejected([&] { (void)decode_annotation_state(unknown_symbol_key, catalog); });
+        auto procedural_wire = mixed_wire;
+        procedural_wire["symbols"][1]["svg_palette"] = envelope;
+        rejected([&] { (void)decode_annotation_state(procedural_wire, catalog); });
+        auto procedural_state = mixed;
+        procedural_state.symbols.back().svg_palette = SymbolSvgPalette{};
+        rejected([&] { validate_annotation_state(procedural_state, catalog); });
+        auto saved_procedural = palette_state;
+        saved_procedural.symbols.front().definition->svg_asset.reset();
+        saved_procedural.symbols.front().pinned_svg.clear();
+        rejected([&] { validate_annotation_state(saved_procedural, catalog); });
+        auto resolved_svg = palette_state;
+        resolved_svg.symbols.front().definition.reset();
+        resolved_svg.symbols.front().pinned_svg.clear();
+        require(encode_annotation_state(resolved_svg, catalog).at("version") == 7,
+            "Catalog SVG definitions qualify without requiring an existing saved snapshot");
+        require(encode_annotation_state(decode_annotation_state(palette_wire, {}), {}) == palette_wire,
+            "Saved SVG palette intent survives removal of the installed catalog definition");
+        auto stale_catalog = svg;
+        ++stale_catalog.artwork_revision;
+        auto stale_palette = palette_state;
+        stale_palette.symbols.front().pinned_svg.clear();
+        validate_annotation_state(stale_palette, {stale_catalog});
+        require(!resolved_symbol_definition(stale_palette.symbols.front(), {stale_catalog}).svg_asset &&
+                stale_palette.symbols.front().svg_palette == SymbolSvgPalette{},
+            "Unavailable stale SVG source preserves saved palette intent for explicit migration");
+        const auto migrated = migrate_symbol_definition(stale_palette, "palette-symbol", {stale_catalog}, "<svg/>");
+        require(migrated.symbols.front().svg_palette == SymbolSvgPalette{} &&
+                !symbol_requires_migration(migrated.symbols.front(), {stale_catalog}),
+            "Explicit artwork migration preserves palette intent");
+    }
+    {
         AnnotationState dimension_state;
         PresentationOverride dimension;
         dimension.target_kind="wall_dimension";
@@ -606,7 +788,7 @@ int main() {
     rejected([&]{(void)placed_symbol_preview(catalog.front(),{{},0,0.001});});
     auto malformed = encoded; malformed["version"] = 1.0;
     rejected([&]{(void)decode_annotation_state(malformed,catalog);});
-    malformed = encoded; malformed["version"] = 7;
+    malformed = encoded; malformed["version"] = 8;
     rejected([&]{(void)decode_annotation_state(malformed,catalog);});
     malformed = encoded; malformed["labels"][0]["visible"] = "false";
     rejected([&]{(void)decode_annotation_state(malformed,catalog);});
