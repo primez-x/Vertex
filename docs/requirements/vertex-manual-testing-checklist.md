@@ -1939,8 +1939,8 @@ drawing; switching modes does not change existing geometry.
   - Notes: ______________________________
 
 - [ ] **U332 — Keep below-grade, low ceilings and ADUs out of primary GLA**
-  - Steps: With ANSI-oriented appraisal enabled, declare a finished area with a flat 6 ft 11 in ceiling. Inspect its category and reason. Change it to 7 ft and inspect again. Mark its floor partly below grade. Add another finished measured area and identify it as an ADU, then check Details and Full report. Undo the declarations one at a time.
-  - Expected: Low flat ceilings report nonstandard finished area with a reason; 7 ft satisfies the implemented flat-height rule. Any partly below floor is reported wholly below grade. ADU area stays separate from primary GLA. All measurements and category changes update without a separate Calculate action.
+  - Steps: With ANSI-oriented appraisal enabled, declare a finished area with a flat 6 ft 11 in ceiling. Inspect its category and reason. Change it to 7 ft and inspect again. Choose tenth-foot acquisition and try observed heights of 6.96 ft, 6.85 ft and 6.951 ft; inspect the Facts preview, Details and exported Full report PDF. Switch acquisition to inches while retaining 6.951 ft. Save/reopen and undo the changes. Mark its floor partly below grade. Add another finished measured area and identify it as an ADU, then check the separate totals.
+  - Expected: Facts shows the rounded height used for classification; Details and PDF also retain the recorded observation. Tenth-foot acquisition reports 6.96 ft as 7.0 ft and 6.85 ft as 6.9 ft. The first passes the flat-height rule; the second remains nonstandard finished. At 6.951 ft, tenth-foot acquisition reaches 7.0 ft while inch acquisition reaches 6 ft 11 in and remains nonstandard. Changing precision does not replace the original observation. Undo and reopening preserve the facts and resulting totals. Any partly below floor is reported wholly below grade; ADU area stays separate from primary GLA. Totals update without a separate Calculate action.
   - Result: Not tested
   - Notes: ______________________________
 

@@ -180,7 +180,9 @@ void ansi_report_html_pdf_canonical_units_and_evidence() {
         "ANSI HTML uses canonical areas and tenth-foot dimensions with clearly supplemental metric display");
     require(html.contains("Interior inspected") && html.contains("Direct measurement") && html.contains("Inch") &&
         html.contains("Year-round suitable") && html.contains("Finish matches dwelling") && html.contains("Primary") &&
-        html.contains("8.0 ft") && html.contains("normative",Qt::CaseInsensitive) && html.contains("&lt;verified&gt;"),
+        html.contains("Recorded minimum ceiling height") && html.contains("8 ft") &&
+        html.contains("Rounded minimum ceiling height") && html.contains("8 ft 0 in (nearest inch)") &&
+        html.contains("normative",Qt::CaseInsensitive) && html.contains("&lt;verified&gt;"),
         "ANSI HTML exposes source declarations and truthful escaped validation limitations");
     QTemporaryDir directory;require(directory.isValid(),"ANSI PDF fixture directory");QString error;
     const auto path=directory.filePath("ansi-measurement.pdf");

@@ -11,6 +11,14 @@ classifies qualifying above/below-grade areas, applies geometric deductions and
 records calculation provenance. A qualified report means those implemented
 rules have sufficient inputs. It does not mean ANSI approval.
 
+The 2026-10-03 flat-height correction uses the declared acquisition increment
+before the seven-foot eligibility comparison, while preserving the recorded
+height. Facts previews the rounded height; Details and PDF distinguish it from
+the observation. This follows the concrete height examples in Fannie Mae's
+[September 2023 ANSI Answers, page 6](https://singlefamily.fanniemae.com/media/36856/display).
+It does not resolve the separate sloped-room denominator or final publisher
+standard qualification.
+
 Fannie Mae requires ANSI Z765-2021 for relevant single-family appraisal
 measurements, calculations and reporting. Apartment/multifamily buildings need
 different treatment, including interior-perimeter measurement of apartment

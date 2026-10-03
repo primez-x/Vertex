@@ -312,6 +312,26 @@ std::optional<AcquisitionIncrement> parse_acquisition_increment(std::string_view
     if (token == "tenth_foot") return AcquisitionIncrement::tenth_foot;
     return std::nullopt;
 }
+double rounded_ansi_ceiling_height_metres(double observed_metres, AcquisitionIncrement increment) {
+    double step_metres;
+    switch (increment) {
+    case AcquisitionIncrement::inch: step_metres = 0.0254; break;
+    case AcquisitionIncrement::tenth_foot: step_metres = 0.03048; break;
+    default: throw std::invalid_argument("Unknown acquisition increment");
+    }
+    if (!std::isfinite(observed_metres) || observed_metres < 0)
+        throw std::invalid_argument("Ceiling height must be finite and nonnegative");
+    const double units = observed_metres / step_metres;
+    // Beyond this bound double cannot distinguish every consecutive increment.
+    constexpr double maximum_increment_count = 9007199254740991.0; // 2^53 - 1
+    if (!std::isfinite(units) || units > maximum_increment_count)
+        throw std::invalid_argument("Ceiling height cannot be represented at acquisition precision");
+    const double rounded_units = std::round(units);
+    const double rounded_metres = rounded_units * step_metres;
+    if (rounded_units > maximum_increment_count || !std::isfinite(rounded_metres))
+        throw std::invalid_argument("Rounded ceiling height cannot be represented at acquisition precision");
+    return rounded_units == 0 ? 0.0 : rounded_metres;
+}
 std::string_view dwelling_identity_name(DwellingIdentity value) {
     switch (value) { case DwellingIdentity::primary: return "primary";
     case DwellingIdentity::attached_adu: return "attached_adu";
@@ -393,9 +413,18 @@ AppraisalQualification derive_ansi(const AppraisalFacts& f, ExactRational factor
                 if (*a.ceiling.kind == CeilingKind::flat) {
                     if (!a.ceiling.minimum_height_m || !std::isfinite(*a.ceiling.minimum_height_m) || *a.ceiling.minimum_height_m < 0)
                         issue("ceiling_height_missing", "Flat ceilings require a finite nonnegative minimum height in metres.");
-                    else {
-                        nonstandard = *a.ceiling.minimum_height_m < 2.1336;
-                        if (nonstandard) r.rule_notes.push_back("Nonstandard finished: minimum flat ceiling height is below seven feet.");
+                    else if (a.measurement.acquisition_increment) {
+                        try {
+                            const double rounded_height = rounded_ansi_ceiling_height_metres(
+                                *a.ceiling.minimum_height_m, *a.measurement.acquisition_increment);
+                            nonstandard = rounded_height < 2.1336;
+                            r.rule_notes.push_back(*a.measurement.acquisition_increment == AcquisitionIncrement::inch ?
+                                "Flat ceiling height compared with seven feet after nearest-inch acquisition rounding; original observed height retained." :
+                                "Flat ceiling height compared with seven feet after nearest-tenth-foot acquisition rounding; original observed height retained.");
+                            if (nonstandard) r.rule_notes.push_back("Nonstandard finished: acquisition-rounded minimum flat ceiling height is below seven feet.");
+                        } catch (const std::invalid_argument&) {
+                            issue("ceiling_height_invalid", "Flat ceiling height cannot be represented at the declared acquisition precision.");
+                        }
                     }
                 } else if (*a.ceiling.kind == CeilingKind::sloped) {
                     const auto high = a.ceiling.at_least_7ft_area_m2, room = a.ceiling.room_floor_area_m2;

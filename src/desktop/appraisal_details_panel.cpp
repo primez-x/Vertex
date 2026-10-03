@@ -1,4 +1,5 @@
 #include "sketch/desktop/appraisal_details_panel.hpp"
+#include "sketch/desktop/appraisal_report_dialog.hpp"
 
 #include <QFont>
 #include <QHeaderView>
@@ -123,7 +124,7 @@ struct AppraisalDetailsPanel::Impl {
             row(QStringLiteral("Finish matches dwelling"),boolean(value.finish_matches_dwelling))+
             row(QStringLiteral("Dwelling identity"),value.dwelling_identity?words(dwelling_identity_name(*value.dwelling_identity)):QStringLiteral("Undeclared"))+
             row(QStringLiteral("Ceiling type"),ceiling.kind?words(ceiling_kind_name(*ceiling.kind)):QStringLiteral("Undeclared"));
-        if(ceiling.minimum_height_m)rows+=row(QStringLiteral("Minimum ceiling height"),length(*ceiling.minimum_height_m));
+        rows+=appraisal_ceiling_height_rows(value);
         if(ceiling.at_least_7ft_area_m2)rows+=row(QStringLiteral("Ceiling area at least 7 ft"),area(*ceiling.at_least_7ft_area_m2));
         if(ceiling.room_floor_area_m2)rows+=row(QStringLiteral("Room floor area"),area(*ceiling.room_floor_area_m2));
         if(ceiling.kind==CeilingKind::sloped) {

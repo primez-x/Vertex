@@ -136,6 +136,56 @@ void ansi_declarations_and_canonical_reporting() {
     require(!report.qualified, "Stored ANSI evidence cannot substitute for missing strict legacy declarations");
 }
 
+void ansi_flat_ceiling_precision_changes_contributions() {
+    using Category = sketch::AppraisalAreaCategory;
+    struct HeightCase { double feet; const char* increment; bool standard; };
+    const HeightCase cases[]{
+        {6.96, "tenth_foot", true}, {6.85, "tenth_foot", false},
+        {6.96, "inch", true}, {6.85, "inch", false},
+        {6.951, "tenth_foot", true}, {6.951, "inch", false}};
+    for (const auto& item : cases) {
+        auto entities = ansi_fixture_entities();
+        const double observed = item.feet * 0.3048;
+        entities.front().properties["appraisal_policy"]["ansi"]["acquisition_increment"] = item.increment;
+        entities.back().properties["appraisal_facts"]["ansi"]["ceiling"]["minimum_height_m"] = observed;
+        const auto document = sketch::Document::create(std::move(entities));
+        const auto before = document.snapshot();
+        const auto report = sketch::build_appraisal_document_report(before, "property-1");
+        const auto& boundary = status(report, "area-1");
+        const auto category = item.standard ? Category::above_grade_finished : Category::above_grade_nonstandard_finished;
+        require(report.qualified && report.calculation && report.ansi_measurement &&
+            boundary.qualification.qualified && boundary.qualification.derived_category == category &&
+            boundary.facts && boundary.facts->ansi,
+            "Declared acquisition precision must determine the flat-height contribution category");
+        near(report.calculation->property.gla().total.square_metres, item.standard ? 9.290304 : 0.0, 1e-8,
+            "Rounded standard ceilings contribute to GLA and nonstandard ceilings contribute zero GLA");
+        near(report.calculation->property.by_category.at(category).total.square_metres, 9.290304, 1e-8,
+            "Ceiling classification must retain the complete physical area in its derived category");
+        near(*boundary.qualification.physical_square_metres, 9.290304, 1e-8,
+            "Acquisition height rounding must not alter measured geometry");
+        require(boundary.facts->ansi->ceiling.minimum_height_m == observed &&
+            sketch::acquisition_increment_name(*report.ansi_measurement->acquisition_increment) == item.increment &&
+            document.snapshot().entities() == before.entities(),
+            "Reporting must retain the original height and declared increment without rewriting source facts");
+    }
+    auto entities = ansi_fixture_entities();
+    entities.back().properties["appraisal_facts"]["ansi"]["ceiling"]["minimum_height_m"] = 6.96 * 0.3048;
+    entities.front().properties["appraisal_policy"]["ansi"].erase("acquisition_increment");
+    const auto report = sketch::build_appraisal_document_report(sketch::Document::create(entities).snapshot(), "property-1");
+    require(!report.qualified && !report.calculation && status(report, "area-1").measurement &&
+        !status(report, "area-1").qualification.derived_category,
+        "A valid low raw height with missing acquisition precision retains diagnostics while withholding totals");
+    for (const auto& invalid : std::vector<json>{-1.0, nullptr, "6.96"}) {
+        auto malformed = ansi_fixture_entities();
+        malformed.back().properties["appraisal_facts"]["ansi"]["ceiling"]["minimum_height_m"] = invalid;
+        const auto invalid_report = sketch::build_appraisal_document_report(
+            sketch::Document::create(std::move(malformed)).snapshot(), "property-1");
+        require(!invalid_report.qualified && !invalid_report.calculation &&
+            !status(invalid_report, "area-1").qualification.derived_category,
+            "Malformed stored height observations cannot create an eligible contribution");
+    }
+}
+
 void ansi_nested_partitions_and_ceiling_binding() {
     auto entities = ansi_fixture_entities();
     entities.back().properties["boundary"] = square(0, 0, 10);
@@ -774,6 +824,7 @@ int main() {
     try {
         qualified_document_recalculates_from_geometry();
         ansi_declarations_and_canonical_reporting();
+        ansi_flat_ceiling_precision_changes_contributions();
         ansi_nested_partitions_and_ceiling_binding();
         ansi_stairs_and_adu_totals();
         declaration_and_factor_failures_retain_physical_traces();

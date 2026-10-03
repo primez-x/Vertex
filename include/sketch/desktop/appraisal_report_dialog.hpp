@@ -13,6 +13,12 @@ namespace sketch::desktop {
 // Returns empty for rows without a square-metre area quantity.
 [[nodiscard]] QString appraisal_schedule_area_text(const ScheduleRow& row, bool metric);
 
+// Acquisition precision governs ceiling eligibility; recorded facts remain
+// untouched. Facts, Details and PDF use this same presentation.
+[[nodiscard]] QString appraisal_rounded_ceiling_height_text(
+    double observed_metres, AcquisitionIncrement increment);
+[[nodiscard]] QString appraisal_ceiling_height_rows(const AnsiAppraisalFacts& facts);
+
 // Readable bounded summary placement; overflow points to the complete report.
 void render_appraisal_summary_schedule(QPainter& painter,const QRectF& bounds,
     double pixels_per_mm,const std::vector<const ScheduleRow*>& rows,bool metric);

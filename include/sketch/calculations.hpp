@@ -95,6 +95,15 @@ enum class AcquisitionIncrement { inch, tenth_foot };
 enum class DwellingIdentity { primary, attached_adu, detached_adu, detached_other };
 enum class CeilingKind { flat, sloped, stairs };
 
+// Flat-ceiling comparison height at the declared acquisition precision.
+// Rounds the floating increment count; positive halfway counts round upward.
+// Original observations are not changed. Decimal-to-binary conversion can
+// displace other mathematically halfway observations from an exact count tie.
+// Invalid increments, nonfinite/negative heights and unrepresentable increment
+// counts throw invalid_argument; callers must explicitly supply precision.
+[[nodiscard]] double rounded_ansi_ceiling_height_metres(
+    double observed_metres, AcquisitionIncrement increment);
+
 #define SKETCH_DECLARE_FACT_TOKENS(Type, name) \
     [[nodiscard]] std::string_view name##_name(Type value); \
     [[nodiscard]] std::optional<Type> parse_##name(std::string_view token);

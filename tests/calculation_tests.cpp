@@ -157,8 +157,10 @@ void ansi_policy_tests() {
         "Exactly seven feet qualifies without legacy ceiling approval");
     facts.ansi->ceiling.minimum_height_m = std::nextafter(2.1336, 0.0);
     auto result = qualified(facts);
-    check(result.qualified && result.derived_category == AppraisalAreaCategory::above_grade_nonstandard_finished && !result.rule_notes.empty(),
-        "Below seven feet is nonstandard with a reason");
+    // Acquisition precision precedes the threshold: a one-ULP shortfall still
+    // records as seven feet to the declared nearest inch.
+    check(result.qualified && result.derived_category == AppraisalAreaCategory::above_grade_finished && !result.rule_notes.empty(),
+        "A height immediately below seven feet qualifies after recorded inch rounding");
     facts.ansi->ceiling.minimum_height_m = 2.1336;
     facts.access = AccessStatus::through_unfinished;
     check(qualified(facts).derived_category == AppraisalAreaCategory::above_grade_nonstandard_finished,
@@ -245,6 +247,116 @@ void ansi_policy_tests() {
     second.boundary = rectangle(2, 0, 1, 0.451 * 0.09290304);
     const auto totals = calculate_appraisal_areas({first, second}, profile);
     check(totals.property.gla().total.display.text == "1", "ANSI totals round once after summing unrounded physical areas");
+}
+
+void ansi_ceiling_rounding_helper_tests() {
+    using namespace sketch;
+    struct RoundedCase { double observed_metres; AcquisitionIncrement increment; double rounded_metres; };
+    // Expected acquisition heights are literal conversions of independently
+    // counted inches or tenths of a foot, not another rounding implementation.
+    const RoundedCase cases[]{
+        {6.96 * 0.3048, AcquisitionIncrement::tenth_foot, 2.1336},
+        {6.85 * 0.3048, AcquisitionIncrement::tenth_foot, 2.10312},
+        {6.96 * 0.3048, AcquisitionIncrement::inch, 2.1336},
+        {6.85 * 0.3048, AcquisitionIncrement::inch, 2.0828},
+        {6.951 * 0.3048, AcquisitionIncrement::tenth_foot, 2.1336},
+        {6.951 * 0.3048, AcquisitionIncrement::inch, 2.1082},
+        {0.01524, AcquisitionIncrement::tenth_foot, 0.03048},
+        {0.0127, AcquisitionIncrement::inch, 0.0254},
+        {0.0, AcquisitionIncrement::tenth_foot, 0.0},
+        {-0.0, AcquisitionIncrement::inch, 0.0},
+        {std::numeric_limits<double>::denorm_min(), AcquisitionIncrement::inch, 0.0}};
+    for (const auto& item : cases)
+        near(rounded_ansi_ceiling_height_metres(item.observed_metres, item.increment),
+            item.rounded_metres, 1e-12, "Shared ceiling rounding must report the declared acquisition increment");
+    struct Cutoff { double metres; AcquisitionIncrement increment; double lower_rounded_metres; };
+    for(const auto& cutoff : {Cutoff{2.11836,AcquisitionIncrement::tenth_foot,2.10312},
+                             Cutoff{2.1209,AcquisitionIncrement::inch,2.1082}}) {
+        near(rounded_ansi_ceiling_height_metres(std::nextafter(cutoff.metres,0.0),cutoff.increment),
+            cutoff.lower_rounded_metres,1e-12,"Represented value below the seven-foot acquisition cutoff stays below it");
+        near(rounded_ansi_ceiling_height_metres(cutoff.metres,cutoff.increment),2.1336,1e-12,
+            "Seven-foot acquisition cutoff rounds upward");
+        near(rounded_ansi_ceiling_height_metres(std::nextafter(cutoff.metres,std::numeric_limits<double>::infinity()),cutoff.increment),
+            2.1336,1e-12,"Represented value above the seven-foot acquisition cutoff remains qualifying");
+    }
+    for (const auto increment : {AcquisitionIncrement::inch, AcquisitionIncrement::tenth_foot}) {
+        for (const double invalid : {-1.0, std::numeric_limits<double>::quiet_NaN(),
+                 std::numeric_limits<double>::infinity(), std::numeric_limits<double>::max(), 1e15})
+            rejected([&] { (void)rounded_ansi_ceiling_height_metres(invalid, increment); });
+    }
+    rejected([] { (void)rounded_ansi_ceiling_height_metres(2.1336, static_cast<AcquisitionIncrement>(999)); });
+}
+
+void ansi_flat_ceiling_acquisition_tests() {
+    using namespace sketch;
+    const AppraisalPolicy policy{AppraisalPolicyKind::ansi_z765_2021, 1};
+    AppraisalFacts facts{PropertyKind::detached_single_family, MeasurementBasis::exterior,
+        GradeStatus::above, FinishStatus::finished, AccessStatus::direct_interior,
+        CeilingEligibility::unknown, AreaUse::dwelling, BoundaryRole::measured_area};
+    AnsiAppraisalFacts ansi;
+    ansi.measurement = {true, true, AcquisitionIncrement::inch, ""};
+    ansi.any_part_below_grade = false;
+    ansi.year_round_suitable = true;
+    ansi.finish_matches_dwelling = true;
+    ansi.dwelling_identity = DwellingIdentity::primary;
+    ansi.ceiling.kind = CeilingKind::flat;
+    facts.ansi = ansi;
+    const auto area = room("flat-room", rectangle(0, 0, 10, 10));
+    struct HeightCase { double feet; AcquisitionIncrement increment; bool standard; };
+    // Fannie Mae's September 2023 ANSI Answers example records 6.96 feet as
+    // seven feet and 6.85 feet as 6.9 feet with tenth-foot acquisition precision.
+    const HeightCase cases[]{
+        {6.96, AcquisitionIncrement::tenth_foot, true},
+        {6.85, AcquisitionIncrement::tenth_foot, false},
+        {6.96, AcquisitionIncrement::inch, true},
+        {6.85, AcquisitionIncrement::inch, false},
+        {6.951, AcquisitionIncrement::tenth_foot, true},
+        {6.951, AcquisitionIncrement::inch, false},
+        {6.94, AcquisitionIncrement::tenth_foot, false},
+        {6.94, AcquisitionIncrement::inch, false},
+        {7.0, AcquisitionIncrement::tenth_foot, true},
+        {7.0, AcquisitionIncrement::inch, true},
+        {7.01, AcquisitionIncrement::tenth_foot, true},
+        {7.01, AcquisitionIncrement::inch, true},
+        {0.0, AcquisitionIncrement::tenth_foot, false},
+        {0.0, AcquisitionIncrement::inch, false}};
+    for (const auto& item : cases) {
+        const double observed = item.feet * 0.3048;
+        facts.ansi->measurement.acquisition_increment = item.increment;
+        facts.ansi->ceiling.minimum_height_m = observed;
+        const auto result = qualify_appraisal_area(area, facts, policy);
+        check(result.qualified && result.derived_category == (item.standard ?
+            AppraisalAreaCategory::above_grade_finished : AppraisalAreaCategory::above_grade_nonstandard_finished),
+            "Flat ceiling eligibility must use declared acquisition rounding before the seven-foot threshold");
+        near(*result.physical_square_metres, 100, 1e-7, "Ceiling rounding must preserve physical area");
+        check(facts.ansi->ceiling.minimum_height_m == observed,
+            "Qualification must retain the original observed ceiling height");
+    }
+    for (const auto increment : {AcquisitionIncrement::inch, AcquisitionIncrement::tenth_foot}) {
+        facts.ansi->measurement.acquisition_increment = increment;
+        for (const double observed : {std::nextafter(2.1336, 0.0), 2.1336,
+                 std::nextafter(2.1336, std::numeric_limits<double>::infinity())}) {
+            facts.ansi->ceiling.minimum_height_m = observed;
+            check(qualify_appraisal_area(area, facts, policy).derived_category == AppraisalAreaCategory::above_grade_finished,
+                "Immediately below, exactly at and immediately above seven feet share a recorded seven-foot height");
+        }
+        for (const double invalid : {-1.0, std::numeric_limits<double>::quiet_NaN(),
+                 std::numeric_limits<double>::infinity(), std::numeric_limits<double>::max()}) {
+            facts.ansi->ceiling.minimum_height_m = invalid;
+            const auto result = qualify_appraisal_area(area, facts, policy);
+            check(!result.qualified && !result.derived_category && !result.issues.empty(),
+                "Malformed or unrepresentable ceiling observations must withhold eligibility");
+        }
+    }
+    facts.ansi->ceiling.minimum_height_m = 6.96 * 0.3048;
+    facts.ansi->measurement.acquisition_increment.reset();
+    const auto missing = qualify_appraisal_area(area, facts, policy);
+    check(!missing.qualified && !missing.derived_category &&
+        std::any_of(missing.issues.begin(), missing.issues.end(), [](const auto& issue) {
+            return issue.code == "acquisition_increment_missing";
+        }), "Missing acquisition precision must not silently default to a qualifying increment");
+    facts.ansi->measurement.acquisition_increment = static_cast<AcquisitionIncrement>(999);
+    rejected([&] { (void)qualify_appraisal_area(area, facts, policy); });
 }
 void declared_policy_tests() {
     using namespace sketch;
@@ -447,6 +559,8 @@ int main() {
         using namespace sketch;
         appraisal_tests();
         ansi_policy_tests();
+        ansi_ceiling_rounding_helper_tests();
+        ansi_flat_ceiling_acquisition_tests();
         declared_policy_tests();
         CalculationProfile profile{"custom-metric",
                                    1,

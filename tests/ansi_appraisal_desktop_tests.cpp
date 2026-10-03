@@ -26,6 +26,8 @@
 #include <QTableWidget>
 #include <QUuid>
 #include <QPushButton>
+#include <QScrollArea>
+#include <QScrollBar>
 #include <QTemporaryDir>
 #include <QTimer>
 #include <exception>
@@ -35,6 +37,7 @@
 #include <cmath>
 #include <algorithm>
 #include <vector>
+#include <tuple>
 
 namespace {
 using sketch::desktop::MainWindow;
@@ -290,14 +293,44 @@ void setup_and_facts() {
         choose(value, "access", "direct_interior"); choose(value, "area_use", "dwelling");
         choose(value, "boundary_role", "measured_area"); choose(value, "ansiYearRoundSuitable", "yes");
         choose(value, "ansiFinishMatchesDwelling", "yes"); choose(value, "ansiDwellingIdentity", "primary");
-        choose(value, "ansiCeilingKind", "flat"); child<QLineEdit>(value, "ansiMinimumHeight").setText("7 ft");
+        choose(value, "ansiCeilingKind", "flat"); child<QLineEdit>(value, "ansiMinimumHeight").setText("6.96 ft");
+        require(child<QLabel>(value,"ansiRoundedMinimumHeight").text().contains("7.0 ft (nearest tenth foot)"),
+            "facts previews the rounded classification height without replacing the entered observation");
+        const auto capture=qEnvironmentVariable("VERTEX_TEST_CAPTURE_DIR");
+        if(!capture.isEmpty()) {
+            auto* viewport=value.findChild<QScrollArea*>();require(viewport,"Facts has a scrollable evidence viewport");
+            QApplication::processEvents();
+            viewport->verticalScrollBar()->setValue(viewport->verticalScrollBar()->maximum());
+            QApplication::processEvents();require(QDir().mkpath(capture) &&
+                value.grab().save(QDir(capture).filePath("ceiling-height-facts.png")),"capture actual observed and rounded height controls");
+        }
         child<QDialogButtonBox>(value, "appraisalFactsButtons").button(QDialogButtonBox::Save)->click();
         require(value.result() == QDialog::Accepted, "flat ANSI evidence saves");
     });
     const auto after = window.document().snapshot();
     require(after.revision() == before.revision() + 1 && std::abs(after.entities().at(area.toStdString()).properties
-        .at("appraisal_facts").at("ansi").at("ceiling").at("minimum_height_m").get<double>() - 2.1336) < 1e-12,
-        "height parses explicit imperial units");
+        .at("appraisal_facts").at("ansi").at("ceiling").at("minimum_height_m").get<double>() - 6.96*.3048) < 1e-12,
+        "height retains explicit observed imperial quantity before acquisition rounding");
+    auto& height_details=child<sketch::desktop::AppraisalDetailsPanel>(window,"appraisalDetailsPanel");
+    require(child<QLabel>(height_details,"appraisalDetailsGla").text()=="100 sq ft",
+        "actual Facts authoring counts the source-backed rounded ceiling observation");
+    for(const auto& [height,increment,rounded,gla] : std::vector<std::tuple<const char*,const char*,const char*,const char*>>{
+        {"6.85 ft","tenth_foot","6.9 ft (nearest tenth foot)","0 sq ft"},
+        {"6.951 ft","tenth_foot","7.0 ft (nearest tenth foot)","100 sq ft"},
+        {"6.951 ft","inch","6 ft 11 in (nearest inch)","0 sq ft"}}) {
+        dialog(window,"appraisalFactsDialog",edit,[&](QDialog& value) {
+            choose(value,"ansiAcquisitionIncrement",increment);
+            child<QLineEdit>(value,"ansiMinimumHeight").setText(QString::fromLatin1(height));
+            require(child<QLabel>(value,"ansiRoundedMinimumHeight").text().contains(QString::fromLatin1(rounded)),
+                "live height preview follows entered observation");
+            child<QDialogButtonBox>(value,"appraisalFactsButtons").button(QDialogButtonBox::Save)->click();
+            require(value.result()==QDialog::Accepted,"rounded height facts save atomically");
+        });
+        require(child<QLabel>(height_details,"appraisalDetailsGla").text()==QString::fromLatin1(gla),
+            "GLA refreshes to the actual rounded flat-ceiling classification");
+        require(window.undoCommand() && window.document().snapshot().entities()==after.entities(),
+            "undo preserves the original observed height and classification");
+    }
     require(window.undoCommand() && window.document().snapshot().entities() == before.entities() && window.redoCommand(), "facts atomic undo redo");
     dialog(window, "appraisalFactsDialog", edit, [&](QDialog& value) {
         child<QLineEdit>(value, "ansiMinimumHeight").setText("7 ft junk");
@@ -306,6 +339,29 @@ void setup_and_facts() {
     });
     QTemporaryDir directory; require(directory.isValid() && window.saveProjectAs(directory.filePath("ansi.bldproj")) &&
         window.openProject(directory.filePath("ansi.bldproj")) && window.document().snapshot().entities() == after.entities(), "ANSI evidence survives save reopen");
+    require(child<QLabel>(height_details,"appraisalDetailsGla").text()=="100 sq ft",
+        "reopened observed height uses the same acquisition rounding");
+    const auto height_report=sketch::build_appraisal_document_report(window.document().snapshot(),"property-1");
+    const auto height_html=sketch::desktop::appraisal_report_html(window.document().snapshot(),height_report,true,true);
+    require(height_html.contains("Recorded minimum ceiling height") && height_html.contains("6.96 ft") &&
+        height_html.contains("7.0 ft (nearest tenth foot)"),"printable report preserves recorded and rounded ceiling height");
+    QString height_error;
+    const auto height_pdf_path=directory.filePath("ceiling-height-report.pdf");
+    require(sketch::desktop::write_appraisal_report_pdf(window.document().snapshot(),height_report,true,height_pdf_path,height_error),
+        "export actual report for recorded and rounded ceiling observations");
+    QPdfDocument height_pdf;require(height_pdf.load(height_pdf_path)==QPdfDocument::Error::None,"reopen actual ceiling observation PDF");
+    QString height_pdf_text;
+    for(int page=0;page<height_pdf.pageCount();++page) {
+        const auto page_text=height_pdf.getAllText(page).text().simplified();height_pdf_text+=page_text+QLatin1Char(' ');
+        const auto capture=qEnvironmentVariable("VERTEX_TEST_CAPTURE_DIR");
+        if(!capture.isEmpty() && page_text.contains("Recorded minimum ceiling height")) {
+            const auto rendered=height_pdf.render(page,QSize(1000,1400));
+            require(!rendered.isNull() && rendered.save(QDir(capture).filePath("ceiling-height-report.png")),
+                "capture actual exported ceiling-height report page");
+        }
+    }
+    require(height_pdf_text.contains("Recorded minimum ceiling height") && height_pdf_text.contains("6.96 ft") &&
+        height_pdf_text.contains("7.0 ft (nearest tenth foot)"),"actual PDF preserves rounded classification and original observation");
     require(window.selectEntity(area), "reselect complete room");
     const auto identified = sketch::decode_identified_boundary_entity(window.document().snapshot().entities().at(area.toStdString()));
     const auto dimension = window.createLengthDimension(area, QString::fromStdString(identified.segments.front().segment_id), {1.524,-1});

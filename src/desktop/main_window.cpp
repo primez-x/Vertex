@@ -20101,6 +20101,21 @@ public:
         if (ceiling_evidence.contains("minimum_height_m") && ceiling_evidence.at("minimum_height_m").is_number())
             minimum->setText(QString::number(ceiling_evidence.at("minimum_height_m").get<double>(), 'g', 17) + QStringLiteral(" m"));
         ansi_form->addRow(QStringLiteral("Minimum ceiling height (ft)"), minimum);
+        auto* rounded_minimum = new QLabel(ansi_group);
+        rounded_minimum->setObjectName(QStringLiteral("ansiRoundedMinimumHeight"));
+        rounded_minimum->setWordWrap(true);
+        ansi_form->addRow(QStringLiteral("Height used for classification"), rounded_minimum);
+        const auto update_minimum_height = [=] {
+            const auto increment = parse_acquisition_increment(measurement.increment->currentData().toString().toStdString());
+            if (!increment) {rounded_minimum->setText(QStringLiteral("Choose inch or tenth-foot acquisition precision."));return;}
+            try {
+                const auto observed = parse_quantity(minimum->text().trimmed().toStdString(), Unit::foot);
+                rounded_minimum->setText(appraisal_rounded_ceiling_height_text(observed.metres,*increment));
+            } catch (const std::exception&) {rounded_minimum->setText(QStringLiteral("Enter a valid observed height."));}
+        };
+        QObject::connect(minimum, &QLineEdit::textChanged, &dialog, update_minimum_height);
+        QObject::connect(measurement.increment, &QComboBox::currentIndexChanged, &dialog, update_minimum_height);
+        update_minimum_height();
         auto* high = new QLineEdit(ansi_group); high->setObjectName(QStringLiteral("ansiAtLeast7ftArea"));
         high->setPlaceholderText(QStringLiteral("Observed area at least 7 ft high, in sq ft"));
         if (ceiling_evidence.contains("at_least_7ft_area_m2") && ceiling_evidence.at("at_least_7ft_area_m2").is_number())
@@ -20139,6 +20154,7 @@ public:
             form->setRowVisible(grade, !ansi);form->setRowVisible(ceiling, !ansi);
             const auto type = ceiling_kind->currentData().toString();
             show_field(minimum, type == QStringLiteral("flat"));
+            show_field(rounded_minimum, type == QStringLiteral("flat"));
             for (QWidget* field : std::array<QWidget*,3>{high, low, confirm}) show_field(field, type == QStringLiteral("sloped"));
             show_field(stair, type == QStringLiteral("stairs"));
         };

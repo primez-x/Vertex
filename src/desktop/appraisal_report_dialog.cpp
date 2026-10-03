@@ -100,7 +100,7 @@ QString ansi_facts(const AppraisalFacts& facts,const AppraisalDocumentReport& re
         row(QStringLiteral("Finish matches dwelling"),boolean(value.finish_matches_dwelling))+
         row(QStringLiteral("Dwelling identity"),value.dwelling_identity?words(dwelling_identity_name(*value.dwelling_identity)):QStringLiteral("Undeclared"))+
         row(QStringLiteral("Ceiling type"),ceiling.kind?words(ceiling_kind_name(*ceiling.kind)):QStringLiteral("Undeclared"));
-    if(ceiling.minimum_height_m)rows+=row(QStringLiteral("Minimum ceiling height"),length(*ceiling.minimum_height_m,report,metric));
+    rows+=appraisal_ceiling_height_rows(value);
     if(ceiling.at_least_7ft_area_m2)rows+=row(QStringLiteral("Ceiling area at least 7 ft"),area(*ceiling.at_least_7ft_area_m2,report,metric));
     if(ceiling.room_floor_area_m2)rows+=row(QStringLiteral("Room floor area"),area(*ceiling.room_floor_area_m2,report,metric));
     if(ceiling.kind==CeilingKind::sloped) {
@@ -308,6 +308,30 @@ QString boundary_details(const DocumentSnapshot& source,const AppraisalDocumentR
     return html;
 }
 } // namespace
+
+QString appraisal_rounded_ceiling_height_text(double observed_metres, AcquisitionIncrement increment) {
+    const auto rounded=rounded_ansi_ceiling_height_metres(observed_metres,increment);
+    if(increment==AcquisitionIncrement::tenth_foot)
+        return QString::number(rounded/.3048,'f',1)+QStringLiteral(" ft (nearest tenth foot)");
+    const auto inches=std::round(rounded/.0254);
+    return QStringLiteral("%1 ft %2 in (nearest inch)")
+        .arg(QString::number(std::floor(inches/12),'f',0),QString::number(std::fmod(inches,12),'f',0));
+}
+
+QString appraisal_ceiling_height_rows(const AnsiAppraisalFacts& facts) {
+    if(!facts.ceiling.minimum_height_m)return {};
+    const auto observed=*facts.ceiling.minimum_height_m;
+    const auto feet=observed/.3048;
+    auto rows=row(QStringLiteral("Recorded minimum ceiling height"),
+        QString::number(std::isfinite(feet)?feet:observed,'g',12)+
+        (std::isfinite(feet)?QStringLiteral(" ft"):QStringLiteral(" m")));
+    QString rounded=QStringLiteral("Acquisition precision undeclared");
+    if(facts.measurement.acquisition_increment) {
+        try {rounded=appraisal_rounded_ceiling_height_text(observed,*facts.measurement.acquisition_increment);}
+        catch(const std::exception&) {rounded=QStringLiteral("Unavailable: invalid ceiling measurement");}
+    }
+    return rows+row(QStringLiteral("Rounded minimum ceiling height"),rounded);
+}
 
 QString appraisal_schedule_area_text(const ScheduleRow& row, bool metric) {
     const auto amount=row.cells.find("area");

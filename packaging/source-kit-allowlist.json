@@ -1583,6 +1583,10 @@
     },
     {
       "category": "docs",
+      "path": "docs/plans/2026-10-03-ceiling-measurement-rounding.md"
+    },
+    {
+      "category": "docs",
       "path": "docs/plans/2026-10-03-output-view-appearance.md"
     },
     {
@@ -2408,6 +2412,10 @@
     {
       "category": "docs",
       "path": "docs/verification/cad-hosted-exchange-2026-09-29.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/verification/ceiling-measurement-rounding-2026-10-03.md"
     },
     {
       "category": "docs",

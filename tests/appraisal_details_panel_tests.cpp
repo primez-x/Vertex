@@ -117,6 +117,41 @@ void ansi_canonical_units_declarations_and_curve_dimensions() {
     require(!panel.report()->qualified && label(panel,"appraisalDetailsGla")=="Totals unavailable",
         "missing ANSI source declaration withholds prominent total");
 }
+void ansi_ceiling_height_uses_declared_acquisition_precision() {
+    auto entities=fixture();
+    auto& policy=entities.front().properties["appraisal_policy"];
+    policy["policy_kind"]="ansi_z765_2021";
+    policy["ansi"]={{"interior_inspected",true},{"direct_measurement",true},
+        {"acquisition_increment","tenth_foot"}};
+    entities[2].properties["appraisal_facts"]["ansi"]={{"any_part_below_grade",false}};
+    auto& evidence=entities.back().properties["appraisal_facts"]["ansi"];
+    evidence={{"year_round_suitable",true},{"finish_matches_dwelling",true},
+        {"dwelling_identity","primary"},{"ceiling",{{"kind","flat"},{"minimum_height_m",6.96*.3048}}}};
+    AppraisalDetailsPanel panel;
+    const auto show=[&] {
+        auto document=sketch::Document::create(entities);
+        panel.setDocument(document.snapshot(),"p",true);panel.setSelectedBoundary("a");
+        return label(panel,"appraisalDetailsTrace");
+    };
+    auto trace=show();
+    require(panel.report()->qualified && label(panel,"appraisalDetailsGla")=="100 sq ft",
+        "6.96-foot observation rounds to seven feet for flat-ceiling GLA classification");
+    require(trace.contains("Recorded minimum ceiling height") && trace.contains("6.96 ft") &&
+        trace.contains("Rounded minimum ceiling height") && trace.contains("7.0 ft (nearest tenth foot)"),
+        "Details distinguishes retained observation from the actual rounded classification height");
+    evidence["ceiling"]["minimum_height_m"]=6.85*.3048;trace=show();
+    require(panel.report()->qualified && label(panel,"appraisalDetailsGla")=="0 sq ft" &&
+        trace.contains("6.85 ft") && trace.contains("6.9 ft (nearest tenth foot)"),
+        "6.85-foot observation reports 6.9 feet and stays nonstandard finished");
+    evidence["ceiling"]["minimum_height_m"]=6.951*.3048;trace=show();
+    require(label(panel,"appraisalDetailsGla")=="100 sq ft","tenth-foot acquisition governs ceiling threshold");
+    policy["ansi"]["acquisition_increment"]="inch";trace=show();
+    require(label(panel,"appraisalDetailsGla")=="0 sq ft" && trace.contains("6 ft 11 in (nearest inch)"),
+        "inch acquisition uses its own rounded threshold and displays whole inches");
+    policy["ansi"].erase("acquisition_increment");trace=show();
+    require(!panel.report()->qualified && label(panel,"appraisalDetailsGla")=="Totals unavailable" &&
+        trace.contains("Acquisition precision undeclared"),"missing precision cannot silently select a height rule");
+}
 void qualified_units_refresh_and_callbacks() {
     AppraisalDetailsPanel panel;
     auto entities=fixture();auto document=sketch::Document::create(entities);
@@ -343,7 +378,7 @@ int main(int argc,char** argv) {
     try {
         require(QFontDatabase::addApplicationFont(QStringLiteral(":/fonts/Inter.ttf"))>=0,"bundled Inter font loads for native Details capture");
         app.setFont(QFont(QStringLiteral("Inter"),10));
-        ansi_canonical_units_declarations_and_curve_dimensions();qualified_units_refresh_and_callbacks();undeclared_and_invalid_measurements();
+        ansi_ceiling_height_uses_declared_acquisition_precision();ansi_canonical_units_declarations_and_curve_dimensions();qualified_units_refresh_and_callbacks();undeclared_and_invalid_measurements();
         categories_floors_deductions_and_phase();stale_wall_sources();native_main_window_details();native_stale_context_withholds_actions_and_totals();
         std::cout<<"appraisal_details_panel_tests passed\n";return 0;
     } catch(const std::exception& failure) {std::cerr<<"appraisal_details_panel_tests: "<<failure.what()<<'\n';return 1;}
