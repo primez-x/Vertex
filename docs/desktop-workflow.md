@@ -251,9 +251,13 @@ workflow seam.
 
 The same command surface exposes local **Import DXF** and **Export DXF**.
 Export writes the bounded R2013 ASCII subset plus a `.fidelity.json` report.
-Import maps lines, arcs, polylines, solid hatch loops, block inserts, labels,
-and dimension extension geometry into one undoable command on the active
-floor/layer. The original DXF bytes are retained as a `dxf_source` asset and
+Import maps lines, arcs, circles, polylines, solid hatch loops, block inserts,
+labels and dimension extension geometry into one undoable command. The import
+review assigns each source layer to an existing destination or a source-named
+layer on the active floor. Circles remain two analytical semicircles, including
+uniformly scaled, reflected or rotated INSERTs. Use **Upgrade boundary editing**
+for typed edits to imported boundaries. Exported labels and component linework
+use their assigned native layers. The original DXF bytes are retained as a `dxf_source` asset and
 all unsupported or unbound semantics remain visible in the adjacent report and
 source entity diagnostics.
 

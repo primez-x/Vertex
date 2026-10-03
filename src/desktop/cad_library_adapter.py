@@ -245,7 +245,7 @@ def normalize_dxf(data: bytes) -> dict:
         writer.end()
     writer.section("ENTITIES")
     written = 0
-    mapped = {"LINE", "ARC", "LWPOLYLINE", "TEXT", "DIMENSION", "HATCH"}
+    mapped = {"LINE", "ARC", "CIRCLE", "LWPOLYLINE", "TEXT", "DIMENSION", "HATCH"}
 
     def emit(entity, depth=0, inherited_layer="0", fallback_source_id=""):
         nonlocal written
@@ -280,6 +280,38 @@ def normalize_dxf(data: bytes) -> dict:
                 def skipped(child, reason):
                     diagnostics.append(_diagnostic(_source_id(child), child.dxftype(), "dxf_insert_transform_not_mapped"))
                 for child in instance.virtual_entities(skipped_entity_callback=skipped):
+                    original = child.origin_of_copy
+                    # Validate the source before a transform can repair invalid
+                    # radii or rotate/recenter unsupported OCS into the XY plane.
+                    if (child.dxftype() == "CIRCLE" and original is not None and
+                            original.dxftype() == "CIRCLE" and
+                            (tuple(original.dxf.extrusion) != (0, 0, 1) or
+                             original.dxf.center.z != 0 or
+                             not math.isfinite(original.dxf.radius) or
+                             original.dxf.radius <= 0)):
+                        diagnostics.append(_diagnostic(_source_id(original) or source_id,
+                            "CIRCLE", "dxf_insert_transform_not_mapped"))
+                        continue
+                    # Library transform tolerances can classify unequal XY
+                    # scales as a circle. Never accept that approximate locus.
+                    if (child.dxftype() == "CIRCLE" and original is not None and
+                            original.dxftype() == "CIRCLE" and
+                            abs(instance.dxf.xscale) != abs(instance.dxf.yscale)):
+                        diagnostics.append(_diagnostic(_source_id(original) or source_id,
+                            "CIRCLE", "dxf_insert_transform_not_mapped"))
+                        continue
+                    # A reflected full circle has the same locus in +Z OCS.
+                    # Normalize only foreign copies of default planar circles;
+                    # retain source nondefault/tilted OCS for the strict mapper.
+                    if (child.dxftype() == "CIRCLE" and original is not None and
+                            original.dxftype() == "CIRCLE" and
+                            tuple(original.dxf.extrusion) == (0, 0, 1) and
+                            original.dxf.center.z == 0 and
+                            tuple(child.dxf.extrusion) == (0, 0, -1)):
+                        center = child.ocs().to_wcs(child.dxf.center)
+                        if center.z == 0:
+                            child.dxf.center = center
+                            child.dxf.extrusion = (0, 0, 1)
                     scales=(abs(instance.dxf.xscale),abs(instance.dxf.yscale),abs(instance.dxf.zscale))
                     if max(scales)-min(scales)>1e-12 and child.dxftype() in {"TEXT","MTEXT","ATTRIB","ATTDEF"}:
                         diagnostics.append(_diagnostic(_source_id(child) or source_id,child.dxftype(),"dxf_insert_transform_not_mapped"))

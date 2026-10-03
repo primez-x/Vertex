@@ -118,7 +118,7 @@ void entity(DxfImportResult& result, DxfDrawing& destination, std::string_view t
     (void)block_xdata(r, malformed_xdata);
     if (without_xdata(r).size() != r.size()) diagnostic("xdata_not_activated");
     r = without_xdata(r);
-    if (type != "LINE" && type != "ARC" && type != "LWPOLYLINE" && type != "TEXT" &&
+    if (type != "LINE" && type != "ARC" && type != "CIRCLE" && type != "LWPOLYLINE" && type != "TEXT" &&
         type != "DIMENSION" && type != "HATCH" && type != "INSERT") {
         diagnostic("unsupported_entity"); return;
     }
@@ -133,6 +133,11 @@ void entity(DxfImportResult& result, DxfDrawing& destination, std::string_view t
         require(v.radius > 0 && v.start_degrees >= 0 && v.start_degrees < 360 && v.end_degrees >= 0 && v.end_degrees < 360 && v.start_degrees != v.end_degrees);
         if (!supported(r, {10, 20, 40, 50, 51}, l)) diagnostic("unsupported_feature");
         else destination.arcs.push_back(std::move(v));
+    } else if (type == "CIRCLE") {
+        DxfCircle v{point(r, 10, 20), number<double>(mandatory(r, 40)), entity_layer};
+        require(v.radius > 0);
+        if (!supported(r, {10, 20, 40}, l)) diagnostic("unsupported_feature");
+        else destination.circles.push_back(std::move(v));
     } else if (type == "TEXT") {
         DxfLabel v{point(r, 10, 20), number<double>(mandatory(r, 40)), real(r, 50),
             std::string(mandatory(r, 1)), entity_layer};
@@ -313,7 +318,7 @@ void parse_block_section(DxfImportResult& result, const std::vector<Pair>& pairs
         result.drawing.blocks.push_back({std::string(name_value), base,
                                          std::move(contents.lines), std::move(contents.arcs),
                                          std::move(contents.polylines), std::move(contents.labels),
-                                         std::move(native_json)});
+                                         std::move(native_json), std::move(contents.circles)});
     }
 }
 
@@ -448,7 +453,7 @@ std::string export_dxf_ascii(const DxfDrawing& d, const DxfExchangeLimits& l) {
     // Incremental counts avoid overflow on caller-controlled containers.
     std::size_t count = 0;
     for (auto size : {d.lines.size(), d.arcs.size(), d.polylines.size(), d.dimensions.size(),
-                      d.hatches.size(), d.labels.size()}) {
+                      d.hatches.size(), d.labels.size(), d.circles.size()}) {
         require(size <= l.max_entities - count); count += size;
     }
     require(d.blocks.size() <= l.max_entities - count); count += d.blocks.size();
@@ -457,7 +462,7 @@ std::string export_dxf_ascii(const DxfDrawing& d, const DxfExchangeLimits& l) {
     for (const auto& block : d.blocks) {
         printable(block.name, l);
         require(!block.name.empty() && block_names.insert(block.name).second);
-        for (auto size : {block.lines.size(), block.arcs.size(), block.polylines.size(), block.labels.size()}) {
+        for (auto size : {block.lines.size(), block.arcs.size(), block.polylines.size(), block.labels.size(), block.circles.size()}) {
             require(size <= l.max_entities - count); count += size;
         }
     }
@@ -477,6 +482,11 @@ std::string export_dxf_ascii(const DxfDrawing& d, const DxfExchangeLimits& l) {
         w.begin("ARC", v.layer, "AcDbCircle"); w.xy(v.center); w.put(30, 0.0);
         w.put(40, v.radius); w.put(100, "AcDbArc");
         w.put(50, v.start_degrees); w.put(51, v.end_degrees);
+    };
+    const auto write_circle = [&](const DxfCircle& v) {
+        require(v.radius > 0);
+        w.begin("CIRCLE", v.layer, "AcDbCircle"); w.xy(v.center); w.put(30, 0.0);
+        w.put(40, v.radius);
     };
     std::size_t vertices = 0;
     const auto write_polyline = [&](const DxfPolyline& v) {
@@ -524,6 +534,7 @@ std::string export_dxf_ascii(const DxfDrawing& d, const DxfExchangeLimits& l) {
             }
             for (const auto& v : block.lines) write_line(v);
             for (const auto& v : block.arcs) write_arc(v);
+            for (const auto& v : block.circles) write_circle(v);
             for (const auto& v : block.polylines) write_polyline(v);
             for (const auto& v : block.labels) write_label(v);
             w.begin("ENDBLK", "0", "AcDbBlockEnd");
@@ -533,6 +544,7 @@ std::string export_dxf_ascii(const DxfDrawing& d, const DxfExchangeLimits& l) {
     w.put(0, "SECTION"); w.put(2, "ENTITIES");
     for (const auto& v : d.lines) write_line(v);
     for (const auto& v : d.arcs) write_arc(v);
+    for (const auto& v : d.circles) write_circle(v);
     for (const auto& v : d.polylines) write_polyline(v);
     for (const auto& v : d.dimensions) {
         require(std::isfinite(v.rotation_degrees) && std::abs(v.rotation_degrees) <= 1e12);

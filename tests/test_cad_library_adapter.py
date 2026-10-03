@@ -202,9 +202,120 @@ class DxfAdapterTests(unittest.TestCase):
 
     def test_unsupported_geometry_has_source_diagnostic(self):
         doc = ezdxf.new("R2013")
-        circle = doc.modelspace().add_circle((0,0),2)
+        ellipse = doc.modelspace().add_ellipse((0,0), major_axis=(2,0), ratio=0.5)
         result,_ = normalized(doc)
-        self.assertIn({"source_id":circle.dxf.handle,"source_kind":"CIRCLE","code":"dxf_geometry_not_mapped"}, result["diagnostics"])
+        self.assertIn({"source_id":ellipse.dxf.handle,"source_kind":"ELLIPSE","code":"dxf_geometry_not_mapped"}, result["diagnostics"])
+
+    def test_circle_ascii_and_binary_preserve_exact_geometry(self):
+        for binary in (False, True):
+            with self.subTest(binary=binary):
+                doc = ezdxf.new("R2013")
+                doc.header["$INSUNITS"] = 4
+                doc.modelspace().add_circle((3000,-1000),2000,dxfattribs={"layer":"Round pads"})
+                result, parsed = normalized(doc, binary)
+                circle = parsed.modelspace()[0]
+                self.assertEqual(circle.dxftype(), "CIRCLE")
+                self.assertEqual(tuple(circle.dxf.center), (3000,-1000,0))
+                self.assertEqual(circle.dxf.radius, 2000)
+                self.assertEqual(circle.dxf.layer, "Round pads")
+                self.assertEqual(parsed.header["$INSUNITS"], 4)
+                self.assertEqual(result["diagnostics"], [])
+
+    def test_circle_uniform_and_reflected_insert_preserve_exact_geometry(self):
+        for xscale in (2, -2):
+            with self.subTest(xscale=xscale):
+                doc = ezdxf.new("R2013")
+                block = doc.blocks.new("ROUND")
+                block.add_circle((1,3),2,dxfattribs={"color":3,"thickness":0.5})
+                doc.modelspace().add_blockref("ROUND",(10,20),dxfattribs={
+                    "xscale":xscale,"yscale":2,"zscale":2,"layer":"Round pads"})
+                result, parsed = normalized(doc)
+                circle = parsed.modelspace()[0]
+                self.assertEqual(circle.dxftype(), "CIRCLE")
+                self.assertEqual(circle.dxf.radius, 4)
+                self.assertEqual(tuple(circle.dxf.extrusion), (0,0,1))
+                center = circle.ocs().to_wcs(circle.dxf.center)
+                self.assertEqual(tuple(center), (10+xscale,26,0))
+                self.assertEqual(circle.dxf.layer, "Round pads")
+                self.assertEqual(circle.dxf.color, 3)
+                self.assertEqual(abs(circle.dxf.thickness), 1)
+                self.assertEqual(result["diagnostics"], [])
+
+    def test_raw_and_block_nondefault_circle_ocs_is_preserved(self):
+        for in_block in (False, True):
+            with self.subTest(in_block=in_block):
+                doc = ezdxf.new("R2013")
+                target = doc.blocks.new("ROUND") if in_block else doc.modelspace()
+                target.add_circle((1,2),3,dxfattribs={"extrusion":(0,0,-1),"color":3})
+                if in_block:
+                    doc.modelspace().add_blockref("ROUND",(0,0))
+                _, parsed = normalized(doc)
+                if in_block:
+                    self.assertEqual(len(parsed.modelspace()), 0)
+                    continue
+                circle = parsed.modelspace()[0]
+                self.assertEqual(tuple(circle.dxf.extrusion), (0,0,-1))
+                self.assertEqual(circle.dxf.color, 3)
+
+    def test_circle_insert_cannot_rehabilitate_invalid_source_geometry(self):
+        cases = (
+            ((0,0,0), 2, (0,0,-1), {"xscale":-1}),
+            ((0,0,0), 2, (0,1,0), {"extrusion":(0,1,0)}),
+            ((0,0,0), -2, (0,0,1), {}),
+            ((0,0,2), 2, (0,0,1), {}),
+        )
+        for center, radius, extrusion, attrs in cases:
+            with self.subTest(center=center, radius=radius, extrusion=extrusion, attrs=attrs):
+                doc = ezdxf.new("R2013")
+                block = doc.blocks.new("ROUND")
+                original = block.add_circle(center,radius,dxfattribs={"extrusion":extrusion})
+                placement = (0,0,-2) if center[2] else (0,0,0)
+                doc.modelspace().add_blockref("ROUND",placement,dxfattribs=attrs)
+                result, parsed = normalized(doc)
+                self.assertEqual(len(parsed.modelspace()), 0)
+                self.assertIn({"source_id":original.dxf.handle,"source_kind":"CIRCLE",
+                               "code":"dxf_insert_transform_not_mapped"}, result["diagnostics"])
+
+    def test_circle_insert_preserves_valid_upscaled_tiny_source_radius(self):
+        doc = ezdxf.new("R2013")
+        block = doc.blocks.new("ROUND")
+        block.add_circle((0,0),1e-9)
+        doc.modelspace().add_blockref("ROUND",(0,0),dxfattribs={"xscale":1e9,"yscale":1e9})
+        result, parsed = normalized(doc)
+        self.assertEqual(parsed.modelspace()[0].dxf.radius, 1)
+        self.assertEqual(result["diagnostics"], [])
+
+    def test_nonuniform_circle_insert_reports_unmapped_ellipse(self):
+        doc = ezdxf.new("R2013")
+        block = doc.blocks.new("ROUND")
+        block.add_circle((0,0),2)
+        doc.modelspace().add_blockref("ROUND",(0,0),dxfattribs={"xscale":2})
+        result, parsed = normalized(doc)
+        self.assertEqual(len(parsed.modelspace()), 0)
+        self.assertTrue(any(d["source_kind"] == "ELLIPSE" and
+                            d["code"] == "dxf_geometry_not_mapped" for d in result["diagnostics"]))
+
+    def test_library_tolerance_cannot_rehabilitate_nonuniform_circle_insert(self):
+        for radius, sx, sy in ((100000, 1e-5, 2e-5), (2, 1, 1+1e-12)):
+            with self.subTest(radius=radius, sx=sx, sy=sy):
+                doc = ezdxf.new("R2013")
+                block = doc.blocks.new("ROUND")
+                block.add_circle((0,0),radius)
+                doc.modelspace().add_blockref("ROUND",(0,0),dxfattribs={"xscale":sx,"yscale":sy})
+                result, parsed = normalized(doc)
+                self.assertEqual(len(parsed.modelspace()), 0)
+                self.assertTrue(any(d["source_kind"] == "CIRCLE" and
+                                    d["code"] == "dxf_insert_transform_not_mapped"
+                                    for d in result["diagnostics"]))
+                self.assertTrue(result["source_retention_required"])
+
+    def test_tilted_circle_preserves_extrusion_for_strict_mapper(self):
+        doc = ezdxf.new("R2013")
+        doc.modelspace().add_circle((1,2),3,dxfattribs={"extrusion":(0,1,0)})
+        _, parsed = normalized(doc)
+        circle = parsed.modelspace()[0]
+        self.assertEqual(circle.dxftype(), "CIRCLE")
+        self.assertEqual(tuple(circle.dxf.extrusion), (0,1,0))
 
     def test_layer_zero_inherits_foreign_insert_layer(self):
         doc = ezdxf.new("R2013")

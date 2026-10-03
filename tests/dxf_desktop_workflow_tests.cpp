@@ -3,6 +3,8 @@
 #include "sketch/dxf_exchange.hpp"
 #include "sketch/annotation_entity_codec.hpp"
 #include "sketch/project_organization.hpp"
+#include "sketch/boundary_entity.hpp"
+#include "../src/desktop/plan_canvas.hpp"
 
 #include <QApplication>
 #include <QFile>
@@ -21,6 +23,8 @@
 #include <QStandardItemModel>
 #include <algorithm>
 #include <exception>
+#include <cmath>
+#include <numbers>
 
 #include <iostream>
 #include <map>
@@ -80,7 +84,8 @@ bool reviewedImport(sketch::desktop::MainWindow& window, const QString& path, Re
     const auto result = window.importDxfWithLayerReview(path);
     timer.stop();
     if (failure) std::rethrow_exception(failure);
-    require(visited, "reviewed DXF import must open the actual layer review modal");
+    if (!visited) throw std::runtime_error("reviewed DXF import must open the actual layer review modal: " +
+                                          window.lastError().toStdString());
     return result;
 }
 }
@@ -179,6 +184,17 @@ void dxfLayerReviewDesktop(const QString& directory) {
         }
     }
     require(geometry == 2 && receipts == 1, "review must import geometry and retained source");
+    const auto reviewed_export = directory + "/reviewed-layers.dxf";
+    if (!window.exportDxf(reviewed_export))
+        throw std::runtime_error("reviewed drawing must export again: " + window.lastError().toStdString());
+    QFile reviewed_file(reviewed_export);
+    require(reviewed_file.open(QIODevice::ReadOnly), "reviewed DXF output must open");
+    const auto reviewed_bytes = reviewed_file.readAll();
+    const auto reviewed_drawing = parse_dxf_ascii(std::string_view(reviewed_bytes.constData(),
+                                                                 reviewed_bytes.size()));
+    require(std::any_of(reviewed_drawing.drawing.labels.begin(), reviewed_drawing.drawing.labels.end(),
+                       [](const auto& label) { return label.text == "Room" && label.layer == "Upper import"; }),
+            "exported imported label must use its reviewed native destination layer");
     require(window.undoCommand() && window.document().snapshot().entities() == before.entities() &&
             window.document().snapshot().assets() == before.assets(), "one undo must restore exact preimport state");
     require(window.redoCommand() && window.document().snapshot().entities() == imported.entities() &&
@@ -589,6 +605,174 @@ void dxfOpeningProfileDesktopRoundtrip(const QString& directory) {
     }
 }
 
+void dxfCircleInsertDesktopWorkflow(const QString& directory) {
+    using namespace sketch;
+    using namespace sketch::desktop;
+    struct Case {
+        const char* xscale; const char* yscale; const char* radius; bool supported;
+        const char* source_z{"0"}; const char* insert_z{"0"};
+        const char* source_tags{""}; const char* insert_tags{""};
+    };
+    const Case cases[]{{"2", "2", "2", true}, {"-2", "2", "2", true},
+                       {"0.00001", "0.00002", "100000", false}, {"1", "1.000000000001", "2", false},
+                       {"-1", "1", "2", false, "0", "0", "210\n0\n220\n0\n230\n-1\n"},
+                       {"1", "1", "2", false, "0", "0", "210\n0\n220\n1\n230\n0\n", "210\n0\n220\n1\n230\n0\n"},
+                       {"1", "1", "-2", false}, {"1", "1", "2", false, "2", "-2"}};
+    int index = 0;
+    for (const auto& item : cases) {
+        QByteArray bytes =
+            "0\nSECTION\n2\nHEADER\n9\n$ACADVER\n1\nAC1027\n9\n$INSUNITS\n70\n6\n0\nENDSEC\n"
+            "0\nSECTION\n2\nBLOCKS\n0\nBLOCK\n100\nAcDbEntity\n8\n0\n100\nAcDbBlockBegin\n2\nROUND\n70\n0\n10\n0\n20\n0\n30\n0\n"
+            "0\nCIRCLE\n100\nAcDbEntity\n8\n0\n100\nAcDbCircle\n10\n1\n20\n2\n30\n@sourcez@\n40\n@radius@\n@sourcetags@"
+            "0\nENDBLK\n100\nAcDbEntity\n8\n0\n100\nAcDbBlockEnd\n0\nENDSEC\n"
+            "0\nSECTION\n2\nENTITIES\n0\nINSERT\n100\nAcDbEntity\n8\nRound inserts\n100\nAcDbBlockReference\n2\nROUND\n10\n10\n20\n20\n30\n@insertz@\n41\n@xscale@\n42\n@yscale@\n43\n1\n50\n90\n@inserttags@0\nENDSEC\n0\nEOF\n";
+        bytes.replace("@radius@", item.radius).replace("@xscale@", item.xscale).replace("@yscale@", item.yscale);
+        bytes.replace("@sourcez@", item.source_z).replace("@insertz@", item.insert_z)
+             .replace("@sourcetags@", item.source_tags).replace("@inserttags@", item.insert_tags);
+        const auto path = directory + QStringLiteral("/circle-insert-%1.dxf").arg(index++);
+        QFile input(path);
+        require(input.open(QIODevice::WriteOnly) && input.write(bytes) == bytes.size(), "circle INSERT fixture must save");
+        input.close();
+        MainWindow window;
+        window.setAttribute(Qt::WA_DontShowOnScreen);
+        window.setMetricUnits(true);
+        require(reviewedImport(window, path, [&](QDialog& dialog) {
+            auto* table = dialog.findChild<QTableWidget*>("dxfImportLayerTable");
+            require(table && table->rowCount() == (item.supported ? 1 : 0),
+                    "circle INSERT layer review must reject unequal scales and unsupported source geometry");
+            if (item.supported) require(table->item(0, 0)->text() == "Round inserts" && table->item(0, 1)->text() == "1",
+                                       "uniform/reflected circle INSERT must offer editable geometry");
+            dialog.accept();
+        }), "uniform/reflected circle INSERT must import through the sandboxed normalizer");
+        std::size_t circles = 0;
+        bool source_retained = false;
+        const auto snapshot = window.document().snapshot();
+        for (const auto& [id, entity] : snapshot.entities()) {
+            (void)id;
+            if (entity.type == "dxf_source") {
+                const auto& asset = snapshot.assets().at(entity.properties.at("asset_id").get<std::string>());
+                require(asset.bytes.size() == static_cast<std::size_t>(bytes.size()) &&
+                        std::equal(asset.bytes.begin(), asset.bytes.end(), reinterpret_cast<const std::byte*>(bytes.constData())),
+                        "circle INSERT original source must remain byte exact");
+                source_retained = true;
+                if (!item.supported) require(!entity.properties.at("diagnostics").empty(),
+                                             "unsupported circle must retain fidelity diagnostics");
+            }
+            if (entity.type != "boundary" || entity.properties.value("classification", "") != "dxf_circle") continue;
+            ++circles;
+            const auto geometry = boundary_geometry(decode_identified_boundary_entity(upgrade_legacy_boundary_entity(entity)));
+            require(geometry.size() == 2 && validate_boundary(geometry).empty(), "normalized circle INSERT must remain analytical and closed");
+            const Vec2 center{(geometry.front().start.x + geometry.front().end.x) * 0.5,
+                              (geometry.front().start.y + geometry.front().end.y) * 0.5};
+            require(std::abs(center.x - 6.0) < 1e-8 && std::abs(center.y - (item.xscale[0] == '-' ? 18.0 : 22.0)) < 1e-8 &&
+                    std::abs(std::abs(signed_area(geometry)) - 16 * std::numbers::pi) < 1e-8 &&
+                    std::abs(perimeter(geometry) - 8 * std::numbers::pi) < 1e-8,
+                    "normalized uniform/reflected circle INSERT must retain exact world geometry");
+        }
+        require(circles == (item.supported ? 1U : 0U) && source_retained,
+                "circle INSERT must retain source and admit only exact uniform geometry");
+    }
+}
+
+void dxfCircleDesktopWorkflow(const QString& directory) {
+    using namespace sketch;
+    using namespace sketch::desktop;
+    // Independent standard CIRCLE record, in millimetres; not the product writer.
+    const QByteArray bytes =
+        "0\nSECTION\n2\nHEADER\n9\n$ACADVER\n1\nAC1027\n9\n$INSUNITS\n70\n4\n0\nENDSEC\n"
+        "0\nSECTION\n2\nENTITIES\n0\nCIRCLE\n100\nAcDbEntity\n8\nRound pads\n"
+        "100\nAcDbCircle\n10\n3000\n20\n-1000\n30\n0\n40\n2000\n0\nENDSEC\n0\nEOF\n";
+    const auto path = directory + "/circle-mm.dxf";
+    QFile input(path);
+    require(input.open(QIODevice::WriteOnly) && input.write(bytes) == bytes.size(), "circle source must save");
+    input.close();
+    MainWindow window;
+    window.setAttribute(Qt::WA_DontShowOnScreen);
+    window.setMetricUnits(true);
+    const auto upper_floor = window.createFloor("building-1", "Round fixtures");
+    const auto upper_layer = window.createLayer(upper_floor, "Round fixtures");
+    require(!upper_floor.isEmpty() && !upper_layer.isEmpty(), "circle destination must exist");
+    const auto before = window.document().snapshot();
+    require(reviewedImport(window, path, [&](QDialog& dialog) {
+        auto* table = dialog.findChild<QTableWidget*>("dxfImportLayerTable");
+        require(table && table->rowCount() == 1 && table->item(0, 0)->text() == "Round pads" &&
+                table->item(0, 1)->text() == "1", "circle must be offered as one editable layer item");
+        setReviewedDestination(dialog, 0, upper_layer, true);
+        dialog.accept();
+    }), "native sandboxed circle import must succeed");
+    const auto imported = window.document().snapshot();
+    require(imported.revision() == before.revision() + 1, "circle import must be one transaction");
+    QString circle_id;
+    bool retained = false;
+    for (const auto& [id, entity] : imported.entities()) {
+        if (entity.type == "boundary" && entity.properties.value("classification", "") == "dxf_circle") {
+            require(circle_id.isEmpty(), "one circle must create one boundary");
+            circle_id = QString::fromStdString(id);
+            require(entity.properties.at("floor_id") == upper_floor.toStdString() &&
+                    entity.properties.at("layer_id") == upper_layer.toStdString(), "circle must follow reviewed destination");
+            const auto geometry = boundary_geometry(decode_identified_boundary_entity(upgrade_legacy_boundary_entity(entity)));
+            require(validate_boundary(geometry).empty() && std::abs(signed_area(geometry) - 4 * std::numbers::pi) < 1e-8 &&
+                    std::abs(perimeter(geometry) - 4 * std::numbers::pi) < 1e-8,
+                    "circle millimetres must normalize into exact two-metre radius area and perimeter");
+        } else if (entity.type == "dxf_source") {
+            const auto& asset = imported.assets().at(entity.properties.at("asset_id").get<std::string>());
+            require(asset.bytes.size() == static_cast<std::size_t>(bytes.size()), "circle source size must survive");
+            for (qsizetype i = 0; i < bytes.size(); ++i)
+                require(asset.bytes[static_cast<std::size_t>(i)] == static_cast<std::byte>(bytes[i]),
+                        "circle source must remain byte exact");
+            require(entity.properties.value("isolated_import", false), "circle must pass actual isolated importer");
+            retained = true;
+        }
+    }
+    require(!circle_id.isEmpty() && retained, "editable circle and source receipt must both exist");
+    require(window.undoCommand() && window.document().snapshot().entities() == before.entities() &&
+            window.document().snapshot().assets() == before.assets(), "circle import undo must restore source state");
+    require(window.redoCommand() && window.document().snapshot().entities() == imported.entities() &&
+            window.document().snapshot().assets() == imported.assets(), "circle import redo must restore exact candidate");
+    require(window.selectEntity(circle_id) && window.upgradeSelectedBoundaryIdentities(),
+            "imported circle must expose existing typed editing upgrade");
+    const auto editable = window.document().snapshot();
+    const auto model = decode_identified_boundary_entity(editable.entities().at(circle_id.toStdString()));
+    require(window.editSelectedBoundaryEdgeLength(QString::fromStdString(model.segments.front().segment_id),
+                                                  "7 m", BoundaryFixedEndpoint::start, true),
+            "imported curve edge must support exact physical-length editing");
+    require(window.undoCommand() && window.document().snapshot().entities() == editable.entities(),
+            "typed curve length undo must restore circular geometry");
+    const auto exported = directory + "/circle-export.dxf";
+    if (!window.exportDxf(exported))
+        throw std::runtime_error("editable circle must export analytically: " + window.lastError().toStdString());
+    QFile output(exported);
+    require(output.open(QIODevice::ReadOnly), "circle DXF export must open");
+    const auto exported_bytes = output.readAll();
+    const auto parsed = parse_dxf_ascii(std::string_view(exported_bytes.constData(), exported_bytes.size()));
+    require(parsed.diagnostics.empty() && parsed.drawing.polylines.size() == 1 &&
+            parsed.drawing.polylines.front().closed && parsed.drawing.polylines.front().vertices.size() == 2,
+            "circle export must retain closed exact two-bulge geometry");
+    for (const auto& vertex : parsed.drawing.polylines.front().vertices)
+        require(std::abs(vertex.bulge - 1.0) < 1e-12, "circle export must preserve each analytic semicircle");
+    const auto project = directory + "/editable-circle.sketch";
+    require(window.saveProjectAs(project), "editable circle must save");
+    MainWindow reopened;
+    reopened.setAttribute(Qt::WA_DontShowOnScreen);
+    require(reopened.openProject(project) && reopened.document().snapshot().entities() == editable.entities() &&
+            reopened.document().snapshot().assets() == editable.assets(), "circle geometry, identities and source must reopen exactly");
+    require(reopened.selectEntity(circle_id), "reopened circle must remain selectable");
+    const auto capture = qEnvironmentVariable("VERTEX_TEST_CAPTURE_DIR");
+    if (!capture.isEmpty()) {
+        QDir().mkpath(capture);
+        reopened.resize(1180, 780);
+        reopened.show();
+        QApplication::processEvents();
+        require(reopened.selectEntity(circle_id), "rendered circle must be selected after window initialization");
+        auto* canvas = dynamic_cast<PlanCanvas*>(reopened.findChild<QWidget*>("measurementPlanCanvas"));
+        require(canvas, "circle drawing canvas must exist");
+        canvas->fitView();
+        QApplication::processEvents();
+        require(reopened.grab().save(capture + "/dxf-circle-import.png"), "circle native UI must capture");
+        reopened.hide();
+    }
+}
+
 int main(int argc, char** argv) {
     sketch::testing::noninteractive_errors();
     QStandardPaths::setTestModeEnabled(true);
@@ -619,6 +803,8 @@ int main(int argc, char** argv) {
         dxfAnnotationCollisionReviewDesktop(temporary.path());
         dxfLargeLayerReviewUsesSharedDestinations(temporary.path());
         dxfOpeningProfileDesktopRoundtrip(temporary.path());
+        dxfCircleDesktopWorkflow(temporary.path());
+        dxfCircleInsertDesktopWorkflow(temporary.path());
         MainWindow source;
         const auto boundary_id = source.createBoundary({
             {{0.0, 0.0}, {4.0, 0.0}, 0.0},

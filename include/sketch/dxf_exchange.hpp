@@ -15,6 +15,11 @@ struct DxfArc {
     double radius{}, start_degrees{}, end_degrees{}; // Counterclockwise in XY.
     std::string layer{"0"};
 };
+struct DxfCircle {
+    DxfPoint center;
+    double radius{};
+    std::string layer{"0"};
+};
 struct DxfVertex { DxfPoint point; double bulge{}; }; // tan(signed sweep / 4).
 struct DxfPolyline {
     std::vector<DxfVertex> vertices;
@@ -62,6 +67,7 @@ struct DxfBlock {
     // are <=255 bytes; all XDATA on one entity is bounded to 16 KiB.
     // Geometry remains ordinary 2D DXF even when this payload is ignored.
     std::string vertex_entity_json{};
+    std::vector<DxfCircle> circles;
 };
 struct DxfInsert {
     std::string block_name;
@@ -81,6 +87,7 @@ struct DxfDrawing {
     std::vector<DxfHatch> hatches;
     std::vector<DxfBlock> blocks;
     std::vector<DxfInsert> inserts;
+    std::vector<DxfCircle> circles;
 };
 struct DxfDiagnostic {
     std::size_t entity_index{}; // One-based ENTITIES ordinal; zero for a section.
@@ -103,7 +110,7 @@ struct DxfExchangeLimits {
 // Unsupported entities/features are omitted with stable diagnostics, never executed.
 [[nodiscard]] DxfImportResult parse_dxf_ascii(
     std::string_view bytes, const DxfExchangeLimits& limits = {});
-// Canonical entity order: block definitions, lines, arcs, polylines,
+// Canonical entity order: block definitions, lines, arcs, circles, polylines,
 // dimensions, hatches, labels, then INSERT references (vector order retained
 // within each family).
 // Unsupported style/3D information is not representable and is never synthesized.

@@ -116,7 +116,7 @@ void run() {
     check(!invalid_utf8_import.diagnostics.empty() && invalid_utf8_import.drawing.blocks[0].lines.size() == 1,
           "malformed native UTF-8 must preserve readable block geometry");
     auto unsupported_native = metadata_bytes;
-    unsupported_native.insert(unsupported_native.find("0\nLINE\n", native_marker), "0\nCIRCLE\n10\n0\n20\n0\n40\n1\n");
+    unsupported_native.insert(unsupported_native.find("0\nLINE\n", native_marker), "0\nELLIPSE\n10\n0\n20\n0\n40\n1\n");
     const auto unsupported_native_import = parse_dxf_ascii(unsupported_native);
     check(!unsupported_native_import.diagnostics.empty() &&
           unsupported_native_import.drawing.blocks[0].vertex_entity_json == "!unsupported_vertex_block",
@@ -133,7 +133,7 @@ void run() {
     auto crlf = encoded;
     for (std::size_t i = 0; i < crlf.size(); ++i) if (crlf[i] == '\n') crlf.insert(i++, 1, '\r');
     check(export_dxf_ascii(parse_dxf_ascii(crlf).drawing) == encoded, "CRLF differs");
-    const auto skipped = parse_dxf_ascii(file("0\nCIRCLE\n10\n0\n20\n0\n40\n2\n0\n3DFACE\n"));
+    const auto skipped = parse_dxf_ascii(file("0\nELLIPSE\n10\n0\n20\n0\n40\n2\n0\n3DFACE\n"));
     check(skipped.diagnostics.size() == 2 && skipped.diagnostics[1].entity_index == 2,
         "unsupported entities not reported");
     check(skipped.diagnostics[0].code == "unsupported_entity", "unstable diagnostic");
@@ -195,6 +195,59 @@ void run() {
     d.lines.clear(); d.labels[0].text = "injected\n0\nEOF";
     rejects([&] { (void)export_dxf_ascii(d); });
 }
+void test_circle_codec_and_limits() {
+    using namespace sketch;
+    const auto external=parse_dxf_ascii(file("0\nCIRCLE\n8\nRound pads\n10\n3.25\n20\n-1.5\n40\n2.125\n"
+        "30\n0\n39\n0\n210\n0\n220\n0\n230\n1\n"));
+    check(external.diagnostics.empty() && external.drawing.circles.size()==1 &&
+        external.drawing.circles.front().center.x==3.25 && external.drawing.circles.front().center.y==-1.5 &&
+        external.drawing.circles.front().radius==2.125 && external.drawing.circles.front().layer=="Round pads",
+        "independent planar CIRCLE input retains center, radius, layer and default OCS");
+    DxfDrawing drawing; drawing.insertion_units=6;
+    drawing.circles.push_back({{3.25,-1.5},2.125,"Round pads"});
+    DxfBlock block{"Round fixture",{10,20}};
+    block.circles.push_back({{12,23},4,"0"});
+    block.circles.push_back({{22,23},1,"Detail pads"});
+    drawing.blocks.push_back(block); drawing.inserts.push_back({block.name,{100,200},2,2,90,"Inserted pads"});
+    const auto bytes=export_dxf_ascii(drawing);
+    const auto roundtrip=parse_dxf_ascii(bytes);
+    check(roundtrip.diagnostics.empty() && roundtrip.drawing.circles.size()==1 &&
+        roundtrip.drawing.blocks.size()==1 && roundtrip.drawing.blocks.front().circles.size()==2 &&
+        roundtrip.drawing.blocks.front().circles[0].center.x==12 &&
+        roundtrip.drawing.blocks.front().circles[1].layer=="Detail pads" &&
+        export_dxf_ascii(roundtrip.drawing)==bytes,
+        "main and block circles survive deterministic transport roundtrip without becoming arcs or polylines");
+    for (const auto* record : {"0\nCIRCLE\n20\n0\n40\n1\n", "0\nCIRCLE\n10\n0\n40\n1\n",
+        "0\nCIRCLE\n10\n0\n20\n0\n", "0\nCIRCLE\n10\n0\n20\n0\n40\n0\n",
+        "0\nCIRCLE\n10\n0\n20\n0\n40\n-1\n", "0\nCIRCLE\n10\nNaN\n20\n0\n40\n1\n",
+        "0\nCIRCLE\n10\n0\n20\ninf\n40\n1\n", "0\nCIRCLE\n10\n0\n20\n0\n40\nNaN\n",
+        "0\nCIRCLE\n10\n0\n10\n1\n20\n0\n40\n1\n", "0\nCIRCLE\n10\n0\n20\n0\n20\n1\n40\n1\n",
+        "0\nCIRCLE\n10\n0\n20\n0\n40\n1\n40\n2\n"})
+        rejects([&] { (void)parse_dxf_ascii(file(record)); });
+    const std::string circle="0\nCIRCLE\n10\n0\n20\n0\n40\n1\n";
+    for (const auto* feature : {"30\n1\n","39\n0.1\n","210\n1\n","220\n1\n","230\n-1\n",
+        "62\n1\n","6\nDASHED\n","370\n25\n"}) {
+        const auto unsupported=parse_dxf_ascii(file(circle+feature));
+        check(unsupported.drawing.circles.empty() && unsupported.diagnostics.size()==1 &&
+            unsupported.diagnostics.front().entity_type=="CIRCLE" &&
+            unsupported.diagnostics.front().code=="unsupported_feature",
+            "3D, thickness, nondefault OCS or unsupported appearance rejects the whole circle with a diagnostic");
+    }
+    for (double radius : {0.0,-1.0,std::numeric_limits<double>::infinity(),std::numeric_limits<double>::quiet_NaN()}) {
+        auto invalid=drawing; invalid.circles.front().radius=radius;
+        rejects([&] { (void)export_dxf_ascii(invalid); });
+    }
+    auto invalid=drawing; invalid.blocks.front().circles.front().center.x=std::numeric_limits<double>::infinity();
+    rejects([&] { (void)export_dxf_ascii(invalid); });
+    DxfDrawing main_only; main_only.circles={{{0,0},1},{{3,0},1}};
+    auto limits=DxfExchangeLimits{}; limits.max_entities=1;
+    rejects([&] { (void)parse_dxf_ascii(export_dxf_ascii(main_only),limits); });
+    rejects([&] { (void)export_dxf_ascii(main_only,limits); });
+    DxfDrawing block_only; block_only.blocks.push_back(block);
+    limits.max_entities=2;
+    rejects([&] { (void)parse_dxf_ascii(export_dxf_ascii(block_only),limits); });
+    rejects([&] { (void)export_dxf_ascii(block_only,limits); });
 }
-int main() { try { run(); std::cout << "DXF exchange tests passed\n"; return 0; }
+}
+int main() { try { test_circle_codec_and_limits(); run(); std::cout << "DXF exchange tests passed\n"; return 0; }
     catch (const std::exception& e) { std::cerr << e.what() << '\n'; return 1; } }

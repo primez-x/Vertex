@@ -19,6 +19,8 @@
 #include <stdexcept>
 #include <set>
 #include <string>
+#include <utility>
+#include <vector>
 
 namespace {
 
@@ -76,6 +78,276 @@ sketch::Document make_document() {
     return Document::create({std::move(boundary), std::move(dimension), std::move(wall),
                              std::move(opening), std::move(slab),
                              make_annotation_entity("annotations-1", annotations)});
+}
+
+void test_planar_circle_is_an_exact_editable_measurement_candidate() {
+    using namespace sketch;
+    const auto bytes=wrapped_entities("0\nCIRCLE\n8\nRound pads\n10\n3\n20\n-1\n40\n2\n");
+    const auto parsed=parse_dxf_ascii(bytes);
+    check(parsed.diagnostics.empty(),"a supported planar DXF CIRCLE must survive the transport codec without omission diagnostics");
+    const auto mapped=import_project_dxf(bytes);
+    check(mapped.complete() && mapped.entities.size()==1 && !mapped.source_retention_required,
+        "planar CIRCLE must reconstruct one complete native measurement candidate");
+    const auto& candidate=mapped.entities.front();
+    check(candidate.type=="boundary" && candidate.properties.value("classification","")=="dxf_circle" &&
+        candidate.extensions.at("dxf_source").at("layer")=="Round pads",
+        "circle candidate retains its explicit classification and source layer lineage");
+    check(inspect_boundary_entity_version(candidate).format==BoundaryEntityFormat::anonymous_legacy,
+        "circle import follows the established anonymous candidate identity contract");
+    const auto identified=decode_identified_boundary_entity(upgrade_legacy_boundary_entity(candidate));
+    const auto geometry=boundary_geometry(identified);
+    const auto pi=std::acos(-1.0);
+    check(geometry.size()==2 && std::abs(geometry[0].sweep_radians-pi)<1e-14 &&
+        std::abs(geometry[1].sweep_radians-pi)<1e-14 &&
+        geometry[0].end.x==geometry[1].start.x && geometry[0].end.y==geometry[1].start.y &&
+        geometry[1].end.x==geometry[0].start.x && geometry[1].end.y==geometry[0].start.y,
+        "full circle remains exactly closed as two analytical signed semicircles");
+    check(std::abs(std::hypot(geometry[0].start.x-3,geometry[0].start.y+1)-2)<1e-12 &&
+        std::abs(signed_area(geometry)-4*pi)<1e-10 && std::abs(perimeter(geometry)-4*pi)<1e-10,
+        "circle center, radius, area and perimeter remain exact analytical quantities");
+    const auto upgraded=upgrade_legacy_boundary_entity(candidate);
+    auto document=Document::create({upgraded});
+    const auto before=document.snapshot();
+    const Vec2 moved{geometry.front().start.x+0.5,geometry.front().start.y+0.25};
+    document.apply(EditBoundaryGeometry{document.revision(),
+        {candidate.id,BoundaryGeometryEditKind::move_vertex,
+            decode_identified_boundary_entity(upgraded).segments.front().start_vertex_id,moved}});
+    const auto edited=decode_identified_boundary_entity(document.snapshot().entities().at(candidate.id));
+    check(edited.segments.front().segment.start.x==moved.x && edited.segments.front().segment.start.y==moved.y &&
+        edited.segments.back().segment.end.x==moved.x && edited.segments.back().segment.end.y==moved.y,
+        "explicit circle identity upgrade admits a real shared-vertex edit without breaking closure");
+    document.undo(document.revision());
+    check(document.snapshot().entities()==before.entities(),"circle vertex-edit Undo restores the exact upgraded source");
+    const auto exported=export_project_dxf(before);
+    check(exported.diagnostics.empty() && exported.drawing.polylines.size()==1 &&
+        exported.drawing.polylines.front().closed && exported.drawing.polylines.front().vertices.size()==2 &&
+        std::abs(exported.drawing.polylines.front().vertices[0].bulge-1)<1e-14 &&
+        std::abs(exported.drawing.polylines.front().vertices[1].bulge-1)<1e-14,
+        "circle project export remains exactly closed as a two-bulge analytical polyline");
+    const auto repeated=import_project_dxf(export_dxf_ascii(exported.drawing));
+    check(repeated.complete() && repeated.entities.size()==1,"circle geometry roundtrip creates one complete boundary candidate");
+    const auto restored=boundary_geometry(decode_identified_boundary_entity(upgrade_legacy_boundary_entity(repeated.entities.front())));
+    check(std::abs(signed_area(restored)-4*pi)<1e-10 && std::abs(perimeter(restored)-4*pi)<1e-10,
+        "circle geometric roundtrip retains analytical area and perimeter without polygon approximation");
+}
+
+void check_circle(const sketch::Entity& entity,sketch::Vec2 center,double radius,double sign) {
+    using namespace sketch;
+    const auto geometry=boundary_geometry(decode_identified_boundary_entity(upgrade_legacy_boundary_entity(entity)));
+    const auto pi=std::acos(-1.0);
+    check(geometry.size()==2 && geometry[0].end.x==geometry[1].start.x && geometry[0].end.y==geometry[1].start.y &&
+        geometry[1].end.x==geometry[0].start.x && geometry[1].end.y==geometry[0].start.y,
+        "mapped circle's analytical semicircles share exact endpoints and closure");
+    for (const auto& segment : geometry) {
+        check(std::abs(segment.sweep_radians-sign*pi)<1e-14 &&
+            std::abs(std::hypot(segment.start.x-center.x,segment.start.y-center.y)-radius)<std::max(1e-12,radius*1e-11),
+            "circle transform retains exact signed sweep, center and radius in metre coordinates");
+    }
+    check(std::abs(signed_area(geometry)-sign*pi*radius*radius)<std::max(1e-10,pi*radius*radius*1e-11) &&
+        std::abs(perimeter(geometry)-2*pi*radius)<std::max(1e-10,2*pi*radius*1e-11),
+        "mapped circle area and perimeter remain analytical under units and reflections");
+}
+
+void test_circle_units_and_insert_transforms() {
+    using namespace sketch;
+    for (const auto& [units,factor] : std::vector<std::pair<int,double>>{{1,0.0254},{2,0.3048},{4,0.001},{5,0.01},{6,1},{7,1000}}) {
+        auto bytes=wrapped_entities("0\nCIRCLE\n8\nRound pads\n10\n3\n20\n-1\n40\n2\n");
+        bytes.replace(bytes.find("$INSUNITS\n70\n6"),std::string("$INSUNITS\n70\n6").size(),
+            "$INSUNITS\n70\n"+std::to_string(units));
+        const auto imported=import_project_dxf(bytes);
+        check(imported.complete() && imported.entities.size()==1,"supported circle source units must normalize without omission");
+        check_circle(imported.entities.front(),{3*factor,-factor},2*factor,1);
+        check(imported.entities.front().extensions.at("dxf_source").at("primitive")=="CIRCLE",
+            "direct circle source lineage preserves its CAD primitive kind");
+    }
+    const auto input=[](double x_scale,double y_scale) {
+        DxfDrawing drawing; drawing.insertion_units=4;
+        DxfBlock block{"Round fixture",{100,200}};
+        block.circles.push_back({{103,204},2,"0"});
+        block.circles.push_back({{113,204},1,"Detail pads"});
+        drawing.blocks.push_back(block);
+        drawing.inserts.push_back({block.name,{1000,2000},x_scale,y_scale,90,"Inserted pads"});
+        return drawing;
+    };
+    for (const double x_scale : {2.0,-2.0}) {
+        const auto imported=import_project_dxf(export_dxf_ascii(input(x_scale,2)));
+        check(imported.complete() && imported.entities.size()==2,"uniformly scaled and reflected block circles remain complete candidates");
+        check_circle(imported.entities[0],{0.992,x_scale>0 ? 2.006 : 1.994},0.004,x_scale>0 ? 1 : -1);
+        check_circle(imported.entities[1],{0.992,x_scale>0 ? 2.026 : 1.974},0.002,x_scale>0 ? 1 : -1);
+        check(imported.entities[0].properties.value("classification","")=="dxf_insert_circle" &&
+            imported.entities[0].extensions.at("dxf_source").at("layer")=="Inserted pads" &&
+            imported.entities[1].extensions.at("dxf_source").at("layer")=="Detail pads",
+            "block circle layer zero inherits INSERT layer while explicit circle layer stays intact");
+    }
+    auto distorted=input(2,3); distorted.lines.push_back({{0,0},{1000,0},"Retained line"});
+    const auto nonuniform=import_project_dxf(export_dxf_ascii(distorted));
+    check(nonuniform.source_retention_required && nonuniform.entities.size()==1 &&
+        nonuniform.entities.front().properties.value("classification","")=="dxf_line" &&
+        std::any_of(nonuniform.diagnostics.begin(),nonuniform.diagnostics.end(),[](const auto& item) {
+            return item.source_kind=="INSERT" && item.code=="nonuniform_circle_scale";
+        }),"nonuniform block circle scale retains source and diagnostic without fabricating an ellipse or dropping unrelated geometry");
+}
+void test_annotation_children_export_their_assigned_layers() {
+    using namespace sketch;
+    AnnotationState state;
+    const auto add_label=[&](const char* id,const char* text,const char* layer,double x) {
+        auto label=instantiate_label(default_label_templates().front(),id);
+        label.content=text; label.placement.position={x,0}; label.placement.layer_id=layer;
+        state.labels.push_back(std::move(label));
+    };
+    add_label("label-a","Layer A label","layer-a",0);
+    add_label("label-b","Layer B label","layer-b",10);
+    add_label("label-unassigned","Legacy label","",20);
+    state.symbols.push_back({"symbol-a","toilet-w3-d3",{{30,0},0,1,"layer-a"},{},true});
+    state.symbols.push_back({"symbol-b","double-bed-w2-d2",{{40,0},0,1,"layer-b"},{},true});
+    state.symbols.push_back({"symbol-unassigned","sofa-w2-d2",{{50,0},0,1},{},true});
+    const auto document=Document::create({make_annotation_entity("layered-annotations",state),
+        Entity{"layer-a","layer",{{"name","Notes A"}}},Entity{"layer-b","layer",{{"name","Furniture B"}}}});
+    const auto exported=export_project_dxf(document.snapshot());
+    check(exported.diagnostics.empty() && exported.drawing.labels.size()==3,
+        "valid child annotation layers export without loss diagnostics");
+    const std::map<std::string,std::string> expected{{"Layer A label","Notes A"},{"Layer B label","Furniture B"},
+        {"Legacy label","Annotations"}};
+    for (const auto& label : exported.drawing.labels)
+        check(label.layer==expected.at(label.text),"each annotation label exports its own referenced layer name or legacy fallback");
+    std::set<std::string> symbol_layers;
+    for (const auto& line : exported.drawing.lines) symbol_layers.insert(line.layer);
+    check(symbol_layers==std::set<std::string>{"Notes A","Furniture B","Symbols"},
+        "two differently layered symbols and an unassigned symbol retain separate DXF layers");
+    const auto imported=import_project_dxf(export_dxf_ascii(exported.drawing));
+    check(imported.complete(),"named annotation child layers survive transport and project reconstruction");
+    std::set<std::string> reconstructed_symbol_layers;
+    for (const auto& entity : imported.entities) {
+        if (entity.type=="boundary") reconstructed_symbol_layers.insert(entity.extensions.at("dxf_source").at("layer").get<std::string>());
+        if (entity.type!=kAnnotationEntityType) continue;
+        const auto labels=decode_annotation_entity(entity).labels;
+        for (const auto& label : labels)
+            check(entity.extensions.at("dxf_annotation_layers").at(label.id)==expected.at(label.content),
+                "reconstructed annotation labels retain actual per-child source layer lineage");
+    }
+    check(reconstructed_symbol_layers==symbol_layers,"symbol fallback strokes retain their individual CAD layers after reimport");
+
+    AnnotationState invalid;
+    for (const auto& [id,layer] : std::vector<std::pair<std::string,std::string>>{
+        {"missing-label","missing-layer"},{"wrong-type-label","not-a-layer"},{"invalid-name-label","bad-layer"}}) {
+        auto label=instantiate_label(default_label_templates().front(),id);
+        label.content=id; label.placement.layer_id=layer; invalid.labels.push_back(std::move(label));
+    }
+    invalid.symbols.push_back({"missing-symbol","toilet-w3-d3",{{0,0},0,1,"missing-layer"},{},true});
+    const auto invalid_document=Document::create({make_annotation_entity("invalid-layer-annotations",invalid),
+        Entity{"not-a-layer","floor",{{"name","Wrong target type"}}},Entity{"bad-layer","layer",{{"name","Bad\nlayer"}}}});
+    const auto invalid_export=export_project_dxf(invalid_document.snapshot());
+    check(invalid_export.diagnostics.size()>=4,
+        "each invalid child layer assignment contributes a loss diagnostic rather than one generic success fallback");
+    for (const auto* id : {"missing-label","wrong-type-label","invalid-name-label","missing-symbol"})
+        check(std::any_of(invalid_export.diagnostics.begin(),invalid_export.diagnostics.end(),[&](const auto& item) {
+            return item.source_id==id && !item.code.empty();
+        }),"missing, wrong-type or unrepresentable annotation layer assignments require explicit source diagnostics");
+    check(std::none_of(invalid_export.drawing.labels.begin(),invalid_export.drawing.labels.end(),[](const auto& label) {
+        return label.layer=="Bad\nlayer" || label.layer=="missing-layer" || label.layer=="not-a-layer";
+    }),"invalid layer references never masquerade as resolved CAD layer names");
+    check(std::any_of(invalid_export.diagnostics.begin(),invalid_export.diagnostics.end(),[](const auto& item) {
+        return item.code=="layer_not_representable";
+    }),"invalid resolved layer name reuses the established bounded DXF layer diagnostic");
+}
+
+void test_expanded_circle_insert_budgets() {
+    using namespace sketch;
+    const auto circles=[](int count) {
+        DxfDrawing drawing; drawing.insertion_units=6;
+        DxfBlock block{"Repeated circles",{0,0}};
+        block.circles={{{0,0},1},{{4,0},1}}; drawing.blocks.push_back(block);
+        for (int i=0;i<count;++i) drawing.inserts.push_back({block.name,{0,10.0*i},1,1,0,"Pads"});
+        return export_dxf_ascii(drawing);
+    };
+    const auto rejected=[](const std::string& bytes,DxfExchangeLimits limits) {
+        check(parse_dxf_ascii(bytes,limits).diagnostics.empty(),"expanded-budget regression input is legal bounded source transport");
+        bool failed{};
+        try { (void)import_project_dxf(bytes,limits); } catch (const std::invalid_argument& error) {
+            check(std::string(error.what()).find("dxf_project_expansion_limit_exceeded")!=std::string::npos,
+                "checked expanded work budget uses its stable whole-import failure diagnostic");
+            failed=true;
+        }
+        check(failed,"expanded INSERT geometry or candidate budget must fail before returning a partial import");
+    };
+    auto limits=DxfExchangeLimits{}; limits.max_entities=6; limits.max_vertices=8;
+    rejected(circles(3),limits);
+    limits.max_entities=7; limits.max_vertices=100;
+    rejected(circles(4),limits);
+    DxfDrawing mixed; mixed.insertion_units=6;
+    DxfBlock block{"Mixed bounded fixture",{0,0}};
+    block.lines.push_back({{0,0},{1,0}});
+    block.circles.push_back({{3,0},1});
+    block.polylines.push_back({{{{0,2},0},{{1,2},0}},false});
+    block.labels.push_back({{0,3},0.2,0,"Mixed label"});
+    mixed.blocks.push_back(block);
+    mixed.inserts.push_back({block.name,{0,0}}); mixed.inserts.push_back({block.name,{10,0}});
+    const auto mixed_bytes=export_dxf_ascii(mixed);
+    limits.max_entities=9; limits.max_vertices=12;
+    check(parse_dxf_ascii(mixed_bytes,limits).diagnostics.empty(),"mixed exact-limit fixture remains legal source transport");
+    const auto accepted=import_project_dxf(mixed_bytes,limits);
+    check(accepted.complete() && accepted.entities.size()==7 &&
+        decode_annotation_entity(accepted.entities.back()).labels.size()==2,
+        "exact expanded boundary, child, shared-container and conservative geometry-work limits are accepted");
+    auto one_less=limits; one_less.max_entities=8; rejected(mixed_bytes,one_less);
+    one_less=limits; one_less.max_vertices=11; rejected(mixed_bytes,one_less);
+}
+
+void test_circle_geometry_representability() {
+    using namespace sketch;
+    const auto omitted=[](const std::string& bytes) {
+        check(parse_dxf_ascii(bytes).diagnostics.empty(),
+            "finite positive-radius collapsed circle remains valid source transport");
+        const auto imported=import_project_dxf(bytes);
+        check(!imported.complete() && imported.entities.empty() && imported.source_retention_required &&
+            std::any_of(imported.diagnostics.begin(),imported.diagnostics.end(),[](const auto& item) {
+                return item.code=="circle_geometry_not_representable";
+            }),"collapsed circle endpoints must be omitted with an explicit representability diagnostic and retained source");
+    };
+    omitted(wrapped_entities("0\nCIRCLE\n10\n1000000000000\n20\n0\n40\n0.000001\n"));
+    DxfDrawing drawing; drawing.insertion_units=6;
+    DxfBlock block{"Small round fixture",{0,0}};
+    block.circles.push_back({{0,0},0.000001}); drawing.blocks.push_back(block);
+    drawing.inserts.push_back({block.name,{1e12,0}});
+    omitted(export_dxf_ascii(drawing));
+    const auto representable=import_project_dxf(wrapped_entities(
+        "0\nCIRCLE\n10\n1000000000000\n20\n0\n40\n2\n"));
+    check(representable.complete() && representable.entities.size()==1,
+        "large coordinates alone do not reject a representable analytical circle");
+    check_circle(representable.entities.front(),{1e12,0},2,1);
+    drawing.blocks.front().circles.front().radius=2;
+    const auto inserted=import_project_dxf(export_dxf_ascii(drawing));
+    check(inserted.complete() && inserted.entities.size()==1,
+        "uniform INSERT at large coordinates accepts a representable circle");
+    check_circle(inserted.entities.front(),{1e12,0},2,1);
+}
+
+void test_circle_insert_admission_uses_final_geometry() {
+    using namespace sketch;
+    DxfDrawing drawing; drawing.insertion_units=6;
+    DxfBlock block{"Upscaled round fixture",{1e12,0}};
+    block.circles.push_back({{1e12,0},0.000001}); drawing.blocks.push_back(block);
+    drawing.inserts.push_back({block.name,{0,0},1e6,1e6});
+    const auto bytes=export_dxf_ascii(drawing);
+    check(parse_dxf_ascii(bytes).diagnostics.empty(),
+        "uniformly upscaled source circle is valid transport even when source-coordinate endpoints would collapse");
+    const auto imported=import_project_dxf(bytes);
+    check(imported.complete() && imported.entities.size()==1 && !imported.source_retention_required,
+        "uniform INSERT must admit a representable final circle without first constructing collapsed source endpoints");
+    check_circle(imported.entities.front(),{0,0},1,1);
+    check(imported.entities.front().properties.value("classification","")=="dxf_insert_circle",
+        "upscaled circle retains its INSERT candidate classification");
+    drawing.blocks.front().base={0,0};
+    drawing.blocks.front().circles.front()={{0,0},1e-8};
+    for (const double sign : {1.0,-1.0}) {
+        drawing.inserts.front()={block.name,{3,-2},sign*1e8,1e8,90,"Upscaled pads"};
+        const auto transformed=import_project_dxf(export_dxf_ascii(drawing));
+        check(transformed.complete() && transformed.entities.size()==1 && !transformed.source_retention_required,
+            "small source circles are admitted when uniform scaling produces valid final analytical geometry");
+        check_circle(transformed.entities.front(),{3,-2},1,sign);
+        check(transformed.entities.front().extensions.at("dxf_source").at("layer")=="Upscaled pads",
+            "upscaled rotated and reflected circles retain effective INSERT layer provenance");
+    }
 }
 
 void run() {
@@ -174,7 +446,7 @@ void run() {
     }), "block inserts must reconstruct transformed native geometry");
 
     const auto unsupported = import_project_dxf(wrapped_entities(
-        "0\nCIRCLE\n10\n0\n20\n0\n40\n2\n"));
+        "0\nELLIPSE\n10\n0\n20\n0\n40\n2\n"));
     check(!unsupported.diagnostics.empty() && unsupported.source_retention_required,
           "unsupported DXF entities must produce retention diagnostics");
     bool rejected = false;
@@ -361,8 +633,8 @@ void test_unspecified_or_unsupported_units_fail_closed() {
     missing.erase(missing.find("9\n$INSUNITS\n70\n6\n"), std::string("9\n$INSUNITS\n70\n6\n").size());
     const auto unspecified = import_project_dxf(missing);
     check(unspecified.entities.empty() && unspecified.source_retention_required &&
-          unspecified.diagnostics.size() == 2,
-          "missing units must preserve both units and unsupported-record diagnostics");
+          unspecified.diagnostics.size() == 1 && unspecified.diagnostics.front().code=="source_units_unspecified",
+          "unitless supported circles must still produce no candidates and retain the unresolved-units diagnostic");
     auto unknown = wrapped_entities("0\nLINE\n10\n0\n20\n0\n11\n1000\n21\n0\n");
     unknown.replace(unknown.find("$INSUNITS\n70\n6"), std::string("$INSUNITS\n70\n6").size(), "$INSUNITS\n70\n99");
     bool rejected = false;
@@ -704,6 +976,15 @@ void test_native_hosted_roundtrip_and_fallback() {
         };
         auto changed = mapped.drawing;
         changed.blocks.front().lines.front().end.x += 0.02; fallback(changed);
+        changed=mapped.drawing; changed.blocks.front().circles.push_back({{4,5},0.4,"0"});
+        const auto circle_tamper_bytes=export_dxf_ascii(changed);
+        check(parse_dxf_ascii(circle_tamper_bytes).diagnostics.empty(),
+            "extra-circle native tamper uses supported transport rather than unsupported-entity rejection");
+        fallback(changed);
+        const auto circle_fallback=import_project_dxf(circle_tamper_bytes);
+        check(std::any_of(circle_fallback.entities.begin(),circle_fallback.entities.end(),[](const auto& entity) {
+            return entity.properties.value("classification","")=="dxf_insert_circle";
+        }),"extra supported circle breaks native block parity and survives as explicit analytical visual fallback");
         changed = mapped.drawing; changed.blocks.front().vertex_entity_json = "{"; fallback(changed);
         changed = mapped.drawing; changed.inserts.front().rotation_degrees = 20; fallback(changed);
         changed = mapped.drawing; changed.inserts.erase(changed.inserts.begin()); fallback(changed);
@@ -800,6 +1081,12 @@ void test_import_source_layer_lineage() {
 
 int main() {
     try {
+        test_planar_circle_is_an_exact_editable_measurement_candidate();
+        test_circle_units_and_insert_transforms();
+        test_annotation_children_export_their_assigned_layers();
+        test_expanded_circle_insert_budgets();
+        test_circle_geometry_representability();
+        test_circle_insert_admission_uses_final_geometry();
         run();
         test_source_units_are_normalized_to_metres();
         test_units_cover_primitives_annotations_and_blocks();

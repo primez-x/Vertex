@@ -71,12 +71,12 @@ resolves references, contacts a service, or mutates a project. It is a smaller
 implemented subset than the declared `local.dxf.worker` target above; it does
 not satisfy that worker's reference-preservation or runtime-attestation gates.
 
-The transport records preserve 2D LINE endpoints, ARC center/radius and
+The transport records preserve 2D LINE endpoints, CIRCLE center/radius, ARC center/radius and
 counterclockwise start/end angles, LWPOLYLINE vertices with signed bulges and
 closure, plain TEXT insertion point/height/rotation/string, linear DIMENSION
 extension and text points, and one-loop solid polygon HATCH boundaries. Layers
 and R2013 `$INSUNITS` values 0 through 20 are retained without unit conversion.
-BLOCK definitions contain lines, arcs, open/closed bulged polylines, and plain
+BLOCK definitions contain lines, arcs, circles, open/closed bulged polylines, and plain
 text; INSERT records retain the block name, insertion point, independent X/Y
 scale, rotation, and layer. Block names are unique and every insert must name
 a definition in the same file.
@@ -104,7 +104,7 @@ and bulges have absolute numeric magnitude capped at `1e12`.
 
 `DxfImportResult::diagnostics` identifies unsupported entities by one-based
 ENTITIES ordinal, entity type, and a stable code. POLYLINE, MTEXT,
-CIRCLE, and every other unimplemented type are reported as `unsupported_entity`.
+ELLIPSE and every other unimplemented type are reported as `unsupported_entity`.
 Unsupported dimension types, patterned or multi-loop hatches, nested blocks,
 attributes, unsupported block content, 3D coordinates, nondefault OCS,
 paper-space entities, widths, and styled text omit the whole affected entity
@@ -118,8 +118,8 @@ retained. No native Apex compatibility or full DXF fidelity is claimed.
 Both import and export enforce caller-reducible hard ceilings: 16 MiB, 500,000
 group-code pairs, 50,000 entities, 100,000 aggregate polyline vertices, and
 255 bytes per value. Export uses locale-independent round-trip numeric precision,
-normalizes negative zero, emits LF, and groups entities as lines, arcs,
-polylines, then labels while retaining each vector's order. Repeated export and
+normalizes negative zero, emits LF, and groups entities as lines, arcs, circles,
+polylines, dimensions, hatches, labels and INSERTs while retaining each vector's order. Repeated export and
 export/import/export are byte-stable within this subset. Export rejects invalid
 records or strings instead of emitting injected group codes.
 
@@ -155,7 +155,7 @@ into a misleading linear measurement.
 
 `import_project_dxf` parses the bounded drawing and returns unparented editable
 boundary candidates plus one typed annotation entity for labels. Lines, arcs,
-polylines, solid hatch loops, and block INSERT geometry are reconstructed with
+circles, polylines, solid hatch loops, and block INSERT geometry are reconstructed with
 stable import-local IDs and an inspectable `extensions.dxf_source` record.
 Dimensions retain their extension geometry and displayed text as annotation
 content, but are explicitly diagnosed as `dimension_associativity_unbound`
@@ -167,6 +167,45 @@ references with missing block definitions are rejected before mapping. The resul
 `source_retention_required` whenever either the transport parser or project
 mapper reports a limitation, so a desktop adapter can retain the original DXF
 bytes alongside the editable candidates.
+
+CIRCLE follows [Autodesk's entity contract](https://help.autodesk.com/cloudhelp/2018/ENU/AutoCAD-DXF/files/GUID-8663262B-222C-414D-B133-4A8506A27C18.htm):
+center coordinates, positive radius and a default planar object coordinate
+system. Nonzero thickness, nonplanar centers and nondefault normals are diagnosed
+as unsupported. A native circle boundary contains two exact semicircles with
+shared opposite endpoints; area and perimeter remain analytical. Uniform
+INSERT scale, reflection, rotation and block base points are honored. A
+nonuniform circle scale requires an ellipse and produces
+`nonuniform_circle_scale`. A numerically unrepresentable circle produces
+`circle_geometry_not_representable` and requires source retention. Imported
+boundaries follow the existing anonymous geometry contract; **Upgrade boundary
+editing** adds stable topology for typed edge/vertex edits. Native export can
+represent the circle as a closed two-bulge LWPOLYLINE without changing its curve.
+
+The desktop library normalizer also retains ASCII/binary circles. Foreign block
+copies must satisfy exact XY uniformity and the original circle's default
+normal, zero elevation and finite positive radius before being admitted. A
+valid reflected copy is converted to an equivalent default-normal world circle.
+Library tolerance or transform repair cannot make unsupported source geometry
+editable; these cases retain `dxf_insert_transform_not_mapped` diagnostics.
+General nonuniform transforms may instead report an unmapped ELLIPSE. Native
+metadata continues through the original strict representation.
+
+Project mapping also preflights expanded INSERT work before creating candidates.
+`max_entities` caps candidate records and annotation children, including their
+shared owner; `max_vertices` caps analytical geometry work (line/arc: one,
+circle: two, polyline/hatch: source vertex count, label: one anchor, dimension:
+four anchors). Native metadata activation reserves an additional record and
+geometry unit. Checked accumulation covers direct and repeated block content;
+excess work throws `dxf_project_expansion_limit_exceeded` without a partial
+candidate set. Conservative accounting can refuse content that a later
+unsupported-feature fallback would otherwise simplify.
+
+Annotation export resolves each label/symbol's assigned native layer name.
+Unassigned children keep Annotations/Symbols fallback layers. A missing or
+invalid layer reference is reported against the child with
+`layer_reference_missing` and layer 0; an unrepresentable name uses the existing
+`layer_not_representable` diagnostic. Labels do not revert to a generic layer
+after a reviewed import.
 
 This mapping is a deterministic native-project slice, not Apex native-file
 compatibility or full CAD fidelity. The desktop transaction adapter retains the

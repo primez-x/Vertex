@@ -120,6 +120,15 @@ std::string valid_layer(std::string value, std::vector<DxfProjectDiagnostic>& di
     return value;
 }
 
+std::optional<std::string> layer_name(const DocumentSnapshot& document, const std::string& layer_id) {
+    const auto found = document.entities().find(layer_id);
+    if (found == document.entities().end() || found->second.type != "layer" ||
+        !found->second.properties.contains("name") || !found->second.properties.at("name").is_string())
+        return std::nullopt;
+    const auto name = found->second.properties.at("name").get<std::string>();
+    return name.empty() ? std::nullopt : std::optional<std::string>{name};
+}
+
 std::string layer_for(const DocumentSnapshot& document, const Entity& entity,
                       std::vector<DxfProjectDiagnostic>& diagnostics) {
     std::string layer;
@@ -133,15 +142,22 @@ std::string layer_for(const DocumentSnapshot& document, const Entity& entity,
         if (layer.empty() && entity.properties.contains("layer_id") &&
             entity.properties.at("layer_id").is_string()) {
             const auto layer_id = entity.properties.at("layer_id").get<std::string>();
-            const auto found = document.entities().find(layer_id);
-            if (found != document.entities().end() && found->second.type == "layer" &&
-                found->second.properties.contains("name") &&
-                found->second.properties.at("name").is_string()) {
-                layer = found->second.properties.at("name").get<std::string>();
-            }
+            if (const auto name = layer_name(document, layer_id)) layer = *name;
         }
     }
     return valid_layer(std::move(layer), diagnostics, entity.id, entity.type);
+}
+
+std::string annotation_layer_for(const DocumentSnapshot& document, const AnnotationPlacement& placement,
+                                 const std::string& child_id, std::string_view fallback,
+                                 std::vector<DxfProjectDiagnostic>& diagnostics) {
+    if (placement.layer_id.empty()) return std::string(fallback);
+    const auto name = layer_name(document, placement.layer_id);
+    if (!name) {
+        diagnostic(diagnostics, child_id, kAnnotationEntityType, "layer_reference_missing");
+        return "0";
+    }
+    return valid_layer(*name, diagnostics, child_id, kAnnotationEntityType);
 }
 
 double normalized_degrees(double radians) {
@@ -457,7 +473,7 @@ void export_native_entity(const DocumentSnapshot& document, const Entity& entity
                 if (!label.visible) continue;
                 result.drawing.labels.push_back({{label.placement.position.x, label.placement.position.y},
                     label.style.text_height_metres, normalized_degrees(label.placement.rotation_radians),
-                    label.content, "Annotations"});
+                    label.content, annotation_layer_for(document, label.placement, label.id, "Annotations", result.diagnostics)});
             }
             const auto catalog = default_symbol_catalog();
             for (const auto& symbol : state.symbols) {
@@ -471,9 +487,10 @@ void export_native_entity(const DocumentSnapshot& document, const Entity& entity
                 }
                 try {
                     const auto definition = resolved_symbol_definition(symbol, catalog);
+                    const auto symbol_layer = annotation_layer_for(document, symbol.placement, symbol.id, "Symbols", result.diagnostics);
                     for (const auto& stroke : transformed_symbol_preview(definition, symbol))
                         result.drawing.lines.push_back({{stroke.start.x, stroke.start.y},
-                                                        {stroke.end.x, stroke.end.y}, "Symbols"});
+                                                        {stroke.end.x, stroke.end.y}, symbol_layer});
                 } catch (const std::exception&) {
                     diagnostic(result.diagnostics, entity.id, entity.type, "symbol_not_representable");
                 }
@@ -600,6 +617,46 @@ Boundary polyline_boundary(const DxfPolyline& polyline) {
     return result;
 }
 
+bool circle_geometry_representable(const Boundary& boundary, DxfPoint expected_center, double expected_radius) {
+    if (!std::isfinite(expected_center.x) || !std::isfinite(expected_center.y) ||
+        !std::isfinite(expected_radius) || !(expected_radius > 0) || boundary.size() != 2)
+        return false;
+    // Closure must survive exactly, independently of the validator's contact
+    // tolerance. Validate native analytical arcs before recovering their circle.
+    if (boundary[0].end.x != boundary[1].start.x || boundary[0].end.y != boundary[1].start.y ||
+        boundary[1].end.x != boundary[0].start.x || boundary[1].end.y != boundary[0].start.y ||
+        !validate_boundary(boundary, kGeometryTolerance).empty())
+        return false;
+    for (const auto& segment : boundary) {
+        if (std::abs(segment.sweep_radians) != std::numbers::pi ||
+            segment.sweep_radians != boundary.front().sweep_radians)
+            return false;
+        const auto dx = segment.end.x - segment.start.x;
+        const auto dy = segment.end.y - segment.start.y;
+        const auto chord = std::hypot(dx, dy);
+        const auto half_sweep = segment.sweep_radians * 0.5;
+        const auto radius = chord / (2.0 * std::sin(std::abs(half_sweep)));
+        const auto offset = chord / (2.0 * std::tan(half_sweep));
+        const DxfPoint center{(segment.start.x + segment.end.x) * 0.5 - (dy / chord) * offset,
+                              (segment.start.y + segment.end.y) * 0.5 + (dx / chord) * offset};
+        if (!std::isfinite(radius) || !std::isfinite(center.x) || !std::isfinite(center.y) ||
+            std::abs(radius - expected_radius) > kGeometryTolerance ||
+            std::hypot(center.x - expected_center.x, center.y - expected_center.y) > kGeometryTolerance)
+            return false;
+    }
+    return true;
+}
+
+std::optional<Boundary> circle_boundary(const DxfCircle& circle) {
+    // A single full-turn segment has coincident endpoints and is not a native
+    // arc. Two analytical semicircles retain the complete closed geometry.
+    const Vec2 right{circle.center.x + circle.radius, circle.center.y};
+    const Vec2 left{circle.center.x - circle.radius, circle.center.y};
+    Boundary boundary{{right, left, std::numbers::pi}, {left, right, std::numbers::pi}};
+    if (!circle_geometry_representable(boundary, circle.center, circle.radius)) return std::nullopt;
+    return boundary;
+}
+
 struct InsertTransform {
     DxfPoint origin;
     double scale_x{1};
@@ -645,6 +702,15 @@ void import_direct_geometry(const DxfDrawing& drawing, DxfProjectImportResult& r
         const Boundary boundary{arc_segment(arc)};
         result.entities.push_back(imported_boundary("dxf-boundary-" + std::to_string(++counter),
             boundary, "dxf_arc", arc.layer, "ARC"));
+    }
+    for (const auto& circle : drawing.circles) {
+        const auto boundary = circle_boundary(circle);
+        if (!boundary) {
+            diagnostic(result.diagnostics, {}, "CIRCLE", "circle_geometry_not_representable");
+            continue;
+        }
+        result.entities.push_back(imported_boundary("dxf-boundary-" + std::to_string(++counter),
+            *boundary, "dxf_circle", circle.layer, "CIRCLE"));
     }
     for (const auto& polyline : drawing.polylines) {
         const auto boundary = polyline_boundary(polyline);
@@ -761,6 +827,29 @@ void import_inserts(const DxfDrawing& drawing, const std::set<std::size_t>& nati
             result.entities.push_back(imported_boundary("dxf-boundary-" + std::to_string(++boundary_counter),
                 Boundary{transformed}, "dxf_insert_arc", effective_layer(arc.layer), "INSERT"));
         }
+        for (const auto& circle : block->circles) {
+            if (std::abs(transform.scale_x) != std::abs(transform.scale_y)) {
+                diagnostic(result.diagnostics, insert.block_name, "INSERT", "nonuniform_circle_scale");
+                continue;
+            }
+            const auto center = transform_point(circle.center, transform);
+            // CIRCLE has no authored angular endpoints. Construct its diameter
+            // after placement so recentering/upscaling can recover geometry
+            // that cannot be represented around the source block's coordinates.
+            const auto signed_radius = circle.radius * transform.scale_x;
+            const auto dx = signed_radius * std::cos(transform.rotation);
+            const auto dy = signed_radius * std::sin(transform.rotation);
+            const Vec2 right{center.x + dx, center.y + dy};
+            const Vec2 left{center.x - dx, center.y - dy};
+            const auto sweep = transform.scale_x * transform.scale_y < 0 ? -std::numbers::pi : std::numbers::pi;
+            const Boundary transformed{{right, left, sweep}, {left, right, sweep}};
+            if (!circle_geometry_representable(transformed, center, std::abs(signed_radius))) {
+                diagnostic(result.diagnostics, insert.block_name, "INSERT", "circle_geometry_not_representable");
+                continue;
+            }
+            result.entities.push_back(imported_boundary("dxf-boundary-" + std::to_string(++boundary_counter),
+                transformed, "dxf_insert_circle", effective_layer(circle.layer), "INSERT"));
+        }
         for (const auto& polyline : block->polylines) {
             auto source = polyline_boundary(polyline);
             const auto transformed = transformed_boundary(source, transform);
@@ -843,7 +932,8 @@ bool same_block_geometry(const DxfBlock& a, const DxfBlock& b) {
     const auto near = [](double x, double y) { return std::abs(x - y) <= kGeometryTolerance; };
     const auto point = [&](DxfPoint x, DxfPoint y) { return near(x.x, y.x) && near(x.y, y.y); };
     if (!a.labels.empty() || !b.labels.empty() || a.lines.size() != b.lines.size() ||
-        a.arcs.size() != b.arcs.size() || a.polylines.size() != b.polylines.size()) return false;
+        a.arcs.size() != b.arcs.size() || a.polylines.size() != b.polylines.size() ||
+        a.circles.size() != b.circles.size()) return false;
     for (std::size_t i = 0; i < a.lines.size(); ++i)
         if (!point(a.lines[i].start, b.lines[i].start) || !point(a.lines[i].end, b.lines[i].end) ||
             a.lines[i].layer != b.lines[i].layer) return false;
@@ -851,6 +941,9 @@ bool same_block_geometry(const DxfBlock& a, const DxfBlock& b) {
         if (!point(a.arcs[i].center, b.arcs[i].center) || !near(a.arcs[i].radius, b.arcs[i].radius) ||
             !near(a.arcs[i].start_degrees, b.arcs[i].start_degrees) ||
             !near(a.arcs[i].end_degrees, b.arcs[i].end_degrees) || a.arcs[i].layer != b.arcs[i].layer) return false;
+    for (std::size_t i = 0; i < a.circles.size(); ++i)
+        if (!point(a.circles[i].center, b.circles[i].center) || !near(a.circles[i].radius, b.circles[i].radius) ||
+            a.circles[i].layer != b.circles[i].layer) return false;
     for (std::size_t i = 0; i < a.polylines.size(); ++i) {
         const auto& x = a.polylines[i]; const auto& y = b.polylines[i];
         if (x.closed != y.closed || x.layer != y.layer || x.vertices.size() != y.vertices.size()) return false;
@@ -980,6 +1073,7 @@ void normalize_drawing_to_metres(DxfDrawing& drawing, double factor) {
     const auto primitives = [&](auto& contents) {
         for (auto& line : contents.lines) { point(line.start); point(line.end); }
         for (auto& arc : contents.arcs) { point(arc.center); length(arc.radius); }
+        for (auto& circle : contents.circles) { point(circle.center); length(circle.radius); }
         for (auto& polyline : contents.polylines)
             for (auto& vertex : polyline.vertices) point(vertex.point);
         for (auto& label : contents.labels) { point(label.position); length(label.height); }
@@ -996,6 +1090,72 @@ void normalize_drawing_to_metres(DxfDrawing& drawing, double factor) {
     for (auto& block : drawing.blocks) { point(block.base); primitives(block); }
     for (auto& insert : drawing.inserts) point(insert.insertion);
     drawing.insertion_units = 6;
+}
+
+void preflight_project_expansion(const DxfDrawing& drawing, const DxfExchangeLimits& limits) {
+    // Transport budgets bound stored definitions, not their INSERT expansion.
+    // The mapper separately caps work records (including annotation children)
+    // and analytical geometry: one line/arc segment, two circle segments,
+    // polyline/hatch vertices, label anchors and four dimension anchors.
+    struct Work {
+        std::size_t records{};
+        std::size_t geometry{};
+        bool annotations{};
+    };
+    const auto add = [](std::size_t& total, std::size_t amount, std::size_t cap) {
+        if (amount > cap - total)
+            throw std::invalid_argument("dxf_project_expansion_limit_exceeded");
+        total += amount;
+    };
+    const auto primitives = [&](const auto& contents) {
+        Work work;
+        const auto raw_cap = std::numeric_limits<std::size_t>::max();
+        for (const auto count : {contents.lines.size(), contents.arcs.size(), contents.circles.size(),
+                                 contents.polylines.size(), contents.labels.size()})
+            add(work.records, count, raw_cap);
+        add(work.geometry, contents.lines.size(), raw_cap);
+        add(work.geometry, contents.arcs.size(), raw_cap);
+        add(work.geometry, contents.circles.size(), raw_cap);
+        add(work.geometry, contents.circles.size(), raw_cap);
+        for (const auto& polyline : contents.polylines)
+            add(work.geometry, polyline.vertices.size(), raw_cap);
+        add(work.geometry, contents.labels.size(), raw_cap);
+        work.annotations = !contents.labels.empty();
+        return work;
+    };
+    Work total;
+    const auto append = [&](const Work& work) {
+        add(total.records, work.records, limits.max_entities);
+        add(total.geometry, work.geometry, limits.max_vertices);
+        total.annotations = total.annotations || work.annotations;
+    };
+    append(primitives(drawing));
+    // Dimensions produce both a boundary candidate and an annotation child.
+    for (const auto& dimension : drawing.dimensions) {
+        (void)dimension;
+        append({2, 4, true});
+    }
+    for (const auto& hatch : drawing.hatches)
+        append({1, hatch.boundary.size(), false});
+
+    std::map<std::string, Work, std::less<>> blocks;
+    for (const auto& block : drawing.blocks) {
+        auto work = primitives(block);
+        if (!block.vertex_entity_json.empty()) {
+            // Reserve activation as well as fallback before inspecting native
+            // metadata. Generated plan parity is still checked independently.
+            add(work.records, 1, std::numeric_limits<std::size_t>::max());
+            add(work.geometry, 1, std::numeric_limits<std::size_t>::max());
+        }
+        blocks.emplace(block.name, work);
+    }
+    for (const auto& insert : drawing.inserts) {
+        const auto block = blocks.find(insert.block_name);
+        if (block == blocks.end()) throw std::invalid_argument("invalid_or_excessive_dxf");
+        append(block->second);
+    }
+    // Children share one native annotation-state container.
+    if (total.annotations) add(total.records, 1, limits.max_entities);
 }
 
 } // namespace
@@ -1034,6 +1194,7 @@ DxfProjectImportResult import_project_dxf(std::string_view bytes,
         return result;
     }
     const bool source_is_metres = parsed.drawing.insertion_units == 6;
+    preflight_project_expansion(parsed.drawing, limits);
     normalize_drawing_to_metres(parsed.drawing, *factor);
     const auto native_inserts = import_native_graphs(parsed.drawing, source_is_metres, result);
     std::size_t boundary_counter = 0;

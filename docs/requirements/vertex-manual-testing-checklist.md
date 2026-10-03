@@ -2127,6 +2127,26 @@ drawing; switching modes does not change existing geometry.
   - Result: Not tested
   - Notes: ______________________________
 
+## Importing round CAD fixtures and preserving layers
+
+- [ ] **U362 — Import an exact circle from a CAD plan**
+  - Steps: Use Import DXF with `tests/fixtures/dxf/circle-mm.dxf`. Choose the destination floor/layer in the review. Fit the canvas and select the round pad. Undo and Redo, then save and reopen.
+  - Expected: One complete circle appears with a 4 m diameter, rather than a missing item or a polygon. Its area is about 12.566 m² and perimeter about 12.566 m. The chosen layer and original DXF are retained. Undo/Redo and reopening preserve it. An imported shape does not automatically become verified GLA.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **U363 — Edit an imported curved boundary**
+  - Steps: Select the imported circle, run Upgrade boundary editing from Commands, then open its boundary geometry editor. Change a curved edge length, Apply, Undo and Redo. Save/reopen, then export DXF.
+  - Expected: The selected curve's physical length can be edited precisely. Undo restores the circle. Editing and reopening preserve true curves; export retains curved geometry.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **U364 — Keep annotation layers when exporting CAD**
+  - Steps: Put two text labels and two components on different named layers. Export DXF and import the result into another project. Inspect source layers in the import review. Repeat with labels imported earlier into a chosen destination layer.
+  - Expected: Labels and component linework use the layers you assigned. Reviewed imported labels retain the destination layer on later export. Export notes disclose unsupported symbol artwork rather than promising full native component fidelity.
+  - Result: Not tested
+  - Notes: ______________________________
+
 ## Issue report template
 
 - Task ID(s):
