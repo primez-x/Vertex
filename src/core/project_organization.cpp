@@ -82,9 +82,9 @@ void add_issues(std::vector<std::string>& destination,
 }
 
 bool is_placeable_type(std::string_view type) noexcept {
-    static constexpr std::array<std::string_view, 13> placeable{
+    static constexpr std::array<std::string_view, 14> placeable{
         "boundary", "measurement_boundary", "room_boundary", "wall", "opening", "room",
-        "slab", "roof", "stair", "railing", "column", "beam", "terrain_surface"};
+        "slab", "roof", "stair", "railing", "column", "beam", "terrain_surface", "measurement_linework"};
     return std::find(placeable.begin(), placeable.end(), type) != placeable.end();
 }
 
@@ -629,7 +629,8 @@ Entity resolve_vertical_placement_impl(const std::map<std::string, Entity, std::
         return entity;
     }
     if (entity.type == "opening" || entity.type == "boundary" ||
-        entity.type == "measurement_boundary" || entity.type == "room_boundary") {
+        entity.type == "measurement_boundary" || entity.type == "room_boundary" ||
+        entity.type == "measurement_linework") {
         throw std::invalid_argument("level placement is supported only for 3D objects and slabs");
     }
 

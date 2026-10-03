@@ -19,6 +19,7 @@
 #include "sketch/wall_measurement.hpp"
 #include "sketch/project_organization.hpp"
 #include "sketch/wall_semantics.hpp"
+#include "sketch/measurement_linework.hpp"
 #include "sketch/roof_join_semantics.hpp"
 #include "sketch/slab_semantics.hpp"
 
@@ -296,6 +297,18 @@ void validate_entity(const Entity& entity) {
         if (entity.extensions.contains(key)) {
             document_error(DocumentErrorCode::invalid_entity,
                            std::string("entity extension uses reserved field: ") + key);
+        }
+    }
+    if (entity.type == "measurement_linework") {
+        try {
+            if (!entity.required)
+                throw std::invalid_argument("measurement linework must be required geometry");
+            const auto decoded = decode_measurement_linework_model(entity.properties.at("model"));
+            if (decoded.supported() && decoded.model->stroke_id != entity.id)
+                throw std::invalid_argument("measurement linework stroke ID must match its entity ID");
+        } catch (const std::exception& error) {
+            document_error(DocumentErrorCode::invalid_entity,
+                           "invalid measurement linework " + entity.id + ": " + error.what());
         }
     }
     if (entity.type == kSheetViewEntityType) {
@@ -684,6 +697,64 @@ void collect_references(const Entity& entity, std::vector<EntityReference>& refe
                 {value.get<std::string>(), *expected_type, EntityReference::Target::entity});
         }
     }
+}
+
+// Loose strokes retain measurement geometry without wall or area semantics.
+// Organizational references stay known when a future model is opaque.
+std::optional<std::string> validate_measurement_linework_integrity(
+    const std::map<std::string, Entity, std::less<>>& entities) {
+    if (std::none_of(entities.begin(), entities.end(), [](const auto& item) {
+            return item.second.type == "measurement_linework";
+        })) return std::nullopt;
+    std::optional<std::string> unsupported;
+    std::set<std::string, std::less<>> occupied;
+    for (const auto& [id, entity] : entities) {
+        occupied.insert(id);
+        if (can_recognize_boundary_entity_type(entity.type) &&
+            inspect_boundary_entity_version(entity).format == BoundaryEntityFormat::identified_v1) {
+            for (const auto& edge : decode_identified_boundary_entity(entity).segments) {
+                occupied.insert(edge.segment_id);
+                occupied.insert(edge.start_vertex_id);
+                occupied.insert(edge.end_vertex_id);
+            }
+        }
+    }
+    const auto organization = organize_project(entities);
+    const auto reference = [](const Entity& entity, const char* key) -> std::string {
+        const auto found = entity.properties.find(key);
+        if (found == entity.properties.end() || !found->is_string() ||
+            found->get_ref<const std::string&>().empty())
+            throw std::invalid_argument("measurement linework requires a complete drawing context: " +
+                                        std::string(key));
+        return found->get<std::string>();
+    };
+    for (const auto& [id, entity] : entities) {
+        if (entity.type != "measurement_linework") continue;
+        const auto property = reference(entity, "property_id");
+        const auto building = reference(entity, "building_id");
+        const auto floor = reference(entity, "floor_id");
+        const auto layer = reference(entity, "layer_id");
+        const auto resolved = organization.drawing_context(id);
+        if (!resolved || *resolved != DrawingContext{property, building, floor, layer})
+            throw std::invalid_argument("measurement linework " + id +
+                                        " has inconsistent drawing context references");
+        const auto decoded = decode_measurement_linework_model(entity.properties.at("model"));
+        if (!decoded.supported()) {
+            if (!unsupported) unsupported = "measurement linework " + id + ": " + decoded.diagnostic;
+            continue;
+        }
+        std::set<std::string, std::less<>> vertices;
+        for (const auto& edge : decoded.model->edges) {
+            if (!occupied.insert(edge.segment_id).second)
+                throw std::invalid_argument("measurement linework segment identity collides: " + edge.segment_id);
+            vertices.insert(edge.start_vertex_id);
+            vertices.insert(edge.end_vertex_id);
+        }
+        for (const auto& vertex : vertices)
+            if (!occupied.insert(vertex).second)
+                throw std::invalid_argument("measurement linework vertex identity collides: " + vertex);
+    }
+    return unsupported;
 }
 
 std::optional<std::string> validate_state(const std::map<std::string, Entity, std::less<>>& entities,
@@ -1130,6 +1201,12 @@ std::optional<std::string> validate_state(const std::map<std::string, Entity, st
         document_error(DocumentErrorCode::invalid_entity, error.what());
     }
     try {
+        const auto unsupported_linework = validate_measurement_linework_integrity(entities);
+        if (!unsupported_boundary) unsupported_boundary = unsupported_linework;
+    } catch (const std::exception& error) {
+        document_error(DocumentErrorCode::invalid_entity, error.what());
+    }
+    try {
         const auto unsupported_constraint = validate_constraint_integrity(entities);
         return unsupported_boundary ? unsupported_boundary : unsupported_constraint;
     }
@@ -1309,7 +1386,7 @@ std::string sha256_hex(std::span<const std::byte> bytes) {
 }
 
 bool is_known_entity_type(std::string_view type) noexcept {
-    static constexpr std::array<std::string_view, 35> known{
+    static constexpr std::array<std::string_view, 36> known{
         "property",             "building", "floor",  "layer", "boundary",
         "measurement_boundary", "room_boundary", "wall", "opening", "room",
         "slab",                 "roof",     "stair",  "railing", "column", "beam",
@@ -1317,7 +1394,7 @@ bool is_known_entity_type(std::string_view type) noexcept {
         "sheet_view_model",    "annotation_state", "reference_asset",
         "assembly_model",      "model_phases", "room_relationships", "vertical_levels",
         "reference_grid", "terrain_surface", "dxf_source", "ifc_source",
-        "georeferencing", "wall_join", "roof_join"};
+        "georeferencing", "wall_join", "roof_join", "measurement_linework"};
     return std::find(known.begin(), known.end(), type) != known.end();
 }
 

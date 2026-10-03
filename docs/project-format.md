@@ -1,5 +1,35 @@
 # Vertex project formats v1 through v27
 
+## Measurement linework model v1
+
+`measurement_linework` is required 2D geometry, separate from architectural
+walls and calculated measurement areas. Each entity represents one connected
+stroke, open or closed. Its `properties` contain the usual `property_id`,
+`building_id`, `floor_id` and `layer_id`, plus a typed `model`. All four IDs must
+resolve to the same drawing context. `required` is true so an older application
+that does not recognize the entity preserves the project read-only.
+
+The model has `version: 1`, `replay_version: 1`, `stroke_id` (the entity ID),
+`anchor: [x, y]` in metres, `closed`, ordered `segments`, and opaque `extensions`.
+Each segment holds `segment_id`, `start_vertex_id`, `end_vertex_id` and `receipt`.
+Receipts use the existing exact construction-input codec; original quantities
+and angles remain retained. Geometry is reconstructed with individual receipt
+replay, not the closed-boundary replay engine. There is no parallel writable
+geometry cache. Consecutive edges share exact endpoint coordinates and vertex
+identities. A reused vertex identity must retain its exact point. Closed strokes
+end at their anchor and reuse the first vertex identity. Crossings and retracing
+are allowed; they do not themselves establish valid area polygons.
+
+Linework contributes no GLA or architectural wall volume. Classification and
+calculation require separate derived area entities. Unknown positive model or
+replay versions preserve the original model without guessing its geometry and
+make the document read-only. Invalid known data rejects atomically.
+
+This model does not increase the SQLite envelope floor: the existing required
+entity mechanism protects earlier readers. Canvas authoring, relocation,
+dimension/output/edit adapters and derived face detection are subsequent
+implementation stages; the model alone does not establish Draw First parity.
+
 ## Connected curved-wall rigid intent (v27)
 
 Constraint-command envelope 10 retains the ordinary, boundary, wall, physical,

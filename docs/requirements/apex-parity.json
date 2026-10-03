@@ -1018,7 +1018,7 @@
         "apex_draw_first"
       ],
       "evidence_status": "documented",
-      "implementation_status": "verified",
+      "implementation_status": "in_progress",
       "acceptance": "A Draw First fixture creates, closes, edits, classifies, calculates, saves, reopens, and prints with expected geometry and command behavior.",
       "package": 4,
       "blocker": null,
@@ -1028,10 +1028,16 @@
         "tests/desktop_smoke.cpp",
         "docs/boundary-authoring.md",
         "docs/desktop-workflow.md",
+        "include/sketch/measurement_linework.hpp",
+        "src/core/measurement_linework.cpp",
+        "tests/measurement_linework_tests.cpp",
+        "tests/measurement_linework_document_tests.cpp",
+        "docs/plans/2026-10-03-measurement-linework.md",
+        "docs/verification/measurement-linework-2026-10-03.md",
         "scripts/generate_workflow_acceptance_evidence.py",
         "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "Draw First authoring, atomic commit, dimensions, visibility, undo/redo, and native save/reopen paths are implemented; full Apex-compatible edit/calculate/print fixture remains open. Deterministic Debug/Release workflow evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
+      "implementation_note": "Closed-outline Draw First authoring, atomic commit, dimensions, visibility, undo/redo and native save/reopen paths exist. Source review of the official tutorial additionally establishes loose separator lines and pen-up relocation before later area definition. A first-class measurement_linework model now retains open or closed receipt-derived strokes, curves, crossings and retracing with document/context admission and real history/storage coverage. Canvas authoring, disconnected point jumping, dimensions/edit/output/recovery adapters, derived graph noding and later area definition remain open; this prerequisite does not certify Draw First parity. Historical workflow evidence retains its named-source qualification boundary."
     },
     {
       "id": "APX-WF-002",

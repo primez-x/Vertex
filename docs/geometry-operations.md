@@ -175,6 +175,13 @@ dimension policy and draft undo/redo; physical walls retain the ordinary guarded
 wall creation path. This is distinct from the direct three-point bay-profile
 API, which creates an entire closed measurement boundary. Point jumping updates
 the precision pointer without dirtying the project.
+The separate `measurement_linework` model retains open measured strokes with
+individual construction receipts. It deliberately does not relax a closed
+boundary's topology contract or pretend that pointer motion starts a new edge.
+Its document admission and storage are prerequisites for disconnected Draw
+First authoring. Canvas jump/pen-state integration and derived area-face noding
+remain open; U049 is not fulfilled by this model alone. See the
+[implementation plan](plans/2026-10-03-measurement-linework.md).
 Physical key preset verification, editable shortcut persistence, and broader
 semantic dependency migration remain open. Callers must not replace a document
 entity with a geometry result while silently dropping its owned semantics;
