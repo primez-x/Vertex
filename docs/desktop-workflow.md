@@ -493,12 +493,27 @@ classifies changed records as semantic, geometric, calculation, or
 presentation changes and lists the first changed property paths for review.
 Comparison is read-only and does not alter the current selection or history.
 
+The same dialog includes synchronized **Before** and **After** plan canvases
+and an **Overlay** mode with an Added/Removed/Changed legend. Select a floor
+from the union of both states' property/building/floor contexts. A missing or
+moved context is reported independently per pane; a multi-floor property or
+building requires an explicit floor choice. The shared snapshot scene projector
+resolves exact geometry, annotations, appraisal dimensions, styles and retained
+reference assets separately for each state. Overlay differences include rendered
+dependencies, so an unchanged dimension record can still be highlighted when its
+host geometry changes. Historical projection owns separate caches and never
+rebinds the live document. Current-head selections resolve one fresh snapshot at
+Compare time. Navigation is synchronized in model coordinates; it never edits
+either state. Missing artwork and failed comparisons are diagnosed visibly.
+
 **Restore as new project** reconstructs the selected retained history prefix,
 marks that copy clean, and writes it to a new `.bldproj` destination. It never
 replaces the open document, discards later edits, or mutates the named source
 revision. A destination that already exists is rejected by the same guarded
 ProjectStore path as ordinary Save As. Revision copy output and independent
-comparison reports still need production fixtures and end-to-end qualification.
+comparison reports still need production-scale qualification. Saved linked
+architectural views and 3D comparison remain open scope beyond conventional
+floor-plan comparison.
 
 ## Wall dimensions and constraints
 

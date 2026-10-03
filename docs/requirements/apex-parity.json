@@ -2834,7 +2834,7 @@
         "scripts/generate_workflow_acceptance_evidence.py",
         "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "Named revisions are persisted through the normal NameRevision command and survive save/reopen. The desktop editor now compares any two independently selected named revisions or the current head in either direction, reporting added, removed, and changed entities/assets plus semantic, geometric, calculation, and presentation classifications and bounded property-path detail. Restore reconstructs the selected immutable history prefix as a separate clean project without changing the open document. Graphical side-by-side or overlay comparison synchronized with drawing navigation and production qualification remain open."
+      "implementation_note": "Named revisions persist through NameRevision and survive save/reopen. Independent From/To selectors compare named states or a freshly resolved current head, retaining the semantic/geometric/calculation/presentation text report. Conventional 2D floor drawings now have synchronized side-by-side and Added/Removed/Changed overlay views, a historical context union, isolated snapshot scenes/caches, retained artwork, dependent dimensions and palette-only differences, diagnostics and Fit drawings. Native comparison and affected live/output checks are documented in docs/verification/visual-revision-comparison-20261003.md. Restore writes a separate clean project preserving later work. Saved linked architectural views, 3D comparison, production-scale qualification and native Apex compatibility remain open."
     },
     {
       "id": "REC-003",

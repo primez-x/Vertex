@@ -2107,6 +2107,26 @@ drawing; switching modes does not change existing geometry.
   - Result: Not tested
   - Notes: ______________________________
 
+## Comparing saved revisions
+
+- [ ] **U359 — Compare two named drawing revisions**
+  - Steps: Name an existing plan revision. Move a wall, change a dimension style, add a component and delete another. Name the revised plan. Open Named revisions, choose the two names, compare them and select the floor you want to inspect.
+  - Expected: Before and After show their own geometry, dimensions, components and appearance. Pan or zoom either drawing; the other stays aligned. The text report still lists the changes.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **U360 — Inspect a change overlay**
+  - Steps: Compare two revisions and switch to Overlay. Check added and removed geometry and an edited wall or dimension against the legend. Switch back to side-by-side. Select a floor that exists in only one revision.
+  - Expected: Changes are distinguishable using the legend. A missing floor produces an empty pane with an explanation; it does not substitute a different floor. Returning to side-by-side restores each revision's original appearance.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **U361 — Keep current work while viewing history**
+  - Steps: After naming a revision, make additional edits and begin an unfinished outline. Open Named revisions and compare the named revision with Current head. Close the dialog, finish or cancel the outline, then make an ordinary edit and Undo it.
+  - Expected: Current head includes the latest committed edits. Comparing preserves current work, selection and the unfinished outline. Normal editing and Undo continue after closing history.
+  - Result: Not tested
+  - Notes: ______________________________
+
 ## Issue report template
 
 - Task ID(s):

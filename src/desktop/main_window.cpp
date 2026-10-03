@@ -94,6 +94,7 @@
 #include <QCryptographicHash>
 #include <QCursor>
 #include <QDeadlineTimer>
+#include <QDataStream>
 #include <QDesktopServices>
 #include <QDialog>
 #include <QDialogButtonBox>
@@ -198,6 +199,7 @@
 #include <string>
 #include <string_view>
 #include <set>
+#include <tuple>
 #include <stdexcept>
 #include <thread>
 #include <type_traits>
@@ -7472,7 +7474,7 @@ public:
         styleDialog(dialog);
         dialog.setObjectName(QStringLiteral("revisionHistoryDialog"));
         dialog.setWindowTitle(QStringLiteral("Named revisions"));
-        dialog.resize(760, 470);
+        dialog.resize(1120, 840);
         auto* layout = new QVBoxLayout(&dialog);
         auto* help = new QLabel(QStringLiteral(
             "Name stable project states as you work. Comparisons are read-only; restoring writes a new project copy and leaves this document unchanged."),
@@ -7504,6 +7506,182 @@ public:
         comparison_row->addWidget(new QLabel(QStringLiteral("To"), &dialog));
         comparison_row->addWidget(compare_to, 1);
         layout->addLayout(comparison_row);
+
+        auto* visual_controls = new QHBoxLayout;
+        auto* visual_mode = new QComboBox(&dialog);
+        visual_mode->setObjectName(QStringLiteral("revisionVisualMode"));
+        visual_mode->addItem(QStringLiteral("Side by side"), QStringLiteral("side_by_side"));
+        visual_mode->addItem(QStringLiteral("Overlay"), QStringLiteral("overlay"));
+        auto* drawing_context = new QComboBox(&dialog);
+        drawing_context->setObjectName(QStringLiteral("revisionDrawingContext"));
+        drawing_context->setAccessibleName(QStringLiteral("Revision drawing floor context"));
+        visual_controls->addWidget(visual_mode);
+        visual_controls->addWidget(new QLabel(QStringLiteral("Drawing context"), &dialog));
+        visual_controls->addWidget(drawing_context, 1);
+        auto* fit_drawings = new QPushButton(QStringLiteral("Fit drawings"), &dialog);
+        fit_drawings->setObjectName(QStringLiteral("revisionFitDrawings"));
+        visual_controls->addWidget(fit_drawings);
+        layout->addLayout(visual_controls);
+        auto* visual_views = new QWidget(&dialog);
+        auto* visual_row = new QHBoxLayout(visual_views);
+        visual_row->setContentsMargins(0,0,0,0);
+        const auto make_pane = [&](const char* title, const char* canvas_name, const char* diagnostic_name) {
+            auto* pane = new QGroupBox(QString::fromLatin1(title), visual_views);
+            auto* pane_layout = new QVBoxLayout(pane);
+            auto* canvas = new PlanCanvas(pane);
+            canvas->setObjectName(QString::fromLatin1(canvas_name));
+            canvas->setMinimumHeight(260);
+            canvas->setCanvasBackground(QColor(248,250,253));
+            canvas->setGridEnabled(false); canvas->setSnapEnabled(false); canvas->setWallSnapEnabled(false);
+            canvas->setSelectionControlsVisible(false); canvas->setSelectionTransformEnabled(false,false);
+            canvas->setSelectionAxisResizeEnabled(false); canvas->setMetricUnits(m_metric_units);
+            pane_layout->addWidget(canvas,1);
+            auto* diagnostic = new QLabel(QStringLiteral("Choose two states and compare their drawings."),pane);
+            diagnostic->setObjectName(QString::fromLatin1(diagnostic_name));
+            diagnostic->setTextFormat(Qt::PlainText); diagnostic->setWordWrap(true);
+            pane_layout->addWidget(diagnostic);
+            return std::tuple{pane,canvas,diagnostic};
+        };
+        auto [before_pane,before_canvas,before_diagnostic] = make_pane("From", "revisionBeforeCanvas", "revisionBeforeDiagnostics");
+        auto [after_pane,after_canvas,after_diagnostic] = make_pane("To", "revisionAfterCanvas", "revisionAfterDiagnostics");
+        visual_row->addWidget(before_pane,1); visual_row->addWidget(after_pane,1);
+        layout->addWidget(visual_views,2);
+        auto* overlay_canvas = new PlanCanvas(&dialog);
+        overlay_canvas->setObjectName(QStringLiteral("revisionOverlayCanvas"));
+        overlay_canvas->setMinimumHeight(260); overlay_canvas->setCanvasBackground(QColor(248,250,253));
+        overlay_canvas->setGridEnabled(false); overlay_canvas->setSnapEnabled(false); overlay_canvas->setWallSnapEnabled(false);
+        overlay_canvas->setSelectionControlsVisible(false); overlay_canvas->setSelectionTransformEnabled(false,false);
+        overlay_canvas->setSelectionAxisResizeEnabled(false); overlay_canvas->setMetricUnits(m_metric_units);
+        layout->addWidget(overlay_canvas,2); overlay_canvas->hide();
+        auto* legend = new QLabel(QStringLiteral("Added: green  •  Removed: red dashed  •  Changed: amber  •  Unchanged: authored appearance"), &dialog);
+        legend->setObjectName(QStringLiteral("revisionComparisonLegend")); legend->setWordWrap(true);
+        layout->addWidget(legend);
+        auto* diagnostic_row = new QHBoxLayout;
+        before_diagnostic->parentWidget()->layout()->removeWidget(before_diagnostic);
+        after_diagnostic->parentWidget()->layout()->removeWidget(after_diagnostic);
+        diagnostic_row->addWidget(before_diagnostic,1); diagnostic_row->addWidget(after_diagnostic,1);
+        layout->addLayout(diagnostic_row);
+        bool synchronizing_navigation = false;
+        const auto synchronize = [&](PlanCanvas* source, Vec2 center, double scale) {
+            if (synchronizing_navigation) return;
+            synchronizing_navigation = true;
+            for (auto* canvas : {before_canvas,after_canvas,overlay_canvas})
+                if (canvas != source) canvas->setViewTransform(center,scale);
+            synchronizing_navigation = false;
+        };
+        for (auto* canvas : {before_canvas,after_canvas,overlay_canvas})
+            canvas->setNavigationChanged([&,canvas](Vec2 center,double scale) { synchronize(canvas,center,scale); });
+        QObject::connect(visual_mode,&QComboBox::currentIndexChanged,&dialog,[&] {
+            const bool overlay=visual_mode->currentData().toString()==QStringLiteral("overlay");
+            visual_views->setVisible(!overlay); overlay_canvas->setVisible(overlay);
+            before_diagnostic->setVisible(true); after_diagnostic->setVisible(true);
+        });
+        std::optional<DocumentSnapshot> visual_before, visual_after;
+        PlanSceneCaches before_caches, after_caches;
+        const auto clear_visual = [&] {
+            for (auto* canvas : {before_canvas,after_canvas,overlay_canvas}) {
+                canvas->setEntities({}); canvas->setLabels({}); canvas->setReferences({}); canvas->setReferenceGrids({});
+            }
+        };
+        const auto publish_scene = [](PlanCanvas* canvas,const SnapshotPlanScene& scene) {
+            canvas->setEntities(scene.geometry); canvas->setLabels(scene.labels);
+            canvas->setReferences(scene.references); canvas->setReferenceGrids(scene.grids);
+        };
+        std::optional<SnapshotPlanScene> projected_before, projected_after;
+        const auto fit_visual = [&](const SnapshotPlanScene& before_scene, const SnapshotPlanScene& after_scene) {
+            // Fit the union at the smaller pane size, then retain exactly one world transform.
+            PlanCanvas fit_scene;
+            fit_scene.resize(std::max(1,std::min(before_canvas->width(),after_canvas->width())),
+                std::max(1,std::min(before_canvas->height(),after_canvas->height())));
+            auto fit_geometry=before_scene.geometry; fit_geometry.insert(fit_geometry.end(),after_scene.geometry.begin(),after_scene.geometry.end());
+            auto fit_labels=before_scene.labels; fit_labels.insert(fit_labels.end(),after_scene.labels.begin(),after_scene.labels.end());
+            auto fit_references=before_scene.references; fit_references.insert(fit_references.end(),after_scene.references.begin(),after_scene.references.end());
+            auto fit_grids=before_scene.grids; fit_grids.insert(fit_grids.end(),after_scene.grids.begin(),after_scene.grids.end());
+            fit_scene.setEntities(std::move(fit_geometry)); fit_scene.setLabels(std::move(fit_labels));
+            fit_scene.setReferences(std::move(fit_references)); fit_scene.setReferenceGrids(std::move(fit_grids)); fit_scene.fitView();
+            before_canvas->setViewTransform(fit_scene.viewCenter(),fit_scene.viewScale());
+        };
+        QObject::connect(fit_drawings,&QPushButton::clicked,&dialog,[&] {
+            if (projected_before && projected_after) fit_visual(*projected_before,*projected_after);
+        });
+        const auto project_visual = [&] {
+            if (!visual_before || !visual_after) return;
+            clear_visual(); projected_before.reset(); projected_after.reset();
+            try {
+                const auto options_for = [&](PlanCanvas* canvas) {
+                    SnapshotPlanSceneOptions options;
+                    options.metric_units=m_metric_units; options.visibility={};
+                    options.label_font=canvas->font(); options.label_device=canvas;
+                    options.scope_id=drawing_context->currentData().toString().toStdString();
+                    options.scope_property_id=drawing_context->currentData(Qt::UserRole+2).toString().toStdString();
+                    options.scope_building_id=drawing_context->currentData(Qt::UserRole+3).toString().toStdString();
+                    return options;
+                };
+                if (drawing_context->currentIndex()<0) {
+                    before_diagnostic->setText(QStringLiteral("No retained floor context is available."));
+                    after_diagnostic->setText(before_diagnostic->text()); return;
+                }
+                const auto before_scene=projectSnapshotPlanScene(*visual_before,options_for(before_canvas),before_caches);
+                const auto after_scene=projectSnapshotPlanScene(*visual_after,options_for(after_canvas),after_caches);
+                publish_scene(before_canvas,before_scene); publish_scene(after_canvas,after_scene);
+                before_diagnostic->setText(before_scene.diagnostics.isEmpty() ? QStringLiteral("Read-only historical drawing") : before_scene.diagnostics);
+                after_diagnostic->setText(after_scene.diagnostics.isEmpty() ? QStringLiteral("Read-only comparison drawing") : after_scene.diagnostics);
+                const auto overlay=revisionOverlayScene(*visual_before,before_scene,*visual_after,after_scene);
+                publish_scene(overlay_canvas,overlay);
+                projected_before=before_scene; projected_after=after_scene;
+                fit_visual(before_scene,after_scene);
+            } catch (const std::exception& error) {
+                clear_visual();
+                const auto message=QStringLiteral("Drawing comparison unavailable: %1").arg(QString::fromUtf8(error.what()));
+                before_diagnostic->setText(message); after_diagnostic->setText(message);
+            }
+        };
+        const auto populate_contexts = [&] {
+            const auto previous_id=drawing_context->currentData().toString();
+            const auto previous_property=drawing_context->currentData(Qt::UserRole+2).toString();
+            const auto previous_building=drawing_context->currentData(Qt::UserRole+3).toString();
+            const QSignalBlocker blocker(drawing_context); drawing_context->clear();
+            struct ContextChoice { QString id,type,property,building,label; };
+            std::map<std::string,ContextChoice> choices;
+            for (const auto* snapshot : {&*visual_before,&*visual_after}) {
+                const auto organization=organize_project(*snapshot);
+                const auto name_of=[&](const std::string& id) {
+                    const auto found=organization.nodes.find(id);
+                    return QString::fromStdString(found==organization.nodes.end() || found->second.name.empty() ? id : found->second.name);
+                };
+                for (const auto& [id,node] : organization.nodes) {
+                    if (node.type!="property" && node.type!="building" && node.type!="floor") continue;
+                    const auto property=node.type=="property" ? id : node.context.property_id;
+                    const auto building=node.type=="building" ? id : node.type=="floor" ? node.context.building_id : std::string{};
+                    const auto key=json::array({node.type,property,building,id}).dump();
+                    auto title=name_of(property);
+                    if (!building.empty()) title+=QStringLiteral(" / ")+name_of(building);
+                    if (node.type=="floor") title+=QStringLiteral(" / ")+name_of(id);
+                    title+=QStringLiteral("  [%1]").arg(QString::fromStdString(node.type));
+                    const ContextChoice choice{id_from(id),QString::fromStdString(node.type),id_from(property),id_from(building),title};
+                    if (const auto old=choices.find(key);old!=choices.end() && old->second.label!=title)
+                        old->second.label+=QStringLiteral(" → ")+title;
+                    else choices.try_emplace(key,choice);
+                }
+            }
+            const auto live_context=organize_project(m_document->snapshot()).drawing_context(m_active_layer_id.toStdString());
+            int chosen=-1, active=-1, first_floor=-1;
+            for (const auto& [key,choice] : choices) {
+                (void)key; const auto index=drawing_context->count();
+                drawing_context->addItem(choice.label,choice.id);
+                drawing_context->setItemData(index,choice.type,Qt::UserRole+1);
+                drawing_context->setItemData(index,choice.property,Qt::UserRole+2);
+                drawing_context->setItemData(index,choice.building,Qt::UserRole+3);
+                if (choice.id==previous_id && choice.property==previous_property && choice.building==previous_building) chosen=index;
+                if (choice.type==QStringLiteral("floor")) {
+                    if (first_floor<0) first_floor=index;
+                    if (live_context && choice.id==id_from(live_context->floor_id) && choice.property==id_from(live_context->property_id) &&
+                        choice.building==id_from(live_context->building_id)) active=index;
+                }
+            }
+            drawing_context->setCurrentIndex(chosen>=0 ? chosen : active>=0 ? active : first_floor);
+        };
+        QObject::connect(drawing_context,&QComboBox::currentIndexChanged,&dialog,[&] { project_visual(); });
 
         auto* name = new QLineEdit(&dialog);
         name->setObjectName(QStringLiteral("revisionName"));
@@ -7625,15 +7803,23 @@ public:
             }
             try {
                 const auto source = authoringSnapshot();
-                const auto from_revision = static_cast<Revision>(
-                    compare_from->currentData().toULongLong());
-                const auto to_revision = static_cast<Revision>(
-                    compare_to->currentData().toULongLong());
+                const auto resolve_revision = [&](QComboBox* selector) {
+                    if (!selector->currentData(Qt::UserRole+1).toBool())
+                        return static_cast<Revision>(selector->currentData().toULongLong());
+                    const auto index=selector->currentIndex();
+                    selector->setItemData(index,QVariant::fromValue<qulonglong>(source.revision()));
+                    selector->setItemText(index,QStringLiteral("Current head  •  revision %1").arg(source.revision()));
+                    return source.revision();
+                };
+                const auto from_revision=resolve_revision(compare_from);
+                const auto to_revision=resolve_revision(compare_to);
                 auto from_document = Document::fork_at_revision(source, from_revision);
                 auto to_document = Document::fork_at_revision(source, to_revision);
                 const auto from_snapshot = from_document.snapshot();
                 const auto to_snapshot = to_document.snapshot();
                 const auto diff = compareRevisions(from_snapshot, to_snapshot);
+                visual_before=from_snapshot; visual_after=to_snapshot;
+                populate_contexts(); project_visual();
                 QString detail_text;
                 if (diff.details.empty()) {
                     detail_text = QStringLiteral("No semantic records changed.");
@@ -7668,6 +7854,10 @@ public:
                         .arg(detail_text));
                 status->setText(QStringLiteral("Comparison generated without changing the document."));
             } catch (const std::exception& error) {
+                visual_before.reset(); visual_after.reset(); projected_before.reset(); projected_after.reset();
+                clear_visual(); comparison->clear();
+                const auto diagnostic=QStringLiteral("No current comparison: %1").arg(QString::fromUtf8(error.what()));
+                before_diagnostic->setText(diagnostic); after_diagnostic->setText(diagnostic);
                 status->setText(QStringLiteral("Compare revisions: %1").arg(QString::fromUtf8(error.what())));
             }
         });
@@ -28367,53 +28557,107 @@ private:
         m_refreshing = false;
     }
 
-    void refreshCanvases() {
-        // A shared Document can replace its head without changing its address
-        // or revision. Every refreshed scene needs a new immutable preview source.
-        m_opening_preview_source.reset();
-        m_opening_preview_document.reset();
-        m_pending_opening_preview.reset();
-        if (m_running_opening_preview)
-            (void)m_opening_preview_queue.cancel(m_opening_preview_sequence);
-        m_vertex_preview_source.reset();
-        m_vertex_preview_scene.reset();
-        m_vertex_preview_eligible.reset();
-        m_vertex_preview_labels.reset();
-        m_vertex_preview_appraisal_area_ids.reset();
-        m_vertex_preview_label_footprints.reset();
-        m_vertex_preview_component_bounds.reset();
-        m_vertex_preview_view_context.reset();
-        m_vertex_preview_canvas.clear();
-        m_vertex_preview_document.reset();
-        m_wall_move_source.reset();
-        m_wall_move_document.reset();
-        m_wall_move_canvas.clear();
-        m_entity_transform_source.reset();
-        m_entity_transform_document.reset();
-        m_entity_transform_canvas.clear();
-        m_entity_transform_context.reset();
-        m_entity_transform_command.reset();
-        m_entity_transform_ready=false;
-        m_pending_vertex_preview.reset();
-        if (m_running_vertex_preview)
-            (void)m_vertex_preview_queue.cancel(m_vertex_preview_sequence);
-        const auto snapshot = m_document->snapshot();
+    struct PlanSceneCaches {
+        std::map<std::string, std::pair<std::string, Boundary>> projections;
+        std::map<std::string, std::pair<std::string, QString>, std::less<>> slab_validation;
+    };
+    struct SnapshotPlanSceneOptions {
+        bool metric_units{};
+        ProjectViewFilter visibility;
+        QString selected_id;
+        std::optional<DrawingContext> active_context;
+        std::string scope_id, scope_property_id, scope_building_id;
+        bool interactive{};
+        QFont label_font;
+        const QPaintDevice* label_device{};
+    };
+    struct AssemblyPreview {
+        std::string child_id;
+        std::string host_entity_id;
+        AssemblyPlacement placement;
+        double thickness_metres{};
+        std::optional<QColor> fill_color;
+    };
+    struct SnapshotPlanScene {
+        ProjectOrganization organization;
+        std::vector<CanvasEntity> all_geometry, geometry;
+        std::vector<CanvasLabel> all_labels, labels;
+        std::vector<CanvasReference> references;
+        std::vector<CanvasReferenceGrid> grids;
+        std::map<std::string, WallPlanGeometry, std::less<>> wall_plans;
+        std::map<std::string, std::vector<HostedOpening>, std::less<>> openings_by_wall;
+        std::vector<AssemblyPreview> assembly_previews;
+        std::set<std::string, std::less<>> visible_ids, presentation_hidden_ids, object_hidden_ids, appraisal_area_ids;
+        std::map<std::string, PresentationOverride, std::less<>> object_appearance, object_appearance_defaults;
+        QString diagnostics;
+    };
+    static void applySnapshotObjectAppearance(CanvasEntity& entity,
+        const std::map<std::string, PresentationOverride, std::less<>>& object_appearance) {
+            // Projection creates new shapes later, and several physical strokes
+            // may share one source ID. Style each retained physical shape only;
+            // dimensions and other annotation children remain independent.
+            if (entity.type != QStringLiteral("window") && !supportsObjectAppearance(entity.type.toStdString())) return;
+            const auto found = object_appearance.find(entity.id.toStdString());
+            if (found == object_appearance.end() || found->second.inherit_appearance) return;
+            const auto& value = found->second;
+            entity.stroke_color = QColor(QString::fromStdString(value.style.stroke_color));
+            entity.dark_stroke_color = QColor{};
+            entity.stroke_width_metres = value.style.stroke_width_metres;
+            if (value.paper_line_width_mm) {
+                entity.output_stroke_width_mm = *value.paper_line_width_mm;
+                entity.paper_stroke_width_on_screen = true;
+            }
+            entity.fill_color = QColor(QString::fromStdString(value.style.fill_color));
+            entity.hatch_pattern = QString::fromStdString(value.style.fill_pattern);
+            if (value.hatch_scale) entity.hatch_scale = *value.hatch_scale;
+            entity.filled = value.style.fill_pattern != "none" && entity.fill_color.isValid();
+    }
+    static SnapshotPlanScene projectSnapshotPlanScene(const DocumentSnapshot& snapshot,
+        const SnapshotPlanSceneOptions& requested_options, PlanSceneCaches& caches) {
+        SnapshotPlanScene result;
+        auto options = requested_options;
         const auto organization = organize_project(snapshot);
-        const auto appraisal_area_projection = appraisal_plan_area_projection(snapshot, m_metric_units);
+        std::string scoped_floor;
+        bool scope_available = true;
+        if (!options.scope_id.empty()) {
+            const auto chosen = organization.nodes.find(options.scope_id);
+            if (chosen == organization.nodes.end()) {
+                scope_available = false;
+                result.diagnostics = QStringLiteral("This drawing context is absent from this revision.");
+            } else {
+                std::vector<const OrganizationNode*> floors;
+                for (const auto& [id, node] : organization.nodes) {
+                    if (node.type != "floor") continue;
+                    const bool matches = chosen->second.type == "floor"
+                        ? id == options.scope_id && node.context.property_id == options.scope_property_id &&
+                            node.context.building_id == options.scope_building_id
+                        : chosen->second.type == "building"
+                            ? node.context.building_id == options.scope_id && node.context.property_id == options.scope_property_id
+                            : node.context.property_id == options.scope_id;
+                    if (matches) floors.push_back(&node);
+                }
+                if (floors.size() == 1) {
+                    scoped_floor = floors.front()->id;
+                    options.active_context = floors.front()->context;
+                } else {
+                    scope_available = false;
+                    result.diagnostics = floors.empty()
+                        ? QStringLiteral("This drawing context has no matching floor in this revision.")
+                        : QStringLiteral("Choose one floor to compare this property or building; floors are not overlaid.");
+                }
+            }
+        }
+        const auto appraisal_area_projection = appraisal_plan_area_projection(snapshot, options.metric_units);
         const auto& appraisal_area_values = appraisal_area_projection.values;
-        m_plan_appraisal_area_ids.clear();
+        result.appraisal_area_ids.clear();
         for (const auto& [id, value] : appraisal_area_values) {
             (void)value;
-            m_plan_appraisal_area_ids.insert(id);
+            result.appraisal_area_ids.insert(id);
         }
-        m_plan_geometry_error.clear();
-        std::erase_if(m_plan_projection_cache, [&](const auto& entry) {
+        std::erase_if(caches.projections, [&](const auto& entry) {
             return !snapshot.entities().contains(entry.first);
         });
-        std::erase_if(m_plan_transform_frame_cache, [&](const auto& entry) {
-            return !snapshot.entities().contains(entry.first);
-        });
-        std::erase_if(m_plan_slab_validation_cache, [&](const auto& entry) {
+        std::erase_if(caches.slab_validation, [&](const auto& entry) {
             return !snapshot.entities().contains(entry.first);
         });
         std::vector<CanvasEntity> all_geometry;
@@ -28424,17 +28668,17 @@ private:
         const auto wall_plans = document_wall_plan_geometry(snapshot.entities());
         const auto exterior_label_regions=wall_dimension_exterior_regions(snapshot);
         const auto append_geometry_error = [&](const QString& message) {
-            if (!m_plan_geometry_error.isEmpty()) {
-                m_plan_geometry_error += QLatin1Char('\n');
+            if (!result.diagnostics.isEmpty()) {
+                result.diagnostics += QLatin1Char('\n');
             }
-            m_plan_geometry_error += message;
+            result.diagnostics += message;
         };
         std::map<std::string,PresentationOverride,std::less<>> wall_presentations;
         try {wall_presentations=wall_dimension_presentations(snapshot.entities());}
         catch(const std::exception& error) {
             append_geometry_error(QStringLiteral("Wall measurements: %1").arg(QString::fromUtf8(error.what())));
         }
-        std::map<std::string, std::vector<HostedOpening>, std::less<>> openings_by_wall;
+        auto& openings_by_wall = result.openings_by_wall;
         std::map<std::string, std::vector<const Entity*>, std::less<>> opening_entities_by_wall;
         for (const auto& [id, entity] : snapshot.entities()) {
             if (entity.type == "reference_grid") {
@@ -28489,7 +28733,7 @@ private:
                         id_from(id), image, *position, metres_per_source_unit, transform_scale,
                         rotation, boolean_property("flip_horizontal", false),
                         boolean_property("flip_vertical", false), intensity,
-                        boolean_property("visible", true), id_from(id) == m_selected_id});
+                        boolean_property("visible", true), id_from(id) == options.selected_id});
                 } catch (const std::exception& error) {
                     append_geometry_error(QStringLiteral("Reference %1: %2")
                                               .arg(id_from(id), QString::fromUtf8(error.what())));
@@ -28508,7 +28752,7 @@ private:
                         }
                         all_geometry.push_back(CanvasEntity{
                             id_from(id), QStringLiteral("terrain_surface"), std::move(segments), 0.0,
-                            id_from(id) == m_selected_id});
+                            id_from(id) == options.selected_id});
                     }
                 } catch (const std::exception& error) {
                     append_geometry_error(QStringLiteral("Terrain %1: %2")
@@ -28566,14 +28810,14 @@ private:
                             cuts.push_back({cut.id,cut.offset,cut.width,cut.sill,cut.height});
                         const auto key = std::string{"hosted-cut-v1\n"} + resolved_host.properties.dump() +
                             '\n' + entity.properties.dump() + '\n' + cuts.dump();
-                        auto cached = m_plan_projection_cache.find(id);
-                        if (cached == m_plan_projection_cache.end() || cached->second.first != key) {
+                        auto cached = caches.projections.find(id);
+                        if (cached == caches.projections.end() || cached->second.first != key) {
                             auto projection = project_hosted_opening_plan(wall, *opening, assembly, operation);
-                            cached = m_plan_projection_cache.insert_or_assign(id,
+                            cached = caches.projections.insert_or_assign(id,
                                 std::make_pair(key, std::move(projection))).first;
                         }
                         CanvasEntity component{id_from(id), kind == "window" ? QStringLiteral("window") : QStringLiteral("opening"),
-                            cached->second.second, 0.0, id_from(id) == m_selected_id};
+                            cached->second.second, 0.0, id_from(id) == options.selected_id};
                         component.stroke_color = QColor(35, 43, 52);
                         component.dark_stroke_color = QColor(220, 232, 244);
                         component.output_stroke_width_mm = 0.16;
@@ -28582,7 +28826,7 @@ private:
                         all_geometry.push_back(CanvasEntity{id_from(id),"opening",
                             door_plan_symbol(*baseline,opening->offset,opening->width,
                                 decode_door_operation(entity.properties.at("door_operation"))),0,
-                            id_from(id)==m_selected_id});
+                            id_from(id)==options.selected_id});
                     } else if (kind == "opening" || kind == "door") {
                         const auto span = hosted_opening_span(*baseline, opening->offset, opening->width);
                         const auto outline = wall_plan_footprint(span, {},
@@ -28591,7 +28835,7 @@ private:
                         // hit target without suggesting a door leaf or glazing.
                         Boundary symbol{outline.at(1), outline.at(3), span};
                         CanvasEntity doorway{id_from(id), QStringLiteral("opening"),
-                            std::move(symbol), 0.0, id_from(id) == m_selected_id};
+                            std::move(symbol), 0.0, id_from(id) == options.selected_id};
                         doorway.stroke_color = QColor(110, 120, 130);
                         doorway.dark_stroke_color = QColor(175, 188, 200);
                         doorway.output_stroke_width_mm = 0.13;
@@ -28604,7 +28848,7 @@ private:
                         if (symbol.empty()) throw std::invalid_argument("window plan symbol is invalid");
                         CanvasEntity window{id_from(id), QStringLiteral("window"),
                                             std::move(symbol), 0.0,
-                                            id_from(id) == m_selected_id};
+                                            id_from(id) == options.selected_id};
                         window.stroke_color = QColor(52, 67, 82);
                         window.dark_stroke_color = QColor(210, 226, 239);
                         window.output_stroke_width_mm = 0.22;
@@ -28613,7 +28857,7 @@ private:
                     if (!all_geometry.empty() && all_geometry.back().id == id_from(id))
                         all_geometry.back().hit_segments = {
                             hosted_opening_span(*baseline, opening->offset, opening->width)};
-                    if (snapshot.is_editable() && !all_geometry.empty() && all_geometry.back().id == id_from(id)) {
+                    if (options.interactive && snapshot.is_editable() && !all_geometry.empty() && all_geometry.back().id == id_from(id)) {
                         try {
                             const auto frame = hosted_opening_resize_frame(snapshot, id);
                             auto& retained = all_geometry.back();
@@ -28653,7 +28897,7 @@ private:
                     if (source == snapshot.entities().end())
                         throw std::invalid_argument("source boundary is missing");
                     auto projection=project_boundary_dimension(dimension,source->second,
-                        m_metric_units,id_from(id)==m_selected_id, ansi_boundary_dimensions(snapshot, source->second));
+                        options.metric_units,id_from(id)==options.selected_id, ansi_boundary_dimensions(snapshot, source->second));
                     if (dimension.presentation && !dimension.presentation->visible) continue;
                     if (projection.line) all_geometry.push_back(std::move(*projection.line));
                     all_labels.push_back(std::move(projection.label));
@@ -28667,16 +28911,16 @@ private:
                 try {
                     const auto resolved = resolve_vertical_placement(snapshot, entity);
                     const auto key = resolved.type + '\n' + resolved.properties.dump();
-                    auto cached = m_plan_projection_cache.find(id);
-                    if (cached == m_plan_projection_cache.end() || cached->second.first != key) {
+                    auto cached = caches.projections.find(id);
+                    if (cached == caches.projections.end() || cached->second.first != key) {
                         auto projection = project_building_plan(decode_building_entity(resolved));
-                        cached = m_plan_projection_cache.insert_or_assign(
+                        cached = caches.projections.insert_or_assign(
                             id, std::make_pair(key, std::move(projection))).first;
                     }
                     all_geometry.push_back(CanvasEntity{id_from(id), QString::fromStdString(entity.type),
-                        cached->second.second, 0.0, id_from(id) == m_selected_id});
+                        cached->second.second, 0.0, id_from(id) == options.selected_id});
                 } catch (const std::exception& error) {
-                    m_plan_projection_cache.erase(id);
+                    caches.projections.erase(id);
                     append_geometry_error(QStringLiteral("Object %1: %2")
                         .arg(id_from(id), QString::fromUtf8(error.what())));
                 }
@@ -28739,8 +28983,8 @@ private:
                             : std::optional<PresentationOverride>{configured->second};
                         const auto exterior=exterior_label_regions.find(id);
                         if (!presentation || presentation->visible)
-                            all_labels.push_back(wall_dimension_label(id,*baseline,*thickness,m_metric_units,
-                                id_from(id)==m_selected_id,presentation,
+                            all_labels.push_back(wall_dimension_label(id,*baseline,*thickness,options.metric_units,
+                                id_from(id)==options.selected_id,presentation,
                                 exterior==exterior_label_regions.end() ? nullptr : &exterior->second));
                     } catch(const std::exception& error) {
                         append_geometry_error(QStringLiteral("Wall measurement %1: %2")
@@ -28768,8 +29012,8 @@ private:
                 }
                 segments = *boundary;
                 const auto key = geometry_entity.type + '\n' + geometry_entity.properties.dump();
-                auto cached = m_plan_slab_validation_cache.find(id);
-                if (cached == m_plan_slab_validation_cache.end() || cached->second.first != key) {
+                auto cached = caches.slab_validation.find(id);
+                if (cached == caches.slab_validation.end() || cached->second.first != key) {
                     QString validation_error;
                     const auto holes = read_required_holes(geometry_entity.properties);
                     if (!holes.has_value()) {
@@ -28793,7 +29037,7 @@ private:
                             }
                         }
                     }
-                    cached = m_plan_slab_validation_cache
+                    cached = caches.slab_validation
                                  .insert_or_assign(id, std::make_pair(key, validation_error))
                                  .first;
                 }
@@ -28837,7 +29081,7 @@ private:
                                        QString::fromStdString(entity.type),
                                        segments,
                                        read_number(geometry_entity.properties, "thickness_m", 0.08),
-                                       id_from(id) == m_selected_id};
+                                       id_from(id) == options.selected_id};
             if (entity.type == "room") {
                 RoomVolume room;
                 std::string room_error;
@@ -28856,7 +29100,7 @@ private:
                     ? 0.7 : 1.0;
                 canvas_entity.filled = presentation.filled;
                 canvas_entity.output_stroke_width_mm = 0.34;
-                if (canvas_entity.selected && m_document->is_editable() &&
+                if (canvas_entity.selected && (options.interactive && snapshot.is_editable()) &&
                     inspect_boundary_entity_version(entity).format ==
                         BoundaryEntityFormat::identified_v1) {
                     const auto identified = decode_identified_boundary_entity(entity);
@@ -28875,7 +29119,7 @@ private:
                 }
                 if (!label_text.isEmpty()) {
                     CanvasLabel area_label{id_from(id), plan_label_anchor(segments),
-                                           label_text, id_from(id) == m_selected_id};
+                                           label_text, id_from(id) == options.selected_id};
                     area_label.text_height_metres = 0.20;
                     area_label.show_background = false;
                     area_label.avoid_components = true;
@@ -28921,7 +29165,7 @@ private:
                     annotation_child_layers.emplace_back(label.id, label.placement.layer_id);
                     CanvasLabel canvas_label{id_from(label.id), label.placement.position,
                                              QString::fromStdString(label.content),
-                                             id_from(label.id) == m_selected_id,
+                                             id_from(label.id) == options.selected_id,
                                              label.placement.rotation_radians,
                                              label.placement.scale,
                                              label.style.text_height_metres};
@@ -28948,7 +29192,7 @@ private:
                     annotation_child_layers.emplace_back(symbol.id, symbol.placement.layer_id);
                     CanvasEntity canvas_symbol{id_from(symbol.id), QStringLiteral("symbol"),
                                                std::move(preview), 0.0,
-                                               id_from(symbol.id) == m_selected_id};
+                                               id_from(symbol.id) == options.selected_id};
                     canvas_symbol.stroke_color =
                         QColor(QString::fromStdString(symbol.style.stroke_color));
                     if (QString::fromStdString(symbol.style.stroke_color)
@@ -28982,7 +29226,7 @@ private:
                                 const auto colored=colored_symbol_svg(svg_symbol.document,*symbol.svg_palette);
                                 if(!QSvgRenderer(colored).isValid())throw std::invalid_argument("colored artwork cannot be rendered");
                             }catch(const std::exception& failure){
-                                m_plan_geometry_error+=QStringLiteral("Component %1 colors: %2. Reset colors or update its artwork.\n")
+                                result.diagnostics+=QStringLiteral("Component %1 colors: %2. Reset colors or update its artwork.\n")
                                     .arg(id_from(symbol.id),QString::fromUtf8(failure.what()));
                             }
                         }
@@ -28998,8 +29242,11 @@ private:
                         svg_symbol.flip_horizontal = symbol.flip_horizontal;
                         svg_symbol.flip_vertical = symbol.flip_vertical;
                         canvas_symbol.svg_symbol = std::move(svg_symbol);
+                    } else if (!options.interactive && (symbol.svg_palette || !symbol.pinned_svg.empty() ||
+                               (symbol.definition && symbol.definition->svg_asset))) {
+                        append_geometry_error(QStringLiteral("Component %1: historical SVG artwork is unavailable; only its retained vector preview can be shown.").arg(id_from(symbol.id)));
                     } else if(symbol.svg_palette) {
-                        m_plan_geometry_error+=QStringLiteral("Component %1 has saved colors but its SVG artwork is unavailable. Reset colors or update its artwork.\n").arg(id_from(symbol.id));
+                        result.diagnostics+=QStringLiteral("Component %1 has saved colors but its SVG artwork is unavailable. Reset colors or update its artwork.\n").arg(id_from(symbol.id));
                     }
                     all_geometry.push_back(std::move(canvas_symbol));
                 }
@@ -29062,24 +29309,7 @@ private:
             }
         }
         const auto apply_object_appearance = [&](CanvasEntity& entity) {
-            // Projection creates new shapes later, and several physical strokes
-            // may share one source ID. Style each retained physical shape only;
-            // dimensions and other annotation children remain independent.
-            if (entity.type != QStringLiteral("window") && !supportsObjectAppearance(entity.type.toStdString())) return;
-            const auto found = object_appearance.find(entity.id.toStdString());
-            if (found == object_appearance.end() || found->second.inherit_appearance) return;
-            const auto& value = found->second;
-            entity.stroke_color = QColor(QString::fromStdString(value.style.stroke_color));
-            entity.dark_stroke_color = QColor{};
-            entity.stroke_width_metres = value.style.stroke_width_metres;
-            if (value.paper_line_width_mm) {
-                entity.output_stroke_width_mm = *value.paper_line_width_mm;
-                entity.paper_stroke_width_on_screen = true;
-            }
-            entity.fill_color = QColor(QString::fromStdString(value.style.fill_color));
-            entity.hatch_pattern = QString::fromStdString(value.style.fill_pattern);
-            if (value.hatch_scale) entity.hatch_scale = *value.hatch_scale;
-            entity.filled = value.style.fill_pattern != "none" && entity.fill_color.isValid();
+            applySnapshotObjectAppearance(entity, object_appearance);
         };
         // Reusable assembly instances are retained inside the catalog model,
         // but their plan preview is a transformed copy of the declared host
@@ -29090,13 +29320,6 @@ private:
             const auto key = entity.id.toStdString();
             if (!host_geometry.contains(key)) host_geometry.emplace(key, entity);
         }
-        struct AssemblyPreview {
-            std::string child_id;
-            std::string host_entity_id;
-            AssemblyPlacement placement;
-            double thickness_metres{};
-            std::optional<QColor> fill_color;
-        };
         std::vector<AssemblyPreview> assembly_previews;
         std::vector<std::pair<std::string, std::string>> assembly_child_hosts;
         for (const auto& [catalog_id, catalog_entity] : snapshot.entities()) {
@@ -29120,7 +29343,7 @@ private:
                     CanvasEntity preview{id_from(child_id), QStringLiteral("assembly_instance"),
                                          std::move(segments),
                                          host->second.thickness_metres * instance.placement->scale,
-                                         id_from(child_id) == m_selected_id};
+                                         id_from(child_id) == options.selected_id};
                     const auto resolved = model.resolve(instance.id);
                     for (const auto& [slot, material_id] : resolved.materials) {
                         (void)slot;
@@ -29153,9 +29376,9 @@ private:
         // Visibility is derived before annotation layout so hidden components
         // cannot push visible room labels away from otherwise clear space.
         // Geometry validation above remains unconditional.
-        auto visible_ids = visible_project_entities(snapshot, m_view_filter);
+        auto visible_ids = visible_project_entities(snapshot, options.visibility);
         try {
-            visible_ids = visible_project_entities_with_phase(snapshot, m_view_filter);
+            visible_ids = visible_project_entities_with_phase(snapshot, options.visibility);
         } catch (const std::exception& error) {
             append_geometry_error(QStringLiteral("Design phase: %1")
                                       .arg(QString::fromUtf8(error.what())));
@@ -29166,6 +29389,36 @@ private:
         }
         for (const auto& [id, layer_id] : annotation_child_layers) {
             if (layer_id.empty() || visible_ids.contains(layer_id)) visible_ids.insert(id);
+        }
+        if (!options.scope_id.empty()) {
+            bool unresolved = false;
+            std::erase_if(visible_ids, [&](const auto& id) {
+                if (!scope_available) return true;
+                auto context = organization.drawing_context(id);
+                if (!context) {
+                    const auto annotation = std::find_if(annotation_child_layers.begin(), annotation_child_layers.end(),
+                        [&](const auto& child) { return child.first == id; });
+                    if (annotation != annotation_child_layers.end()) context = organization.drawing_context(annotation->second);
+                    const auto assembly = std::find_if(assembly_child_hosts.begin(), assembly_child_hosts.end(),
+                        [&](const auto& child) { return child.first == id; });
+                    if (assembly != assembly_child_hosts.end()) context = organization.drawing_context(assembly->second);
+                }
+                if (!context || context->floor_id.empty()) {
+                    if (std::any_of(all_geometry.begin(), all_geometry.end(), [&](const auto& item) { return item.id.toStdString() == id; }) ||
+                        std::any_of(reference_underlays.begin(), reference_underlays.end(), [&](const auto& item) { return item.id.toStdString() == id; }))
+                        unresolved = true;
+                    return true;
+                }
+                return context->floor_id != scoped_floor || context->property_id != options.active_context->property_id ||
+                    context->building_id != options.active_context->building_id;
+            });
+            if (unresolved) append_geometry_error(QStringLiteral("Drawing records with unresolved placement were excluded from this floor."));
+            std::erase_if(reference_underlays, [&](const auto& reference) {
+                return !visible_ids.contains(reference.id.toStdString()) || presentation_hidden_ids.contains(reference.id.toStdString());
+            });
+            std::erase_if(reference_grids, [&](const auto& grid) {
+                return !visible_ids.contains(grid.id.toStdString()) || presentation_hidden_ids.contains(grid.id.toStdString());
+            });
         }
         // Keep automatically generated room/area names readable after users
         // furnish the plan. Labels remain derived presentation values: only
@@ -29191,7 +29444,7 @@ private:
             const auto label_owner = std::find_if(all_geometry.begin(), all_geometry.end(),
                 [&](const auto& candidate) { return candidate.id == label.id; });
             if (label_owner == all_geometry.end() || label_owner->segments.empty()) continue;
-            const auto footprint=plan_area_label_footprint(label,m_measurementCanvas->font(),m_measurementCanvas);
+            const auto footprint=plan_area_label_footprint(label,options.label_font,options.label_device);
             auto obstacles = component_bounds;
             obstacles.insert(obstacles.end(),placed_area_label_bounds.begin(),placed_area_label_bounds.end());
             if (appraisal_area_values.contains(label.id.toStdString())) {
@@ -29216,6 +29469,393 @@ private:
         std::erase_if(all_labels, [](const auto& label) {
             return label.avoid_components && label.text.isEmpty();
         });
+        result.object_appearance_defaults.clear();
+        for (const auto& entity : all_geometry) {
+            const auto source = snapshot.entities().find(entity.id.toStdString());
+            if (source == snapshot.entities().end() || !supportsObjectAppearance(source->second.type) ||
+                (entity.type != QStringLiteral("window") && !supportsObjectAppearance(entity.type.toStdString()))) continue;
+            PresentationOverride defaults;
+            defaults.target_kind = "object";
+            defaults.target_id = source->first;
+            // Missing retained colors use the shared output/annotation defaults
+            // (black outline, white fill); explicit semantic colors are exact.
+            if (entity.stroke_color.isValid()) defaults.style.stroke_color = entity.stroke_color.name(QColor::HexRgb).toStdString();
+            if (entity.fill_color.isValid()) defaults.style.fill_color = entity.fill_color.name(QColor::HexRgb).toStdString();
+            defaults.style.fill_pattern = !entity.filled || entity.hatch_pattern == QStringLiteral("none") ? "none"
+                : entity.hatch_pattern == QStringLiteral("solid") ? "solid" : "hatch";
+            if (entity.stroke_width_metres > 0.0) defaults.style.stroke_width_metres = entity.stroke_width_metres;
+            defaults.paper_line_width_mm = entity.output_stroke_width_mm > 0.0 ? entity.output_stroke_width_mm : 0.25;
+            defaults.hatch_scale = entity.hatch_scale;
+            result.object_appearance_defaults.try_emplace(source->first, std::move(defaults));
+        }
+        std::vector<CanvasEntity> geometry;
+        geometry.reserve(all_geometry.size());
+        const auto active_snap_context = options.active_context;
+        for (auto entity : all_geometry) {
+            apply_object_appearance(entity);
+            if (visible_ids.contains(entity.id.toStdString()) &&
+                !presentation_hidden_ids.contains(entity.id.toStdString())) {
+                const auto source = snapshot.entities().find(entity.id.toStdString());
+                if (source != snapshot.entities().end() && active_snap_context &&
+                    (source->second.type == "wall" || is_closed_boundary_entity(source->second.type))) {
+                    const auto context = organization.drawing_context(source->second.id);
+                    const bool same_floor = context &&
+                        context->property_id == active_snap_context->property_id &&
+                        context->building_id == active_snap_context->building_id &&
+                        context->floor_id == active_snap_context->floor_id;
+                    if (same_floor) {
+                        if (source->second.type == "wall") {
+                            const auto baseline = read_required_segment(source->second.properties, "baseline");
+                            if (baseline) {
+                                entity.snap_points = {baseline->start, baseline->end};
+                                entity.snap_segments = {*baseline};
+                            }
+                        } else {
+                            entity.snap_segments = entity.segments;
+                            for (const auto& segment : entity.segments) {
+                                entity.snap_points.push_back(segment.start);
+                                entity.snap_points.push_back(segment.end);
+                            }
+                        }
+                    }
+                }
+                geometry.push_back(std::move(entity));
+            }
+        }
+        const auto plan_layer = [](const CanvasEntity& entity) { return snapshotPlanLayer(entity); };
+        std::stable_sort(geometry.begin(), geometry.end(), [&](const auto& left, const auto& right) {
+            return plan_layer(left) < plan_layer(right);
+        });
+        std::vector<CanvasLabel> labels;
+        for (auto label : all_labels) {
+            if (visible_ids.contains(label.id.toStdString()) &&
+                (!presentation_hidden_ids.contains(label.id.toStdString()) || object_hidden_ids.contains(label.id.toStdString()))) {
+                labels.push_back(std::move(label));
+            }
+        }
+        // A floor title belongs to the plan presentation rather than to an
+        // arbitrary text annotation. Anchor it from the active floor's actual
+        // visible geometry so it follows edits and never becomes stale data.
+        if (const auto active = scope_available ? options.active_context : std::nullopt) {
+            std::optional<Bounds2> floor_bounds;
+            std::optional<Bounds2> primary_area_bounds;
+            double primary_area_extent = 0.0;
+            for (const auto& entity : geometry) {
+                const auto context = organization.drawing_context(entity.id.toStdString());
+                if (!context || context->floor_id != active->floor_id || entity.segments.empty()) continue;
+                try {
+                    const auto bounds = boundary_bounds(entity.segments);
+                    if (!floor_bounds) {
+                        floor_bounds = bounds;
+                    } else {
+                        floor_bounds->minimum.x = std::min(floor_bounds->minimum.x, bounds.minimum.x);
+                        floor_bounds->minimum.y = std::min(floor_bounds->minimum.y, bounds.minimum.y);
+                        floor_bounds->maximum.x = std::max(floor_bounds->maximum.x, bounds.maximum.x);
+                        floor_bounds->maximum.y = std::max(floor_bounds->maximum.y, bounds.maximum.y);
+                    }
+                    if (entity.type == QStringLiteral("measurement_boundary") ||
+                        entity.type == QStringLiteral("boundary")) {
+                        const auto extent = (bounds.maximum.x - bounds.minimum.x) *
+                                            (bounds.maximum.y - bounds.minimum.y);
+                        if (std::isfinite(extent) && extent > primary_area_extent) {
+                            primary_area_extent = extent;
+                            primary_area_bounds = bounds;
+                        }
+                    }
+                } catch (const std::exception&) {
+                    // Invalid geometry is already reported by its projection
+                    // path and must not suppress the rest of the floor title.
+                }
+            }
+            const auto floor = organization.nodes.find(active->floor_id);
+            if (floor_bounds && floor != organization.nodes.end()) {
+                const auto title_bounds = primary_area_bounds.value_or(*floor_bounds);
+                auto title = normalized_plan_name(QString::fromStdString(
+                    floor->second.name.empty() ? std::string("Floor") : floor->second.name));
+                CanvasLabel floor_label{id_from(active->floor_id),
+                    {title_bounds.maximum.x,
+                     title_bounds.maximum.y +
+                         std::max(0.28, (title_bounds.maximum.y - title_bounds.minimum.y) * 0.025)},
+                    std::move(title), false};
+                floor_label.paper_height_mm = 3.2;
+                floor_label.text_height_metres = 0.25;
+                floor_label.bold = true;
+                floor_label.show_background = false;
+                floor_label.plan_only = true;
+                labels.push_back(std::move(floor_label));
+            }
+        }
+        result.organization = organization;
+        result.wall_plans = wall_plans;
+        result.all_geometry = std::move(all_geometry);
+        result.all_labels = std::move(all_labels);
+        result.geometry = std::move(geometry);
+        result.labels = std::move(labels);
+        result.references = std::move(reference_underlays);
+        result.grids = std::move(reference_grids);
+        result.assembly_previews = std::move(assembly_previews);
+        result.visible_ids = std::move(visible_ids);
+        result.presentation_hidden_ids = std::move(presentation_hidden_ids);
+        result.object_hidden_ids = std::move(object_hidden_ids);
+        result.object_appearance = std::move(object_appearance);
+        return result;
+    }
+
+    static std::set<std::string, std::less<>> revisionDrawingSources(
+        const DocumentSnapshot& snapshot, const QString& drawable_id) {
+        const auto id = drawable_id.toStdString();
+        std::set<std::string, std::less<>> result{id};
+        if (const auto parent = annotation_parent_for_child(snapshot, id)) result.insert(*parent);
+        if (const auto host = assembly_host_for_child(snapshot, id)) {
+            result.insert(*host);
+            if (const auto split = id.find(":instance:"); split != std::string::npos) result.insert(id.substr(0, split));
+        }
+        if (const auto found = snapshot.entities().find(id); found != snapshot.entities().end()) {
+            if (found->second.type == "opening")
+                if (const auto host = read_string(found->second.properties, "wall_id")) result.insert(*host);
+            if (can_recognize_boundary_dimension_entity_type(found->second.type)) {
+                const auto decoded = decode_boundary_dimension_entity(found->second);
+                if (decoded.supported()) result.insert(decoded.dimension->boundary_id);
+            }
+        }
+        return result;
+    }
+
+    static std::map<QString, QByteArray> revisionDrawingSignatures(const SnapshotPlanScene& scene) {
+        std::map<QString, QByteArray> result;
+        const auto record = [&](const QString& id, const auto& write) {
+            QByteArray bytes;
+            QDataStream stream(&bytes, QIODevice::WriteOnly);
+            write(stream);
+            result[id].append(bytes);
+        };
+        const auto point = [](QDataStream& stream, Vec2 p) { stream << p.x << p.y; };
+        const auto path = [&](QDataStream& stream, const Boundary& edges) {
+            stream << quint64(edges.size());
+            for (const auto& edge : edges) { point(stream, edge.start); point(stream, edge.end); stream << edge.sweep_radians; }
+        };
+        for (const auto& entity : scene.geometry) record(entity.id, [&](QDataStream& stream) {
+            stream << QStringLiteral("geometry") << entity.type << entity.thickness_metres << entity.filled
+                << entity.hatch_pattern << entity.hatch_scale << entity.fill_color << entity.stroke_color
+                << entity.dark_stroke_color << entity.stroke_width_metres << entity.output_stroke_width_mm
+                << entity.dimension_end_ticks << entity.paper_stroke_width_on_screen;
+            path(stream, entity.segments); stream << quint64(entity.holes.size());
+            for (const auto& hole : entity.holes) path(stream, hole);
+            stream << entity.stroke_segments.has_value(); if (entity.stroke_segments) path(stream, *entity.stroke_segments);
+            stream << entity.svg_symbol.has_value();
+            if (entity.svg_symbol) {
+                const auto& svg = *entity.svg_symbol;
+                stream << svg.artwork_sha256 << svg.view_box << svg.footprint_view_box << svg.rotation_radians
+                    << svg.width_metres << svg.depth_metres << svg.flip_horizontal << svg.flip_vertical;
+                point(stream, svg.position);
+                stream << svg.svg_palette.has_value();
+                if (svg.svg_palette) stream << QString::fromStdString(svg.svg_palette->profile)
+                    << QString::fromStdString(svg.svg_palette->outline_color)
+                    << QString::fromStdString(svg.svg_palette->surface_color);
+            }
+        });
+        for (const auto& label : scene.labels) record(label.id, [&](QDataStream& stream) {
+            stream << QStringLiteral("label") << label.text << label.rotation_radians << label.scale
+                << label.text_height_metres << label.paper_height_mm << label.color << label.bold << label.italic
+                << label.fill_color << label.fill_pattern << label.show_background << label.font_family
+                << label.avoid_components << label.plan_only << label.model_plan << label.wall_dimension_manual_rotation;
+            point(stream, label.position); stream << label.leader_start.has_value();
+            if (label.leader_start) point(stream, *label.leader_start);
+            stream << label.plan_label_offset.has_value();
+            if (label.plan_label_offset) point(stream,*label.plan_label_offset);
+            stream << label.automatic_linear_placement.has_value();
+            if (label.automatic_linear_placement) {
+                const auto& placement=*label.automatic_linear_placement;
+                path(stream,Boundary{placement.anchor}); point(stream,placement.outward_normal);
+                stream << placement.clearance_metres;
+            }
+        });
+        for (const auto& reference : scene.references) record(reference.id, [&](QDataStream& stream) {
+            stream << QStringLiteral("reference") << reference.image << reference.metres_per_source_unit
+                << reference.scale << reference.rotation_degrees << reference.flip_horizontal << reference.flip_vertical
+                << reference.intensity << reference.visible;
+            point(stream, reference.position);
+        });
+        for (const auto& grid : scene.grids) record(grid.id, [&](QDataStream& stream) {
+            stream << QStringLiteral("grid") << grid.visible << grid.x_label << grid.y_label << quint64(grid.lines.size());
+            for (const auto& line : grid.lines) { point(stream, line.start); point(stream, line.end); stream << line.major; }
+        });
+        return result;
+    }
+
+    static SnapshotPlanScene revisionOverlayScene(const DocumentSnapshot& before, const SnapshotPlanScene& left,
+        const DocumentSnapshot& after, const SnapshotPlanScene& right) {
+        SnapshotPlanScene overlay;
+        const auto left_signatures = revisionDrawingSignatures(left);
+        const auto right_signatures = revisionDrawingSignatures(right);
+        const auto changed = [&](const DocumentSnapshot& snapshot, const QString& id) {
+            const auto annotation_parent = annotation_parent_for_child(snapshot,id.toStdString());
+            const auto child_record = [&](const DocumentSnapshot& source) -> json {
+                if (!annotation_parent) return json();
+                const auto found=source.entities().find(*annotation_parent);
+                if (found==source.entities().end()) return json();
+                const auto state=decode_annotation_entity(found->second);
+                const auto records=encode_annotation_state(state,desktop_symbol_catalog());
+                for (const auto* collection : {"labels","symbols"}) {
+                    for (const auto& record : records.at(collection))
+                        if (record.value("id",std::string{})==id.toStdString()) return record;
+                }
+                return json();
+            };
+            if (annotation_parent && child_record(before)!=child_record(after)) return true;
+            for (const auto& owner : revisionDrawingSources(snapshot, id)) {
+                const auto old = before.entities().find(owner), current = after.entities().find(owner);
+                if ((!annotation_parent || owner!=*annotation_parent) &&
+                    ((old == before.entities().end()) != (current == after.entities().end()) ||
+                    (old != before.entities().end() && !(old->second == current->second)))) return true;
+                const auto entity = snapshot.entities().find(owner);
+                if (entity == snapshot.entities().end()) continue;
+                for (const auto* key : {"asset_id", "render_asset_id"}) {
+                    const auto asset = read_string(entity->second.properties, key);
+                    if (!asset) continue;
+                    const auto old_asset = before.assets().find(*asset), new_asset = after.assets().find(*asset);
+                    if ((old_asset == before.assets().end()) != (new_asset == after.assets().end()) ||
+                        (old_asset != before.assets().end() && !(old_asset->second == new_asset->second))) return true;
+                }
+            }
+            const auto old = left_signatures.find(id), current = right_signatures.find(id);
+            return old != left_signatures.end() && current != right_signatures.end() && old->second != current->second;
+        };
+        const auto append = [&](const DocumentSnapshot& snapshot, const SnapshotPlanScene& source, bool prior) {
+            const auto& opposite = prior ? right_signatures : left_signatures;
+            const auto disposition = [&](const QString& id) {
+                if (!opposite.contains(id)) return prior ? -1 : 1;
+                return changed(snapshot, id) ? 2 : 0;
+            };
+            const auto color = [](int state) { return QColor(state == -1 ? "#c23b3b" : state == 1 ? "#17844b" : "#b87000"); };
+            const auto renamed = [&](const QString& id) { return (prior ? QStringLiteral("revision-before:") : QStringLiteral("revision-after:")) + id; };
+            for (auto item : source.geometry) {
+                const auto state = disposition(item.id); if (prior && state == 0) continue;
+                item.id = renamed(item.id); item.selected = false; item.vertex_handles.clear();
+                item.resize_frame.reset(); item.opening_width_controls.reset();
+                if (state) {
+                    item.stroke_color = color(state); item.dark_stroke_color = {};
+                    item.fill_color = QColor(color(state).red(), color(state).green(), color(state).blue(), 38);
+                    item.output_stroke_width_mm = .4; item.dashed_stroke = prior;
+                    // Artwork is retained unchanged; its analytical footprint carries the comparison tint.
+                    if (item.svg_symbol) {
+                        auto outline = item; outline.svg_symbol.reset(); outline.filled = false;
+                        outline.id += QStringLiteral(":comparison-outline");
+                        overlay.geometry.push_back(std::move(item)); overlay.geometry.push_back(std::move(outline));
+                        continue;
+                    }
+                }
+                overlay.geometry.push_back(std::move(item));
+            }
+            for (auto item : source.labels) {
+                const auto state = disposition(item.id); if (prior && state == 0) continue;
+                item.id = renamed(item.id); item.selected = false;
+                if (state) item.color = color(state);
+                overlay.labels.push_back(std::move(item));
+            }
+            for (auto item : source.references) {
+                const auto state = disposition(item.id); if (prior && state == 0) continue;
+                item.id = renamed(item.id); item.selected = false;
+                if (state) {
+                    const auto width = item.image.width() * item.metres_per_source_unit * item.scale;
+                    const auto height = item.image.height() * item.metres_per_source_unit * item.scale;
+                    const auto c = std::cos(item.rotation_degrees * std::numbers::pi / 180), sn = std::sin(item.rotation_degrees * std::numbers::pi / 180);
+                    const auto corner = [&](double x, double y) { return Vec2{item.position.x + c*x-sn*y, item.position.y+sn*x+c*y}; };
+                    const std::array<Vec2,4> corners{corner(-width/2,-height/2),corner(width/2,-height/2),corner(width/2,height/2),corner(-width/2,height/2)};
+                    CanvasEntity outline{item.id+QStringLiteral(":comparison-outline"),QStringLiteral("boundary"),{},0};
+                    for (std::size_t i=0;i<corners.size();++i) outline.segments.push_back({corners[i],corners[(i+1)%corners.size()],0});
+                    outline.stroke_color = color(state); outline.output_stroke_width_mm=.4; outline.dashed_stroke=prior;
+                    overlay.geometry.push_back(std::move(outline));
+                }
+                overlay.references.push_back(std::move(item));
+            }
+            for (auto item : source.grids) {
+                const auto state=disposition(item.id); if (prior && state==0) continue;
+                item.id=renamed(item.id);
+                if (!state) overlay.grids.push_back(std::move(item));
+                else {
+                    CanvasEntity lines{item.id,QStringLiteral("reference_grid"),{},0};
+                    for (const auto& line:item.lines) lines.segments.push_back({line.start,line.end,0});
+                    lines.stroke_color=color(state); lines.dashed_stroke=prior;
+                    overlay.geometry.push_back(std::move(lines));
+                }
+            }
+        };
+        append(before,left,true); append(after,right,false);
+        return overlay;
+    }
+
+    static int snapshotPlanLayer(const CanvasEntity& entity) {
+        if (entity.type == QStringLiteral("terrain_surface") || entity.type == QStringLiteral("measurement_boundary") ||
+            entity.type == QStringLiteral("room_boundary") || entity.type == QStringLiteral("boundary") ||
+            entity.type == QStringLiteral("slab") || entity.type == QStringLiteral("room")) return 0;
+        if (entity.type == QStringLiteral("wall")) return 10;
+        if (entity.type == QStringLiteral("opening") || entity.type == QStringLiteral("window")) return 20;
+        if (entity.type == QStringLiteral("symbol") || entity.type == QStringLiteral("assembly_instance")) return 30;
+        if (entity.type == QStringLiteral("dimension_line")) return 40;
+        return 15;
+    }
+    void refreshCanvases() {
+        // A shared Document can replace its head without changing its address
+        // or revision. Every refreshed scene needs a new immutable preview source.
+        m_opening_preview_source.reset();
+        m_opening_preview_document.reset();
+        m_pending_opening_preview.reset();
+        if (m_running_opening_preview)
+            (void)m_opening_preview_queue.cancel(m_opening_preview_sequence);
+        m_vertex_preview_source.reset();
+        m_vertex_preview_scene.reset();
+        m_vertex_preview_eligible.reset();
+        m_vertex_preview_labels.reset();
+        m_vertex_preview_appraisal_area_ids.reset();
+        m_vertex_preview_label_footprints.reset();
+        m_vertex_preview_component_bounds.reset();
+        m_vertex_preview_view_context.reset();
+        m_vertex_preview_canvas.clear();
+        m_vertex_preview_document.reset();
+        m_wall_move_source.reset();
+        m_wall_move_document.reset();
+        m_wall_move_canvas.clear();
+        m_entity_transform_source.reset();
+        m_entity_transform_document.reset();
+        m_entity_transform_canvas.clear();
+        m_entity_transform_context.reset();
+        m_entity_transform_command.reset();
+        m_entity_transform_ready=false;
+        m_pending_vertex_preview.reset();
+        if (m_running_vertex_preview)
+            (void)m_vertex_preview_queue.cancel(m_vertex_preview_sequence);
+        const auto snapshot = m_document->snapshot();
+        std::erase_if(m_plan_transform_frame_cache, [&](const auto& entry) {
+            return !snapshot.entities().contains(entry.first);
+        });
+        SnapshotPlanSceneOptions scene_options;
+        scene_options.metric_units = m_metric_units;
+        scene_options.visibility = m_view_filter;
+        scene_options.selected_id = m_selected_id;
+        scene_options.active_context = organize_project(snapshot).drawing_context(m_active_layer_id.toStdString());
+        scene_options.interactive = true;
+        scene_options.label_font = m_measurementCanvas->font();
+        scene_options.label_device = m_measurementCanvas;
+        auto scene = projectSnapshotPlanScene(snapshot, scene_options, m_plan_scene_caches);
+        auto& all_geometry = scene.all_geometry;
+        auto& reference_underlays = scene.references;
+        auto& reference_grids = scene.grids;
+        const auto& wall_plans = scene.wall_plans;
+        auto& openings_by_wall = scene.openings_by_wall;
+        const auto& assembly_previews = scene.assembly_previews;
+        const auto& visible_ids = scene.visible_ids;
+        const auto& presentation_hidden_ids = scene.presentation_hidden_ids;
+        const auto& object_hidden_ids = scene.object_hidden_ids;
+        m_plan_appraisal_area_ids = scene.appraisal_area_ids;
+        m_plan_geometry_error = scene.diagnostics;
+        const auto append_geometry_error = [&](const QString& message) {
+            if (!m_plan_geometry_error.isEmpty()) m_plan_geometry_error += QLatin1Char('\n');
+            m_plan_geometry_error += message;
+        };
+        const auto apply_object_appearance = [&](CanvasEntity& entity) {
+            applySnapshotObjectAppearance(entity, scene.object_appearance);
+        };
         // Measurement always retains its plan geometry. Build all three
         // architectural presentations from the same snapshot so persisted
         // sheet viewports can render independently of the active workspace.
@@ -29306,12 +29946,27 @@ private:
             m_view_projection_cache.clear();
             m_view_projection_sources = snapshot.entities();
         }
-        // Keep globally hidden physical sources until the saved-view resolver:
-        // explicit local visibility can recover them within the hard view mask.
-        auto architectural_hidden_ids = presentation_hidden_ids;
-        for (const auto& id : object_hidden_ids) architectural_hidden_ids.erase(id);
         const auto build_architectural_geometry = [&](BuildingViewKind kind,
                                                        const ArchitecturalViewContext& view_context) {
+            // Resolve this view's effective visibility before host/child closure.
+            // A hidden selected opening cannot admit its host and assemblies;
+            // an explicit local re-show still recovers a globally hidden physical owner.
+            const ViewPhysicalAppearancePolicy appearance(view_context.presentation.appearance);
+            auto architectural_hidden_ids = presentation_hidden_ids;
+            for (const auto& id : object_hidden_ids) {
+                if (appearance.physicalVisible(id,visible_ids,presentation_hidden_ids,object_hidden_ids))
+                    architectural_hidden_ids.erase(id);
+            }
+            for (const auto& [id, entity] : snapshot.entities()) {
+                (void)entity;
+                if (!appearance.physicalVisible(id,visible_ids,presentation_hidden_ids,object_hidden_ids))
+                    architectural_hidden_ids.insert(id);
+            }
+            for (const auto& entity : all_geometry) {
+                const auto id=entity.id.toStdString();
+                if (!appearance.physicalVisible(id,visible_ids,presentation_hidden_ids,object_hidden_ids))
+                    architectural_hidden_ids.insert(id);
+            }
             auto referenced=architectural_view_references(view_context,snapshot.entities(),architectural_hidden_ids);
             const bool restricted = view_context.restrict_to_objects || !view_context.object_ids.empty();
             if (restricted) {
@@ -29741,25 +30396,7 @@ private:
         // Every supported entity has been parsed and validated before the
         // previously derived view mask is applied. Hidden invalid geometry
         // therefore remains reported and cannot bypass validation.
-        m_object_appearance_defaults.clear();
-        for (const auto& entity : all_geometry) {
-            const auto source = snapshot.entities().find(entity.id.toStdString());
-            if (source == snapshot.entities().end() || !supportsObjectAppearance(source->second.type) ||
-                (entity.type != QStringLiteral("window") && !supportsObjectAppearance(entity.type.toStdString()))) continue;
-            PresentationOverride defaults;
-            defaults.target_kind = "object";
-            defaults.target_id = source->first;
-            // Missing retained colors use the shared output/annotation defaults
-            // (black outline, white fill); explicit semantic colors are exact.
-            if (entity.stroke_color.isValid()) defaults.style.stroke_color = entity.stroke_color.name(QColor::HexRgb).toStdString();
-            if (entity.fill_color.isValid()) defaults.style.fill_color = entity.fill_color.name(QColor::HexRgb).toStdString();
-            defaults.style.fill_pattern = !entity.filled || entity.hatch_pattern == QStringLiteral("none") ? "none"
-                : entity.hatch_pattern == QStringLiteral("solid") ? "solid" : "hatch";
-            if (entity.stroke_width_metres > 0.0) defaults.style.stroke_width_metres = entity.stroke_width_metres;
-            defaults.paper_line_width_mm = entity.output_stroke_width_mm > 0.0 ? entity.output_stroke_width_mm : 0.25;
-            defaults.hatch_scale = entity.hatch_scale;
-            m_object_appearance_defaults.try_emplace(source->first, std::move(defaults));
-        }
+        m_object_appearance_defaults = scene.object_appearance_defaults;
         std::vector<CanvasEntity> geometry;
         // Exact previews need uncropped sources with presentation still
         // recoverable in the captured saved view. The measurement canvas has
@@ -29779,57 +30416,8 @@ private:
         }
         for (auto& entity : m_constraint_preview_source_geometry) apply_object_appearance(entity);
         std::array<std::vector<CanvasEntity>, 3> visible_view_geometry;
-        geometry.reserve(all_geometry.size());
-        const auto active_snap_context = organization.drawing_context(m_active_layer_id.toStdString());
-        for (auto& entity : all_geometry) {
-            apply_object_appearance(entity);
-            if (visible_ids.contains(entity.id.toStdString()) &&
-                !presentation_hidden_ids.contains(entity.id.toStdString())) {
-                const auto source = snapshot.entities().find(entity.id.toStdString());
-                if (source != snapshot.entities().end() && active_snap_context &&
-                    (source->second.type == "wall" || is_closed_boundary_entity(source->second.type))) {
-                    const auto context = organization.drawing_context(source->second.id);
-                    const bool same_floor = context &&
-                        context->property_id == active_snap_context->property_id &&
-                        context->building_id == active_snap_context->building_id &&
-                        context->floor_id == active_snap_context->floor_id;
-                    if (same_floor) {
-                        if (source->second.type == "wall") {
-                            const auto baseline = read_required_segment(source->second.properties, "baseline");
-                            if (baseline) {
-                                entity.snap_points = {baseline->start, baseline->end};
-                                entity.snap_segments = {*baseline};
-                            }
-                        } else {
-                            entity.snap_segments = entity.segments;
-                            for (const auto& segment : entity.segments) {
-                                entity.snap_points.push_back(segment.start);
-                                entity.snap_points.push_back(segment.end);
-                            }
-                        }
-                    }
-                }
-                geometry.push_back(std::move(entity));
-            }
-        }
-        const auto plan_layer = [](const CanvasEntity& entity) {
-            if (entity.type == QStringLiteral("terrain_surface") ||
-                entity.type == QStringLiteral("measurement_boundary") ||
-                entity.type == QStringLiteral("room_boundary") ||
-                entity.type == QStringLiteral("boundary") ||
-                entity.type == QStringLiteral("slab") ||
-                entity.type == QStringLiteral("room")) return 0;
-            if (entity.type == QStringLiteral("wall")) return 10;
-            if (entity.type == QStringLiteral("opening") ||
-                entity.type == QStringLiteral("window")) return 20;
-            if (entity.type == QStringLiteral("symbol") ||
-                entity.type == QStringLiteral("assembly_instance")) return 30;
-            if (entity.type == QStringLiteral("dimension_line")) return 40;
-            return 15;
-        };
-        std::stable_sort(geometry.begin(), geometry.end(), [&](const auto& left, const auto& right) {
-            return plan_layer(left) < plan_layer(right);
-        });
+        geometry = scene.geometry;
+        const auto plan_layer = [](const CanvasEntity& entity) { return snapshotPlanLayer(entity); };
         for (std::size_t index = 0; index < view_geometry.size(); ++index) {
             visible_view_geometry[index].reserve(view_geometry[index].size());
             for (auto& entity : view_geometry[index]) {
@@ -29977,65 +30565,7 @@ private:
         const auto active_key = m_active_named_view.isEmpty()
             ? canonical_view_ids[architectural_view_index(m_architectural_view_kind)]
             : std::make_pair(m_active_named_view_owner.toStdString(),m_active_named_view.toStdString());
-        std::vector<CanvasLabel> labels;
-        for (auto& label : all_labels) {
-            if (visible_ids.contains(label.id.toStdString()) &&
-                (!presentation_hidden_ids.contains(label.id.toStdString()) || object_hidden_ids.contains(label.id.toStdString()))) {
-                labels.push_back(std::move(label));
-            }
-        }
-        // A floor title belongs to the plan presentation rather than to an
-        // arbitrary text annotation. Anchor it from the active floor's actual
-        // visible geometry so it follows edits and never becomes stale data.
-        if (const auto active = organization.drawing_context(m_active_layer_id.toStdString())) {
-            std::optional<Bounds2> floor_bounds;
-            std::optional<Bounds2> primary_area_bounds;
-            double primary_area_extent = 0.0;
-            for (const auto& entity : geometry) {
-                const auto context = organization.drawing_context(entity.id.toStdString());
-                if (!context || context->floor_id != active->floor_id || entity.segments.empty()) continue;
-                try {
-                    const auto bounds = boundary_bounds(entity.segments);
-                    if (!floor_bounds) {
-                        floor_bounds = bounds;
-                    } else {
-                        floor_bounds->minimum.x = std::min(floor_bounds->minimum.x, bounds.minimum.x);
-                        floor_bounds->minimum.y = std::min(floor_bounds->minimum.y, bounds.minimum.y);
-                        floor_bounds->maximum.x = std::max(floor_bounds->maximum.x, bounds.maximum.x);
-                        floor_bounds->maximum.y = std::max(floor_bounds->maximum.y, bounds.maximum.y);
-                    }
-                    if (entity.type == QStringLiteral("measurement_boundary") ||
-                        entity.type == QStringLiteral("boundary")) {
-                        const auto extent = (bounds.maximum.x - bounds.minimum.x) *
-                                            (bounds.maximum.y - bounds.minimum.y);
-                        if (std::isfinite(extent) && extent > primary_area_extent) {
-                            primary_area_extent = extent;
-                            primary_area_bounds = bounds;
-                        }
-                    }
-                } catch (const std::exception&) {
-                    // Invalid geometry is already reported by its projection
-                    // path and must not suppress the rest of the floor title.
-                }
-            }
-            const auto floor = organization.nodes.find(active->floor_id);
-            if (floor_bounds && floor != organization.nodes.end()) {
-                const auto title_bounds = primary_area_bounds.value_or(*floor_bounds);
-                auto title = normalized_plan_name(QString::fromStdString(
-                    floor->second.name.empty() ? std::string("Floor") : floor->second.name));
-                CanvasLabel floor_label{id_from(active->floor_id),
-                    {title_bounds.maximum.x,
-                     title_bounds.maximum.y +
-                         std::max(0.28, (title_bounds.maximum.y - title_bounds.minimum.y) * 0.025)},
-                    std::move(title), false};
-                floor_label.paper_height_mm = 3.2;
-                floor_label.text_height_metres = 0.25;
-                floor_label.bold = true;
-                floor_label.show_background = false;
-                floor_label.plan_only = true;
-                labels.push_back(std::move(floor_label));
-            }
-        }
+        auto labels = scene.labels;
         m_measurementCanvas->setLabels(labels);
         if (m_architectural_view_kind==BuildingViewKind::plan) {
             auto frame=architectural_view_context(snapshot,BuildingViewKind::plan).frame;
@@ -35164,13 +35694,12 @@ private:
     QString m_last_error;
     QDeadlineTimer m_wall_measurement_notice{0};
     QString m_plan_geometry_error;
-    std::map<std::string, std::pair<std::string, Boundary>> m_plan_projection_cache;
+    PlanSceneCaches m_plan_scene_caches;
     std::map<std::string, PresentationOverride, std::less<>> m_object_appearance_defaults;
     std::map<std::string, std::pair<std::string, CanvasSelectionFrame>> m_plan_transform_frame_cache;
     std::map<std::string, Entity, std::less<>> m_view_projection_sources;
     std::map<std::pair<std::string, std::string>, std::optional<Boundary>> m_view_projection_cache;
-    std::map<std::string, std::pair<std::string, QString>, std::less<>>
-        m_plan_slab_validation_cache;
+
     std::array<std::vector<CanvasEntity>, 3> m_architectural_view_entities;
     std::map<std::pair<std::string, std::string>, std::vector<CanvasEntity>>
         m_coordinated_view_entities;

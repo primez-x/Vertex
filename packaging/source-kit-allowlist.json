@@ -4463,6 +4463,10 @@
     },
     {
       "category": "source",
+      "path": "tests/revision_comparison_desktop_tests.cpp"
+    },
+    {
+      "category": "source",
       "path": "tests/roof_join_tests.cpp"
     },
     {
@@ -4988,6 +4992,14 @@
     {
       "category": "docs",
       "path": "docs/verification/automatic-appraisal-wall-closure-20261003.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/superpowers/plans/2026-10-03-visual-revision-comparison.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/verification/visual-revision-comparison-20261003.md"
     }
   ]
 }

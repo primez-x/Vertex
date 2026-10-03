@@ -144,6 +144,8 @@ struct CanvasEntity {
     // Interaction-only geometry, such as the analytical span through an open
     // casement. It remains pickable without painting a false closed pane.
     Boundary hit_segments;
+    // Derived comparison presentation only; historical geometry stays exact.
+    bool dashed_stroke{false};
 };
 
 // A retained document annotation. Unlike BoundaryDraftPreview, labels are
@@ -332,6 +334,10 @@ public:
     void clearPreview();
     void fitView();
     void zoomBy(double factor, QPointF anchor = {});
+    // Synchronize read-only drawing views in model coordinates. Invalid
+    // transforms are ignored; valid scales use the interactive zoom limits.
+    void setViewTransform(Vec2 center, double scale);
+    void setNavigationChanged(std::function<void(Vec2, double)> callback);
     // Compact in-canvas navigation aid. The map is screen-only and never
     // participates in printable/exported scene output.
     [[nodiscard]] QRectF overviewMapRect() const noexcept;
@@ -494,6 +500,7 @@ protected:
     void dropEvent(QDropEvent* event) override;
 
 private:
+    void notifyNavigationChanged(Vec2 previous_center, double previous_scale);
     using PerformanceClock = std::chrono::steady_clock;
     std::function<void(PerformanceMetric, PerformanceClock::duration)> m_performance_measured;
     std::vector<std::pair<PerformanceMetric, PerformanceClock::time_point>> m_pending_measurements;
@@ -732,6 +739,7 @@ private:
     bool m_tablet_active{false};
 
     std::function<void(Vec2)> m_point_clicked;
+    std::function<void(Vec2, double)> m_navigation_changed;
     std::function<void(Vec2)> m_point_placement_requested;
     std::function<void(QString)> m_entity_clicked;
     std::function<void(QString)> m_entity_double_clicked;

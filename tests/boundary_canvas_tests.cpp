@@ -3673,6 +3673,14 @@ void test_two_finger_canvas_navigation() {
     canvas.show();
     process_events();
     int authored = 0, moved = 0;
+    int navigation_changes = 0;
+    Vec2 notified_center{};
+    double notified_scale{};
+    canvas.setNavigationChanged([&](Vec2 center, double scale) {
+        ++navigation_changes;
+        notified_center = center;
+        notified_scale = scale;
+    });
     canvas.setPointClicked([&](Vec2) { ++authored; });
     canvas.setEntitiesMoveRequested([&](QStringList, Vec2) { ++moved; return true; });
     auto* device = QTest::createTouchDevice();
@@ -3693,6 +3701,9 @@ void test_two_finger_canvas_navigation() {
     sequence.move(1,{210,270}).move(2,{510,270}).commit();
     require(std::abs(canvas.viewScale()-120)<1e-8 && close(model_at({360,270}),anchor),
             "two-finger translation must pan without changing scale or anchor");
+    require(navigation_changes >= 2 && close(notified_center,canvas.viewCenter()) &&
+                notified_scale == canvas.viewScale(),
+            "pinch and two-finger pan publish their final transform for synchronized drawings");
     require(images_equal(output_before,render(canvas,true)),
             "touch navigation must not change saved/output geometry or output scale");
     save_capture(qEnvironmentVariable("VERTEX_TEST_CAPTURE_DIR"),

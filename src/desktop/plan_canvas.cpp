@@ -724,6 +724,8 @@ QRectF PlanCanvas::overviewMapRect() const noexcept {
 }
 
 void PlanCanvas::fitView() {
+    const auto previous_center = m_view_center;
+    const auto previous_scale = m_scale;
     beginPerformanceMeasurement(PerformanceMetric::navigation);
     const auto bounds = contentBounds();
     if (!bounds) {
@@ -731,6 +733,7 @@ void PlanCanvas::fitView() {
         m_scale = 80.0;
         if (m_last_mouse_position) updateCursor(*m_last_mouse_position);
         update();
+        notifyNavigationChanged(previous_center, previous_scale);
         return;
     }
     const auto minimum = bounds->first;
@@ -750,6 +753,7 @@ void PlanCanvas::fitView() {
                         minimum_scale, maximum_scale);
     if (m_last_mouse_position) updateCursor(*m_last_mouse_position);
     update();
+    notifyNavigationChanged(previous_center, previous_scale);
 }
 
 void PlanCanvas::zoomBy(double factor, QPointF anchor) {
@@ -757,6 +761,8 @@ void PlanCanvas::zoomBy(double factor, QPointF anchor) {
         return;
     }
     beginPerformanceMeasurement(PerformanceMetric::navigation);
+    const auto previous_center = m_view_center;
+    const auto previous_scale = m_scale;
     if (anchor.isNull()) {
         anchor = rect().center();
     }
@@ -766,6 +772,34 @@ void PlanCanvas::zoomBy(double factor, QPointF anchor) {
     m_view_center = m_view_center + (before - after);
     if (m_last_mouse_position) updateCursor(*m_last_mouse_position);
     update();
+    notifyNavigationChanged(previous_center, previous_scale);
+}
+
+void PlanCanvas::setViewTransform(Vec2 center, double scale) {
+    if (!std::isfinite(center.x) || !std::isfinite(center.y) ||
+        !std::isfinite(scale) || scale <= 0.0) return;
+    const auto previous_center = m_view_center;
+    const auto previous_scale = m_scale;
+    scale = std::clamp(scale, minimum_scale, maximum_scale);
+    if (center.x == previous_center.x && center.y == previous_center.y &&
+        scale == previous_scale) return;
+    beginPerformanceMeasurement(PerformanceMetric::navigation);
+    m_view_center = center;
+    m_scale = scale;
+    if (m_last_mouse_position) updateCursor(*m_last_mouse_position);
+    update();
+    notifyNavigationChanged(previous_center, previous_scale);
+}
+
+void PlanCanvas::setNavigationChanged(std::function<void(Vec2, double)> callback) {
+    m_navigation_changed = std::move(callback);
+}
+
+void PlanCanvas::notifyNavigationChanged(Vec2 previous_center, double previous_scale) {
+    if (m_view_center.x == previous_center.x && m_view_center.y == previous_center.y &&
+        m_scale == previous_scale) return;
+    const auto callback = m_navigation_changed;
+    if (callback) callback(m_view_center, m_scale);
 }
 
 void PlanCanvas::renderScene(QPainter& painter, const QRectF& viewport) const {
@@ -1308,10 +1342,13 @@ bool PlanCanvas::navigateOverviewMap(QPointF position) {
     if (!(map_scale > 0.0) || !std::isfinite(map_scale)) return true;
     const auto world_center = Vec2{(world_min.x + world_max.x) * 0.5,
                                    (world_min.y + world_max.y) * 0.5};
+    const auto previous_center = m_view_center;
+    const auto previous_scale = m_scale;
     m_view_center = {world_center.x + (position.x() - inner.center().x()) / map_scale,
                      world_center.y - (position.y() - inner.center().y()) / map_scale};
     updateCursor(position);
     update();
+    notifyNavigationChanged(previous_center, previous_scale);
     return true;
 }
 
@@ -1619,9 +1656,12 @@ void PlanCanvas::handleTouchEvent(QTouchEvent& event) {
                             start.anchor.y + (centroid.y()-center.y())/scale};
         if (!std::isfinite(proposed.x) || !std::isfinite(proposed.y)) return;
         beginPerformanceMeasurement(PerformanceMetric::navigation);
+        const auto previous_center = m_view_center;
+        const auto previous_scale = m_scale;
         m_scale = scale;
         m_view_center = proposed;
         update();
+        notifyNavigationChanged(previous_center, previous_scale);
         return;
     }
     if (m_touch_navigation) {
@@ -1923,10 +1963,13 @@ void PlanCanvas::pointerMove(QPointF position, Qt::KeyboardModifiers modifiers) 
     }
     if (m_panning) {
         beginPerformanceMeasurement(PerformanceMetric::navigation);
+        const auto previous_center = m_view_center;
+        const auto previous_scale = m_scale;
         const auto delta = position - m_pan_start;
         m_view_center = {m_pan_view_start.x - delta.x() / m_scale,
                          m_pan_view_start.y + delta.y() / m_scale};
         update();
+        notifyNavigationChanged(previous_center, previous_scale);
     }
     updateCursor(position);
 }
@@ -4624,7 +4667,8 @@ void PlanCanvas::drawEntity(QPainter& painter, const CanvasEntity& entity, bool 
             return;
         }
     }
-    QPen pen(color, 0.0, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);
+    QPen pen(color, 0.0, entity.dashed_stroke ? Qt::DashLine : Qt::SolidLine,
+             Qt::RoundCap, Qt::RoundJoin);
     const auto paper_width = (output || entity.paper_stroke_width_on_screen)
         ? paper_stroke_pixels(entity,
               (output && paper_pixels_per_mm && std::isfinite(*paper_pixels_per_mm) &&
