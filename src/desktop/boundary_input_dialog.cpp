@@ -105,13 +105,15 @@ bool has_explicit_angle_unit(const QString& value) {
 
 class BoundaryInputDialog::Impl {
 public:
-    Impl(BoundaryInputDialog* owner, const BoundaryAuthoringSession& source,
+    Impl(BoundaryInputDialog* owner, std::optional<BoundaryAuthoringSession> source,
          bool metric_units,const BoundaryInputPreferences& preferences,
-         BoundaryInputPresentation presentation)
-        : owner(owner), source(source), metric(metric_units),
+         BoundaryInputPresentation presentation,
+         std::optional<MeasurementLineworkInputContext> measured = std::nullopt)
+        : owner(owner), source(std::move(source)), measured(std::move(measured)), metric(metric_units),
           preferences(preferences.metric_units && *preferences.metric_units!=metric_units ? BoundaryInputPreferences{} : preferences),
           wall(presentation == BoundaryInputPresentation::wall) {
-        phase=source.phase();
+        phase=this->measured ? (this->measured->start ? BoundaryAuthoringPhase::drawing :
+            BoundaryAuthoringPhase::awaiting_anchor) : this->source->phase();
         owner->setObjectName(QStringLiteral("boundaryInputDialog"));
         owner->setWindowTitle(QStringLiteral("Add precise boundary segment"));
         owner->setMinimumWidth(500);
@@ -139,6 +141,13 @@ public:
                 ? QStringLiteral("Wall start point") : QStringLiteral("Add precise wall segment"));
             if (phase == BoundaryAuthoringPhase::drawing)
                 heading->setText(QStringLiteral("Choose how to draw the next physical wall. Its thickness and height come from Wall settings."));
+        }
+        if (this->measured) {
+            owner->setWindowTitle(phase == BoundaryAuthoringPhase::awaiting_anchor
+                ? QStringLiteral("Measured stroke start point") : QStringLiteral("Add precise measured edge"));
+            heading->setText(phase == BoundaryAuthoringPhase::awaiting_anchor
+                ? QStringLiteral("Enter starting coordinates.") : QString{});
+            heading->setVisible(phase == BoundaryAuthoringPhase::awaiting_anchor);
         }
 
         form = new QFormLayout;
@@ -188,7 +197,7 @@ public:
 
         error = new QLabel(owner);
         error->setObjectName(QStringLiteral("boundaryInputError"));
-        error->setAccessibleName(wall ? QStringLiteral("Wall input diagnostic") : QStringLiteral("Boundary input diagnostic"));
+        error->setAccessibleName(this->measured ? QStringLiteral("Measured edge input diagnostic") : wall ? QStringLiteral("Wall input diagnostic") : QStringLiteral("Boundary input diagnostic"));
         error->setWordWrap(true);
         error->setStyleSheet(QStringLiteral("color:#b44b4b;"));
         error->setVisible(false);
@@ -196,13 +205,13 @@ public:
 
         preview = new QLabel(owner);
         preview->setObjectName(QStringLiteral("boundaryInputPreview"));
-        preview->setAccessibleName(wall ? QStringLiteral("Wall segment preview") : QStringLiteral("Boundary segment preview"));
+        preview->setAccessibleName(this->measured ? QStringLiteral("Measured edge preview") : wall ? QStringLiteral("Wall segment preview") : QStringLiteral("Boundary segment preview"));
         preview->setWordWrap(true);
         root->addWidget(preview);
 
         status = new QLabel(owner);
         status->setObjectName(QStringLiteral("boundaryInputStatus"));
-        status->setAccessibleName(wall ? QStringLiteral("Wall input status") : QStringLiteral("Boundary input status"));
+        status->setAccessibleName(this->measured ? QStringLiteral("Measured edge input status") : wall ? QStringLiteral("Wall input status") : QStringLiteral("Boundary input status"));
         status->setWordWrap(true);
         status->setTextInteractionFlags(Qt::TextSelectableByMouse);
         root->addWidget(status);
@@ -211,7 +220,7 @@ public:
         buttons->setObjectName(QStringLiteral("boundaryInputButtons"));
         const auto action_text=phase==BoundaryAuthoringPhase::awaiting_anchor ? QStringLiteral("Place start point") :
             phase==BoundaryAuthoringPhase::awaiting_dimension ? QStringLiteral("Place dimension") :
-            wall ? QStringLiteral("Add wall") : QStringLiteral("Add segment");
+            this->measured ? QStringLiteral("Add measured edge") : wall ? QStringLiteral("Add wall") : QStringLiteral("Add segment");
         add_button = buttons->addButton(action_text,
                                          QDialogButtonBox::AcceptRole);
         add_button->setObjectName(QStringLiteral("boundaryInputAdd"));
@@ -249,7 +258,7 @@ public:
                          [this] { (void)submit(); });
         QObject::connect(buttons, &QDialogButtonBox::rejected, owner, &QDialog::reject);
         QObject::connect(owner, &QDialog::rejected, owner,
-                         [this] { accepted_candidate.reset(); accepted_preferences.reset(); });
+                         [this] { accepted_candidate.reset(); accepted_receipt.reset(); accepted_anchor.reset(); accepted_preferences.reset(); });
 
         QWidget::setTabOrder(method, length);
         QWidget::setTabOrder(length, heading_angle);
@@ -279,15 +288,21 @@ public:
         return accepted_candidate;
     }
     std::optional<BoundaryInputPreferences> acceptedPreferences() const { return accepted_preferences; }
+    std::optional<ConstructionReceipt> receipt() const { return accepted_receipt; }
+    std::optional<Vec2> anchor() const { return accepted_anchor; }
 
     QString last_error() const { return error_message; }
 
     bool submit() {
         accepted_candidate.reset();
+        accepted_receipt.reset();
+        accepted_anchor.reset();
         accepted_preferences.reset();
         try {
-            auto value = make_candidate();
-            accepted_candidate = value;
+            if (measured) {
+                if (measured->start) accepted_receipt = replay_measured().receipt;
+                else accepted_anchor = read_coordinate();
+            } else accepted_candidate = make_candidate();
             accepted_preferences=preferences;
             if (phase==BoundaryAuthoringPhase::drawing) {
                 accepted_preferences->metric_units=metric;
@@ -300,10 +315,15 @@ public:
             error->clear();
             error->setVisible(false);
             add_button->setEnabled(true);
-            update_preview(*accepted_candidate);
+            if (measured) update_measured_preview();
+            else update_preview(*accepted_candidate);
             owner->accept();
             return true;
         } catch (const std::exception& exception) {
+            accepted_candidate.reset();
+            accepted_receipt.reset();
+            accepted_anchor.reset();
+            accepted_preferences.reset();
             show_error(exception.what());
             return false;
         }
@@ -358,7 +378,15 @@ private:
             if (value!=preferences.expressions.end()) field->setText(value->second);
         }
         clockwise->setChecked(preferences.clockwise);
-        const auto state=source.view();
+        if (measured) {
+            auto position = measured->pointer.value_or(measured->start.value_or(Vec2{}));
+            if (measured->start && (!measured->pointer ||
+                (position.x == measured->start->x && position.y == measured->start->y))) position.x += 1.0;
+            end_x->setText(QString::number(position.x,'g',17)+QStringLiteral(" m"));
+            end_y->setText(QString::number(position.y,'g',17)+QStringLiteral(" m"));
+            return;
+        }
+        const auto state=source->view();
         auto position=state.pointer.value_or(state.anchor.value_or(Vec2{}));
         if (state.active_chain && !state.active_chain->segments.empty()) {
             const auto& segment=state.active_chain->segments.back().segment;
@@ -456,51 +484,97 @@ private:
                 read_quantity(end_y, QStringLiteral("world Y")).metres};
     }
 
+    ConstructionReceipt make_receipt(Vec2 start) const {
+        ConstructionReceipt value;
+        value.segment_id = "precision-input";
+        value.start = start;
+        switch (method_from(*method)) {
+            case InputMethod::length_heading:
+                value.kind = BoundaryConstructionKind::line_heading;
+                value.distance = read_quantity(length, QStringLiteral("length"));
+                value.heading = read_angle(heading_angle, QStringLiteral("heading"));
+                break;
+            case InputMethod::rise_run:
+                value.kind = BoundaryConstructionKind::line_rise_run;
+                value.rise = read_quantity(rise, QStringLiteral("rise"));
+                value.run = read_quantity(run, QStringLiteral("run"));
+                break;
+            case InputMethod::relative_turn:
+                value.kind = BoundaryConstructionKind::line_relative_turn;
+                value.distance = read_quantity(length, QStringLiteral("length"));
+                value.turn = read_angle(turn, QStringLiteral("turn"));
+                break;
+            case InputMethod::line_to_coordinate:
+                value.kind = BoundaryConstructionKind::line_to_point;
+                value.chord_end = read_coordinate();
+                break;
+            case InputMethod::arc_chord_angle:
+                value.kind = BoundaryConstructionKind::arc_chord_angle;
+                value.chord_end = read_coordinate();
+                value.angle = read_angle(sweep, QStringLiteral("sweep angle"));
+                break;
+            case InputMethod::arc_chord_height:
+                value.kind = BoundaryConstructionKind::arc_chord_height;
+                value.chord_end = read_coordinate();
+                value.height = read_quantity(height, QStringLiteral("chord height"));
+                break;
+            case InputMethod::arc_chord_length:
+                value.kind = BoundaryConstructionKind::arc_chord_length;
+                value.chord_end = read_coordinate();
+                value.arc_length = read_quantity(arc_length, QStringLiteral("arc length"));
+                value.clockwise = clockwise->isChecked();
+                break;
+            case InputMethod::arc_start_tangent:
+                value.kind = BoundaryConstructionKind::arc_start_tangent;
+                value.tangent = read_angle(tangent, QStringLiteral("start tangent"));
+                value.arc_length = read_quantity(arc_length, QStringLiteral("arc length"));
+                value.sweep = read_angle(sweep, QStringLiteral("sweep angle"));
+                break;
+        }
+        return value;
+    }
+
     BoundaryAuthoringSession make_candidate() const {
-        auto value = source;
+        auto value = *source;
         if (phase==BoundaryAuthoringPhase::awaiting_anchor) { (void)value.anchor(read_coordinate()); return value; }
         if (phase==BoundaryAuthoringPhase::awaiting_dimension) { (void)value.place_manual_dimension(read_coordinate()); return value; }
         if (phase!=BoundaryAuthoringPhase::drawing)
             throw std::invalid_argument("This drawing is not awaiting an anchor, edge or dimension position");
-        const auto selected = method_from(*method);
-        switch (selected) {
-            case InputMethod::length_heading:
-                (void)value.add_line(read_quantity(length, QStringLiteral("length")),
-                                      read_angle(heading_angle, QStringLiteral("heading")));
-                break;
-            case InputMethod::rise_run:
-                (void)value.add_line_rise_run(read_quantity(rise, QStringLiteral("rise")),
-                                              read_quantity(run, QStringLiteral("run")));
-                break;
-            case InputMethod::relative_turn:
-                (void)value.add_line_relative_turn(
-                    read_quantity(length, QStringLiteral("length")),
-                    read_angle(turn, QStringLiteral("turn")));
-                break;
-            case InputMethod::line_to_coordinate:
-                (void)value.add_line_to(read_coordinate());
-                break;
-            case InputMethod::arc_chord_angle:
-                (void)value.add_arc_chord_angle(
-                    read_coordinate(), read_angle(sweep, QStringLiteral("sweep angle")));
-                break;
-            case InputMethod::arc_chord_height:
-                (void)value.add_arc_chord_height(
-                    read_coordinate(), read_quantity(height, QStringLiteral("chord height")));
-                break;
-            case InputMethod::arc_chord_length:
-                (void)value.add_arc_chord_arc_length(
-                    read_coordinate(), read_quantity(arc_length, QStringLiteral("arc length")),
-                    clockwise->isChecked());
-                break;
-            case InputMethod::arc_start_tangent:
-                (void)value.add_arc_start_tangent(
-                    read_angle(tangent, QStringLiteral("start tangent")),
-                    read_quantity(arc_length, QStringLiteral("arc length")),
-                    read_angle(sweep, QStringLiteral("sweep angle")));
-                break;
+        const auto receipt = make_receipt({});
+        switch (receipt.kind) {
+            case BoundaryConstructionKind::line_heading: (void)value.add_line(*receipt.distance,*receipt.heading); break;
+            case BoundaryConstructionKind::line_rise_run: (void)value.add_line_rise_run(*receipt.rise,*receipt.run); break;
+            case BoundaryConstructionKind::line_relative_turn: (void)value.add_line_relative_turn(*receipt.distance,*receipt.turn); break;
+            case BoundaryConstructionKind::line_to_point: (void)value.add_line_to(*receipt.chord_end); break;
+            case BoundaryConstructionKind::arc_chord_angle: (void)value.add_arc_chord_angle(*receipt.chord_end,*receipt.angle); break;
+            case BoundaryConstructionKind::arc_chord_height: (void)value.add_arc_chord_height(*receipt.chord_end,*receipt.height); break;
+            case BoundaryConstructionKind::arc_chord_length: (void)value.add_arc_chord_arc_length(*receipt.chord_end,*receipt.arc_length,receipt.clockwise); break;
+            case BoundaryConstructionKind::arc_start_tangent: (void)value.add_arc_start_tangent(*receipt.tangent,*receipt.arc_length,*receipt.sweep); break;
+            default: throw std::invalid_argument("Unsupported precision input method");
         }
         return value;
+    }
+
+    ReplayedConstructionReceipt replay_measured() const {
+        ConstructionReplayContext context;
+        context.expected_start = measured->start.value();
+        if (method_from(*method) == InputMethod::relative_turn) context.previous_segment = measured->previous_segment;
+        return replay_construction_receipt(make_receipt(context.expected_start), context);
+    }
+
+    void update_measured_preview() {
+        if (!measured->start) {
+            const auto position = read_coordinate();
+            preview->setText(QStringLiteral("Start point preview: X %1, Y %2")
+                .arg(display_coordinate(position.x),display_coordinate(position.y)));
+            preview->setToolTip(QStringLiteral("Coordinate preview is rounded to three decimals. Entered positions are preserved."));
+            status->setText(QStringLiteral("Ready to place the measured start point. Press D for the first edge."));
+            return;
+        }
+        const auto segment = replay_measured().segment;
+        preview->setText(QStringLiteral("Endpoint: X %1, Y %2 • length: %3")
+            .arg(display_length(segment.end.x),display_length(segment.end.y),display_length(segment_length(segment))));
+        status->setText(QStringLiteral("D: next edge • Enter: finish stroke"));
     }
 
     QString display_length(double metres) const {
@@ -571,23 +645,28 @@ private:
             return;
         }
         accepted_candidate.reset();
+        accepted_receipt.reset();
+        accepted_anchor.reset();
         accepted_preferences.reset();
         validation_candidate.reset();
         error_message.clear();
         error->clear();
         error->setVisible(false);
         try {
-            auto value = make_candidate();
-            validation_candidate = value;
+            if (measured) update_measured_preview();
+            else {
+                validation_candidate = make_candidate();
+                update_preview(*validation_candidate);
+            }
             add_button->setEnabled(true);
-            update_preview(*validation_candidate);
         } catch (const std::exception& exception) {
             show_error(exception.what());
         }
     }
 
     BoundaryInputDialog* owner{};
-    BoundaryAuthoringSession source;
+    std::optional<BoundaryAuthoringSession> source;
+    std::optional<MeasurementLineworkInputContext> measured;
     BoundaryAuthoringPhase phase{};
     bool metric{};
     BoundaryInputPreferences preferences;
@@ -596,6 +675,8 @@ private:
     bool loading{true};
     std::optional<BoundaryAuthoringSession> validation_candidate;
     std::optional<BoundaryAuthoringSession> accepted_candidate;
+    std::optional<ConstructionReceipt> accepted_receipt;
+    std::optional<Vec2> accepted_anchor;
     QString error_message;
     QFormLayout* form{};
     QComboBox* method{};
@@ -613,6 +694,12 @@ BoundaryInputDialog::BoundaryInputDialog(const BoundaryAuthoringSession& source,
                                          BoundaryInputPresentation presentation)
     : QDialog(parent), m_impl(std::make_unique<Impl>(this, source, metricUnits,preferences,presentation)) {}
 
+BoundaryInputDialog::BoundaryInputDialog(const MeasurementLineworkInputContext& source,
+                                         bool metricUnits, QWidget* parent,
+                                         const BoundaryInputPreferences& preferences)
+    : QDialog(parent), m_impl(std::make_unique<Impl>(this, std::nullopt, metricUnits,
+        preferences, BoundaryInputPresentation::boundary, source)) {}
+
 BoundaryInputDialog::~BoundaryInputDialog() = default;
 
 std::optional<BoundaryAuthoringSession> BoundaryInputDialog::candidate() const {
@@ -621,6 +708,8 @@ std::optional<BoundaryAuthoringSession> BoundaryInputDialog::candidate() const {
 std::optional<BoundaryInputPreferences> BoundaryInputDialog::acceptedPreferences() const {
     return m_impl->acceptedPreferences();
 }
+std::optional<ConstructionReceipt> BoundaryInputDialog::receipt() const { return m_impl->receipt(); }
+std::optional<Vec2> BoundaryInputDialog::anchor() const { return m_impl->anchor(); }
 
 bool BoundaryInputDialog::submit() { return m_impl->submit(); }
 

@@ -24,6 +24,14 @@ struct BoundaryInputPreferences {
 
 enum class BoundaryInputPresentation { boundary, wall };
 
+// An open measured stroke uses the same controls and receipt replay kernel,
+// without importing the topology or area rules of a boundary session.
+struct MeasurementLineworkInputContext {
+    std::optional<Vec2> start;
+    std::optional<Segment> previous_segment;
+    std::optional<Vec2> pointer;
+};
+
 // Native precision entry for an anchor, analytical edge or pending dimension. The source
 // session belongs to the caller; this dialog only returns a copied session
 // after the requested construction has validated successfully.
@@ -34,6 +42,9 @@ public:
                                  QWidget* parent = nullptr,
                                  const BoundaryInputPreferences& preferences = {},
                                  BoundaryInputPresentation presentation = BoundaryInputPresentation::boundary);
+    explicit BoundaryInputDialog(const MeasurementLineworkInputContext& source,
+                                 bool metricUnits, QWidget* parent = nullptr,
+                                 const BoundaryInputPreferences& preferences = {});
     ~BoundaryInputDialog() override;
 
     BoundaryInputDialog(const BoundaryInputDialog&) = delete;
@@ -42,6 +53,10 @@ public:
     // Empty until the Add segment action has validated and accepted the
     // private candidate.  Returned sessions are independent copies.
     [[nodiscard]] std::optional<BoundaryAuthoringSession> candidate() const;
+    // Measured-stroke results are empty until successful submission. An
+    // unanchored context returns only a start point; an anchored one a receipt.
+    [[nodiscard]] std::optional<ConstructionReceipt> receipt() const;
+    [[nodiscard]] std::optional<Vec2> anchor() const;
     // Empty until successful submission. Cancellation/invalid input never
     // publishes changed preferences; coordinate phases retain the effective
     // edge preferences after applying the current input-unit basis.

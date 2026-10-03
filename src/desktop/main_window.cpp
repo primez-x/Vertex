@@ -6607,6 +6607,10 @@ public:
     [[nodiscard]] bool metricUnits() const noexcept { return m_metric_units; }
 
     void setMetricUnits(bool metric) {
+        if (m_linework_drawing && m_metric_units != metric) {
+            ++m_linework_drawing->input_generation;
+            m_linework_drawing->input_preferences = {};
+        }
         m_metric_units = metric;
         if (m_unitsCombo) {
             QSignalBlocker blocker(m_unitsCombo);
@@ -13013,7 +13017,7 @@ public:
     void refreshLineworkPreview() {
         if (!m_linework_drawing) return;
         BoundaryDraftPreview preview;
-        preview.instruction = QStringLiteral("Measured lines  •  Click nodes  •  Enter/right click finishes  •  D distance and heading");
+        preview.instruction = QStringLiteral("Measured lines  •  Click nodes  •  Enter/right click finishes  •  D precise line or curve");
         if (m_linework_drawing->has_anchor) {
             const auto pen = lineworkPen();
             preview.anchor = m_linework_drawing->model.anchor; preview.pen_position = pen;
@@ -13032,26 +13036,47 @@ public:
     void preciseLineworkInput(PlanCanvas* source_canvas = nullptr) {
         try {
             requireLineworkDrawing();
-            if (!m_linework_drawing->has_anchor) throw std::invalid_argument("Place the measured-line starting point first.");
             const auto context = captureModalContext(); const auto drawing = *m_linework_drawing;
-            QDialog dialog(owner); dialog.setObjectName(QStringLiteral("measuredLineInput"));
-            dialog.setWindowTitle(QStringLiteral("Measured line"));
-            auto* layout = new QFormLayout(&dialog);
-            auto* distance = new QLineEdit(&dialog); distance->setObjectName(QStringLiteral("measuredLineDistance"));
-            distance->setPlaceholderText(m_metric_units ? QStringLiteral("1.25 m") : QStringLiteral("12 ft 6 in"));
-            auto* heading = new QLineEdit(QStringLiteral("0 deg"), &dialog); heading->setObjectName(QStringLiteral("measuredLineHeading"));
-            layout->addRow(QStringLiteral("Distance"), distance); layout->addRow(QStringLiteral("Heading (counterclockwise from +X)"), heading);
-            auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
-            layout->addRow(buttons);
-            QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
-            QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
-            distance->setFocus(); const auto result = dialog.exec();
-            if (source_canvas) source_canvas->setFocus(Qt::OtherFocusReason);
-            if (result != QDialog::Accepted || !modalContextUnchanged(context) || !m_linework_drawing) return;
+            const auto snapshot = m_document->snapshot();
+            const auto tool = m_tool; const auto workspace = m_workspace; const auto mode = m_creation_mode;
+            const auto selection = m_selected_ids;
+            MeasurementLineworkInputContext input;
+            input.pointer = m_last_cursor;
+            if (drawing.has_anchor) input.start = lineworkPen();
+            if (!drawing.model.edges.empty())
+                input.previous_segment = replay_measurement_linework(drawing.model).edges.back().segment;
+            auto preferences = drawing.input_preferences;
+            // A relative turn has no meaning before the first analytical edge.
+            if (!input.previous_segment && preferences.method_index == 2) preferences.method_index = 0;
+            BoundaryInputDialog dialog(input, context.metric_units, owner, preferences);
+            dialog.setObjectName(QStringLiteral("measuredLineInput"));
+            const QPointer<PlanCanvas> return_canvas = source_canvas ? source_canvas : m_measurementCanvas;
+            const auto result = dialog.exec();
+            if (return_canvas && m_workspace == Workspace::measurement)
+                return_canvas->setFocus(Qt::OtherFocusReason);
+            if (result != QDialog::Accepted) return;
+            const auto current = m_document->snapshot();
+            if (!modalContextUnchanged(context)) return;
+            if (!m_linework_drawing || m_tool != tool || m_workspace != workspace || m_creation_mode != mode ||
+                m_selected_ids != selection || current.document_id() != snapshot.document_id() ||
+                current.entities() != snapshot.entities() || current.assets() != snapshot.assets())
+                throw std::invalid_argument("The measured drawing source changed while input was open.");
             if (m_linework_drawing->has_anchor != drawing.has_anchor ||
+                m_linework_drawing->anchor_vertex != drawing.anchor_vertex ||
+                m_linework_drawing->pen_vertex != drawing.pen_vertex ||
+                m_linework_drawing->context != drawing.context ||
+                m_linework_drawing->history_index != drawing.history_index ||
+                m_linework_drawing->history_revisions != drawing.history_revisions ||
+                m_linework_drawing->input_generation != drawing.input_generation ||
                 encodeLineworkInputState(m_linework_drawing->model) != encodeLineworkInputState(drawing.model))
                 throw std::invalid_argument("The measured pen changed while input was open.");
-            (void)appendMeasurementLineworkHeading(distance->text(), heading->text(), context.revision);
+            requireLineworkDrawing(context.revision);
+            bool admitted = false;
+            if (drawing.has_anchor) {
+                if (const auto receipt = dialog.receipt()) admitted = appendLineworkReceipt(*receipt, context.revision);
+            } else if (const auto anchor = dialog.anchor()) admitted = appendMeasurementLineworkPoint(*anchor, context.revision);
+            if (admitted && m_linework_drawing && dialog.acceptedPreferences())
+                m_linework_drawing->input_preferences = *dialog.acceptedPreferences();
         } catch (const std::exception& error) {
             setError(QStringLiteral("Precise measured input: %1").arg(QString::fromUtf8(error.what())));
         }
@@ -37451,6 +37476,8 @@ private:
         bool has_anchor{};
         std::string anchor_vertex;
         std::string pen_vertex;
+        BoundaryInputPreferences input_preferences;
+        std::uint64_t input_generation{};
     };
     std::optional<LineworkDrawing> m_linework_drawing;
     std::optional<MeasurementLinework> m_drawing_input_linework;

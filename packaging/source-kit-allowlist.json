@@ -1603,6 +1603,10 @@
     },
     {
       "category": "docs",
+      "path": "docs/plans/2026-10-03-measured-stroke-precision-input.md"
+    },
+    {
+      "category": "docs",
       "path": "docs/plans/2026-10-03-measurement-linework-canvas.md"
     },
     {
@@ -2528,6 +2532,10 @@
     {
       "category": "docs",
       "path": "docs/verification/measured-stroke-history-2026-10-03.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/verification/measured-stroke-precision-2026-10-03.md"
     },
     {
       "category": "docs",
@@ -4488,6 +4496,10 @@
     {
       "category": "source",
       "path": "tests/measurement_linework_history_desktop_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/measurement_linework_precision_desktop_tests.cpp"
     },
     {
       "category": "source",

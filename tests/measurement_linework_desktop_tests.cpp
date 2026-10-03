@@ -119,9 +119,9 @@ void test_native_precise_lift_and_point_jump() {
     QTimer::singleShot(0, [&] {
         auto* dialog=window.findChild<QDialog*>(QStringLiteral("measuredLineInput"));
         require(dialog, "D opens native measured input dialog");
-        dialog->findChild<QLineEdit*>(QStringLiteral("measuredLineDistance"))->setText(QStringLiteral("3.125 m"));
-        dialog->findChild<QLineEdit*>(QStringLiteral("measuredLineHeading"))->setText(QStringLiteral("0 deg"));
-        precise=true; dialog->findChild<QDialogButtonBox*>()->button(QDialogButtonBox::Ok)->click();
+        dialog->findChild<QLineEdit*>(QStringLiteral("boundaryInputLength"))->setText(QStringLiteral("3.125 m"));
+        dialog->findChild<QLineEdit*>(QStringLiteral("boundaryInputHeading"))->setText(QStringLiteral("0 deg"));
+        precise=true; dialog->findChild<QPushButton*>(QStringLiteral("boundaryInputAdd"))->click();
     });
     QKeyEvent d(QEvent::KeyPress,Qt::Key_D,Qt::NoModifier,QStringLiteral("d")); QApplication::sendEvent(&canvas,&d); events();
     require(precise, "native D command reaches precise input");

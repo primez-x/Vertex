@@ -1049,3 +1049,21 @@ reviving an obsolete pen. Redo with no available side leaves a validated current
 stroke active. Explicit Finish, Enter, Escape and stationary
 right-click keep committed geometry but end drawing. Native reopen restores
 ordinary saved geometry and history, without automatically resuming authoring.
+
+## Precise measured-line and curve input
+
+Choose **Measured lines** in Draw and press **D** on the canvas. Before placing
+the first node, D accepts exact starting X/Y coordinates. After an anchor exists,
+the same dialog offers length/heading, rise/run, relative turn, world-coordinate
+endpoint, arc chord/angle, chord/height, chord/arc length and
+start-tangent/arc-length/sweep. Chord methods currently take the chord's endpoint
+in world X/Y coordinates. Relative turns use the actual previous edge's end
+tangent, including curves.
+
+Bare lengths use the current Imperial or Metric input basis; explicit mixed
+units are accepted. Numeric endpoint and length previews do not replace exact
+stored geometry. Invalid input stays open for correction; Cancel leaves the
+stroke unchanged. Each accepted edge uses ordinary per-side Undo/Redo. The last
+successfully accepted method and fields are remembered during the live stroke;
+changing units resets them. A changed document, pen, units, layer or phase cannot
+admit a result from an obsolete dialog.

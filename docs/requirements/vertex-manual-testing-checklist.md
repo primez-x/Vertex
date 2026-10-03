@@ -2192,6 +2192,48 @@ drawing; switching modes does not change existing geometry.
   - Result: Not tested
   - Notes: ______________________________
 
+- [ ] **U369 — Enter an exact measured-stroke starting point and side**
+  - Steps: Choose Measured lines in Draw. Press D before clicking a starting point. Enter X = 2 ft and Y = 3 ft, then place the start. Press D again, choose Length / heading and enter 12 ft 6 in at 30 deg. Repeat in Metric with explicit cm or mm entries and with bare numbers.
+  - Expected: The starting point and side use the entered coordinates, units and heading. Bare lengths use feet in Imperial and metres in Metric. A placed side remains after finishing, saving and reopening. Input display rounding does not change its stored measurement.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **U370 — Draw a measured diagonal and turn relative to it**
+  - Steps: Start Measured lines at X = 0, Y = 0. Press D, choose Rise / run and enter rise = 3 ft, run = 4 ft. Press D again, choose Relative turn and enter length = 2 ft and turn = 90 deg. Undo and Redo, then enter a different relative turn after Undo. Also try Relative turn before placing any side.
+  - Expected: The first side is 5 ft long and ends at X = 4 ft, Y = 3 ft. The next side turns 90 degrees from that side. Undo/Redo restores the correct pen and previous direction. Relative turn without a previous side explains what is missing and creates nothing.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **U371 — Draw a curve from its chord and angle**
+  - Steps: Start Measured lines at X = 0, Y = 0. Press D and choose Arc chord / angle. Enter endpoint X = 10 ft, Y = 0 ft and sweep = 90 deg. Add the curve. Repeat with sweep = -90 deg. Undo, Redo, save and reopen.
+  - Expected: Both curves end at the entered endpoint and have a quarter-circle sweep in opposite directions. Their measured lengths exceed the 10 ft chord. The curve remains analytical after history navigation and reopening.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **U372 — Draw a curve from its chord and height**
+  - Steps: Start Measured lines at X = 0, Y = 0. Press D and choose Arc chord / height. Enter endpoint X = 10 ft, Y = 0 ft and signed chord height = 2 ft. Repeat with height = -2 ft. Inspect the bulge, finish the stroke, save and reopen.
+  - Expected: The curves share their chord and bow to opposite sides. The midpoint's distance from the chord is 2 ft. The saved curves retain their shape and measurements.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **U373 — Draw a curve from its chord and arc length**
+  - Steps: Start Measured lines at X = 0, Y = 0. Press D and choose Arc chord / length. Enter endpoint X = 10 ft, Y = 0 ft and arc length = 12 ft. Add it, then repeat with Clockwise enabled. Try an arc length of 9 ft before correcting it to 12 ft.
+  - Expected: Each valid curve ends at the entered point and measures 12 ft along the curve. Clockwise changes its direction. The impossible 9 ft arc is rejected inline without placing anything; correcting it allows placement.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **U374 — Draw a tangent-defined curve and continue from its tangent**
+  - Steps: Start Measured lines at X = 0, Y = 0. Press D and choose Arc start tangent / length / sweep. Enter start tangent = 0 deg, arc length = 12 ft and sweep = 90 deg. Add it. Press D, choose Relative turn and enter length = 3 ft, turn = 0 deg. Undo, Redo, save and reopen.
+  - Expected: The curve starts horizontally, measures 12 ft and turns through 90 degrees. The next straight side follows the curve's ending tangent, rather than its chord direction. History and reopening preserve both constructions.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **U375 — Correct or cancel precise measured-line input**
+  - Steps: Open D while a measured stroke is active. Enter an invalid quantity or impossible curve; correct it without closing the dialog. Try Cancel after entering valid values. Switch Imperial/Metric after closing the dialog, reopen D, choose Length / heading and enter a bare length. Finish the stroke and select another layer before starting another one.
+  - Expected: Invalid values explain the problem inside the dialog and place nothing. Correct values can be added. Cancel keeps existing geometry and the pen unchanged. Reopened input uses the selected units, and a newly started stroke belongs to the active layer. Previous geometry retains its actual size.
+  - Result: Not tested
+  - Notes: ______________________________
+
 ## Issue report template
 
 - Task ID(s):
