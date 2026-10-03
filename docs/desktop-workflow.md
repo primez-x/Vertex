@@ -784,9 +784,25 @@ The geometry operation commands also expose **Jump to boundary vertex…** and
 **Auto close active boundary** from **More** and the command palette. Point
 jumping updates the precision pointer only. Automatic closure uses the exact
 endpoint helper and publishes a named boundary command; the direct API can
-also create a closed boundary from an open chain. Bay-window completion builds
-the three validated shoulder edges, adds the exact closing edge, and publishes
-one undoable command with the **Complete bay window** history action.
+also create a closed boundary from an open chain.
+
+For a bay in an outline already being drawn, accept its first angled side and
+front, then press **B** on the canvas or run **Complete bay-window return (B)**
+from **Tools** or **Commands**. Vertex adds the matching angled return and
+leaves drawing active. It reflects the first side across the front direction;
+it does not snap the result or close the whole outline across the bay opening.
+This works with physical **Wall** drawing and **Measurement** boundaries.
+The return follows the normal dimensions and history workflow. In Define
+First, finish placing outstanding dimensions before completing the return.
+Undo removes the return while keeping the previously accepted sides. A return
+that actually reaches the original outline anchor uses normal outline closure.
+Invalid, curved, disconnected or insufficient sides produce an explanation
+without adding geometry.
+
+The separate direct `completeBayWindowDraft` API can create a complete closed
+bay profile from a fresh anchor. It is distinct from the interactive **B**
+return command. Apex's documented keyboard behavior is described in the
+[ApexSketch v7 drawing-angles guide](https://www.apexwin.com/support/ApexSketchv7/ApexSketchv7-DrawingAngles.pdf).
 
 `scripts/test-constraint-editor.ps1` captures the dialog at normal and 150 percent
 scale with the bundled font and a 15-second process timeout. It exercises both

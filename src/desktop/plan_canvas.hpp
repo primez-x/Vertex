@@ -477,6 +477,8 @@ public:
     void setFinishRequested(std::function<void()> callback);
     void setCancelRequested(std::function<void()> callback);
     void setPreciseInputRequested(std::function<void()> callback);
+    void setBayWindowReturnRequested(std::function<void()> callback);
+    [[nodiscard]] bool drawingCommandIdle() const noexcept;
     // A numeric key can start the host's exact drawing input. The host owns
     // applicability, parsing and document mutation; false preserves shortcuts.
     void setDrawingTextRequested(std::function<bool(const QString&)> callback);
@@ -769,6 +771,7 @@ private:
     std::function<void()> m_finish_requested;
     std::function<void()> m_cancel_requested;
     std::function<void()> m_precise_input_requested;
+    std::function<void()> m_bay_window_return_requested;
     std::function<bool(const QString&)> m_drawing_text_requested;
     std::function<void()> m_draft_undo_requested;
     std::function<void()> m_draft_redo_requested;

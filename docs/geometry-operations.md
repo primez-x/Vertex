@@ -161,12 +161,20 @@ The caller must normalize platform key chords before conflict detection.
 
 ## Integration status and remaining work
 
-The Windows desktop now dispatches point jumping from the More menu and command
-palette, and routes automatic closure and bay-window completion through the
-identified measurement-boundary command path. Those two creation operations
-retain their named history action and undo/redo as one document revision; point
-jumping updates the precision pointer without dirtying the project. The direct
-`MainWindow` APIs are also used by the deterministic desktop smoke fixture.
+The Windows desktop dispatches point jumping and automatic closure from its
+menu and command palette. `complete_bay_window_return` takes exactly joined
+straight entering/front edges and returns the matching third edge by reflecting
+the entering direction across the front. The result must pass the existing
+bay-shoulder and topology checks. It leaves the surrounding outline open and
+does not snap analytical coordinates.
+
+The canvas **B** command and **Complete bay-window return (B)** menu/palette
+action use that helper during either a measurement draft or physical wall
+chain. Measurement authoring retains the ordinary construction receipt,
+dimension policy and draft undo/redo; physical walls retain the ordinary guarded
+wall creation path. This is distinct from the direct three-point bay-profile
+API, which creates an entire closed measurement boundary. Point jumping updates
+the precision pointer without dirtying the project.
 Physical key preset verification, editable shortcut persistence, and broader
 semantic dependency migration remain open. Callers must not replace a document
 entity with a geometry result while silently dropping its owned semantics;

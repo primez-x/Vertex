@@ -174,6 +174,56 @@ Boundary complete_bay_window(Vec2 start,Vec2 shoulder1,Vec2 shoulder2,Vec2 end) 
     return result;
 }
 
+Segment complete_bay_window_return(const Segment& entering, const Segment& front) {
+    finite(entering.start); finite(entering.end);
+    finite(front.start); finite(front.end);
+    if (!std::isfinite(entering.sweep_radians) || !std::isfinite(front.sweep_radians) ||
+        entering.sweep_radians != 0.0 || front.sweep_radians != 0.0) {
+        throw std::invalid_argument("Bay completion requires straight edges");
+    }
+    if (!same(entering.end, front.start)) {
+        throw std::invalid_argument("Bay edges must join exactly");
+    }
+    const Vec2 entering_direction{entering.end.x - entering.start.x,
+                                  entering.end.y - entering.start.y};
+    const Vec2 front_direction{front.end.x - front.start.x,
+                               front.end.y - front.start.y};
+    finite(entering_direction); finite(front_direction);
+    const auto entering_length = std::hypot(entering_direction.x, entering_direction.y);
+    const auto front_length = std::hypot(front_direction.x, front_direction.y);
+    if (!std::isfinite(entering_length) || !std::isfinite(front_length) ||
+        !(entering_length > default_geometry_tolerance_metres) ||
+        !(front_length > default_geometry_tolerance_metres)) {
+        throw std::invalid_argument("Bay edge length cannot be represented or is too small");
+    }
+    const Vec2 front_unit{front_direction.x / front_length, front_direction.y / front_length};
+    // Check progression before normalization. Rounding a perpendicular pair's
+    // normalized dot can otherwise create a tiny positive shoulder projection
+    // and admit a rectangle as an angled bay. Ambiguous cancellation is not
+    // sufficient evidence of positive progression.
+    const auto along_x = entering_direction.x * front_direction.x;
+    const auto along_y = entering_direction.y * front_direction.y;
+    const auto progress = along_x + along_y;
+    const auto progress_error = 8.0 * std::numeric_limits<double>::epsilon() *
+        (std::abs(along_x) + std::abs(along_y));
+    if (!std::isfinite(progress) || !std::isfinite(progress_error) ||
+        !(progress > progress_error)) {
+        throw std::invalid_argument("Bay sides must progress along the front");
+    }
+    const auto doubled_projection = 2.0 *
+        (entering_direction.x * front_unit.x + entering_direction.y * front_unit.y);
+    if (!std::isfinite(doubled_projection)) {
+        throw std::invalid_argument("Bay return direction cannot be represented");
+    }
+    const Vec2 return_direction{doubled_projection * front_unit.x - entering_direction.x,
+                                doubled_projection * front_unit.y - entering_direction.y};
+    finite(return_direction);
+    const Vec2 end{front.end.x + return_direction.x, front.end.y + return_direction.y};
+    finite(end);
+    const auto bay = complete_bay_window(entering.start, entering.end, front.end, end);
+    return bay.back();
+}
+
 Boundary assemble_boundary_from_segments(const std::vector<Segment>& segments,
                                           std::size_t seed_index) {
     if (segments.size() < 3) {

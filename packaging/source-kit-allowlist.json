@@ -3995,6 +3995,10 @@
     },
     {
       "category": "source",
+      "path": "tests/bay_return_desktop_tests.cpp"
+    },
+    {
+      "category": "source",
       "path": "tests/boundary_active_recovery_tests.cpp"
     },
     {

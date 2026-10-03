@@ -1492,6 +1492,19 @@ void PlanCanvas::setPreciseInputRequested(std::function<void()> callback) {
     m_precise_input_requested = std::move(callback);
 }
 
+void PlanCanvas::setBayWindowReturnRequested(std::function<void()> callback) {
+    m_bay_window_return_requested = std::move(callback);
+}
+
+bool PlanCanvas::drawingCommandIdle() const noexcept {
+    return m_gesture_button == Qt::NoButton && !m_touch_active && !m_tablet_active &&
+        !m_space_pan_armed && !m_panning && m_left_gesture == LeftGesture::none &&
+        !m_move_release_pending && !m_move_preview_pending &&
+        !m_transform_release_pending && !m_transform_preview_pending && !m_transform_frame_start &&
+        !m_vertex_move_handle && !m_boundary_vertex_preview_pending &&
+        !m_opening_width_handle && !m_opening_width_preview_pending;
+}
+
 void PlanCanvas::setDrawingTextRequested(std::function<bool(const QString&)> callback) {
     m_drawing_text_requested = std::move(callback);
 }
@@ -3627,7 +3640,8 @@ void PlanCanvas::keyPressEvent(QKeyEvent* event) {
     // draft or reopen a modal after its initial input action was consumed.
     if (event->isAutoRepeat() &&
         (event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter ||
-         event->key() == Qt::Key_Escape || event->key() == Qt::Key_D)) {
+         event->key() == Qt::Key_Escape || event->key() == Qt::Key_D ||
+         event->key() == Qt::Key_B)) {
         event->accept();
         return;
     }
@@ -3695,6 +3709,14 @@ void PlanCanvas::keyPressEvent(QKeyEvent* event) {
         if (m_precise_input_requested) {
             m_precise_input_requested();
         }
+        event->accept();
+        return;
+    }
+    if (event->key() == Qt::Key_B &&
+        !(event->modifiers() & (Qt::ControlModifier | Qt::AltModifier | Qt::MetaModifier)) &&
+        drawingCommandIdle() &&
+        (m_tool == CanvasTool::boundary || m_tool == CanvasTool::wall)) {
+        if (m_bay_window_return_requested) m_bay_window_return_requested();
         event->accept();
         return;
     }

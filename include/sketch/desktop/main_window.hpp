@@ -437,6 +437,9 @@ public:
     // Explicitly invokes the exact automatic-closure operation on the active
     // boundary draft and publishes one named document command.
     [[nodiscard]] bool autoCloseBoundaryDraft();
+    // Reflects the last accepted bay side across its front, adds only the
+    // matching return side, and continues the active boundary or wall chain.
+    [[nodiscard]] bool completeBayWindowReturn();
     // Adds the three validated bay-window edges to an active draft, closes the
     // profile, and publishes one named document command.
     [[nodiscard]] bool completeBayWindowDraft(Vec2 shoulder1, Vec2 shoulder2,

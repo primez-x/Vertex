@@ -805,7 +805,9 @@
       "id": "GEO-BASE-004",
       "area": "geometry",
       "requirement": "Provide alignment, snapping, point jumping, automatic closure, and bay-window completion while retaining exact geometry.",
-      "source_urls": [],
+      "source_urls": [
+        "https://www.apexwin.com/support/ApexSketchv7/ApexSketchv7-DrawingAngles.pdf"
+      ],
       "evidence_status": "documented",
       "implementation_status": "verified",
       "acceptance": "Keyboard and pointer fixtures show each behavior, expose the resulting constraint or closure, and reopen without drift.",
@@ -817,10 +819,12 @@
         "tests/geometry_operations_tests.cpp",
         "docs/geometry-operations.md",
         "src/desktop/plan_canvas.cpp",
+        "src/desktop/main_window.cpp",
+        "tests/bay_return_desktop_tests.cpp",
         "scripts/generate_workflow_acceptance_evidence.py",
         "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "Point jump, exact closure, bay completion, alignment/snap behavior and logical shortcut mappings have bounded geometry/UI foundations; physical shortcut verification, full command integration, and parity fixtures remain open. Current Debug/Release acceptance evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
+      "implementation_note": "Point jump, exact closure, alignment/snap and logical shortcut mappings have bounded geometry/UI foundations. Canvas B and a Tools/Commands action add a matching bay return to an existing physical wall or measurement outline, retaining normal dimensions, draft/document history and true-outline closure. Focused native Release checks cover exact/rotated returns, continuation, automatic exterior measurement, Define First dimensions and save/reopen. Broader physical shortcut qualification, native Apex compatibility and production parity remain open; historical Debug/Release evidence retains its named-source qualification boundary."
     },
     {
       "id": "GEO-CON-001",
@@ -1143,7 +1147,9 @@
       "id": "APX-KEY-004",
       "area": "apex_parity",
       "requirement": "Support point jumping, automatic closure, and bay-window completion as explicit geometry operations.",
-      "source_urls": [],
+      "source_urls": [
+        "https://www.apexwin.com/support/ApexSketchv7/ApexSketchv7-DrawingAngles.pdf"
+      ],
       "evidence_status": "documented",
       "implementation_status": "verified",
       "acceptance": "Each operation is observable in command history, produces the expected topology, and is undoable.",
@@ -1157,10 +1163,12 @@
         "include/sketch/desktop/main_window.hpp",
         "src/desktop/main_window.cpp",
         "tests/desktop_smoke.cpp",
+        "src/desktop/plan_canvas.cpp",
+        "tests/bay_return_desktop_tests.cpp",
         "scripts/generate_workflow_acceptance_evidence.py",
         "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "Point jumping is dispatched from the desktop without dirtying the project; automatic closure and bay-window completion publish named identified-boundary commands with exact topology and undo/redo coverage. Current Debug/Release evidence covers the core operations and desktop history path; physical Apex key mapping, native Apex project fixtures, and production qualification remain open."
+      "implementation_note": "Point jumping is dispatched without dirtying the project and automatic closure publishes identified-boundary commands. The canvas B and Tools/Commands bay-return action match the documented v7 two-sides-then-return workflow in both physical Wall and Measurement drawing. The return uses ordinary exact construction receipts and history, preserves manual Define First dimensions, and continues the outline unless it reaches the actual original anchor. Focused native Release checks cover B/menu, rotation, Undo/Redo, true closure with atomic exterior measurement and save/reopen; full physical Apex shortcut qualification, native Apex fixtures and production certification remain open."
     },
     {
       "id": "APX-CURVE-001",

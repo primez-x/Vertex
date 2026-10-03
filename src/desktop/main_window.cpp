@@ -18614,6 +18614,110 @@ public:
         }
     }
 
+    bool completeBayWindowReturn() {
+        if (!m_document->is_editable()) {
+            setError(QStringLiteral("This document is read-only."));
+            return false;
+        }
+        try {
+            if (m_workspace != Workspace::measurement ||
+                !m_pending_symbol_id.isEmpty() || !m_pending_opening_kind.isEmpty() ||
+                m_text_placement_context || m_plan_label_context ||
+                (m_tool != CanvasTool::boundary && m_tool != CanvasTool::wall))
+                throw std::invalid_argument("Draw the first bay side and front in an active boundary or wall chain.");
+            if (!m_measurementCanvas || !m_measurementCanvas->drawingCommandIdle())
+                throw std::invalid_argument("Finish the active canvas gesture before completing the bay-window return.");
+            const auto current = m_document->snapshot();
+            if (m_tool == CanvasTool::boundary) {
+                if (!m_boundary_session || m_boundary_document != m_document ||
+                    !m_boundary_source || !m_boundary_context ||
+                    m_boundary_context->layer_id != m_active_layer_id.toStdString() ||
+                    inspect_boundary_recovery_source(current,
+                        capture_boundary_recovery_source(*m_boundary_source, *m_boundary_context)) !=
+                        BoundaryRecoverySourceStatus::current)
+                    throw std::invalid_argument("The unfinished boundary's drawing context changed. Start the command again.");
+                if (m_boundary_session->pending_dimension())
+                    throw std::invalid_argument("Place the pending dimension before completing the bay-window return.");
+                if (m_boundary_session->phase() != BoundaryAuthoringPhase::drawing ||
+                    m_boundary_session->pen_state() != BoundaryPenState::down)
+                    throw std::invalid_argument("Continue the active boundary before completing the bay-window return.");
+                const auto original = *m_boundary_session;
+                const auto restored_navigation = m_restored_boundary_navigation;
+                auto candidate = original;
+                const auto chain = candidate.active_chain();
+                if (!chain || chain->segments.size() < 2)
+                    throw std::invalid_argument("Draw the first bay side and front before completing the return.");
+                const auto edge = complete_bay_window_return(
+                    chain->segments[chain->segments.size() - 2].segment,
+                    chain->segments.back().segment);
+                (void)candidate.add_line_to(edge.end);
+                candidate.set_pointer(edge.end);
+                const bool closes = edge.end.x == chain->anchor.x && edge.end.y == chain->anchor.y;
+                if (closes) {
+                    Boundary geometry;
+                    const auto closed_chain = candidate.active_chain();
+                    for (const auto& segment : closed_chain->segments)
+                        geometry.push_back(segment.segment);
+                    const auto diagnostics = validate_boundary(geometry);
+                    if (!diagnostics.empty()) throw std::invalid_argument(diagnostics.front().message);
+                }
+                m_boundary_session = std::move(candidate);
+                if (!boundaryDraftChanged()) {
+                    m_boundary_session = original;
+                    m_restored_boundary_navigation = restored_navigation;
+                    refreshBoundaryPreview();
+                    refreshActions();
+                    refreshTitle();
+                    return false;
+                }
+                resetDrawingInputContext();
+                if (m_drawing_input) m_drawing_input->clearInput();
+                clearError();
+                if (closes && !m_boundary_session->pending_dimension()) {
+                    finishTool(QStringLiteral("Complete bay-window return"));
+                    return m_last_error.isEmpty();
+                }
+                return true;
+            }
+            if (m_boundary_session || !m_pending_wall_start || !m_wall_chain_anchor)
+                throw std::invalid_argument("Draw the first bay side and front in an active wall chain.");
+            const auto drawing_context = requireDrawingContext();
+            if (!drawing_context) return false;
+            const auto live = liveWallChainOwners(current);
+            const auto front = previousWallSegment(current);
+            if (!front || live.size() < 2)
+                throw std::invalid_argument("Draw the first bay side and front before completing the return.");
+            // Validate authoritative lineage and placement before letting the
+            // ordinary point path create a wall, constraints and any shell
+            // measurement together in its existing atomic command.
+            auto endpoint = *m_wall_chain_anchor;
+            for (const auto& id : live) {
+                const auto& wall = current.entities().at(id.toStdString());
+                const auto baseline = read_required_segment(wall.properties, "baseline");
+                if (read_string(wall.properties, "floor_id") !=
+                        std::optional<std::string>{drawing_context->floor_id} ||
+                    read_string(wall.properties, "layer_id") !=
+                        std::optional<std::string>{drawing_context->layer_id} ||
+                    !baseline || baseline->start.x != endpoint.x || baseline->start.y != endpoint.y)
+                    throw std::invalid_argument("The wall chain's connected geometry or drawing layer changed. Start a new chain.");
+                endpoint = baseline->end;
+            }
+            const auto entering = read_required_segment(
+                current.entities().at(live[live.size() - 2].toStdString()).properties, "baseline");
+            if (!entering) throw std::invalid_argument("The first bay side is unavailable.");
+            const auto edge = complete_bay_window_return(*entering, *front);
+            ConstructionReceipt receipt;
+            receipt.kind = BoundaryConstructionKind::line_to_point;
+            receipt.start = edge.start;
+            receipt.chord_end = edge.end;
+            onCanvasPoint(edge.end, current.revision(), receipt);
+            return m_document->revision() == current.revision() + 1;
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Complete bay-window return: %1").arg(QString::fromUtf8(error.what())));
+            return false;
+        }
+    }
+
     bool completeBayWindowDraft(Vec2 shoulder1, Vec2 shoulder2, Vec2 end) {
         if (!m_document->is_editable()) {
             setError(QStringLiteral("This document is read-only."));
@@ -24808,6 +24912,7 @@ public:
             {QStringLiteral("Insert boundary vertex"), [this] { showBoundaryVertexInsertion(); }},
             {QStringLiteral("Jump to boundary vertex"), [this] { showBoundaryVertexJump(); }},
             {QStringLiteral("Auto close active boundary"), [this] { autoCloseBoundaryDraft(); }},
+            {QStringLiteral("Complete bay-window return (B)"), [this] { (void)completeBayWindowReturn(); }},
             {QStringLiteral("Redefine boundary"), [this] { showBoundaryRedefinition(); }},
             {QStringLiteral("Detect closed areas from walls"), [this] { showAutomaticAreaDetection(); }},
             {QStringLiteral("Measure exterior from walls"), [this] { showWallMeasurementReview(); }},
@@ -26276,6 +26381,9 @@ private:
         jump_vertex_action->setObjectName(QStringLiteral("jumpBoundaryVertex"));
         auto* auto_close_action = new QAction(QStringLiteral("Auto close active boundary"), owner);
         auto_close_action->setObjectName(QStringLiteral("autoCloseBoundary"));
+        auto* bay_return_action = new QAction(QStringLiteral("Complete bay-window return (B)"), owner);
+        bay_return_action->setObjectName(QStringLiteral("completeBayWindowReturnAction"));
+        bay_return_action->setToolTip(QStringLiteral("After drawing the first diagonal side and front, add the matching return side and continue drawing (B on the canvas)."));
         more_menu->addAction(m_copy_action);
         more_menu->addAction(m_cut_action);
         more_menu->addAction(m_paste_action);
@@ -26284,6 +26392,7 @@ private:
         more_menu->addAction(m_insert_vertex_action);
         more_menu->addAction(jump_vertex_action);
         more_menu->addAction(auto_close_action);
+        more_menu->addAction(bay_return_action);
         more_menu->addSeparator();
         m_annotation_action = new QAction(QStringLiteral("Annotations"), owner);
         m_reference_action = new QAction(QStringLiteral("Reference image"), owner);
@@ -26391,6 +26500,8 @@ private:
                          [this] { showBoundaryVertexJump(); });
         QObject::connect(auto_close_action, &QAction::triggered, owner,
                          [this] { (void)autoCloseBoundaryDraft(); });
+        QObject::connect(bay_return_action, &QAction::triggered, owner,
+                         [this] { (void)completeBayWindowReturn(); });
         auto* more_button = new QToolButton(toolbar);
         more_button->setObjectName(QStringLiteral("moreTools"));
         more_button->setIcon(modern_toolbar_icon("<path d='M5 7h14M5 12h14M5 17h14'/>"));
@@ -28530,6 +28641,7 @@ private:
         canvas->setDraftUndoRequested([this] {
             (void)undoCommand();
         });
+        canvas->setBayWindowReturnRequested([this] { (void)completeBayWindowReturn(); });
         canvas->setDraftRedoRequested([this] {
             (void)redoCommand();
         });
@@ -32408,6 +32520,9 @@ private:
         m_save_action->setEnabled(m_document->is_editable() &&
                                  (projectDirty() || hasUnsavedBoundaryDraftChanges()));
         m_save_as_action->setEnabled(m_document->is_editable());
+        if (auto* action = owner->findChild<QAction*>(QStringLiteral("completeBayWindowReturnAction")))
+            action->setEnabled(m_document->is_editable() && m_workspace == Workspace::measurement &&
+                (m_tool == CanvasTool::boundary || m_tool == CanvasTool::wall));
         m_object_button->setEnabled(m_document->is_editable());
         const auto selected=selectedEntity();
         if (auto* repair = owner->findChild<QAction*>(QStringLiteral("replaceExteriorMeasurementSources")))
@@ -36434,6 +36549,10 @@ bool MainWindow::jumpSelectedBoundaryVertex(const QString& vertex_id) {
 
 bool MainWindow::autoCloseBoundaryDraft() {
     return m_impl->autoCloseBoundaryDraft();
+}
+
+bool MainWindow::completeBayWindowReturn() {
+    return m_impl->completeBayWindowReturn();
 }
 
 bool MainWindow::completeBayWindowDraft(Vec2 shoulder1, Vec2 shoulder2, Vec2 end) {

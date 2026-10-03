@@ -309,7 +309,10 @@ drawing; switching modes does not change existing geometry.
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U051 — Complete a bay-window shape**
-  - Expected: The generated segments match the entered bay dimensions.
+  - Steps: In Wall mode, begin an outline, draw an angled side outward and a straight bay front, then press B. Continue drawing the surrounding outline. Undo and Redo the return before closing. Repeat in Measurement mode, using Complete bay-window return from Commands. In Define First, place the pending dimensions before pressing B. Save and reopen the completed drawing.
+  - Expected: B adds one matching angled return with the same length as the first angled side. Drawing remains active; the application does not close across the bay opening. The return has the normal wall thickness or measurement dimensions. Undo removes only the return and Redo restores it. The finished drawing and dimensions survive reopening.
+  - Also try: Press B after only one side, after a curved side, with Ctrl held, and while entering a name in a text field. Try an invalid backwards bay.
+  - Expected: Invalid geometry is explained without adding a side. Modified keys and typing do not trigger bay completion.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 

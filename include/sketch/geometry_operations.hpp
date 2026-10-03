@@ -46,6 +46,11 @@ enum class BoundaryFlipAxis { horizontal, vertical };
 [[nodiscard]] Boundary automatically_close_boundary(const Boundary& open_chain);
 // Completes start -> shoulder1 -> shoulder2 -> end with three straight segments.
 [[nodiscard]] Boundary complete_bay_window(Vec2 start, Vec2 shoulder1, Vec2 shoulder2, Vec2 end);
+// Reflects the entering shoulder direction across the bay front and returns
+// only the matching third edge. Inputs must be finite, straight, and join
+// exactly; the resulting bay must pass complete_bay_window validation.
+// Does not close the surrounding outline or snap analytical coordinates.
+[[nodiscard]] Segment complete_bay_window_return(const Segment& entering, const Segment& front);
 // Orders an unordered set of existing analytical segments into one closed
 // boundary without changing their coordinates or curve sweeps. Every endpoint
 // must join exactly, every vertex must have degree two, and all supplied

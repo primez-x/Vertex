@@ -75,6 +75,105 @@ sketch::IdentifiedBoundary downward_rectangle() {
         {"e3", "v3", "v0", {{0, -20}, {0, 0}, 0}}}};
 }
 
+void test_complete_bay_window_return() {
+    using namespace sketch;
+    struct Example { Segment entering; Segment front; Vec2 expected_end; };
+    // Literal results are hand-derived matching shoulders, including a 3-4-5
+    // rotation/scaling, translation, reflection, and feet expressed in metres.
+    const Example examples[]{
+        {{{0, 0}, {1, -1}, 0}, {{1, -1}, {3, -1}, 0}, {4, 0}},
+        {{{5, -2}, {6, -1}, 0}, {{6, -1}, {6, 1}, 0}, {5, 2}},
+        {{{7, 11}, {14, 12}, 0}, {{14, 12}, {20, 20}, 0}, {19, 27}},
+        {{{100.125, -20.75}, {101.125, -21.75}, 0},
+         {{101.125, -21.75}, {103.125, -21.75}, 0}, {104.125, -20.75}},
+        {{{2, 3}, {1, 2}, 0}, {{1, 2}, {-1, 2}, 0}, {-2, 3}},
+        {{{0, 0}, {0.3048, -0.3048}, 0},
+         {{0.3048, -0.3048}, {0.9144, -0.3048}, 0}, {1.2192, 0}},
+        {{{0.125, 0.25}, {1.625, -0.625}, 0},
+         {{1.625, -0.625}, {3.875, -0.625}, 0}, {5.375, 0.25}},
+    };
+    for (const auto& example : examples) {
+        const auto entering_before = example.entering;
+        const auto front_before = example.front;
+        const auto result = complete_bay_window_return(example.entering, example.front);
+        require(same_point(result.start, example.front.end) && result.sweep_radians == 0.0,
+                "bay completion must return only a straight edge starting exactly at the front end");
+        require(near(result.end.x, example.expected_end.x) &&
+                    near(result.end.y, example.expected_end.y),
+                "bay return must match the entering shoulder across the front direction");
+        require(near(segment_length(result), segment_length(example.entering)),
+                "bay return must retain the entering shoulder length");
+        require(!same_point(result.end, example.entering.start),
+                "bay return must leave the surrounding floor outline open");
+        require(same_point(example.entering.start, entering_before.start) &&
+                    same_point(example.entering.end, entering_before.end) &&
+                    example.entering.sweep_radians == entering_before.sweep_radians &&
+                    same_point(example.front.start, front_before.start) &&
+                    same_point(example.front.end, front_before.end) &&
+                    example.front.sweep_radians == front_before.sweep_radians,
+                "bay return must not mutate its analytical input edges");
+    }
+    const auto precise = complete_bay_window_return(examples[6].entering, examples[6].front);
+    require(same_point(precise.end, examples[6].expected_end),
+            "bay completion must preserve representable analytical coordinates without snapping");
+}
+
+void test_complete_bay_window_return_rejections() {
+    using namespace sketch;
+    const Segment entering{{0, 0}, {1, -1}, 0};
+    const Segment front{{1, -1}, {3, -1}, 0};
+    const auto reject_pair = [](const Segment& first, const Segment& second) {
+        rejects([&] { (void)complete_bay_window_return(first, second); },
+                "invalid bay inputs must throw invalid_argument");
+    };
+    reject_pair({{0, 0}, {0, 0}, 0}, {{0, 0}, {2, 0}, 0});
+    reject_pair(entering, {{1, -1}, {1, -1}, 0});
+    reject_pair(entering, {{1 + 1e-12, -1}, {3, -1}, 0});
+    reject_pair(entering, {{3, -1}, {1, -1}, 0});
+    reject_pair({{0, 0}, {1, 0}, 0}, {{1, 0}, {3, 0}, 0});
+    reject_pair({{0, 0}, {1, 0}, 0}, {{1, 0}, {-1, 0}, 0});
+    reject_pair(entering, {{1, -1}, {-1, -1}, 0});
+    reject_pair({{0, 0}, {-1, -1}, 0}, {{-1, -1}, {1, -1}, 0});
+    reject_pair({{0, 0}, {13, -8}, 0}, {{13, -8}, {21, 5}, 0});
+    // Perpendicular integer vectors have exactly zero progress along the
+    // front; normalization must not turn them into a valid angled bay.
+    for (int x = -24; x <= 24; ++x) for (int y = -24; y <= 24; ++y) {
+        if (x == 0 || y == 0) continue;
+        rejects([&] {
+            (void)complete_bay_window_return({{0, 0}, {double(x), double(y)}, 0},
+                {{double(x), double(y)}, {double(x-y), double(y+x)}, 0});
+        }, "perpendicular directions must not acquire positive bay progress from rounding");
+    }
+    for (const double sweep : {0.25, std::numeric_limits<double>::quiet_NaN(),
+                               std::numeric_limits<double>::infinity()}) {
+        auto curved_entering = entering;
+        curved_entering.sweep_radians = sweep;
+        reject_pair(curved_entering, front);
+        auto curved_front = front;
+        curved_front.sweep_radians = sweep;
+        reject_pair(entering, curved_front);
+    }
+    for (const double value : {std::numeric_limits<double>::quiet_NaN(),
+                               std::numeric_limits<double>::infinity()}) {
+        for (std::size_t coordinate = 0; coordinate < 8; ++coordinate) {
+            auto bad_entering = entering;
+            auto bad_front = front;
+            double* coordinates[]{&bad_entering.start.x, &bad_entering.start.y,
+                                  &bad_entering.end.x, &bad_entering.end.y,
+                                  &bad_front.start.x, &bad_front.start.y,
+                                  &bad_front.end.x, &bad_front.end.y};
+            *coordinates[coordinate] = value;
+            reject_pair(bad_entering, bad_front);
+        }
+    }
+    const auto huge = std::numeric_limits<double>::max();
+    reject_pair({{-huge, 0}, {huge, -1}, 0}, {{huge, -1}, {huge, -2}, 0});
+    reject_pair({{0, 0}, {huge / 2, -huge / 2}, 0},
+                {{huge / 2, -huge / 2}, {huge, -huge / 2}, 0});
+    reject_pair({{0, 0}, {1e-12, -1e-12}, 0},
+                {{1e-12, -1e-12}, {3e-12, -1e-12}, 0});
+}
+
 void test_reconstruct_boundary_arc() {
     using namespace sketch;
     const auto source = tall_rectangle();
@@ -289,6 +388,8 @@ void test_direct_boundary_edit_rejections() {
 }
 int main() {
     try {
+        test_complete_bay_window_return();
+        test_complete_bay_window_return_rejections();
         test_reconstruct_boundary_arc();
         test_direct_boundary_edits();
         test_direct_boundary_edit_rejections();
