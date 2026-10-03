@@ -35,6 +35,7 @@
 #include "sketch/boundary_receipt.hpp"
 #include "sketch/measurement_linework.hpp"
 #include "sketch/measurement_area_graph.hpp"
+#include "sketch/measurement_linework_source.hpp"
 #include "sketch/boundary_transform.hpp"
 #include "sketch/document_digest.hpp"
 #include "sketch/dxf_project_exchange.hpp"
@@ -3239,7 +3240,7 @@ void project_plan_model_labels(std::vector<CanvasLabel>& labels,
         if (label.plan_only || label.model_plan || (found != snapshot.entities().end() && found->second.type == "dimension")) {
             label.position = project_plan_point(label.position, frame);
             if (label.leader_start) label.leader_start=project_plan_point(*label.leader_start,frame);
-            if (found!=snapshot.entities().end() && found->second.type=="wall") {
+            if (found!=snapshot.entities().end() && (found->second.type=="wall" || found->second.type=="measurement_linework")) {
                 const auto right=plan_view_right(frame),up=plan_view_up(frame);
                 const auto x=std::cos(label.rotation_radians),y=std::sin(label.rotation_radians);
                 label.rotation_radians=std::atan2(up.x*x+up.y*y,right.x*x+right.y*y);
@@ -5168,6 +5169,67 @@ public:
         }
     }
 
+    Command completeMeasuredAreaConsequences(const DocumentSnapshot& source, Command command) {
+        const auto before_visibility=visible_project_entities_with_phase(source,ProjectViewFilter{});
+        const auto before = measurement_linework_source_checks(source.entities(),&before_visibility);
+        if (before.empty()) return command;
+        const auto candidate = Document::preview_command(source, command);
+        const auto after_visibility=visible_project_entities_with_phase(candidate,ProjectViewFilter{});
+        const auto after = measurement_linework_source_checks(candidate.entities(),&after_visibility);
+        std::vector<EntityChange> refreshes;
+        std::set<std::string,std::less<>> refreshed_ids;
+        for (const auto& [id, check] : after) {
+            const auto previous = before.find(id);
+            if (check.current || previous == before.end() || !previous->second.current || !check.proposed_boundary) continue;
+            const auto& area = candidate.entities().at(id);
+            // Authored boundary receipts require their typed reconstruction path.
+            // They remain explicitly stale rather than acquiring invented input.
+            if (area.properties.contains("boundary_authoring") || area.extensions.contains("boundary_geometry_derivation")) continue;
+            auto boundary = decode_identified_boundary_entity(area);
+            if (boundary.segments.size() != check.proposed_boundary->size()) continue;
+            for (std::size_t i = 0; i < boundary.segments.size(); ++i)
+                boundary.segments[i].segment = check.proposed_boundary->at(i);
+            auto refreshed = encode_identified_boundary_entity(boundary, &area);
+            refreshed.extensions["measurement_linework_sources"] = check.proposed_lineage;
+            refreshed_ids.insert(id);
+            refreshes.push_back(EntityChange::upsert(std::move(refreshed)));
+        }
+        if (refreshes.empty()) return command;
+        std::visit([&](auto& value) {
+            using T = std::decay_t<decltype(value)>;
+            if constexpr (std::is_same_v<T, ApplyEntityChanges> || std::is_same_v<T, TranslateBoundaries> || std::is_same_v<T, TransformBoundaries>) {
+                for (auto& change : refreshes) {
+                    const auto found = std::find_if(value.entity_changes.begin(), value.entity_changes.end(),
+                        [&](const auto& existing) { return existing.entity.id == change.entity.id; });
+                    if (found == value.entity_changes.end()) value.entity_changes.push_back(std::move(change));
+                    else *found = std::move(change);
+                }
+            } else throw std::invalid_argument("Measured area refresh requires an atomic geometry command.");
+        }, command);
+        const auto refreshed = Document::preview_command(source, command);
+        const auto checks = measurement_linework_source_checks(refreshed.entities(),&after_visibility);
+        for (const auto& [id, check] : checks)
+            if (refreshed_ids.contains(id) && !check.current)
+                throw std::invalid_argument("The measured area refresh did not reproduce its actual source geometry.");
+        return command;
+    }
+
+    static void includeMeasuredAreaSources(const DocumentSnapshot& source,std::vector<Entity>& graph) {
+        if (std::none_of(graph.begin(),graph.end(),[](const auto& entity){return entity.extensions.contains("measurement_linework_sources");})) return;
+        const auto visibility=visible_project_entities_with_phase(source,ProjectViewFilter{});
+        const auto checks=measurement_linework_source_checks(source.entities(),&visibility);
+        std::set<std::string,std::less<>> sources;
+        for (const auto& area : graph) {
+            if (!area.extensions.contains("measurement_linework_sources")) continue;
+            if (!measurement_linework_source_current(checks,area))
+                throw std::invalid_argument("Refresh or redefine this measured area before moving its source geometry: "+checks.at(area.id).diagnostic);
+            for (const auto& edge : area.extensions.at("measurement_linework_sources"))
+                for (const auto& use : edge) sources.insert(use.at("owner_id").get<std::string>());
+        }
+        for (const auto& id : sources)
+            if (std::none_of(graph.begin(),graph.end(),[&](const auto& entity){return entity.id==id;})) graph.push_back(source.entities().at(id));
+    }
+
     Command makeSelectionGeometryTransformCommand(const DocumentSnapshot& source,
         const QStringList& root_ids, const PlanarTransform& transform,
         std::vector<EntityChange> supplemental_changes = {}) {
@@ -5175,11 +5237,13 @@ public:
         for (const auto& id : root_ids) {
             const auto found=source.entities().find(id.toStdString());
             if (found==source.entities().end()) throw std::invalid_argument("A selected object no longer exists.");
-            if (!is_closed_boundary_entity(found->second.type) && found->second.type!="wall")
+            if (!is_closed_boundary_entity(found->second.type) && found->second.type!="wall" && found->second.type!="measurement_linework")
                 throw std::invalid_argument("Select closed areas and their physical walls for a shared rigid transform.");
-            for (const auto& entity : clipboard_entities_for_selection(source,found->first)) selected_roots.push_back(entity);
+            if (found->second.type=="measurement_linework") selected_roots.push_back(found->second);
+            else for (const auto& entity : clipboard_entities_for_selection(source,found->first)) selected_roots.push_back(entity);
         }
-        const auto graph=independentAreaCopyGraph(source,std::move(selected_roots));
+        auto graph=independentAreaCopyGraph(source,std::move(selected_roots));
+        includeMeasuredAreaSources(source,graph);
         if (transform.rotation_radians==0.0 && !transform.flip_horizontal && !transform.flip_vertical &&
             transform.offset.x==0.0 && transform.offset.y==0.0 && supplemental_changes.empty())
             return ApplyEntityChanges{source.revision(),{}, {},"Transform areas with deductions and source walls"};
@@ -5196,6 +5260,12 @@ public:
                 if (inspect_boundary_entity_version(entity).format!=BoundaryEntityFormat::identified_v1)
                     throw std::invalid_argument("A dependent boundary needs an explicit identity upgrade before transforming.");
                 transformations.push_back({entity.id,transform});
+            } else if (entity.type=="measurement_linework") {
+                const auto decoded=decode_measurement_linework_model(entity.properties.at("model"));
+                if (!decoded.supported()) throw std::invalid_argument(decoded.diagnostic);
+                auto moved=entity;
+                moved.properties["model"]=encode_measurement_linework_model(transformed_measurement_linework(*decoded.model,transform));
+                supplemental.insert_or_assign(entity.id,std::move(moved));
             } else if (entity.type=="wall") {
                 const auto built=makeWallTransformCommand(source,entity,{},false,false,{}, {},false,transform,nullptr,true);
                 const auto* changes=std::get_if<ApplyEntityChanges>(&built.first);
@@ -5233,11 +5303,12 @@ public:
                 if (annotation!=source.entities().at(entity.id)) supplemental.insert_or_assign(entity.id,std::move(annotation));
             }
         }
-        if (transformations.empty()) throw std::invalid_argument("Select an identified closed area before transforming its dependencies.");
         std::vector<EntityChange> changes;
         for (auto& [id,entity] : supplemental) changes.push_back(EntityChange::upsert(std::move(entity)));
-        const Command command=TransformBoundaries{source.revision(),std::move(transformations),std::move(changes),
-            "Transform areas with deductions and source walls"};
+        const Command command=completeMeasuredAreaConsequences(source, transformations.empty()
+            ? Command{ApplyEntityChanges{source.revision(),std::move(changes),{},"Rotate measured strokes"}}
+            : Command{TransformBoundaries{source.revision(),std::move(transformations),std::move(changes),
+                "Transform areas with deductions and source walls"}});
         const auto candidate=Document::preview_command(source,command);
         for (const auto& entity : graph)
             if (is_closed_boundary_entity(entity.type) && !wall_measurement_source_current(candidate,candidate.entities().at(entity.id)))
@@ -5251,14 +5322,16 @@ public:
         for (const auto& id : model_ids) {
             const auto found = source.entities().find(id.toStdString());
             if (found == source.entities().end()) throw std::invalid_argument("A selected object no longer exists.");
-            for (const auto& entity : clipboard_entities_for_selection(source,found->first)) selected_roots.push_back(entity);
+            if (found->second.type=="measurement_linework") selected_roots.push_back(found->second);
+            else for (const auto& entity : clipboard_entities_for_selection(source,found->first)) selected_roots.push_back(entity);
         }
-        const auto graph = independentAreaCopyGraph(source,std::move(selected_roots));
+        auto graph = independentAreaCopyGraph(source,std::move(selected_roots));
+        includeMeasuredAreaSources(source,graph);
         std::vector<BoundaryTranslation> translations;
         std::vector<std::string> walls;
         std::vector<ArchitecturalOperation> operations;
         for (const auto& entity : graph) {
-            if ((is_closed_boundary_entity(entity.type) || entity.type == "wall") && !model_ids.contains(id_from(entity.id)))
+            if ((is_closed_boundary_entity(entity.type) || entity.type == "wall" || entity.type == "measurement_linework") && !model_ids.contains(id_from(entity.id)))
                 model_ids.push_back(id_from(entity.id));
             if (entity.type == "constraint") {
                 const auto decoded = decode_constraint_entity(entity);
@@ -5284,6 +5357,15 @@ public:
                 }
                 continue;
             }
+            if (entity.type == "measurement_linework") {
+                const auto decoded=decode_measurement_linework_model(entity.properties.at("model"));
+                if (!decoded.supported()) throw std::invalid_argument(decoded.diagnostic);
+                auto moved=entity;
+                moved.properties["model"]=encode_measurement_linework_model(transformed_measurement_linework(
+                    *decoded.model,PlanarTransform{{},0.0,false,false,offset}));
+                changes.push_back(EntityChange::upsert(std::move(moved)));
+                continue;
+            }
             if (!can_transform_architectural_entity_type(entity.type))
                 throw std::invalid_argument("This selected object does not support movement.");
             walls.push_back(entity.id);
@@ -5298,9 +5380,9 @@ public:
             changes.insert(changes.end(),std::make_move_iterator(wall_changes.entity_changes.begin()),
                 std::make_move_iterator(wall_changes.entity_changes.end()));
         }
-        const Command command = augmentAuthoredCommand(translations.empty()
+        const Command command = completeMeasuredAreaConsequences(source, augmentAuthoredCommand(translations.empty()
             ? Command{ApplyEntityChanges{source.revision(),std::move(changes),{},"Move selected objects"}}
-            : Command{TranslateBoundaries{source.revision(),std::move(translations),std::move(changes),"Move selected objects"}}, source);
+            : Command{TranslateBoundaries{source.revision(),std::move(translations),std::move(changes),"Move selected objects"}}, source));
         const auto candidate = Document::preview_command(source,command);
         for (const auto& id : model_ids) {
             const auto& entity = source.entities().at(id.toStdString());
@@ -15756,7 +15838,7 @@ public:
             return false;
         }
         try {
-            if (m_boundary_session || m_pending_wall_start || !m_pending_symbol_id.isEmpty()) {
+            if (m_boundary_session || m_linework_drawing || m_pending_wall_start || !m_pending_symbol_id.isEmpty()) {
                 throw std::invalid_argument(
                     "Finish or cancel the active drawing command before moving selected objects.");
             }
@@ -16147,6 +16229,32 @@ public:
                             std::hypot(wall->second.baseline.end.x-wall->second.baseline.start.x,
                                        wall->second.baseline.end.y-wall->second.baseline.start.y),
                             wall->second.thickness};
+                } else if (entity.type=="measurement_linework") {
+                    if (entity == source.entities().at(entity.id)) continue;
+                    const auto decoded=decode_measurement_linework_model(entity.properties.at("model"));
+                    if (!decoded.supported()) return std::nullopt;
+                    const auto replay=replay_measurement_linework(*decoded.model);
+                    proposed.segments.clear(); proposed.snap_points.clear(); proposed.snap_segments.clear();
+                    for (const auto& edge : replay.edges) {
+                        proposed.segments.push_back(edge.segment);
+                        proposed.snap_segments.push_back(edge.segment);
+                        proposed.snap_points.push_back(edge.segment.start);
+                        proposed.snap_points.push_back(edge.segment.end);
+                    }
+                    if (proposed.resize_frame) {
+                        if (view_context) {
+                            auto& frame=*proposed.resize_frame;
+                            const auto along=Vec2{frame.center.x+std::cos(frame.rotation_radians),frame.center.y+std::sin(frame.rotation_radians)};
+                            frame.center=unproject_plan_point(frame.center,view_context->frame);
+                            const auto world_along=unproject_plan_point(along,view_context->frame);
+                            frame.rotation_radians=std::atan2(world_along.y-frame.center.y,world_along.x-frame.center.x);
+                        }
+                        const auto old=decode_measurement_linework_model(source.entities().at(entity.id).properties.at("model"));
+                        const auto old_replay=replay_measurement_linework(*old.model);
+                        const auto delta=Vec2{replay.anchor.x-old_replay.anchor.x,replay.anchor.y-old_replay.anchor.y};
+                        proposed.resize_frame->center.x+=delta.x;
+                        proposed.resize_frame->center.y+=delta.y;
+                    }
                 } else if (entity.type=="opening") {
                     const auto host_wall=changed_walls.find(entity.properties.at("wall_id").get<std::string>());
                     if (host_wall==changed_walls.end()) continue;
@@ -16265,6 +16373,40 @@ public:
                     if (view_context) {
                         std::vector<CanvasLabel> projected{std::move(proposed)};
                         project_plan_model_labels(projected,source,view_context->frame);
+                        proposed=std::move(projected.front());
+                    }
+                    result.labels.push_back(std::move(proposed));
+                } else if (entity.type=="measurement_linework") {
+                    if (entity == source.entities().at(entity.id)) continue;
+                    const auto decoded=decode_measurement_linework_model(entity.properties.at("model"));
+                    if (!decoded.supported()) return std::nullopt;
+                    const auto replay=replay_measurement_linework(*decoded.model);
+                    const auto original=decode_measurement_linework_model(source.entities().at(entity.id).properties.at("model"));
+                    const auto original_replay=replay_measurement_linework(*original.model);
+                    const auto index=std::find_if(original_replay.edges.begin(),original_replay.edges.end(),[&](const auto& edge) {
+                        if (!label.automatic_linear_placement) return false;
+                        const auto a=view_context ? project_plan_path(Boundary{edge.segment},view_context->frame).front() : edge.segment;
+                        const auto& b=label.automatic_linear_placement->anchor;
+                        return a.start.x==b.start.x && a.start.y==b.start.y && a.end.x==b.end.x && a.end.y==b.end.y && a.sweep_radians==b.sweep_radians;
+                    });
+                    if (index==original_replay.edges.end()) continue;
+                    const auto& edge=replay.edges.at(static_cast<std::size_t>(index-original_replay.edges.begin()));
+                    auto proposed=wall_dimension_label(entity.id,edge.segment,0.0,metric_units,label.selected,std::nullopt);
+                    proposed.text=format_boundary_length(segment_length(edge.segment),metric_units,ansi_boundary_dimensions(candidate_snapshot,entity));
+                    Boundary boundary; for (const auto& item : replay.edges) boundary.push_back(item.segment);
+                    if (replay.closed && signed_area(boundary)>0) {
+                        auto& placement=*proposed.automatic_linear_placement;
+                        placement.outward_normal={-placement.outward_normal.x,-placement.outward_normal.y};
+                        const auto middle=point_at_segment(edge.segment,0.5).value();
+                        proposed.position={middle.x+placement.outward_normal.x*placement.clearance_metres,
+                            middle.y+placement.outward_normal.y*placement.clearance_metres};
+                    }
+                    proposed.text_height_metres=label.text_height_metres;
+                    proposed.paper_height_mm=label.paper_height_mm;
+                    proposed.selection_type=label.selection_type;
+                    if (view_context) {
+                        std::vector<CanvasLabel> projected{std::move(proposed)};
+                        project_plan_model_labels(projected,candidate_snapshot,view_context->frame);
                         proposed=std::move(projected.front());
                     }
                     result.labels.push_back(std::move(proposed));
@@ -16551,7 +16693,8 @@ public:
         PlanCanvas* canvas,const QString& id,double scale,double radians,Vec2 canvas_pivot,std::uint64_t serial) {
         if (!canvas || !m_entity_transform_source) return std::nullopt;
         const auto found=m_entity_transform_source->entities().find(id.toStdString());
-        if (found==m_entity_transform_source->entities().end() || !is_closed_boundary_entity(found->second.type) ||
+        if (found==m_entity_transform_source->entities().end() ||
+            (!is_closed_boundary_entity(found->second.type) && found->second.type!="measurement_linework") ||
             std::abs(scale-1.0)>1e-9) return std::nullopt;
         m_entity_transform_command.reset();
         m_entity_transform_ready=false;
@@ -17016,7 +17159,7 @@ public:
             return false;
         }
         try {
-            if (m_boundary_session || m_pending_wall_start || !m_pending_symbol_id.isEmpty())
+            if (m_boundary_session || m_linework_drawing || m_pending_wall_start || !m_pending_symbol_id.isEmpty())
                 throw std::invalid_argument(
                     "Finish or cancel the active drawing command before transforming an object.");
             if (!std::isfinite(relative_scale) || !(relative_scale > 0.0) ||
@@ -17029,7 +17172,7 @@ public:
             const auto source = authoringSnapshot();
             const auto wanted = requested_id.toStdString();
             const auto model=source.entities().find(wanted);
-            if (model!=source.entities().end() && is_closed_boundary_entity(model->second.type) &&
+            if (model!=source.entities().end() && (is_closed_boundary_entity(model->second.type) || model->second.type=="measurement_linework") &&
                 std::abs(relative_scale-1.0)<=1e-9) {
                 const auto* active_canvas=m_workspace==Workspace::measurement ? m_measurementCanvas : m_architecturalCanvas;
                 if (!entityTransformContextUnchanged() || m_entity_transform_canvas!=active_canvas ||
@@ -31236,9 +31379,10 @@ private:
                     const auto model = snapshot.entities().find(entity.id.toStdString());
                     const bool boundary = model != snapshot.entities().end() &&
                         is_closed_boundary_entity(model->second.type);
+                    const bool linework = model != snapshot.entities().end() && model->second.type=="measurement_linework";
                     const bool dimension = entity.type==QStringLiteral("dimension_line");
                     const bool symbol = entity.type==QStringLiteral("symbol");
-                    if ((!boundary && !dimension && !symbol) ||
+                    if ((!boundary && !linework && !dimension && !symbol) ||
                         architectural_hidden_ids.contains(entity.id.toStdString()) ||
                         (restricted && !referenced.contains(entity.id.toStdString()))) continue;
                     auto retained = entity;
@@ -31248,8 +31392,13 @@ private:
                             hole = project_plan_path(std::move(hole), frame);
                         for (auto& handle : retained.vertex_handles)
                             handle.position = project_plan_point(handle.position, frame);
+                        if (linework) {
+                            retained.snap_segments=project_plan_path(std::move(retained.snap_segments),frame);
+                            retained.hit_segments=project_plan_path(std::move(retained.hit_segments),frame);
+                            for (auto& point : retained.snap_points) point=project_plan_point(point,frame);
+                        }
                     }
-                    if (boundary && view_context.crop) {
+                    if ((boundary || linework) && view_context.crop) {
                         const Bounds2 bounds{{view_context.crop->min_horizontal_m,view_context.crop->min_vertical_m},
                                              {view_context.crop->max_horizontal_m,view_context.crop->max_vertical_m}};
                         clip_plan_entity(retained, bounds);
@@ -31481,6 +31630,12 @@ private:
                             project_frame(canvas_entity);
                             continue;
                         }
+                    } else if (found->second.type == "measurement_linework") {
+                        const auto decoded=decode_measurement_linework_model(found->second.properties.at("model"));
+                        if (!decoded.supported()) continue;
+                        const auto replay=replay_measurement_linework(*decoded.model);
+                        const auto& first=replay.edges.front().segment;
+                        angle=std::atan2(first.end.y-first.start.y,first.end.x-first.start.x);
                     } else if (is_closed_boundary_entity(found->second.type)) {
                         const auto boundary = projection ? boundary_geometry(
                             decode_identified_boundary_entity(found->second)) : canvas_entity.segments;
@@ -31492,6 +31647,11 @@ private:
                     auto segments = projection && is_closed_boundary_entity(found->second.type)
                         ? boundary_geometry(decode_identified_boundary_entity(found->second))
                         : canvas_entity.segments;
+                    if (projection && found->second.type=="measurement_linework") {
+                        const auto decoded=decode_measurement_linework_model(found->second.properties.at("model"));
+                        segments.clear();
+                        for (const auto& edge : replay_measurement_linework(*decoded.model).edges) segments.push_back(edge.segment);
+                    }
                     for (auto& segment : segments) {
                         segment.start = local(segment.start);
                         segment.end = local(segment.end);
@@ -32191,6 +32351,7 @@ private:
             // relationship rather than a silently changed number.
             const auto phase_visible_ids = visible_project_entities_with_phase(
                 snapshot, ProjectViewFilter{});
+            const auto linework_sources = measurement_linework_source_checks(entities, &phase_visible_ids);
             if (!phase_visible_ids.contains(selected->id)) {
                 throw std::invalid_argument(
                     "selected boundary is hidden by the active design phase");
@@ -32298,6 +32459,8 @@ private:
                 }
                 if (!declared && !wall_measurement_source_current(snapshot,entity))
                     throw std::invalid_argument("Exterior measurement is stale; refresh it from its source walls.");
+                if (!measurement_linework_source_current(linework_sources,entity))
+                    throw std::invalid_argument(linework_sources.at(id).diagnostic);
                 auto entity_classification = area_classification_for_workflow(
                     entity.properties, calculation_workflow);
                 if (!declared && referenced_deductions.contains(id) &&
@@ -33483,6 +33646,10 @@ private:
             if (found->second.type == "reference_asset" ||
                 can_transform_architectural_entity_type(found->second.type)) return {true, true};
             if (is_closed_boundary_entity(found->second.type)) return {false, true};
+            if (found->second.type == "measurement_linework") {
+                try { return {false, decode_measurement_linework_model(found->second.properties.at("model")).supported()}; }
+                catch (const std::exception&) { return {false, false}; }
+            }
             return {false, false};
         }
         for (const auto& [id, entity] : snapshot.entities()) {

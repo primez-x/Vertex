@@ -9,8 +9,14 @@
 
 namespace sketch {
 
-inline constexpr std::uint32_t measurement_linework_schema_version = 1;
-inline constexpr std::uint32_t measurement_linework_replay_version = 1;
+inline constexpr std::uint32_t measurement_linework_schema_version_v1 = 1;
+inline constexpr std::uint32_t measurement_linework_schema_version_v2 = 2;
+inline constexpr std::uint32_t measurement_linework_schema_version = measurement_linework_schema_version_v1;
+inline constexpr std::uint32_t measurement_linework_latest_schema_version = measurement_linework_schema_version_v2;
+inline constexpr std::uint32_t measurement_linework_replay_version_v1 = 1;
+inline constexpr std::uint32_t measurement_linework_replay_version_v2 = 2;
+inline constexpr std::uint32_t measurement_linework_replay_version = measurement_linework_replay_version_v1;
+inline constexpr std::uint32_t measurement_linework_latest_replay_version = measurement_linework_replay_version_v2;
 
 // One analytical measurement stroke, independent of physical walls and areas.
 // Entity adapters own property/building/floor/layer context and place this
@@ -25,6 +31,8 @@ struct MeasurementLinework {
     bool closed{};
     std::vector<ConstructionTopologyEdge> edges;
     nlohmann::json extensions = nlohmann::json::object();
+    // Schema/replay two: ordered world operations; all receipts stay local.
+    std::vector<PlanarTransform> transforms;
 };
 
 struct MeasurementLineworkReplay {
@@ -53,8 +61,15 @@ struct MeasurementLineworkReplay {
     const MeasurementLinework& model,
     double tolerance_metres = default_geometry_tolerance_metres);
 
+// Preserve the local anchor, exact receipts, identities and extensions while
+// appending a rigid world-space operation. Both input and copy must replay;
+// invalid or precision-losing operations throw without modifying the input.
+[[nodiscard]] MeasurementLinework transformed_measurement_linework(
+    const MeasurementLinework& model, const PlanarTransform& transform);
+
 enum class MeasurementLineworkFormat {
     supported_v1,
+    supported_v2,
     unsupported_version,
     unsupported_replay_version,
 };
@@ -79,10 +94,13 @@ struct MeasurementLineworkDecodeResult {
 // Version one JSON keys: version, replay_version, stroke_id, anchor, closed,
 // segments, extensions. Each segment has segment_id, start_vertex_id,
 // end_vertex_id and the strict single-receipt codec's receipt. Only extensions
-// is opaque; unknown typed keys fail closed. Inspection reads only the object
+// is opaque; unknown typed keys fail closed. Schema/replay two additionally
+// requires transforms: an ordered array of objects with version: 1, pivot,
+// rotation_radians, flip_horizontal, flip_vertical and offset. V1 forbids that
+// field, and neither dialect accepts uniform scaling. Inspection reads only the object
 // and its positive integral version, plus a required positive integral
-// replay_version for a known schema. Decode validates/replays known versions;
-// unknown positive schema/replay versions return the exact opaque JSON for a
+// replay_version for a known schema. Decode validates/replays known pairs
+// (1,1) and (2,2); unknown positive schema/replay pairs return exact opaque JSON for a
 // caller to preserve without decoding. Encode validates and retains original
 // expressions and extensions. Malformed known models throw invalid_argument.
 [[nodiscard]] MeasurementLineworkVersion inspect_measurement_linework_model(

@@ -1587,6 +1587,10 @@
     },
     {
       "category": "docs",
+      "path": "docs/plans/2026-10-03-measured-linework-editing.md"
+    },
+    {
+      "category": "docs",
       "path": "docs/plans/2026-10-03-measurement-linework-canvas.md"
     },
     {
@@ -2511,6 +2515,10 @@
     },
     {
       "category": "docs",
+      "path": "docs/verification/measurement-linework-editing-2026-10-03.md"
+    },
+    {
+      "category": "docs",
       "path": "docs/verification/named-plan-vertex-editing-2026-09-30.md"
     },
     {
@@ -2952,6 +2960,10 @@
     {
       "category": "source",
       "path": "include/sketch/measurement_linework.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/measurement_linework_source.hpp"
     },
     {
       "category": "source",
@@ -3699,6 +3711,10 @@
     },
     {
       "category": "source",
+      "path": "src/core/measurement_linework_source.cpp"
+    },
+    {
+      "category": "source",
       "path": "src/core/model_phases.cpp"
     },
     {
@@ -4435,7 +4451,19 @@
     },
     {
       "category": "source",
+      "path": "tests/measurement_linework_source_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/measurement_linework_storage_tests.cpp"
+    },
+    {
+      "category": "source",
       "path": "tests/measurement_linework_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/measurement_linework_transform_tests.cpp"
     },
     {
       "category": "source",

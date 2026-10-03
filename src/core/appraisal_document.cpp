@@ -1,6 +1,7 @@
 #include "sketch/appraisal_document.hpp"
 #include "sketch/boundary_entity.hpp"
 #include "sketch/wall_measurement.hpp"
+#include "sketch/measurement_linework_source.hpp"
 #include "sketch/document_digest.hpp"
 
 #include <algorithm>
@@ -408,6 +409,12 @@ AppraisalDocumentReport build_appraisal_document_report(
         throw std::invalid_argument("calculation_workflow must be measurement or appraisal");
     result.configured = workflow == "appraisal";
     if (!result.configured) return result;
+    const auto linework_sources = measurement_linework_source_checks(document.entities(), visible_entity_ids);
+    const auto source_current = [&](const Entity& entity) {
+        return wall_measurement_source_current(document, entity) &&
+            wall_measurement_sources_visible(entity, visible_entity_ids) &&
+            measurement_linework_source_current(linework_sources, entity);
+    };
     try {
         Entity empty;
         empty.properties = Json::object();
@@ -495,8 +502,11 @@ AppraisalDocumentReport build_appraisal_document_report(
             result.policy = declared.policy;
             const bool exclusion = declared.facts.role != BoundaryRole::measured_area &&
                 !(ansi_policy && declared.facts.role == BoundaryRole::stair_footprint);
-            if (!wall_measurement_source_current(document, *entity) ||
-                !wall_measurement_sources_visible(*entity, visible_entity_ids)) {
+            if (!source_current(*entity)) {
+                const auto linework = linework_sources.find(entity->id);
+                const auto source_message = linework != linework_sources.end() && !linework->second.current
+                    ? linework->second.diagnostic
+                    : std::string("Exterior measurement is stale; refresh exterior measurement from source walls before producing appraisal totals.");
                 auto qualification = declared.policy
                     ? derive_appraisal_category(declared.facts, *declared.policy) : AppraisalQualification{};
                 if (!declared.policy)
@@ -507,11 +517,10 @@ AppraisalDocumentReport build_appraisal_document_report(
                 qualification.derived_category.reset();
                 qualification.issues.push_back({
                     "stale_measurement_source",
-                    "Exterior measurement is stale; refresh exterior measurement from source walls before producing appraisal totals."});
+                    source_message});
                 result.boundaries.push_back({entity->id, exclusion, std::move(qualification)});
                 result.boundaries.back().facts = declared.facts;
-                result.issues.push_back(entity->id +
-                    ": Exterior measurement is stale; refresh exterior measurement from source walls before producing appraisal totals.");
+                result.issues.push_back(entity->id + ": " + source_message);
                 continue;
             }
             std::vector<AreaDeduction> deductions;
@@ -529,8 +538,7 @@ AppraisalDocumentReport build_appraisal_document_report(
                         const auto child_owner = context(document, child->second, property_id);
                         if (child_owner.floor->id != floor_id || child_owner.building->id != building_id || scope(child->second) == "site")
                             throw std::invalid_argument("nested deduction " + id + " must share the parent building floor and scope");
-                        if (!wall_measurement_source_current(document, child->second) ||
-                            !wall_measurement_sources_visible(child->second, visible_entity_ids))
+                        if (!source_current(child->second))
                             throw std::invalid_argument("nested deduction " + id + " has stale or phase-hidden measurement sources");
                         if (!complete.contains(id)) visit(child->second);
                         child_geometry.push_back({id, geometry(child->second)});
@@ -560,10 +568,9 @@ AppraisalDocumentReport build_appraisal_document_report(
                     throw std::invalid_argument("site boundary " + deduction_id + " cannot be a building deduction");
                 if (!ansi_policy && !deduction_ids(deduction->second).empty())
                     throw std::invalid_argument("deduction " + deduction_id + " cannot contain another deduction");
-                if (!wall_measurement_source_current(document, deduction->second) ||
-                    !wall_measurement_sources_visible(deduction->second, visible_entity_ids))
+                if (!source_current(deduction->second))
                     throw std::invalid_argument("deduction " + deduction_id +
-                        " has a stale exterior measurement; refresh exterior measurement from source walls");
+                        " has stale or phase-hidden measurement sources; refresh its source boundary");
                 deductions.push_back({deduction_id, geometry(deduction->second)});
                 if (ansi_policy && declared.facts.ansi &&
                     std::find(declared.facts.ansi->ceiling.below_5ft_deduction_ids.begin(), declared.facts.ansi->ceiling.below_5ft_deduction_ids.end(), deduction_id) != declared.facts.ansi->ceiling.below_5ft_deduction_ids.end()) {

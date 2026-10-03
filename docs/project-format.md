@@ -1,4 +1,4 @@
-# Vertex project formats v1 through v27
+# Vertex project formats v1 through v28
 
 ## Measurement linework model v1
 
@@ -25,10 +25,45 @@ calculation require separate derived area entities. Unknown positive model or
 replay versions preserve the original model without guessing its geometry and
 make the document read-only. Invalid known data rejects atomically.
 
-This model does not increase the SQLite envelope floor: the existing required
-entity mechanism protects earlier readers. Canvas authoring, relocation,
-dimension/output/edit adapters and derived face detection are subsequent
-implementation stages; the model alone does not establish Draw First parity.
+Independent version-one strokes do not increase the SQLite envelope floor:
+the required entity mechanism protects earlier readers. Canvas authoring,
+dimensions, point jumping, analytical output and derived face detection use this
+model. These implemented adapters do not establish certified Draw First parity.
+
+## Rigid measured-line frames and live area sources (v28)
+
+The recognized `(version: 2, replay_version: 2)` pair adds a required `transforms`
+array. Every ordered operation has exactly `version: 1`, `pivot: [x,y]`,
+`rotation_radians`, `flip_horizontal`, `flip_vertical` and `offset: [x,y]`.
+All coordinates and angles are finite. The local anchor and original ordered
+receipts stay unchanged; world geometry is obtained by replaying those receipts
+then applying the operations in order. Effective identity operations preserve the
+original version-one encoding. Scaling is not part of this rigid dialect.
+Reflections reverse arc sweep. Operations that lose measurement precision or
+collapse an edge are rejected. Other positive schema/replay pairs remain opaque.
+
+Defined measurement boundaries retain `extensions.measurement_linework_sources`,
+an array in boundary-edge order. Each edge has one or more source-use records:
+`owner_id`, `segment_id`, finite `parameter_start` and `parameter_end` within
+`0 <= start < end <= 1`, and boolean `reversed`. Qualification recomputes the
+complete source layer's analytical graph and compares geometry and lineage.
+Deleted, unsupported, context-mismatched or semantically hidden sources withhold
+the dependent measurement and appraisal totals. Presentation visibility does not
+change physical totals. Parent deductions require current sources too.
+
+Canvas movement and rotation refresh previously current areas when their source
+edge identities identify one unambiguous face with unchanged edge count. Boundary
+IDs, edge IDs and classification facts are retained. Source and area edits occupy
+one revision. A changed or ambiguous topology requires explicit area review;
+the old boundary cannot continue contributing a qualified total.
+
+Any retained recognized version-two stroke or identified measurement boundary
+with linework lineage requires native format 28 and extraction version 26,
+including deleted and undone history. Published older files containing
+version-one strokes and lineage can still open without being rewritten; their
+next save upgrades the envelope. This legacy-read exception does not permit a
+version-two stroke inside a falsely lowered envelope. Original backup and
+history-preservation rules continue to apply.
 
 ## Connected curved-wall rigid intent (v27)
 

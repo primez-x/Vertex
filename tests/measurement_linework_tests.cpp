@@ -366,10 +366,10 @@ void test_replay_rejects_malformed_geometry_identities_and_typed_inputs() {
     changed.extensions = Json::array();
     malformed.push_back(changed);
     changed = original;
-    changed.schema_version = 2;
+    changed.schema_version = 999;
     malformed.push_back(changed);
     changed = original;
-    changed.replay_version = 2;
+    changed.replay_version = 999;
     malformed.push_back(changed);
     for (const auto& model : malformed) {
         expect_invalid([&] { (void)sketch::replay_measurement_linework(model); },
