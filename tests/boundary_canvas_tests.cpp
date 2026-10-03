@@ -12,6 +12,7 @@
 #include <QFontMetricsF>
 #include <QImage>
 #include <QKeyEvent>
+#include <QLineEdit>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPdfDocument>
@@ -3559,6 +3560,78 @@ void test_dark_canvas_semantic_strokes_and_overrides() {
             "selection color must take precedence over both stroke overrides");
 }
 
+void test_focus_loss_cancels_navigation_without_canceling_draft() {
+    PlanCanvas canvas;
+    canvas.setAttribute(Qt::WA_DontShowOnScreen);
+    canvas.resize(640,480); canvas.setOverviewMapEnabled(false); canvas.setSnapEnabled(false);
+    canvas.setTool(CanvasTool::boundary);
+    BoundaryDraftPreview draft;
+    draft.segments = {{{0,0},{1,0},0}};
+    draft.anchor = Vec2{0,0}; draft.pen_position = Vec2{1,0};
+    canvas.setBoundaryDraftPreview(draft);
+    int authored{}, canceled_drafts{}, context_menus{};
+    canvas.setPointClicked([&](Vec2) { ++authored; });
+    canvas.setCancelRequested([&] { ++canceled_drafts; });
+    canvas.setRightClicked([&](Vec2,QString) { ++context_menus; });
+    const auto mouse = [&](QEvent::Type type, QPointF point, Qt::MouseButton button,
+                           Qt::MouseButtons buttons, Qt::KeyboardModifiers modifiers = Qt::NoModifier) {
+        QMouseEvent event(type,point,canvas.mapToGlobal(point.toPoint()),button,buttons,modifiers);
+        QApplication::sendEvent(&canvas,&event);
+    };
+    const auto focus_out = [&] {
+        QFocusEvent event(QEvent::FocusOut,Qt::OtherFocusReason);
+        QApplication::sendEvent(&canvas,&event);
+    };
+    const auto close = [](Vec2 a,Vec2 b) { return std::hypot(a.x-b.x,a.y-b.y)<1e-9; };
+    const auto center = canvas.viewCenter();
+    QKeyEvent space_down(QEvent::KeyPress,Qt::Key_Space,Qt::NoModifier);
+    QApplication::sendEvent(&canvas,&space_down);
+    focus_out();
+    QLineEdit other_control;
+    other_control.setAttribute(Qt::WA_DontShowOnScreen);
+    QKeyEvent space_up(QEvent::KeyRelease,Qt::Key_Space,Qt::NoModifier);
+    QApplication::sendEvent(&other_control,&space_up);
+    QFocusEvent focus_in(QEvent::FocusIn,Qt::OtherFocusReason);
+    QApplication::sendEvent(&canvas,&focus_in);
+    mouse(QEvent::MouseButtonPress,{420,300},Qt::LeftButton,Qt::LeftButton);
+    mouse(QEvent::MouseButtonRelease,{420,300},Qt::LeftButton,Qt::NoButton);
+    require(authored==1 && close(canvas.viewCenter(),center),
+        "Space released elsewhere after FocusOut must not consume the next drawing click as pan");
+    require(canceled_drafts==0 && canvas.boundaryDraftPreview() &&
+        canvas.boundaryDraftPreview()->segments.size()==1 &&
+        canvas.boundaryDraftPreview()->segments.front().end.x==1,
+        "focus transfer preserves the authoring draft without invoking its Cancel callback");
+
+    mouse(QEvent::MouseButtonPress,{320,240},Qt::RightButton,Qt::RightButton);
+    mouse(QEvent::MouseMove,{350,260},Qt::NoButton,Qt::RightButton);
+    const auto abandoned_pan = canvas.viewCenter();
+    require(!close(abandoned_pan,center), "focus pan fixture has an active navigation gesture");
+    focus_out();
+    mouse(QEvent::MouseMove,{390,290},Qt::NoButton,Qt::RightButton);
+    mouse(QEvent::MouseButtonRelease,{390,290},Qt::RightButton,Qt::NoButton);
+    require(close(canvas.viewCenter(),abandoned_pan) && context_menus==0 && authored==1 && canceled_drafts==0,
+        "late pointer events after FocusOut cannot resume the abandoned pan or end the draft");
+
+    canvas.setBoundaryDraftPreview(std::nullopt); canvas.setTool(CanvasTool::select);
+    canvas.setEntities({CanvasEntity{"focus-owner","symbol",{{{-1,-1},{1,-1},0},
+        {{1,-1},{1,1},0},{{1,1},{-1,1},0},{{-1,1},{-1,-1},0}},0,false}});
+    int selections{};
+    canvas.setEntitiesSelected([&](QStringList ids,bool additive) {
+        require(additive && ids.contains(QStringLiteral("focus-owner")), "fresh marquee selects its retained owner");
+        ++selections;
+    });
+    const auto marquee_begin = [&] {
+        mouse(QEvent::MouseButtonPress,{40,40},Qt::LeftButton,Qt::LeftButton,Qt::ControlModifier);
+        mouse(QEvent::MouseMove,{600,440},Qt::NoButton,Qt::LeftButton,Qt::ControlModifier);
+    };
+    marquee_begin(); focus_out();
+    mouse(QEvent::MouseButtonRelease,{600,440},Qt::LeftButton,Qt::NoButton,Qt::ControlModifier);
+    require(selections==0,"FocusOut abandons marquee ownership before a late release can select");
+    marquee_begin();
+    mouse(QEvent::MouseButtonRelease,{600,440},Qt::LeftButton,Qt::NoButton,Qt::ControlModifier);
+    require(selections==1,"fresh marquee selection works after focus-loss cancellation");
+}
+
 void test_source_replacement_cancels_object_moves() {
     PlanCanvas canvas;
     canvas.resize(640,480);
@@ -3712,6 +3785,10 @@ int main(int argc, char** argv) {
         for (const auto character : QStringLiteral("2.00 m Draft boundary • place the next dimension")) {
             require(metrics.inFont(character), "capture font must contain each rendered character");
         }
+        if (application.arguments().contains(QStringLiteral("--focus-loss-only"))) {
+            test_focus_loss_cancels_navigation_without_canceling_draft();
+            return 0;
+        }
         if (application.arguments().contains(QStringLiteral("--selection-filter-only"))) {
             test_selection_category_filters();
             test_opt_in_screen_paper_stroke_width();
@@ -3770,6 +3847,7 @@ int main(int argc, char** argv) {
         test_boundary_vertex_invalid_and_final_pointer();
         test_boundary_vertex_stale_and_canceled_previews();
         test_mouse_gesture_contract();
+        test_focus_loss_cancels_navigation_without_canceling_draft();
         test_source_replacement_cancels_object_moves();
         test_two_finger_canvas_navigation();
         test_boundary_draft_rendering_and_history();

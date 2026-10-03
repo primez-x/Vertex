@@ -11,6 +11,7 @@
 #include <QEventLoop>
 #include <QFont>
 #include <QFontDatabase>
+#include <QFocusEvent>
 #include <QKeyEvent>
 #include <QMouseEvent>
 #include <QStandardPaths>
@@ -636,6 +637,79 @@ void test_plan_canvas_exact_move_provider_release_contract() {
             "controlled canvas callbacks keep the native fixture document unchanged");
 }
 
+void test_focus_loss_revokes_async_move_and_queued_commit() {
+    QTemporaryDir directory;
+    require(directory.isValid(), "focus-loss move fixture has an isolated directory");
+    MainWindow window({}, nullptr, directory.filePath(QStringLiteral("text-library.json")));
+    window.setAttribute(Qt::WA_DontShowOnScreen);
+    window.resize(1000, 700); window.setMetricUnits(true); window.show();
+    window.setWorkspace(Workspace::measurement); QApplication::processEvents();
+    auto& canvas = measurement_canvas(window);
+    const auto wall = window.createStraightWall({0,0}, {3,0});
+    require(!wall.isEmpty() && window.selectEntity(wall), "focus-loss fixture selects an authored wall");
+    canvas.setSnapEnabled(false); canvas.setWallSnapEnabled(false); canvas.setOverviewMapEnabled(false);
+    const auto before = window.document().snapshot();
+    const auto grab = frame_grab_point(canvas, wall_baseline(before.entities().at(wall.toStdString())));
+    const Vec2 delta{0,0.6};
+    const auto release = grab + QPointF(0, -delta.y * canvas.viewScale());
+    std::uint64_t serial{};
+    int commits{}, rejections{};
+    canvas.setEntitiesMoveRequested([&](QStringList ids, Vec2 committed_delta) {
+        require(ids == QStringList{wall} && nearly_equal(committed_delta, delta),
+            "fresh focus-loss gesture commits its own final target");
+        ++commits; return true;
+    });
+    canvas.setEntitiesMoveRejected([&](QStringList, Vec2) { ++rejections; });
+    canvas.setEntitiesMovePreviewRequested([&](QStringList, Vec2, std::uint64_t requested_serial)
+        -> std::optional<std::vector<CanvasEntity>> {
+        serial = requested_serial;
+        require(canvas.markEntitiesMovePreviewPending(serial), "controlled focus-loss request is pending");
+        return std::nullopt;
+    });
+    const auto released_move = [&] {
+        send_mouse(canvas, QEvent::MouseButtonPress, grab, Qt::LeftButton, Qt::LeftButton);
+        send_mouse(canvas, QEvent::MouseMove, release, Qt::NoButton, Qt::LeftButton);
+        send_mouse(canvas, QEvent::MouseButtonRelease, release, Qt::LeftButton,
+            Qt::NoButton, Qt::NoModifier, false);
+        require(canvas.entitiesMovePreviewPending(), "released move awaits its controlled exact result");
+        return serial;
+    };
+    const auto focus_out = [&] {
+        QFocusEvent event(QEvent::FocusOut, Qt::OtherFocusReason);
+        QApplication::sendEvent(&canvas, &event);
+    };
+    const auto canceled_serial = released_move();
+    focus_out();
+    require(!canvas.entitiesMovePreviewPending() && canvas.entitiesMovePreview().empty(),
+        "FocusOut clears the released asynchronous object-move preview immediately");
+    require(!canvas.completeEntitiesMovePreview(canceled_serial, canvas.entities()),
+        "late exact result after FocusOut cannot revive the released object move");
+    QApplication::processEvents();
+    require(commits == 0 && rejections == 0,
+        "focus cancellation invokes neither commit nor invalid-geometry rejection");
+
+    const auto queued_serial = released_move();
+    require(queued_serial != canceled_serial && canvas.completeEntitiesMovePreview(queued_serial, canvas.entities()),
+        "next released move can accept an exact result before queued admission");
+    require(commits == 0, "exact move admission is still deferred until the event loop runs");
+    focus_out();
+    QApplication::processEvents(); QApplication::processEvents();
+    require(commits == 0 && rejections == 0 && !canvas.entitiesMovePreviewPending(),
+        "FocusOut before queued admission revokes the accepted object-move command");
+    require(!canvas.completeEntitiesMovePreview(queued_serial, canvas.entities()),
+        "canceled queued result has no surviving completion authority");
+
+    const auto fresh_serial = released_move();
+    require(fresh_serial != queued_serial && canvas.completeEntitiesMovePreview(fresh_serial, canvas.entities()),
+        "fresh gesture works after focus cancels pending and accepted moves");
+    QApplication::processEvents(); QApplication::processEvents();
+    require(commits == 1 && rejections == 0 && !canvas.entitiesMovePreviewPending(),
+        "fresh gesture commits once after focus-loss cancellation");
+    require(window.document().revision() == before.revision() &&
+        window.document().snapshot().entities() == before.entities(),
+        "controlled focus-loss callbacks preserve native document geometry and history");
+}
+
 void test_canvas_ctrl_click_group_move_round_trips() {
     MainWindow window;
     window.resize(1200, 800);
@@ -814,6 +888,12 @@ int main(int argc, char** argv) {
     if (font_id >= 0)
         QApplication::setFont(QFont(QFontDatabase::applicationFontFamilies(font_id).front(), 10));
     try {
+        if (application.arguments().contains(QStringLiteral("--focus-loss-only"))) {
+            test_focus_loss_revokes_async_move_and_queued_commit();
+            std::cout << "Connected wall canvas focus-loss tests passed\n";
+            return 0;
+        }
+        test_focus_loss_revokes_async_move_and_queued_commit();
         test_selected_connected_wall_move_previews_commits_and_round_trips();
         test_canvas_release_without_intermediate_move_commits_pointer_target();
         test_canvas_wall_move_release_refuses_stale_document_head();

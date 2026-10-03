@@ -2101,6 +2101,12 @@ drawing; switching modes does not change existing geometry.
   - Result: Not tested
   - Notes: ______________________________
 
+- [ ] **U358 — Return from another control without a stuck canvas gesture**
+  - Steps: Hold Space over the canvas, move focus to Search or another input, release Space there, then click the canvas. Start a wall outline, use the keypad or left-panel controls and return. If an object move is still showing its pending preview, move focus to another control before it completes, then try a new move.
+  - Expected: Normal clicks select or place a node without a stuck pan mode. The unfinished outline remains available. A canceled pending move cannot apply later, and a fresh move works normally.
+  - Result: Not tested
+  - Notes: ______________________________
+
 ## Issue report template
 
 - Task ID(s):

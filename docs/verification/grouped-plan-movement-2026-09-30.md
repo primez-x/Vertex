@@ -45,3 +45,37 @@ acceptance requires the protected installed runtime and its separate decoder che
 Mixed measurement-boundary groups, dependent dimension groups, full Apex
 compatibility, physical-device behavior, and full installed production qualification
 remain outside this scoped evidence. The overall production goal remains active.
+
+## Canvas focus ownership, 2026-10-03
+
+Native RED checks reproduced two failures in FocusOut handling: a released
+asynchronous object move retained completion authority, and Space-pan stayed
+armed when its key release went to another control. Existing Escape cancellation
+did not cover either focus transition.
+
+FocusOut now releases Space before resetting the gesture, invalidates all pointer
+and deferred-preview serials, resets touch ownership and retires the tablet press.
+It does not invoke the authoring Cancel callback or clear the unfinished draft.
+MainWindow's queued projection delivery also compares the same captured serial,
+document and revision before handing a result back to the canvas.
+
+The regression checks pending-result and already-accepted queued-result cases,
+refuses late completions, and accepts a fresh move exactly once. It also routes
+Space release to a separate input, verifies the next drawing click, preserves the
+draft, retires right-pan/marquee ownership and allows a fresh marquee. Controlled
+callbacks verify dispatch authority without changing the fixture document.
+
+Full connected-wall canvas, boundary canvas and appraisal Details checks passed.
+Root inspected the actual connected-wall committed capture. Logs and captures are
+under `artifacts/canvas-focus-ownership-20261003`; delivery.json must record the
+matching commit, remote ref and installed executable. Real input hardware and
+the full production acceptance gate remain unqualified by these Qt event checks.
+
+The independent source reviewer approved this fix with no actionable findings,
+while distinguishing controlled focus events from hardware observations. Root
+then relinked and passed the existing five inline-drawing workflows, including
+the actual length field, keypad, Define First and local history paths. The full
+drawing measurement check also passed focused-input exact typing, closure and
+stationary right-click cancellation for pending typed walls and unplaced symbols.
+These additional logs are `input-inline-checks.json` (the targeted
+`--inline-drawing-only` path) and `input-measurement-checks.json` (the full suite).

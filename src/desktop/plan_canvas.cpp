@@ -1487,8 +1487,13 @@ bool PlanCanvas::eventFilter(QObject* watched, QEvent* event) {
 bool PlanCanvas::event(QEvent* event) {
     switch (event->type()) {
     case QEvent::FocusOut:
-        if (m_touch_active || m_opening_width_handle || m_vertex_move_handle || m_transform_frame_start) resetGesture();
+        // Focus can move to a panel after release while an exact proposal or
+        // queued admission still owns the gesture. Retire that authority, not
+        // the drawing draft, and release keys whose key-up may go elsewhere.
+        m_space_pan_armed = false;
+        resetGesture();
         resetTouchInput();
+        m_tablet_active = false;
         break;
     case QEvent::Hide:
     case QEvent::WindowBlocked:
