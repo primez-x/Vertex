@@ -50,6 +50,29 @@ struct ViewCrop {
     double max_vertical_m{};
     bool operator==(const ViewCrop&) const = default;
 };
+// Render-only intent. Absence inherits the existing object drawing appearance.
+// Object identity is separate from the owning coordinated view identity.
+struct ViewAppearanceStyle {
+    std::string outline_color{"#000000"};
+    std::string fill_color{"#ffffff"};
+    std::string fill_pattern{"none"};
+    double line_width_mm{0.18};
+    double hatch_scale{1.0};
+    bool operator==(const ViewAppearanceStyle&) const = default;
+};
+struct ViewObjectAppearance {
+    std::string object_id;
+    std::optional<ViewAppearanceStyle> style;
+    std::optional<bool> visible;
+    bool operator==(const ViewObjectAppearance&) const = default;
+};
+struct ViewAppearance {
+    // Hiding the whole view includes annotations, references and overlays.
+    bool visible{true};
+    std::optional<ViewAppearanceStyle> style;
+    std::vector<ViewObjectAppearance> objects;
+    bool operator==(const ViewAppearance&) const = default;
+};
 struct ViewPresentation {
     double cut_depth_m{1.2};
     double far_depth_m{100.0};
@@ -60,6 +83,7 @@ struct ViewPresentation {
     double hatch_scale{1.0};
     ViewDetail detail{ViewDetail::medium};
     std::optional<ViewCrop> crop;
+    std::optional<ViewAppearance> appearance;
     bool operator==(const ViewPresentation&) const = default;
 };
 struct CoordinatedView {

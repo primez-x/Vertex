@@ -1456,9 +1456,20 @@
         "docs/verification/area-appearance-selection-filters-2026-10-01.md",
         "tests/object_appearance_desktop_tests.cpp",
         "docs/plans/2026-10-03-building-object-appearance.md",
-        "docs/verification/building-object-appearance-20261003.md"
+        "docs/verification/building-object-appearance-20261003.md",
+        "include/sketch/sheet_view_model.hpp",
+        "src/core/sheet_view_model.cpp",
+        "src/core/document.cpp",
+        "src/core/project_store.cpp",
+        "src/core/project_exchange.cpp",
+        "tests/sheet_view_model_tests.cpp",
+        "tests/project_store_tests.cpp",
+        "tests/project_exchange_tests.cpp",
+        "tests/output_view_appearance_desktop_tests.cpp",
+        "docs/plans/2026-10-03-output-view-appearance.md",
+        "docs/verification/output-view-appearance-20261003.md"
       ],
-      "implementation_note": "Presentation styles, fills, visibility, and target overrides are validated separately from analytical geometry. The shared desktop appearance editor changes closed-area or physical building-object outline/fill colors, fill pattern, hatch scale, paper line width and visibility, or resets only that target. Revision-guarded raw edits preserve owner protection, opaque metadata and siblings. Object styles apply after physical plan/elevation/section projection, including multiple shapes belonging to one source, and remain independent of measurement labels. Quick properties and contextual actions expose the physical-object editor; hidden objects remain recoverable through Layers. Focused native workflows exercise rendered output, history, save/reopen, no-op, reset, stale/read-only and source preservation. SVG artwork color overrides, independent output-view appearance and full production visual/print qualification remain open; this scoped implementation does not certify full parity or shaded 3D material editing. Historical evidence remains hash-bound to its original sources and fixtures."
+      "implementation_note": "Presentation styles, fills, visibility, and target overrides are validated separately from analytical geometry. The shared desktop appearance editor changes closed-area or physical building-object outline/fill colors, fill pattern, hatch scale, paper line width and visibility, or resets only that target. Revision-guarded raw edits preserve owner protection, opaque metadata and siblings. Object styles apply after physical plan/elevation/section projection, including multiple shapes belonging to one source, and remain independent of measurement labels. Quick properties and contextual actions expose the physical-object editor; hidden objects remain recoverable through Layers. Focused native workflows exercise rendered output, history, save/reopen, no-op, reset, stale/read-only and source preservation. Saved plan/elevation/section views now retain independent whole-view and physical-object style/visibility, resolved once for canvas and sheet/PDF. Graph-owner and local-view identity prevent cross-view edits and labels. Hosted openings inherit resolved host visibility; hidden presentation overlays do not block visible output. Native fixtures cover actual editor controls, source preservation, same-sheet independent colors, full scene hiding/recovery, exact owner identity, history, native reopen, deletion repair and legacy/current clipboard remapping. Optional model7 appearance requires native24/extraction22 across all retained history, with downgrade refusal and strict reference admission. SVG artwork color overrides, constraint previews of locally recovered sources and full production visual/print qualification remain open; this scoped implementation does not certify full parity or shaded 3D material editing. Historical evidence remains hash-bound to its original sources and fixtures."
     },
     {
       "id": "APX-SYM-001",

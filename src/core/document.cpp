@@ -745,6 +745,15 @@ std::optional<std::string> validate_state(const std::map<std::string, Entity, st
                                     " references missing object " + object_id);
                         }
                     }
+                    if (view.presentation.appearance) {
+                        for (const auto& appearance : view.presentation.appearance->objects) {
+                            if (!entities.contains(appearance.object_id)) {
+                                document_error(DocumentErrorCode::dangling_reference,
+                                    "coordinated view " + view.id +
+                                    " appearance references missing object " + appearance.object_id);
+                            }
+                        }
+                    }
                     for (const auto& overlay : view.overlays) {
                         if (!overlay.dimension_binding) continue;
                         const auto& target_id = overlay.dimension_binding->object_id;

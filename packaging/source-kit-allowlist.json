@@ -1583,6 +1583,10 @@
     },
     {
       "category": "docs",
+      "path": "docs/plans/2026-10-03-output-view-appearance.md"
+    },
+    {
+      "category": "docs",
       "path": "docs/plans/2026-10-03-redraw-angle-reference-removal.md"
     },
     {
@@ -2364,6 +2368,10 @@
     {
       "category": "docs",
       "path": "docs/verification/building-object-appearance-20261003.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/verification/output-view-appearance-20261003.md"
     },
     {
       "category": "docs",
@@ -4320,6 +4328,10 @@
     {
       "category": "source",
       "path": "tests/object_appearance_desktop_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/output_view_appearance_desktop_tests.cpp"
     },
     {
       "category": "source",

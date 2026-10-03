@@ -191,8 +191,10 @@ are keyed by exact artwork digest rather than catalog ID, so historical and
 current instances of the same component can coexist without visual aliasing.
 
 Stored stroke/fill colors, fill patterns, paper-independent text height,
-bold/italic emphasis, and symbol stroke width now flow into the same renderer
-for interactive views and fitted sheet/export scenes.
+bold/italic emphasis, and non-SVG symbol stroke width flow into the shared
+renderer for interactive views and fitted sheet/export scenes. Pinned SVG
+artwork currently retains its authored palette; instance palette overrides
+remain an implementation gap.
 
 Area overrides additionally support optional paper outline widths (0.05–10 mm)
 and hatch scales (0.1–10). Old records without these fields retain their defaults.
@@ -201,6 +203,14 @@ width, scale and visibility, or removes the selected override to restore the
 classification preset. It applies one revision-guarded, undoable command and
 preserves sibling records and opaque metadata. Calculations still use the
 original analytical boundary and declarations.
+
+Saved-view appearance is stored separately in the owning coordinated view's
+optional `ViewPresentation.appearance`, using sheet/view model version 7 and
+native project format 24. It supports view-wide and source-object style and
+visibility scopes without changing analytical geometry. See
+[project format](project-format.md) for inheritance, identity, reader versions,
+source references and history. Generic annotation `output_view` records remain
+preserved; they are not reinterpreted as this explicit view-owned representation.
 
 This is a bounded semantic and authoring slice for APX-ANNO-001, APX-ANNO-003
 and APX-SYM-001, **not completed parity**. The supplied detailed assets are now

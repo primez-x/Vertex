@@ -1,4 +1,34 @@
-# Vertex project formats v1 through v23
+# Vertex project formats v1 through v24
+
+## Saved-view drawing appearance (v24)
+
+The typed `sheet_view_model` can retain optional `presentation.appearance` in
+its coordinated views. A view is identified by its owning graph entity and
+local view ID. Appearance has `visible`, optional `style`, and canonical
+`objects`. Each object entry has a unique `object_id`, optional `style` and
+optional `visible`. Null style inherits; null object visibility inherits.
+The appearance property itself is omitted for complete inheritance and cannot
+be null. Styles retain `outline_color`, `fill_color`, `fill_pattern`,
+`line_width_mm` and `hatch_scale`; they contain no analytical geometry.
+
+Absent appearance emits sheet/view model version 6. Explicit appearance emits
+version 7 and requires native format 24 and extraction version 22, including
+when the meaningful record exists only in Undo or deleted history. Explicit
+values equal to current defaults still represent authored intent. Both SQLite
+markers and the logical digest retain this minimum reader version; recomputing
+a digest cannot authorize a lower format marker. Older files retain their
+previous native format requirement. A preserved raw model-version-7 payload
+also retains this reader requirement even if it has no appearance entries;
+normal typed serialization emits version 6 for that case. Extraction remains an export, not a JSON
+project importer.
+
+Document admission validates object references even for unrestricted views.
+Source filters may temporarily exclude existing targets without discarding their
+appearance; deleting a target removes dependent entries in the same edit.
+Global style is the fallback, followed by view style and then object style.
+Local visibility overrides global appearance only, never organization or source
+filters. Whole-view hiding suppresses the complete rendered scene. These
+presentation changes preserve measured geometry and appraisal quantities.
 
 ## Explicit automatic-angle removal during redraw (v23)
 
@@ -225,10 +255,10 @@ reviewed exterior wall-source replacements, and v17 explicit fresh-topology
 boundary replacements, v18 measured group rigid transforms, and v19 coordinated
 physical wall/exterior measurement changes, and v20 mixed ordinary object/asset
 and exterior changes, v21 ANSI-oriented appraisal evidence, and v22 coordinated
-exterior-corner edits, and v23 explicit automatic-angle removal during redraw,
-plus v4 through v23 archives through
+exterior-corner edits, v23 explicit automatic-angle removal during redraw,
+and v24 saved-view drawing appearance, plus v4 through v24 archives through
 recovery-aware APIs.
-Under-versioned semantic data and versions above 23 reject. Legacy-only history
+Under-versioned semantic data and versions above 24 reject. Legacy-only history
 is still written as v1. Unknown boundary entity
 versions in v2 remain preserved read-only. See `boundary-entity-format.md`.
 Version 2 also recognizes `dimension` entities. Segment-length dimensions refer

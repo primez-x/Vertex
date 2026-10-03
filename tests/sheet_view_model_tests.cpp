@@ -334,7 +334,7 @@ void serialization() {
     }
     auto invalid = saved; invalid["views"][0]["direction"].push_back(0);
     rejects([&] { (void)sketch::SheetViewModel::from_json(invalid); });
-    for (const auto& version : {nlohmann::json(7), nlohmann::json(2.0), nlohmann::json("2")}) {
+    for (const auto& version : {nlohmann::json(8), nlohmann::json(2.0), nlohmann::json("2")}) {
         invalid = saved; invalid["version"] = version;
         rejects([&] { (void)sketch::SheetViewModel::from_json(invalid); });
     }
@@ -528,11 +528,61 @@ void associative_dimensions() {
                 "legacy dimensions remain explicitly detached");
     }
 }
+void independent_view_appearance() {
+    const auto original = fixture();
+    const auto inherited = original.to_json();
+    require(inherited.at("version") == 6, "inherited appearance retains the legacy schema");
+    for (const auto& view : inherited.at("views"))
+        require(!view.at("presentation").contains("appearance"), "legacy appearance remains absent");
+    auto styled = inherited;
+    styled["version"] = 7;
+    const nlohmann::json style{{"outline_color", "#112233"}, {"fill_color", "#ffeecc"},
+        {"fill_pattern", "hatch"}, {"line_width_mm", 0.35}, {"hatch_scale", 2.0}};
+    styled["views"][1]["presentation"]["appearance"] = {
+        {"visible", true}, {"style", style}, {"objects", nlohmann::json::array({
+            {{"object_id", "wall-main"}, {"style", nullptr}, {"visible", false}},
+            {{"object_id", "room-main"}, {"style", style}, {"visible", nullptr}}})}};
+    const auto model = sketch::SheetViewModel::from_json(styled);
+    const auto saved = model.to_json();
+    require(saved.at("version") == 7, "explicit view appearance requires its supported schema");
+    require(saved["views"][1]["presentation"]["appearance"]["objects"][0]["object_id"] == "room-main",
+        "view object appearance has canonical stable identity order");
+    require(sketch::SheetViewModel::from_json(saved).to_json() == saved, "view appearance roundtrip is lossless");
+    require(model.sheets() == original.sheets() && model.sheet_order() == original.sheet_order(),
+        "appearance preserves sheet placements, scales and order");
+    require(model.views()[0] == original.views()[0] && model.views()[2] == original.views()[2],
+        "one view appearance preserves other views");
+    require(original.to_json() == inherited, "appearance input cannot mutate the original model");
+    auto filtered = model.views()[1];
+    filtered.object_ids.clear(); filtered.restrict_to_objects = true;
+    require(model.with_view(filtered).views()[1].presentation.appearance == filtered.presentation.appearance,
+        "temporary source exclusion retains dormant object styles");
+    auto cleared = saved;
+    cleared["views"][1]["presentation"].erase("appearance");
+    require(sketch::SheetViewModel::from_json(cleared).to_json() == inherited,
+        "reset removes only explicit appearance and returns inherited schema");
+    const auto invalid = [&](auto edit) {
+        auto candidate = saved; edit(candidate);
+        rejects([&] { (void)sketch::SheetViewModel::from_json(candidate); });
+    };
+    invalid([](auto& j) { j["version"] = 6; });
+    invalid([](auto& j) { j["views"][1]["presentation"]["appearance"]["visible"] = "yes"; });
+    invalid([](auto& j) { j["views"][1]["presentation"]["appearance"]["style"]["outline_color"] = "red"; });
+    invalid([](auto& j) { j["views"][1]["presentation"]["appearance"]["style"]["fill_pattern"] = "wood"; });
+    invalid([](auto& j) { j["views"][1]["presentation"]["appearance"]["style"]["line_width_mm"] = 0; });
+    invalid([](auto& j) { j["views"][1]["presentation"]["appearance"]["style"]["hatch_scale"] = -1; });
+    invalid([](auto& j) { j["views"][1]["presentation"]["appearance"]["objects"][0]["object_id"] = " "; });
+    invalid([](auto& j) { auto& a = j["views"][1]["presentation"]["appearance"]["objects"]; a.push_back(a[0]); });
+    invalid([](auto& j) { j["views"][1]["presentation"]["appearance"]["objects"][0]["visible"] = 1; });
+    invalid([](auto& j) { j["views"][1]["presentation"]["appearance"]["extra"] = 1; });
+    invalid([](auto& j) { j["views"][1]["presentation"]["appearance"]["style"].erase("fill_color"); });
+    invalid([](auto& j) { j["views"][1]["presentation"]["appearance"]["objects"][0]["style"] = nlohmann::json::array(); });
+}
 } // namespace
 int main() {
     sketch::testing::noninteractive_errors();
     try {
-        coordination_and_isolation(); empty_source_filter(); sheet_lifecycle(); placement_lifecycle(); serialization(); presentation_order(); view_crops(); invalid_values(); section_overlays(); associative_dimensions();
+        coordination_and_isolation(); empty_source_filter(); sheet_lifecycle(); placement_lifecycle(); serialization(); presentation_order(); view_crops(); invalid_values(); section_overlays(); associative_dimensions(); independent_view_appearance();
         std::cout << "sheet/view model tests passed\n";
         return 0;
     } catch (const std::exception& error) {

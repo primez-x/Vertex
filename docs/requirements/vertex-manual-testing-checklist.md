@@ -2017,6 +2017,32 @@ drawing; switching modes does not change existing geometry.
   - Result: Not tested
   - Notes: ______________________________
 
+## Saved-view appearance
+
+- [ ] **U345 — Style two saved views differently**
+  - Steps: Draw a wall with a door. Create two named plan views of it. In Architectural view settings, choose Drawing appearance and give each whole view a different outline color and line weight. Switch between them, put both on a sheet, export PDF, save and reopen.
+  - Expected: Each view retains its own appearance on the canvas and sheet/PDF. Wall and door dimensions and appraisal totals remain unchanged.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **U346 — Override one object's appearance in one view**
+  - Steps: Give a saved view a custom appearance, then choose its wall in Drawing appearance and set a different style. Check the hosted door and a second saved view. Reset only the wall override. Undo and Redo.
+  - Expected: The wall override affects only that wall in that view. Other objects and views retain their settings. Reset returns to inherited styling; Undo restores the override.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **U347 — Hide and restore a complete saved view**
+  - Steps: Add an annotation or reference image and a saved view. Turn off that view's visibility in Drawing appearance. Check its canvas and sheet/PDF, then restore it through the saved-view selector and settings.
+  - Expected: The hidden view's geometry, annotations and reference content do not draw or print. Its definition remains available so it can be restored without deleting or recreating anything.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **U348 — Keep view styling through source filtering and deletion**
+  - Steps: Style a wall in one view. Exclude that wall using the view source filter, then include it again. Delete the wall and Undo. Save and reopen after each accepted edit.
+  - Expected: Filtering preserves the wall's authored style for re-inclusion. Deletion removes its dependent view settings together; Undo restores the wall and those settings. No invalid references or geometry changes occur from styling.
+  - Result: Not tested
+  - Notes: ______________________________
+
 ## Issue report template
 
 - Task ID(s):

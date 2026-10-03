@@ -8,6 +8,7 @@
 #include "sketch/constraint_entity.hpp"
 #include "sketch/constraint_wall_edit.hpp"
 #include "sketch/wall_measurement.hpp"
+#include "sketch/sheet_view_entity_codec.hpp"
 #include "support/noninteractive_errors.hpp"
 #include "support/redraw_angle_fixture.hpp"
 
@@ -2705,6 +2706,75 @@ void test_ansi_appraisal_reader_floor_retains_history() {
         "unrelated vendor field collision stays opaque in its original format");
 }
 
+void test_view_appearance_reader_floor_and_source_integrity() {
+    TempDirectory temp;
+    const auto rejects_source = [](auto operation, std::string_view message) {
+        try { operation(); }
+        catch (const sketch::DocumentError& error) {
+            require(error.code() == sketch::DocumentErrorCode::dangling_reference, message);
+            return;
+        }
+        throw std::runtime_error(std::string(message));
+    };
+    sketch::CoordinatedView plan{"plan", "Plan"};
+    sketch::DrawingSheet sheet;
+    sheet.id = "sheet"; sheet.number = "A101";
+    sheet.viewports = {{"viewport", "plan", {10,10,180,120}, 50}};
+    auto graph = sketch::make_sheet_view_entity("views", sketch::SheetViewModel::create({plan}, {sheet}));
+    auto wall = entity("wall", "wall");
+    auto document = Document::create({graph, wall});
+    require(ProjectStore::required_format_version(document.snapshot()) == 1,
+        "inherited view appearance retains its original native reader floor");
+    graph.properties["model"]["version"] = 7;
+    require(ProjectStore::required_format_version(Document::create({graph, wall}).snapshot()) == 24,
+        "a preserved version7 payload requires its reader even without overrides");
+    graph.properties["model"]["views"][0]["presentation"]["appearance"] = {
+        {"visible", true}, {"style", nullptr}, {"objects", nlohmann::json::array({
+            {{"object_id", "wall"}, {"style", nullptr}, {"visible", false}}})}};
+    document.apply(ApplyEntityChanges{document.revision(), {EntityChange::upsert(graph)}, {}, "Hide wall in plan"});
+    const auto styled = document.snapshot();
+    sketch::ProjectWorkspace workspace(styled);
+    const auto capture = workspace.capture();
+    const auto history = sketch::capture_workspace_history_record(capture);
+    sketch::RecoveryLedger ledger{{"view-history", "workspace_history",
+        sketch::encode_workspace_history_record(capture.document(), history, std::nullopt)}};
+    const auto archive_path = temp.path / "view-appearance-archive.bldproj";
+    (void)ProjectStore::save_archive(archive_path, {capture.document(), ledger, sketch::ArchiveRole::ordinary});
+    const auto archive = ProjectStore::load_archive(archive_path, sketch::ArchiveRole::ordinary);
+    require(archive.supported() && archive.archive->document().entities() == styled.entities() &&
+        ProjectStore::required_format_version(archive.archive->document()) == 24,
+        "recovery-aware native archive retains exact view intent and reader floor");
+    rejects_source([&] {
+        document.apply(ApplyEntityChanges{document.revision(), {EntityChange::erase(wall.id)}, {}, "Delete referenced wall"});
+    },
+        "view appearance cannot retain a missing source in an unrestricted view");
+    auto deleted = Document::fork(styled);
+    deleted.apply(ApplyEntityChanges{deleted.revision(), {EntityChange::erase(graph.id)}, {}, "Delete view graph"});
+    document.undo(document.revision());
+    for (const auto& snapshot : {styled, document.snapshot(), deleted.snapshot()}) {
+        require(ProjectStore::required_format_version(snapshot) == 24,
+            "current, undone and deleted view appearance retains native reader24");
+        const auto path = temp.path / ("appearance-" + sketch::make_stable_id() + ".bldproj");
+        (void)ProjectStore::save(path, snapshot);
+        const auto reopened = ProjectStore::load(path).document.snapshot();
+        require(reopened.entities() == snapshot.entities() && reopened.history().size() == snapshot.history().size(),
+            "view appearance and all retained history reopen exactly");
+        execute_sql(path, "PRAGMA user_version=23; UPDATE metadata SET value='23' WHERE key='format_version'");
+        rewrite_logical_digest(path);
+        const auto hash = ProjectStore::file_sha256(path);
+        require_error([&] { (void)ProjectStore::load(path); }, StorageErrorCode::unsupported_format,
+            "a recomputed digest cannot downgrade retained view presentation");
+        require(ProjectStore::file_sha256(path) == hash, "refused appearance downgrade preserves original bytes");
+    }
+    auto vendor = entity("vendor", "generic", graph.properties);
+    require(ProjectStore::required_format_version(Document::create({vendor}).snapshot()) == 1,
+        "an unrelated vendor appearance field remains opaque");
+    auto missing = graph;
+    missing.properties["model"]["views"][0]["presentation"]["appearance"]["objects"][0]["object_id"] = "missing";
+    rejects_source([&] { (void)Document::create({missing, wall}); },
+        "missing view appearance source is rejected on admission");
+}
+
 void test_native_room_topology_is_validated_on_restore() {
     TempDirectory temp;
     const auto path = temp.path / "room.bldproj";
@@ -2735,6 +2805,7 @@ void test_native_room_topology_is_validated_on_restore() {
 int main() {
     sketch::testing::noninteractive_errors();
     try {
+        test_view_appearance_reader_floor_and_source_integrity();
         test_ansi_appraisal_reader_floor_retains_history();
         test_automatic_angle_redraw_reader_floor();
         test_rigid_group_storage_and_history_floors();

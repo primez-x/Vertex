@@ -30,6 +30,22 @@ void positive(double value) {
 void nonnegative(double value) {
     require(std::isfinite(value) && value >= 0, "sheet/view coordinate or depth must be finite and nonnegative");
 }
+void validate_appearance_style(const ViewAppearanceStyle& style) {
+    const auto color = [](const std::string& value) {
+        return value.size() == 7 && value.front() == '#' &&
+            std::all_of(value.begin() + 1, value.end(), [](unsigned char c) {
+                return std::isxdigit(c) != 0;
+            });
+    };
+    require(color(style.outline_color) && color(style.fill_color),
+        "view appearance colors must be #RRGGBB");
+    require(style.fill_pattern == "none" || style.fill_pattern == "solid" || style.fill_pattern == "hatch",
+        "unknown view appearance fill pattern");
+    require(std::isfinite(style.line_width_mm) && style.line_width_mm >= 0.05 && style.line_width_mm <= 10,
+        "view appearance line width outside 0.05 to 10 mm");
+    require(std::isfinite(style.hatch_scale) && style.hatch_scale >= 0.1 && style.hatch_scale <= 10,
+        "view appearance hatch scale outside 0.1 to 10");
+}
 template<class T> std::set<std::string> canonical(std::vector<T>& values) {
     std::set<std::string> ids;
     for (const auto& value : values) {
@@ -81,6 +97,17 @@ void validate_view(const CoordinatedView& view) {
             "view crop spans must exceed 1e-6 metres");
     }
     for (const auto& object_id : view.object_ids) identifier(object_id);
+    if (p.appearance) {
+        const auto& appearance = *p.appearance;
+        if (appearance.style) validate_appearance_style(*appearance.style);
+        require(appearance.objects.size() <= 10000, "view object appearance count exceeds 10000");
+        std::set<std::string> ids;
+        for (const auto& object : appearance.objects) {
+            identifier(object.object_id);
+            require(ids.insert(object.object_id).second, "duplicate view object appearance identity");
+            if (object.style) validate_appearance_style(*object.style);
+        }
+    }
     require(view.overlays.size() <= 1000, "section overlay count exceeds 1000");
     require(view.overlays.empty() || view.kind == CoordinatedViewKind::section,
         "overlays belong only to section views");
@@ -136,9 +163,10 @@ void shape(const nlohmann::json& input, const nlohmann::json& output) {
         require(input.is_array() && input.size() == output.size(), "invalid sheet/view JSON array");
         // Canonical ordering may differ, so compare structures by item identity.
         for (std::size_t i = 0; i < output.size(); ++i) {
-            if (output[i].is_object() && output[i].contains("id")) {
+            if (output[i].is_object() && (output[i].contains("id") || output[i].contains("object_id"))) {
+                const auto* identity = output[i].contains("id") ? "id" : "object_id";
                 const auto found = std::find_if(input.begin(), input.end(), [&](const auto& item) {
-                    return item.is_object() && item.contains("id") && item.at("id") == output[i].at("id");
+                    return item.is_object() && item.contains(identity) && item.at(identity) == output[i].at(identity);
                 });
                 require(found != input.end(), "missing sheet/view JSON identity");
                 shape(*found, output[i]);
@@ -184,12 +212,33 @@ void from_json(const nlohmann::json& value, ViewDetail& detail) {
 }
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(ViewCrop, min_horizontal_m, max_horizontal_m,
     min_vertical_m, max_vertical_m)
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(ViewAppearanceStyle, outline_color, fill_color, fill_pattern,
+    line_width_mm, hatch_scale)
+void to_json(nlohmann::json& value, const ViewObjectAppearance& p) {
+    value = {{"object_id", p.object_id}, {"style", p.style ? nlohmann::json(*p.style) : nlohmann::json(nullptr)},
+        {"visible", p.visible ? nlohmann::json(*p.visible) : nlohmann::json(nullptr)}};
+}
+void from_json(const nlohmann::json& value, ViewObjectAppearance& p) {
+    value.at("object_id").get_to(p.object_id);
+    p.style = value.at("style").is_null() ? std::nullopt : std::optional(value.at("style").get<ViewAppearanceStyle>());
+    p.visible = value.at("visible").is_null() ? std::nullopt : std::optional(value.at("visible").get<bool>());
+}
+void to_json(nlohmann::json& value, const ViewAppearance& p) {
+    value = {{"visible", p.visible}, {"style", p.style ? nlohmann::json(*p.style) : nlohmann::json(nullptr)},
+        {"objects", p.objects}};
+}
+void from_json(const nlohmann::json& value, ViewAppearance& p) {
+    value.at("visible").get_to(p.visible);
+    p.style = value.at("style").is_null() ? std::nullopt : std::optional(value.at("style").get<ViewAppearanceStyle>());
+    value.at("objects").get_to(p.objects);
+}
 void to_json(nlohmann::json& value, const ViewPresentation& p) {
     value = {{"cut_depth_m", p.cut_depth_m}, {"far_depth_m", p.far_depth_m},
         {"cut_line_mm", p.cut_line_mm}, {"projection_line_mm", p.projection_line_mm},
         {"hatch_enabled", p.hatch_enabled}, {"hatch_pattern", p.hatch_pattern},
         {"hatch_scale", p.hatch_scale}, {"detail", p.detail},
         {"crop", p.crop ? nlohmann::json(*p.crop) : nlohmann::json(nullptr)}};
+    if (p.appearance) value["appearance"] = *p.appearance;
 }
 void from_json(const nlohmann::json& value, ViewPresentation& p) {
     value.at("cut_depth_m").get_to(p.cut_depth_m);
@@ -202,6 +251,8 @@ void from_json(const nlohmann::json& value, ViewPresentation& p) {
     value.at("detail").get_to(p.detail);
     const auto& crop = value.at("crop");
     p.crop = crop.is_null() ? std::nullopt : std::optional(crop.get<ViewCrop>());
+    p.appearance = value.contains("appearance")
+        ? std::optional(value.at("appearance").get<ViewAppearance>()) : std::nullopt;
 }
 void to_json(nlohmann::json& value, const SectionOverlayKind& kind) {
     switch (kind) {
@@ -275,6 +326,9 @@ SheetViewModel SheetViewModel::create(std::vector<CoordinatedView> views,
     std::sort(schedule_ids.begin(), schedule_ids.end());
     for (auto& view : views) {
         object_references(view.object_ids);
+        if (view.presentation.appearance)
+            std::sort(view.presentation.appearance->objects.begin(), view.presentation.appearance->objects.end(),
+                [](const auto& left, const auto& right) { return left.object_id < right.object_id; });
         (void)canonical(view.overlays);
         validate_view(view);
     }
@@ -508,7 +562,9 @@ SheetViewModel SheetViewModel::with_removed_callout(const std::string& sheet_id,
 }
 
 nlohmann::json SheetViewModel::to_json() const {
-    return {{"schema", "sketch.sheet_view_model"}, {"version", 6}, {"views", views_},
+    const auto explicit_appearance = std::any_of(views_.begin(), views_.end(),
+        [](const auto& view) { return view.presentation.appearance.has_value(); });
+    return {{"schema", "sketch.sheet_view_model"}, {"version", explicit_appearance ? 7 : 6}, {"views", views_},
         {"sheets", sheets_}, {"schedule_ids", schedule_ids_}, {"sheet_order", sheet_order_}};
 }
 SheetViewModel SheetViewModel::from_json(const nlohmann::json& value) {
@@ -517,9 +573,13 @@ SheetViewModel SheetViewModel::from_json(const nlohmann::json& value) {
             value.at("version").is_number_integer() &&
             (value.at("version") == 1 || value.at("version") == 2 ||
              value.at("version") == 3 || value.at("version") == 4 || value.at("version") == 5 ||
-             value.at("version") == 6),
+             value.at("version") == 6 || value.at("version") == 7),
             "unsupported sheet/view schema");
         auto normalized = value;
+        if (value.at("version") < 7)
+            for (const auto& view : value.at("views"))
+                require(!view.at("presentation").contains("appearance"),
+                    "view appearance requires sheet/view schema 7");
         if (value.at("version") == 1) {
             // Version 1 views had no semantic source-object references. Keep
             // those projects readable while normalizing them to the current

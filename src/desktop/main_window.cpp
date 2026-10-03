@@ -324,6 +324,23 @@ void remap_entity_references(Entity& entity,
     }
     reference(properties, "refs");
     reference(properties, "references");
+    if (entity.type == kSheetViewEntityType) {
+        for (auto& view : properties.at("model").at("views")) {
+            reference(view,"object_ids");
+            // Models 1 and 2 predate overlays. Remap the retained wire record
+            // without inventing optional fields or upgrading its version.
+            if (view.contains("overlays")) {
+                for (auto& overlay : view.at("overlays")) {
+                    reference(overlay,"object_id");
+                    if (overlay.contains("dimension_binding") && !overlay.at("dimension_binding").is_null())
+                        reference(overlay.at("dimension_binding"),"object_id");
+                }
+            }
+            if (view.at("presentation").contains("appearance"))
+                for (auto& object : view.at("presentation").at("appearance").at("objects"))
+                    reference(object,"object_id");
+        }
+    }
     if (properties.contains("material_assignment"))
         reference(properties.at("material_assignment"), "catalog_id");
     if (entity.type == "boundary" || entity.type == "measurement_boundary" ||
@@ -4613,12 +4630,13 @@ public:
             m_plan_label_context=captureModalContext();
             const auto workspace=m_workspace;
             const auto named_view=m_active_named_view;
+            const auto named_owner=m_active_named_view_owner;
             const auto kind=m_architectural_view_kind;
-            canvas->setPointPlacementRequested([this,workspace,view,named_view,kind](Vec2 point){
+            canvas->setPointPlacementRequested([this,workspace,view,named_view,named_owner,kind](Vec2 point){
                 const auto context=m_plan_label_context;
                 cancelPlanLabelPlacement();
                 if (!context || !modalContextUnchanged(*context)) return;
-                if (workspace!=m_workspace || named_view!=m_active_named_view || kind!=m_architectural_view_kind) {
+                if (workspace!=m_workspace || named_view!=m_active_named_view || named_owner!=m_active_named_view_owner || kind!=m_architectural_view_kind) {
                     setError(QStringLiteral("The view changed while placing the label. Start placement again.")); return;
                 }
                 if (view) point=unproject_plan_point(point,view->frame);
@@ -6301,7 +6319,7 @@ public:
         const QString& cut_line_mm, const QString& projection_line_mm, bool hatch_enabled,
         const QString& hatch_pattern, const QString& hatch_scale, const QString& detail,
         const QString& object_ids_text, std::optional<QString> crop_bounds_text,
-        std::optional<bool> restrict_to_objects) {
+        std::optional<bool> restrict_to_objects, const QString& sheet_entity_id) {
         if (!m_document->is_editable()) {
             setError(QStringLiteral("This document is read-only."));
             return false;
@@ -6354,9 +6372,11 @@ public:
             const Entity* view_entity = nullptr;
             std::optional<SheetViewModel> model;
             const auto wanted_view = view_id.trimmed().toStdString();
+            std::size_t matches = 0;
             for (const auto& [id, candidate] : source.entities()) {
                 (void)id;
-                if (candidate.type != kSheetViewEntityType) continue;
+                if (candidate.type != kSheetViewEntityType ||
+                    (!sheet_entity_id.isEmpty() && id != sheet_entity_id.toStdString())) continue;
                 try {
                     auto decoded = decode_sheet_view_entity(candidate);
                     const auto found = std::find_if(decoded.views().begin(), decoded.views().end(),
@@ -6364,7 +6384,7 @@ public:
                     if (found != decoded.views().end()) {
                         model = std::move(decoded);
                         view_entity = &candidate;
-                        break;
+                        ++matches;
                     }
                 } catch (const std::exception&) {
                     if (wanted_view.empty()) throw;
@@ -6372,6 +6392,7 @@ public:
             }
             if (view_entity == nullptr || !model)
                 throw std::invalid_argument("Architectural view was not found");
+            if (matches != 1) throw std::invalid_argument("Architectural view identity is ambiguous; specify its sheet model owner");
             const auto found = std::find_if(model->views().begin(), model->views().end(),
                 [&](const auto& view) { return view.id == wanted_view; });
             if (found == model->views().end())
@@ -6391,6 +6412,7 @@ public:
             replacement.object_ids = std::move(object_ids);
             replacement.restrict_to_objects = restriction;
             if (!restriction) replacement.object_ids.clear();
+            if (replacement == *found) {clearError();return true;}
             const auto updated_model = model->with_view(std::move(replacement));
             auto updated_entity = *view_entity;
             updated_entity.properties = make_sheet_view_entity(
@@ -15558,7 +15580,8 @@ public:
             bool found = false;
             for (const auto& [id, entity] : source.entities()) {
                 (void)id;
-                if (entity.type != kSheetViewEntityType) continue;
+                if (entity.type != kSheetViewEntityType ||
+                    (!m_active_named_view_owner.isEmpty() && id != m_active_named_view_owner.toStdString())) continue;
                 const auto model = decode_sheet_view_entity(entity);
                 for (const auto& view : model.views()) {
                     if (view.id != m_active_named_view.toStdString()) continue;
@@ -15676,7 +15699,7 @@ public:
             m_entity_transform_document==m_document && m_entity_transform_source &&
             m_entity_transform_source->revision()==m_document->revision() &&
             m_entity_transform_selection==m_selected_ids && m_entity_transform_workspace==m_workspace &&
-            m_entity_transform_named_view==m_active_named_view && m_entity_transform_view_kind==m_architectural_view_kind &&
+            m_entity_transform_named_view==m_active_named_view && m_entity_transform_named_owner==m_active_named_view_owner && m_entity_transform_view_kind==m_architectural_view_kind &&
             !m_boundary_session && !m_pending_wall_start && m_pending_symbol_id.isEmpty();
     }
 
@@ -15689,6 +15712,7 @@ public:
         m_entity_transform_selection=m_selected_ids;
         m_entity_transform_workspace=m_workspace;
         m_entity_transform_named_view=m_active_named_view;
+        m_entity_transform_named_owner=m_active_named_view_owner;
         m_entity_transform_view_kind=m_architectural_view_kind;
         m_entity_transform_command.reset();
         m_entity_transform_ready=false;
@@ -16083,7 +16107,8 @@ public:
         if (!m_active_named_view.isEmpty()) {
             for (const auto& [id, entity] : source.entities()) {
                 (void)id;
-                if (entity.type != kSheetViewEntityType) continue;
+                if (entity.type != kSheetViewEntityType ||
+                    (!m_active_named_view_owner.isEmpty() && id != m_active_named_view_owner.toStdString())) continue;
                 const auto model = decode_sheet_view_entity(entity);
                 for (const auto& view : model.views()) {
                     if (view.id != m_active_named_view.toStdString()) continue;
@@ -19714,6 +19739,7 @@ public:
             for (const auto& viewport : sheet.viewports) {
                 const auto* view = find_view(viewport.view_id);
                 if (view == nullptr) continue;
+                if (view->presentation.appearance && !view->presentation.appearance->visible) continue;
                 for (const auto& overlay : view->overlays) {
                     if (overlay.kind != SectionOverlayKind::dimension ||
                         !section_overlay_visible(overlay, view->presentation.detail)) continue;
@@ -22319,9 +22345,19 @@ public:
     void showNamedViews() {
         const auto context = captureModalContext();
         const auto source = authoringSnapshot();
-        const auto record = decode_sheet_model(source);
+        auto record = decode_sheet_model(source);
+        if (!m_active_named_view_owner.isEmpty()) {
+            const auto found=source.entities().find(m_active_named_view_owner.toStdString());
+            if(found==source.entities().end() || found->second.type!=kSheetViewEntityType) {
+                setError(QStringLiteral("The selected saved-view owner is unavailable."));return;
+            }
+            record=SheetModelRecord{found->first,decode_sheet_view_entity(found->second)};
+        }
         if (!record) { setError(QStringLiteral("No drawing views are defined.")); return; }
+        const auto active_owner=m_active_named_view_owner;
+        const auto active_view=m_active_named_view;
         QDialog dialog(owner);
+        if (owner->testAttribute(Qt::WA_DontShowOnScreen)) dialog.setAttribute(Qt::WA_DontShowOnScreen);
         dialog.setObjectName(QStringLiteral("namedViewsDialog"));
         dialog.setWindowTitle(QStringLiteral("Named elevations and sections"));
         styleDialog(dialog);
@@ -22465,6 +22501,9 @@ public:
         QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
         QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, [&] {
             try {
+                if(active_owner!=m_active_named_view_owner || active_view!=m_active_named_view) {
+                    error->setText(QStringLiteral("The selected saved view changed. Reopen named views."));return;
+                }
                 if (!modalContextUnchanged(context)) { error->setText(lastError()); return; }
                 const auto scalar = [](const QString& text) {
                     bool ok = false; const auto number = text.trimmed().toDouble(&ok);
@@ -22541,11 +22580,15 @@ public:
                     views, record->model.sheets(),
                     record->model.to_json().at("schedule_ids").get<std::vector<std::string>>(),
                     record->model.sheet_order());
-                if (!applySheetModelMutation(QStringLiteral("Edit named view"), outputSheetId(),
-                        [replacement](const SheetViewModel&) { return replacement; })) {
-                    error->setText(lastError()); return;
+                auto updated=source.entities().at(record->entity_id);
+                updated.properties=make_sheet_view_entity(updated.id,replacement).properties;
+                if(updated!=source.entities().at(record->entity_id)) {
+                    const ApplyEntityChanges command{source.revision(),{EntityChange::upsert(std::move(updated))},{},"Edit named view"};
+                    (void)Document::preview_command(source,command);applyDocumentCommand(command);
+                    clearError();refresh();
                 }
                 m_active_named_view = QString::fromStdString(value.id);
+                m_active_named_view_owner = QString::fromStdString(record->entity_id);
                 m_architectural_view_kind = architectural_view_kind(value.kind);
                 refreshCanvases();
                 dialog.accept();
@@ -22779,11 +22822,209 @@ public:
         return renderSheetOutput(snapshot, outputSheetId().toStdString(), painter, target, background);
     }
 
+    void showViewAppearance(const std::string& sheet_id, const std::string& view_id) {
+        try {
+            if (!m_document->is_editable()) throw std::invalid_argument("This document is read-only.");
+            const auto context = captureModalContext();
+            const auto source = authoringSnapshot();
+            const auto original = source.entities().at(sheet_id);
+            const auto model = decode_sheet_view_entity(original);
+            const auto found = std::find_if(model.views().begin(), model.views().end(),
+                [&](const auto& view) { return view.id == view_id; });
+            if (found == model.views().end()) throw std::invalid_argument("The saved view is unavailable.");
+            const auto& view = *found;
+            const auto existing = view.presentation.appearance;
+            const auto active_owner = m_active_named_view_owner;
+            const auto active_view = m_active_named_view;
+            QDialog dialog(owner);
+            if (owner->testAttribute(Qt::WA_DontShowOnScreen)) dialog.setAttribute(Qt::WA_DontShowOnScreen);
+            styleDialog(dialog);
+            dialog.setObjectName(QStringLiteral("viewAppearanceDialog"));
+            dialog.setWindowTitle(QStringLiteral("Saved view drawing appearance"));
+            auto* layout = new QVBoxLayout(&dialog);
+            auto* explanation = new QLabel(QStringLiteral(
+                "Edit this saved view independently. Whole-view visibility includes annotations and references. "
+                "Object visibility follows phase, layer and source filters. Hosted openings follow their wall's visibility. "
+                "Apply one scope at a time."), &dialog);
+            explanation->setWordWrap(true);layout->addWidget(explanation);
+            auto* form = new QFormLayout;layout->addLayout(form);
+            auto* scope = new QComboBox(&dialog);scope->setObjectName(QStringLiteral("viewAppearanceScope"));
+            scope->addItem(QStringLiteral("Whole view"), QString{});
+            for (const auto& [id, entity] : source.entities()) {
+                if (!supportsObjectAppearance(entity.type)) continue;
+                scope->addItem(QStringLiteral("%1 — %2").arg(QString::fromStdString(entity.type), id_from(id)), id_from(id));
+            }
+            form->addRow(QStringLiteral("Scope"), scope);
+            auto* inherit = new QCheckBox(QStringLiteral("Use inherited drawing style"), &dialog);
+            inherit->setObjectName(QStringLiteral("viewAppearanceInheritStyle"));form->addRow(inherit);
+            const auto color_field = [&](const QString& label, const char* name) {
+                auto* row = new QWidget(&dialog);auto* row_layout = new QHBoxLayout(row);
+                row_layout->setContentsMargins(0,0,0,0);
+                auto* edit = new QLineEdit(row);edit->setObjectName(QString::fromLatin1(name));
+                edit->setPlaceholderText(QStringLiteral("#RRGGBB"));row_layout->addWidget(edit,1);
+                auto* choose = new QPushButton(QStringLiteral("Choose…"),row);
+                choose->setAccessibleName(QStringLiteral("Choose %1").arg(label.toLower()));row_layout->addWidget(choose);
+                const auto swatch = [edit,choose] {
+                    const QColor color(edit->text().trimmed());QPixmap image(14,14);
+                    image.fill(color.isValid() ? color : Qt::transparent);choose->setIcon(QIcon(image));
+                };
+                QObject::connect(edit,&QLineEdit::textChanged,&dialog,swatch);
+                QObject::connect(choose,&QPushButton::clicked,&dialog,[&,edit,label] {
+                    const auto color=QColorDialog::getColor(QColor(edit->text()),&dialog,label);
+                    if(color.isValid())edit->setText(color.name(QColor::HexRgb));
+                });
+                QObject::connect(inherit,&QCheckBox::toggled,row,[row](bool inherited){row->setEnabled(!inherited);});
+                form->addRow(label,row);return edit;
+            };
+            auto* outline = color_field(QStringLiteral("Outline color"),"viewOutlineColor");
+            auto* fill = color_field(QStringLiteral("Fill color"),"viewFillColor");
+            auto* pattern = new QComboBox(&dialog);pattern->setObjectName(QStringLiteral("viewFillPattern"));
+            for(const auto* value:{"none","solid","hatch"})pattern->addItem(QString::fromLatin1(value),QString::fromLatin1(value));
+            form->addRow(QStringLiteral("Fill pattern"),pattern);
+            const auto spin = [&](const char* name,double minimum,double maximum,const QString& label) {
+                auto* control=new QDoubleSpinBox(&dialog);control->setObjectName(QString::fromLatin1(name));
+                control->setButtonSymbols(QAbstractSpinBox::NoButtons);control->setDecimals(2);control->setRange(minimum,maximum);
+                form->addRow(label,control);return control;
+            };
+            auto* width=spin("viewLineWidthMm",.05,10,QStringLiteral("Line width (mm)"));
+            auto* hatch=spin("viewAppearanceHatchScale",.1,10,QStringLiteral("Hatch scale"));
+            for(auto* control:std::array<QWidget*,3>{pattern,width,hatch})
+                QObject::connect(inherit,&QCheckBox::toggled,control,[control](bool inherited){control->setEnabled(!inherited);});
+            auto* inherit_visibility=new QCheckBox(QStringLiteral("Use inherited object visibility"),&dialog);
+            inherit_visibility->setObjectName(QStringLiteral("viewAppearanceInheritVisibility"));form->addRow(inherit_visibility);
+            auto* visible=new QCheckBox(QStringLiteral("Show in this view"),&dialog);
+            visible->setObjectName(QStringLiteral("viewAppearanceVisible"));form->addRow(visible);
+            auto* reset=new QPushButton(QStringLiteral("Reset selected scope"),&dialog);
+            reset->setObjectName(QStringLiteral("resetViewAppearance"));layout->addWidget(reset);
+            auto* error=new QLabel(&dialog);error->setObjectName(QStringLiteral("viewAppearanceError"));
+            error->setWordWrap(true);layout->addWidget(error);
+            auto* buttons=new QDialogButtonBox(QDialogButtonBox::Apply|QDialogButtonBox::Cancel,&dialog);layout->addWidget(buttons);
+            ViewAppearanceStyle initial_style;
+            std::optional<ViewAppearanceStyle> explicit_style;
+            std::optional<bool> explicit_visibility;
+            double shown_width{},shown_hatch{};
+            bool initial_visible=true,initial_inherited=true,initial_visibility_inherited=true;
+            bool populating=false,reset_pending=false;
+            const auto populate=[&] {
+                populating=true;reset_pending=false;error->clear();
+                const auto id=scope->currentData().toString().toStdString();
+                initial_style=ViewAppearanceStyle{};
+                initial_style.line_width_mm=view.presentation.projection_line_mm;
+                initial_style.fill_pattern=view.presentation.hatch_enabled ? "solid" : "none";
+                initial_style.hatch_scale=view.presentation.hatch_scale;
+                bool inherited_visible=true;
+                if(!id.empty()) {
+                    if(const auto defaults=m_object_appearance_defaults.find(id);defaults!=m_object_appearance_defaults.end()) {
+                        const auto& p=defaults->second;
+                        initial_style={p.style.stroke_color,p.style.fill_color,p.style.fill_pattern,
+                            p.paper_line_width_mm.value_or(p.style.stroke_width_metres*1000),p.hatch_scale.value_or(1)};
+                    }
+                    for(const auto& [annotation_id,entity]:source.entities()) {
+                        (void)annotation_id;if(entity.type!=kAnnotationEntityType)continue;
+                        for(const auto& p:decode_annotation_entity(entity).overrides)
+                            if(p.target_kind=="object" && p.target_id==id && !p.inherit_appearance) {
+                                initial_style={p.style.stroke_color,p.style.fill_color,p.style.fill_pattern,
+                                    p.paper_line_width_mm.value_or(p.style.stroke_width_metres*1000),p.hatch_scale.value_or(1)};
+                                inherited_visible=p.visible;
+                            }
+                    }
+                    if(existing && existing->style)initial_style=*existing->style;
+                }
+                explicit_style.reset();explicit_visibility.reset();
+                if(existing) {
+                    if(id.empty()) {explicit_style=existing->style;explicit_visibility=existing->visible;}
+                    else for(const auto& object:existing->objects)if(object.object_id==id) {
+                        explicit_style=object.style;explicit_visibility=object.visible;break;
+                    }
+                }
+                if(explicit_style)initial_style=*explicit_style;
+                initial_inherited=!explicit_style;
+                initial_visibility_inherited=!explicit_visibility;
+                initial_visible=explicit_visibility.value_or(inherited_visible);
+                outline->setText(QString::fromStdString(initial_style.outline_color));fill->setText(QString::fromStdString(initial_style.fill_color));
+                pattern->setCurrentIndex(pattern->findData(QString::fromStdString(initial_style.fill_pattern)));
+                width->setValue(initial_style.line_width_mm);hatch->setValue(initial_style.hatch_scale);
+                shown_width=width->value();shown_hatch=hatch->value();
+                inherit->setChecked(initial_inherited);inherit_visibility->setChecked(initial_visibility_inherited);
+                inherit_visibility->setVisible(!id.empty());visible->setChecked(initial_visible);
+                populating=false;
+            };
+            QObject::connect(scope,&QComboBox::currentIndexChanged,&dialog,populate);
+            const auto edited=[&]{if(!populating)reset_pending=false;};
+            QObject::connect(outline,&QLineEdit::textChanged,&dialog,edited);QObject::connect(fill,&QLineEdit::textChanged,&dialog,edited);
+            QObject::connect(pattern,&QComboBox::currentIndexChanged,&dialog,edited);
+            QObject::connect(width,&QDoubleSpinBox::valueChanged,&dialog,edited);QObject::connect(hatch,&QDoubleSpinBox::valueChanged,&dialog,edited);
+            QObject::connect(inherit,&QCheckBox::toggled,&dialog,edited);QObject::connect(inherit_visibility,&QCheckBox::toggled,&dialog,edited);
+            QObject::connect(visible,&QCheckBox::toggled,&dialog,[&]{if(!populating){reset_pending=false;inherit_visibility->setChecked(false);}});
+            QObject::connect(reset,&QPushButton::clicked,&dialog,[&]{populate();reset_pending=true;error->setText(QStringLiteral("Apply will reset only the selected scope."));});
+            QObject::connect(buttons,&QDialogButtonBox::rejected,&dialog,&QDialog::reject);
+            QObject::connect(buttons->button(QDialogButtonBox::Apply),&QPushButton::clicked,&dialog,[&] {
+                try {
+                    if(!m_document->is_editable())throw std::invalid_argument("This document is read-only.");
+                    if(!modalContextUnchanged(context) || active_view!=m_active_named_view || active_owner!=m_active_named_view_owner)
+                        throw std::invalid_argument("The document or selected saved view changed. Reopen drawing appearance.");
+                    const auto id=scope->currentData().toString().toStdString();
+                    if(!reset_pending && inherit->isChecked()==initial_inherited &&
+                        outline->text()==QString::fromStdString(initial_style.outline_color) && fill->text()==QString::fromStdString(initial_style.fill_color) &&
+                        pattern->currentData().toString()==QString::fromStdString(initial_style.fill_pattern) &&
+                        width->value()==shown_width && hatch->value()==shown_hatch && visible->isChecked()==initial_visible &&
+                        (id.empty() || inherit_visibility->isChecked()==initial_visibility_inherited)) {clearError();dialog.accept();return;}
+                    auto appearance=existing.value_or(ViewAppearance{});
+                    if(reset_pending) {
+                        if(id.empty()){appearance.visible=true;appearance.style.reset();}
+                        else std::erase_if(appearance.objects,[&](const auto& value){return value.object_id==id;});
+                    } else {
+                        auto style=initial_style;
+                        style.outline_color=outline->text().trimmed().toStdString();style.fill_color=fill->text().trimmed().toStdString();
+                        style.fill_pattern=pattern->currentData().toString().toStdString();
+                        if(width->value()!=shown_width)style.line_width_mm=width->value();
+                        if(hatch->value()!=shown_hatch)style.hatch_scale=hatch->value();
+                        const auto selected_style=inherit->isChecked()?std::nullopt:std::optional(style);
+                        if(id.empty()){appearance.style=selected_style;appearance.visible=visible->isChecked();}
+                        else {
+                            ViewObjectAppearance object{id,selected_style,inherit_visibility->isChecked()?std::nullopt:std::optional(visible->isChecked())};
+                            std::erase_if(appearance.objects,[&](const auto& value){return value.object_id==id;});
+                            if(object.style || object.visible)appearance.objects.push_back(std::move(object));
+                        }
+                    }
+                    auto replacement=view;
+                    if(!appearance.style && appearance.visible && appearance.objects.empty())replacement.presentation.appearance.reset();
+                    else replacement.presentation.appearance=std::move(appearance);
+                    if(replacement.presentation.appearance==existing){clearError();dialog.accept();return;}
+                    const auto changed=model.with_view(replacement);
+                    auto updated=original;
+                    // Write only the selected field; legacy sibling fields and
+                    // required/opaque owner policy remain exact.
+                    auto& raw_model=updated.properties.at("model");
+                    // Advancing an older graph must supply the mandatory
+                    // fields of schema 7. No-op and Cancel never migrate it.
+                    if(raw_model.at("version")<6)raw_model=changed.to_json();
+                    for(auto& raw_view:raw_model.at("views"))if(raw_view.at("id")==view_id) {
+                        auto& presentation=raw_view.at("presentation");
+                        const auto canonical=changed.to_json();
+                        const auto canonical_view=std::find_if(canonical.at("views").begin(),canonical.at("views").end(),
+                            [&](const auto& value){return value.at("id")==view_id;});
+                        if(replacement.presentation.appearance)presentation["appearance"]=canonical_view->at("presentation").at("appearance");
+                        else presentation.erase("appearance");
+                    }
+                    if(replacement.presentation.appearance)raw_model["version"]=7;
+                    else if(raw_model.at("version")==7 && changed.to_json().at("version")==6)raw_model["version"]=6;
+                    validate_sheet_view_entity(updated);
+                    const ApplyEntityChanges command{source.revision(),{EntityChange::upsert(std::move(updated))},{},
+                        reset_pending?"Reset saved view appearance":"Edit saved view appearance"};
+                    (void)Document::preview_command(source,command);applyDocumentCommand(command);clearError();refresh();dialog.accept();
+                }catch(const std::exception& failure){error->setText(QString::fromUtf8(failure.what()));}
+            });
+            populate();dialog.exec();
+        }catch(const std::exception& failure){setError(QStringLiteral("Saved view appearance: %1").arg(QString::fromUtf8(failure.what())));}
+    }
+
     void showArchitecturalViewSettings() {
         const auto context = captureModalContext();
         const auto source = authoringSnapshot();
         const auto sheet_entity = std::find_if(source.entities().begin(), source.entities().end(),
-            [](const auto& entry) { return entry.second.type == kSheetViewEntityType; });
+            [&](const auto& entry) { return entry.second.type == kSheetViewEntityType &&
+                (m_active_named_view_owner.isEmpty() || entry.first == m_active_named_view_owner.toStdString()); });
         if (sheet_entity == source.entities().end()) {
             setError(QStringLiteral("No typed architectural view is available."));
             return;
@@ -22801,6 +23042,7 @@ public:
                 throw std::invalid_argument("the selected architectural view is not defined");
             const auto number = [](double value) { return QString::number(value, 'g', 12); };
             QDialog dialog(owner);
+            if (owner->testAttribute(Qt::WA_DontShowOnScreen)) dialog.setAttribute(Qt::WA_DontShowOnScreen);
             styleDialog(dialog);
             dialog.setWindowTitle(QStringLiteral("Architectural view settings"));
             dialog.setModal(true);
@@ -22862,6 +23104,17 @@ public:
             form->addRow(QStringLiteral("Source object IDs"), object_ids);
             form->addRow(crop_enabled);
             form->addRow(QStringLiteral("Crop left, right, bottom, top (m)"), crop_bounds);
+            auto* appearance = new QPushButton(QStringLiteral("Drawing appearance…"), &dialog);
+            appearance->setObjectName(QStringLiteral("viewAppearanceButton"));
+            appearance->setAccessibleName(QStringLiteral("Saved view drawing appearance"));
+            appearance->setEnabled(m_document->is_editable());
+            form->addRow(appearance);
+            QObject::connect(appearance, &QPushButton::clicked, &dialog, [&, sheet_id = sheet_entity->first, view_id = found->id] {
+                showViewAppearance(sheet_id, view_id);
+                // A successful nested edit invalidates this form's snapshot.
+                // Close it so OK cannot overwrite the new appearance.
+                if (m_document->revision() != source.revision()) dialog.reject();
+            });
             auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
             form->addRow(buttons);
             QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
@@ -22872,7 +23125,8 @@ public:
                 projection_line->text(), hatch->isChecked(), pattern->text(), hatch_scale->text(),
                 detail->currentText(), object_ids->text(),
                 crop_enabled->isChecked() ? std::optional<QString>(crop_bounds->text())
-                                          : std::optional<QString>(QString{}), restrict_objects->isChecked());
+                                          : std::optional<QString>(QString{}), restrict_objects->isChecked(),
+                QString::fromStdString(sheet_entity->first));
         } catch (const std::exception& error) {
             setError(QStringLiteral("Architectural view settings: %1")
                          .arg(QString::fromUtf8(error.what())));
@@ -23051,12 +23305,13 @@ public:
             m_text_placement_context=captureModalContext();
             const auto workspace=m_workspace;
             const auto named_view=m_active_named_view;
+            const auto named_owner=m_active_named_view_owner;
             const auto kind=m_architectural_view_kind;
-            canvas->setPointPlacementRequested([this,entry,view,workspace,named_view,kind](Vec2 point) {
+            canvas->setPointPlacementRequested([this,entry,view,workspace,named_view,named_owner,kind](Vec2 point) {
                 const auto context=m_text_placement_context;
                 cancelTextPlacement();
                 if (!context || !modalContextUnchanged(*context)) return;
-                if (workspace!=m_workspace || named_view!=m_active_named_view || kind!=m_architectural_view_kind) {
+                if (workspace!=m_workspace || named_view!=m_active_named_view || named_owner!=m_active_named_view_owner || kind!=m_architectural_view_kind) {
                     setError(QStringLiteral("The view changed while placing text. Start placement again.")); return;
                 }
                 if (view) point=unproject_plan_point(point,view->frame);
@@ -24780,6 +25035,15 @@ private:
                                    (!overlay.object_id.empty() && removed_ids.contains(overlay.object_id));
                         });
                         changed |= references != view.object_ids.size() || annotations != view.overlays.size();
+                        if (view.presentation.appearance) {
+                            auto& objects = view.presentation.appearance->objects;
+                            const auto count = objects.size();
+                            std::erase_if(objects,[&](const auto& object){return removed_ids.contains(object.object_id);});
+                            changed |= count != objects.size();
+                            const auto& appearance=*view.presentation.appearance;
+                            if(count!=objects.size() && appearance.visible && !appearance.style && objects.empty())
+                                view.presentation.appearance.reset();
+                        }
                         if (references != view.object_ids.size()) view.restrict_to_objects = restricted;
                     }
                     if (!changed) continue;
@@ -25811,6 +26075,7 @@ private:
                              case BuildingViewKind::section:
                                  m_architectural_view_kind = static_cast<BuildingViewKind>(value);
                                  m_active_named_view = m_architecturalViewCombo->itemData(index, Qt::UserRole + 1).toString();
+                                 m_active_named_view_owner = m_architecturalViewCombo->itemData(index, Qt::UserRole + 2).toString();
                                  refreshCanvases();
                                  if (m_workspace == Workspace::architectural) m_architecturalCanvas->fitView();
                                  break;
@@ -28744,16 +29009,20 @@ private:
             m_view_projection_cache.clear();
             m_view_projection_sources = snapshot.entities();
         }
+        // Keep globally hidden physical sources until the saved-view resolver:
+        // explicit local visibility can recover them within the hard view mask.
+        auto architectural_hidden_ids = presentation_hidden_ids;
+        for (const auto& id : object_hidden_ids) architectural_hidden_ids.erase(id);
         const auto build_architectural_geometry = [&](BuildingViewKind kind,
                                                        const ArchitecturalViewContext& view_context) {
-            auto referenced=architectural_view_references(view_context,snapshot.entities(),presentation_hidden_ids);
+            auto referenced=architectural_view_references(view_context,snapshot.entities(),architectural_hidden_ids);
             const bool restricted = view_context.restrict_to_objects || !view_context.object_ids.empty();
             if (restricted) {
                 // A placed assembly is a transformed copy of its host. Keep
                 // that dependent preview when the view selects the host.
                 for (const auto& assembly : assembly_previews) {
                     if (referenced.contains(assembly.host_entity_id) &&
-                        !presentation_hidden_ids.contains(assembly.child_id)) {
+                        !architectural_hidden_ids.contains(assembly.child_id)) {
                         referenced.insert(assembly.child_id);
                     }
                 }
@@ -28764,7 +29033,7 @@ private:
                 std::vector<CanvasEntity> filtered;
                 filtered.reserve(all_geometry.size());
                 for (const auto& entity : all_geometry) {
-                    if (!presentation_hidden_ids.contains(entity.id.toStdString()) &&
+                    if (!architectural_hidden_ids.contains(entity.id.toStdString()) &&
                         (!restricted || referenced.contains(entity.id.toStdString()))) {
                         auto retained = entity;
                         if (view_context.crop) retained.opening_width_controls.reset();
@@ -28849,7 +29118,7 @@ private:
                 return projection;
             };
             for (const auto& [id, entity] : snapshot.entities()) {
-                if (presentation_hidden_ids.contains(id) ||
+                if (architectural_hidden_ids.contains(id) ||
                     (restricted && !referenced.contains(id))) {
                     continue;
                 }
@@ -28861,7 +29130,7 @@ private:
                         if (host == snapshot.entities().end() || host->second.type != "wall") {
                             throw std::invalid_argument("opening host wall is missing");
                         }
-                        if (presentation_hidden_ids.contains(*wall_id)) continue;
+                        if (architectural_hidden_ids.contains(*wall_id)) continue;
                         std::vector<const Entity*> siblings;
                         for (const auto& [sibling_id, sibling] : snapshot.entities()) {
                             if (sibling.type == "opening" &&
@@ -29022,7 +29291,7 @@ private:
                     const bool dimension = entity.type==QStringLiteral("dimension_line");
                     const bool symbol = entity.type==QStringLiteral("symbol");
                     if ((!boundary && !dimension && !symbol) ||
-                        presentation_hidden_ids.contains(entity.id.toStdString()) ||
+                        architectural_hidden_ids.contains(entity.id.toStdString()) ||
                         (restricted && !referenced.contains(entity.id.toStdString()))) continue;
                     auto retained = entity;
                     if (!symbol) {
@@ -29042,8 +29311,8 @@ private:
                 }
             }
             for (const auto& assembly : assembly_previews) {
-                if (presentation_hidden_ids.contains(assembly.host_entity_id) ||
-                    presentation_hidden_ids.contains(assembly.child_id) ||
+                if (architectural_hidden_ids.contains(assembly.host_entity_id) ||
+                    architectural_hidden_ids.contains(assembly.child_id) ||
                     (restricted && !referenced.contains(assembly.host_entity_id) &&
                      !referenced.contains(assembly.child_id))) {
                     continue;
@@ -29073,6 +29342,10 @@ private:
                     }
                 }
             }
+            // Analytical source validation and solid projection above remain
+            // unconditional. Hidden presentation annotations must not resolve
+            // or publish diagnostics that block an otherwise visible sheet.
+            if(view_context.presentation.appearance && !view_context.presentation.appearance->visible)return result;
             for (const auto& overlay : view_context.overlays) {
                 if (!section_overlay_visible(overlay, view_context.presentation.detail) ||
                     overlay.kind == SectionOverlayKind::text) continue;
@@ -29132,7 +29405,7 @@ private:
         // kind. Reuse the first persisted view of each kind when it is the same
         // view used to build that vector; otherwise a normal refresh would
         // repeat the expensive OCCT projection for every default viewport.
-        std::array<std::string, 3> canonical_view_ids;
+        std::array<std::pair<std::string, std::string>, 3> canonical_view_ids;
         for (const auto& [sheet_id, entity] : snapshot.entities()) {
             (void)sheet_id;
             if (entity.type != kSheetViewEntityType) continue;
@@ -29140,7 +29413,7 @@ private:
                 const auto model = decode_sheet_view_entity(entity);
                 for (const auto& view : model.views()) {
                     const auto index = architectural_view_index(architectural_view_kind(view.kind));
-                    if (canonical_view_ids[index].empty()) canonical_view_ids[index] = view.id;
+                    if (canonical_view_ids[index].first.empty()) canonical_view_ids[index] = {sheet_id, view.id};
                 }
             } catch (const std::exception&) {
                 // The typed document boundary reports malformed sheet/view data;
@@ -29154,7 +29427,7 @@ private:
                 for (const auto& view : model.views()) {
                     const auto kind = architectural_view_kind(view.kind);
                     const auto index = architectural_view_index(kind);
-                    if (canonical_view_ids[index] == view.id) {
+                    if (canonical_view_ids[index] == std::make_pair(sheet_id, view.id)) {
                         m_coordinated_view_entities.emplace(
                             std::make_pair(sheet_id, view.id), view_geometry[index]);
                         continue;
@@ -29261,12 +29534,55 @@ private:
                              });
         }
         for (auto& [view_id, entities] : m_coordinated_view_entities) {
-            (void)view_id;
-            for (auto& entity : entities) apply_object_appearance(entity);
+            const auto model = decode_sheet_view_entity(snapshot.entities().at(view_id.first));
+            const auto view = std::find_if(model.views().begin(),model.views().end(),
+                [&](const auto& value){return value.id==view_id.second;});
+            if (view==model.views().end()) {entities.clear();continue;}
+            const auto* appearance = view->presentation.appearance ? &*view->presentation.appearance : nullptr;
+            if (appearance && !appearance->visible) {entities.clear();continue;}
+            std::map<std::string,const ViewObjectAppearance*,std::less<>> scoped;
+            if (appearance)for(const auto& object:appearance->objects)scoped.emplace(object.object_id,&object);
+            const auto style_entity = [](CanvasEntity& entity,const ViewAppearanceStyle& style) {
+                entity.stroke_color=QColor(QString::fromStdString(style.outline_color));entity.dark_stroke_color=QColor{};
+                entity.fill_color=QColor(QString::fromStdString(style.fill_color));
+                entity.hatch_pattern=QString::fromStdString(style.fill_pattern);entity.hatch_scale=style.hatch_scale;
+                entity.filled=style.fill_pattern!="none";
+                entity.stroke_width_metres=style.line_width_mm/1000;
+                entity.output_stroke_width_mm=style.line_width_mm;entity.paper_stroke_width_on_screen=true;
+            };
+            for (auto& entity : entities) {
+                apply_object_appearance(entity);
+                if (!supportsObjectAppearance(entity.type.toStdString()) && entity.type!=QStringLiteral("window")) continue;
+                if(appearance && appearance->style)style_entity(entity,*appearance->style);
+                if(const auto found=scoped.find(entity.id.toStdString());found!=scoped.end() && found->second->style)
+                    style_entity(entity,*found->second->style);
+            }
+            const auto physical_visible = [&](const std::string& id) {
+                if(!visible_ids.contains(id))return false;
+                bool visible=!presentation_hidden_ids.contains(id);
+                if(!presentation_hidden_ids.contains(id) || object_hidden_ids.contains(id))
+                    if(const auto found=scoped.find(id);found!=scoped.end() && found->second->visible)
+                        visible=*found->second->visible;
+                return visible;
+            };
             std::erase_if(entities, [&](const auto& entity) {
                 if (entity.type == QStringLiteral("section_overlay")) return false;
-                return !visible_ids.contains(entity.id.toStdString()) ||
-                       presentation_hidden_ids.contains(entity.id.toStdString());
+                const auto id=entity.id.toStdString();
+                if(!visible_ids.contains(id))return true;
+                if(supportsObjectAppearance(entity.type.toStdString()) || entity.type==QStringLiteral("window")) {
+                    if(!physical_visible(id))return true;
+                    // A hosted glyph inherits its wall's presentation mask.
+                    // A local wall recovery restores its children unless they
+                    // have their own hidden intent; no child bypasses its host.
+                    const auto source=snapshot.entities().find(id);
+                    if(source!=snapshot.entities().end() && source->second.type=="opening") {
+                        const auto host=read_string(source->second.properties,"wall_id");
+                        if(host && !physical_visible(*host))return true;
+                    }
+                    return false;
+                }
+                bool visible=!presentation_hidden_ids.contains(id);
+                return !visible;
             });
             std::stable_sort(entities.begin(), entities.end(),
                              [&](const auto& left, const auto& right) {
@@ -29336,6 +29652,11 @@ private:
             }
         };
         attach_frames(geometry);
+        // The built-in kind tabs represent the first saved view of that kind.
+        // Reuse its fully resolved scene, just as named tabs and sheets do.
+        for (std::size_t index=0;index<canonical_view_ids.size();++index)
+            if (const auto found=m_coordinated_view_entities.find(canonical_view_ids[index]);found!=m_coordinated_view_entities.end())
+                visible_view_geometry[index]=found->second;
         const auto ordinary_plan_frame = architectural_view_context(snapshot, BuildingViewKind::plan).frame;
         attach_frames(visible_view_geometry[architectural_view_index(BuildingViewKind::plan)],
                       &ordinary_plan_frame);
@@ -29366,16 +29687,22 @@ private:
                         static_cast<int>(architectural_view_kind(view.kind)));
                     const auto index = m_architecturalViewCombo->count() - 1;
                     m_architecturalViewCombo->setItemData(index, QString::fromStdString(view.id), Qt::UserRole + 1);
-                    if (view.id == m_active_named_view.toStdString()) {
+                    m_architecturalViewCombo->setItemData(index, QString::fromStdString(model_id), Qt::UserRole + 2);
+                    if (view.id == m_active_named_view.toStdString() &&
+                        (m_active_named_view_owner.isEmpty() || model_id==m_active_named_view_owner.toStdString())) {
+                        m_active_named_view_owner=QString::fromStdString(model_id);
                         selected_index = index;
                         const auto projected = m_coordinated_view_entities.find(std::make_pair(model_id, view.id));
                         if (projected != m_coordinated_view_entities.end()) m_architecturalCanvas->setEntities(projected->second);
                     }
                 }
             }
-            if (selected_index < 3) m_active_named_view.clear();
+            if (selected_index < 3) {m_active_named_view.clear();m_active_named_view_owner.clear();}
             m_architecturalViewCombo->setCurrentIndex(selected_index);
         }
+        const auto active_key = m_active_named_view.isEmpty()
+            ? canonical_view_ids[architectural_view_index(m_architectural_view_kind)]
+            : std::make_pair(m_active_named_view_owner.toStdString(),m_active_named_view.toStdString());
         std::vector<CanvasLabel> labels;
         for (auto& label : all_labels) {
             if (visible_ids.contains(label.id.toStdString()) &&
@@ -29441,7 +29768,8 @@ private:
             if (!m_active_named_view.isEmpty()) {
                 for (const auto& [id,entity] : snapshot.entities()) {
                     (void)id;
-                    if (entity.type!=kSheetViewEntityType) continue;
+                    if (entity.type!=kSheetViewEntityType ||
+                        (!m_active_named_view_owner.isEmpty() && id!=m_active_named_view_owner.toStdString())) continue;
                     const auto model=decode_sheet_view_entity(entity);
                     for (const auto& view : model.views())
                         if (view.id==m_active_named_view.toStdString()) frame=architectural_view_context(view).frame;
@@ -29453,10 +29781,11 @@ private:
             std::erase_if(labels, [](const auto& label) { return label.plan_only || label.model_plan; });
         }
         if (m_architectural_view_kind == BuildingViewKind::section) {
-            if (const auto record = decode_sheet_model(snapshot)) {
-                for (const auto& view : record->model.views()) {
-                    if (view.kind != CoordinatedViewKind::section ||
-                        (!m_active_named_view.isEmpty() && view.id != m_active_named_view.toStdString())) continue;
+            if(const auto graph=snapshot.entities().find(active_key.first);graph!=snapshot.entities().end()) {
+                const auto model=decode_sheet_view_entity(graph->second);
+                for (const auto& view : model.views()) {
+                    if (view.id!=active_key.second || view.kind!=CoordinatedViewKind::section ||
+                        (view.presentation.appearance && !view.presentation.appearance->visible)) continue;
                     for (auto& label : section_overlay_labels(snapshot, view, m_metric_units)) labels.push_back(std::move(label));
                     break;
                 }
@@ -29467,6 +29796,13 @@ private:
         m_architecturalCanvas->setReferences(std::move(reference_underlays));
         m_measurementCanvas->setReferenceGrids(reference_grids);
         m_architecturalCanvas->setReferenceGrids(std::move(reference_grids));
+        if (const auto graph=snapshot.entities().find(active_key.first);graph!=snapshot.entities().end()) {
+            const auto model=decode_sheet_view_entity(graph->second);
+            for(const auto& view:model.views())if(view.id==active_key.second && view.presentation.appearance && !view.presentation.appearance->visible) {
+                m_architecturalCanvas->setLabels({});m_architecturalCanvas->setReferences({});m_architecturalCanvas->setReferenceGrids({});
+                break;
+            }
+        }
         m_plan_error_banner->setText(m_plan_geometry_error);
         m_plan_error_banner->setVisible(!m_plan_geometry_error.isEmpty());
         m_measurementCanvas->setSelectedIds(m_selected_ids);
@@ -34454,6 +34790,7 @@ private:
     QStringList m_entity_transform_selection;
     Workspace m_entity_transform_workspace{Workspace::measurement};
     QString m_entity_transform_named_view;
+    QString m_entity_transform_named_owner;
     BuildingViewKind m_entity_transform_view_kind{BuildingViewKind::plan};
     QString m_entity_transform_id;
     std::optional<Command> m_entity_transform_command;
@@ -34596,6 +34933,7 @@ private:
     QLabel* m_architecture_hint{};
     BuildingViewKind m_architectural_view_kind{BuildingViewKind::plan};
     QString m_active_named_view;
+    QString m_active_named_view_owner;
 
     AppraisalDetailsPanel* m_appraisal_details{};
     std::weak_ptr<Document> m_appraisal_details_document;
@@ -34949,10 +35287,10 @@ bool MainWindow::editArchitecturalViewPresentation(
     const QString& cut_line_mm, const QString& projection_line_mm, bool hatch_enabled,
     const QString& hatch_pattern, const QString& hatch_scale, const QString& detail,
     const QString& object_ids, std::optional<QString> crop_bounds,
-    std::optional<bool> restrict_to_objects) {
+    std::optional<bool> restrict_to_objects, const QString& sheet_entity_id) {
     return m_impl->editArchitecturalViewPresentation(
         view_id, cut_depth_m, far_depth_m, cut_line_mm, projection_line_mm, hatch_enabled,
-        hatch_pattern, hatch_scale, detail, object_ids, std::move(crop_bounds), restrict_to_objects);
+        hatch_pattern, hatch_scale, detail, object_ids, std::move(crop_bounds), restrict_to_objects, sheet_entity_id);
 }
 
 Workspace MainWindow::workspace() const noexcept {

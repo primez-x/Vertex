@@ -1823,6 +1823,10 @@ void PlanCanvas::pointerMove(QPointF position, Qt::KeyboardModifiers modifiers) 
             m_move_preview_pending = false;
             m_move_preview_exact = false;
             if (m_entities_move_preview_requested) {
+                // A configured exact provider owns admission, including an
+                // unavailable result. Only the providerless path may use the
+                // legacy translated preview and commit without a proposal.
+                m_move_preview_exact = true;
                 m_move_preview_request_in_progress = true;
                 std::optional<std::vector<CanvasEntity>> proposed;
                 try {
@@ -1831,10 +1835,10 @@ void PlanCanvas::pointerMove(QPointF position, Qt::KeyboardModifiers modifiers) 
                 if (serial != m_move_preview_serial || !m_move_preview_request_in_progress) return;
                 m_move_preview_request_in_progress = false;
                 if (proposed && !m_move_preview_pending) {
-                    m_move_preview_exact = true;
                     m_move_entities_preview = std::move(*proposed);
-                    setCursor(m_move_entities_preview.empty() ? Qt::ForbiddenCursor : Qt::ClosedHandCursor);
                 }
+                if (!m_move_preview_pending)
+                    setCursor(m_move_entities_preview.empty() ? Qt::ForbiddenCursor : Qt::ClosedHandCursor);
             }
             update();
         }

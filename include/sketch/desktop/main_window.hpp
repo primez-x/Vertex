@@ -140,7 +140,8 @@ public:
         const QString& detail,
         const QString& object_ids = {},
         std::optional<QString> crop_bounds = std::nullopt,
-        std::optional<bool> restrict_to_objects = std::nullopt);
+        std::optional<bool> restrict_to_objects = std::nullopt,
+        const QString& sheet_entity_id = {});
 
     [[nodiscard]] Workspace workspace() const noexcept;
     void setWorkspace(Workspace workspace);

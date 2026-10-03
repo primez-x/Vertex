@@ -531,6 +531,111 @@ void test_plan_canvas_async_unavailable_candidate_never_commits() {
             "missing asynchronous proposal leaves all committed wall geometry unchanged");
 }
 
+void test_plan_canvas_exact_move_provider_release_contract() {
+    MainWindow window;
+    window.resize(1000, 700);
+    window.setMetricUnits(true);
+    window.show();
+    window.setWorkspace(Workspace::measurement);
+    QApplication::processEvents();
+    auto& canvas = measurement_canvas(window);
+    const auto wall = window.createStraightWall({0.0, 0.0}, {3.0, 0.0});
+    require(!wall.isEmpty() && window.selectEntity(wall),
+            "exact move provider fixture selects a wall");
+    canvas.setSnapEnabled(false);
+    canvas.setWallSnapEnabled(false);
+    canvas.setOverviewMapEnabled(false);
+    const auto before = window.document().snapshot();
+    const auto grab = frame_grab_point(canvas, wall_baseline(before.entities().at(wall.toStdString())));
+    const Vec2 intermediate_delta{0.0, 0.35};
+    const Vec2 final_delta{0.0, 0.6};
+    const auto intermediate = grab + QPointF(0.0, -intermediate_delta.y * canvas.viewScale());
+    const auto release = grab + QPointF(0.0, -final_delta.y * canvas.viewScale());
+    int commits{};
+    int rejections{};
+    Vec2 committed_delta{};
+    Vec2 requested_delta{};
+    std::uint64_t pending_serial{};
+    canvas.setEntitiesMoveRequested([&](QStringList ids, Vec2 delta) {
+        require(ids == QStringList{wall}, "move commit retains the selected identity");
+        committed_delta = delta;
+        ++commits;
+        return true;
+    });
+    canvas.setEntitiesMoveRejected([&](QStringList, Vec2) { ++rejections; });
+    canvas.setEntitiesMovePreviewRequested(
+        [](QStringList, Vec2, std::uint64_t) -> std::optional<std::vector<CanvasEntity>> {
+            return std::nullopt;
+        });
+    send_mouse(canvas, QEvent::MouseButtonPress, grab, Qt::LeftButton, Qt::LeftButton);
+    send_mouse(canvas, QEvent::MouseMove, intermediate, Qt::NoButton, Qt::LeftButton);
+    send_mouse(canvas, QEvent::MouseButtonRelease, release, Qt::LeftButton);
+    require(commits == 0 && rejections == 1 && !canvas.entitiesMovePreviewPending(),
+            "configured synchronous null proposal refuses release exactly once");
+
+    canvas.setEntitiesMovePreviewRequested(
+        [&](QStringList, Vec2 delta, std::uint64_t serial)
+            -> std::optional<std::vector<CanvasEntity>> {
+            requested_delta = delta;
+            pending_serial = serial;
+            require(canvas.markEntitiesMovePreviewPending(serial),
+                    "controlled move provider marks its live request pending");
+            return std::nullopt;
+        });
+    send_mouse(canvas, QEvent::MouseButtonPress, grab, Qt::LeftButton, Qt::LeftButton);
+    send_mouse(canvas, QEvent::MouseMove, intermediate, Qt::NoButton, Qt::LeftButton);
+    send_mouse(canvas, QEvent::MouseButtonRelease, release, Qt::LeftButton,
+               Qt::NoButton, Qt::NoModifier, false);
+    const auto canceled_serial = pending_serial;
+    require(canvas.entitiesMovePreviewPending() && nearly_equal(requested_delta, final_delta),
+            "released async move requests the final pointer position");
+    QKeyEvent escape(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+    QApplication::sendEvent(&canvas, &escape);
+    require(!canvas.entitiesMovePreviewPending(), "Escape clears released pending state immediately");
+    require(!canvas.completeEntitiesMovePreview(canceled_serial, canvas.entities()),
+            "late completion after Escape cannot revive the canceled move");
+    QApplication::processEvents();
+    require(commits == 0 && rejections == 1, "canceled move invokes no commit or rejection");
+
+    // The next gesture must work without replacing the provider or scene.
+    send_mouse(canvas, QEvent::MouseButtonPress, grab, Qt::LeftButton, Qt::LeftButton);
+    send_mouse(canvas, QEvent::MouseMove, intermediate, Qt::NoButton, Qt::LeftButton);
+    send_mouse(canvas, QEvent::MouseButtonRelease, release, Qt::LeftButton,
+               Qt::NoButton, Qt::NoModifier, false);
+    require(pending_serial != canceled_serial && canvas.entitiesMovePreviewPending(),
+            "next gesture starts a fresh pending release after cancellation");
+    require(canvas.completeEntitiesMovePreview(pending_serial, canvas.entities()),
+            "matching final async candidate completes");
+    QApplication::processEvents();
+    QApplication::processEvents();
+    require(commits == 1 && nearly_equal(committed_delta, final_delta) &&
+                !canvas.entitiesMovePreviewPending(),
+            "async release commits its final position exactly once");
+    require(!canvas.completeEntitiesMovePreview(pending_serial, canvas.entities()),
+            "repeated async completion cannot commit twice");
+
+    canvas.setEntitiesMovePreviewRequested(
+        [&](QStringList, Vec2 delta, std::uint64_t) -> std::optional<std::vector<CanvasEntity>> {
+            requested_delta = delta;
+            return canvas.entities();
+        });
+    send_mouse(canvas, QEvent::MouseButtonPress, grab, Qt::LeftButton, Qt::LeftButton);
+    send_mouse(canvas, QEvent::MouseMove, intermediate, Qt::NoButton, Qt::LeftButton);
+    send_mouse(canvas, QEvent::MouseButtonRelease, release, Qt::LeftButton);
+    QApplication::processEvents();
+    require(commits == 2 && rejections == 1 && nearly_equal(requested_delta, final_delta) &&
+                nearly_equal(committed_delta, final_delta),
+            "synchronous exact release commits final position exactly once");
+
+    canvas.setEntitiesMovePreviewRequested({});
+    send_mouse(canvas, QEvent::MouseButtonPress, grab, Qt::LeftButton, Qt::LeftButton);
+    send_mouse(canvas, QEvent::MouseButtonRelease, release, Qt::LeftButton);
+    require(commits == 3 && rejections == 1 && nearly_equal(committed_delta, final_delta),
+            "legacy move without a preview provider retains simple translation");
+    require(window.document().snapshot().entities() == before.entities(),
+            "controlled canvas callbacks keep the native fixture document unchanged");
+}
+
 void test_canvas_ctrl_click_group_move_round_trips() {
     MainWindow window;
     window.resize(1200, 800);
@@ -714,6 +819,7 @@ int main(int argc, char** argv) {
         test_canvas_wall_move_release_refuses_stale_document_head();
         test_escape_cancels_exact_release_preview_before_commit();
         test_plan_canvas_async_unavailable_candidate_never_commits();
+        test_plan_canvas_exact_move_provider_release_contract();
         test_canvas_ctrl_click_group_move_round_trips();
         test_rigid_wall_rotation_keeps_connected_corner_and_hosted_opening();
         test_fixed_anchor_conflict_rejects_selected_connected_wall_move_atomically();

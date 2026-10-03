@@ -10,6 +10,7 @@
 #include "sketch/constraint_wall_edit.hpp"
 #include "sketch/wall_measurement.hpp"
 #include "sketch/document_digest.hpp"
+#include "sketch/sheet_view_entity_codec.hpp"
 #include "support/noninteractive_errors.hpp"
 #include "support/redraw_angle_fixture.hpp"
 #include <fstream>
@@ -137,6 +138,29 @@ void test_translation_export(const std::filesystem::path& root) {
         batch_json.at("revisions")[constraint_revision].at("boundary_constraint_changes") == sketch::command_to_json(later_constraint) &&
         !batch_json.at("revisions").back().contains("boundary_translations"),
         "exchange must retain exact mixed proofs only on their command rows");
+}
+void test_view_appearance_export_floor(const std::filesystem::path& root) {
+  sketch::CoordinatedView plan{"plan", "Plan"};
+  sketch::DrawingSheet sheet; sheet.id = "sheet"; sheet.number = "A101";
+  auto graph = sketch::make_sheet_view_entity("views", sketch::SheetViewModel::create({plan}, {sheet}));
+  auto document = sketch::Document::create({});
+  graph.properties["model"]["version"] = 7;
+  graph.properties["model"]["views"][0]["presentation"]["appearance"] = {
+      {"visible", false}, {"style", nullptr}, {"objects", nlohmann::json::array()}};
+  document.apply(sketch::ApplyEntityChanges{0, {sketch::EntityChange::upsert(graph)}, {}, "Hide output view"});
+  const auto head = document.snapshot();
+  auto deleted = sketch::Document::fork(head);
+  deleted.apply(sketch::ApplyEntityChanges{deleted.revision(), {sketch::EntityChange::erase(graph.id)}, {}, "Delete view"});
+  document.undo(document.revision());
+  int sequence = 0;
+  for (const auto& snapshot : {head, document.snapshot(), deleted.snapshot()}) {
+    const auto destination = root / ("view-appearance-" + std::to_string(sequence++));
+    sketch::extract_project(snapshot, destination);
+    std::ifstream input(destination / "project.json");
+    const auto encoded = nlohmann::json::parse(input);
+    check(encoded.at("exchange_version") == 22 && encoded.at("revisions").size() == snapshot.history().size(),
+        "current, undone and deleted view appearance retains extraction22 and history");
+  }
 }
 
 void test_live_exterior_source_exchange_v17(const std::filesystem::path& root, bool mixed = false) {
@@ -1087,6 +1111,7 @@ int main() {
       check(encoded.at("exchange_version") == 19 && encoded.at("revisions").size() == snapshot.history().size(),
           "current, undone and deleted appraisal evidence must advertise exchange19 without dropping history");
     }
+    test_view_appearance_export_floor(root);
     test_translation_export(root);
     test_reviewed_source_export_floor(root);
     test_automatic_angle_redraw_export_floor(root);

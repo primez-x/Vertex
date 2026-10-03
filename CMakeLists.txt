@@ -676,6 +676,11 @@ if(SKETCH_BUILD_DESKTOP)
     qt_add_resources(object_appearance_desktop_tests object_appearance_test_fonts PREFIX "/fonts" BASE assets/fonts
       FILES assets/fonts/Inter.ttf)
     add_test(NAME object_appearance_desktop COMMAND object_appearance_desktop_tests)
+    add_executable(output_view_appearance_desktop_tests tests/output_view_appearance_desktop_tests.cpp)
+    target_link_libraries(output_view_appearance_desktop_tests PRIVATE sketch_desktop)
+    qt_add_resources(output_view_appearance_desktop_tests output_view_appearance_test_fonts PREFIX "/fonts" BASE assets/fonts
+      FILES assets/fonts/Inter.ttf)
+    add_test(NAME output_view_appearance_desktop COMMAND output_view_appearance_desktop_tests)
     if(MSVC)
       target_compile_options(text_library_tests PRIVATE /W4 /permissive- /utf-8)
       target_compile_options(text_library_desktop_tests PRIVATE /W4 /permissive- /utf-8)
@@ -684,8 +689,9 @@ if(SKETCH_BUILD_DESKTOP)
       target_compile_options(boundary_editing_desktop_tests PRIVATE /W4 /permissive- /utf-8)
       target_compile_options(redraw_angle_removal_desktop_tests PRIVATE /W4 /permissive- /utf-8)
       target_compile_options(object_appearance_desktop_tests PRIVATE /W4 /permissive- /utf-8)
+      target_compile_options(output_view_appearance_desktop_tests PRIVATE /W4 /permissive- /utf-8)
     endif()
-    set_tests_properties(text_library text_library_desktop wall_dimension_desktop appraisal_report_desktop boundary_editing_desktop redraw_angle_removal_desktop object_appearance_desktop PROPERTIES
+    set_tests_properties(text_library text_library_desktop wall_dimension_desktop appraisal_report_desktop boundary_editing_desktop redraw_angle_removal_desktop object_appearance_desktop output_view_appearance_desktop PROPERTIES
       ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_PLUGIN_PATH=${SKETCH_QT_PREFIX}/plugins"
       ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${SKETCH_QT_BIN};PATH=path_list_prepend:${CMAKE_SOURCE_DIR}/.deps/native/x64-windows/$<IF:$<CONFIG:Debug>,debug/bin,bin>")
     add_executable(reference_import_tests tests/reference_import_tests.cpp)

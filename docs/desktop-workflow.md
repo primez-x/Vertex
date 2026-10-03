@@ -455,6 +455,22 @@ plans, elevations, and sections crop derived solids and terrain surfaces before
 analytical projection. The same result appears on the canvas, sheet viewports,
 print, and exported output.
 
+## Saved-view drawing appearance
+
+Select a saved plan, elevation or section and open **Architectural view settings**.
+Choose **Drawing appearance…** to edit the whole view or one physical object in
+it. Inherited styling uses the object's global appearance. An explicit view
+style applies before that view's object-specific style. Set outline, fill,
+pattern, hatch scale, paper line weight or visibility without changing geometry
+or appraisal quantities. Reset clears only the chosen scope.
+
+Hidden views remain in the saved-view selector, so their settings can restore
+visibility. Local object visibility cannot reveal a hidden layer/phase or an
+object excluded by the view's source filter. Source filters retain existing
+appearance settings for later reuse. Accepted edits survive Undo/Redo and
+save/reopen and use the same derived scene in the canvas and sheet/PDF output.
+Unchanged Apply and Cancel do not create history.
+
 ## Named revisions and comparison
 
 The **Named revisions** command is available from **More** and the command
