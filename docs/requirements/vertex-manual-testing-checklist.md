@@ -1991,6 +1991,32 @@ drawing; switching modes does not change existing geometry.
   - Result: Not tested
   - Notes: ______________________________
 
+## Building-object appearance
+
+- [ ] **U341 — Change a wall's plan appearance**
+  - Steps: Draw a wall, double-click it to open its quick properties, then open its appearance editor. Change Outline color, Fill color, Fill pattern and Line width. Apply and compare the canvas and an exported PDF. Undo, Redo, save and reopen.
+  - Expected: The physical wall uses the chosen colors, pattern and paper line weight. Its length, thickness, hosted openings and appraisal measurements stay unchanged. The accepted appearance survives history and reopening.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **U342 — Style a door or window independently of its wall**
+  - Steps: Add a door and window to a wall. Open one opening's appearance editor and change its outline color. Apply, export a PDF, save and reopen. Compare the other opening and the host wall.
+  - Expected: The chosen opening's plan geometry uses its appearance. The other opening and wall retain their own appearance; opening width, position, operation and host relationship remain unchanged.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **U343 — Hide and restore a building object**
+  - Steps: Uncheck visibility in a wall or opening's appearance editor and Apply. Select that same object from the Layers tree and restore visibility through its properties. Check Undo/Redo and save/reopen.
+  - Expected: Hiding changes the presentation and output without deleting the object or changing measured totals. The hidden object remains available in Layers and can be restored. History and reopening preserve the chosen state.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **U344 — Reset a building object's appearance**
+  - Steps: Customize a wall and an opening differently. Reopen one object's appearance editor and Apply without changing anything. Cancel a separate attempted edit. Finally choose Reset to defaults and Apply; Undo once.
+  - Expected: Unchanged Apply and Cancel add no edit. Reset restores only the chosen object's default appearance, keeping the other object's appearance and all geometry. Undo restores the custom appearance.
+  - Result: Not tested
+  - Notes: ______________________________
+
 ## Issue report template
 
 - Task ID(s):

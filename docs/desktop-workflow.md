@@ -529,6 +529,17 @@ restored. Explicit line widths remain fixed on screen while zooming and use the
 same paper width in output. Duplicate override providers report an error rather
 than choosing one silently.
 
+For a selected physical wall or hosted door/window, double-click to open quick
+properties and choose **Drawing appearance…**, or use its right-click appearance
+action. Change outline/fill colors, None/Solid/Hatch, hatch scale, paper line
+weight or visibility. These controls affect the physical plan presentation;
+wall thickness, opening size and host relationships, measurement text and
+appraisal facts remain unchanged. Select a hidden object in **Layers** to open
+its properties and restore visibility. Reset removes only that object's custom
+appearance. Accepted edits are undoable and survive save/reopen; unchanged
+Apply and Cancel do not add history. SVG component coloring and independent
+output-view appearance remain separate implementation gaps.
+
 Drag the outward circular handle to rotate a selected object. Its selection
 frame and handle retain the committed angle after release, so the next drag
 starts from that orientation. Rotation snaps every 45 degrees by default;

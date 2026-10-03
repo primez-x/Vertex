@@ -6,6 +6,20 @@ Records contain no analytical geometry or calculation classifications. Editing
 them cannot implicitly reclassify an area. Target IDs are opaque references; the
 caller must resolve their existence and apply output-view visibility policy.
 
+The desktop area and building-object appearance editors write `area` and
+`object` overrides through revision-guarded document commands. Physical wall
+and opening geometry uses the object override after plan/view projection,
+including derived pieces belonging to the same logical object. The independent
+`wall_dimension` target controls measurements; object appearance does not
+recolor or restyle that measurement text. Hidden objects remain in the project
+navigator. Reset removes only the chosen override. Paper line weight and hatch
+scale use the existing optional annotation fields, without a new entity schema.
+
+Output-view appearance is still a workflow/rendering gap. SVG symbol color
+fields are also not yet applied by the artwork renderer; persisted style fields
+alone do not establish that support. A future explicit artwork-palette override
+must preserve pinned SVG bytes, gradients and existing instance appearance.
+
 The twelve label templates can be filtered by case-sensitive content/ID substring
 and exact category. Instances copy content and keep a provenance template ID;
 later instance edits do not alter the library. Empty content is allowed. Styles

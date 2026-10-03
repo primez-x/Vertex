@@ -671,6 +671,11 @@ if(SKETCH_BUILD_DESKTOP)
     qt_add_resources(redraw_angle_removal_desktop_tests redraw_angle_test_fonts PREFIX "/fonts" BASE assets/fonts
       FILES assets/fonts/Inter.ttf)
     add_test(NAME redraw_angle_removal_desktop COMMAND redraw_angle_removal_desktop_tests)
+    add_executable(object_appearance_desktop_tests tests/object_appearance_desktop_tests.cpp)
+    target_link_libraries(object_appearance_desktop_tests PRIVATE sketch_desktop)
+    qt_add_resources(object_appearance_desktop_tests object_appearance_test_fonts PREFIX "/fonts" BASE assets/fonts
+      FILES assets/fonts/Inter.ttf)
+    add_test(NAME object_appearance_desktop COMMAND object_appearance_desktop_tests)
     if(MSVC)
       target_compile_options(text_library_tests PRIVATE /W4 /permissive- /utf-8)
       target_compile_options(text_library_desktop_tests PRIVATE /W4 /permissive- /utf-8)
@@ -678,8 +683,9 @@ if(SKETCH_BUILD_DESKTOP)
       target_compile_options(appraisal_report_desktop_tests PRIVATE /W4 /permissive- /utf-8)
       target_compile_options(boundary_editing_desktop_tests PRIVATE /W4 /permissive- /utf-8)
       target_compile_options(redraw_angle_removal_desktop_tests PRIVATE /W4 /permissive- /utf-8)
+      target_compile_options(object_appearance_desktop_tests PRIVATE /W4 /permissive- /utf-8)
     endif()
-    set_tests_properties(text_library text_library_desktop wall_dimension_desktop appraisal_report_desktop boundary_editing_desktop redraw_angle_removal_desktop PROPERTIES
+    set_tests_properties(text_library text_library_desktop wall_dimension_desktop appraisal_report_desktop boundary_editing_desktop redraw_angle_removal_desktop object_appearance_desktop PROPERTIES
       ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_PLUGIN_PATH=${SKETCH_QT_PREFIX}/plugins"
       ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${SKETCH_QT_BIN};PATH=path_list_prepend:${CMAKE_SOURCE_DIR}/.deps/native/x64-windows/$<IF:$<CONFIG:Debug>,debug/bin,bin>")
     add_executable(reference_import_tests tests/reference_import_tests.cpp)

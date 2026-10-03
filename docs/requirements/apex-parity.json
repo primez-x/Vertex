@@ -1453,9 +1453,12 @@
         "src/desktop/plan_canvas.cpp",
         "tests/appraisal_desktop_workflow_tests.cpp",
         "tests/boundary_canvas_tests.cpp",
-        "docs/verification/area-appearance-selection-filters-2026-10-01.md"
+        "docs/verification/area-appearance-selection-filters-2026-10-01.md",
+        "tests/object_appearance_desktop_tests.cpp",
+        "docs/plans/2026-10-03-building-object-appearance.md",
+        "docs/verification/building-object-appearance-20261003.md"
       ],
-      "implementation_note": "Presentation styles, fills, visibility, and target overrides are validated separately from analytical geometry. The desktop Area appearance editor now changes closed-area outline/fill colors, fill pattern, hatch scale, paper line width and visibility, or resets to classification defaults. Revision-guarded raw edits preserve owner protection, opaque metadata and siblings; explicit widths survive analytical plan generation and shared rendering. Native area tests cover history, save/reopen, PDF, no-op, stale and read-only behavior. Broader object/output-view appearance workflows and production visual/print qualification remain open; this scoped implementation does not certify full parity. Historical evidence remains hash-bound to its original sources and fixtures."
+      "implementation_note": "Presentation styles, fills, visibility, and target overrides are validated separately from analytical geometry. The shared desktop appearance editor changes closed-area or physical building-object outline/fill colors, fill pattern, hatch scale, paper line width and visibility, or resets only that target. Revision-guarded raw edits preserve owner protection, opaque metadata and siblings. Object styles apply after physical plan/elevation/section projection, including multiple shapes belonging to one source, and remain independent of measurement labels. Quick properties and contextual actions expose the physical-object editor; hidden objects remain recoverable through Layers. Focused native workflows exercise rendered output, history, save/reopen, no-op, reset, stale/read-only and source preservation. SVG artwork color overrides, independent output-view appearance and full production visual/print qualification remain open; this scoped implementation does not certify full parity or shaded 3D material editing. Historical evidence remains hash-bound to its original sources and fixtures."
     },
     {
       "id": "APX-SYM-001",

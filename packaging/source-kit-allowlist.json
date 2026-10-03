@@ -1579,6 +1579,10 @@
     },
     {
       "category": "docs",
+      "path": "docs/plans/2026-10-03-building-object-appearance.md"
+    },
+    {
+      "category": "docs",
       "path": "docs/plans/2026-10-03-redraw-angle-reference-removal.md"
     },
     {
@@ -2356,6 +2360,10 @@
     {
       "category": "docs",
       "path": "docs/verification/boundary-curvature-and-diagnostics-2026-10-01.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/verification/building-object-appearance-20261003.md"
     },
     {
       "category": "docs",
@@ -4308,6 +4316,10 @@
     {
       "category": "source",
       "path": "tests/native_view_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/object_appearance_desktop_tests.cpp"
     },
     {
       "category": "source",

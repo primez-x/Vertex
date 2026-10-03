@@ -4634,26 +4634,47 @@ public:
         }
     }
 
-    void showAreaAppearance() {
+    static bool supportsObjectAppearance(std::string_view type) {
+        return type == "wall" || type == "opening" || type == "slab" || type == "room" ||
+            can_recognize_building_entity_type(type);
+    }
+
+    void showAreaAppearance() { showSelectedAppearance(false); }
+    void showObjectAppearance() { showSelectedAppearance(true); }
+
+    void showSelectedAppearance(bool object) {
         try {
             if (!m_document->is_editable()) throw std::invalid_argument("This document is read-only.");
             const auto selected = selectedEntity();
-            if (!selected || !is_closed_boundary_entity(selected->type) || m_selected_ids.size() != 1)
-                throw std::invalid_argument("Select one closed area to edit its appearance.");
+            if (!selected || m_selected_ids.size() != 1 ||
+                !(object ? supportsObjectAppearance(selected->type) : is_closed_boundary_entity(selected->type)))
+                throw std::invalid_argument(object ? "Select one physical object to edit its appearance."
+                    : "Select one closed area to edit its appearance.");
+            const std::string target_kind = object ? "object" : "area";
+            const auto prefix = object ? QStringLiteral("object") : QStringLiteral("area");
             const auto context = captureModalContext();
             const auto source = authoringSnapshot();
-            const auto area_projection = appraisal_plan_area_projection(source, m_metric_units);
-            const auto presentation = effective_plan_area_presentation(
-                *selected, area_projection);
             PresentationOverride defaults;
-            defaults.target_kind = "area";
+            defaults.target_kind = target_kind;
             defaults.target_id = selected->id;
-            defaults.style.stroke_color = presentation.stroke.name(QColor::HexRgb).toStdString();
-            defaults.style.fill_color = presentation.fill.name(QColor::HexRgb).toStdString();
-            defaults.style.fill_pattern = !presentation.filled ? "none"
-                : presentation.hatch == QStringLiteral("solid") ? "solid" : "hatch";
-            defaults.paper_line_width_mm = 0.34;
-            defaults.hatch_scale = presentation.hatch.contains(QStringLiteral("diagonal")) ? 0.7 : 1.0;
+            if (object) {
+                // Captured from the complete unoverridden retained plan on
+                // refresh, including hidden objects. Do not duplicate semantic
+                // palettes or infer defaults from a selected/overridden shape.
+                const auto found = m_object_appearance_defaults.find(selected->id);
+                if (found == m_object_appearance_defaults.end())
+                    throw std::invalid_argument("This object's drawing geometry is unavailable. Resolve its geometry before editing appearance.");
+                defaults = found->second;
+            } else {
+                const auto area_projection = appraisal_plan_area_projection(source, m_metric_units);
+                const auto presentation = effective_plan_area_presentation(*selected, area_projection);
+                defaults.style.stroke_color = presentation.stroke.name(QColor::HexRgb).toStdString();
+                defaults.style.fill_color = presentation.fill.name(QColor::HexRgb).toStdString();
+                defaults.style.fill_pattern = !presentation.filled ? "none"
+                    : presentation.hatch == QStringLiteral("solid") ? "solid" : "hatch";
+                defaults.paper_line_width_mm = 0.34;
+                defaults.hatch_scale = presentation.hatch.contains(QStringLiteral("diagonal")) ? 0.7 : 1.0;
+            }
             auto initial = defaults;
             std::optional<std::string> owner_id;
             std::optional<std::string> provider_id;
@@ -4663,24 +4684,30 @@ public:
                 const auto state = decode_annotation_entity(entity);
                 if (!owner_id) owner_id = id;
                 for (const auto& value : state.overrides) {
-                    if (value.target_kind != "area" || value.target_id != selected->id) continue;
+                    if (value.target_kind != target_kind || value.target_id != selected->id) continue;
                     if (provider_id)
-                        throw std::invalid_argument("This area has appearance overrides in multiple annotation groups. Remove duplicate overrides before editing.");
+                        throw std::invalid_argument("This target has appearance overrides in multiple annotation groups. Remove duplicate overrides before editing.");
                     provider_id = id;
                     owner_id = id;
                     initial = value.inherit_appearance ? defaults : value;
                     initial.plan_label_offset=value.plan_label_offset;
                     for (const auto& record : entity.properties.at("state").at("overrides"))
-                        if (record.at("target_kind") == "area" && record.at("target_id") == selected->id)
+                        if (record.at("target_kind") == target_kind && record.at("target_id") == selected->id)
                             original_record = record;
                 }
             }
 
             QDialog dialog(owner);
+            if (owner->testAttribute(Qt::WA_DontShowOnScreen)) dialog.setAttribute(Qt::WA_DontShowOnScreen);
             styleDialog(dialog);
-            dialog.setObjectName(QStringLiteral("areaAppearanceDialog"));
-            dialog.setWindowTitle(QStringLiteral("Area appearance"));
+            dialog.setObjectName(prefix + QStringLiteral("AppearanceDialog"));
+            dialog.setWindowTitle(object ? QStringLiteral("Object drawing appearance") : QStringLiteral("Area appearance"));
             auto* layout = new QVBoxLayout(&dialog);
+            if (object) {
+                auto* scope = new QLabel(QStringLiteral("Controls plan, elevation and section drawings, including print and PDF output."), &dialog);
+                scope->setWordWrap(true);
+                layout->addWidget(scope);
+            }
             auto* form = new QFormLayout;
             layout->addLayout(form);
             const auto color_field = [&](const QString& label, const QString& object_name, const std::string& value) {
@@ -4711,24 +4738,26 @@ public:
                 form->addRow(label, row);
                 return edit;
             };
-            auto* outline = color_field(QStringLiteral("Outline color"), QStringLiteral("areaOutlineColor"), initial.style.stroke_color);
-            auto* fill = color_field(QStringLiteral("Fill color"), QStringLiteral("areaFillColor"), initial.style.fill_color);
+            auto* outline = color_field(QStringLiteral("Outline color"), prefix + QStringLiteral("OutlineColor"), initial.style.stroke_color);
+            auto* fill = color_field(QStringLiteral("Fill color"), prefix + QStringLiteral("FillColor"), initial.style.fill_color);
             auto* pattern = new QComboBox(&dialog);
-            pattern->setObjectName(QStringLiteral("areaFillPattern"));
+            pattern->setObjectName(prefix + QStringLiteral("FillPattern"));
             pattern->addItem(QStringLiteral("None"), QStringLiteral("none"));
             pattern->addItem(QStringLiteral("Solid"), QStringLiteral("solid"));
             pattern->addItem(QStringLiteral("Hatch"), QStringLiteral("hatch"));
             pattern->setCurrentIndex(pattern->findData(QString::fromStdString(initial.style.fill_pattern)));
             form->addRow(QStringLiteral("Fill pattern"), pattern);
             auto* hatch = new QDoubleSpinBox(&dialog);
-            hatch->setObjectName(QStringLiteral("areaHatchScale"));
+            hatch->setObjectName(prefix + QStringLiteral("HatchScale"));
+            hatch->setButtonSymbols(QAbstractSpinBox::NoButtons);
             hatch->setRange(0.1, 10.0);
             hatch->setDecimals(2);
             hatch->setSingleStep(0.1);
             hatch->setValue(initial.hatch_scale.value_or(*defaults.hatch_scale));
             form->addRow(QStringLiteral("Hatch scale"), hatch);
             auto* width = new QDoubleSpinBox(&dialog);
-            width->setObjectName(QStringLiteral("areaLineWidthMm"));
+            width->setObjectName(prefix + QStringLiteral("LineWidthMm"));
+            width->setButtonSymbols(QAbstractSpinBox::NoButtons);
             width->setRange(0.05, 10.0);
             width->setDecimals(2);
             width->setSingleStep(0.05);
@@ -4737,15 +4766,15 @@ public:
             form->addRow(QStringLiteral("Line width"), width);
             const auto initial_width = width->value();
             const auto initial_hatch = hatch->value();
-            auto* visible = new QCheckBox(QStringLiteral("Show area"), &dialog);
-            visible->setObjectName(QStringLiteral("areaVisible"));
+            auto* visible = new QCheckBox(object ? QStringLiteral("Show object in drawings") : QStringLiteral("Show area"), &dialog);
+            visible->setObjectName(prefix + QStringLiteral("Visible"));
             visible->setChecked(initial.visible);
             form->addRow(visible);
             auto* reset = new QPushButton(QStringLiteral("Reset to defaults"), &dialog);
-            reset->setObjectName(QStringLiteral("resetAreaAppearance"));
+            reset->setObjectName(object ? QStringLiteral("resetObjectAppearance") : QStringLiteral("resetAreaAppearance"));
             layout->addWidget(reset);
             auto* error = new QLabel(&dialog);
-            error->setObjectName(QStringLiteral("areaAppearanceError"));
+            error->setObjectName(prefix + QStringLiteral("AppearanceError"));
             error->setWordWrap(true);
             error->setStyleSheet(QStringLiteral("color:#b42318;"));
             layout->addWidget(error);
@@ -4796,8 +4825,8 @@ public:
                             auto updated = source.entities().at(*provider_id);
                             auto& records = updated.properties.at("state").at("overrides");
                             records.erase(std::remove_if(records.begin(), records.end(), [&](json& record) {
-                                if (record.at("target_kind") != "area" || record.at("target_id") != selected->id) return false;
-                                if (record.contains("plan_label_offset_m")) {
+                                if (record.at("target_kind") != target_kind || record.at("target_id") != selected->id) return false;
+                                if (!object && record.contains("plan_label_offset_m")) {
                                     record["inherit_appearance"]=true;
                                     auto& version=updated.properties.at("state").at("version");
                                     version=std::max(4,version.get<int>());
@@ -4846,7 +4875,7 @@ public:
                         auto& records = updated.properties.at("state").at("overrides");
                         if (provider_id) {
                             for (auto& existing : records)
-                                if (existing.at("target_kind") == "area" && existing.at("target_id") == selected->id)
+                                if (existing.at("target_kind") == target_kind && existing.at("target_id") == selected->id)
                                     existing = record;
                         } else records.push_back(std::move(record));
                         validate_annotation_entity(updated);
@@ -4855,7 +4884,7 @@ public:
                     }
                     if (!changes.empty()) {
                         const ApplyEntityChanges command{source.revision(), std::move(changes), {},
-                            reset_pending ? "Reset area appearance" : "Edit area appearance"};
+                            reset_pending ? "Reset " + target_kind + " appearance" : "Edit " + target_kind + " appearance"};
                         (void)Document::preview_command(source, command);
                         if (!modalContextUnchanged(context)) throw std::invalid_argument(lastError().toStdString());
                         applyDocumentCommand(command);
@@ -4869,7 +4898,8 @@ public:
             });
             if (dialog.exec() == QDialog::Accepted && changed) refresh();
         } catch (const std::exception& exception) {
-            setError(QStringLiteral("Area appearance: %1").arg(QString::fromUtf8(exception.what())));
+            setError((object ? QStringLiteral("Object appearance: %1") : QStringLiteral("Area appearance: %1"))
+                .arg(QString::fromUtf8(exception.what())));
         }
     }
 
@@ -25963,6 +25993,20 @@ private:
                          [this](QTreeWidgetItem* item, int column) {
                              onNavigatorClicked(item, column);
                          });
+        QObject::connect(m_navigator, &QTreeWidget::itemDoubleClicked, owner,
+                         [this](QTreeWidgetItem* item, int column) {
+            if (!item || column != 0 || m_navigator->checkboxInteraction()) return;
+            const auto id = item->data(0, Qt::UserRole).toString();
+            const auto document = m_document;
+            const auto revision = document->revision();
+            // Tree selection rebuilds its rows; retain identity, never the item.
+            QTimer::singleShot(0, owner, [this, id, document, revision] {
+                if (id.isEmpty() || m_document != document || document->revision() != revision ||
+                    !has_entity(*document, id)) return;
+                const auto entity = document->snapshot().entities().at(id.toStdString());
+                if (supportsObjectAppearance(entity.type) && selectEntity(id)) positionContextEditor();
+            });
+        });
         QObject::connect(m_navigator, &QTreeWidget::itemChanged, owner,
                          [this](QTreeWidgetItem* item, int column) {
                              if (m_refreshing || column != 0 ||
@@ -26447,6 +26491,12 @@ private:
                     auto* properties = menu.addAction(QStringLiteral("Properties"));
                     QObject::connect(properties, &QAction::triggered, owner,
                                      [this] { positionContextEditor(); });
+                    if (supportsObjectAppearance(selectedEntity()->type)) {
+                        auto* appearance = menu.addAction(QStringLiteral("Drawing appearance…"));
+                        appearance->setObjectName(QStringLiteral("objectAppearanceContextAction"));
+                        appearance->setEnabled(m_document->is_editable());
+                        QObject::connect(appearance, &QAction::triggered, owner, [this] { showObjectAppearance(); });
+                    }
                     if (selectedEntity()->type == "room") {
                         auto* dimensions = menu.addAction(QStringLiteral("Edit room dimensions…"));
                         QObject::connect(dimensions, &QAction::triggered, owner,
@@ -26620,6 +26670,12 @@ private:
         inspector_layout->addWidget(m_edit_object_button);
         QObject::connect(m_edit_object_button, &QPushButton::clicked, owner,
                          [this] { showBuildingObjectDialog(true); });
+        m_object_appearance_button = new QPushButton(QStringLiteral("Drawing appearance…"), inspector_body);
+        m_object_appearance_button->setObjectName(QStringLiteral("objectAppearanceButton"));
+        m_object_appearance_button->setAccessibleName(QStringLiteral("Selected object drawing appearance"));
+        inspector_layout->addWidget(m_object_appearance_button);
+        QObject::connect(m_object_appearance_button, &QPushButton::clicked, owner,
+                         [this] { showObjectAppearance(); });
         m_edit_curve_button = new QPushButton(QStringLiteral("Edit curve…"), inspector_body);
         m_edit_curve_button->setObjectName(QStringLiteral("editCurvedWall"));
         m_edit_curve_button->setToolTip(QStringLiteral(
@@ -27627,6 +27683,12 @@ private:
                 selection->setEnabled(false);
                 if (m_selected_ids.size() == 1) {
                     const auto entity = selectedEntity();
+                    if (entity && supportsObjectAppearance(entity->type)) {
+                        auto* appearance = menu.addAction(QStringLiteral("Drawing appearance…"));
+                        appearance->setObjectName(QStringLiteral("objectAppearanceContextAction"));
+                        appearance->setEnabled(m_document->is_editable());
+                        QObject::connect(appearance, &QAction::triggered, owner, [this] { showObjectAppearance(); });
+                    }
                     if (entity && entity->type == "wall") {
                         menu.addAction(owner->findChild<QAction*>(QStringLiteral("createDoor")));
                         menu.addAction(owner->findChild<QAction*>(QStringLiteral("createWindow")));
@@ -28297,6 +28359,8 @@ private:
         // both interactive and persisted output use the same vector path.
         std::vector<std::pair<std::string, std::string>> annotation_child_layers;
         std::set<std::string, std::less<>> presentation_hidden_ids;
+        std::set<std::string, std::less<>> object_hidden_ids;
+        std::map<std::string, PresentationOverride, std::less<>> object_appearance;
         for (const auto& [id, entity] : snapshot.entities()) {
             if (entity.type != kAnnotationEntityType) continue;
             try {
@@ -28382,6 +28446,17 @@ private:
                     // The wall and its derived measurement share identity, but
                     // measurement appearance/visibility never affects geometry.
                     if (override.target_kind == "wall_dimension") continue;
+                    if (override.target_kind == "object") {
+                        const auto target = snapshot.entities().find(override.target_id);
+                        if (target != snapshot.entities().end() && supportsObjectAppearance(target->second.type)) {
+                            object_appearance.insert_or_assign(override.target_id, override);
+                            if (!override.visible) {
+                                object_hidden_ids.insert(override.target_id);
+                                presentation_hidden_ids.insert(override.target_id);
+                            }
+                            continue;
+                        }
+                    }
                     if (override.target_kind=="area" && override.plan_label_offset) {
                         for (auto& label:all_labels) {
                             if (label.avoid_components && label.id.toStdString()==override.target_id) {
@@ -28424,6 +28499,26 @@ private:
                                            .arg(id_from(id), QString::fromUtf8(error.what())));
             }
         }
+        const auto apply_object_appearance = [&](CanvasEntity& entity) {
+            // Projection creates new shapes later, and several physical strokes
+            // may share one source ID. Style each retained physical shape only;
+            // dimensions and other annotation children remain independent.
+            if (entity.type != QStringLiteral("window") && !supportsObjectAppearance(entity.type.toStdString())) return;
+            const auto found = object_appearance.find(entity.id.toStdString());
+            if (found == object_appearance.end() || found->second.inherit_appearance) return;
+            const auto& value = found->second;
+            entity.stroke_color = QColor(QString::fromStdString(value.style.stroke_color));
+            entity.dark_stroke_color = QColor{};
+            entity.stroke_width_metres = value.style.stroke_width_metres;
+            if (value.paper_line_width_mm) {
+                entity.output_stroke_width_mm = *value.paper_line_width_mm;
+                entity.paper_stroke_width_on_screen = true;
+            }
+            entity.fill_color = QColor(QString::fromStdString(value.style.fill_color));
+            entity.hatch_pattern = QString::fromStdString(value.style.fill_pattern);
+            if (value.hatch_scale) entity.hatch_scale = *value.hatch_scale;
+            entity.filled = value.style.fill_pattern != "none" && entity.fill_color.isValid();
+        };
         // Reusable assembly instances are retained inside the catalog model,
         // but their plan preview is a transformed copy of the declared host
         // geometry.  This keeps screen, print, and export paths on the same
@@ -29076,6 +29171,25 @@ private:
         // Every supported entity has been parsed and validated before the
         // previously derived view mask is applied. Hidden invalid geometry
         // therefore remains reported and cannot bypass validation.
+        m_object_appearance_defaults.clear();
+        for (const auto& entity : all_geometry) {
+            const auto source = snapshot.entities().find(entity.id.toStdString());
+            if (source == snapshot.entities().end() || !supportsObjectAppearance(source->second.type) ||
+                (entity.type != QStringLiteral("window") && !supportsObjectAppearance(entity.type.toStdString()))) continue;
+            PresentationOverride defaults;
+            defaults.target_kind = "object";
+            defaults.target_id = source->first;
+            // Missing retained colors use the shared output/annotation defaults
+            // (black outline, white fill); explicit semantic colors are exact.
+            if (entity.stroke_color.isValid()) defaults.style.stroke_color = entity.stroke_color.name(QColor::HexRgb).toStdString();
+            if (entity.fill_color.isValid()) defaults.style.fill_color = entity.fill_color.name(QColor::HexRgb).toStdString();
+            defaults.style.fill_pattern = !entity.filled || entity.hatch_pattern == QStringLiteral("none") ? "none"
+                : entity.hatch_pattern == QStringLiteral("solid") ? "solid" : "hatch";
+            if (entity.stroke_width_metres > 0.0) defaults.style.stroke_width_metres = entity.stroke_width_metres;
+            defaults.paper_line_width_mm = entity.output_stroke_width_mm > 0.0 ? entity.output_stroke_width_mm : 0.25;
+            defaults.hatch_scale = entity.hatch_scale;
+            m_object_appearance_defaults.try_emplace(source->first, std::move(defaults));
+        }
         std::vector<CanvasEntity> geometry;
         m_plan_visible_model_ids=visible_ids;
         std::erase_if(m_plan_visible_model_ids,[&](const auto& id) { return presentation_hidden_ids.contains(id); });
@@ -29083,6 +29197,7 @@ private:
         geometry.reserve(all_geometry.size());
         const auto active_snap_context = organization.drawing_context(m_active_layer_id.toStdString());
         for (auto& entity : all_geometry) {
+            apply_object_appearance(entity);
             if (visible_ids.contains(entity.id.toStdString()) &&
                 !presentation_hidden_ids.contains(entity.id.toStdString())) {
                 const auto source = snapshot.entities().find(entity.id.toStdString());
@@ -29133,6 +29248,7 @@ private:
         for (std::size_t index = 0; index < view_geometry.size(); ++index) {
             visible_view_geometry[index].reserve(view_geometry[index].size());
             for (auto& entity : view_geometry[index]) {
+                apply_object_appearance(entity);
                 if ((entity.type == QStringLiteral("section_overlay") || visible_ids.contains(entity.id.toStdString())) &&
                     !presentation_hidden_ids.contains(entity.id.toStdString())) {
                     visible_view_geometry[index].push_back(std::move(entity));
@@ -29146,6 +29262,7 @@ private:
         }
         for (auto& [view_id, entities] : m_coordinated_view_entities) {
             (void)view_id;
+            for (auto& entity : entities) apply_object_appearance(entity);
             std::erase_if(entities, [&](const auto& entity) {
                 if (entity.type == QStringLiteral("section_overlay")) return false;
                 return !visible_ids.contains(entity.id.toStdString()) ||
@@ -29262,7 +29379,7 @@ private:
         std::vector<CanvasLabel> labels;
         for (auto& label : all_labels) {
             if (visible_ids.contains(label.id.toStdString()) &&
-                !presentation_hidden_ids.contains(label.id.toStdString())) {
+                (!presentation_hidden_ids.contains(label.id.toStdString()) || object_hidden_ids.contains(label.id.toStdString()))) {
                 labels.push_back(std::move(label));
             }
         }
@@ -30605,6 +30722,9 @@ private:
             (entity && is_closed_boundary_entity(entity->type));
         m_edit_object_button->setVisible(building_object);
         m_edit_object_button->setEnabled(editable && building_object);
+        const bool appearance_object = entity && supportsObjectAppearance(entity->type) && m_selected_ids.size() == 1;
+        m_object_appearance_button->setVisible(appearance_object);
+        m_object_appearance_button->setEnabled(editable && appearance_object);
         m_roof_properties_group->setVisible(false);
         m_roof_properties_group->setEnabled(false);
         m_roof_edit_context.reset();
@@ -34412,6 +34532,7 @@ private:
     QString m_last_error;
     QString m_plan_geometry_error;
     std::map<std::string, std::pair<std::string, Boundary>> m_plan_projection_cache;
+    std::map<std::string, PresentationOverride, std::less<>> m_object_appearance_defaults;
     std::map<std::string, std::pair<std::string, CanvasSelectionFrame>> m_plan_transform_frame_cache;
     std::map<std::string, Entity, std::less<>> m_view_projection_sources;
     std::map<std::pair<std::string, std::string>, std::optional<Boundary>> m_view_projection_cache;
@@ -34612,6 +34733,7 @@ private:
     QCheckBox* m_include_living_check{};
     QToolButton* m_object_button{};
     QPushButton* m_edit_object_button{};
+    QPushButton* m_object_appearance_button{};
     QPushButton* m_edit_curve_button{};
     QPushButton* m_edit_layers_button{};
     QPushButton* m_delete_annotation_button{};
