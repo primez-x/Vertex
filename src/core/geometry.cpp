@@ -84,15 +84,18 @@ ArcGeometry arc_geometry(const Segment& segment) {
     const auto chord = segment.end - segment.start;
     const auto chord_length = length(chord);
     const auto half_sweep = segment.sweep_radians / 2.0;
-    const auto sine = std::sin(std::abs(half_sweep));
-    const auto tangent = std::tan(half_sweep);
+    const bool half_turn = std::abs(segment.sweep_radians) == std::numbers::pi;
+    const auto sine = half_turn ? 1.0 : std::sin(std::abs(half_sweep));
+    const auto tangent = half_turn ? 1.0 : std::tan(half_sweep);
     if (!(sine > 0.0) || tangent == 0.0 || !std::isfinite(tangent)) {
         throw std::invalid_argument("arc sweep cannot be represented");
     }
 
-    const auto midpoint = (segment.start + segment.end) * 0.5;
+    const Vec2 midpoint{std::midpoint(segment.start.x, segment.end.x),
+                        std::midpoint(segment.start.y, segment.end.y)};
     const Vec2 left_normal{-chord.y / chord_length, chord.x / chord_length};
-    const auto center = midpoint + left_normal * (chord_length / (2.0 * tangent));
+    const auto center = half_turn ? midpoint :
+        midpoint + left_normal * (chord_length / (2.0 * tangent));
     const auto radius = chord_length / (2.0 * sine);
     if (!finite(center) || !std::isfinite(radius)) {
         throw std::invalid_argument("arc geometry exceeds numeric range");
@@ -148,6 +151,29 @@ struct IntersectionResult {
     std::array<Vec2, 2> points{};
     std::size_t point_count{};
 };
+
+struct CompensatedValue {
+    double value;
+    double tail;
+};
+
+CompensatedValue compensated_sum(double a, double b) {
+    const auto sum = a + b;
+    const auto restored_b = sum - a;
+    return {sum, (a - (sum - restored_b)) + (b - restored_b)};
+}
+
+CompensatedValue compensated_add(CompensatedValue a, CompensatedValue b) {
+    const auto sum = compensated_sum(a.value, b.value);
+    return compensated_sum(sum.value, sum.tail + a.tail + b.tail);
+}
+
+CompensatedValue compensated_product(CompensatedValue a, CompensatedValue b) {
+    const auto product = a.value * b.value;
+    const auto tail = std::fma(a.value, b.value, -product) +
+        a.value * b.tail + a.tail * b.value + a.tail * b.tail;
+    return compensated_sum(product, tail);
+}
 
 void add_point(IntersectionResult& result, Vec2 point, double tolerance) {
     for (std::size_t index = 0; index < result.point_count; ++index) {
@@ -250,45 +276,307 @@ IntersectionResult intersect_lines(const Segment& left, const Segment& right, do
 IntersectionResult intersect_line_arc(const Segment& line, const Segment& arc_segment,
                                       double tolerance) {
     IntersectionResult result;
-    const auto arc = arc_geometry(arc_segment);
+    // Internal validators also call this kernel directly. Normalize them at
+    // the arc, just as the public contact API does, so a rounded world midpoint
+    // cannot change branch membership or erase a second endpoint-root contact.
+    if (arc_segment.start.x != 0.0 || arc_segment.start.y != 0.0) {
+        const auto origin = arc_segment.start;
+        const Segment local_line{line.start - origin, line.end - origin, 0.0};
+        const Segment local_arc{{0, 0}, arc_segment.end - origin, arc_segment.sweep_radians};
+        if (!finite(local_line.start) || !finite(local_line.end) || !finite(local_arc.end)) {
+            result.kind = IntersectionKind::indeterminate;
+            return result;
+        }
+        auto local = intersect_line_arc(local_line, local_arc, tolerance);
+        for (std::size_t index = 0; index < local.point_count; ++index) {
+            const auto point = local.points[index];
+            const auto restored = point + origin;
+            if (!finite(restored) || distance(restored - origin, point) > tolerance) {
+                result.kind = IntersectionKind::indeterminate;
+                return result;
+            }
+            local.points[index] = restored;
+        }
+        return local;
+    }
+    const auto bounds = segment_bounds(arc_segment);
+    if (std::max(line.start.x, line.end.x) < bounds.minimum.x - tolerance ||
+        std::min(line.start.x, line.end.x) > bounds.maximum.x + tolerance ||
+        std::max(line.start.y, line.end.y) < bounds.minimum.y - tolerance ||
+        std::min(line.start.y, line.end.y) > bounds.maximum.y + tolerance) return result;
+
     const auto direction = line.end - line.start;
     const auto line_length = length(direction);
-    const auto direction_squared = dot(direction, direction);
-    const auto center_offset = arc.center - line.start;
-    const auto projection = dot(center_offset, direction) / direction_squared;
-    const auto nearest = line.start + direction * projection;
-    const auto nearest_distance = distance(nearest, arc.center);
-    const auto square_limit = std::sqrt(std::numeric_limits<double>::max());
-    if (!std::isfinite(direction_squared) || !std::isfinite(nearest_distance) ||
-        arc.radius > square_limit || nearest_distance > square_limit) {
+    const auto chord = arc_segment.end - arc_segment.start;
+    const auto chord_length = length(chord);
+    const Vec2 midpoint{std::midpoint(arc_segment.start.x, arc_segment.end.x),
+                        std::midpoint(arc_segment.start.y, arc_segment.end.y)};
+    const Vec2 normal{-chord.y / chord_length, chord.x / chord_length};
+    // The chosen arc is confined to one chord half-plane. Prove separation
+    // of the whole finite line before solving its supporting circle: a tangent
+    // on the excluded circle portion is not an unresolved arc contact.
+    const auto excluded_side = [&](Vec2 point) {
+        const auto offset = point - midpoint;
+        const auto side = std::copysign(1.0, arc_segment.sweep_radians) *
+            std::fma(offset.x, normal.x, offset.y * normal.y);
+        const auto error = 64.0 * std::numeric_limits<double>::epsilon() *
+            ((std::abs(point.x) + std::abs(midpoint.x)) * std::abs(normal.x) +
+             (std::abs(point.y) + std::abs(midpoint.y)) * std::abs(normal.y));
+        return std::isfinite(side) && std::isfinite(error) && side > tolerance + error;
+    };
+    if (excluded_side(line.start) && excluded_side(line.end)) return result;
+    const Vec2 unit{direction.x / line_length, direction.y / line_length};
+    const Vec2 line_normal{-unit.y, unit.x};
+    const auto accurate_cross = [](Vec2 a, Vec2 b) {
+        const auto product = a.y * b.x;
+        return std::fma(a.x, b.y, -product) + std::fma(-a.y, b.x, product);
+    };
+    // Anchor the line near the chord, independently of its finite endpoints.
+    // Subtracting a distant line parameter would erase nearby distinct roots.
+    double offset;
+    if (direction.y == 0.0) offset = (line.start.y - midpoint.y) * unit.x;
+    else if (direction.x == 0.0) offset = -(line.start.x - midpoint.x) * unit.y;
+    else offset = (accurate_cross(direction, line.start) -
+                   accurate_cross(direction, midpoint)) / line_length;
+    const auto scale = std::max(chord_length, std::abs(offset));
+    if (!std::isfinite(scale) || !(scale > 0.0) || !finite(unit)) {
         result.kind = IntersectionKind::indeterminate;
         return result;
     }
-    const auto radial_delta = arc.radius * arc.radius - nearest_distance * nearest_distance;
-    const auto delta_tolerance = tolerance * (2.0 * arc.radius + tolerance);
-    if (radial_delta < -delta_tolerance) {
+    const Vec2 p = line_normal * (offset / scale);
+    const auto half_chord = (chord_length / scale) * 0.5;
+    const bool half_turn = std::abs(arc_segment.sweep_radians) == std::numbers::pi;
+    const auto sine = half_turn ? std::copysign(1.0, arc_segment.sweep_radians) :
+        std::sin(arc_segment.sweep_radians * 0.5);
+    const auto half_chord_cosine = half_turn ? 0.0 :
+        half_chord * std::cos(arc_segment.sweep_radians * 0.5);
+    const auto precise_dot = [](Vec2 a, Vec2 b) { return std::fma(a.x, b.x, a.y * b.y); };
+    // S*(x*x+y*y-h*h)-2*h*C*dot((x,y),normal)=0 is the
+    // circle equation in the chord frame; no distant center or radius square.
+    double a = sine * precise_dot(unit, unit);
+    double b = 2.0 * std::fma(sine, precise_dot(p, unit),
+                              -half_chord_cosine * precise_dot(unit, normal));
+    double k = std::fma(sine, std::fma(p.x, p.x, std::fma(p.y, p.y, -half_chord * half_chord)),
+                        -2.0 * half_chord_cosine * precise_dot(p, normal));
+    constexpr auto epsilon = std::numeric_limits<double>::epsilon();
+    double error_a = 32.0 * epsilon * std::abs(sine) * (unit.x * unit.x + unit.y * unit.y);
+    double error_b = 64.0 * epsilon * (std::abs(sine) *
+        (std::abs(p.x * unit.x) + std::abs(p.y * unit.y)) + std::abs(half_chord_cosine) *
+        (std::abs(unit.x * normal.x) + std::abs(unit.y * normal.y)));
+    double error_k = 64.0 * epsilon * (std::abs(sine) *
+        (p.x * p.x + p.y * p.y + half_chord * half_chord) +
+        2.0 * std::abs(half_chord_cosine) * (std::abs(p.x * normal.x) + std::abs(p.y * normal.y)));
+    const auto coefficient_scale = std::max({std::abs(a), std::abs(b), std::abs(k)});
+    if (!std::isfinite(coefficient_scale) || !(coefficient_scale > 0.0)) {
+        result.kind = IntersectionKind::indeterminate;
         return result;
     }
-
-    const auto parameter_tolerance = tolerance / line_length;
-    const auto add_parameter = [&](double parameter) {
-        if (parameter < -parameter_tolerance || parameter > 1.0 + parameter_tolerance) {
-            return;
-        }
-        const auto point = line.start + direction * std::clamp(parameter, 0.0, 1.0);
-        if (point_on_arc(arc, point, tolerance)) {
-            add_point(result, point, tolerance);
-        }
+    a /= coefficient_scale; b /= coefficient_scale; k /= coefficient_scale;
+    error_a /= coefficient_scale; error_b /= coefficient_scale; error_k /= coefficient_scale;
+    const auto along = [&](Vec2 point) {
+        return precise_dot((point - midpoint) * (1.0 / scale), unit);
     };
-
-    if (radial_delta <= delta_tolerance) {
-        add_parameter(projection);
+    const auto low = std::min(along(line.start), along(line.end));
+    const auto high = std::max(along(line.start), along(line.end));
+    if (!std::isfinite(low) || !std::isfinite(high) ||
+        !std::isfinite(error_a) || !std::isfinite(error_b) || !std::isfinite(error_k)) {
+        result.kind = IntersectionKind::indeterminate;
         return result;
     }
-
-    const auto offset = std::sqrt(radial_delta / direction_squared);
-    add_parameter(projection - offset);
-    add_parameter(projection + offset);
+    bool unresolved = false;
+    const auto admit_verified_point = [&](Vec2 point) {
+        if (!finite(point)) { unresolved = true; return; }
+        const auto root = along(point);
+        const auto range_tolerance = tolerance / scale + 64.0 * epsilon * std::max(1.0, std::abs(root));
+        if (!std::isfinite(root)) { unresolved = true; return; }
+        if (root < low - range_tolerance || root > high + range_tolerance) return;
+        const auto local = (point - midpoint) * (1.0 / scale);
+        const auto side = precise_dot(local, normal);
+        const auto side_error = 64.0 * epsilon *
+            (std::abs(local.x * normal.x) + std::abs(local.y * normal.y));
+        if (!std::isfinite(side) || !std::isfinite(side_error)) { unresolved = true; return; }
+        // A world-distance tolerance may admit an endpoint contact, but must
+        // not enlarge the chosen sweep by the entire band around its chord.
+        if (std::copysign(1.0, arc_segment.sweep_radians) * side > side_error &&
+            distance(point, arc_segment.start) > tolerance &&
+            distance(point, arc_segment.end) > tolerance) return;
+        if (distance(point, line.start) <= tolerance) add_point(result, line.start, tolerance);
+        else if (distance(point, line.end) <= tolerance) add_point(result, line.end, tolerance);
+        else if (distance(point, arc_segment.start) <= tolerance) add_point(result, arc_segment.start, tolerance);
+        else if (distance(point, arc_segment.end) <= tolerance) add_point(result, arc_segment.end, tolerance);
+        else add_point(result, point, tolerance);
+    };
+    const auto admit_root = [&](double root) {
+        if (!std::isfinite(root)) { unresolved = true; return; }
+        const auto range_tolerance = tolerance / scale + 64.0 * epsilon * std::max(1.0, std::abs(root));
+        if (root < low - range_tolerance || root > high + range_tolerance) return;
+        const Vec2 local{std::fma(root, unit.x, p.x), std::fma(root, unit.y, p.y)};
+        const auto residual = std::fma(std::fma(a, root, b), root, k);
+        const auto residual_error = error_a * root * root + error_b * std::abs(root) + error_k +
+            64.0 * epsilon * (std::abs(a) * root * root + std::abs(b * root) + std::abs(k));
+        if (!std::isfinite(residual) || !std::isfinite(residual_error) ||
+            std::abs(residual) > residual_error) { unresolved = true; return; }
+        const Vec2 point{std::fma(local.x, scale, midpoint.x), std::fma(local.y, scale, midpoint.y)};
+        admit_verified_point(point);
+    };
+    // An exact shared station is a known circle root. Anchor the polynomial
+    // there instead of evaluating a nearly cancelling constant coefficient.
+    // Factoring t*(A*t+B) retains the possible second contact; only a proved
+    // tolerance-sized second-root band may merge with the known endpoint.
+    for (const auto endpoint : std::array{arc_segment.start, arc_segment.end}) {
+        if (!((endpoint.x == line.start.x && endpoint.y == line.start.y) ||
+              (endpoint.x == line.end.x && endpoint.y == line.end.y))) continue;
+        admit_verified_point(endpoint);
+        // An endpoint is exactly +/- half the chord from its geometric
+        // midpoint, even when that midpoint cannot be represented in world
+        // coordinates. Do not let rounded translation erase the derivative.
+        const auto half_sign = endpoint.x == arc_segment.start.x && endpoint.y == arc_segment.start.y
+            ? -0.5 : 0.5;
+        const Vec2 local{(chord.x / scale) * half_sign, (chord.y / scale) * half_sign};
+        const auto endpoint_a = sine * precise_dot(unit, unit);
+        const auto endpoint_b = 2.0 * std::fma(sine, precise_dot(local, unit),
+            -half_chord_cosine * precise_dot(unit, normal));
+        const auto endpoint_b_error = 64.0 * epsilon * (std::abs(sine) *
+            (std::abs(local.x * unit.x) + std::abs(local.y * unit.y)) +
+            std::abs(half_chord_cosine) *
+            (std::abs(unit.x * normal.x) + std::abs(unit.y * normal.y)));
+        const auto delta = -endpoint_b / endpoint_a;
+        const auto delta_error = endpoint_b_error / std::abs(endpoint_a) +
+            64.0 * epsilon * std::abs(delta);
+        if (!std::isfinite(delta) || !std::isfinite(delta_error) || endpoint_a == 0.0) {
+            unresolved = true;
+        } else if (std::abs(delta) + delta_error <= tolerance / scale) {
+            // Both roots are independently confined to this endpoint band.
+        } else if (std::abs(delta) <= delta_error) {
+            unresolved = true;
+        } else {
+            const auto offset = delta * scale;
+            admit_verified_point({std::fma(unit.x, offset, endpoint.x),
+                                  std::fma(unit.y, offset, endpoint.y)});
+        }
+        if (unresolved) {
+            result.kind = IntersectionKind::indeterminate;
+            result.point_count = 0;
+        }
+        return result;
+    }
+    if (a == 0.0) {
+        if (b != 0.0) admit_root(-k / b);
+        else unresolved = true;
+    } else {
+        const auto discriminant = std::fma(b, b, -4.0 * a * k);
+        const auto discriminant_error = 2.0 * std::abs(b) * error_b +
+            4.0 * (std::abs(k) * error_a + std::abs(a) * error_k) +
+            64.0 * epsilon * (b * b + 4.0 * std::abs(a * k));
+        if (!std::isfinite(discriminant) || !std::isfinite(discriminant_error)) unresolved = true;
+        else if (std::abs(discriminant) <= discriminant_error) {
+            // Normalizing a direction can move a line across a circle by one
+            // ulp. For half turns, independently evaluate
+            // R^2*(D.D)-cross(D,P-M)^2 from the represented inputs, preserving
+            // product tails. Other uncertain signs do not produce contacts.
+            const auto exact_difference = [](double x, double y) {
+                return compensated_sum(x, -y).tail == 0.0;
+            };
+            const auto center_x = compensated_sum(arc_segment.start.x * 0.5,
+                                                   arc_segment.end.x * 0.5);
+            const auto center_y = compensated_sum(arc_segment.start.y * 0.5,
+                                                   arc_segment.end.y * 0.5);
+            const auto offset = line.start - midpoint;
+            if (!half_turn ||
+                center_x.tail != 0.0 || center_y.tail != 0.0 ||
+                center_x.value != midpoint.x || center_y.value != midpoint.y ||
+                !exact_difference(arc_segment.end.x, arc_segment.start.x) ||
+                !exact_difference(arc_segment.end.y, arc_segment.start.y) ||
+                !exact_difference(line.end.x, line.start.x) ||
+                !exact_difference(line.end.y, line.start.y) ||
+                !exact_difference(line.start.x, midpoint.x) ||
+                !exact_difference(line.start.y, midpoint.y)) {
+                unresolved = true;
+            } else {
+                const auto radius = chord_length * 0.5;
+                int direction_exponent = 0;
+                int position_exponent = 0;
+                std::frexp(std::max(std::abs(direction.x), std::abs(direction.y)), &direction_exponent);
+                std::frexp(std::max({radius, std::abs(offset.x), std::abs(offset.y)}), &position_exponent);
+                const auto dx = std::ldexp(direction.x, -direction_exponent);
+                const auto dy = std::ldexp(direction.y, -direction_exponent);
+                const auto px = std::ldexp(offset.x, -position_exponent);
+                const auto py = std::ldexp(offset.y, -position_exponent);
+                const auto r = std::ldexp(radius, -position_exponent);
+                const auto squared = [&](double x) { return compensated_product({x, 0.0}, {x, 0.0}); };
+                // The circle is defined by its endpoints. Squaring a rounded
+                // hypot radius would enlarge a tilted diameter's circle.
+                const auto half_x = std::ldexp(chord.x, -position_exponent) * 0.5;
+                const auto half_y = std::ldexp(chord.y, -position_exponent) * 0.5;
+                const auto radius_squared = compensated_add(squared(half_x), squared(half_y));
+                const auto norm_squared = compensated_add(squared(dx), squared(dy));
+                auto second_cross_product = compensated_product({dy, 0.0}, {px, 0.0});
+                second_cross_product.value = -second_cross_product.value;
+                second_cross_product.tail = -second_cross_product.tail;
+                const auto determinant = compensated_add(
+                    compensated_product({dx, 0.0}, {py, 0.0}), second_cross_product);
+                const auto radial_product = compensated_product(radius_squared, norm_squared);
+                auto determinant_squared = compensated_product(determinant, determinant);
+                const auto proof_error = 512.0 * epsilon * epsilon *
+                    (std::abs(radial_product.value) + std::abs(determinant_squared.value)) +
+                    128.0 * std::numeric_limits<double>::denorm_min();
+                determinant_squared.value = -determinant_squared.value;
+                determinant_squared.tail = -determinant_squared.tail;
+                const auto proof = compensated_add(radial_product, determinant_squared);
+                const auto proof_value = proof.value + proof.tail;
+                // An axis line through the endpoint of an axis diameter is
+                // independently an exact tangent. Its known endpoint is the
+                // sole circle contact, including when the discriminant is zero.
+                bool exact_endpoint_tangent = false;
+                for (const auto endpoint : std::array{arc_segment.start, arc_segment.end}) {
+                    if ((chord.y == 0.0 && direction.x == 0.0 && endpoint.x == line.start.x) ||
+                        (chord.x == 0.0 && direction.y == 0.0 && endpoint.y == line.start.y)) {
+                        exact_endpoint_tangent = true;
+                        admit_verified_point(endpoint);
+                    }
+                }
+                if (exact_endpoint_tangent) {
+                    // Admission also verifies the finite line range.
+                    if (unresolved) result.kind = IntersectionKind::indeterminate;
+                    return result;
+                }
+                const bool axis_diameter = chord.x == 0.0 || chord.y == 0.0;
+                if (axis_diameter && direction.y == 0.0 && std::abs(offset.y) == radius) {
+                    admit_verified_point({midpoint.x, line.start.y});
+                    if (unresolved) result.kind = IntersectionKind::indeterminate;
+                    return result;
+                }
+                if (axis_diameter && direction.x == 0.0 && std::abs(offset.x) == radius) {
+                    admit_verified_point({line.start.x, midpoint.y});
+                    if (unresolved) result.kind = IntersectionKind::indeterminate;
+                    return result;
+                }
+                if (!std::isfinite(proof_value) || !(r > 0.0) || !std::isfinite(proof_error)) {
+                    unresolved = true;
+                } else if (proof_value > proof_error) {
+                    const auto norm = norm_squared.value + norm_squared.tail;
+                    const auto signed_offset = (determinant.value + determinant.tail) / norm;
+                    const auto spacing = std::sqrt(proof_value) / norm;
+                    for (const double sign : {-1.0, 1.0}) {
+                        const auto x = std::fma(-dy, signed_offset, sign * dx * spacing);
+                        const auto y = std::fma(dx, signed_offset, sign * dy * spacing);
+                        admit_verified_point({midpoint.x + std::ldexp(x, position_exponent),
+                                              midpoint.y + std::ldexp(y, position_exponent)});
+                    }
+                } else if (proof_value >= -proof_error) {
+                    unresolved = true;
+                }
+            }
+        }
+        else if (discriminant > 0.0) {
+            // A small positive discriminant still has two genuine contacts.
+            const auto q = -0.5 * (b + std::copysign(std::sqrt(discriminant), b));
+            if (q == 0.0) unresolved = true;
+            else { admit_root(q / a); admit_root(k / q); }
+        } else if (discriminant == 0.0) admit_root(-b / (2.0 * a));
+        else if (discriminant >= -discriminant_error) unresolved = true;
+    }
+    if (unresolved) result.kind = IntersectionKind::indeterminate;
     return result;
 }
 
@@ -390,6 +678,95 @@ IntersectionResult intersect_segments(const Segment& left, const Segment& right,
     return intersect_arcs(left, right, tolerance);
 }
 
+// Clearance is a topology decision, not an intersection coordinate. A line
+// and arc can miss while their interior stationary points are within tolerance.
+// Only analytical endpoints and circle normals are needed to find that minimum;
+// arithmetic uncertainty at the tolerance boundary rejects conservatively.
+bool line_arc_clearance_unresolved_or_within(const Segment& source_line,
+                                            const Segment& source_arc,
+                                            double tolerance) {
+    const auto origin = source_arc.start;
+    const Segment line{source_line.start - origin, source_line.end - origin, 0.0};
+    const Segment segment{source_arc.start - origin, source_arc.end - origin,
+                          source_arc.sweep_radians};
+    const auto line_bounds = segment_bounds(line);
+    const auto arc_bounds = segment_bounds(segment);
+    if (line_bounds.maximum.x < arc_bounds.minimum.x - tolerance ||
+        arc_bounds.maximum.x < line_bounds.minimum.x - tolerance ||
+        line_bounds.maximum.y < arc_bounds.minimum.y - tolerance ||
+        arc_bounds.maximum.y < line_bounds.minimum.y - tolerance) return false;
+
+    const auto arc = arc_geometry(segment);
+    const auto direction = line.end - line.start;
+    const auto line_length = length(direction);
+    const Vec2 unit{direction.x / line_length, direction.y / line_length};
+    const Vec2 normal{-unit.y, unit.x};
+    const Vec2 line_middle{std::midpoint(line.start.x, line.end.x),
+                           std::midpoint(line.start.y, line.end.y)};
+    const Vec2 arc_middle{std::midpoint(segment.start.x, segment.end.x),
+                          std::midpoint(segment.start.y, segment.end.y)};
+    const auto chord = segment.end - segment.start;
+    const auto chord_length = length(chord);
+    const Vec2 arc_normal{-chord.y / chord_length, chord.x / chord_length};
+    constexpr auto roundoff = 128.0 * std::numeric_limits<double>::epsilon();
+    const auto checked_dot = [](Vec2 a, Vec2 b) {
+        return std::fma(a.x, b.x, a.y * b.y);
+    };
+    const auto dot_error = [&](Vec2 a, Vec2 b) {
+        return roundoff * (std::abs(a.x * b.x) + std::abs(a.y * b.y));
+    };
+    const auto on_chosen_arc_or_unresolved = [&](Vec2 point, double point_error) {
+        const auto offset = point - arc_middle;
+        const auto side = std::copysign(1.0, segment.sweep_radians) *
+            checked_dot(offset, arc_normal);
+        const auto error = point_error + dot_error(offset, arc_normal);
+        return !std::isfinite(side) || !std::isfinite(error) || side <= error;
+    };
+    const auto arc_point_near_line = [&](Vec2 point) {
+        const auto offset = point - line_middle;
+        const auto along = checked_dot(offset, unit);
+        const auto half_length = line_length * 0.5;
+        const auto nearest = line_middle + unit * std::clamp(along, -half_length, half_length);
+        const auto gap = distance(point, nearest);
+        const auto error = roundoff * (length(offset) + line_length + length(point));
+        return !finite(nearest) || !std::isfinite(gap) || !std::isfinite(error) ||
+            gap <= tolerance + error;
+    };
+    if (arc_point_near_line(segment.start) || arc_point_near_line(segment.end)) return true;
+
+    const auto line_point_near_arc = [&](Vec2 point) {
+        if (distance(point, segment.start) <= tolerance ||
+            distance(point, segment.end) <= tolerance) return true;
+        const auto radial = point - arc.center;
+        const auto radius = length(radial);
+        const auto error = roundoff * (radius + arc.radius + length(arc.center));
+        if (!std::isfinite(radius) || !std::isfinite(error)) return true;
+        if (std::abs(radius - arc.radius) > tolerance + error) return false;
+        if (!(radius > 0.0)) return true;
+        const auto nearest = arc.center + radial * (arc.radius / radius);
+        return !finite(nearest) || on_chosen_arc_or_unresolved(nearest, error);
+    };
+    if (line_point_near_arc(line.start) || line_point_near_arc(line.end)) return true;
+
+    const auto center_offset = arc.center - line_middle;
+    const auto signed_distance = checked_dot(center_offset, normal);
+    const auto distance_error = dot_error(center_offset, normal) +
+        roundoff * (arc.radius + length(arc.center));
+    for (const double sign : {-1.0, 1.0}) {
+        const auto gap = std::abs(signed_distance + sign * arc.radius);
+        if (!std::isfinite(gap) || !std::isfinite(distance_error)) return true;
+        if (gap > tolerance + distance_error) continue;
+        const auto candidate = arc.center + normal * (sign * arc.radius);
+        if (!finite(candidate)) return true;
+        const auto along = checked_dot(candidate - line_middle, unit);
+        const auto along_error = dot_error(candidate - line_middle, unit) + distance_error;
+        if (!std::isfinite(along) || !std::isfinite(along_error)) return true;
+        if (std::abs(along) > line_length * 0.5 + along_error) continue;
+        if (on_chosen_arc_or_unresolved(candidate, distance_error)) return true;
+    }
+    return false;
+}
+
 void add_diagnostic(std::vector<BoundaryDiagnostic>& diagnostics, BoundaryIssue issue,
                     std::size_t segment_index, std::optional<std::size_t> other_segment_index,
                     const char* message) {
@@ -476,9 +853,11 @@ SegmentIntersection segment_intersection(const Segment& first, const Segment& se
         segment_length(first)<=tolerance || segment_length(second)<=tolerance)
         throw std::invalid_argument("Segment intersection requires finite nondegenerate geometry");
     // Local coordinates avoid cancellation far from the document origin.
+    const auto origin = first.sweep_radians != 0.0 ? first.start :
+        (second.sweep_radians != 0.0 ? second.start : first.start);
     auto left=first; auto right=second;
-    left.start={0,0}; left.end=first.end-first.start;
-    right.start=second.start-first.start; right.end=second.end-first.start;
+    left.start=first.start-origin; left.end=first.end-origin;
+    right.start=second.start-origin; right.end=second.end-origin;
     const auto hit=intersect_segments(left,right,tolerance);
     SegmentIntersection result;
     if (hit.kind==IntersectionKind::overlap) result.kind=SegmentIntersectionKind::overlap;
@@ -490,7 +869,7 @@ SegmentIntersection segment_intersection(const Segment& first, const Segment& se
             if (distance(point,left.start)>tolerance && distance(point,left.end)>tolerance &&
                 distance(point,right.start)>tolerance && distance(point,right.end)>tolerance)
                 result.kind=SegmentIntersectionKind::proper;
-            result.points.push_back(point+first.start);
+            result.points.push_back(point+origin);
         }
     }
     return result;
@@ -621,6 +1000,19 @@ Bounds2 segment_bounds(const Segment& segment) {
     const Vec2 normal{-chord.y / chord_length, chord.x / chord_length};
     const Vec2 midpoint{std::midpoint(segment.start.x, segment.end.x),
                         std::midpoint(segment.start.y, segment.end.y)};
+    if (std::abs(segment.sweep_radians) == std::numbers::pi) {
+        for (const auto direction : std::array{Vec2{1, 0}, Vec2{0, 1}, Vec2{-1, 0}, Vec2{0, -1}}) {
+            if (std::copysign(1.0, segment.sweep_radians) * dot(direction, normal) > 0.0) continue;
+            const Vec2 point{midpoint.x + direction.x * arc.radius,
+                             midpoint.y + direction.y * arc.radius};
+            if (!finite(point)) throw std::invalid_argument("arc bounds exceed numeric range");
+            result.minimum.x = std::min(result.minimum.x, point.x);
+            result.minimum.y = std::min(result.minimum.y, point.y);
+            result.maximum.x = std::max(result.maximum.x, point.x);
+            result.maximum.y = std::max(result.maximum.y, point.y);
+        }
+        return result;
+    }
     const auto center_distance = chord_length / (2.0 * std::tan(segment.sweep_radians / 2.0));
     const auto half = std::abs(segment.sweep_radians) / 2.0;
     const auto small_sine = half <= std::numbers::pi / 2.0 ?
@@ -1010,6 +1402,12 @@ std::optional<std::string> validate_boundary_holes(
             for (const auto& left : first) {
                 for (const auto& right : second) {
                     if (intersect_segments(left, right, tolerance_metres).kind != IntersectionKind::none)
+                        return true;
+                    if (left.sweep_radians == 0.0 && right.sweep_radians != 0.0 &&
+                        line_arc_clearance_unresolved_or_within(left, right, tolerance_metres))
+                        return true;
+                    if (right.sweep_radians == 0.0 && left.sweep_radians != 0.0 &&
+                        line_arc_clearance_unresolved_or_within(right, left, tolerance_metres))
                         return true;
                 }
             }

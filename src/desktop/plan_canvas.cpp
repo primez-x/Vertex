@@ -3941,31 +3941,6 @@ std::optional<Vec2> PlanCanvas::directionalDrawingAlignment(
                 }
                 return;
             }
-            const Vec2 chord{segment.end.x-segment.start.x, segment.end.y-segment.start.y};
-            const auto chord_length = std::hypot(chord.x, chord.y);
-            if (!std::isfinite(chord_length) || chord_length <= 0.0) return;
-            const Vec2 midpoint{std::midpoint(segment.start.x, segment.end.x),
-                std::midpoint(segment.start.y, segment.end.y)};
-            const Vec2 normal{-chord.y/chord_length, chord.x/chord_length};
-            const bool half_turn = std::abs(segment.sweep_radians) == std::numbers::pi;
-            if (half_turn) {
-                // An exact represented half-turn has a midpoint center. Use
-                // its canonical extrema for both clipping and tangent proof;
-                // trigonometric residue must not expand or shrink the circle.
-                bounds = {{std::min(segment.start.x, segment.end.x), std::min(segment.start.y, segment.end.y)},
-                    {std::max(segment.start.x, segment.end.x), std::max(segment.start.y, segment.end.y)}};
-                for (const auto direction_vector : std::array{Vec2{1,0}, Vec2{0,1}, Vec2{-1,0}, Vec2{0,-1}}) {
-                    const auto side = direction_vector.x*normal.x + direction_vector.y*normal.y;
-                    if (std::copysign(1.0, segment.sweep_radians)*side > 0.0) continue;
-                    const Vec2 point{midpoint.x + direction_vector.x*(chord_length*0.5),
-                        midpoint.y + direction_vector.y*(chord_length*0.5)};
-                    if (!std::isfinite(point.x) || !std::isfinite(point.y)) return;
-                    bounds.minimum.x = std::min(bounds.minimum.x, point.x);
-                    bounds.minimum.y = std::min(bounds.minimum.y, point.y);
-                    bounds.maximum.x = std::max(bounds.maximum.x, point.x);
-                    bounds.maximum.y = std::max(bounds.maximum.y, point.y);
-                }
-            }
             // Exact endpoint contacts do not depend on the circle solve.
             const auto axis = transverse(origin);
             if (transverse(segment.start) == axis) consider(coordinate(segment.start));
@@ -3987,77 +3962,11 @@ std::optional<Vec2> PlanCanvas::directionalDrawingAlignment(
             const auto tolerance = 32.0 * std::numeric_limits<double>::epsilon() *
                 std::max({1.0, static_cast<double>(length), source_length});
             if (!std::isfinite(tolerance)) return;
-            // A chord-frame circle equation avoids subtracting two enormous
-            // radius squares for shallow arcs. It also avoids constructing a
-            // distant center whose low bits cannot retain the ray offset.
-            const Vec2 offset{start.x-midpoint.x, start.y-midpoint.y};
-            const Vec2 ray{end.x-start.x, end.y-start.y};
-            const auto scale = std::max({chord_length, std::abs(offset.x), std::abs(offset.y),
-                std::abs(ray.x), std::abs(ray.y)});
-            if (!std::isfinite(scale) || scale <= 0.0) return;
-            const Vec2 p{offset.x/scale, offset.y/scale}, d{ray.x/scale, ray.y/scale};
-            const auto half_chord = (chord_length/scale)*0.5;
-            const auto sine = half_turn ? std::copysign(1.0, segment.sweep_radians) : std::sin(segment.sweep_radians*0.5);
-            const auto half_chord_cosine = half_turn ? 0.0 : half_chord*std::cos(segment.sweep_radians*0.5);
-            const auto dot = [](Vec2 a, Vec2 b) { return std::fma(a.x, b.x, a.y*b.y); };
-            double a = sine*dot(d, d);
-            double b = 2.0*std::fma(sine, dot(p, d), -half_chord_cosine*dot(d, normal));
-            double k = std::fma(sine, std::fma(p.x, p.x, std::fma(p.y, p.y, -half_chord*half_chord)),
-                -2.0*half_chord_cosine*dot(p, normal));
-            constexpr auto epsilon = std::numeric_limits<double>::epsilon();
-            double error_a = 32.0*epsilon*std::abs(sine)*(d.x*d.x+d.y*d.y);
-            double error_b = 64.0*epsilon*(std::abs(sine)*(std::abs(p.x*d.x)+std::abs(p.y*d.y)) +
-                std::abs(half_chord_cosine)*(std::abs(d.x*normal.x)+std::abs(d.y*normal.y)));
-            double error_k = 64.0*epsilon*(std::abs(sine)*(p.x*p.x+p.y*p.y+half_chord*half_chord) +
-                2.0*std::abs(half_chord_cosine)*(std::abs(p.x*normal.x)+std::abs(p.y*normal.y)));
-            const auto coefficient_scale = std::max({std::abs(a), std::abs(b), std::abs(k)});
-            if (!std::isfinite(coefficient_scale) || coefficient_scale <= 0.0) return;
-            a /= coefficient_scale; b /= coefficient_scale; k /= coefficient_scale;
-            error_a /= coefficient_scale; error_b /= coefficient_scale; error_k /= coefficient_scale;
-            if (!std::isfinite(error_a) || !std::isfinite(error_b) || !std::isfinite(error_k)) return;
-            const auto admit_root = [&](double root) {
-                if (!std::isfinite(root)) return;
-                const auto range_error = 64.0*epsilon*std::max(1.0, std::abs(root));
-                if (root < -range_error || root > 1.0+range_error) return;
-                root = std::clamp(root, 0.0, 1.0);
-                const auto residual = std::fma(std::fma(a, root, b), root, k);
-                const auto residual_error = error_a*root*root + error_b*std::abs(root) + error_k +
-                    64.0*epsilon*(std::abs(a)*root*root+std::abs(b*root)+std::abs(k));
-                if (!std::isfinite(residual) || !std::isfinite(residual_error) ||
-                    std::abs(residual) > residual_error) return;
-                const Vec2 local{std::fma(root, d.x, p.x), std::fma(root, d.y, p.y)};
-                const auto side = dot(local, normal);
-                const auto side_error = 32.0*epsilon*(std::abs(local.x*normal.x)+std::abs(local.y*normal.y));
-                if (!std::isfinite(side) || !std::isfinite(side_error) ||
-                    std::copysign(1.0, segment.sweep_radians)*side > side_error) return;
-                consider(std::fma(root, coordinate(end)-coordinate(start), coordinate(start)), tolerance);
-            };
-            if (a == 0.0) {
-                if (b != 0.0) admit_root(-k/b);
-                return;
-            }
-            const auto discriminant = std::fma(b, b, -4.0*a*k);
-            const auto discriminant_error = 2.0*std::abs(b)*error_b +
-                4.0*(std::abs(k)*error_a+std::abs(a)*error_k) +
-                64.0*epsilon*(b*b+4.0*std::abs(a*k));
-            if (!std::isfinite(discriminant) || !std::isfinite(discriminant_error) ||
-                discriminant < -discriminant_error) return;
-            const bool interior_extremum =
-                (axis == transverse(bounds.minimum) || axis == transverse(bounds.maximum)) &&
-                axis != transverse(segment.start) && axis != transverse(segment.end);
-            if (interior_extremum && discriminant <= discriminant_error) {
-                // Roundoff alone cannot turn a near miss into a tangent.
-                // A bound distinct from both endpoints independently proves
-                // an interior cardinal tangency, including a slightly
-                // positive rounded discriminant at that exact extremum.
-                admit_root(-b/(2.0*a));
-                return;
-            }
-            if (discriminant <= 0.0) return;
-            // Even a tiny positive discriminant represents two contacts.
-            const auto q = -0.5*(b+std::copysign(std::sqrt(discriminant), b));
-            if (q == 0.0) admit_root(-b/(2.0*a));
-            else { admit_root(q/a); admit_root(k/q); }
+            // Drawing alignment and topology use the same analytical kernel.
+            // An unresolved contact must never move the pen.
+            const auto hit = segment_intersection({start, end, 0.0}, segment, tolerance);
+            if (hit.kind == SegmentIntersectionKind::proper || hit.kind == SegmentIntersectionKind::touch)
+                for (const auto point : hit.points) consider(coordinate(point), tolerance);
         } catch (const std::exception&) {
             // Invalid or numerically unresolved geometry cannot move the pen.
         }

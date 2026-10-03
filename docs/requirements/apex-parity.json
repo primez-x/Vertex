@@ -752,17 +752,18 @@
       "requirement": "Represent lines, arcs, holes, winding, tangency, and topology as analytical geometry rather than screen strokes.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "verified",
+      "implementation_status": "in_progress",
       "acceptance": "Independent analytical and high-precision fixtures agree within the documented area and coordinate tolerances after save/reopen.",
       "package": 4,
       "blocker": null,
       "implementation_sources": [
         "include/sketch/geometry.hpp",
         "src/core/geometry.cpp",
+        "tests/geometry_tests.cpp",
         "scripts/generate_workflow_acceptance_evidence.py",
         "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "Analytical line and circular-arc geometry, closure, winding, intersections, tangency, and boundary validation are implemented. Room-hole topology now validates each hole plus strict containment, disjoint interiors, and no contact or nesting analytically, rejecting indeterminate cases closed; independent high-precision fixture parity, broader topology workflows, and the production gate remain open. Current Debug/Release acceptance evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
+      "implementation_note": "Analytical line and circular-arc geometry, closure, winding, intersections, tangency, and boundary validation are implemented. Shared line/arc contacts use a local chord-frame solve rather than subtracting large radius squares; canvas directional alignment uses that same kernel. Room-hole topology validates each hole plus strict containment, disjoint interiors, and no contact or nesting analytically, rejecting indeterminate cases closed. Separate shallow-arc containment and arc/arc numerical qualification, independent high-precision fixture parity, broader topology workflows, and the production gate remain open. Historical Debug/Release evidence retains its named-source qualification boundary; this requirement remains in progress."
     },
     {
       "id": "GEO-BASE-002",

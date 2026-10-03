@@ -1,10 +1,12 @@
 #include "sketch/geometry.hpp"
+#include "support/noninteractive_errors.hpp"
 
 #include <cmath>
 #include <cstdlib>
 #include <iostream>
 #include <limits>
 #include <numbers>
+#include <numeric>
 #include <stdexcept>
 #include <string_view>
 
@@ -324,6 +326,265 @@ void test_validation_reports_crossings_tangencies_and_overlaps() {
             "coincident arc overlap should be diagnosed");
 }
 
+void require_contacts(const Segment& line, const Segment& arc,
+                      std::initializer_list<Vec2> expected, double tolerance,
+                      double coordinate_tolerance, std::string_view message) {
+    const auto hit = sketch::segment_intersection(line, arc, tolerance);
+    require(hit.points.size() == expected.size(), message);
+    require(hit.kind == (expected.size() == 0 ? sketch::SegmentIntersectionKind::none :
+                        sketch::SegmentIntersectionKind::proper), message);
+    for (const auto point : expected) {
+        bool found = false;
+        for (const auto actual : hit.points) {
+            if (std::hypot(actual.x - point.x, actual.y - point.y) <= coordinate_tolerance)
+                found = true;
+        }
+        require(found, message);
+    }
+}
+
+void test_line_arc_contacts_preserve_small_geometric_offsets() {
+    // At y=-1e-9 this arc's chord-frame equation gives x=1 +/- sqrt(0.6).
+    const Segment shallow{{0, 0}, {2, 0}, 1e-8};
+    const Segment line{{-1, -1e-9}, {3, -1e-9}, 0};
+    const std::initializer_list<Vec2> contacts{{0.2254033307585166, -1e-9},
+                                            {1.7745966692414834, -1e-9}};
+    require_contacts(line, shallow, contacts, 1e-14, 1e-12,
+                     "shallow arc must retain two proper contacts rather than a midpoint tangent");
+    require_contacts(line, shallow, contacts, sketch::default_geometry_tolerance_metres, 1e-12,
+                     "default tolerance must retain both actual shallow contacts");
+    require_contacts({{-1, 1e-9}, {3, 1e-9}, 0}, shallow, {},
+                     sketch::default_geometry_tolerance_metres, 0,
+                     "default tolerance must exclude circle roots on the opposite shallow sweep");
+    const auto ambiguous_bound = sketch::segment_intersection(
+        {{-1, -2.5e-9}, {3, -2.5e-9}, 0}, shallow, 1e-14);
+    require(ambiguous_bound.kind == sketch::SegmentIntersectionKind::indeterminate &&
+                ambiguous_bound.points.empty(),
+            "rounded shallow bound must fail closed rather than manufacture a tangent");
+    require_contacts({line.end, line.start, 0}, shallow, contacts, 1e-14, 1e-12,
+                     "reversing the finite line must retain both shallow contacts");
+    require_contacts(line, {shallow.end, shallow.start, -shallow.sweep_radians},
+                     contacts, 1e-14, 1e-12, "reversing the arc must retain both contacts");
+    const auto swapped = sketch::segment_intersection(shallow, line, 1e-14);
+    require(swapped.kind == sketch::SegmentIntersectionKind::proper && swapped.points.size() == 2,
+            "swapping line and arc must retain proper shared contacts");
+    require_contacts({{-1, 1e-9}, {3, 1e-9}, 0}, {{0, 0}, {2, 0}, -1e-8},
+                     {{0.2254033307585166, 1e-9}, {1.7745966692414834, 1e-9}},
+                     1e-14, 1e-12, "negative shallow sweep must retain both contacts");
+    const auto rotate = [](Vec2 point) {
+        return Vec2{std::fma(0.6, point.x, -0.8 * point.y),
+                    std::fma(0.8, point.x, 0.6 * point.y)};
+    };
+    require_contacts({rotate(line.start), rotate(line.end), 0},
+                     {rotate(shallow.start), rotate(shallow.end), shallow.sweep_radians},
+                     {rotate(*contacts.begin()), rotate(*(contacts.begin() + 1))},
+                     1e-14, 1e-7, "diagonal line and chord must preserve shallow contacts");
+
+    for (const double sign : {-1.0, 1.0}) {
+        require_contacts({{0, -sign * 0.5}, {4, -sign * 0.5}, 0},
+                         {{3, 0}, {2, -sign}, sign * 1.5 * std::numbers::pi},
+                         {{1.1339745962155614, -sign * 0.5}}, 1e-14, 1e-12,
+                         "signed major sweep must exclude only its missing quadrant");
+    }
+
+    const Segment semicircle{{3, 0}, {1, 0}, std::numbers::pi};
+    const double near_height = 0.9999999;
+    require_contacts({{-1e12, near_height}, {1e12, near_height}, 0}, semicircle,
+                     {{1.999552786415789, near_height}, {2.000447213584211, near_height}},
+                     1e-14, 2e-11, "long finite line must preserve nearby near-tangent roots");
+    require_contacts({{1e8 - 1e12, near_height}, {1e8 + 1e12, near_height}, 0},
+                     {{1e8 + 3, 0}, {1e8 + 1, 0}, std::numbers::pi},
+                     {{1e8 + 1.999552786415789, near_height},
+                      {1e8 + 2.000447213584211, near_height}},
+                     1e-14, 2e-8, "translated long line must preserve both nearby roots");
+
+    const Segment diagonal{{2 - 3e6, -4e6 + 1.6666665},
+                           {2 + 3e6, 4e6 + 1.6666665}, 0};
+    // Independent projection oracle uses the actual represented endpoints,
+    // rather than assuming the entered offset survived the large coordinates.
+    const auto dx = static_cast<long double>(diagonal.end.x) - diagonal.start.x;
+    const auto dy = static_cast<long double>(diagonal.end.y) - diagonal.start.y;
+    const auto norm = std::hypot(dx, dy);
+    const auto ux = dx / norm;
+    const auto uy = dy / norm;
+    const auto middle_x = std::midpoint(static_cast<long double>(diagonal.start.x),
+                                      static_cast<long double>(diagonal.end.x));
+    const auto middle_y = std::midpoint(static_cast<long double>(diagonal.start.y),
+                                      static_cast<long double>(diagonal.end.y));
+    const auto signed_offset = -uy * (middle_x - 2) + ux * middle_y;
+    const auto half_contact_spacing = std::sqrt((1 - signed_offset) * (1 + signed_offset));
+    const Vec2 first_contact{static_cast<double>(2 - uy * signed_offset - ux * half_contact_spacing),
+                             static_cast<double>(ux * signed_offset - uy * half_contact_spacing)};
+    const Vec2 second_contact{static_cast<double>(2 - uy * signed_offset + ux * half_contact_spacing),
+                              static_cast<double>(ux * signed_offset + uy * half_contact_spacing)};
+    require_contacts(diagonal, semicircle, {first_contact, second_contact}, 1e-14, 1e-9,
+                     "rotated long finite line must retain both represented near-tangent roots");
+    require_contacts({diagonal.end, diagonal.start, 0}, semicircle,
+                     {first_contact, second_contact}, 1e-14, 1e-9,
+                     "reversed rotated long line must retain both represented roots");
+    const auto diagonal_swapped = sketch::segment_intersection(semicircle, diagonal, 1e-14);
+    require(diagonal_swapped.kind == sketch::SegmentIntersectionKind::proper &&
+                diagonal_swapped.points.size() == 2,
+            "swapped rotated long line must retain both proper contacts");
+}
+
+void test_canonical_semicircle_tangent_and_adjacent_heights() {
+    const Segment semicircle{{3, 0}, {1, 0}, std::numbers::pi};
+    const auto bounds = sketch::segment_bounds(semicircle);
+    require(bounds.minimum.x == 1 && bounds.maximum.x == 3 &&
+                bounds.minimum.y == 0 && bounds.maximum.y == 1,
+            "exact half-turn bounds must not contain trigonometric center residue");
+    require_contacts({{0, 1}, {4, 1}, 0}, semicircle, {{2, 1}}, 1e-17, 1e-15,
+                     "canonical semicircle tangent must have one proper contact");
+    const auto outside = std::nextafter(1.0, std::numeric_limits<double>::infinity());
+    require_contacts({{0, outside}, {4, outside}, 0}, semicircle, {}, 1e-17, 0,
+                     "one representable step outside canonical semicircle must have no contact");
+    const auto inside = std::nextafter(1.0, 0.0);
+    require_contacts({{0, inside}, {4, inside}, 0}, semicircle,
+                     {{1.9999999850988388, inside}, {2.0000000149011612, inside}},
+                     1e-17, 2e-15, "one representable step inside must retain two true contacts");
+    const Segment unit_semicircle{{1, 0}, {-1, 0}, std::numbers::pi};
+    const Segment endpoint_secant{{1, 0}, {0, 2}, 0};
+    require_contacts(endpoint_secant, unit_semicircle, {{1, 0}, {0.6, 0.8}}, 1e-14, 1e-12,
+                     "shared endpoint secant must retain its second proper arc contact");
+    require_contacts({endpoint_secant.end, endpoint_secant.start, 0},
+                     {unit_semicircle.end, unit_semicircle.start, -std::numbers::pi},
+                     {{1, 0}, {0.6, 0.8}}, 1e-14, 1e-12,
+                     "reversed shared endpoint secant must retain both contacts");
+    const auto endpoint_tangent = sketch::segment_intersection(
+        {{1, -1}, {1, 1}, 0}, unit_semicircle, 1e-14);
+    require(endpoint_tangent.kind == sketch::SegmentIntersectionKind::touch &&
+                endpoint_tangent.points.size() == 1 &&
+                endpoint_tangent.points.front().x == 1 && endpoint_tangent.points.front().y == 0,
+            "canonical arc endpoint tangent must retain its sole exact touch");
+    const Boundary tangent_endpoint_boundary{
+        unit_semicircle, {{-1, 0}, {-1, -1}, 0},
+        {{-1, -1}, {1, -1}, 0}, {{1, -1}, {1, 0}, 0},
+    };
+    require(sketch::validate_boundary(tangent_endpoint_boundary, 1e-14).empty(),
+            "valid closed boundary must retain both expected adjacent arc endpoint tangencies");
+    for (const double angle : {0.37, -0.81}) {
+        for (const bool mirrored : {false, true}) {
+            sketch::PlanarTransform transform;
+            transform.rotation_radians = angle;
+            transform.flip_horizontal = mirrored;
+            transform.offset = {7.25, -3.5};
+            Boundary transformed;
+            for (const auto& edge : tangent_endpoint_boundary)
+                transformed.push_back(sketch::transform_segment(edge, transform));
+            const auto issues = sketch::validate_boundary(transformed);
+            for (const auto& issue : issues)
+                std::cerr << "transformed tangent angle=" << angle << " mirrored=" << mirrored
+                          << " segment=" << issue.segment_index << " other="
+                          << issue.other_segment_index.value_or(999) << " " << issue.message << '\n';
+            require(issues.empty(),
+                    "rotated translated and mirrored boundary must preserve exact shared tangent stations");
+        }
+    }
+    const auto quarter_endpoint = sketch::segment_intersection(
+        {{-2, 1.5}, {2, 1.5}, 0}, {{-2, 1.5}, {-2, -1.5}, std::numbers::pi / 2}, 1e-14);
+    require(quarter_endpoint.kind == sketch::SegmentIntersectionKind::touch &&
+                quarter_endpoint.points.size() == 1 &&
+                quarter_endpoint.points.front().x == -2 && quarter_endpoint.points.front().y == 1.5,
+            "noncanonical quarter arc endpoint must retain its exact adjacent contact");
+    const auto outside_diagonal_offset = std::sqrt(2.0);
+    // This represented sqrt(2) lies strictly above real sqrt(2), so the exact
+    // supporting line x+y=offset has no unit-circle contact. Unit-vector
+    // normalization must not change that sign and invent two intersections.
+    const auto diagonal_line = [](double offset) {
+        return Segment{{0.5, offset - 0.5}, {1.5, offset - 1.5}, 0};
+    };
+    const auto diagonal_miss = sketch::segment_intersection(
+        diagonal_line(outside_diagonal_offset), unit_semicircle, 1e-17);
+    require(diagonal_miss.points.empty() &&
+                (diagonal_miss.kind == sketch::SegmentIntersectionKind::none ||
+                 diagonal_miss.kind == sketch::SegmentIntersectionKind::indeterminate),
+            "represented diagonal line outside unit circle must not fabricate contacts");
+    const auto inside_diagonal_offset = std::nextafter(outside_diagonal_offset, 0.0);
+    const auto diagonal_crossing = sketch::segment_intersection(
+        diagonal_line(inside_diagonal_offset), unit_semicircle, 1e-17);
+    require(diagonal_crossing.kind == sketch::SegmentIntersectionKind::proper &&
+                diagonal_crossing.points.size() == 2 &&
+                std::hypot(diagonal_crossing.points[0].x - diagonal_crossing.points[1].x,
+                           diagonal_crossing.points[0].y - diagonal_crossing.points[1].y) > 1e-9,
+            "represented diagonal line inside unit circle must preserve two distinct contacts");
+    const Segment tilted_diameter{{1, 1}, {-1, -1}, std::numbers::pi};
+    const auto rounded_bound_miss = sketch::segment_intersection(
+        {{-1, outside_diagonal_offset}, {1, outside_diagonal_offset}, 0}, tilted_diameter, 1e-17);
+    require(rounded_bound_miss.points.empty() &&
+                (rounded_bound_miss.kind == sketch::SegmentIntersectionKind::none ||
+                 rounded_bound_miss.kind == sketch::SegmentIntersectionKind::indeterminate),
+            "rounded non-axis semicircle bound must not prove a false tangent");
+    const auto tilted_inside = sketch::segment_intersection(
+        {{-1, inside_diagonal_offset}, {1, inside_diagonal_offset}, 0}, tilted_diameter, 1e-17);
+    require(tilted_inside.kind == sketch::SegmentIntersectionKind::proper && tilted_inside.points.size() == 2,
+            "non-axis diameter must preserve both true adjacent inside contacts");
+    constexpr double distant_x = 9007199254740992.0;
+    const Boundary distant_crossing{
+        {{distant_x, 0}, {distant_x + 2, 0}, -std::numbers::pi},
+        {{distant_x + 2, 0}, {distant_x + 2, 2}, 0},
+        {{distant_x + 2, 2}, {distant_x, 0}, 0},
+    };
+    require(!sketch::validate_boundary(distant_crossing).empty(),
+            "rounded distant midpoint must not hide a shared-endpoint secant crossing");
+    const Boundary tilted_distant_crossing{
+        {{distant_x, 0}, {distant_x + 2, 2}, -std::numbers::pi},
+        {{distant_x + 2, 2}, {distant_x + 2, 3}, 0},
+        {{distant_x + 2, 3}, {distant_x, 0}, 0},
+    };
+    require(!sketch::validate_boundary(tilted_distant_crossing).empty(),
+            "rounded world contact must not hide a tilted shared-endpoint secant crossing");
+    const auto huge = sketch::segment_bounds(
+        {{1e308, 0}, {1e308, 2e292}, std::numbers::pi});
+    require(std::isfinite(huge.minimum.x) && std::isfinite(huge.maximum.x) &&
+                huge.maximum.x > 1e308 && huge.minimum.y == 0 && huge.maximum.y == 2e292,
+            "finite translated semicircle must not overflow its midpoint");
+}
+
+void test_holes_reject_sub_tolerance_arc_clearance() {
+    const Boundary upper_half_disk{
+        {{3, 0}, {1, 0}, std::numbers::pi},
+        {{1, 0}, {3, 0}, 0},
+    };
+    const auto near_hole = rectangle(1.9999, 0.9, 2.0001, 1.0 - 5e-8);
+    require(sketch::validate_boundary_holes(upper_half_disk, {near_hole}, 1e-7).has_value(),
+            "hole with sub-tolerance curved boundary clearance must fail closed");
+    const auto clear_hole = rectangle(1.9999, 0.9, 2.0001, 1.0 - 5e-7);
+    require(!sketch::validate_boundary_holes(upper_half_disk, {clear_hole}, 1e-7).has_value(),
+            "hole farther than tolerance from curved boundary must remain valid");
+    const auto outer_rectangle = rectangle(-2, -3, 2, 0);
+    const auto upper_arc_hole = [](double delta) {
+        return Boundary{{{-1, -1 - delta}, {1, -1 - delta}, -std::numbers::pi},
+                        {{1, -1 - delta}, {-1, -1 - delta}, 0}};
+    };
+    require(sketch::validate_boundary_holes(outer_rectangle, {upper_arc_hole(5e-8)}, 1e-7).has_value(),
+            "hole arc tangent extremum within tolerance of a nonintersecting outer line must reject");
+    require(!sketch::validate_boundary_holes(outer_rectangle, {upper_arc_hole(2e-7)}, 1e-7).has_value(),
+            "hole arc tangent extremum farther than tolerance from an outer line must remain valid");
+    const auto rotate = [](Vec2 point) {
+        return Vec2{std::fma(0.6, point.x, -0.8 * point.y),
+                    std::fma(0.8, point.x, 0.6 * point.y)};
+    };
+    const auto rotated = [&](Boundary boundary) {
+        for (auto& segment : boundary) {
+            segment.start = rotate(segment.start);
+            segment.end = rotate(segment.end);
+        }
+        return boundary;
+    };
+    const auto rotated_outer = rotated(outer_rectangle);
+    require(sketch::validate_boundary_holes(rotated_outer,
+                {rotated(upper_arc_hole(5e-8))}, 1e-7).has_value(),
+            "rotated interior arc/line clearance within tolerance must reject");
+    require(!sketch::validate_boundary_holes(rotated_outer,
+                {rotated(upper_arc_hole(2e-7))}, 1e-7).has_value(),
+            "rotated interior arc/line clearance above tolerance must remain valid");
+    auto complement = upper_arc_hole(5e-8);
+    complement.front().sweep_radians = std::numbers::pi;
+    require(!sketch::validate_boundary_holes(rotated_outer, {rotated(complement)}, 1e-7).has_value(),
+            "clearance must exclude a nearby full-circle extremum on the opposite arc");
+}
+
 }  // namespace
 
 void test_analytic_bounds() {
@@ -448,6 +709,10 @@ void test_planar_transforms() {
 }
 
 int main() {
+    sketch::testing::noninteractive_errors();
+    test_line_arc_contacts_preserve_small_geometric_offsets();
+    test_canonical_semicircle_tangent_and_adjacent_heights();
+    test_holes_reject_sub_tolerance_arc_clearance();
     test_planar_transforms();
     test_analytic_bounds();
     test_boundary_crop_preserves_analytic_segments();
