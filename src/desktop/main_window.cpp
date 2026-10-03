@@ -14232,6 +14232,144 @@ public:
         }
     }
 
+    void showMeasuredAreaSourceReview() {
+        try {
+            if (!m_document->is_editable() || m_linework_drawing || m_boundary_session || m_pending_wall_start)
+                throw std::invalid_argument("Finish the active drawing before reviewing measured sources.");
+            const auto selected=selectedEntity();
+            if (!selected || m_selected_ids.size()!=1 || selected->type!="measurement_boundary" ||
+                !selected->extensions.contains("measurement_linework_sources"))
+                throw std::invalid_argument("Select one area derived from measured strokes.");
+            const auto context=captureModalContext();
+            const auto selection=m_selected_ids;
+            const auto workspace=m_workspace;
+            const auto source=authoringSnapshot();
+            const auto organization=organize_project(source);
+            const auto target_context=organization.drawing_context(selected->id);
+            if (!target_context) throw std::invalid_argument("The area has no resolved drawing context.");
+            const auto eligible=visible_project_entities_with_phase(source,ProjectViewFilter{});
+            if (!eligible.contains(selected->id)) throw std::invalid_argument("The area is not in the active design phase.");
+            std::vector<MeasurementGraphSource> segments;
+            for (const auto& [id,entity]:source.entities()) {
+                if (entity.type!="measurement_linework" || !eligible.contains(id) ||
+                    organization.drawing_context(id)!=target_context) continue;
+                const auto decoded=decode_measurement_linework_model(entity.properties.at("model"));
+                if (!decoded.supported()) throw std::invalid_argument("The layer contains an unsupported measured stroke.");
+                for (const auto& edge:replay_measurement_linework(*decoded.model).edges)
+                    segments.push_back({id,edge.segment_id,edge.segment});
+            }
+            const auto graph=build_measurement_area_graph(segments);
+            if (graph.faces.empty()) throw std::invalid_argument("No closed measured face exists in this layer. Close the source strokes first.");
+            const auto original=boundary_geometry(decode_identified_boundary_entity(*selected));
+            QDialog dialog(owner);styleDialog(dialog);
+            dialog.setObjectName(QStringLiteral("measuredAreaSourceReview"));
+            dialog.setWindowTitle(QStringLiteral("Review measured area sources"));dialog.resize(640,600);
+            auto* layout=new QVBoxLayout(&dialog);
+            auto* help=new QLabel(QStringLiteral("Choose the closed face belonging to this area. Its name, classification and appraisal facts are retained. Other faces need their own areas and facts."),&dialog);
+            help->setWordWrap(true);layout->addWidget(help);
+            auto* faces=new QComboBox(&dialog);faces->setObjectName(QStringLiteral("measuredAreaSourceFace"));
+            faces->addItem(QStringLiteral("Choose a measured face…"),-1);
+            for (std::size_t i=0;i<graph.faces.size();++i)
+                faces->addItem(QStringLiteral("Face %1 · %2 · %3 edges").arg(i+1)
+                    .arg(format_dimension_area(graph.faces[i].area_square_metres,context.metric_units))
+                    .arg(graph.faces[i].boundary.size()),static_cast<int>(i));
+            layout->addWidget(faces);
+            auto* preview=new PlanCanvas(&dialog);preview->setObjectName(QStringLiteral("measuredAreaSourcePreview"));
+            preview->setGridEnabled(false);preview->setSnapEnabled(false);preview->setOverviewMapEnabled(false);
+            preview->setSelectionTransformEnabled(false,false);preview->setMinimumHeight(280);layout->addWidget(preview,1);
+            layout->addWidget(new QLabel(QStringLiteral("Gray: retained boundary. Blue: chosen current face."),&dialog));
+            auto* status=new QLabel(&dialog);status->setObjectName(QStringLiteral("measuredAreaSourceStatus"));
+            status->setWordWrap(true);status->setTextFormat(Qt::PlainText);layout->addWidget(status);
+            auto* buttons=new QDialogButtonBox(QDialogButtonBox::Apply|QDialogButtonBox::Cancel,&dialog);
+            buttons->setObjectName(QStringLiteral("measuredAreaSourceButtons"));layout->addWidget(buttons);
+            std::optional<EditBoundaryGeometry> candidate;
+            bool reference_review_required=false;
+            const auto unchanged=[&] {
+                return modalContextUnchanged(context) && selection==m_selected_ids && workspace==m_workspace &&
+                    m_document->is_editable() && !m_linework_drawing && !m_boundary_session && !m_pending_wall_start;
+            };
+            const auto update=[&] {
+                candidate.reset();reference_review_required=false;
+                buttons->button(QDialogButtonBox::Apply)->setText(QStringLiteral("Apply"));
+                buttons->button(QDialogButtonBox::Apply)->setEnabled(false);
+                CanvasEntity retained;retained.id=QStringLiteral("retained-area");retained.type=QStringLiteral("measurement_boundary");
+                retained.segments=original;retained.stroke_color=QColor(130,143,158);
+                std::vector<CanvasEntity> shapes{retained};
+                if (!unchanged()) {status->setText(QStringLiteral("The project or drawing context changed. Cancel and reopen this review."));return;}
+                const auto index=faces->currentData().toInt();
+                if (index<0) {preview->setEntities(std::move(shapes));preview->fitView();status->setText(QStringLiteral("Choose a face to inspect its outline and area before applying."));return;}
+                const auto& face=graph.faces.at(static_cast<std::size_t>(index));
+                CanvasEntity proposed;proposed.id=QStringLiteral("proposed-area");proposed.type=QStringLiteral("measurement_boundary");
+                proposed.segments=face.boundary;proposed.stroke_color=QColor(40,102,245);proposed.filled=true;proposed.fill_color=QColor(40,102,245,18);
+                shapes.push_back(std::move(proposed));preview->setEntities(std::move(shapes));preview->fitView();
+                try {
+                    json lineage=json::array();
+                    for (const auto& traversal:face.edge_uses) {
+                        json uses=json::array();
+                        for (const auto& use:graph.edges.at(traversal.edge_index).source_uses)
+                            uses.push_back({{"owner_id",use.owner_id},{"segment_id",use.segment_id},
+                                {"parameter_start",use.parameter_start},{"parameter_end",use.parameter_end},
+                                {"reversed",use.reversed!=traversal.reversed}});
+                        lineage.push_back(std::move(uses));
+                    }
+                    if (boundary_json(original)==boundary_json(face.boundary) &&
+                        selected->extensions.at("measurement_linework_sources")==lineage) {
+                        status->setText(QStringLiteral("This area already uses the chosen current face."));return;
+                    }
+                    auto command=boundaryRedefinitionCommand(source,face.boundary,{},nullptr,
+                        boundary_json(original)!=boundary_json(face.boundary));
+                    command.edit.replacement_linework_sources=std::move(lineage);
+                    // Fresh child identities require the existing explicit reference review.
+                    // Until those decisions are supplied, this is an actual geometric area,
+                    // not a claimed qualified GLA contribution.
+                    QString message=QStringLiteral("Chosen boundary: %1. Name, classification, factors and appraisal facts will be retained.")
+                        .arg(format_dimension_area(face.area_square_metres,context.metric_units));
+                    try {
+                        const auto proposal=Document::preview_command(source,command);
+                        const auto report=build_appraisal_document_report(proposal,target_context->property_id,
+                            context.metric_units?AreaUnit::square_metre:AreaUnit::square_foot,&eligible);
+                        if (report.qualified && report.calculation)
+                            message+=QStringLiteral("\nProposed property GLA: %1.")
+                                .arg(format_display_area(report.calculation->property.gla().total.display));
+                        else message+=QStringLiteral("\nProperty GLA remains withheld until the other appraisal issues are resolved.");
+                    } catch (const std::exception& failure) {
+                        if (!command.edit.fresh_topology || !QString::fromUtf8(failure.what()).contains(
+                            QStringLiteral("Retained redraw reference requires an explicit child mapping:"))) throw;
+                        reference_review_required=true;
+                        buttons->button(QDialogButtonBox::Apply)->setText(QStringLiteral("Review references…"));
+                        message+=QStringLiteral("\nReference review is required before the final calculation preview: %1")
+                            .arg(QString::fromUtf8(failure.what()));
+                    }
+                    candidate=std::move(command);status->setText(message);buttons->button(QDialogButtonBox::Apply)->setEnabled(true);
+                } catch (const std::exception& failure) {
+                    candidate.reset();buttons->button(QDialogButtonBox::Apply)->setEnabled(false);
+                    status->setText(QString::fromUtf8(failure.what()));
+                }
+            };
+            QObject::connect(faces,&QComboBox::currentIndexChanged,&dialog,[&](int){update();});
+            QObject::connect(buttons,&QDialogButtonBox::rejected,&dialog,&QDialog::reject);
+            QObject::connect(buttons->button(QDialogButtonBox::Apply),&QPushButton::clicked,&dialog,[&] {
+                if (!unchanged() || !candidate) {update();return;}
+                try {
+                    const auto reviewed=reference_review_required?reviewBoundaryRedefinition(source,*candidate):candidate;
+                    if (!reviewed) return;
+                    if (!unchanged()) {update();return;}
+                    const auto proposal=Document::preview_command(source,*reviewed);
+                    const auto checks=measurement_linework_source_checks(proposal.entities(),&eligible);
+                    if (!measurement_linework_source_current(checks,proposal.entities().at(selected->id)))
+                        throw std::invalid_argument("The chosen face does not match the current measured sources.");
+                    applyDocumentCommand(*reviewed);clearError();refresh();dialog.accept();
+                } catch (const std::exception& failure) {
+                    candidate.reset();buttons->button(QDialogButtonBox::Apply)->setEnabled(false);
+                    status->setText(QString::fromUtf8(failure.what()));
+                }
+            });
+            QTimer timer(&dialog);timer.setInterval(100);
+            QObject::connect(&timer,&QTimer::timeout,&dialog,[&]{if(!unchanged()){candidate.reset();buttons->button(QDialogButtonBox::Apply)->setEnabled(false);status->setText(QStringLiteral("The project or drawing context changed. Cancel and reopen this review."));}});
+            timer.start();update();(void)dialog.exec();
+        } catch (const std::exception& failure) {setError(QStringLiteral("Review measured sources: %1").arg(QString::fromUtf8(failure.what())));}
+    }
+
     QStringList defineMeasuredAreasFromLinework(const QString& classification, Revision revision) {
         try {
             if (!m_document->is_editable() || m_document->revision() != revision)
@@ -19956,7 +20094,19 @@ public:
                 }
                 candidate = std::move(proposed);
                 candidate_snapshot = snapshot;
-                status->setText(QStringLiteral("Kept dimensions and corner relationships stay attached to your chosen edges and corners. Apply commits these choices together."));
+                QString review_status=QStringLiteral("Kept dimensions and corner relationships stay attached to your chosen edges and corners. Apply commits these choices together.");
+                if (command.edit.replacement_linework_sources) {
+                    const auto organization=organize_project(snapshot);
+                    const auto drawing_context=organization.drawing_context(target_entity.id);
+                    if (!drawing_context) throw std::invalid_argument("The reviewed area has no drawing context.");
+                    const auto eligible=visible_project_entities_with_phase(snapshot,ProjectViewFilter{});
+                    const auto report=build_appraisal_document_report(snapshot,drawing_context->property_id,
+                        context.metric_units?AreaUnit::square_metre:AreaUnit::square_foot,&eligible);
+                    review_status+=report.qualified && report.calculation?
+                        QStringLiteral("\nProposed property GLA: %1.").arg(format_display_area(report.calculation->property.gla().total.display)):
+                        QStringLiteral("\nProperty GLA remains withheld until other appraisal issues are resolved.");
+                }
+                status->setText(review_status);
                 buttons->button(QDialogButtonBox::Apply)->setEnabled(true);
             } catch (const std::exception& error) {
                 status->setText(QString::fromUtf8(error.what()));
@@ -25862,6 +26012,7 @@ public:
             {QStringLiteral("Auto close active drawing (A)"), [this] { (void)autoCloseActiveDrawing(); }},
             {QStringLiteral("Complete bay-window return (B)"), [this] { (void)completeBayWindowReturn(); }},
             {QStringLiteral("Redefine boundary"), [this] { showBoundaryRedefinition(); }},
+            {QStringLiteral("Review measured area sources"), [this] { showMeasuredAreaSourceReview(); }},
             {QStringLiteral("Detect closed areas from walls or measured lines"), [this] { showAutomaticAreaDetection(); }},
             {QStringLiteral("Measure exterior from walls"), [this] { showWallMeasurementReview(); }},
             {QStringLiteral("Refresh exterior measurement"), [this] { showWallMeasurementReview(true); }},
@@ -27428,6 +27579,10 @@ private:
         QObject::connect(measure_exterior,&QAction::triggered,owner,[this] { showWallMeasurementReview(); });
         QObject::connect(refresh_exterior,&QAction::triggered,owner,[this] { showWallMeasurementReview(true); });
         QObject::connect(replace_exterior,&QAction::triggered,owner,[this] { showWallMeasurementSourceReview(); });
+        auto* review_measured=new QAction(QStringLiteral("Review measured sources…"),owner);
+        review_measured->setObjectName(QStringLiteral("reviewMeasuredAreaSources"));
+        owner->addAction(review_measured);more_menu->addAction(review_measured);
+        QObject::connect(review_measured,&QAction::triggered,owner,[this]{showMeasuredAreaSourceReview();});
         m_terrain_action = new QAction(QStringLiteral("Create terrain surface…"), owner);
         m_terrain_action->setObjectName(QStringLiteral("createTerrainSurface"));
         m_architectural_actions = {curved_wall_action, sloped_wall_action, m_view_action, m_remodel_action,
@@ -27736,6 +27891,9 @@ private:
         });
         m_appraisal_details->setFactsRequested([this](const QString& boundary, Revision revision) {
             if (appraisalDetailsCurrent(revision) && selectEntity(boundary)) showAppraisalFacts();
+        });
+        m_appraisal_details->setSourceReviewRequested([this](const QString& boundary,Revision revision) {
+            if (appraisalDetailsCurrent(revision) && selectEntity(boundary)) showMeasuredAreaSourceReview();
         });
         m_appraisal_details->setSetupRequested([this](const QString& property) {
             if (m_appraisal_details_revision && appraisalDetailsCurrent(*m_appraisal_details_revision)) showAppraisalSetup(property);
@@ -29554,6 +29712,9 @@ private:
                 const auto selected = selectedEntity();
                 if (selected && selected->type == "wall")
                     menu.addAction(owner->findChild<QAction*>(QStringLiteral("measureExteriorFromWalls")));
+                if (m_selected_ids.size()==1 && selected && selected->type=="measurement_boundary" &&
+                    selected->extensions.contains("measurement_linework_sources"))
+                    menu.addAction(owner->findChild<QAction*>(QStringLiteral("reviewMeasuredAreaSources")));
                 if (m_selected_ids.size() == 1 && selected && selected->type == "measurement_boundary" &&
                     selected->properties.contains("wall_measurement_source")) {
                     menu.addAction(owner->findChild<QAction*>(QStringLiteral("refreshExteriorMeasurement")));
@@ -33655,6 +33816,10 @@ private:
                 (m_tool == CanvasTool::boundary || m_tool == CanvasTool::wall));
         m_object_button->setEnabled(m_document->is_editable());
         const auto selected=selectedEntity();
+        if (auto* review=owner->findChild<QAction*>(QStringLiteral("reviewMeasuredAreaSources")))
+            review->setEnabled(m_document->is_editable() && !m_linework_drawing && !m_boundary_session &&
+                !m_pending_wall_start && m_selected_ids.size()==1 && selected && selected->type=="measurement_boundary" &&
+                selected->extensions.contains("measurement_linework_sources"));
         if (auto* repair = owner->findChild<QAction*>(QStringLiteral("replaceExteriorMeasurementSources")))
             repair->setEnabled(m_document->is_editable() && !m_boundary_session && !m_pending_wall_start &&
                 m_selected_ids.size() == 1 && selected && supportedExteriorWallMeasurement(*selected));
@@ -38307,6 +38472,10 @@ void MainWindow::showBoundaryTransformEditor() {
 
 void MainWindow::showBoundaryRedefinition() {
     m_impl->showBoundaryRedefinition();
+}
+
+void MainWindow::showMeasuredAreaSourceReview() {
+    m_impl->showMeasuredAreaSourceReview();
 }
 
 void MainWindow::showAutomaticAreaDetection() {

@@ -121,10 +121,11 @@ public:
     // compact mixed asset references require v26; verified connected wall
     // rigid-transform proofs require v27; schema/replay-two measured linework
     // and identified measured areas retaining linework sources require v28;
-    // schema/replay-three measured stroke edit derivations require v29.
+    // schema/replay-three measured stroke edit derivations require v29;
+    // explicitly reviewed measured-area source replacements require v30.
     // Any may include
     // the optional recovery ledger. Absent proofs preserve historical formats.
-    static constexpr std::uint32_t format_version = 29;
+    static constexpr std::uint32_t format_version = 30;
     static constexpr std::uint32_t recovery_format_version = 4;
     [[nodiscard]] static std::uint32_t required_format_version(const DocumentSnapshot& snapshot);
     static constexpr std::uint64_t maximum_file_bytes = 4ULL * 1024ULL * 1024ULL * 1024ULL;

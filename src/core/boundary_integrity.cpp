@@ -7,6 +7,8 @@
 #include "sketch/constraint_entity.hpp"
 #include "sketch/wall_measurement.hpp"
 #include "sketch/project_organization.hpp"
+#include "sketch/measurement_linework_source.hpp"
+#include "sketch/model_phases.hpp"
 #include <algorithm>
 #include <cmath>
 #include <numeric>
@@ -659,6 +661,55 @@ static void validate_retained_replacement_deductions(
     }
 }
 
+static void validate_replacement_linework_face(
+    const std::map<std::string, Entity, std::less<>>& source, const Entity& original,
+    const IdentifiedBoundary& replacement, const BoundaryGeometryEdit& edit) {
+    if (original.type != "measurement_boundary" ||
+        !original.extensions.contains("measurement_linework_sources") ||
+        original.properties.contains("wall_measurement_source"))
+        throw std::invalid_argument("Measured-line source replacement requires a retained measured-line area owner");
+    const auto organization = organize_project(source);
+    const auto context = organization.drawing_context(original.id);
+    if (!context || !context->complete())
+        throw std::invalid_argument("Measured-line source replacement requires a complete drawing context");
+    // Phase membership is semantic. Drawing filters, ordinary layer hiding and
+    // saved-view presentation must not reduce the graph used for source proof.
+    std::set<std::string, std::less<>> available;
+    for (const auto& [id, entity] : source) { (void)entity; available.insert(id); }
+    for (const auto& [id, entity] : source) {
+        (void)id;
+        if (entity.type != "model_phases") continue;
+        const auto phases = ModelPhases::from_json(entity.properties.at("model"));
+        const auto active = phases.active_state();
+        for (const auto& member : phases.entity_ids())
+            if (!active.contains(member) || active.at(member) == ModelPhase::demolished) available.erase(member);
+    }
+    if (!available.contains(original.id))
+        throw std::invalid_argument("Measured area is unavailable in the active design phase");
+    auto metadata = original;
+    metadata.extensions["measurement_linework_sources"] = *edit.replacement_linework_sources;
+    auto candidate = source;
+    // This temporary map proves only the current graph face. Receipt and
+    // reference retirement remains the responsibility of the actual edit
+    // below, which archives authoring and validates every dependent reference.
+    metadata.properties["segments"] = encode_identified_boundary_entity(replacement).properties.at("segments");
+    candidate.at(original.id) = std::move(metadata);
+    const auto checks = measurement_linework_source_checks(candidate, &available);
+    const auto found = checks.find(original.id);
+    if (found == checks.end() || !found->second.current)
+        throw std::invalid_argument("Replacement measured area is not an exact current source face: " +
+            (found == checks.end() ? std::string("source lineage is missing") : found->second.diagnostic));
+    const auto outline = boundary_geometry(replacement);
+    for (const auto& [id, check] : checks)
+        if (id != original.id && available.contains(id) && check.current && organization.drawing_context(id) == context &&
+            exact_replacement_outline(outline, boundary_geometry(decode_identified_boundary_entity(candidate.at(id)))))
+            throw std::invalid_argument("Replacement measured source face is already assigned to another area: " + id);
+    validate_retained_replacement_deductions(source, original, outline);
+    for (const auto& [key, value] : edit.replacement_properties.items())
+        if (!original.properties.contains(key) || original.properties.at(key) != value)
+            throw std::invalid_argument("Measured-line source replacement must retain the measured area's metadata");
+}
+
 static std::map<std::string, Entity, std::less<>> edited_boundary_entities_impl(
     const std::map<std::string, Entity, std::less<>>& source,
     const BoundaryGeometryEdit& edit, const std::vector<BoundaryGeometryEdit>* batch,
@@ -674,6 +725,10 @@ static std::map<std::string, Entity, std::less<>> edited_boundary_entities_impl(
         throw std::invalid_argument(*unsupported);
     const auto edited = batch ? apply_vertex_batch(decode_identified_boundary_entity(original), *batch)
                               : apply_geometry_edit(decode_identified_boundary_entity(original), edit);
+    if (edit.replacement_linework_sources) {
+        if (batch) throw std::invalid_argument("Measured-line source replacement cannot be a vertex batch");
+        validate_replacement_linework_face(source, original, edited, edit);
+    }
     std::optional<WallMeasurementResult> replacement_source;
     if (!edit.replacement_wall_source_ids.empty()) {
         if (batch) throw std::invalid_argument("Wall source replacement cannot be a vertex batch");
@@ -704,6 +759,8 @@ static std::map<std::string, Entity, std::less<>> edited_boundary_entities_impl(
         edited == decode_identified_boundary_entity(original)) return source;
 
     auto metadata = original;
+    if (edit.replacement_linework_sources)
+        metadata.extensions["measurement_linework_sources"] = *edit.replacement_linework_sources;
     if (replacement_source) metadata.properties["wall_measurement_source"] = replacement_source->source;
     if (edit.kind == BoundaryGeometryEditKind::redefine_boundary)
         for (const auto& [key, value] : edit.replacement_properties.items()) metadata.properties[key] = value;
@@ -717,7 +774,7 @@ static std::map<std::string, Entity, std::less<>> edited_boundary_entities_impl(
             {"operations", nlohmann::json::array()}};
         metadata.properties.erase("boundary_authoring");
     }
-    if ((replacement_source || edit.fresh_topology || edit.allow_automatic_angle_removal) && !had_derivation &&
+    if ((replacement_source || edit.replacement_linework_sources || edit.fresh_topology || edit.allow_automatic_angle_removal) && !had_derivation &&
         !metadata.extensions.contains("boundary_geometry_derivation")) {
         metadata.extensions["boundary_geometry_derivation"] = {
             {"version", 2}, {"source_boundary", {
@@ -1073,10 +1130,12 @@ std::optional<std::string> validate_boundary_integrity(
                 // Reconcile the retained proof with the final source envelope,
                 // without requiring historical walls to remain in today's map.
                 std::vector<std::string> reviewed_sources;
+                std::optional<nlohmann::json> reviewed_linework;
                 for (const auto& operation : entity.extensions.at("boundary_geometry_derivation").at("operations")) {
                     if (operation.at("kind") != "geometry_edit") continue;
                     const auto edit = decode_boundary_geometry_edit(operation.at("value"));
                     if (!edit.replacement_wall_source_ids.empty()) reviewed_sources = edit.replacement_wall_source_ids;
+                    if (edit.replacement_linework_sources) reviewed_linework = edit.replacement_linework_sources;
                 }
                 if (!reviewed_sources.empty()) {
                     auto actual_sources = exterior_wall_measurement_source_ids(entity);
@@ -1085,6 +1144,11 @@ std::optional<std::string> validate_boundary_integrity(
                     if (reviewed_sources != actual_sources)
                         throw std::invalid_argument("Boundary " + id + ": exterior source differs from its reviewed replacement proof");
                 }
+                if (reviewed_linework && (entity.type != "measurement_boundary" ||
+                    entity.properties.contains("wall_measurement_source") ||
+                    !entity.extensions.contains("measurement_linework_sources") ||
+                    entity.extensions.at("measurement_linework_sources").dump() != reviewed_linework->dump()))
+                    throw std::invalid_argument("Boundary " + id + ": measured-line sources differ from their reviewed replacement proof");
             }
         } else if (version.format == BoundaryEntityFormat::unsupported_version) {
             future_boundaries.insert(id);

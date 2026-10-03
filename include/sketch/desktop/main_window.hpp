@@ -714,6 +714,7 @@ public:
     void showRevisionHistory();
     void showBoundaryTransformEditor();
     void showBoundaryRedefinition();
+    void showMeasuredAreaSourceReview();
     void showAutomaticAreaDetection();
     void showTerrainSurfaceDialog();
     // Writes an immutable copy of a named revision without changing the

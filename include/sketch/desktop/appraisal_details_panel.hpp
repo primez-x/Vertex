@@ -25,6 +25,7 @@ public:
     void setSetupRequested(std::function<void(const QString&)> callback);
     void setFactsRequested(std::function<void(const QString&, Revision)> callback);
     void setReportRequested(std::function<void(const QString&)> callback);
+    void setSourceReviewRequested(std::function<void(const QString&, Revision)> callback);
 private:
     struct Impl;
     std::unique_ptr<Impl> impl_;

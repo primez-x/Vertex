@@ -2176,6 +2176,14 @@ drawing; switching modes does not change existing geometry.
   - Result: Not tested
   - Notes: ______________________________
 
+- [ ] **U367 — Reassign an appraisal area after its measured lines split it**
+  - Steps: In Measurement draw mode, create a closed outline with an internal divider and define its areas. Set one area's facts to dwelling and another to garage. Add another divider that splits the dwelling. Select its retained area, open Details and click Review measured sources (also available by right-clicking the area). Choose a face; inspect the blue proposed outline against the gray retained outline. Apply it, resolving any referenced dimensions explicitly. Review the other affected areas as needed. Undo, Redo, save and reopen.
+  - Expected: The selected area keeps its name, classification and facts while adopting only the chosen face. GLA updates after all affected areas and declarations are current. Newly unassigned faces are not silently classified or included. A face already assigned to another current area is unavailable. Cancel changes nothing.
+  - Also try: Select a different face, cancel reference review, or change the project/units/layer while the dialog is open. Hide the source layer normally and review through Details.
+  - Expected: An abandoned or stale review cannot apply. Normal layer hiding does not alter appraisal totals or invalidate source geometry.
+  - Result: Not tested
+  - Notes: ______________________________
+
 ## Issue report template
 
 - Task ID(s):

@@ -1,4 +1,34 @@
-# Vertex project formats v1 through v29
+# Vertex project formats v1 through v30
+
+## Reviewed measured-area source replacement (v30)
+
+Boundary geometry edit envelope v6 adds required `replacement_linework_sources`
+to the complete v5 envelope. It is a nonempty ordered array of edge source-use
+arrays, with exact `owner_id`, `segment_id`, `parameter_start`, `parameter_end`
+and `reversed` fields. It is permitted only for redefinition of an existing
+measurement boundary derived from measured strokes. Wall-source replacement
+cannot share this authority.
+
+Admission proves that the replacement geometry and complete lineage identify
+an actual current graph face in the owner's property/building/floor/layer and
+active design phase. Presentation visibility does not change the source graph.
+A face already assigned to another current area cannot be assigned twice.
+The retained name, appraisal facts, classifications, factors and deductions
+remain authoritative; deductions must fit the chosen face. Changed child
+identities require explicit reference mappings or reviewed removals.
+
+The redefinition archives its previous construction or topology and the v6
+operation. The final lineage must agree with the latest retained source review
+proof. Future source edits can make the reviewed area stale again; they cannot
+rewrite that proof implicitly. Each affected owner is reviewed separately.
+
+Native format 30 and extraction version 28 are required whenever this proof
+exists, including Undo history, constraint-command boundary edits and imported
+identified-boundary derivation archives. Prior edit dialects retain their
+historical wire representation and format floors.
+Measured strokes may also participate in design-phase registries. This new
+membership requires native format 30/extraction 28 even without an area review,
+including retained history. Generic vendor `model` properties do not qualify.
 
 ## Measurement linework model v1
 

@@ -95,8 +95,8 @@ struct AppraisalDetailsPanel::Impl {
     bool metric{};
     QLabel *property_name{},*gla{},*status{},*standards{},*policy{},*totals{},*issues{},*trace{};
     QTreeWidget* areas{};
-    QPushButton *setup{},*facts{},*full_report{},*locate{};
-    std::function<void(const QString&,Revision)> locate_requested,facts_requested;
+    QPushButton *setup{},*facts{},*full_report{},*locate{},*review_sources{};
+    std::function<void(const QString&,Revision)> locate_requested,facts_requested,source_review_requested;
     std::function<void(const QString&)> setup_requested,report_requested;
 
     const Entity* entity(const std::string& id) const {
@@ -146,6 +146,11 @@ struct AppraisalDetailsPanel::Impl {
         const auto id=selected();const AppraisalBoundaryStatus* boundary=nullptr;
         if(report)for(const auto& value:report->boundaries)if(text(value.boundary_id)==id){boundary=&value;break;}
         locate->setEnabled(boundary!=nullptr);facts->setEnabled(boundary!=nullptr);
+        const auto* selected_owner=boundary?entity(boundary->boundary_id):nullptr;
+        const bool has_linework_sources=selected_owner && selected_owner->type=="measurement_boundary" &&
+            selected_owner->extensions.contains("measurement_linework_sources");
+        review_sources->setVisible(has_linework_sources);
+        review_sources->setEnabled(has_linework_sources);
         if(!boundary || !source) {
             trace->setText(report && report->boundaries.empty() ?
                 QStringLiteral("Draw a measured area, then use Edit facts to declare its finish, access, ceiling eligibility and use.") :
@@ -355,6 +360,8 @@ AppraisalDetailsPanel::AppraisalDetailsPanel(QWidget* parent):QWidget(parent),im
     auto* source_actions=new QVBoxLayout;source_actions->setSpacing(6);
     p.locate=new QPushButton(QStringLiteral("Show on canvas"),content);p.locate->setObjectName(QStringLiteral("appraisalDetailsLocate"));source_actions->addWidget(p.locate);
     p.facts=new QPushButton(QStringLiteral("Edit facts"),content);p.facts->setObjectName(QStringLiteral("appraisalDetailsEditFacts"));source_actions->addWidget(p.facts);layout->addLayout(source_actions);
+    p.review_sources=new QPushButton(QStringLiteral("Review measured sources…"),content);
+    p.review_sources->setObjectName(QStringLiteral("appraisalDetailsReviewSources"));layout->addWidget(p.review_sources);
     heading(layout,QStringLiteral("Area dimensions and trace"));p.trace=label(content,"appraisalDetailsTrace");layout->addWidget(p.trace);
     layout->addStretch();scroll->setWidget(content);outer->addWidget(scroll);
     connect(p.areas,&QTreeWidget::currentItemChanged,this,[this]{impl_->show_trace();});
@@ -363,6 +370,7 @@ AppraisalDetailsPanel::AppraisalDetailsPanel(QWidget* parent):QWidget(parent),im
     connect(p.facts,&QPushButton::clicked,this,[this]{const auto id=impl_->selected();if(impl_->report && !id.isEmpty() && impl_->facts_requested)impl_->facts_requested(id,impl_->report->revision);});
     connect(p.setup,&QPushButton::clicked,this,[this]{if(impl_->setup_requested && impl_->entity(impl_->property))impl_->setup_requested(text(impl_->property));});
     connect(p.full_report,&QPushButton::clicked,this,[this]{if(impl_->report && impl_->report_requested)impl_->report_requested(text(impl_->property));});
+    connect(p.review_sources,&QPushButton::clicked,this,[this]{const auto id=impl_->selected();if(impl_->report && !id.isEmpty() && impl_->source_review_requested)impl_->source_review_requested(id,impl_->report->revision);});
     p.show_report({});
 }
 AppraisalDetailsPanel::~AppraisalDetailsPanel()=default;
@@ -387,5 +395,6 @@ void AppraisalDetailsPanel::setLocateRequested(std::function<void(const QString&
 void AppraisalDetailsPanel::setSetupRequested(std::function<void(const QString&)> callback){impl_->setup_requested=std::move(callback);}
 void AppraisalDetailsPanel::setFactsRequested(std::function<void(const QString&,Revision)> callback){impl_->facts_requested=std::move(callback);}
 void AppraisalDetailsPanel::setReportRequested(std::function<void(const QString&)> callback){impl_->report_requested=std::move(callback);}
+void AppraisalDetailsPanel::setSourceReviewRequested(std::function<void(const QString&,Revision)> callback){impl_->source_review_requested=std::move(callback);}
 
 } // namespace sketch::desktop

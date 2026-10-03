@@ -393,6 +393,7 @@ target_link_libraries(sketch_dxf_project_exchange PRIVATE sketch_measurement_lin
 add_library(sketch_measurement_linework_source src/core/measurement_linework_source.cpp)
 target_include_directories(sketch_measurement_linework_source PUBLIC include)
 target_link_libraries(sketch_measurement_linework_source PUBLIC sketch_measurement_area_graph sketch_measurement_linework sketch_project_organization)
+target_link_libraries(sketch_document PRIVATE sketch_measurement_linework_source)
 target_link_libraries(sketch_appraisal_document PUBLIC sketch_measurement_linework_source)
 if(MSVC)
   target_compile_options(sketch_measurement_linework_source PRIVATE /W4 /permissive- /utf-8)
@@ -413,12 +414,15 @@ if(BUILD_TESTING)
   add_executable(measurement_linework_source_tests tests/measurement_linework_source_tests.cpp)
   target_link_libraries(measurement_linework_source_tests PRIVATE sketch_measurement_linework_source sketch_appraisal_document)
   add_test(NAME measurement_linework_source COMMAND measurement_linework_source_tests)
+  add_executable(measurement_area_source_replacement_tests tests/measurement_area_source_replacement_tests.cpp)
+  target_link_libraries(measurement_area_source_replacement_tests PRIVATE sketch_measurement_linework_source sketch_appraisal_document sketch_project_visibility sketch_boundary_authoring)
+  add_test(NAME measurement_area_source_replacement COMMAND measurement_area_source_replacement_tests)
   add_executable(measurement_linework_storage_tests tests/measurement_linework_storage_tests.cpp)
   target_link_libraries(measurement_linework_storage_tests PRIVATE sketch_measurement_linework sketch_storage sketch_sqlite sketch_exchange)
   add_test(NAME measurement_linework_storage COMMAND measurement_linework_storage_tests)
   set_tests_properties(measurement_linework_storage PROPERTIES ENVIRONMENT_MODIFICATION
     "PATH=path_list_prepend:${CMAKE_SOURCE_DIR}/.deps/native/x64-windows/$<IF:$<CONFIG:Debug>,debug/bin,bin>")
-  set_tests_properties(measurement_linework_source measurement_linework_transform measurement_linework_edit PROPERTIES ENVIRONMENT_MODIFICATION
+  set_tests_properties(measurement_linework_source measurement_linework_transform measurement_linework_edit measurement_area_source_replacement PROPERTIES ENVIRONMENT_MODIFICATION
     "PATH=path_list_prepend:${CMAKE_SOURCE_DIR}/.deps/native/x64-windows/$<IF:$<CONFIG:Debug>,debug/bin,bin>")
   add_executable(measurement_linework_exchange_tests tests/measurement_linework_exchange_tests.cpp)
   target_link_libraries(measurement_linework_exchange_tests PRIVATE sketch_measurement_linework sketch_dxf_project_exchange)
@@ -618,6 +622,9 @@ endif()
 
 if(SKETCH_BUILD_DESKTOP)
   find_package(Qt6 6.8 CONFIG REQUIRED COMPONENTS Core Gui Widgets OpenGL OpenGLWidgets PrintSupport Pdf Svg)
+  get_target_property(SKETCH_QMAKE_EXECUTABLE Qt6::qmake IMPORTED_LOCATION)
+  get_filename_component(SKETCH_QT_BIN "${SKETCH_QMAKE_EXECUTABLE}" DIRECTORY)
+  get_filename_component(SKETCH_QT_PREFIX "${SKETCH_QT_BIN}" DIRECTORY)
   add_library(sketch_reference_import src/desktop/reference_import.cpp)
   target_include_directories(sketch_reference_import PUBLIC src/desktop)
   target_link_libraries(sketch_reference_import PUBLIC sketch_windows_import_worker Qt6::Gui)
@@ -883,7 +890,12 @@ if(SKETCH_BUILD_DESKTOP)
     qt_add_resources(measurement_linework_area_desktop_tests measurement_linework_area_test_fonts
       PREFIX "/fonts" BASE assets/fonts FILES assets/fonts/Inter.ttf)
     add_test(NAME measurement_linework_area_desktop COMMAND measurement_linework_area_desktop_tests)
-    set_tests_properties(measurement_linework_desktop measurement_linework_area_desktop PROPERTIES
+    add_executable(measurement_area_source_desktop_tests tests/measurement_area_source_desktop_tests.cpp)
+    target_link_libraries(measurement_area_source_desktop_tests PRIVATE sketch_desktop sketch_sqlite sketch_exchange)
+    qt_add_resources(measurement_area_source_desktop_tests measurement_area_source_test_fonts
+      PREFIX "/fonts" BASE assets/fonts FILES assets/fonts/Inter.ttf)
+    add_test(NAME measurement_area_source_desktop COMMAND measurement_area_source_desktop_tests)
+    set_tests_properties(measurement_linework_desktop measurement_linework_area_desktop measurement_area_source_desktop PROPERTIES
       ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_PLUGIN_PATH=${SKETCH_QT_PREFIX}/plugins"
       ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${SKETCH_QT_BIN};PATH=path_list_prepend:${CMAKE_SOURCE_DIR}/.deps/native/x64-windows/$<IF:$<CONFIG:Debug>,debug/bin,bin>")
     target_link_libraries(drawing_measurement_desktop_tests PRIVATE sketch_desktop)
@@ -1049,9 +1061,6 @@ if(SKETCH_BUILD_DESKTOP)
     add_test(NAME ifc_desktop_workflow COMMAND ifc_desktop_workflow_tests)
     set_tests_properties(dxf_desktop_workflow ifc_desktop_workflow
       PROPERTIES SKIP_RETURN_CODE 77)
-    get_target_property(SKETCH_QMAKE_EXECUTABLE Qt6::qmake IMPORTED_LOCATION)
-    get_filename_component(SKETCH_QT_BIN "${SKETCH_QMAKE_EXECUTABLE}" DIRECTORY)
-    get_filename_component(SKETCH_QT_PREFIX "${SKETCH_QT_BIN}" DIRECTORY)
     set_tests_properties(ansi_appraisal_desktop appraisal_details_panel directional_alignment_canvas witness_alignment_desktop bay_return_desktop drawing_measurement_desktop wall_measurement_desktop wall_chain_connection connected_wall_canvas wall_corner_canvas PROPERTIES
       ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_PLUGIN_PATH=${SKETCH_QT_PREFIX}/plugins"
       ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${SKETCH_QT_BIN};PATH=path_list_prepend:${CMAKE_SOURCE_DIR}/.deps/native/x64-windows/$<IF:$<CONFIG:Debug>,debug/bin,bin>")
