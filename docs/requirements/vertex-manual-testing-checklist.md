@@ -2095,6 +2095,12 @@ drawing; switching modes does not change existing geometry.
   - Result: Not tested
   - Notes: ______________________________
 
+- [ ] **U357 — Review an ANSI measurement edit before applying it**
+  - Steps: In an ANSI-oriented Appraisal project, add edge dimensions to a measured area. Open its boundary geometry editor and change an edge length. Compare the original and proposed dimensions in the preview and review table with the canvas. Repeat in Metric, then Cancel. Repeat in a project using ordinary measurement rules.
+  - Expected: ANSI dimensions use tenths of a foot; Metric adds a supplemental metre value. Analytical areas use whole square feet. Editable coordinates and inputs retain the workspace units. Cancel preserves the geometry and dimensions. Ordinary measurement projects retain their usual unit formatting.
+  - Result: Not tested
+  - Notes: ______________________________
+
 ## Issue report template
 
 - Task ID(s):

@@ -58,6 +58,117 @@ void dialog(MainWindow& window, const char* name, const std::function<void()>& o
     });
     open(); if (failure) std::rethrow_exception(failure); require(found, "dialog opened");
 }
+void boundary_review_precision(bool metric, bool ansi) {
+    QTemporaryDir fixture; require(fixture.isValid(), "isolated boundary review fixture");
+    MainWindow window({}, nullptr, fixture.filePath("text-library.json"));
+    window.setAttribute(Qt::WA_DontShowOnScreen);
+    window.setMetricUnits(metric); window.resize(1280, 900); window.show();
+    QApplication::processEvents();
+    if (ansi) {
+        child<QTabWidget>(window, "sidebarTabs").setCurrentIndex(2);
+        dialog(window, "appraisalSetupDialog",
+            [&] { child<QPushButton>(window, "appraisalDetailsSetup").click(); },
+            [&](QDialog& value) {
+                value.setAttribute(Qt::WA_DontShowOnScreen);
+                choose(value, "appraisalSetupPolicy", "ansi_z765_2021");
+                choose(value, "appraisalSetupPropertyKind", "detached_single_family");
+                choose(value, "appraisalSetupMeasurementBasis", "exterior");
+                choose(value, "ansiInteriorInspected", "yes");
+                choose(value, "ansiDirectMeasurement", "yes");
+                choose(value, "ansiAcquisitionIncrement", "tenth_foot");
+                child<QDialogButtonBox>(value, "appraisalSetupButtons").button(QDialogButtonBox::Save)->click();
+                require(value.result() == QDialog::Accepted, "boundary review ANSI setup saves");
+            });
+    }
+    const sketch::Boundary square{{{0,0},{3.048,0},0},{{3.048,0},{3.048,3.048},0},
+        {{3.048,3.048},{0,3.048},0},{{0,3.048},{0,0},0}};
+    const auto area = window.createBoundary(square);
+    require(!area.isEmpty(), "review uses an actual authored boundary");
+    const auto boundary = sketch::decode_identified_boundary_entity(
+        window.document().snapshot().entities().at(area.toStdString()));
+    const auto length = window.createLengthDimension(area,
+        QString::fromStdString(boundary.segments.front().segment_id), {1.524,-1});
+    const auto area_dimension = window.createAreaDimension(area, {1.524,1.524});
+    require(!length.isEmpty() && !area_dimension.isEmpty(), "review uses authored dependent dimensions");
+    require(window.selectEntity(area), "select measured boundary for the actual geometry editor");
+    const auto before = window.document().snapshot();
+    const auto before_length = ansi ? (metric ? QStringLiteral("10.0 ft (3.048 m)") : QStringLiteral("10.0 ft"))
+                                   : QStringLiteral("3.048 m");
+    const auto after_length = ansi ? (metric ? QStringLiteral("11.0 ft (3.353 m)") : QStringLiteral("11.0 ft"))
+                                  : QStringLiteral("3.353 m");
+    const auto before_area = ansi ? (metric ? QStringLiteral("100 sq ft (9.29 m²)") : QStringLiteral("100 sq ft"))
+                                 : QStringLiteral("9.29 m²");
+    const auto after_area = ansi ? (metric ? QStringLiteral("105 sq ft (9.75 m²)") : QStringLiteral("105 sq ft"))
+                                : QStringLiteral("9.75 m²");
+    dialog(window, "boundaryGeometryDialog",
+        [&] { child<QPushButton>(window, "editBoundaryGeometry").click(); }, [&](QDialog& value) {
+            value.setAttribute(Qt::WA_DontShowOnScreen);
+            require(child<QComboBox>(value, "boundaryEditOperation").currentData().toString() == "length",
+                "boundary review opens the real default edge-length operation");
+            auto& edge = child<QComboBox>(value, "boundaryEdge");
+            const auto index = edge.findData(QString::fromStdString(boundary.segments.front().segment_id));
+            require(index >= 0, "review retains the authored edge identity"); edge.setCurrentIndex(index);
+            child<QLineEdit>(value, "boundaryEdgeLength").setText(QStringLiteral("11 ft"));
+            QApplication::processEvents();
+            auto& buttons = child<QDialogButtonBox>(value, "boundaryGeometryButtons");
+            require(buttons.button(QDialogButtonBox::Apply)->isEnabled(), "exact edge input produces a valid review");
+            const auto capture = qEnvironmentVariable("VERTEX_TEST_CAPTURE_DIR");
+            if (!capture.isEmpty()) {
+                require(QDir().mkpath(capture) && value.grab().save(QDir(capture).filePath(
+                    QStringLiteral("boundary-review-%1-%2.png").arg(ansi ? "ansi" : "generic", metric ? "metric" : "imperial"))),
+                    "capture the actual boundary review dialog");
+            }
+            auto& changes = child<QTableWidget>(value, "boundaryGeometryChanges");
+            const auto check_row = [&](const QString& name, const QString& original, const QString& proposed) {
+                for (int row = 0; row < changes.rowCount(); ++row) {
+                    if (changes.item(row, 0)->text() != name) continue;
+                    const auto actual_before = changes.item(row, 1)->text();
+                    const auto actual_after = changes.item(row, 2)->text();
+                    if (!actual_before.startsWith(original + QStringLiteral("  @ ")) ||
+                        !actual_after.startsWith(proposed + QStringLiteral("  @ ")))
+                        throw std::runtime_error(QStringLiteral("%1 %2 review %3 must use canonical dimension text; before='%4', after='%5'")
+                            .arg(ansi ? "ANSI" : "generic", metric ? "Metric" : "Imperial", name, actual_before, actual_after).toStdString());
+                    return;
+                }
+                throw std::runtime_error("authored dimension is missing from the real review table");
+            };
+            check_row(QStringLiteral("Edge 1 measurement"), before_length, after_length);
+            check_row(QStringLiteral("Area measurement"), before_area, after_area);
+            const auto& labels = child<sketch::desktop::PlanCanvas>(value, "boundaryGeometryPreview").labels();
+            const auto check_labels = [&](const QString& id, const QString& original, const QString& proposed) {
+                const auto original_label = std::find_if(labels.begin(), labels.end(),
+                    [&](const auto& label) { return label.id == id + QStringLiteral("-original"); });
+                const auto proposed_label = std::find_if(labels.begin(), labels.end(),
+                    [&](const auto& label) { return label.id == id + QStringLiteral("-proposed"); });
+                require(proposed_label != labels.end(), "real preview retains the proposed authored dimension label");
+                // The review combines both values at a shared text position to avoid overprinting.
+                require(original_label == labels.end()
+                    ? proposed_label->text == original + QStringLiteral(" → ") + proposed
+                    : original_label->text == original && proposed_label->text == proposed,
+                    "original and proposed preview dimensions use the same presentation as their review table");
+            };
+            check_labels(length, before_length, after_length);
+            check_labels(area_dimension, before_area, after_area);
+            const auto before_perimeter = ansi ? (metric ? QStringLiteral("40.0 ft (12.192 m)") : QStringLiteral("40.0 ft"))
+                                              : QStringLiteral("12.192 m");
+            const auto after_perimeter = ansi ? (metric ? QStringLiteral("41.0 ft (12.512 m)") : QStringLiteral("41.0 ft"))
+                                             : QStringLiteral("12.512 m");
+            require(child<QLabel>(value, "boundaryGeometrySummary").text() ==
+                QStringLiteral("Edge: %1 → %2\nAnalytical boundary area: %3 → %4    Perimeter: %5 → %6")
+                    .arg(before_length, after_length, before_area, after_area, before_perimeter, after_perimeter),
+                "review summary uses the owning property's dimension precision for edge, area and perimeter");
+            require(window.document().snapshot().revision() == before.revision() &&
+                window.document().snapshot().entities() == before.entities(), "review preserves exact live geometry and dimensions");
+            buttons.button(QDialogButtonBox::Cancel)->click();
+        });
+    require(window.document().snapshot().revision() == before.revision() &&
+        window.document().snapshot().entities() == before.entities(), "Cancel preserves boundary dimensions and history exactly");
+}
+void boundary_review_precision() {
+    boundary_review_precision(true, true);
+    boundary_review_precision(false, true);
+    boundary_review_precision(true, false);
+}
 void check_saved_appraisal_sheet(MainWindow& window, const QString& area, const QString& directory) {
     auto source = window.document().snapshot();
     auto sheet_entity = source.entities().at("sheet-view-1");
@@ -293,7 +404,11 @@ int main(int argc, char** argv) {
     try {
         require(QFontDatabase::addApplicationFont(QStringLiteral(":/fonts/Inter.ttf")) >= 0, "Inter font loads");
         app.setFont(QFont(QStringLiteral("Inter"), 10));
-        setup_and_facts(); std::cout << "ansi_appraisal_desktop_tests passed\n"; return 0;
+        if (QCoreApplication::arguments().contains(QStringLiteral("--ansi-boundary-review-only"))) {
+            boundary_review_precision();
+            std::cout << "ansi_appraisal_desktop_tests boundary review passed\n"; return 0;
+        }
+        boundary_review_precision(); setup_and_facts(); std::cout << "ansi_appraisal_desktop_tests passed\n"; return 0;
     }
     catch (const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }
 }

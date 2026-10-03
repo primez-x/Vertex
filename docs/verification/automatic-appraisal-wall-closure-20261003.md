@@ -60,3 +60,33 @@ Phase exclusion is supported by the existing phase augmentation and current-stat
 projection; this checkpoint is not full production qualification of every design
 alternative. Apex native compatibility, normative ANSI validation and the remaining
 production acceptance requirements stay open.
+
+## Follow-up: ANSI boundary edit presentation
+
+Source review found that persisted canvas and saved-sheet dimensions already use
+the owning property's ANSI presentation, but the boundary geometry review used
+ordinary workspace formatting. A real native review reproduced the discrepancy:
+the ANSI Metric edge row showed `3.048 m` instead of `10.0 ft (3.048 m)`.
+
+The review now shares the existing canvas length/area formatters. Its original
+and proposed dimension labels, review rows and analytical area/perimeter summary
+follow that property policy. Coordinate fields and input expressions retain their
+workspace units and precision. This changes presentation only, without rounding
+stored geometry or altering eligibility, deductions, facts or calculation rules.
+
+The focused fixture uses an actual authored 10-foot square, authored edge/area
+dimensions and an 11-foot edge proposal. Its resulting trapezoid has 105 square
+feet, not 110. It checks ANSI Imperial/Metric and ordinary Metric presentation,
+and exact entity/revision preservation through preview and Cancel. Captures and
+RED/GREEN logs belong to `artifacts/ansi-edit-dimensions-20261003`.
+
+Full native ANSI appraisal and boundary editing checks passed after the correction.
+Root inspected the actual Metric review and Details captures. The ANSI fixture
+also checks persisted canvas dimensions, schedules and saved-sheet PDFs in both
+unit modes. Delivery metadata records the matching commit, remote ref, installed
+executable and runtime inspection separately; these checks are not user signoff.
+
+Physical source-wall baseline dimensions and exterior appraisal dimensions are
+distinct geometry. No blanket suppression is introduced: explicit wall callouts,
+architectural output and editing remain intact. The original production gates
+and normative ANSI validation stay open.

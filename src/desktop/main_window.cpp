@@ -1515,23 +1515,33 @@ struct DimensionCanvasProjection {
     std::optional<CanvasEntity> line;
 };
 
+QString format_boundary_length(double metres, bool metric, bool ansi) {
+    if (!ansi) return format_length(metres, metric);
+    auto text = QStringLiteral("%1 ft").arg(QString::number(std::round(metres / 0.3048 * 10) / 10, 'f', 1));
+    if (metric) text += QStringLiteral(" (%1 m)").arg(QString::number(metres, 'f', 3));
+    return text;
+}
+
+QString format_boundary_area(double square_metres, bool metric, bool ansi) {
+    if (!ansi) return format_dimension_area(square_metres, metric);
+    auto text = QStringLiteral("%1 sq ft").arg(QString::number(std::round(square_metres / 0.09290304), 'f', 0));
+    if (metric) text += QStringLiteral(" (%1 m²)").arg(QString::number(square_metres, 'f', 2));
+    return text;
+}
+
 DimensionCanvasProjection project_boundary_dimension(const BoundaryDimension& dimension,
     const Entity& boundary, bool metric, bool selected, bool ansi = false) {
     const auto resolved=dimension.resolve(boundary);
     QString text;
     std::optional<Boundary> overlay;
     if (resolved.kind==BoundaryDimensionKind::segment_length) {
-        text=ansi ? QStringLiteral("%1 ft").arg(QString::number(std::round(resolved.segment_length_metres / 0.3048 * 10) / 10, 'f', 1))
-                  : format_length(resolved.segment_length_metres,metric);
-        if (ansi && metric) text += QStringLiteral(" (%1 m)").arg(QString::number(resolved.segment_length_metres, 'f', 3));
+        text=format_boundary_length(resolved.segment_length_metres,metric,ansi);
         overlay=dimension_overlay(resolved.segment,dimension.text_position);
     } else if (resolved.kind==BoundaryDimensionKind::angle) {
         text=format_dimension_angle(resolved.angle_radians);
         overlay=angle_dimension_overlay(decode_identified_boundary_entity(boundary),dimension);
     } else {
-        text=ansi ? QStringLiteral("%1 sq ft").arg(QString::number(std::round(resolved.area_square_metres / 0.09290304), 'f', 0))
-                  : format_dimension_area(resolved.area_square_metres,metric);
-        if (ansi && metric) text += QStringLiteral(" (%1 m²)").arg(QString::number(resolved.area_square_metres, 'f', 2));
+        text=format_boundary_area(resolved.area_square_metres,metric,ansi);
     }
     DimensionCanvasProjection result{{id_from(dimension.id),dimension.text_position,std::move(text),selected},{}};
     result.label.selection_type = QStringLiteral("dimension");
@@ -33726,6 +33736,7 @@ public:
             const auto source = authoringSnapshot();
             const auto workspace = m_workspace;
             const auto original_geometry = boundary_geometry(boundary);
+            const auto ansi = ansi_boundary_dimensions(source, *selected);
             QDialog dialog(owner);
             styleDialog(dialog);
             dialog.setObjectName(QStringLiteral("boundaryGeometryDialog"));
@@ -33878,8 +33889,8 @@ public:
                 preview->fitView();
                 changes->setRowCount(0);
                 summary->setText(QStringLiteral("Analytical boundary area: %1    Perimeter: %2")
-                    .arg(format_dimension_area(std::abs(signed_area(original_geometry)), context.metric_units),
-                        format_length(perimeter(original_geometry), context.metric_units)));
+                    .arg(format_boundary_area(std::abs(signed_area(original_geometry)), context.metric_units, ansi),
+                        format_boundary_length(perimeter(original_geometry), context.metric_units, ansi)));
                 status->setText(message);
                 buttons->button(QDialogButtonBox::Apply)->setEnabled(false);
             };
@@ -34027,10 +34038,10 @@ public:
                     }
                     const auto dimension_text = [&](const BoundaryDimensionResolution& resolved) {
                         if (resolved.kind == BoundaryDimensionKind::segment_length)
-                            return format_length(resolved.segment_length_metres, context.metric_units);
+                            return format_boundary_length(resolved.segment_length_metres, context.metric_units, ansi);
                         if (resolved.kind == BoundaryDimensionKind::angle)
                             return format_dimension_angle(resolved.angle_radians);
-                        return format_dimension_area(resolved.area_square_metres, context.metric_units);
+                        return format_boundary_area(resolved.area_square_metres, context.metric_units, ansi);
                     };
                     const auto add_dimension = [&](const BoundaryDimension& dimension,
                                                    const Entity& boundary_entity, QString suffix,
@@ -34099,13 +34110,13 @@ public:
                                     coordinate_input_text(after.segments[static_cast<std::size_t>(corner_index)].segment.start.x),
                                     coordinate_input_text(after.segments[static_cast<std::size_t>(corner_index)].segment.start.y)))
                         : QStringLiteral("Edge: %1 → %2")
-                            .arg(format_length(segment_length(original_edge.segment), context.metric_units),
-                                format_length(segment_length(after.segments[static_cast<std::size_t>(index)].segment), context.metric_units));
+                            .arg(format_boundary_length(segment_length(original_edge.segment), context.metric_units, ansi),
+                                format_boundary_length(segment_length(after.segments[static_cast<std::size_t>(index)].segment), context.metric_units, ansi));
                     summary->setText(target_summary + QStringLiteral("\nAnalytical boundary area: %1 → %2    Perimeter: %3 → %4")
-                        .arg(format_dimension_area(std::abs(signed_area(original_geometry)), context.metric_units),
-                            format_dimension_area(std::abs(signed_area(after_geometry)), context.metric_units),
-                            format_length(perimeter(original_geometry), context.metric_units),
-                            format_length(perimeter(after_geometry), context.metric_units)));
+                        .arg(format_boundary_area(std::abs(signed_area(original_geometry)), context.metric_units, ansi),
+                            format_boundary_area(std::abs(signed_area(after_geometry)), context.metric_units, ansi),
+                            format_boundary_length(perimeter(original_geometry), context.metric_units, ansi),
+                            format_boundary_length(perimeter(after_geometry), context.metric_units, ansi)));
                     candidate = std::move(command);
                     candidate_snapshot = proposed;
                     buttons->button(QDialogButtonBox::Apply)->setEnabled(proposed.entities() != source.entities());

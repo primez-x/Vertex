@@ -37,3 +37,25 @@ build while a fixture executable remains live. Preserve unrelated temp.txt.
 This checkpoint addresses one original workflow gap. Full Apex replacement and
 compatibility certification, normative ANSI validation and the remaining production
 requirements stay open under the existing production plan.
+
+## Follow-up: ANSI dimension review
+
+Outcome: boundary-edit review tables and preview labels use the same owning-property
+dimension presentation as the main canvas and sheets. ANSI profile dimensions show
+tenths of a foot and whole square feet, with supplemental metric values when chosen.
+Editable coordinates and input expressions retain their existing units and precision.
+
+Root owns the shared formatter in main_window.cpp, documentation and delivery. The
+regression worker owns ansi_appraisal_desktop_tests.cpp. Both freeze before builds.
+
+- [x] Reproduce the review's generic-unit bypass through the actual native dialog.
+- [x] Reuse one display formatter for canvas projections and modal review values.
+- [x] Verify imperial/metric, non-ANSI controls, cancel integrity and actual captures.
+- [x] Run the existing ANSI canvas, saved-sheet/PDF and Facts checks.
+
+The delivery record must additionally verify the scoped commit, remote ref and
+matching installed checkpoint. None of these steps claims normative certification.
+
+Do not blanket-hide physical wall labels: manually placed source-wall dimensions
+and exterior dimensions describe different geometry. Their display policy needs
+separate visibility, editing and architectural-output handling.
