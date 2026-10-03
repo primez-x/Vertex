@@ -96,6 +96,8 @@ void select_method(BoundaryInputDialog& dialog, int index) {
     auto& choice = method(dialog);
     require(index >= 0 && index < choice.count(), "boundary input method index is unavailable");
     choice.setCurrentIndex(index);
+    if (index >= 4 && index <= 6)
+        dialog.findChild<QComboBox*>("boundaryInputChordDefinition")->setCurrentIndex(0);
 }
 
 void set_field(BoundaryInputDialog& dialog, const char* object_name,

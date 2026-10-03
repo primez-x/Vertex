@@ -76,6 +76,8 @@ std::size_t authoring_dynamic_bytes(const ConstructionReceipt& r) {
     for (const auto* a : {&r.heading, &r.turn, &r.angle, &r.tangent, &r.sweep}) {
         if (*a) add(strings({(*a)->original_expression, (*a)->normalized_expression}));
     }
+    if (r.chord_input) add(strings({r.chord_input->length.original_expression,
+        r.chord_input->heading.original_expression,r.chord_input->heading.normalized_expression}));
     return result;
 }
 std::size_t authoring_dynamic_bytes(const IdentifiedSegment& s) {

@@ -895,6 +895,11 @@ if(SKETCH_BUILD_DESKTOP)
     qt_add_resources(measurement_linework_precision_desktop_tests measurement_linework_precision_test_fonts
       PREFIX "/fonts" BASE assets/fonts FILES assets/fonts/Inter.ttf)
     add_test(NAME measurement_linework_precision_desktop COMMAND measurement_linework_precision_desktop_tests)
+    add_executable(typed_chord_desktop_tests tests/typed_chord_desktop_tests.cpp)
+    target_link_libraries(typed_chord_desktop_tests PRIVATE sketch_desktop)
+    qt_add_resources(typed_chord_desktop_tests typed_chord_test_fonts
+      PREFIX "/fonts" BASE assets/fonts FILES assets/fonts/Inter.ttf)
+    add_test(NAME typed_chord_desktop COMMAND typed_chord_desktop_tests)
     add_executable(measurement_linework_area_desktop_tests tests/measurement_linework_area_desktop_tests.cpp)
     target_link_libraries(measurement_linework_area_desktop_tests PRIVATE sketch_desktop)
     qt_add_resources(measurement_linework_area_desktop_tests measurement_linework_area_test_fonts
@@ -905,7 +910,7 @@ if(SKETCH_BUILD_DESKTOP)
     qt_add_resources(measurement_area_source_desktop_tests measurement_area_source_test_fonts
       PREFIX "/fonts" BASE assets/fonts FILES assets/fonts/Inter.ttf)
     add_test(NAME measurement_area_source_desktop COMMAND measurement_area_source_desktop_tests)
-    set_tests_properties(measurement_linework_desktop measurement_linework_history_desktop measurement_linework_precision_desktop measurement_linework_area_desktop measurement_area_source_desktop PROPERTIES
+    set_tests_properties(measurement_linework_desktop measurement_linework_history_desktop measurement_linework_precision_desktop typed_chord_desktop measurement_linework_area_desktop measurement_area_source_desktop PROPERTIES
       ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_PLUGIN_PATH=${SKETCH_QT_PREFIX}/plugins"
       ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${SKETCH_QT_BIN};PATH=path_list_prepend:${CMAKE_SOURCE_DIR}/.deps/native/x64-windows/$<IF:$<CONFIG:Debug>,debug/bin,bin>")
     target_link_libraries(drawing_measurement_desktop_tests PRIVATE sketch_desktop)
@@ -1667,6 +1672,13 @@ if(BUILD_TESTING)
   add_executable(boundary_receipt_tests tests/boundary_receipt_tests.cpp)
   target_link_libraries(boundary_receipt_tests PRIVATE sketch_boundary_receipts)
   add_test(NAME boundary_receipts COMMAND boundary_receipt_tests)
+  add_executable(typed_chord_receipt_tests tests/typed_chord_receipt_tests.cpp)
+  target_link_libraries(typed_chord_receipt_tests PRIVATE sketch_boundary_authoring sketch_measurement_linework sketch_storage sketch_exchange)
+  add_test(NAME typed_chord_receipts COMMAND typed_chord_receipt_tests)
+  if(WIN32)
+    set_tests_properties(typed_chord_receipts PROPERTIES ENVIRONMENT_MODIFICATION
+      "PATH=path_list_prepend:${CMAKE_SOURCE_DIR}/.deps/native/x64-windows/$<IF:$<CONFIG:Debug>,debug/bin,bin>")
+  endif()
   add_executable(boundary_receipt_integrity_tests tests/boundary_receipt_integrity_tests.cpp)
   target_link_libraries(boundary_receipt_integrity_tests PRIVATE sketch_storage sketch_boundary_receipts sketch_sqlite)
   add_test(NAME boundary_receipt_integrity COMMAND boundary_receipt_integrity_tests)

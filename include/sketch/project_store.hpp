@@ -122,10 +122,11 @@ public:
     // rigid-transform proofs require v27; schema/replay-two measured linework
     // and identified measured areas retaining linework sources require v28;
     // schema/replay-three measured stroke edit derivations require v29;
-    // explicitly reviewed measured-area source replacements require v30.
+    // explicitly reviewed measured-area source replacements require v30;
+    // durable typed chord inputs and their retained command proofs require v31.
     // Any may include
     // the optional recovery ledger. Absent proofs preserve historical formats.
-    static constexpr std::uint32_t format_version = 30;
+    static constexpr std::uint32_t format_version = 31;
     static constexpr std::uint32_t recovery_format_version = 4;
     [[nodiscard]] static std::uint32_t required_format_version(const DocumentSnapshot& snapshot);
     static constexpr std::uint64_t maximum_file_bytes = 4ULL * 1024ULL * 1024ULL * 1024ULL;
@@ -140,7 +141,7 @@ public:
                                           const DocumentSnapshot& snapshot,
                                           const SaveOptions& options = {});
     [[nodiscard]] static LoadResult load(const std::filesystem::path& source);
-    // Recovery-bearing v4 through v29 only. A document-only path never drops a ledger.
+    // Recovery-bearing v4 through the current format. Document-only paths never drop a ledger.
     [[nodiscard]] static SaveReceipt save_archive(const std::filesystem::path& destination,
         const ProjectArchiveSnapshot&, const SaveOptions& options = {});
     [[nodiscard]] static ArchiveLoadResult load_archive(const std::filesystem::path& source, ArchiveRole role);

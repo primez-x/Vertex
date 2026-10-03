@@ -167,6 +167,16 @@ public:
                    InputMethod::arc_start_tangent);
         form->addRow(QStringLiteral("Construction method"), method);
 
+        chord_definition = new QComboBox(owner);
+        chord_definition->setObjectName(QStringLiteral("boundaryInputChordDefinition"));
+        chord_definition->addItem(QStringLiteral("Endpoint X/Y"));
+        chord_definition->addItem(QStringLiteral("Length / heading"));
+        form->addRow(QStringLiteral("Chord definition"), chord_definition);
+        chord_length = quantity_field(QStringLiteral("boundaryInputChordLength"));
+        chord_heading = angle_field(QStringLiteral("boundaryInputChordHeading"));
+        form->addRow(QStringLiteral("Chord length"), chord_length);
+        form->addRow(QStringLiteral("Chord heading (deg/rad/pi)"), chord_heading);
+
         length = quantity_field(QStringLiteral("boundaryInputLength"));
         heading_angle = angle_field(QStringLiteral("boundaryInputHeading"));
         rise = quantity_field(QStringLiteral("boundaryInputRise"));
@@ -239,8 +249,10 @@ public:
                                  configure();
                              }
                          });
+        QObject::connect(chord_definition, qOverload<int>(&QComboBox::currentIndexChanged), owner,
+                         [this](int) { if (!loading) configure(); });
         for (auto* field : {length, heading_angle, rise, run, turn, end_x, end_y, sweep,
-                            height, arc_length, tangent}) {
+                            height, arc_length, tangent, chord_length, chord_heading}) {
             QObject::connect(field, &QLineEdit::textChanged, owner,
                              [this] {
                                  if (!loading) {
@@ -260,7 +272,10 @@ public:
         QObject::connect(owner, &QDialog::rejected, owner,
                          [this] { accepted_candidate.reset(); accepted_receipt.reset(); accepted_anchor.reset(); accepted_preferences.reset(); });
 
-        QWidget::setTabOrder(method, length);
+        QWidget::setTabOrder(method, chord_definition);
+        QWidget::setTabOrder(chord_definition, chord_length);
+        QWidget::setTabOrder(chord_length, chord_heading);
+        QWidget::setTabOrder(chord_heading, length);
         QWidget::setTabOrder(length, heading_angle);
         QWidget::setTabOrder(heading_angle, rise);
         QWidget::setTabOrder(rise, run);
@@ -280,6 +295,7 @@ public:
         if (phase!=BoundaryAuthoringPhase::drawing) end_x->setFocus();
         else if (method_from(*method)==InputMethod::rise_run) rise->setFocus();
         else if (method_from(*method)==InputMethod::arc_start_tangent) tangent->setFocus();
+        else if (!chord_length->isHidden()) chord_length->setFocus();
         else if (length->isHidden()) end_x->setFocus();
         else length->setFocus();
     }
@@ -307,8 +323,9 @@ public:
             if (phase==BoundaryAuthoringPhase::drawing) {
                 accepted_preferences->metric_units=metric;
                 accepted_preferences->method_index=method->currentIndex();
+                accepted_preferences->chord_definition_index=chord_definition->currentIndex();
                 accepted_preferences->clockwise=clockwise->isChecked();
-                for (auto* field : {length,heading_angle,rise,run,turn,sweep,height,arc_length,tangent})
+                for (auto* field : {length,heading_angle,rise,run,turn,sweep,height,arc_length,tangent,chord_length,chord_heading})
                     accepted_preferences->expressions[field->objectName().toStdString()]=field->text();
             }
             error_message.clear();
@@ -370,10 +387,13 @@ private:
         height->setText(QStringLiteral("0.25") + unit);
         arc_length->setText(QStringLiteral("2") + unit);
         tangent->setText(QStringLiteral("0 deg"));
+        chord_length->setText(QStringLiteral("1") + unit);
+        chord_heading->setText(QStringLiteral("0 deg"));
+        chord_definition->setCurrentIndex(preferences.chord_definition_index == 0 ? 0 : 1);
         clockwise->setChecked(false);
         if (preferences.method_index>=0 && preferences.method_index<method->count())
             method->setCurrentIndex(preferences.method_index);
-        for (auto* field : {length,heading_angle,rise,run,turn,sweep,height,arc_length,tangent}) {
+        for (auto* field : {length,heading_angle,rise,run,turn,sweep,height,arc_length,tangent,chord_length,chord_heading}) {
             const auto value=preferences.expressions.find(field->objectName().toStdString());
             if (value!=preferences.expressions.end()) field->setText(value->second);
         }
@@ -408,6 +428,9 @@ private:
         const auto selected = method_from(*method);
         if (phase!=BoundaryAuthoringPhase::drawing) {
             form->setRowVisible(method,false);
+            form->setRowVisible(chord_definition,false);
+            form->setRowVisible(chord_length,false);
+            form->setRowVisible(chord_heading,false);
             for (auto* field : {length,heading_angle,rise,run,turn,sweep,height,arc_length,tangent})
                 form->setRowVisible(field,false);
             form->setRowVisible(clockwise,false);
@@ -427,8 +450,12 @@ private:
         const auto has_chord = selected == InputMethod::arc_chord_angle ||
                                selected == InputMethod::arc_chord_height ||
                                selected == InputMethod::arc_chord_length;
-        form->setRowVisible(end_x, selected == InputMethod::line_to_coordinate || has_chord);
-        form->setRowVisible(end_y, selected == InputMethod::line_to_coordinate || has_chord);
+        const auto typed_chord = has_chord && chord_definition->currentIndex() == 1;
+        form->setRowVisible(chord_definition,has_chord);
+        form->setRowVisible(chord_length,typed_chord);
+        form->setRowVisible(chord_heading,typed_chord);
+        form->setRowVisible(end_x, selected == InputMethod::line_to_coordinate || (has_chord && !typed_chord));
+        form->setRowVisible(end_y, selected == InputMethod::line_to_coordinate || (has_chord && !typed_chord));
         form->setRowVisible(sweep, selected == InputMethod::arc_chord_angle ||
                                       selected == InputMethod::arc_start_tangent);
         form->setRowVisible(height, selected == InputMethod::arc_chord_height);
@@ -488,6 +515,12 @@ private:
         ConstructionReceipt value;
         value.segment_id = "precision-input";
         value.start = start;
+        const auto set_chord = [&] {
+            if (chord_definition->currentIndex() == 1)
+                value.chord_input = ChordInput{read_quantity(chord_length,QStringLiteral("chord length")),
+                    read_angle(chord_heading,QStringLiteral("chord heading"))};
+            else value.chord_end = read_coordinate();
+        };
         switch (method_from(*method)) {
             case InputMethod::length_heading:
                 value.kind = BoundaryConstructionKind::line_heading;
@@ -510,17 +543,17 @@ private:
                 break;
             case InputMethod::arc_chord_angle:
                 value.kind = BoundaryConstructionKind::arc_chord_angle;
-                value.chord_end = read_coordinate();
+                set_chord();
                 value.angle = read_angle(sweep, QStringLiteral("sweep angle"));
                 break;
             case InputMethod::arc_chord_height:
                 value.kind = BoundaryConstructionKind::arc_chord_height;
-                value.chord_end = read_coordinate();
+                set_chord();
                 value.height = read_quantity(height, QStringLiteral("chord height"));
                 break;
             case InputMethod::arc_chord_length:
                 value.kind = BoundaryConstructionKind::arc_chord_length;
-                value.chord_end = read_coordinate();
+                set_chord();
                 value.arc_length = read_quantity(arc_length, QStringLiteral("arc length"));
                 value.clockwise = clockwise->isChecked();
                 break;
@@ -546,9 +579,18 @@ private:
             case BoundaryConstructionKind::line_rise_run: (void)value.add_line_rise_run(*receipt.rise,*receipt.run); break;
             case BoundaryConstructionKind::line_relative_turn: (void)value.add_line_relative_turn(*receipt.distance,*receipt.turn); break;
             case BoundaryConstructionKind::line_to_point: (void)value.add_line_to(*receipt.chord_end); break;
-            case BoundaryConstructionKind::arc_chord_angle: (void)value.add_arc_chord_angle(*receipt.chord_end,*receipt.angle); break;
-            case BoundaryConstructionKind::arc_chord_height: (void)value.add_arc_chord_height(*receipt.chord_end,*receipt.height); break;
-            case BoundaryConstructionKind::arc_chord_length: (void)value.add_arc_chord_arc_length(*receipt.chord_end,*receipt.arc_length,receipt.clockwise); break;
+            case BoundaryConstructionKind::arc_chord_angle:
+                if (receipt.chord_input) (void)value.add_arc_chord_angle(receipt.chord_input->length,receipt.chord_input->heading,*receipt.angle);
+                else (void)value.add_arc_chord_angle(*receipt.chord_end,*receipt.angle);
+                break;
+            case BoundaryConstructionKind::arc_chord_height:
+                if (receipt.chord_input) (void)value.add_arc_chord_height(receipt.chord_input->length,receipt.chord_input->heading,*receipt.height);
+                else (void)value.add_arc_chord_height(*receipt.chord_end,*receipt.height);
+                break;
+            case BoundaryConstructionKind::arc_chord_length:
+                if (receipt.chord_input) (void)value.add_arc_chord_arc_length(receipt.chord_input->length,receipt.chord_input->heading,*receipt.arc_length,receipt.clockwise);
+                else (void)value.add_arc_chord_arc_length(*receipt.chord_end,*receipt.arc_length,receipt.clockwise);
+                break;
             case BoundaryConstructionKind::arc_start_tangent: (void)value.add_arc_start_tangent(*receipt.tangent,*receipt.arc_length,*receipt.sweep); break;
             default: throw std::invalid_argument("Unsupported precision input method");
         }
@@ -680,6 +722,8 @@ private:
     QString error_message;
     QFormLayout* form{};
     QComboBox* method{};
+    QComboBox* chord_definition{};
+    QLineEdit *chord_length{}, *chord_heading{};
     QLineEdit *length{}, *heading_angle{}, *rise{}, *run{}, *turn{};
     QLineEdit *end_x{}, *end_y{}, *sweep{}, *height{}, *arc_length{}, *tangent{};
     QCheckBox* clockwise{};

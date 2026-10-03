@@ -1,5 +1,12 @@
 # Precision boundary authoring
 
+Chord-based curve input offers Length / heading by default and Endpoint X/Y as
+an alternative. The direct definition retains exact quantity and angle inputs
+for analytical replay. Typed constructions opt into boundary schema 4; ordinary
+legacy constructions keep their earlier encoding. See the
+[native format 31 contract](project-format.md#exact-chord-length-and-heading-v31)
+for receipt, frame, recovery and reader-version details.
+
 The native desktop now uses the shared session and sealed commit service for
 both drawing modes. This remains an internal integration in the accepted
 production plan; keyboard parity and persistent unfinished sessions are incomplete.

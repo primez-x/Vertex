@@ -54,6 +54,8 @@ void choose(QDialog& dialog, int index) {
     auto* methods = dialog.findChild<QComboBox*>(QStringLiteral("boundaryInputMethod"));
     require(methods && methods->count() == 8, "all eight analytical methods are available");
     methods->setCurrentIndex(index);
+    if (index >= 4 && index <= 6)
+        dialog.findChild<QComboBox*>(QStringLiteral("boundaryInputChordDefinition"))->setCurrentIndex(0);
 }
 void accept(QDialog& dialog) {
     auto* add = dialog.findChild<QPushButton*>(QStringLiteral("boundaryInputAdd"));

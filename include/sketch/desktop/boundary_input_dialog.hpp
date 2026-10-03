@@ -16,6 +16,7 @@ namespace sketch::desktop {
 // coordinates always come from the current session context rather than repeat.
 struct BoundaryInputPreferences {
     int method_index{};
+    int chord_definition_index{1};
     std::map<std::string,QString,std::less<>> expressions;
     bool clockwise{};
     std::optional<bool> metric_units;

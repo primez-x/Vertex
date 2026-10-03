@@ -12883,6 +12883,8 @@ public:
             const auto& drawing = *m_linework_drawing;
             if (!drawing.has_anchor) throw std::invalid_argument("Place the measured-line starting point first.");
             auto candidate = drawing.model;
+            if (receipt.chord_input)
+                candidate = promoted_measurement_linework_for_typed_chord(candidate);
             ConstructionReplayContext replay_context;
             replay_context.expected_start = lineworkPen();
             if (receipt.kind == BoundaryConstructionKind::line_relative_turn && !candidate.edges.empty())

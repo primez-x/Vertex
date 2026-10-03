@@ -65,12 +65,12 @@ bool valid_explicit_relationship_transform(const Entity& previous, const Entity&
         if (!old_receipt.supported() || !new_receipt.supported()) return false;
         const auto& old_record = *old_receipt.record;
         const auto& new_record = *new_receipt.record;
-        if (new_record.schema_version != boundary_receipt_schema_version_v3 ||
+        if ((new_record.schema_version != boundary_receipt_schema_version_v3 && new_record.schema_version != boundary_receipt_schema_version_v4) ||
             new_record.transforms.empty() ||
             !same_record_without_transforms(old_record, new_record)) {
             return false;
         }
-        if (old_record.schema_version == boundary_receipt_schema_version_v3) {
+        if (old_record.schema_version == boundary_receipt_schema_version_v3 || old_record.schema_version == boundary_receipt_schema_version_v4) {
             if (new_record.transforms.size() != old_record.transforms.size() + 1) return false;
             for (std::size_t index = 0; index < old_record.transforms.size(); ++index) {
                 if (!(new_record.transforms[index] == old_record.transforms[index])) return false;
@@ -482,7 +482,7 @@ std::map<std::string, Entity, std::less<>> translated_boundary_entities(
         if (!decoded.supported()) throw std::invalid_argument(decoded.diagnostic);
         // Keep historical v1/v2 translation proofs byte-replayable. Framed
         // records retain local inputs and compose a world-space offset instead.
-        const auto translated = decoded.record->schema_version == boundary_receipt_schema_version_v3
+        const auto translated = (decoded.record->schema_version == boundary_receipt_schema_version_v3 || decoded.record->schema_version == boundary_receipt_schema_version_v4)
             ? transformed_boundary_construction(
                 *decoded.record, PlanarTransform{{},0,false,false,translation.offset})
             : translated_boundary_construction(*decoded.record, translation.offset);

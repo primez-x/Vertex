@@ -1627,6 +1627,10 @@
     },
     {
       "category": "docs",
+      "path": "docs/plans/2026-10-03-typed-chord-input.md"
+    },
+    {
+      "category": "docs",
       "path": "docs/product-scope.md"
     },
     {
@@ -2612,6 +2616,10 @@
     {
       "category": "docs",
       "path": "docs/verification/touch-navigation-and-legacy-upgrade-2026-09-30.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/verification/typed-chord-input-2026-10-03.md"
     },
     {
       "category": "docs",
@@ -4940,6 +4948,14 @@
     {
       "category": "source",
       "path": "tests/text_library_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/typed_chord_desktop_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/typed_chord_receipt_tests.cpp"
     },
     {
       "category": "source",

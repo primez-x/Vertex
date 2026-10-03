@@ -2093,6 +2093,8 @@ void test_physical_wall_precision_methods_and_persistence() {
                 require(input && input->windowTitle().contains("wall", Qt::CaseInsensitive),
                         "physical wall precision must identify its actual object type");
                 input->findChild<QComboBox*>("boundaryInputMethod")->setCurrentIndex(example.method);
+                if (example.method >= 4 && example.method <= 6)
+                    input->findChild<QComboBox*>("boundaryInputChordDefinition")->setCurrentIndex(0);
                 for (const auto& [suffix, text] : example.fields) {
                     auto* field = input->findChild<QLineEdit*>(QStringLiteral("boundaryInput") + suffix);
                     require(field, "precision method must expose its required native input");
@@ -2165,6 +2167,8 @@ void test_physical_wall_precision_anchor_relative_and_modal_guards() {
             auto* input = dynamic_cast<sketch::desktop::BoundaryInputDialog*>(modal);
             require(input, "relative wall chain must use the analytical native form");
             input->findChild<QComboBox*>("boundaryInputMethod")->setCurrentIndex(method);
+            if (method >= 4 && method <= 6)
+                input->findChild<QComboBox*>("boundaryInputChordDefinition")->setCurrentIndex(0);
             for (const auto& [suffix, text] : fields)
                 input->findChild<QLineEdit*>(QStringLiteral("boundaryInput") + suffix)->setText(text);
             require(input->submit(), "a relative wall chain edge must validate");

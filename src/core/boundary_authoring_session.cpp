@@ -1197,6 +1197,43 @@ std::string BoundaryAuthoringSession::add_arc_chord_angle(Vec2 end, double sweep
     return add_arc_chord_angle(end, AngleInput::from_radians(sweep_radians));
 }
 
+std::string BoundaryAuthoringSession::add_typed_chord_arc(ConstructionReceipt receipt) {
+    auto semantic=semantic_;
+    validate_active_for_edge(*this,semantic.active_chain.has_value(),
+        semantic.active_chain && !semantic.active_chain->pending_dimensions.empty());
+    const auto start=semantic.active_chain->segments.empty() ? semantic.active_chain->anchor : semantic.active_chain->segments.back().segment.end;
+    receipt.start=start;
+    const auto replay=replay_construction_receipt(receipt,{start,std::nullopt,std::nullopt,options_.geometry_tolerance_metres});
+    const auto before_ids=IdCounters{next_boundary_id_,next_vertex_id_,next_segment_id_,next_dimension_id_};
+    auto ids=before_ids; std::vector<std::string> generated_ids;
+    auto id=append_edge(semantic,ids,replay.segment,replay.receipt,&generated_ids);
+    BoundaryAuthoringAction action;
+    action.kind=action_kind_for_receipt(receipt.kind);
+    action.counters_before=public_counters(before_ids); action.counters_after=public_counters(ids);
+    action.generated_ids=std::move(generated_ids); action.receipt=semantic.active_chain->receipts.back();
+    auto transaction=prepare_semantic(std::move(semantic),ids,std::move(action));
+    PublishOnSuccess publication(*this,transaction);
+    return std::string(id);
+}
+
+std::string BoundaryAuthoringSession::add_arc_chord_angle(const Quantity& length,const AngleInput& heading,const AngleInput& sweep) {
+    ConstructionReceipt receipt; receipt.kind=BoundaryConstructionKind::arc_chord_angle;
+    receipt.chord_input=ChordInput{length,heading}; receipt.angle=sweep;
+    return add_typed_chord_arc(std::move(receipt));
+}
+
+std::string BoundaryAuthoringSession::add_arc_chord_height(const Quantity& length,const AngleInput& heading,const Quantity& height) {
+    ConstructionReceipt receipt; receipt.kind=BoundaryConstructionKind::arc_chord_height;
+    receipt.chord_input=ChordInput{length,heading}; receipt.height=height;
+    return add_typed_chord_arc(std::move(receipt));
+}
+
+std::string BoundaryAuthoringSession::add_arc_chord_arc_length(const Quantity& length,const AngleInput& heading,const Quantity& arc_length,bool clockwise) {
+    ConstructionReceipt receipt; receipt.kind=BoundaryConstructionKind::arc_chord_length;
+    receipt.chord_input=ChordInput{length,heading}; receipt.arc_length=arc_length; receipt.clockwise=clockwise;
+    return add_typed_chord_arc(std::move(receipt));
+}
+
 std::string BoundaryAuthoringSession::add_arc_chord_height(Vec2 end,
                                                            const Quantity& signed_height) {
     require_point(end, "arc endpoint");
@@ -1739,7 +1776,16 @@ BoundaryAuthoringCheckpoint BoundaryAuthoringSession::recovery_checkpoint() cons
     }
     result.counters = public_counters();
     result.extensions = nlohmann::json::parse(recovery_extensions_);
+    if (boundary_authoring_checkpoint_has_typed_chord(result)) result.version=boundary_authoring_recovery_version_v2;
     return result;
+}
+
+bool boundary_authoring_checkpoint_has_typed_chord(const BoundaryAuthoringCheckpoint& checkpoint) noexcept {
+    for (const auto& action : checkpoint.actions) {
+        if (action.receipt && action.receipt->chord_input) return true;
+        if (action.chain) for (const auto& edge : action.chain->edges) if (edge.receipt.chord_input) return true;
+    }
+    return false;
 }
 
 void BoundaryAuthoringSession::apply_recovery_action(
@@ -1826,27 +1872,29 @@ void BoundaryAuthoringSession::apply_recovery_action(
         }
         case BoundaryAuthoringActionKind::arc_chord_angle: {
             const auto& receipt = require_receipt();
-            if (!receipt.chord_end.has_value() || !receipt.angle.has_value()) {
+            if ((!receipt.chord_end && !receipt.chord_input) || !receipt.angle) {
                 invalid("chord angle action receipt is incomplete");
             }
-            (void)add_arc_chord_angle(*receipt.chord_end, *receipt.angle);
+            if (receipt.chord_input) (void)add_arc_chord_angle(receipt.chord_input->length,receipt.chord_input->heading,*receipt.angle);
+            else (void)add_arc_chord_angle(*receipt.chord_end, *receipt.angle);
             return;
         }
         case BoundaryAuthoringActionKind::arc_chord_height: {
             const auto& receipt = require_receipt();
-            if (!receipt.chord_end.has_value() || !receipt.height.has_value()) {
+            if ((!receipt.chord_end && !receipt.chord_input) || !receipt.height) {
                 invalid("chord height action receipt is incomplete");
             }
-            (void)add_arc_chord_height(*receipt.chord_end, *receipt.height);
+            if (receipt.chord_input) (void)add_arc_chord_height(receipt.chord_input->length,receipt.chord_input->heading,*receipt.height);
+            else (void)add_arc_chord_height(*receipt.chord_end, *receipt.height);
             return;
         }
         case BoundaryAuthoringActionKind::arc_chord_length: {
             const auto& receipt = require_receipt();
-            if (!receipt.chord_end.has_value() || !receipt.arc_length.has_value()) {
+            if ((!receipt.chord_end && !receipt.chord_input) || !receipt.arc_length) {
                 invalid("chord length action receipt is incomplete");
             }
-            (void)add_arc_chord_arc_length(*receipt.chord_end, *receipt.arc_length,
-                                           receipt.clockwise);
+            if (receipt.chord_input) (void)add_arc_chord_arc_length(receipt.chord_input->length,receipt.chord_input->heading,*receipt.arc_length,receipt.clockwise);
+            else (void)add_arc_chord_arc_length(*receipt.chord_end,*receipt.arc_length,receipt.clockwise);
             return;
         }
         case BoundaryAuthoringActionKind::arc_start_tangent: {
@@ -1876,12 +1924,14 @@ void BoundaryAuthoringSession::apply_recovery_action(
 
 void BoundaryAuthoringSession::restore_recovery_checkpoint(
     const BoundaryAuthoringCheckpoint& checkpoint) {
-    if (checkpoint.version != boundary_authoring_recovery_version) {
+    if (checkpoint.version != boundary_authoring_recovery_version && checkpoint.version != boundary_authoring_recovery_version_v2) {
         invalid("unsupported boundary authoring recovery version");
     }
     if (checkpoint.replay_version != boundary_authoring_recovery_replay_version) {
         invalid("unsupported boundary authoring recovery replay version");
     }
+    if (checkpoint.version==boundary_authoring_recovery_version && boundary_authoring_checkpoint_has_typed_chord(checkpoint))
+        invalid("typed chord input requires recovery checkpoint version two");
     if (!checkpoint.extensions.is_object()) {
         invalid("boundary authoring recovery extensions must be an object");
     }

@@ -14,13 +14,15 @@ namespace sketch {
 inline constexpr std::uint32_t measurement_linework_schema_version_v1 = 1;
 inline constexpr std::uint32_t measurement_linework_schema_version_v2 = 2;
 inline constexpr std::uint32_t measurement_linework_schema_version_v3 = 3;
+inline constexpr std::uint32_t measurement_linework_schema_version_v4 = 4;
 inline constexpr std::uint32_t measurement_linework_schema_version = measurement_linework_schema_version_v1;
-inline constexpr std::uint32_t measurement_linework_latest_schema_version = measurement_linework_schema_version_v3;
+inline constexpr std::uint32_t measurement_linework_latest_schema_version = measurement_linework_schema_version_v4;
 inline constexpr std::uint32_t measurement_linework_replay_version_v1 = 1;
 inline constexpr std::uint32_t measurement_linework_replay_version_v2 = 2;
 inline constexpr std::uint32_t measurement_linework_replay_version_v3 = 3;
+inline constexpr std::uint32_t measurement_linework_replay_version_v4 = 4;
 inline constexpr std::uint32_t measurement_linework_replay_version = measurement_linework_replay_version_v1;
-inline constexpr std::uint32_t measurement_linework_latest_replay_version = measurement_linework_replay_version_v3;
+inline constexpr std::uint32_t measurement_linework_latest_replay_version = measurement_linework_replay_version_v4;
 
 struct MeasurementLineworkEdit {
     BoundaryGeometryEdit intent;
@@ -43,7 +45,7 @@ struct MeasurementLinework {
     nlohmann::json extensions = nlohmann::json::object();
     // Schema/replay two: ordered world operations; all receipts stay local.
     std::vector<PlanarTransform> transforms;
-    // Schema/replay three: ordered derivations in the world frame at that
+    // Schema/replay three/four: ordered derivations in the world frame at that
     // operation. Receipts remain the original immutable authoring evidence.
     // The historical transforms member must be empty in this dialect.
     std::vector<MeasurementLineworkOperation> operations;
@@ -75,6 +77,11 @@ struct MeasurementLineworkReplay {
     const MeasurementLinework& model,
     double tolerance_metres = default_geometry_tolerance_metres);
 
+// Explicitly opts into typed chord receipts while retaining local input and
+// ordered world operations. Also accepts an empty live authoring candidate;
+// persistence still requires a nonempty replayable model.
+[[nodiscard]] MeasurementLinework promoted_measurement_linework_for_typed_chord(const MeasurementLinework& model);
+
 // Preserve the local anchor, exact receipts, identities and extensions while
 // appending a rigid world-space operation. Both input and copy must replay;
 // invalid or precision-losing operations throw without modifying the input.
@@ -95,6 +102,7 @@ enum class MeasurementLineworkFormat {
     supported_v1,
     supported_v2,
     supported_v3,
+    supported_v4,
     unsupported_version,
     unsupported_replay_version,
 };

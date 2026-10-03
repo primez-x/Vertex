@@ -1,4 +1,5 @@
 import hashlib
+from contextlib import closing
 import importlib.util
 import json
 import pathlib
@@ -75,6 +76,26 @@ def create_project(path):
 
 
 class StageProjectPackageTests(unittest.TestCase):
+    def test_latest_native_format_assets_and_future_format_rejection(self):
+        fixture = self.fixture()
+        self.addCleanup(fixture[0].cleanup)
+        _, root, project, _, payload, payload_hash = fixture
+        with closing(sqlite3.connect(project)) as database:
+            database.execute("UPDATE metadata SET value='31' WHERE key='format_version'")
+            database.commit()
+        result = stage.stage_project_package(project, root, root / "out")
+        package = root / "out/project-package"
+        self.assertEqual(result["project"]["format_version"], 31)
+        self.assertEqual((package / result["project"]["path"]).read_bytes(), project.read_bytes())
+        self.assertEqual((package / f"assets/{payload_hash}.bin").read_bytes(), payload)
+        self.assertEqual(stage.verify_package(package)["asset_count"], 1)
+        with closing(sqlite3.connect(project)) as database:
+            database.execute("UPDATE metadata SET value='32' WHERE key='format_version'")
+            database.commit()
+        with self.assertRaisesRegex(stage.ProjectPackageError, "unsupported project format_version"):
+            stage.stage_project_package(project, root, root / "future")
+        self.assertFalse((root / "future/project-package").exists())
+
     def fixture(self):
         temporary = tempfile.TemporaryDirectory()
         root = pathlib.Path(temporary.name)

@@ -1,6 +1,6 @@
 # Vertex user testing checklist
 
-367 practical tasks, grouped by how you use the app (including U100a). This replaces the earlier engineering-oriented checklist. The old 130-item list is preserved separately as engineering-requirements-checklist.md.
+380 practical tasks, grouped by how you use the app (including U100a). This replaces the earlier engineering-oriented checklist. The old 130-item list is preserved separately as engineering-requirements-checklist.md.
 
 This is a user acceptance list for the intended app, not a claim that every listed action is implemented or working in the current preview. If you cannot find a control, or a feature is absent, mark **Blocked / missing** and describe it. Specialized sections can be skipped if you do not use them or lack the device or sample files.
 
@@ -19,7 +19,7 @@ Start with the workspace, draw a room, close it with the mouse, drag-select it, 
 - Draw rooms and measured boundaries (26 tasks)
 - Select, edit and transform drawings (21 tasks)
 - Curves, alignment and constraints (15 tasks)
-- Area colors, classifications and calculations (18 tasks)
+- Area colors, classifications and calculations (19 tasks)
 - Symbols, furniture and component library (17 tasks)
 - Text, labels and dimensions (11 tasks)
 - Reference plans and tracing (10 tasks)
@@ -32,19 +32,39 @@ Start with the workspace, draw a room, close it with the mouse, drag-select it, 
 - Sheets, printing and export (17 tasks)
 - Saving, revisions and recovery (10 tasks)
 - Import, exchange and connected devices — when available (9 tasks)
-- Survey and georeferencing — when used (7 tasks)
+- Survey and georeferencing — when used (8 tasks)
 - Optional assistance — when available (7 tasks)
 - Complete a real job (5 tasks)
-- Appraisal square-foot workflow (13 tasks)
-- Custom area details (1 task)
-- Exact keyboard drawing (8 tasks)
+- Appraisal square-foot workflow (14 tasks)
 - Architectural joins and named views (3 tasks)
-- Connected boundary edits and exterior source repair (3 tasks)
-- Appraisal area copying (1 task)
-- Appraisal area rotation and reflection (1 task)
-- Project appraisal details (1 task)
+- Measure a physical wall layout (2 tasks)
+- Wall drawing and connected edits (3 tasks)
+- Moving walls (3 tasks)
+- Wall corners (3 tasks)
+- Door mechanisms and readable wall dimensions (3 tasks)
+- Window layouts and opening controls (4 tasks)
+- Plan label placement (1 tasks)
+- Appraisal reports and plan sheets (3 tasks)
+- Boundary editing and diagnostic repairs (3 tasks)
+- Curved exterior walls and appraisal measurements (1 tasks)
+- Read measurements while editing (1 tasks)
+- Custom area details (1 tasks)
+- Exact keyboard drawing (18 tasks)
+- Project appraisal details (1 tasks)
 - ANSI-oriented measurements (4 tasks)
-- Keyboard alignment while drawing (1 task)
+- Exact corner corrections and appraisal sheets (2 tasks)
+- Exterior corner corrections (4 tasks)
+- Building-object appearance (4 tasks)
+- Saved-view appearance (6 tasks)
+- Editing within styled saved views (3 tasks)
+- Appraisal measurements while drawing walls (5 tasks)
+- Comparing saved revisions (3 tasks)
+- Importing round CAD fixtures and preserving layers (3 tasks)
+- Keyboard alignment while drawing (2 tasks)
+- Reviewing measured-area sources (1 tasks)
+- Measured-line drawing history (1 tasks)
+- Precise measured-line input (7 tasks)
+- Entering a measured chord directly (4 tasks)
 
 ## Start a project and arrange the workspace
 
@@ -2176,6 +2196,8 @@ drawing; switching modes does not change existing geometry.
   - Result: Not tested
   - Notes: ______________________________
 
+## Reviewing measured-area sources
+
 - [ ] **U367 — Reassign an appraisal area after its measured lines split it**
   - Steps: In Measurement draw mode, create a closed outline with an internal divider and define its areas. Set one area's facts to dwelling and another to garage. Add another divider that splits the dwelling. Select its retained area, open Details and click Review measured sources (also available by right-clicking the area). Choose a face; inspect the blue proposed outline against the gray retained outline. Apply it, resolving any referenced dimensions explicitly. Review the other affected areas as needed. Undo, Redo, save and reopen.
   - Expected: The selected area keeps its name, classification and facts while adopting only the chosen face. GLA updates after all affected areas and declarations are current. Newly unassigned faces are not silently classified or included. A face already assigned to another current area is unavailable. Cancel changes nothing.
@@ -2184,6 +2206,8 @@ drawing; switching modes does not change existing geometry.
   - Result: Not tested
   - Notes: ______________________________
 
+## Measured-line drawing history
+
 - [ ] **U368 — Undo a measured line and keep drawing from the restored endpoint**
   - Steps: Choose Measured lines in Draw. Start a stroke and place three sides. Press Ctrl+Z once; check that the last side disappears and the drawing preview starts at the previous endpoint. Press Ctrl+Y and place another side. Undo back to the starting point, Redo the sides, then Undo once and draw a different side. Repeat using typed distances and angles. Finish with Enter, Escape or a stationary right-click; save and reopen.
   - Expected: Each Undo removes one committed side and leaves the pen at its exact previous position. Redo restores the same side and moves the pen to its endpoint. Continuing after Undo keeps the existing stroke and replaces its abandoned Redo branch. Earlier typed measurements stay unchanged. Undo at an uncommitted starting point cancels only that point. Finishing or reopening does not restart drawing unexpectedly.
@@ -2191,6 +2215,8 @@ drawing; switching modes does not change existing geometry.
   - Expected: History still navigates the document, but an obsolete drawing session cannot resume on the wrong layer, workspace or geometry.
   - Result: Not tested
   - Notes: ______________________________
+
+## Precise measured-line input
 
 - [ ] **U369 — Enter an exact measured-stroke starting point and side**
   - Steps: Choose Measured lines in Draw. Press D before clicking a starting point. Enter X = 2 ft and Y = 3 ft, then place the start. Press D again, choose Length / heading and enter 12 ft 6 in at 30 deg. Repeat in Metric with explicit cm or mm entries and with bare numbers.
@@ -2205,19 +2231,19 @@ drawing; switching modes does not change existing geometry.
   - Notes: ______________________________
 
 - [ ] **U371 — Draw a curve from its chord and angle**
-  - Steps: Start Measured lines at X = 0, Y = 0. Press D and choose Arc chord / angle. Enter endpoint X = 10 ft, Y = 0 ft and sweep = 90 deg. Add the curve. Repeat with sweep = -90 deg. Undo, Redo, save and reopen.
+  - Steps: Start Measured lines at X = 0, Y = 0. Press D and choose Arc chord / angle. Choose Endpoint X/Y in Chord definition, then enter endpoint X = 10 ft, Y = 0 ft and sweep = 90 deg. Add the curve. Repeat with sweep = -90 deg. Undo, Redo, save and reopen.
   - Expected: Both curves end at the entered endpoint and have a quarter-circle sweep in opposite directions. Their measured lengths exceed the 10 ft chord. The curve remains analytical after history navigation and reopening.
   - Result: Not tested
   - Notes: ______________________________
 
 - [ ] **U372 — Draw a curve from its chord and height**
-  - Steps: Start Measured lines at X = 0, Y = 0. Press D and choose Arc chord / height. Enter endpoint X = 10 ft, Y = 0 ft and signed chord height = 2 ft. Repeat with height = -2 ft. Inspect the bulge, finish the stroke, save and reopen.
+  - Steps: Start Measured lines at X = 0, Y = 0. Press D and choose Arc chord / height. Choose Endpoint X/Y in Chord definition, then enter endpoint X = 10 ft, Y = 0 ft and signed chord height = 2 ft. Repeat with height = -2 ft. Inspect the bulge, finish the stroke, save and reopen.
   - Expected: The curves share their chord and bow to opposite sides. The midpoint's distance from the chord is 2 ft. The saved curves retain their shape and measurements.
   - Result: Not tested
   - Notes: ______________________________
 
 - [ ] **U373 — Draw a curve from its chord and arc length**
-  - Steps: Start Measured lines at X = 0, Y = 0. Press D and choose Arc chord / length. Enter endpoint X = 10 ft, Y = 0 ft and arc length = 12 ft. Add it, then repeat with Clockwise enabled. Try an arc length of 9 ft before correcting it to 12 ft.
+  - Steps: Start Measured lines at X = 0, Y = 0. Press D and choose Arc chord / length. Choose Endpoint X/Y in Chord definition, then enter endpoint X = 10 ft, Y = 0 ft and arc length = 12 ft. Add it, then repeat with Clockwise enabled. Try an arc length of 9 ft before correcting it to 12 ft.
   - Expected: Each valid curve ends at the entered point and measures 12 ft along the curve. Clockwise changes its direction. The impossible 9 ft arc is rejected inline without placing anything; correcting it allows placement.
   - Result: Not tested
   - Notes: ______________________________
@@ -2231,6 +2257,32 @@ drawing; switching modes does not change existing geometry.
 - [ ] **U375 — Correct or cancel precise measured-line input**
   - Steps: Open D while a measured stroke is active. Enter an invalid quantity or impossible curve; correct it without closing the dialog. Try Cancel after entering valid values. Switch Imperial/Metric after closing the dialog, reopen D, choose Length / heading and enter a bare length. Finish the stroke and select another layer before starting another one.
   - Expected: Invalid values explain the problem inside the dialog and place nothing. Correct values can be added. Cancel keeps existing geometry and the pen unchanged. Reopened input uses the selected units, and a newly started stroke belongs to the active layer. Previous geometry retains its actual size.
+  - Result: Not tested
+  - Notes: ______________________________
+
+## Entering a measured chord directly
+
+- [ ] **U376 — Draw a curve using a measured chord and heading**
+  - Steps: Choose Measured lines, press D and start at X = 0, Y = 0. Press D, choose Arc chord / angle and keep Length / heading. Enter chord length = 10 ft, heading = 90 deg and sweep = 90 deg. Add it, finish, save and reopen. Repeat with a negative sweep and in Metric using 3 m.
+  - Expected: The chord points upward and the curve ends 10 ft (or 3 m) above its starting point. Positive and negative sweeps bow in opposite directions. Reopening preserves the exact size. You do not need to calculate endpoint coordinates.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **U377 — Draw a curve using chord height or arc length**
+  - Steps: From X = 0, Y = 0, choose Arc chord / height. Enter chord length = 10 ft, heading = 0 deg and height = 2 ft. Repeat with -2 ft. For Arc chord / length enter the same chord and heading with arc length = 12 ft; try Clockwise and an impossible 9 ft arc length.
+  - Expected: Height gives a 2 ft bulge on the chosen side of the chord. Arc length gives a true 12 ft curve. Clockwise reverses the bend. An arc shorter than its chord explains the error and places nothing.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **U378 — Switch between direct chord input and endpoint coordinates**
+  - Steps: In a chord curve dialog, choose Endpoint X/Y and enter a known endpoint. Add the curve, then reopen D. Switch to Length / heading, enter a chord in mm or feet/inches and add it. Reopen D again. Change the choice, then Cancel and reopen.
+  - Expected: Both definitions work. The last successfully added choice and values are remembered during drawing. Cancel does not change them. Explicit units are respected even when the project uses another unit system.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **U379 — Edit and reopen a curve made from a measured chord**
+  - Steps: Draw a chord-defined curve and finish it. Move and rotate it. Open its geometry editor and change its physical arc length with the start fixed. Undo and Redo, save/reopen, then export a PDF. Also close a semicircle with a straight side and use Detect closed areas.
+  - Expected: Movement and rotation preserve the physical curve length. The length edit uses the requested measurement and history restores each state. Saved and printed curves match the canvas. Detect closed areas measures the curved region rather than the triangle or rectangle around it.
   - Result: Not tested
   - Notes: ______________________________
 

@@ -320,8 +320,8 @@ void test_transform_frames_preserve_local_inputs_and_compose() {
         require(sketch::encode_boundary_receipt_envelope(original) == original_json,
                 "transforming must leave legacy source encoding unchanged");
     }
-    require(sketch::boundary_receipt_latest_schema_version == 2,
-            "ordinary current authoring must continue to use schema two");
+    require(sketch::boundary_receipt_latest_schema_version == 4,
+            "latest supported authoring schema includes durable typed chords");
 }
 
 void test_transform_frame_validation() {

@@ -364,7 +364,7 @@ Quantity read_quantity(const Json& value) {
 }
 
 void promote_to_v3(MeasurementLinework& model) {
-    if (model.schema_version == measurement_linework_schema_version_v3) return;
+    if (model.schema_version == measurement_linework_schema_version_v3 || model.schema_version == measurement_linework_schema_version_v4) return;
     for (const auto& transform : model.transforms) model.operations.emplace_back(transform);
     model.transforms.clear();
     model.schema_version = measurement_linework_schema_version_v3;
@@ -372,6 +372,22 @@ void promote_to_v3(MeasurementLinework& model) {
 }
 
 }  // namespace
+
+MeasurementLinework promoted_measurement_linework_for_typed_chord(const MeasurementLinework& model) {
+    if (!model.edges.empty()) (void)replay_measurement_linework(model);
+    else {
+        if (model.schema_version<1 || model.schema_version>4 || model.schema_version!=model.replay_version ||
+            model.closed || !model.transforms.empty() || !model.operations.empty()) invalid("unsupported empty measured authoring candidate");
+        require_identifier(model.stroke_id,"measurement linework stroke_id");
+        require_point(model.anchor,"measurement linework anchor"); require_object(model.extensions,"measurement linework extensions");
+    }
+    auto result=model;
+    for (const auto& transform : result.transforms) result.operations.emplace_back(transform);
+    result.transforms.clear(); result.schema_version=measurement_linework_schema_version_v4;
+    result.replay_version=measurement_linework_replay_version_v4;
+    if (!result.edges.empty()) (void)replay_measurement_linework(result);
+    return result;
+}
 
 MeasurementLinework edited_measurement_linework(
     const MeasurementLinework& model, const BoundaryGeometryEdit& edit,
@@ -399,7 +415,7 @@ MeasurementLinework transformed_measurement_linework(
         return model;
     }
     auto result = model;
-    if (result.schema_version == measurement_linework_schema_version_v3) {
+    if (result.schema_version == measurement_linework_schema_version_v3 || result.schema_version == measurement_linework_schema_version_v4) {
         result.operations.emplace_back(transform);
     } else {
         result.schema_version = measurement_linework_schema_version_v2;
@@ -415,13 +431,14 @@ MeasurementLineworkReplay replay_measurement_linework(const MeasurementLinework&
     if (!std::isfinite(tolerance_metres) || !(tolerance_metres > 0)) {
         invalid("measurement linework tolerance must be finite and positive");
     }
-    if (model.schema_version == measurement_linework_schema_version_v3 &&
-        model.replay_version == measurement_linework_replay_version_v3) {
+    const bool typed_dialect=model.schema_version==measurement_linework_schema_version_v4 && model.replay_version==measurement_linework_replay_version_v4;
+    if ((model.schema_version == measurement_linework_schema_version_v3 &&
+        model.replay_version == measurement_linework_replay_version_v3) || (typed_dialect && !model.operations.empty())) {
         if (!model.transforms.empty())
             invalid("measurement linework version three forbids parallel transforms");
         auto local = model;
-        local.schema_version = measurement_linework_schema_version_v1;
-        local.replay_version = measurement_linework_replay_version_v1;
+        local.schema_version = typed_dialect ? measurement_linework_schema_version_v4 : measurement_linework_schema_version_v1;
+        local.replay_version = typed_dialect ? measurement_linework_replay_version_v4 : measurement_linework_replay_version_v1;
         local.operations.clear();
         auto result = replay_measurement_linework(local, tolerance_metres);
         result.replay_version = model.replay_version;
@@ -458,10 +475,10 @@ MeasurementLineworkReplay replay_measurement_linework(const MeasurementLinework&
     if (!model.transforms.empty()) {
         invalid("measurement linework transforms require schema/replay version two");
     }
-    if (model.schema_version != measurement_linework_schema_version) {
+    if (model.schema_version != measurement_linework_schema_version && !typed_dialect) {
         invalid("unsupported measurement linework schema version");
     }
-    if (model.replay_version != measurement_linework_replay_version) {
+    if (model.replay_version != measurement_linework_replay_version && !typed_dialect) {
         invalid("unsupported measurement linework replay version");
     }
     require_identifier(model.stroke_id, "measurement linework stroke_id");
@@ -481,6 +498,7 @@ MeasurementLineworkReplay replay_measurement_linework(const MeasurementLinework&
     Vec2 expected_start = model.anchor;
     for (std::size_t index = 0; index < model.edges.size(); ++index) {
         const auto& edge = model.edges[index];
+        if (edge.receipt.chord_input && !typed_dialect) invalid("typed chord input requires measurement linework schema/replay four");
         require_identifier(edge.segment_id, "measurement linework segment_id");
         require_identifier(edge.start_vertex_id, "measurement linework start_vertex_id");
         require_identifier(edge.end_vertex_id, "measurement linework end_vertex_id");
@@ -539,7 +557,7 @@ MeasurementLineworkVersion inspect_measurement_linework_model(const Json& model)
     const auto version = read_positive_version(model.at("version"), "measurement linework version");
     if (version != measurement_linework_schema_version_v1 &&
         version != measurement_linework_schema_version_v2 &&
-        version != measurement_linework_schema_version_v3) {
+        version != measurement_linework_schema_version_v3 && version != measurement_linework_schema_version_v4) {
         return {MeasurementLineworkFormat::unsupported_version, version, std::nullopt,
                 "unsupported measurement linework schema version"};
     }
@@ -550,13 +568,14 @@ MeasurementLineworkVersion inspect_measurement_linework_model(const Json& model)
                                                       "measurement linework replay_version");
     if ((version == measurement_linework_schema_version_v1 && replay_version != measurement_linework_replay_version_v1) ||
         (version == measurement_linework_schema_version_v2 && replay_version != measurement_linework_replay_version_v2) ||
-        (version == measurement_linework_schema_version_v3 && replay_version != measurement_linework_replay_version_v3)) {
+        (version == measurement_linework_schema_version_v3 && replay_version != measurement_linework_replay_version_v3) ||
+        (version == measurement_linework_schema_version_v4 && replay_version != measurement_linework_replay_version_v4)) {
         return {MeasurementLineworkFormat::unsupported_replay_version, version, replay_version,
                 "unsupported measurement linework replay version"};
     }
     return {version == measurement_linework_schema_version_v1 ? MeasurementLineworkFormat::supported_v1 :
             version == measurement_linework_schema_version_v2 ? MeasurementLineworkFormat::supported_v2 :
-                                                               MeasurementLineworkFormat::supported_v3,
+            version == measurement_linework_schema_version_v3 ? MeasurementLineworkFormat::supported_v3 : MeasurementLineworkFormat::supported_v4,
             version, replay_version, {}};
 }
 
@@ -564,11 +583,11 @@ MeasurementLineworkDecodeResult decode_measurement_linework_model(const Json& en
     const auto inspected = inspect_measurement_linework_model(encoded);
     if (inspected.format != MeasurementLineworkFormat::supported_v1 &&
         inspected.format != MeasurementLineworkFormat::supported_v2 &&
-        inspected.format != MeasurementLineworkFormat::supported_v3) {
+        inspected.format != MeasurementLineworkFormat::supported_v3 && inspected.format != MeasurementLineworkFormat::supported_v4) {
         return {std::nullopt, encoded, inspected.version, inspected.replay_version,
                 inspected.diagnostic};
     }
-    if (inspected.format == MeasurementLineworkFormat::supported_v3) {
+    if (inspected.format == MeasurementLineworkFormat::supported_v3 || inspected.format == MeasurementLineworkFormat::supported_v4) {
         require_keys(encoded, {"version", "replay_version", "stroke_id", "anchor", "closed",
                                "segments", "extensions", "operations"}, "measurement linework model");
     } else if (inspected.format == MeasurementLineworkFormat::supported_v2) {
@@ -592,7 +611,7 @@ MeasurementLineworkDecodeResult decode_measurement_linework_model(const Json& en
         if (!transforms.is_array()) invalid("measurement linework transforms must be an array");
         for (const auto& value : transforms) model.transforms.push_back(read_transform(value));
     }
-    if (inspected.format == MeasurementLineworkFormat::supported_v3) {
+    if (inspected.format == MeasurementLineworkFormat::supported_v3 || inspected.format == MeasurementLineworkFormat::supported_v4) {
         const auto& operations = encoded.at("operations");
         if (!operations.is_array()) invalid("measurement linework operations must be an array");
         for (const auto& value : operations) {
@@ -651,7 +670,7 @@ Json encode_measurement_linework_model(const MeasurementLinework& model) {
             result["transforms"].push_back(write_transform(transform));
         }
     }
-    if (model.schema_version == measurement_linework_schema_version_v3) {
+    if (model.schema_version == measurement_linework_schema_version_v3 || model.schema_version == measurement_linework_schema_version_v4) {
         result["operations"] = Json::array();
         for (const auto& operation : model.operations) {
             if (const auto* transform = std::get_if<PlanarTransform>(&operation)) {

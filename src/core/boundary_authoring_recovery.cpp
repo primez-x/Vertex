@@ -742,6 +742,8 @@ void preflight_action_fields(const BoundaryAuthoringAction& action,
             if (*q) text((*q)->original_expression);
         for (const auto* a : {&r.heading, &r.turn, &r.angle, &r.tangent, &r.sweep})
             if (*a) { text((*a)->original_expression); text((*a)->normalized_expression); }
+        if (r.chord_input) { text(r.chord_input->length.original_expression);
+            text(r.chord_input->heading.original_expression); text(r.chord_input->heading.normalized_expression); }
     };
     const auto dimension_strings = [&](const BoundaryDimension& d) { text(d.id); text(d.boundary_id); text(d.segment_id); };
     if (action.generated_ids.size() > limits.max_generated_ids_per_action ||
@@ -808,6 +810,7 @@ BoundaryAuthoringRecoveryVersion inspect_boundary_authoring_recovery(
     if (version == boundary_authoring_recovery_version) {
         return {BoundaryAuthoringRecoveryFormat::supported_v1, version, {}};
     }
+    if (version==boundary_authoring_recovery_version_v2) return {BoundaryAuthoringRecoveryFormat::supported_v2,version,{}};
     return {BoundaryAuthoringRecoveryFormat::unsupported_version, version,
             "unsupported boundary authoring recovery version"};
 }
@@ -876,7 +879,7 @@ Json encode_boundary_authoring_recovery(
     const BoundaryAuthoringCheckpoint& checkpoint,
     const BoundaryAuthoringRecoveryLimits& limits) {
     validate_limits(limits);
-    if (checkpoint.version != boundary_authoring_recovery_version ||
+    if ((checkpoint.version != boundary_authoring_recovery_version && checkpoint.version != boundary_authoring_recovery_version_v2) ||
         checkpoint.replay_version != boundary_authoring_recovery_replay_version) {
         invalid("unsupported boundary authoring recovery version");
     }

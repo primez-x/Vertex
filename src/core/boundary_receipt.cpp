@@ -471,6 +471,19 @@ Json write_angle(const AngleInput& input, std::string_view label) {
 }
 
 void require_receipt_key_shape(const Json& value, BoundaryConstructionKind kind) {
+    if (value.contains("chord_input") || value.contains("version")) {
+        if (!value.contains("version") || !value.at("version").is_number_integer() || value.at("version") != 2 ||
+            !value.contains("chord_input") || value.contains("chord_end"))
+            invalid("typed chord receipt requires version two and exactly one chord authority");
+        const auto curve_key = kind == BoundaryConstructionKind::arc_chord_angle ? "angle" :
+            kind == BoundaryConstructionKind::arc_chord_height ? "height" :
+            kind == BoundaryConstructionKind::arc_chord_length ? "arc_length" : nullptr;
+        if (!curve_key) invalid("typed chord input is only valid for chord arcs");
+        require_keys(value,{"version","segment_id","kind","start","clockwise","chord_input",curve_key},
+            {"version","segment_id","kind","start","clockwise","chord_input",curve_key},"typed chord receipt");
+        require_keys(value.at("chord_input"),{"length","heading"},{"length","heading"},"typed chord input");
+        return;
+    }
     switch (kind) {
         case BoundaryConstructionKind::line_heading:
             require_keys(value, {"segment_id", "kind", "start", "clockwise", "distance", "heading"},
@@ -534,6 +547,10 @@ ConstructionReceipt read_receipt(const Json& value) {
     result.kind = kind;
     result.start = read_point(value.at("start"), "construction receipt start");
     result.clockwise = read_bool(value.at("clockwise"), "construction receipt clockwise");
+    if (value.contains("chord_input")) {
+        const auto& chord=value.at("chord_input");
+        result.chord_input=ChordInput{read_quantity(chord.at("length"),"chord length"),read_angle(chord.at("heading"),"chord heading")};
+    }
     switch (kind) {
         case BoundaryConstructionKind::line_heading:
             result.distance = read_quantity(value.at("distance"), "line heading distance");
@@ -554,15 +571,15 @@ ConstructionReceipt read_receipt(const Json& value) {
             result.chord_end = read_point(value.at("chord_end"), "line endpoint");
             break;
         case BoundaryConstructionKind::arc_chord_angle:
-            result.chord_end = read_point(value.at("chord_end"), "chord angle endpoint");
+            if (!result.chord_input) result.chord_end = read_point(value.at("chord_end"), "chord angle endpoint");
             result.angle = read_angle(value.at("angle"), "chord angle sweep");
             break;
         case BoundaryConstructionKind::arc_chord_height:
-            result.chord_end = read_point(value.at("chord_end"), "chord height endpoint");
+            if (!result.chord_input) result.chord_end = read_point(value.at("chord_end"), "chord height endpoint");
             result.height = read_quantity(value.at("height"), "chord height");
             break;
         case BoundaryConstructionKind::arc_chord_length:
-            result.chord_end = read_point(value.at("chord_end"), "chord length endpoint");
+            if (!result.chord_input) result.chord_end = read_point(value.at("chord_end"), "chord length endpoint");
             result.arc_length = read_quantity(value.at("arc_length"), "chord arc length");
             break;
         case BoundaryConstructionKind::arc_start_tangent:
@@ -579,6 +596,14 @@ Json write_receipt(const ConstructionReceipt& receipt) {
                 {"kind", kind_name(receipt.kind)},
                 {"start", write_point(receipt.start, "construction receipt start")},
                 {"clockwise", receipt.clockwise}};
+    const auto write_chord = [&] {
+        if (receipt.chord_input) {
+            if (receipt.chord_end) invalid("typed chord input cannot also retain an authoritative endpoint");
+            result["version"]=2;
+            result["chord_input"]={{"length",write_quantity(receipt.chord_input->length,"chord length")},
+                {"heading",write_angle(receipt.chord_input->heading,"chord heading")}};
+        } else result["chord_end"]=write_point(require_present(receipt.chord_end,"chord endpoint"),"chord endpoint");
+    };
     switch (receipt.kind) {
         case BoundaryConstructionKind::line_heading:
             result["distance"] = write_quantity(
@@ -605,20 +630,17 @@ Json write_receipt(const ConstructionReceipt& receipt) {
                                                "line endpoint");
             break;
         case BoundaryConstructionKind::arc_chord_angle:
-            result["chord_end"] = write_point(
-                require_present(receipt.chord_end, "chord angle endpoint"), "chord angle endpoint");
+            write_chord();
             result["angle"] = write_angle(require_present(receipt.angle, "chord angle sweep"),
                                            "chord angle sweep");
             break;
         case BoundaryConstructionKind::arc_chord_height:
-            result["chord_end"] = write_point(
-                require_present(receipt.chord_end, "chord height endpoint"), "chord height endpoint");
+            write_chord();
             result["height"] = write_quantity(require_present(receipt.height, "chord height"),
                                                "chord height");
             break;
         case BoundaryConstructionKind::arc_chord_length:
-            result["chord_end"] = write_point(
-                require_present(receipt.chord_end, "chord length endpoint"), "chord length endpoint");
+            write_chord();
             result["arc_length"] = write_quantity(
                 require_present(receipt.arc_length, "chord arc length"), "chord arc length");
             break;
@@ -706,6 +728,11 @@ AngleInput normalize_exact_angle(const AngleInput& input, std::string_view label
     return result;
 }
 
+bool ChordInput::operator==(const ChordInput& other) const noexcept {
+    return length.metres==other.length.metres && length.exact_metres==other.length.exact_metres &&
+        length.entered_unit==other.length.entered_unit && length.original_expression==other.length.original_expression && heading==other.heading;
+}
+
 bool ConstructionReceipt::operator==(const ConstructionReceipt& other) const noexcept {
     const auto equal_quantity = [](const std::optional<Quantity>& left,
                                    const std::optional<Quantity>& right) {
@@ -718,7 +745,7 @@ bool ConstructionReceipt::operator==(const ConstructionReceipt& other) const noe
         return !left.has_value() || same_point(*left, *right);
     };
     return segment_id == other.segment_id && kind == other.kind && same_point(start, other.start) &&
-           equal_point(chord_end, other.chord_end) && equal_quantity(distance, other.distance) &&
+           equal_point(chord_end, other.chord_end) && chord_input==other.chord_input && equal_quantity(distance, other.distance) &&
            heading == other.heading && equal_quantity(rise, other.rise) &&
            equal_quantity(run, other.run) && turn == other.turn && angle == other.angle &&
            equal_quantity(height, other.height) && equal_quantity(arc_length, other.arc_length) &&
@@ -760,6 +787,21 @@ ReplayedConstructionReceipt replay_construction_receipt(
     canonical.segment_id = receipt.segment_id;
     canonical.kind = receipt.kind;
     canonical.start = context.expected_start;
+    const bool chord_arc=receipt.kind==BoundaryConstructionKind::arc_chord_angle ||
+        receipt.kind==BoundaryConstructionKind::arc_chord_height || receipt.kind==BoundaryConstructionKind::arc_chord_length;
+    if (!chord_arc && receipt.chord_input) invalid("typed chord input is only valid for chord arcs");
+    const auto chord_endpoint = [&] {
+        if (receipt.chord_input) {
+            if (receipt.chord_end) invalid("chord arc has two authoritative chord inputs");
+            ConstructionReceipt line;
+            line.kind=BoundaryConstructionKind::line_heading; line.start=context.expected_start;
+            line.distance=receipt.chord_input->length; line.heading=receipt.chord_input->heading;
+            const auto replay=replay_construction_receipt(line,{context.expected_start,std::nullopt,std::nullopt,tolerance});
+            canonical.chord_input=ChordInput{*replay.receipt.distance,*replay.receipt.heading};
+            return replay.segment.end;
+        }
+        return require_present(receipt.chord_end,"chord endpoint");
+    };
     switch (receipt.kind) {
         case BoundaryConstructionKind::line_heading: {
             const auto& distance = require_present(receipt.distance, "line heading distance");
@@ -895,7 +937,7 @@ ReplayedConstructionReceipt replay_construction_receipt(
             break;
         }
         case BoundaryConstructionKind::arc_chord_angle: {
-            const auto& end = require_present(receipt.chord_end, "chord angle endpoint");
+            const auto end = chord_endpoint();
             const auto& angle = require_present(receipt.angle, "chord angle sweep");
             const auto normalized_angle = normalize_exact_angle(angle, "chord angle sweep");
             require_absent(receipt.distance, "chord angle distance");
@@ -911,12 +953,12 @@ ReplayedConstructionReceipt replay_construction_receipt(
             if (receipt.clockwise) invalid("chord angle cannot be clockwise");
             require_point(end, "chord angle endpoint");
             rebuilt = arc_from_chord_angle(context.expected_start, end, normalized_angle.radians);
-            canonical.chord_end = end;
+            if (!canonical.chord_input) canonical.chord_end = end;
             canonical.angle = normalized_angle;
             break;
         }
         case BoundaryConstructionKind::arc_chord_height: {
-            const auto& end = require_present(receipt.chord_end, "chord height endpoint");
+            const auto end = chord_endpoint();
             const auto& height = require_present(receipt.height, "chord height");
             const auto normalized_height = normalize_exact_quantity(height, "chord height");
             require_absent(receipt.distance, "chord height distance");
@@ -933,12 +975,12 @@ ReplayedConstructionReceipt replay_construction_receipt(
             require_point(end, "chord height endpoint");
             rebuilt = arc_from_chord_height(context.expected_start, end,
                                              normalized_height.metres);
-            canonical.chord_end = end;
+            if (!canonical.chord_input) canonical.chord_end = end;
             canonical.height = normalized_height;
             break;
         }
         case BoundaryConstructionKind::arc_chord_length: {
-            const auto& end = require_present(receipt.chord_end, "chord length endpoint");
+            const auto end = chord_endpoint();
             const auto& length = require_present(receipt.arc_length, "chord arc length");
             const auto normalized_length = normalize_exact_quantity(length, "chord arc length");
             require_absent(receipt.distance, "chord length distance");
@@ -955,7 +997,7 @@ ReplayedConstructionReceipt replay_construction_receipt(
             rebuilt = arc_from_chord_arc_length(context.expected_start, end,
                                                 normalized_length.metres,
                                                 receipt.clockwise);
-            canonical.chord_end = end;
+            if (!canonical.chord_input) canonical.chord_end = end;
             canonical.arc_length = normalized_length;
             canonical.clockwise = receipt.clockwise;
             break;
@@ -1006,8 +1048,8 @@ bool BoundaryConstructionReplayResult::operator==(
 BoundaryConstructionRecord translated_boundary_construction(
     const BoundaryConstructionRecord& record, Vec2 offset,
     const std::map<std::string, std::string, std::less<>>& identity_map) {
-    if (record.schema_version == boundary_receipt_schema_version_v3) {
-        invalid("schema three translation requires transformed_boundary_construction");
+    if (record.schema_version == boundary_receipt_schema_version_v3 || record.schema_version == boundary_receipt_schema_version_v4) {
+        invalid("framed boundary translation requires transformed_boundary_construction");
     }
     (void)replay_boundary_construction(record);
     require_point(offset, "boundary translation offset");
@@ -1055,7 +1097,8 @@ BoundaryConstructionRecord transformed_boundary_construction(
         remap(edge.end_vertex_id);
         remap(edge.receipt.segment_id);
     }
-    result.schema_version = boundary_receipt_schema_version_v3;
+    result.schema_version = record.schema_version == boundary_receipt_schema_version_v4
+        ? boundary_receipt_schema_version_v4 : boundary_receipt_schema_version_v3;
     result.transforms.push_back(transform);
     (void)replay_boundary_construction(result);
     return result;
@@ -1064,9 +1107,11 @@ BoundaryConstructionRecord transformed_boundary_construction(
 BoundaryConstructionReplayResult replay_boundary_construction(
     const BoundaryConstructionRecord& record, double tolerance_metres) {
     require_tolerance(tolerance_metres);
-    if (record.schema_version == boundary_receipt_schema_version_v3) {
+    if (record.schema_version == boundary_receipt_schema_version_v3 ||
+        (record.schema_version == boundary_receipt_schema_version_v4 && !record.transforms.empty())) {
         auto local = record;
-        local.schema_version = boundary_receipt_schema_version_v2;
+        local.schema_version = record.schema_version == boundary_receipt_schema_version_v4
+            ? boundary_receipt_schema_version_v4 : boundary_receipt_schema_version_v2;
         local.transforms.clear();
         auto result = replay_boundary_construction(local, tolerance_metres);
         Boundary reference;
@@ -1127,7 +1172,8 @@ BoundaryConstructionReplayResult replay_boundary_construction(
         invalid("boundary transforms require schema version three");
     }
     if (record.schema_version != boundary_receipt_schema_version_v1 &&
-        record.schema_version != boundary_receipt_schema_version_v2) {
+        record.schema_version != boundary_receipt_schema_version_v2 &&
+        record.schema_version != boundary_receipt_schema_version_v4) {
         invalid("unsupported boundary receipt schema version");
     }
     if (record.replay_version != boundary_receipt_replay_version) {
@@ -1147,6 +1193,8 @@ BoundaryConstructionReplayResult replay_boundary_construction(
     Vec2 expected_start = record.anchor;
     for (std::size_t index = 0; index < record.edges.size(); ++index) {
         const auto& edge = record.edges[index];
+        if (edge.receipt.chord_input && record.schema_version != boundary_receipt_schema_version_v4)
+            invalid("typed chord input requires boundary receipt schema version four");
         require_identifier(edge.segment_id, "construction segment_id");
         require_identifier(edge.start_vertex_id, "construction start_vertex_id");
         require_identifier(edge.end_vertex_id, "construction end_vertex_id");
@@ -1223,6 +1271,7 @@ BoundaryReceiptEnvelopeVersion inspect_boundary_receipt_envelope(const Json& env
     if (value == boundary_receipt_schema_version_v3) {
         return {BoundaryReceiptEnvelopeFormat::supported_v3, value, {}};
     }
+    if (value == boundary_receipt_schema_version_v4) return {BoundaryReceiptEnvelopeFormat::supported_v4,value,{}};
     return {BoundaryReceiptEnvelopeFormat::unsupported_version, value,
             "unsupported boundary_authoring envelope version"};
 }
@@ -1243,7 +1292,7 @@ BoundaryReceiptDecodeResult decode_boundary_receipt_envelope(const Json& envelop
                                             "boundary_authoring envelope version");
     if (version != boundary_receipt_schema_version_v1 &&
         version != boundary_receipt_schema_version_v2 &&
-        version != boundary_receipt_schema_version_v3) {
+        version != boundary_receipt_schema_version_v3 && version != boundary_receipt_schema_version_v4) {
         invalid("unsupported boundary receipt version");
     }
     const auto replay_version = read_positive_uint(envelope.at("replay_version"),
@@ -1252,7 +1301,7 @@ BoundaryReceiptDecodeResult decode_boundary_receipt_envelope(const Json& envelop
         return {std::nullopt, envelope, version,
                 "unsupported boundary_authoring replay_version"};
     }
-    if (version == boundary_receipt_schema_version_v3) {
+    if (version == boundary_receipt_schema_version_v3 || version == boundary_receipt_schema_version_v4) {
         require_keys(envelope,
                      {"version", "replay_version", "boundary_id", "anchor", "segments", "extensions", "transforms"},
                      {"version", "replay_version", "boundary_id", "anchor", "segments", "extensions", "transforms"},
@@ -1280,7 +1329,7 @@ BoundaryReceiptDecodeResult decode_boundary_receipt_envelope(const Json& envelop
     record.anchor = anchor;
     record.boundary_id = boundary_id;
     record.extensions = extensions;
-    if (version == boundary_receipt_schema_version_v3) {
+    if (version == boundary_receipt_schema_version_v3 || version == boundary_receipt_schema_version_v4) {
         const auto& transforms = envelope.at("transforms");
         require_array(transforms, "boundary transforms");
         for (const auto& value : transforms) {
@@ -1328,7 +1377,7 @@ BoundaryReceiptDecodeResult decode_boundary_receipt_envelope(const Json& envelop
 Json encode_boundary_receipt_envelope(const BoundaryConstructionRecord& record) {
     if (record.schema_version != boundary_receipt_schema_version_v1 &&
         record.schema_version != boundary_receipt_schema_version_v2 &&
-        record.schema_version != boundary_receipt_schema_version_v3) {
+        record.schema_version != boundary_receipt_schema_version_v3 && record.schema_version != boundary_receipt_schema_version_v4) {
         invalid("unsupported boundary receipt schema version");
     }
     if (record.replay_version != boundary_receipt_replay_version) {
@@ -1352,7 +1401,7 @@ Json encode_boundary_receipt_envelope(const BoundaryConstructionRecord& record) 
                 {"anchor", write_point(record.anchor, "boundary construction anchor")},
                 {"segments", std::move(encoded_segments)},
                 {"extensions", record.extensions}};
-    if (record.schema_version == boundary_receipt_schema_version_v3) {
+    if (record.schema_version == boundary_receipt_schema_version_v3 || record.schema_version == boundary_receipt_schema_version_v4) {
         result["transforms"] = Json::array();
         for (const auto& transform : record.transforms) {
             result["transforms"].push_back(Json{

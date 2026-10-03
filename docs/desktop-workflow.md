@@ -1056,8 +1056,11 @@ Choose **Measured lines** in Draw and press **D** on the canvas. Before placing
 the first node, D accepts exact starting X/Y coordinates. After an anchor exists,
 the same dialog offers length/heading, rise/run, relative turn, world-coordinate
 endpoint, arc chord/angle, chord/height, chord/arc length and
-start-tangent/arc-length/sweep. Chord methods currently take the chord's endpoint
-in world X/Y coordinates. Relative turns use the actual previous edge's end
+start-tangent/arc-length/sweep. Chord methods default to **Length / heading**:
+enter the measured chord and its direction without calculating coordinates.
+**Endpoint X/Y** remains an explicit alternative. Original typed chord
+expressions and units survive edits, transforms and reopening. Relative turns
+use the actual previous edge's end
 tangent, including curves.
 
 Bare lengths use the current Imperial or Metric input basis; explicit mixed

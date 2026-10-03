@@ -1,4 +1,30 @@
-# Vertex project formats v1 through v30
+# Vertex project formats v1 through v31
+
+## Exact chord length and heading (v31)
+
+A standalone construction receipt with `version: 2` stores `chord_input` as
+exact `length` quantity and `heading` angle records. The three chord-based arc
+kinds require exactly one definition: this input or the legacy `chord_end`.
+The endpoint is derived analytically from the retained local start, length and
+heading. Original expressions, normalized expressions and entered units remain
+part of the authority. Unused legacy receipts retain their unversioned encoding.
+
+Boundary construction schema 4 / replay 1 permits typed receipts and retains the
+schema-3 frame representation. Measurement linework schema 4 / replay 4 retains
+the ordered schema-3 transform/edit representation. Promotion preserves existing
+operations and their order. Transforms do not rewrite original typed inputs.
+Recovery checkpoint schema 2 / replay 1 permits typed receipts, including closed
+chains and undone actions; legacy checkpoint schema 1 remains unchanged. Older
+known dialects reject typed input, and unknown positive versions remain opaque.
+
+Native format 31 and logical extraction version 29 are required for typed
+receipts, including retained Undo/Redo history, archived boundary source proofs,
+replacement construction in redraw edits, nested reconstruction commands and
+original wall input. Wall receipt validation is independent of an unknown future
+context dialect; a known context additionally proves the original local frame.
+It is not compared with an edited current wall baseline. No SQL or raw asset-row
+representation changes accompany this version. Known malformed input rejects
+atomically; retained expression strings participate in resource limits.
 
 ## Reviewed measured-area source replacement (v30)
 

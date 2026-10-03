@@ -194,7 +194,9 @@ BoundaryConstructionRecord make_record(const AcceptedBoundaryChain& source) {
         invalid("boundary receipt count does not match segment count");
     }
     BoundaryConstructionRecord result;
-    result.schema_version = boundary_receipt_latest_schema_version;
+    result.schema_version = std::any_of(source.receipts.begin(),source.receipts.end(),
+        [](const auto& receipt) { return receipt.chord_input.has_value(); })
+        ? boundary_receipt_schema_version_v4 : boundary_receipt_schema_version_v2;
     result.anchor = source.anchor;
     result.boundary_id = source.boundary.id;
     result.edges.reserve(source.boundary.segments.size());

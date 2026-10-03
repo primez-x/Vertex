@@ -134,9 +134,7 @@ IdentifiedBoundary reconstruct_boundary_arc(const IdentifiedBoundary& source,
         [&](const auto& edge) { return edge.segment_id == id; });
     if (found == source.segments.end()) throw std::invalid_argument("Unknown segment ID");
     if (receipt.segment_id != id || receipt.start.x != found->segment.start.x ||
-        receipt.start.y != found->segment.start.y || !receipt.chord_end ||
-        receipt.chord_end->x != found->segment.end.x ||
-        receipt.chord_end->y != found->segment.end.y) {
+        receipt.start.y != found->segment.start.y) {
         throw std::invalid_argument("Arc construction receipt must retain the selected segment chord");
     }
     if (receipt.kind != BoundaryConstructionKind::arc_chord_angle &&

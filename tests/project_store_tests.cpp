@@ -775,6 +775,46 @@ Entity translation_fixture() {
     return result;
 }
 
+void test_typed_chord_nested_proofs_reject_recomputed_downgrade() {
+    const auto legacy=translation_fixture();
+    auto record=*sketch::decode_boundary_receipt_envelope(legacy.properties.at("boundary_authoring")).record;
+    record.schema_version=sketch::boundary_receipt_schema_version_v4;
+    auto& first=record.edges.front().receipt;
+    first.kind=sketch::BoundaryConstructionKind::arc_chord_angle;
+    first.chord_end.reset();
+    first.chord_input=sketch::ChordInput{sketch::parse_quantity("2 m"),sketch::parse_angle("0 deg")};
+    first.angle=sketch::parse_angle("90 deg");
+    auto geometry=sketch::decode_identified_boundary_entity(legacy);
+    const auto replay=sketch::replay_boundary_construction(record);
+    for(std::size_t i=0;i<geometry.segments.size();++i) geometry.segments[i].segment=replay.edges[i].segment;
+    auto typed=sketch::encode_identified_boundary_entity(geometry);
+    typed.properties["boundary_authoring"]=sketch::encode_boundary_receipt_envelope(record);
+    for(int proof=0;proof<3;++proof) {
+        Entity owner=typed;
+        if(proof==1) {
+            auto edited=Document::create({typed});
+            sketch::BoundaryGeometryEdit edit; edit.boundary_id=typed.id;
+            edit.kind=sketch::BoundaryGeometryEditKind::move_vertex; edit.target_id="vertex-1"; edit.target_position={3,0};
+            edited.apply(sketch::EditBoundaryGeometry{0,edit}); owner=edited.snapshot().entities().at(typed.id);
+            require(!owner.properties.contains("boundary_authoring"),"downgrade fixture actually archives typed source");
+        } else if(proof==2) {
+            auto edited=Document::create({legacy});
+            sketch::BoundaryGeometryEdit edit; edit.boundary_id=edit.target_id=typed.id;
+            edit.kind=sketch::BoundaryGeometryEditKind::redefine_boundary;
+            edit.replacement_segments=typed.properties.at("segments"); edit.replacement_authoring=typed.properties.at("boundary_authoring");
+            edited.apply(sketch::EditBoundaryGeometry{0,edit}); owner=edited.snapshot().entities().at(typed.id);
+            require(!owner.properties.contains("boundary_authoring") && owner.extensions.at("boundary_geometry_derivation").at("source_boundary_authoring").at("version")==2,"downgrade fixture has only nested typed replacement");
+        }
+        auto imported=Document::create({owner}); require(imported.snapshot().history().size()==1 && ProjectStore::required_format_version(imported.snapshot())==31,"fresh nested proof requires31 with no earlier typed history");
+        TempDirectory temporary; const auto file=temporary.path/"typed-chord.bldproj";
+        (void)ProjectStore::save(file,imported.snapshot());
+        require(ProjectStore::load(file).document.snapshot().entities()==imported.snapshot().entities(),"known typed proof reopens before downgrade");
+        execute_sql(file,"PRAGMA user_version=30; UPDATE metadata SET value='30' WHERE key='format_version'");
+        rewrite_logical_digest(file);
+        require_error([&] { (void)ProjectStore::load(file); },StorageErrorCode::unsupported_format,"recomputed digest cannot downgrade direct or nested typed chord proofs");
+    }
+}
+
 void test_translation_group_storage_and_forgery_rejection() {
     TempDirectory temp;
     const auto file = temp.path / "translation-group-v9.psketch";
@@ -3062,6 +3102,7 @@ int main() {
         test_reopen_preserves_redo_navigation_and_named_abandoned_branch();
         test_impossible_history_is_rejected_after_digest_recomputation();
         test_translation_proof_storage_and_forgery_rejection();
+        test_typed_chord_nested_proofs_reject_recomputed_downgrade();
         test_translation_group_storage_and_forgery_rejection();
         test_transform_proof_storage_and_forgery_rejection();
         test_boundary_geometry_edit_proof_storage_and_forgery_rejection();

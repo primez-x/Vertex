@@ -1,5 +1,11 @@
 # Durable boundary recovery
 
+Typed chord inputs opt into checkpoint schema 2 / replay 1. Qualification scans
+all retained actions, including Redo and closed chains; checkpoints without typed
+chords retain schema 1. The outer workspace recovery envelope remains unchanged.
+See [native format 31](project-format.md#exact-chord-length-and-heading-v31) for
+exact receipt fields and older-reader behavior.
+
 This document defines the implementation and reference contract for durable
 unfinished boundary recovery in Vertex.
 

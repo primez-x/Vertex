@@ -16,14 +16,15 @@ namespace sketch {
 
 // Version one remains the default for directly assembled legacy records so
 // their encoding stays byte-for-byte compatible. The construction adapter
-// emits version two for current session output.
+// emits version two for legacy inputs and version four for typed chords.
 inline constexpr std::uint32_t boundary_receipt_schema_version_v1 = 1;
 inline constexpr std::uint32_t boundary_receipt_schema_version_v2 = 2;
 inline constexpr std::uint32_t boundary_receipt_schema_version_v3 = 3;
+inline constexpr std::uint32_t boundary_receipt_schema_version_v4 = 4;
 inline constexpr std::uint32_t boundary_receipt_schema_version =
     boundary_receipt_schema_version_v1;
 inline constexpr std::uint32_t boundary_receipt_latest_schema_version =
-    boundary_receipt_schema_version_v2;
+    boundary_receipt_schema_version_v4;
 inline constexpr std::uint32_t boundary_receipt_replay_version = 1;
 
 // Angles retain the entered expression beside the value used by analytical
@@ -44,6 +45,12 @@ struct AngleInput {
 [[nodiscard]] AngleInput angle_from_radians(double radians);
 [[nodiscard]] AngleInput parse_angle(std::string_view expression);
 
+struct ChordInput {
+    Quantity length;
+    AngleInput heading;
+    bool operator==(const ChordInput& other) const noexcept;
+};
+
 enum class BoundaryConstructionKind {
     line_heading,
     line_rise_run,
@@ -57,13 +64,14 @@ enum class BoundaryConstructionKind {
 };
 
 // This is the normalized, durable input receipt for one analytical edge.
-// Captured start and chord endpoints are construction inputs, not a
-// coordinate fallback inferred from a displayed Segment.
+// Captured start and either a chord endpoint or typed chord length/heading
+// are construction inputs, never inferred from a displayed Segment.
 struct ConstructionReceipt {
     std::string segment_id;
     BoundaryConstructionKind kind{};
     Vec2 start{};
     std::optional<Vec2> chord_end;
+    std::optional<ChordInput> chord_input;
     std::optional<Quantity> distance;
     std::optional<AngleInput> heading;
     std::optional<Quantity> rise;
@@ -136,7 +144,7 @@ struct BoundaryConstructionRecord {
     std::string boundary_id;
     std::vector<ConstructionTopologyEdge> edges;
     nlohmann::json extensions = nlohmann::json::object();
-    // Schema three only: receipts and anchor remain in their original local
+    // Schemas three/four: receipts and anchor remain in their original local
     // frame; replay applies these world-space operations in order.
     std::vector<PlanarTransform> transforms;
 
@@ -174,13 +182,14 @@ struct BoundaryConstructionReplayResult {
 // invalid offsets or identity replacements throw std::invalid_argument.
 // Even finite offsets can reject when floating-point translation loses the
 // exact closure-vector relationship required by replay.
-// Schema three rejects here; use transformed_boundary_construction instead.
+// Schemas three/four reject here; use transformed_boundary_construction instead.
 [[nodiscard]] BoundaryConstructionRecord translated_boundary_construction(
     const BoundaryConstructionRecord& record, Vec2 offset,
     const std::map<std::string, std::string, std::less<>>& identity_map = {});
 
 // Preserve all local construction inputs and append a transform frame. The
-// result opts into schema three. Optional replacements affect typed IDs only.
+// result opts into schema three, retaining four for typed chord inputs.
+// Optional replacements affect typed IDs only.
 [[nodiscard]] BoundaryConstructionRecord transformed_boundary_construction(
     const BoundaryConstructionRecord& record, const PlanarTransform& transform,
     const std::map<std::string, std::string, std::less<>>& identity_map = {});
@@ -189,6 +198,7 @@ enum class BoundaryReceiptEnvelopeFormat {
     supported_v1,
     supported_v2,
     supported_v3,
+    supported_v4,
     unsupported_version,
 };
 
@@ -208,7 +218,7 @@ struct BoundaryReceiptDecodeResult {
 };
 
 // inspect validates only the envelope shape needed to identify its positive
-// schema version. decode strictly validates known v1/v2/v3; an unknown positive
+// schema version. decode strictly validates known v1/v2/v3/v4; an unknown positive
 // schema or replay version is returned as opaque original JSON so a caller can
 // preserve it.
 [[nodiscard]] BoundaryReceiptEnvelopeVersion inspect_boundary_receipt_envelope(

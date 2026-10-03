@@ -763,6 +763,40 @@ std::optional<std::string> validate_state(const std::map<std::string, Entity, st
         validate_entity(entity);
         if (entity.type=="wall") {
             try {
+                const auto input=entity.properties.find("original_drawing_input");
+                const bool known_typed=input!=entity.properties.end() && input->is_object() && input->contains("version") &&
+                    input->at("version").is_number_integer() && input->at("version")==2;
+                if (input!=entity.properties.end() && input->is_object() && input->contains("chord_input") && !known_typed) {
+                    const auto discriminator=input->find("version");
+                    const bool future=discriminator!=input->end() && discriminator->is_number_integer() &&
+                        (discriminator->is_number_unsigned() ? discriminator->get<std::uint64_t>()>2 : discriminator->get<std::int64_t>()>2);
+                    if (!future) throw std::invalid_argument("Typed wall chord input requires its receipt version discriminator");
+                }
+                if (known_typed) {
+                    // A future context cannot conceal malformed known receipt inputs.
+                    const auto receipt=decode_construction_receipt(*input);
+                    (void)replay_construction_receipt(receipt,{receipt.start});
+                    const auto saved=entity.properties.find("original_drawing_input_context");
+                    if (saved==entity.properties.end() || !saved->is_object() || !saved->contains("version") ||
+                        !saved->at("version").is_number_integer())
+                        throw std::invalid_argument("Typed wall chord input requires a saved replay context");
+                    // Future context dialects remain historical opaque metadata.
+                    if (saved->at("version")==1) {
+                        if (saved->size()!=5 || !saved->contains("expected_start") || !saved->contains("previous_segment") ||
+                            !saved->contains("closure_anchor") || !saved->contains("tolerance_metres") ||
+                            !saved->at("previous_segment").is_null() || !saved->at("closure_anchor").is_null())
+                            throw std::invalid_argument("Typed wall chord replay context has unsupported fields");
+                        const auto& start=saved->at("expected_start");
+                        if (!start.is_array() || start.size()!=2 || !start[0].is_number() || !start[1].is_number() ||
+                            !saved->at("tolerance_metres").is_number())
+                            throw std::invalid_argument("Typed wall chord replay context is malformed");
+                        const ConstructionReplayContext context{{start[0].get<double>(),start[1].get<double>()},
+                            std::nullopt,std::nullopt,saved->at("tolerance_metres").get<double>()};
+                        (void)replay_construction_receipt(receipt,context);
+                    } else if (saved->at("version").is_number_unsigned() ?
+                        saved->at("version").get<std::uint64_t>()==0 : saved->at("version").get<std::int64_t>()<=0)
+                        throw std::invalid_argument("Wall chord replay context version must be positive");
+                }
                 if (entity.extensions.contains("curve_input_derivation")) validate_wall_curve_input(entity);
                 validate_wall_length_input(entity);
             }

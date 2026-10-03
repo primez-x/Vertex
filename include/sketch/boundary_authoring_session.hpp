@@ -179,6 +179,7 @@ struct BoundaryAuthoringAction {
 };
 
 inline constexpr std::uint32_t boundary_authoring_recovery_version = 1;
+inline constexpr std::uint32_t boundary_authoring_recovery_version_v2 = 2;
 inline constexpr std::uint32_t boundary_authoring_recovery_replay_version = 1;
 // Compatibility constant for the default linear-action plus quadratic-closure
 // work ceiling. Sessions and typed recovery use the stored resource policy.
@@ -198,6 +199,8 @@ struct BoundaryAuthoringCheckpoint {
 
     bool operator==(const BoundaryAuthoringCheckpoint&) const noexcept;
 };
+
+[[nodiscard]] bool boundary_authoring_checkpoint_has_typed_chord(const BoundaryAuthoringCheckpoint& checkpoint) noexcept;
 
 enum class BoundaryAuthoringFaultPoint {
     before_semantic_mutation,
@@ -322,10 +325,16 @@ public:
     [[nodiscard]] std::string add_arc_chord_angle(Vec2 end,
                                                   const AngleInput& sweep);
     [[nodiscard]] std::string add_arc_chord_angle(Vec2 end, double sweep_radians);
+    [[nodiscard]] std::string add_arc_chord_angle(const Quantity& chord_length,
+        const AngleInput& chord_heading,const AngleInput& sweep);
     [[nodiscard]] std::string add_arc_chord_height(Vec2 end, const Quantity& signed_height);
+    [[nodiscard]] std::string add_arc_chord_height(const Quantity& chord_length,
+        const AngleInput& chord_heading,const Quantity& signed_height);
     [[nodiscard]] std::string add_arc_chord_arc_length(Vec2 end,
                                                        const Quantity& arc_length,
                                                        bool clockwise = false);
+    [[nodiscard]] std::string add_arc_chord_arc_length(const Quantity& chord_length,
+        const AngleInput& chord_heading,const Quantity& arc_length,bool clockwise = false);
     [[nodiscard]] std::string add_arc_start_tangent(const AngleInput& tangent,
                                                     const Quantity& arc_length,
                                                     const AngleInput& sweep);
@@ -500,6 +509,7 @@ private:
         const IdCounters& ids) noexcept;
     void set_counters(const BoundaryAuthoringCounters& counters) noexcept;
     void apply_recovery_action(const BoundaryAuthoringAction& action);
+    [[nodiscard]] std::string add_typed_chord_arc(ConstructionReceipt receipt);
     [[nodiscard]] std::string append_edge(SemanticRoot& semantic, IdCounters& ids,
                                           Segment segment, ConstructionReceipt receipt,
                                           std::vector<std::string>* generated_ids = nullptr);
