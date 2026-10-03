@@ -2075,6 +2075,26 @@ drawing; switching modes does not change existing geometry.
   - Result: Not tested
   - Notes: ______________________________
 
+## Appraisal measurements while drawing walls
+
+- [ ] **U354 — Close walls and inspect their measured exterior**
+  - Steps: Open Details > Setup, enable appraisal calculations and choose Exterior as the measurement basis. Draw a rectangular wall outline and click its first corner to close it. Open Details and select its measured area. Check the dimensions, perimeter and gross area. Undo once, then Redo and save/reopen.
+  - Expected: Closing creates an exterior measurement automatically, including the walls' thickness. It has edge dimensions and appears in Details. GLA waits for your actual floor and area observations. One Undo removes the closing wall and its measurement together; Redo and reopening restore them.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **U355 — Draw an interior loop without duplicating appraisal area**
+  - Steps: In an Appraisal/Exterior project with an existing measured outline, draw and close a smaller wall loop inside it. Repeat with a loop crossing the original measured outline. Check the message, original measurement and physical walls; Undo and Redo.
+  - Expected: The newly drawn walls remain. Vertex explains why it did not add an automatic measurement. It does not count the same floor space twice or guess that the new loop is a deduction. The original measured area remains intact.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **U356 — Close a wall outline with a precise curved wall**
+  - Steps: In an Appraisal/Exterior project, draw three sides of an outline. Press D for precise input. Choose a curved wall defined by its chord endpoint and angle, enter the original starting point as the endpoint and use a 90-degree sweep to close the outline. Inspect the exterior measurement, arc dimension and Details. Undo, Redo and save/reopen.
+  - Expected: The curve closes the outline and produces a current exterior measurement in the same edit. Its dimension measures the actual arc, rather than the straight chord. The physical curve and measured exterior survive Undo/Redo and reopening.
+  - Result: Not tested
+  - Notes: ______________________________
+
 ## Issue report template
 
 - Task ID(s):

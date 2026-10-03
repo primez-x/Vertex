@@ -1,19 +1,29 @@
 #include "sketch/constraint_entity.hpp"
+#include "sketch/boundary_dimension.hpp"
+#include "sketch/boundary_entity.hpp"
+#include "sketch/desktop/appraisal_details_panel.hpp"
+#include "sketch/desktop/boundary_input_dialog.hpp"
 #include "sketch/desktop/main_window.hpp"
 #include "sketch/document.hpp"
 #include "sketch/model_phases.hpp"
+#include "sketch/wall_measurement.hpp"
 #include "../src/desktop/plan_canvas.hpp"
 #include "support/noninteractive_errors.hpp"
 
 #include <QAction>
 #include <QApplication>
 #include <QComboBox>
+#include <QDir>
 #include <QFontDatabase>
 #include <QInputDialog>
 #include <QKeyEvent>
+#include <QLabel>
+#include <QLineEdit>
 #include <QMouseEvent>
 #include <QStandardPaths>
+#include <QStatusBar>
 #include <QTemporaryDir>
+#include <QTabWidget>
 #include <QTimer>
 #include <QToolButton>
 #include <QTreeWidget>
@@ -218,6 +228,302 @@ void test_interactive_wall_chain_closure_finishes_at_its_start() {
     click({5.0, 4.0});
     require(wall_ids(window.document().snapshot()).size() == 3,
             "a click after loop closure cannot begin an unintended fourth segment");
+}
+
+void test_automatic_appraisal_wall_chain_closure(bool survey_only=false) {
+    const auto run = [](bool metric, const char* policy_kind, const char* property_kind,
+                        const char* workflow, const char* basis, bool close_chain, int existing_region = 0,
+                        bool curved_closure = false) {
+        MainWindow window;
+        window.setAttribute(Qt::WA_DontShowOnScreen, true);
+        window.resize(1200,800);
+        auto property = window.document().snapshot().entities().at("property-1");
+        property.properties["calculation_workflow"] = workflow;
+        property.properties["appraisal_policy"] = {{"policy_kind",policy_kind},{"version",1},
+            {"property_kind",property_kind},{"measurement_basis",basis}};
+        if (std::string(policy_kind)=="ansi_z765_2021")
+            property.properties["appraisal_policy"]["ansi"] = {{"interior_inspected",true},{"direct_measurement",true},
+                {"acquisition_increment","tenth_foot"},{"limitations_statement","Fixture explicitly declares measurement acquisition only."}};
+        window.document().apply(ApplyEntityChanges{window.document().revision(),{EntityChange::upsert(property)}, {},
+            "Configure declared appraisal closure fixture"});
+        window.setMetricUnits(metric);
+        window.setWorkspace(Workspace::measurement);
+        QString existing_area;
+        if (existing_region!=0) {
+            const auto drawing_layer = window.activeLayerId();
+            QString hidden_layer;
+            if (existing_region==3) {
+                const auto source = window.document().snapshot();
+                const auto floor = source.entities().at(drawing_layer.toStdString()).properties.at("floor_id").get<std::string>();
+                hidden_layer = window.createLayer(QString::fromStdString(floor),"Hidden existing area");
+                require(!hidden_layer.isEmpty(),"overlap fixture creates another layer on the drawing floor");
+            }
+            const Vec2 low = existing_region==1 || existing_region==4 ? Vec2{-4,-3} : existing_region==2 ? Vec2{-1,-0.5} : Vec2{-1,-2};
+            const Vec2 high = existing_region==1 || existing_region==4 ? Vec2{4,3} : existing_region==2 ? Vec2{1,0.5} : Vec2{3,1};
+            existing_area = window.createBoundary({{low,{high.x,low.y},0},{{high.x,low.y},high,0},
+                {high,{low.x,high.y},0},{{low.x,high.y},low,0}});
+            require(!existing_area.isEmpty(),"automatic closure overlap fixture has an existing measured owner");
+            if (existing_region==4) {
+                auto parcel=window.document().snapshot().entities().at(existing_area.toStdString());
+                parcel.properties["classification"]="survey";
+                parcel.properties["measurement_classification"]="survey";
+                parcel.properties.erase("calculation_scope");
+                window.document().apply(ApplyEntityChanges{window.document().revision(),{EntityChange::upsert(parcel)}, {},
+                    "Legacy parcel inherits survey site scope"});
+            }
+            if (!hidden_layer.isEmpty())
+                require(window.setContainerVisible(hidden_layer,false) && window.setActiveLayer(drawing_layer),
+                    "hidden same-floor measurement retains its semantic ownership while physical drawing uses another layer");
+        }
+        window.show();
+        QApplication::processEvents();
+        auto* canvas = dynamic_cast<PlanCanvas*>(window.findChild<QWidget*>("measurementPlanCanvas"));
+        auto* create_wall = window.findChild<QAction*>("createWall");
+        auto* snap = window.findChild<QToolButton*>("snapTool");
+        require(canvas && create_wall && snap,"automatic appraisal fixture exposes actual canvas wall authoring");
+        // Coordinates are exact canonical metres in both display systems.
+        snap->setChecked(false);
+        create_wall->trigger();
+        const auto click = [&](Vec2 point) {
+            const auto center = QRectF(canvas->rect()).center();
+            const auto view = canvas->viewCenter();
+            const QPointF screen{center.x()+(point.x-view.x)*canvas->viewScale(),
+                                 center.y()-(point.y-view.y)*canvas->viewScale()};
+            QMouseEvent move(QEvent::MouseMove,screen,canvas->mapToGlobal(screen.toPoint()),
+                Qt::NoButton,Qt::NoButton,Qt::NoModifier);
+            QApplication::sendEvent(canvas,&move);
+            QMouseEvent press(QEvent::MouseButtonPress,screen,canvas->mapToGlobal(screen.toPoint()),
+                Qt::LeftButton,Qt::LeftButton,Qt::NoModifier);
+            QApplication::sendEvent(canvas,&press);
+            QMouseEvent release(QEvent::MouseButtonRelease,screen,canvas->mapToGlobal(screen.toPoint()),
+                Qt::LeftButton,Qt::NoButton,Qt::NoModifier);
+            QApplication::sendEvent(canvas,&release);
+        };
+        const auto measured_ids = [](const DocumentSnapshot& snapshot) {
+            std::vector<std::string> ids;
+            for (const auto& [id,entity] : snapshot.entities())
+                if (entity.type=="measurement_boundary") ids.push_back(id);
+            return ids;
+        };
+        click({-2,-1.5}); click({2,-1.5}); click({2,1.5}); click({-2,1.5});
+        const auto open = window.document().snapshot();
+        require(wall_ids(open).size()==3 && measured_ids(open).size()==(existing_region==0 ? 0U : 1U),
+            "open appraisal wall chain must not create a premature area");
+        if (!close_chain) {
+            QKeyEvent cancel(QEvent::KeyPress,Qt::Key_Escape,Qt::NoModifier);
+            QApplication::sendEvent(canvas,&cancel);
+            require(window.document().snapshot().entities()==open.entities() && measured_ids(window.document().snapshot()).empty() &&
+                    !canvas->wallPreview(),"aborted appraisal chain preserves committed walls and creates no area");
+            return;
+        }
+        if (curved_closure) {
+            bool seen = false;
+            std::exception_ptr failure;
+            QTimer::singleShot(0,&window,[&] {
+                auto* modal = qobject_cast<QDialog*>(QApplication::activeModalWidget());
+                try {
+                    auto* input = dynamic_cast<BoundaryInputDialog*>(modal);
+                    require(input,"D on an active wall chain must open real precise analytical input");
+                    input->setAttribute(Qt::WA_DontShowOnScreen,true);
+                    seen = true;
+                    auto* method = input->findChild<QComboBox*>("boundaryInputMethod");
+                    auto* x = input->findChild<QLineEdit*>("boundaryInputEndX");
+                    auto* y = input->findChild<QLineEdit*>("boundaryInputEndY");
+                    auto* sweep = input->findChild<QLineEdit*>("boundaryInputSweep");
+                    require(method && x && y && sweep,"precise closure exposes chord endpoint and signed sweep fields");
+                    method->setCurrentIndex(4);
+                    x->setText("-2 m"); y->setText("-1.5 m"); sweep->setText("90 deg");
+                    require(input->submit(),"precise analytical arc closing at original anchor must validate");
+                } catch (...) {
+                    failure = std::current_exception();
+                    if (modal) modal->reject();
+                }
+            });
+            QKeyEvent precise(QEvent::KeyPress,Qt::Key_D,Qt::NoModifier);
+            QApplication::sendEvent(canvas,&precise);
+            QApplication::processEvents();
+            if (failure) std::rethrow_exception(failure);
+            require(seen,"real wall drawing precision action must execute its closure dialog");
+        } else click({-2,-1.5});
+        const auto closed = window.document().snapshot();
+        const auto sources = wall_ids(closed);
+        require(sources.size()==4 && !canvas->wallPreview(),"actual close click commits four walls and retires the drawing chain");
+        const bool automatic = std::string(workflow)=="appraisal" && std::string(basis)=="exterior";
+        const auto areas = measured_ids(closed);
+        if (existing_region>=1 && existing_region<=3) {
+            require(areas.size()==1 && areas.front()==existing_area.toStdString() &&
+                    closed.entities().at(existing_area.toStdString())==open.entities().at(existing_area.toStdString()) &&
+                    closed.revision()==open.revision()+1 &&
+                    window.statusBar()->currentMessage().contains(QStringLiteral("Automatic exterior measurement was not created")),
+                "nested, enclosing or hidden same-floor overlapping area must retain physical closure, explain refusal and avoid a duplicate contributor");
+            return;
+        }
+        if (!automatic) {
+            require(areas.empty() && closed.revision()==open.revision()+1,
+                "measurement workflow and interior basis retain physical closure without automatic appraisal area");
+            return;
+        }
+        if (areas.size()!=(existing_region==4 ? 2U : 1U))
+            throw std::runtime_error("Automatic closure lacks a measured owner (policy="+std::string(policy_kind)+
+                ", curved="+std::to_string(curved_closure)+", region="+std::to_string(existing_region)+
+                "): "+window.statusBar()->currentMessage().toStdString()+"; "+window.lastError().toStdString());
+        const auto measured=std::find_if(areas.begin(),areas.end(),[&](const auto& id){return id!=existing_area.toStdString();});
+        require(measured!=areas.end(),"closed walls create their own measured owner without replacing a parcel");
+        const auto& owner = closed.entities().at(*measured);
+        require(closed.revision()==open.revision()+1 && wall_measurement_source_current(closed,owner) &&
+                exterior_wall_measurement_source_ids(owner)==sources,
+            "closing wall, current analytical exterior source and area must share one history revision");
+        const double thickness = closed.entities().at(sources.front()).properties.at("thickness_m").get<double>();
+        for (const auto& id : sources)
+            require(std::abs(closed.entities().at(id).properties.at("thickness_m").get<double>()-thickness)<1e-12,
+                "rectangular exterior fixture uses a consistent physical thickness");
+        const auto boundary = decode_identified_boundary_entity(owner);
+        const double area = std::abs(signed_area(boundary_geometry(boundary)));
+        if (curved_closure) {
+            const auto exact = derive_exterior_wall_measurement(closed,sources);
+            require(std::abs(area-std::abs(signed_area(exact.boundary)))<1e-8 &&
+                    std::any_of(boundary.segments.begin(),boundary.segments.end(),[](const auto& edge){return edge.segment.sweep_radians!=0;}),
+                "precise curved closure must retain exact analytical exterior geometry rather than chord approximation");
+            bool precise_wall = false;
+            for (const auto& id : sources) {
+                const auto& wall = closed.entities().at(id);
+                if (wall_baseline(wall).sweep_radians==0) continue;
+                precise_wall = true;
+                const auto receipt = decode_construction_receipt(wall.properties.at("original_drawing_input"));
+                require(receipt.kind==BoundaryConstructionKind::arc_chord_angle && receipt.angle &&
+                        receipt.angle->original_expression=="90 deg",
+                    "precise automatic closure must preserve original curved-wall construction evidence");
+            }
+            require(precise_wall,"actual precise closure must publish one physical analytical curved wall");
+        } else require(std::abs(area-(4+thickness)*(3+thickness))<1e-8 && area>12,
+            "automatic measurement must use exact exterior faces rather than twelve-square-metre centerline area");
+        std::size_t dimensions = 0;
+        double perimeter = 0;
+        bool arc_dimension = false;
+        for (const auto& [id,entity] : closed.entities()) {
+            (void)id;
+            if (!can_recognize_boundary_dimension_entity_type(entity.type)) continue;
+            const auto decoded = decode_boundary_dimension_entity(entity);
+            if (!decoded.dimension || decoded.dimension->boundary_id!=owner.id) continue;
+            require(decoded.dimension->kind==BoundaryDimensionKind::segment_length &&
+                    decoded.dimension->placement==BoundaryDimensionPlacement::automatic,
+                "automatic exterior dimensions must retain physical analytical edge bindings");
+            const auto resolution = decoded.dimension->resolve(owner);
+            perimeter += resolution.segment_length_metres;
+            if (resolution.segment.sweep_radians!=0) {
+                arc_dimension = true;
+                require(resolution.segment_length_metres>std::hypot(resolution.segment.end.x-resolution.segment.start.x,
+                    resolution.segment.end.y-resolution.segment.start.y),"curved closure dimension must measure the arc rather than its chord");
+            }
+            ++dimensions;
+        }
+        require(dimensions==boundary.segments.size() && dimensions==4 &&
+                (curved_closure ? arc_dimension : std::abs(perimeter-2*(7+2*thickness))<1e-8),
+            "every exterior edge must have one current exact dimension");
+        require(!owner.properties.contains("appraisal_facts") && !owner.properties.contains("grade") &&
+                closed.entities().at("property-1")==property,
+            "automatic closure must retain declared policy without inventing finish, grade, access or ANSI area facts");
+        require(window.selectEntity(QString::fromStdString(owner.id)),"automatic measured owner remains selectable");
+        auto* details = dynamic_cast<AppraisalDetailsPanel*>(window.findChild<QWidget*>("appraisalDetailsPanel"));
+        auto* gla = window.findChild<QLabel*>("appraisalDetailsGla");
+        require(details && details->report() && !details->report()->qualified && gla && gla->text()=="Totals unavailable",
+            "Details must remain unqualified until actual area and floor declarations are supplied");
+        auto* tabs = window.findChild<QTabWidget*>("sidebarTabs");
+        require(tabs,"automatic appraisal UI retains the real Details tab");
+        tabs->setCurrentIndex(2);
+        const auto capture_directory = qEnvironmentVariable("VERTEX_TEST_CAPTURE_DIR");
+        if (!capture_directory.isEmpty()) {
+            require(QDir().mkpath(capture_directory),"automatic appraisal captures use requested artifact directory");
+            const auto stem = QStringLiteral("automatic-appraisal-%1-%2%3").arg(metric ? "metric" : "imperial")
+                .arg(QString::fromLatin1(policy_kind)).arg(curved_closure ? "-curved" : "");
+            QApplication::processEvents();
+            require(window.grab().save(QDir(capture_directory).filePath(stem+"-window.png")) &&
+                    canvas->grab().save(QDir(capture_directory).filePath(stem+"-canvas.png")) &&
+                    details->grab().save(QDir(capture_directory).filePath(stem+"-details.png")),
+                "actual automatic owner, dimensioned canvas and unqualified Details UI must render to captures");
+        }
+        require(window.undoCommand() && window.document().snapshot().entities()==open.entities() &&
+                window.redoCommand() && window.document().snapshot().entities()==closed.entities(),
+            "one Undo and Redo must remove and restore closing wall, area, dimensions and connections together");
+        QTemporaryDir directory;
+        // Reopen in the owning window; a concurrent second editor correctly
+        // opens the still-locked project read-only.
+        MainWindow& reopened=window;
+        require(directory.isValid() && window.saveProjectAs(directory.filePath("automatic-appraisal-closure.bldproj")) &&
+                reopened.openProject(directory.filePath("automatic-appraisal-closure.bldproj")) &&
+                reopened.document().snapshot().entities()==closed.entities(),
+            "automatic appraisal closure must save and reopen exact physical and measured entities");
+        for (std::size_t index=0;index<sources.size();++index)
+            require(reopened.selectEntity(QString::fromStdString(sources[index]),index!=0),"reopened exterior sources remain selectable");
+        const auto before_manual = reopened.document().snapshot();
+        const auto manually_measured=reopened.createMeasurementBoundaryFromSelectedWalls();
+        if (manually_measured!=QString::fromStdString(owner.id))
+            throw std::runtime_error("Manual exterior reuse returned '"+manually_measured.toStdString()+
+                "' rather than '"+owner.id+"': "+reopened.lastError().toStdString()+
+                "; revision "+std::to_string(before_manual.revision())+" -> "+std::to_string(reopened.document().revision()));
+        require(manually_measured==QString::fromStdString(owner.id) &&
+                reopened.document().revision()==before_manual.revision() &&
+                reopened.document().snapshot().entities()==before_manual.entities(),
+            "manual exterior derivation must reuse automatic owner without duplicate area or dimensions");
+        if (metric && !curved_closure && std::string(policy_kind)=="residential_declared") {
+            require(reopened.selectEntity(QString::fromStdString(owner.id)),"automatic area remains selectable for explicit facts");
+            const nlohmann::json declarations{{"appraisal_policy",property.properties.at("appraisal_policy")},{"grade","above"},
+                {"appraisal_facts",{{"finish","finished"},{"access","direct_interior"},{"ceiling_eligibility","standard"},
+                    {"area_use","dwelling"},{"boundary_role","measured_area"}}}};
+            require(reopened.editSelectedAppraisalFacts(QString::fromStdString(declarations.dump())),
+                "actual user declarations must qualify the automatically measured exterior area");
+            reopened.setMetricUnits(false);
+            auto* qualified_details = dynamic_cast<AppraisalDetailsPanel*>(reopened.findChild<QWidget*>("appraisalDetailsPanel"));
+            auto* qualified_gla = reopened.findChild<QLabel*>("appraisalDetailsGla");
+            const auto profile = appraisal_display_profile(property.properties,AreaUnit::square_foot);
+            const auto expected = display_area(area,profile);
+            require(qualified_details && qualified_details->report() && qualified_details->report()->qualified &&
+                    qualified_details->report()->calculation && qualified_gla &&
+                    std::abs(qualified_details->report()->calculation->property.gla().total.square_metres-area)<1e-8 &&
+                    qualified_gla->text()==QString::fromStdString(expected.text)+" sq ft",
+                "qualified Details GLA must equal exact exterior area converted to square feet after explicit declarations");
+            auto* qualified_tabs = reopened.findChild<QTabWidget*>("sidebarTabs");
+            require(qualified_tabs,"qualified automatic area retains the Details tab");
+            qualified_tabs->setCurrentIndex(2);
+            reopened.resize(1280,900); reopened.show(); QApplication::processEvents();
+            if (!capture_directory.isEmpty())
+                require(reopened.grab().save(QDir(capture_directory).filePath("automatic-appraisal-closure-details.png")),
+                    "qualified automatic exterior area must render its actual selected Details tab to the requested capture");
+        }
+    };
+    if (survey_only) {
+        run(true,"residential_declared","detached_single_family","appraisal","exterior",true,4);
+        return;
+    }
+    run(true,"residential_declared","detached_single_family","appraisal","exterior",true,4);
+    run(true,"residential_declared","detached_single_family","appraisal","exterior",true);
+    run(false,"light_commercial_declared","light_commercial","appraisal","exterior",true);
+    run(false,"ansi_z765_2021","detached_single_family","appraisal","exterior",true);
+    run(true,"residential_declared","detached_single_family","measurement","exterior",true);
+    run(true,"residential_declared","detached_single_family","appraisal","interior",true);
+    run(true,"residential_declared","detached_single_family","appraisal","exterior",false);
+    run(true,"residential_declared","detached_single_family","appraisal","exterior",true,0,true);
+    for (const int existing_region : {1,2,3})
+        run(true,"residential_declared","detached_single_family","appraisal","exterior",true,existing_region);
+}
+
+void test_generic_wall_api_does_not_auto_create_appraisal_area() {
+    MainWindow window;
+    window.setAttribute(Qt::WA_DontShowOnScreen,true);
+    auto property = window.document().snapshot().entities().at("property-1");
+    property.properties["calculation_workflow"] = "appraisal";
+    property.properties["appraisal_policy"] = {{"policy_kind","residential_declared"},{"version",1},
+        {"property_kind","detached_single_family"},{"measurement_basis","exterior"}};
+    window.document().apply(ApplyEntityChanges{window.document().revision(),{EntityChange::upsert(property)}, {},
+        "Configure generic wall API appraisal fixture"});
+    window.setMetricUnits(true);
+    require(!window.createStraightWall({0,0},{4,0}).isEmpty() && !window.createStraightWall({4,0},{4,3}).isEmpty() &&
+            !window.createStraightWall({4,3},{0,3}).isEmpty() && !window.createStraightWall({0,3},{0,0}).isEmpty(),
+        "generic wall API fixture authors four physical closed walls");
+    const auto source = window.document().snapshot();
+    require(std::none_of(source.entities().begin(),source.entities().end(),[](const auto& value) {
+        return value.second.type=="measurement_boundary";
+    }),"public physical wall APIs must retain explicit area derivation instead of adopting interactive automatic closure");
 }
 
 void test_active_wall_chain_history_tracks_authoritative_endpoint(bool metric, bool workspace_history) {
@@ -546,6 +852,16 @@ int main(int argc, char** argv) {
     const auto font_id = QFontDatabase::addApplicationFont(QStringLiteral(":/fonts/Inter.ttf"));
     if (font_id >= 0) QApplication::setFont(QFont(QFontDatabase::applicationFontFamilies(font_id).front(), 10));
     try {
+        if (application.arguments().contains(QStringLiteral("--auto-appraisal-survey-only"))) {
+            test_automatic_appraisal_wall_chain_closure(true);
+            return 0;
+        }
+        if (application.arguments().contains(QStringLiteral("--auto-appraisal-closure-only"))) {
+            test_automatic_appraisal_wall_chain_closure();
+            test_generic_wall_api_does_not_auto_create_appraisal_area();
+            std::cout << "Automatic appraisal wall chain closure workflow passed\n";
+            return 0;
+        }
         if (application.arguments().contains(QStringLiteral("--active-chain-history-only"))) {
             for (bool metric : {false, true}) for (bool workspace_history : {false,true})
                 test_active_wall_chain_history_tracks_authoritative_endpoint(metric,workspace_history);
@@ -560,6 +876,8 @@ int main(int argc, char** argv) {
         test_public_wall_creation_persists_one_atomic_connection();
         test_wall_connections_respect_layer_and_phase_contexts();
         test_interactive_wall_chain_closure_finishes_at_its_start();
+        test_automatic_appraisal_wall_chain_closure();
+        test_generic_wall_api_does_not_auto_create_appraisal_area();
         for (bool metric : {false, true}) for (bool workspace_history : {false,true})
             test_active_wall_chain_history_tracks_authoritative_endpoint(metric,workspace_history);
         test_uncommitted_wall_anchor_toolbar_undo_without_document_history();

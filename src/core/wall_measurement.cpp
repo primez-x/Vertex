@@ -348,15 +348,18 @@ WallNetwork split_wall_network(const std::vector<SourceWall>& walls) {
             for (const auto point : hit.points) {
                 const auto node = node_for(point);
                 for (const auto wall : {i, j}) {
+                    // Known endpoint cuts already have an authoritative station.
+                    // Recomputing an arc station from a rounded intersection can
+                    // wrap a tiny negative start-angle delta into a full turn.
+                    if (std::any_of(cuts[wall].begin(), cuts[wall].end(), [&](const Cut& cut) {
+                            return cut.node == node;
+                        })) continue;
                     const auto fraction = walls[wall].baseline.sweep_radians == 0.0
                         ? dot(subtract(point, walls[wall].baseline.start),
                               subtract(walls[wall].baseline.end, walls[wall].baseline.start)) /
                               std::pow(distance(walls[wall].baseline.start,
                                                walls[wall].baseline.end), 2)
                         : directed_arc_fraction(walls[wall].baseline, point);
-                    if (std::any_of(cuts[wall].begin(), cuts[wall].end(), [&](const Cut& cut) {
-                            return cut.node == node;
-                        })) continue;
                     if (++cut_count > maximum_network_edges + walls.size())
                         reject("Wall network exceeds the supported intersection fragment count");
                     cuts[wall].push_back({fraction, node});

@@ -258,6 +258,33 @@ void concave_l_outline_and_per_wall_thickness_are_respected() {
          "each rectangle face must use its own half-thickness at the mitered corners");
 }
 
+void quarter_arc_endpoint_contacts_reuse_known_stations() {
+    std::vector<WallSpec> walls{
+        {"bottom",{{-2,-1.5},{2,-1.5},0},0.14},
+        {"right",{{2,-1.5},{2,1.5},0},0.14},
+        {"top",{{2,1.5},{-2,1.5},0},0.14},
+        {"curved-left",{{-2,1.5},{-2,-1.5},std::numbers::pi/2},0.14}};
+    for (bool reverse : {false,true}) {
+        auto candidate=walls;
+        if (reverse) {
+            std::reverse(candidate.begin(),candidate.end());
+            for (auto& wall : candidate) {
+                std::swap(wall.baseline.start,wall.baseline.end);
+                wall.baseline.sweep_radians=-wall.baseline.sweep_radians;
+            }
+        }
+        const auto source=Document::create(base_entities(candidate));
+        const auto ids=exterior_wall_measurement_sources(source.snapshot(),wall_ids(candidate));
+        require(ids.size()==4,"quarter-arc endpoint recognition retains every physical source wall");
+        const auto measured=derive_exterior_wall_measurement(source.snapshot(),ids);
+        require(measured.boundary.size()==4 && validate_boundary(measured.boundary).empty() &&
+                std::any_of(measured.boundary.begin(),measured.boundary.end(),[](const Segment& edge){return edge.sweep_radians!=0;}),
+            "quarter-arc endpoint roundoff keeps the exact curved exterior and valid joins");
+        require(source.snapshot().entities()==Document::create(base_entities(candidate)).snapshot().entities(),
+            "recognition never changes authoritative wall coordinates to repair arc contacts");
+    }
+}
+
 void curved_exterior_is_analytical_reversible_and_current() {
     const auto shell = capsule_walls();
     auto with_partition = shell;
@@ -1990,6 +2017,7 @@ int main(int argc, char** argv) {
         shuffled_and_reversed_walls_keep_the_same_outline();
         stable_wall_identity_seeds_output_order_across_coordinate_edits();
         concave_l_outline_and_per_wall_thickness_are_respected();
+        quarter_arc_endpoint_contacts_reuse_known_stations();
         curved_exterior_is_analytical_reversible_and_current();
         tangent_capsule_offsets_are_rigid_covariant_without_false_closure();
         concave_curved_wall_offsets_concentrically_and_analytically();

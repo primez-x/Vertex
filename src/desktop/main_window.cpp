@@ -93,6 +93,7 @@
 #include <QCoreApplication>
 #include <QCryptographicHash>
 #include <QCursor>
+#include <QDeadlineTimer>
 #include <QDesktopServices>
 #include <QDialog>
 #include <QDialogButtonBox>
@@ -13021,6 +13022,127 @@ public:
         return ids;
     }
 
+    static std::pair<QString,std::vector<EntityChange>> encodeExteriorWallMeasurement(
+        const WallMeasurementResult& derived, const DrawingContext& context, const QString& classification) {
+        const auto name=classification.trimmed();
+        if (name.isEmpty()) throw std::invalid_argument("Measurement classification cannot be empty.");
+        BoundaryAuthoringOptions options;
+        options.automatic_dimension_placement=true;
+        options.automatic_placement_version=2;
+        BoundaryAuthoringSession authoring(BoundaryAuthoringMode::draw_first,options);
+        (void)authoring.anchor(derived.boundary.front().start);
+        for (const auto& edge : derived.boundary) {
+            if (edge.sweep_radians==0.0) (void)authoring.add_line_to(edge.end);
+            else (void)authoring.add_arc_chord_angle(edge.end,edge.sweep_radians);
+        }
+        authoring.classify_current_chain(name.toStdString());
+        const auto accepted=authoring.close_chain();
+        auto entity=encode_identified_boundary_entity(accepted.boundary);
+        const auto metadata=json{{"property_id",context.property_id},{"building_id",context.building_id},
+            {"floor_id",context.floor_id},{"layer_id",context.layer_id},
+            {"classification",name.toStdString()},{"measurement_classification",name.toStdString()},
+            {"name","Exterior measurement"},{"factor",1.0},{"factor_expression","1"},
+            {"factor_numerator",1},{"factor_denominator",1},{"wall_measurement_source",derived.source},
+            {"boundary_authoring",boundary_construction_envelope(accepted,options)}};
+        entity.properties.update(metadata);
+        const auto id=id_from(entity.id);
+        std::vector<EntityChange> changes{EntityChange::upsert(std::move(entity))};
+        for (const auto& dimension : accepted.dimensions) {
+            auto encoded=encode_boundary_dimension_entity(dimension);
+            for (const auto* key : {"property_id","building_id","floor_id","layer_id"})
+                encoded.properties[key]=metadata.at(key);
+            changes.push_back(EntityChange::upsert(std::move(encoded)));
+        }
+        return {id,std::move(changes)};
+    }
+
+    struct WallChainMeasurementCompletion {
+        QString measurement_id;
+        QString diagnostic;
+    };
+
+    static std::pair<QString,std::vector<EntityChange>> prepareAutomaticWallMeasurement(
+        const DocumentSnapshot& candidate, const DrawingContext& context,
+        const QStringList& chain_ids, const std::string& closing_wall_id) {
+        const auto& property=candidate.entities().at(context.property_id);
+        const auto policy=property.properties.find("appraisal_policy");
+        if (calculation_workflow_name(property.properties)!="appraisal" ||
+            policy==property.properties.end() || !policy->is_object() ||
+            read_string(*policy,"measurement_basis")!=std::optional<std::string>{"exterior"}) return {};
+        std::set<std::string,std::less<>> inactive;
+        if (const auto phases=decode_phase_model(candidate)) {
+            const auto active=phases->model.active_state();
+            for (const auto& id : phases->model.entity_ids()) {
+                const auto state=active.find(id);
+                if (state==active.end() || state->second==ModelPhase::demolished) inactive.insert(id);
+            }
+        }
+        const auto organization=organize_project(candidate);
+        std::vector<std::string> requested;
+        for (const auto& id : chain_ids) {
+            const auto owner=id.toStdString();
+            if (inactive.contains(owner) || organization.drawing_context(owner)!=std::optional{context})
+                throw std::invalid_argument("The closed chain does not share one current drawing context.");
+            requested.push_back(owner);
+        }
+        requested.push_back(closing_wall_id);
+        const auto ids=exterior_wall_measurement_sources(candidate,requested);
+        if (std::find(ids.begin(),ids.end(),closing_wall_id)==ids.end())
+            throw std::invalid_argument("The closing wall is not part of the recognized exterior perimeter.");
+        const auto derived=derive_exterior_wall_measurement(candidate,ids);
+        std::vector<const Entity*> existing;
+        for (const auto& [id,entity] : candidate.entities()) {
+            if ((entity.type!="measurement_boundary" && entity.type!="boundary") || inactive.contains(id) ||
+                area_scope_name(entity.properties)=="site") continue;
+            const auto owner=organization.drawing_context(id);
+            if (!owner || owner->property_id!=context.property_id || owner->building_id!=context.building_id ||
+                owner->floor_id!=context.floor_id) continue;
+            if (entity.properties.contains("wall_measurement_source")) {
+                auto sources=exterior_wall_measurement_source_ids(entity);
+                if (std::any_of(sources.begin(),sources.end(),[&](const auto& source){return inactive.contains(source);})) continue;
+                std::sort(sources.begin(),sources.end());
+                if (sources==ids) {
+                    if (!wall_measurement_source_current(candidate,entity))
+                        throw std::invalid_argument("The existing exterior measurement is stale; refresh its sources before measuring this chain.");
+                    return {id_from(id),{}};
+                }
+                if (!wall_measurement_source_current(candidate,entity))
+                    throw std::invalid_argument("An existing same-floor exterior measurement is stale; refresh it before automatically measuring a new chain.");
+            }
+            existing.push_back(&entity);
+        }
+        const CalculationProfile physical{"automatic-exterior-overlap",1,AreaUnit::square_metre,2,
+            {{"physical",{false,false}}}};
+        for (const auto* entity : existing) {
+            const auto geometry=read_boundary(entity->properties);
+            const auto issues=validate_boundary(geometry);
+            if (!issues.empty())
+                throw std::invalid_argument("An existing same-floor measurement cannot be checked: "+entity->id+": "+issues.front().message);
+            for (const auto& left : derived.boundary) for (const auto& right : geometry)
+                if (segment_intersection(left,right).kind!=SegmentIntersectionKind::none)
+                    throw std::invalid_argument("The closed exterior contacts an existing same-floor measurement: "+entity->id);
+            if (!validate_boundary_holes(geometry,{derived.boundary}) ||
+                !validate_boundary_holes(derived.boundary,{geometry}))
+                throw std::invalid_argument("The closed exterior is nested with an existing same-floor measurement: "+entity->id);
+            (void)calculate_areas({MeasurementArea{"automatic-exterior-candidate",context.building_id,context.floor_id,
+                    "physical",derived.boundary,{}, {1,1}},
+                MeasurementArea{entity->id,context.building_id,context.floor_id,"physical",geometry,{}, {1,1}}},physical);
+        }
+        return encodeExteriorWallMeasurement(derived,context,QStringLiteral("measurement"));
+    }
+
+    void showWallChainMeasurementCompletion(const WallChainMeasurementCompletion& completion) {
+        if (!completion.measurement_id.isEmpty()) {
+            (void)selectEntity(completion.measurement_id);
+            m_wall_measurement_notice.setRemainingTime(8000);
+            owner->statusBar()->showMessage(QStringLiteral("Wall chain finished. Exterior measurement is current; appraisal facts determine qualification."),8000);
+        } else if (!completion.diagnostic.isEmpty()) {
+            m_wall_measurement_notice.setRemainingTime(12000);
+            owner->statusBar()->showMessage(QStringLiteral("Walls kept. Automatic exterior measurement was not created: %1")
+                .arg(completion.diagnostic),12000);
+        }
+    }
+
     QString createMeasurementBoundaryFromSelectedWalls(const QString& classification,
                                                         std::optional<Revision> expected_revision) {
         try {
@@ -13051,34 +13173,7 @@ public:
             const auto context = layer_id ? organize_project(source).drawing_context(*layer_id) : std::nullopt;
             if (!context || read_string(wall.properties,"floor_id") != std::optional{context->floor_id})
                 throw std::invalid_argument("The source walls have no resolved floor and drawing layer.");
-            BoundaryAuthoringOptions options;
-            options.automatic_dimension_placement = true;
-            options.automatic_placement_version = 2;
-            BoundaryAuthoringSession authoring(BoundaryAuthoringMode::draw_first,options);
-            (void)authoring.anchor(derived.boundary.front().start);
-            for (const auto& edge : derived.boundary) {
-                if (edge.sweep_radians == 0.0) (void)authoring.add_line_to(edge.end);
-                else (void)authoring.add_arc_chord_angle(edge.end,edge.sweep_radians);
-            }
-            authoring.classify_current_chain(name.toStdString());
-            const auto accepted = authoring.close_chain();
-            auto entity = encode_identified_boundary_entity(accepted.boundary);
-            const auto metadata = json{{"property_id",context->property_id},{"building_id",context->building_id},
-                     {"floor_id",context->floor_id},{"layer_id",context->layer_id},
-                     {"classification",name.toStdString()},
-                     {"measurement_classification",name.toStdString()},{"name","Exterior measurement"},
-                     {"factor",1.0},{"factor_expression","1"},{"factor_numerator",1},{"factor_denominator",1},
-                     {"wall_measurement_source",derived.source},
-                     {"boundary_authoring",boundary_construction_envelope(accepted,options)}};
-            entity.properties.update(metadata);
-            const auto id = id_from(entity.id);
-            std::vector<EntityChange> changes{EntityChange::upsert(entity)};
-            for (const auto& dimension : accepted.dimensions) {
-                auto encoded = encode_boundary_dimension_entity(dimension);
-                for (const auto* key : {"property_id","building_id","floor_id","layer_id"})
-                    encoded.properties[key] = metadata.at(key);
-                changes.push_back(EntityChange::upsert(std::move(encoded)));
-            }
+            auto [id,changes]=encodeExteriorWallMeasurement(derived,*context,name);
             const ApplyEntityChanges command{source.revision(),std::move(changes), {},
                                              "Measure exterior from walls"};
             (void)Document::preview_command(source,command);
@@ -13956,7 +14051,9 @@ public:
                                std::optional<Revision> expected_revision = std::nullopt,
                                std::optional<ConstructionReceipt> original_input = std::nullopt,
                                std::optional<ConstructionReplayContext> original_context = std::nullopt,
-                               json extensions = json::object()) {
+                               json extensions = json::object(),
+                               const std::optional<QStringList>& closing_chain = std::nullopt,
+                               WallChainMeasurementCompletion* measurement_completion = nullptr) {
         const auto start = baseline.start;
         const auto end = baseline.end;
         const auto revision = expected_revision.value_or(m_document->revision());
@@ -14076,9 +14173,30 @@ public:
                 for (const auto& mutation : intent.relation_mutations)
                     command.entity_changes.push_back(EntityChange::upsert(encode_constraint_entity(mutation.constraint)));
             }
+            WallChainMeasurementCompletion completion;
+            if (closing_chain) {
+                const auto completed_walls=Document::preview_command(source,Command{command});
+                // Only optional automatic measurement preparation may fail while
+                // retaining a valid wall. Final command admission remains atomic.
+                try {
+                    auto [measurement,changes]=prepareAutomaticWallMeasurement(
+                        completed_walls,*drawing_context,*closing_chain,entity_id);
+                    completion.measurement_id=std::move(measurement);
+                    command.entity_changes.insert(command.entity_changes.end(),
+                        std::make_move_iterator(changes.begin()),std::make_move_iterator(changes.end()));
+                } catch (const std::exception& error) {
+                    completion.diagnostic=QString::fromUtf8(error.what());
+                }
+            }
             const auto authored = augmentAuthoredCommand(Command{command});
-            (void)Document::preview_command(source, authored);
+            const auto verified=Document::preview_command(source, authored);
+            if (!completion.measurement_id.isEmpty()) {
+                const auto measured=verified.entities().find(completion.measurement_id.toStdString());
+                if (measured==verified.entities().end() || !wall_measurement_source_current(verified,measured->second))
+                    throw std::invalid_argument("The completed wall command does not retain a current exterior measurement.");
+            }
             applyAuthoredCommand(authored);
+            if (measurement_completion) *measurement_completion=std::move(completion);
             clearError();
         } catch (const std::exception& error) {
             setError(QStringLiteral("Create wall: %1").arg(QString::fromUtf8(error.what())));
@@ -31963,6 +32081,10 @@ private:
     }
 
     void refreshCursorLabel(Vec2 point) {
+        // The release's final cursor update must not immediately erase the
+        // result of automatic measurement. Ordinary operation messages remain
+        // free to replace this bounded notice.
+        if (!m_wall_measurement_notice.hasExpired()) return;
         const auto x = format_length(point.x, m_metric_units);
         const auto y = format_length(point.y, m_metric_units);
         if (m_workspace == Workspace::measurement) {
@@ -32507,6 +32629,7 @@ private:
                 return;
             }
             QString id;
+            WallChainMeasurementCompletion measurement_completion;
             if (m_tool == CanvasTool::sloped_wall) {
                 const auto context = captureModalContext();
                 bool accepted = false;
@@ -32532,9 +32655,13 @@ private:
                         original_input && original_input->kind == BoundaryConstructionKind::line_closure
                             ? m_wall_chain_anchor : std::nullopt,
                         default_geometry_tolerance_metres};
+                    const bool closes=m_wall_chain_has_segments && m_wall_chain_anchor &&
+                        point.x==m_wall_chain_anchor->x && point.y==m_wall_chain_anchor->y;
+                    const auto closing_chain=closes
+                        ? std::optional<QStringList>{liveWallChainOwners(m_document->snapshot())} : std::nullopt;
                     id = createPhysicalWall(Segment{*m_pending_wall_start, point, 0.0},
                         QStringLiteral("interior"), expected_revision, std::move(original_input),
-                        replay_context);
+                        replay_context,json::object(),closing_chain,&measurement_completion);
                 } catch (const std::exception& error) {
                     setError(QStringLiteral("Wall chain: %1").arg(QString::fromUtf8(error.what())));
                     return;
@@ -32556,6 +32683,7 @@ private:
                 if (m_tool == CanvasTool::wall && m_wall_chain_has_segments && chain_anchor &&
                     point.x == chain_anchor->x && point.y == chain_anchor->y) {
                     finishWallChain();
+                    showWallChainMeasurementCompletion(measurement_completion);
                     return;
                 }
                 clearPreview();
@@ -32994,13 +33122,17 @@ private:
                 receipt.kind == BoundaryConstructionKind::line_relative_turn ? previous : std::nullopt,
                 receipt.kind == BoundaryConstructionKind::line_closure ? anchor : std::nullopt,
                 default_geometry_tolerance_metres};
+            const bool closes=has_segments && anchor && edge.end.x==anchor->x && edge.end.y==anchor->y;
+            const auto closing_chain=closes ? std::optional<QStringList>{liveWallChainOwners(current)} : std::nullopt;
+            WallChainMeasurementCompletion measurement_completion;
             const auto id = createPhysicalWall(edge, QStringLiteral("interior"), context.revision,
-                receipt, replay_context);
+                receipt, replay_context,json::object(),closing_chain,&measurement_completion);
             if (id.isEmpty()) return;
             const auto preferences = dialog.acceptedPreferences();
             if (m_selected_id == id) (void)selectEntity({}, false);
             if (has_segments && anchor && edge.end.x == anchor->x && edge.end.y == anchor->y) {
                 finishWallChain();
+                showWallChainMeasurementCompletion(measurement_completion);
                 restore_canvas_focus();
                 return;
             }
@@ -35019,6 +35151,7 @@ private:
     QString m_selected_id;
     QStringList m_selected_ids;
     QString m_last_error;
+    QDeadlineTimer m_wall_measurement_notice{0};
     QString m_plan_geometry_error;
     std::map<std::string, std::pair<std::string, Boundary>> m_plan_projection_cache;
     std::map<std::string, PresentationOverride, std::less<>> m_object_appearance_defaults;

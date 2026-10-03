@@ -218,7 +218,17 @@
   <p>When an edited curved edge has related objects, leave
   <strong>Move related objects</strong> checked to update them with the boundary.
   Turning it off can be refused if it would leave connected geometry invalid.</p>
-  <p>For a closed physical wall layout, select a wall and choose
+  <p>To measure while drawing walls, open <strong>Details &gt; Setup</strong>,
+  enable appraisal calculations and choose an <strong>Exterior</strong>
+  measurement basis. Click the wall outline's corners and return to its first
+  point. The completed outline receives a separate exterior measurement and
+  dimensions automatically, using the physical wall thickness. The closing wall
+  and measurement share one Undo operation. Use <strong>Details &gt; Edit facts</strong>
+  to supply the observed floor and area facts; drawing a closed outline alone
+  does not qualify it as GLA. An outline inside, enclosing or overlapping an
+  existing measured area requires explicit measurement review. Vertex keeps
+  those walls and explains why it did not add another measured area.</p>
+  <p>For an existing closed physical wall layout, select a wall and choose
   <strong>Measure exterior from walls…</strong> from its right-click menu or Tools.
   Connected interior partitions are excluded from the exterior perimeter. You can
   select a partition to find its connected shell, or <kbd>Ctrl</kbd>+click an explicit

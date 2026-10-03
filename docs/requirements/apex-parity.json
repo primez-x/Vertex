@@ -1343,6 +1343,10 @@
         "tests/geometry_operations_tests.cpp",
         "docs/geometry-operations.md",
         "src/calculations/calculations.cpp",
+        "tests/wall_chain_connection_tests.cpp",
+        "src/core/wall_measurement.cpp",
+        "tests/wall_measurement_tests.cpp",
+        "docs/superpowers/plans/2026-10-03-automatic-appraisal-wall-closure.md",
         "tests/calculation_tests.cpp",
         "src/desktop/main_window.cpp",
         "include/sketch/desktop/main_window.hpp",
@@ -1351,7 +1355,7 @@
         "scripts/generate_workflow_acceptance_evidence.py",
         "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "Analytical calculation, union subtraction, deterministic endpoint-graph face detection, and explicit room-hole deductions are implemented. The desktop command creates independent room boundaries for all simple bounded faces in one guarded Document transaction; schedule generation now rejects outside, crossing, touching, overlapping, duplicate, nested, or numerically indeterminate holes and preserves analytical quantities for valid disjoint curved or straight holes. Same-floor production fixtures, compatibility evidence, and complete Apex workflows remain open. Current Debug/Release acceptance evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
+      "implementation_note": "Analytical calculation, union subtraction, deterministic endpoint-graph face detection, and explicit room-hole deductions are implemented. The desktop command creates independent room boundaries for all simple bounded faces in one guarded Document transaction; schedule generation now rejects outside, crossing, touching, overlapping, duplicate, nested, or numerically indeterminate holes and preserves analytical quantities for valid disjoint curved or straight holes. Closing an interactive wall outline in an explicitly configured Appraisal/Exterior workflow creates a separately source-linked exterior measurement and dimensions atomically; ambiguous or overlapping automatic proposals keep the physical walls and require explicit review. This creates measured geometry without inferring appraisal qualification. Same-floor production fixtures, compatibility evidence, and complete Apex workflows remain open. Current Debug/Release acceptance evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
     },
     {
       "id": "APX-AREA-002",
