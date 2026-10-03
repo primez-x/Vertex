@@ -464,6 +464,9 @@ public:
     [[nodiscard]] std::uint64_t boundaryVertexPreviewSerial() const noexcept {
         return m_boundary_vertex_preview_serial;
     }
+    [[nodiscard]] bool boundaryVertexPreviewPending() const noexcept {
+        return m_boundary_vertex_preview_pending || m_vertex_release_pending;
+    }
     bool markBoundaryVertexPreviewPending(std::uint64_t serial);
     bool completeBoundaryVertexPreview(std::uint64_t serial,
         std::optional<std::vector<CanvasEntity>> result,
@@ -600,6 +603,7 @@ private:
     bool applyEntityTransformPreview(std::uint64_t serial,
         std::optional<std::vector<CanvasEntity>> result, std::vector<CanvasLabel> labels = {});
     void finishEntityTransformPreview(std::uint64_t serial);
+    void finishBoundaryVertexPreview(std::uint64_t serial);
     void updateOpeningWidthPreview(QPointF point);
     bool applyOpeningWidthPreview(std::uint64_t serial,
         std::optional<std::vector<CanvasEntity>> result);
@@ -731,6 +735,7 @@ private:
     std::optional<CanvasBoundaryPreviewMetrics> m_boundary_vertex_metrics_preview;
     bool m_boundary_vertex_preview_valid{};
     bool m_boundary_vertex_preview_pending{};
+    bool m_vertex_release_pending{};
     bool m_boundary_vertex_preview_request_in_progress{};
     std::uint64_t m_boundary_vertex_preview_serial{};
     std::optional<QPointF> m_boundary_vertex_preview_pointer;

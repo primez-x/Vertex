@@ -5169,7 +5169,7 @@ public:
         }
     }
 
-    Command completeMeasuredAreaConsequences(const DocumentSnapshot& source, Command command) {
+    static Command completeMeasuredAreaConsequences(const DocumentSnapshot& source, Command command) {
         const auto before_visibility=visible_project_entities_with_phase(source,ProjectViewFilter{});
         const auto before = measurement_linework_source_checks(source.entities(),&before_visibility);
         if (before.empty()) return command;
@@ -5212,6 +5212,20 @@ public:
             if (refreshed_ids.contains(id) && !check.current)
                 throw std::invalid_argument("The measured area refresh did not reproduce its actual source geometry.");
         return command;
+    }
+
+    static Command measuredStrokeGeometryCommand(const DocumentSnapshot& source,
+        const BoundaryGeometryEdit& edit, std::optional<Quantity> authored_length = std::nullopt) {
+        const auto found=source.entities().find(edit.boundary_id);
+        if (found==source.entities().end() || found->second.type!="measurement_linework")
+            throw std::invalid_argument("The selected measured stroke is unavailable.");
+        const auto decoded=decode_measurement_linework_model(found->second.properties.at("model"));
+        if (!decoded.supported()) throw std::invalid_argument(decoded.diagnostic);
+        auto replacement=found->second;
+        replacement.properties["model"]=encode_measurement_linework_model(
+            edited_measurement_linework(*decoded.model,edit,std::move(authored_length)));
+        return completeMeasuredAreaConsequences(source,Command{ApplyEntityChanges{source.revision(),
+            {EntityChange::upsert(std::move(replacement))},{},"edit measured stroke geometry"}});
     }
 
     static void includeMeasuredAreaSources(const DocumentSnapshot& source,std::vector<Entity>& graph) {
@@ -16030,15 +16044,19 @@ public:
         try {
             const BoundaryGeometryEdit edit{entity_id.toStdString(),BoundaryGeometryEditKind::move_vertex,
                 vertex_id.toStdString(),position};
-            ConstraintAuthoringIntent intent;
-            intent.boundary_vertex_move=BoundaryVertexMoveIntent{edit,true};
-            const auto preview=preview_constraint_authoring(source,intent);
-            if (!preview.accepted()) return std::nullopt;
-            const auto candidate_snapshot = preview_constraint_authoring_snapshot(source, preview);
+            const bool measured=source.entities().at(edit.boundary_id).type=="measurement_linework";
+            const auto candidate_snapshot = [&] {
+                if (measured) return Document::preview_command(source,measuredStrokeGeometryCommand(source,edit));
+                ConstraintAuthoringIntent intent;
+                intent.boundary_vertex_move=BoundaryVertexMoveIntent{edit,true};
+                const auto preview=preview_constraint_authoring(source,intent);
+                if (!preview.accepted()) throw std::invalid_argument("The vertex proposal could not be resolved.");
+                return preview_constraint_authoring_snapshot(source,preview);
+            }();
             const auto& candidate=candidate_snapshot.entities();
             auto result = computeConstraintGeometryProjection(source, candidate_snapshot, retained, eligible,
                 labels, metric_units, appraisal_area_ids, label_footprints, component_bounds, view_context, label_font);
-            if (result) {
+            if (result && !measured) {
                 const auto geometry=boundary_geometry(decode_identified_boundary_entity(candidate.at(edit.boundary_id)));
                 result->metrics=CanvasBoundaryPreviewMetrics{std::abs(signed_area(geometry)),perimeter(geometry)};
             }
@@ -16235,25 +16253,31 @@ public:
                     if (!decoded.supported()) return std::nullopt;
                     const auto replay=replay_measurement_linework(*decoded.model);
                     proposed.segments.clear(); proposed.snap_points.clear(); proposed.snap_segments.clear();
+                    proposed.vertex_handles.clear();
+                    std::set<std::string,std::less<>> handled_vertices;
                     for (const auto& edge : replay.edges) {
                         proposed.segments.push_back(edge.segment);
                         proposed.snap_segments.push_back(edge.segment);
                         proposed.snap_points.push_back(edge.segment.start);
                         proposed.snap_points.push_back(edge.segment.end);
+                        if (handled_vertices.insert(edge.start_vertex_id).second)
+                            proposed.vertex_handles.push_back({id_from(edge.start_vertex_id),edge.segment.start,source.revision()});
+                        if (handled_vertices.insert(edge.end_vertex_id).second)
+                            proposed.vertex_handles.push_back({id_from(edge.end_vertex_id),edge.segment.end,source.revision()});
                     }
                     if (proposed.resize_frame) {
-                        if (view_context) {
-                            auto& frame=*proposed.resize_frame;
-                            const auto along=Vec2{frame.center.x+std::cos(frame.rotation_radians),frame.center.y+std::sin(frame.rotation_radians)};
-                            frame.center=unproject_plan_point(frame.center,view_context->frame);
-                            const auto world_along=unproject_plan_point(along,view_context->frame);
-                            frame.rotation_radians=std::atan2(world_along.y-frame.center.y,world_along.x-frame.center.x);
+                        const auto& first=replay.edges.front().segment;
+                        const auto angle=std::atan2(first.end.y-first.start.y,first.end.x-first.start.x);
+                        const auto c=std::cos(angle),s=std::sin(angle);
+                        auto local=proposed.segments;
+                        for (auto& segment : local) {
+                            const auto point=[&](Vec2 p){return Vec2{c*p.x+s*p.y,-s*p.x+c*p.y};};
+                            segment.start=point(segment.start);segment.end=point(segment.end);
                         }
-                        const auto old=decode_measurement_linework_model(source.entities().at(entity.id).properties.at("model"));
-                        const auto old_replay=replay_measurement_linework(*old.model);
-                        const auto delta=Vec2{replay.anchor.x-old_replay.anchor.x,replay.anchor.y-old_replay.anchor.y};
-                        proposed.resize_frame->center.x+=delta.x;
-                        proposed.resize_frame->center.y+=delta.y;
+                        const auto bounds=boundary_bounds(local);
+                        const auto x=std::midpoint(bounds.minimum.x,bounds.maximum.x),y=std::midpoint(bounds.minimum.y,bounds.maximum.y);
+                        proposed.resize_frame=CanvasSelectionFrame{{c*x-s*y,s*x+c*y},angle,
+                            bounds.maximum.x-bounds.minimum.x,bounds.maximum.y-bounds.minimum.y};
                     }
                 } else if (entity.type=="opening") {
                     const auto host_wall=changed_walls.find(entity.properties.at("wall_id").get<std::string>());
@@ -16794,7 +16818,7 @@ public:
     std::optional<std::vector<CanvasEntity>> previewBoundaryVertexFromCanvas(
         PlanCanvas* canvas,const QString& id,const QString& vertex,Vec2 position,std::uint64_t revision) {
         if (!canvas || !m_document->is_editable() || m_selected_ids.size()!=1 ||
-            m_selected_ids.front()!=id || m_boundary_session || m_pending_wall_start ||
+            m_selected_ids.front()!=id || m_boundary_session || m_linework_drawing || m_pending_wall_start ||
             !m_pending_symbol_id.isEmpty() || m_document->revision()!=revision ||
             !std::isfinite(position.x) || !std::isfinite(position.y)) return std::nullopt;
         captureConstraintGeometryPreview(canvas,revision);
@@ -19014,6 +19038,12 @@ public:
     bool moveSelectedBoundaryVertex(
         const QString& vertex_id, Vec2 position,
         std::optional<Revision> expected_revision = std::nullopt) {
+        const auto selected=selectedEntity();
+        if (selected && selected->type=="measurement_linework") {
+            BoundaryGeometryEdit edit{selected->id,BoundaryGeometryEditKind::move_vertex,
+                vertex_id.trimmed().toStdString(),position};
+            return applySelectedMeasuredStrokeGeometryEdit(edit,std::nullopt,expected_revision);
+        }
         return applySelectedBoundaryGeometryEdit(
             BoundaryGeometryEdit{m_selected_id.toStdString(),
                                  BoundaryGeometryEditKind::move_vertex,
@@ -19037,11 +19067,33 @@ public:
             edit.target_length_metres = quantity.metres;
             edit.fixed_endpoint = fixed_endpoint;
             edit.move_connected = move_connected;
+            const auto selected=selectedEntity();
+            if (selected && selected->type=="measurement_linework")
+                return applySelectedMeasuredStrokeGeometryEdit(edit,quantity,expected_revision);
             return applySelectedBoundaryGeometryEdit(std::move(edit), expected_revision);
         } catch (const std::exception& error) {
             setError(QStringLiteral("Boundary edge length: %1")
                          .arg(QString::fromUtf8(error.what())));
             return false;
+        }
+    }
+
+    bool applySelectedMeasuredStrokeGeometryEdit(const BoundaryGeometryEdit& edit,
+        std::optional<Quantity> authored_length, std::optional<Revision> expected_revision) {
+        try {
+            if (!m_document->is_editable() || m_selected_ids.size()!=1 ||
+                m_selected_id.toStdString()!=edit.boundary_id || m_boundary_session ||
+                m_linework_drawing || m_pending_wall_start || !m_pending_symbol_id.isEmpty())
+                throw std::invalid_argument("Select one editable saved measured stroke first.");
+            const auto source=authoringSnapshot();
+            if (expected_revision && *expected_revision!=source.revision())
+                throw std::invalid_argument("The measured stroke changed before this edit was committed.");
+            const auto command=measuredStrokeGeometryCommand(source,edit,std::move(authored_length));
+            const auto candidate=Document::preview_command(source,command);
+            if (candidate.entities()==source.entities()) {clearError();return true;}
+            applyDocumentCommand(command);clearError();refresh();return true;
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Measured stroke geometry: %1").arg(QString::fromUtf8(error.what())));return false;
         }
     }
 
@@ -29533,6 +29585,10 @@ private:
                     for (const auto* id : {"createRoom", "createSlab", "createFloor"})
                         menu.addAction(owner->findChild<QAction*>(QString::fromLatin1(id)));
                 }
+                if (m_selected_ids.size()==1 && selected && selected->type=="measurement_linework") {
+                    auto* geometry=menu.addAction(QStringLiteral("Edit measured stroke…"));
+                    QObject::connect(geometry,&QAction::triggered,owner,[this]{showBoundaryGeometryEditor();});
+                }
                 if (selected && (selected->type == "wall" || selected->type == "wall_join")) {
                     if (m_selected_ids.size() > 1) menu.addAction(owner->findChild<QAction*>(QStringLiteral("joinWalls")));
                     menu.addAction(owner->findChild<QAction*>(QStringLiteral("unjoinWalls")));
@@ -29800,8 +29856,15 @@ private:
                     Boundary stroke_boundary;
                     for (const auto& edge : replay.edges) stroke_boundary.push_back(edge.segment);
                     const bool right_side = replay.closed && signed_area(stroke_boundary) > 0;
+                    std::set<std::string,std::less<>> handled_vertices;
                     for (const auto& edge : replay.edges) {
                         linework.segments.push_back(edge.segment);
+                        if (linework.selected && options.interactive && snapshot.is_editable()) {
+                            if (handled_vertices.insert(edge.start_vertex_id).second)
+                                linework.vertex_handles.push_back({id_from(edge.start_vertex_id),edge.segment.start,snapshot.revision()});
+                            if (handled_vertices.insert(edge.end_vertex_id).second)
+                                linework.vertex_handles.push_back({id_from(edge.end_vertex_id),edge.segment.end,snapshot.revision()});
+                        }
                         auto dimension = wall_dimension_label(id, edge.segment, 0.0,
                             options.metric_units, id_from(id) == options.selected_id, std::nullopt);
                         dimension.text = format_boundary_length(segment_length(edge.segment), options.metric_units,
@@ -32978,9 +33041,10 @@ private:
         const bool reference_asset = entity.has_value() && entity->type == "reference_asset";
         const bool project_entity = entity.has_value() && entity->type == "property";
         const bool area_entity = entity.has_value() && is_closed_boundary_entity(entity->type);
-        const bool directly_editable_boundary = area_entity &&
+        const bool measured_stroke=entity && entity->type=="measurement_linework";
+        const bool directly_editable_boundary = measured_stroke || (area_entity &&
             inspect_boundary_entity_version(*entity).format ==
-                BoundaryEntityFormat::identified_v1;
+                BoundaryEntityFormat::identified_v1);
         m_boundary_geometry_button->setVisible(directly_editable_boundary);
         m_geometry_actions->setVisible(directly_editable_boundary || curved_wall || curve_boundary || constraint_target);
         m_boundary_geometry_button->setEnabled(directly_editable_boundary && editable);
@@ -35549,8 +35613,119 @@ public:
         }
     }
 
+    void showMeasuredStrokeGeometryEditor() {
+        const auto selected=selectedEntity();
+        if (!selected || selected->type!="measurement_linework" || m_selected_ids.size()!=1 ||
+            !m_document->is_editable() || m_boundary_session || m_linework_drawing || m_pending_wall_start) {
+            setError(QStringLiteral("Select one editable saved measured stroke first."));return;
+        }
+        try {
+            const auto context=captureModalContext();
+            const auto source=authoringSnapshot();
+            const auto decoded=decode_measurement_linework_model(selected->properties.at("model"));
+            if (!decoded.supported()) throw std::invalid_argument(decoded.diagnostic);
+            const auto original=replay_measurement_linework(*decoded.model);
+            std::map<std::string,Vec2,std::less<>> vertices;
+            Boundary original_geometry;
+            for (const auto& edge : original.edges) {
+                vertices.emplace(edge.start_vertex_id,edge.segment.start);vertices.emplace(edge.end_vertex_id,edge.segment.end);
+                original_geometry.push_back(edge.segment);
+            }
+            QDialog dialog(owner);styleDialog(dialog);dialog.setObjectName("measuredStrokeGeometryDialog");
+            dialog.setWindowTitle(QStringLiteral("Edit measured stroke"));dialog.resize(650,620);
+            auto* layout=new QVBoxLayout(&dialog);
+            auto* form=new QFormLayout;
+            auto* operation=new QComboBox(&dialog);operation->setObjectName("measuredStrokeEditOperation");
+            operation->addItem(QStringLiteral("Edge length"),"length");operation->addItem(QStringLiteral("Vertex position"),"vertex");form->addRow(QStringLiteral("Edit"),operation);
+            auto* edge=new QComboBox(&dialog);edge->setObjectName("measuredStrokeEdge");
+            for (std::size_t i=0;i<original.edges.size();++i) edge->addItem(QStringLiteral("Edge %1 · %2").arg(i+1).arg(format_length(segment_length(original.edges[i].segment),context.metric_units)),id_from(original.edges[i].segment_id));
+            form->addRow(QStringLiteral("Edge"),edge);
+            auto* vertex=new QComboBox(&dialog);vertex->setObjectName("measuredStrokeVertex");
+            std::set<std::string,std::less<>> added;
+            const auto add_vertex=[&](const std::string& id) {if (added.insert(id).second) vertex->addItem(QStringLiteral("Vertex %1").arg(added.size()),id_from(id));};
+            for (const auto& value : original.edges) {add_vertex(value.start_vertex_id);add_vertex(value.end_vertex_id);}
+            form->addRow(QStringLiteral("Vertex"),vertex);
+            auto* length=new QLineEdit(&dialog);length->setObjectName("measuredStrokeLength");form->addRow(QStringLiteral("New length"),length);
+            auto* fixed=new QComboBox(&dialog);fixed->setObjectName("measuredStrokeFixedEndpoint");
+            fixed->addItem(QStringLiteral("Keep start point fixed"),"start");fixed->addItem(QStringLiteral("Keep end point fixed"),"end");form->addRow(QStringLiteral("Anchor"),fixed);
+            auto* connected=new QCheckBox(QStringLiteral("Move all other vertices together"),&dialog);connected->setObjectName("measuredStrokeMoveConnected");
+            connected->setToolTip(QStringLiteral("Translate every other stable vertex by the endpoint movement. The anchored vertex stays fixed."));form->addRow(connected);
+            auto* x=new QLineEdit(&dialog);x->setObjectName("measuredStrokeVertexX");form->addRow(context.metric_units?QStringLiteral("X (m)"):QStringLiteral("X (ft)"),x);
+            auto* y=new QLineEdit(&dialog);y->setObjectName("measuredStrokeVertexY");form->addRow(context.metric_units?QStringLiteral("Y (m)"):QStringLiteral("Y (ft)"),y);
+            layout->addLayout(form);
+            auto* preview=new PlanCanvas(&dialog);preview->setObjectName("measuredStrokeGeometryPreview");preview->setMinimumHeight(220);
+            preview->setMetricUnits(context.metric_units);preview->setGridEnabled(false);preview->setSnapEnabled(false);preview->setOverviewMapEnabled(false);preview->setSelectionTransformEnabled(false,false);
+            layout->addWidget(preview,1);
+            auto* dimensions=new QTableWidget(0,3,&dialog);dimensions->setObjectName("measuredStrokeGeometryDimensions");
+            dimensions->setHorizontalHeaderLabels({QStringLiteral("Edge"),QStringLiteral("Before"),QStringLiteral("After")});dimensions->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
+            dimensions->verticalHeader()->hide();dimensions->setEditTriggers(QAbstractItemView::NoEditTriggers);dimensions->setMaximumHeight(125);layout->addWidget(dimensions);
+            auto* status=new QLabel(&dialog);status->setObjectName("measuredStrokeGeometryStatus");status->setWordWrap(true);status->setTextFormat(Qt::PlainText);layout->addWidget(status);
+            auto* buttons=new QDialogButtonBox(QDialogButtonBox::Apply|QDialogButtonBox::Cancel,&dialog);buttons->setObjectName("measuredStrokeGeometryButtons");layout->addWidget(buttons);
+            std::optional<Command> candidate;
+            const auto scene=[](const Boundary& path,const char* id,QColor color) {CanvasEntity value{QString::fromLatin1(id),"measurement_linework",path,0,false};value.stroke_color=color;return value;};
+            const auto update=[&] {
+                candidate.reset();buttons->button(QDialogButtonBox::Apply)->setEnabled(false);dimensions->setRowCount(0);
+                preview->setEntities({scene(original_geometry,"before",QColor(148,163,184))});preview->fitView();
+                try {
+                    if (!modalContextUnchanged(context)) throw std::invalid_argument("The project or editing context changed. Reopen this editor.");
+                    BoundaryGeometryEdit edit;edit.boundary_id=selected->id;
+                    std::optional<Quantity> authored;
+                    if (operation->currentData().toString()=="length") {
+                        authored=parse_quantity(length->text().toStdString(),context.metric_units?Unit::metre:Unit::foot);
+                        edit.kind=BoundaryGeometryEditKind::resize_segment;edit.target_id=edge->currentData().toString().toStdString();edit.target_length_metres=authored->metres;
+                        edit.fixed_endpoint=fixed->currentIndex()==0?BoundaryFixedEndpoint::start:BoundaryFixedEndpoint::end;edit.move_connected=connected->isChecked();
+                    } else {
+                        edit.kind=BoundaryGeometryEditKind::move_vertex;edit.target_id=vertex->currentData().toString().toStdString();
+                        edit.target_position={parse_quantity(x->text().toStdString(),context.metric_units?Unit::metre:Unit::foot).metres,parse_quantity(y->text().toStdString(),context.metric_units?Unit::metre:Unit::foot).metres};
+                    }
+                    auto command=measuredStrokeGeometryCommand(source,edit,authored);const auto proposed=Document::preview_command(source,command);
+                    const auto replay=replay_measurement_linework(*decode_measurement_linework_model(proposed.entities().at(selected->id).properties.at("model")).model);
+                    Boundary geometry;for (const auto& value : replay.edges)geometry.push_back(value.segment);
+                    preview->setEntities({scene(original_geometry,"before",QColor(148,163,184)),scene(geometry,"after",QColor(37,99,235))});preview->fitView();
+                    for (std::size_t i=0;i<replay.edges.size();++i) {
+                        dimensions->insertRow(static_cast<int>(i));dimensions->setItem(static_cast<int>(i),0,new QTableWidgetItem(QString::number(i+1)));
+                        dimensions->setItem(static_cast<int>(i),1,new QTableWidgetItem(format_length(segment_length(original.edges[i].segment),context.metric_units)));
+                        dimensions->setItem(static_cast<int>(i),2,new QTableWidgetItem(format_length(segment_length(replay.edges[i].segment),context.metric_units)));
+                    }
+                    QStringList information;
+                    const auto phase=visible_project_entities_with_phase(proposed,ProjectViewFilter{});
+                    const auto checks=measurement_linework_source_checks(proposed.entities(),&phase);
+                    std::size_t unresolved=0;for (const auto& [id,check] : checks) { (void)id;if(!check.current)++unresolved; }
+                    if (unresolved)information.push_back(QStringLiteral("%1 derived area(s) need review. Their stale measurements are withheld.").arg(unresolved));
+                    const auto property_id=selected->properties.at("property_id").get<std::string>();
+                    const auto report=build_appraisal_document_report(proposed,property_id,context.metric_units?AreaUnit::square_metre:AreaUnit::square_foot,&phase);
+                    if (report.configured && report.qualified && report.calculation)
+                        information.push_back(QStringLiteral("Proposed GLA: %1").arg(format_display_area(report.calculation->property.gla().total.display)));
+                    if (proposed.entities()==source.entities()) information.push_back(QStringLiteral("No geometry change."));
+                    else {candidate=std::move(command);buttons->button(QDialogButtonBox::Apply)->setEnabled(true);}
+                    status->setText(information.isEmpty()?QStringLiteral("Gray: original. Blue: proposed. Apply commits the stroke and affected areas together."):information.join(QLatin1Char('\n')));
+                } catch (const std::exception& error) {status->setText(QString::fromUtf8(error.what()));}
+            };
+            const auto load=[&] {
+                const bool length_mode=operation->currentData().toString()=="length";
+                form->setRowVisible(edge,length_mode);form->setRowVisible(length,length_mode);form->setRowVisible(fixed,length_mode);form->setRowVisible(connected,length_mode);
+                form->setRowVisible(vertex,!length_mode);form->setRowVisible(x,!length_mode);form->setRowVisible(y,!length_mode);
+                const auto coordinate=[&](double value){return QString::number(context.metric_units?value:value/0.3048,'g',17)+(context.metric_units?QStringLiteral(" m"):QStringLiteral(" ft"));};
+                QSignalBlocker length_block(length),x_block(x),y_block(y);
+                length->setText(coordinate(segment_length(original.edges.at(static_cast<std::size_t>(edge->currentIndex())).segment)));
+                const auto point=vertices.at(vertex->currentData().toString().toStdString());x->setText(coordinate(point.x));y->setText(coordinate(point.y));update();
+            };
+            for (auto* input : {length,x,y})QObject::connect(input,&QLineEdit::textChanged,&dialog,[&]{update();});
+            for (auto* selector : {operation,edge,vertex})QObject::connect(selector,&QComboBox::currentIndexChanged,&dialog,[&]{load();});
+            QObject::connect(fixed,&QComboBox::currentIndexChanged,&dialog,[&]{update();});QObject::connect(connected,&QCheckBox::toggled,&dialog,[&]{update();});
+            QObject::connect(buttons,&QDialogButtonBox::rejected,&dialog,&QDialog::reject);
+            QObject::connect(buttons->button(QDialogButtonBox::Apply),&QPushButton::clicked,&dialog,[&] {
+                if (!candidate || !modalContextUnchanged(context)) {candidate.reset();buttons->button(QDialogButtonBox::Apply)->setEnabled(false);status->setText(QStringLiteral("The project changed. Reopen this editor."));return;}
+                try {applyDocumentCommand(*candidate);clearError();refresh();dialog.accept();}
+                catch (const std::exception& error) {status->setText(QString::fromUtf8(error.what()));}
+            });
+            load();dialog.exec();
+        } catch (const std::exception& error) {setError(QStringLiteral("Measured stroke editor: %1").arg(QString::fromUtf8(error.what())));}
+    }
+
     void showBoundaryGeometryEditor(bool curve_mode = false) {
         const auto selected = selectedEntity();
+        if (selected && selected->type=="measurement_linework") {showMeasuredStrokeGeometryEditor();return;}
         if (!selected || !is_closed_boundary_entity(selected->type) ||
             !m_document->is_editable()) {
             setError(QStringLiteral("Select an editable measurement or room boundary first."));

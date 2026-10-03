@@ -3222,8 +3222,17 @@ void test_boundary_vertex_invalid_and_final_pointer() {
     VertexPreviewFixture pending;
     pending.begin(); const auto serial = pending.serial;
     pending.release(); pending.release();
-    require(pending.commits == 1 && !pending.canvas.completeBoundaryVertexPreview(serial,pending.exact()),
-            "pending release must delegate final native admission once and reject late completion");
+    require(pending.commits == 0,"pending endpoint release must wait for its exact final proposal");
+    require(pending.canvas.completeBoundaryVertexPreview(serial,pending.exact()),"released endpoint accepts its exact final proposal");
+    QApplication::processEvents();
+    require(pending.commits==1 && !pending.canvas.completeBoundaryVertexPreview(serial,pending.exact()),"exact released endpoint commits once and rejects duplicate completion");
+    VertexPreviewFixture refused;
+    refused.begin();const auto refused_serial=refused.serial;refused.release();
+    require(refused.commits==0 && refused.canvas.completeBoundaryVertexPreview(refused_serial,std::nullopt),"released endpoint consumes failed projection without committing");
+    QApplication::processEvents();require(refused.commits==0,"absent exact endpoint proposal never authorizes a commit");
+    VertexPreviewFixture escaped;
+    escaped.begin();const auto escaped_serial=escaped.serial;escaped.release();escaped.cancel();
+    require(!escaped.canvas.completeBoundaryVertexPreview(escaped_serial,escaped.exact()) && escaped.commits==0,"Escape cancels a released pending endpoint without late revival");
 
     VertexPreviewFixture final;
     final.begin();
@@ -3231,14 +3240,20 @@ void test_boundary_vertex_invalid_and_final_pointer() {
             "initial final-pointer candidate must be valid");
     const auto earlier = final.serial;
     final.release({1.75,.5});
-    require(final.requests == 2 && final.commits == 1 && final.serial > earlier &&
-            std::abs(final.requested.x-1.75) < 1e-9 && std::abs(final.committed.x-1.75) < 1e-9 &&
+    require(final.requests == 2 && final.commits == 0 && final.serial > earlier && std::abs(final.requested.x-1.75)<1e-9,
+            "changed release endpoint waits for the actual final proposal");
+    require(final.canvas.completeBoundaryVertexPreview(final.serial,final.exact({1.75,.5})),"actual release endpoint completes exact preview");
+    QApplication::processEvents();
+    require(final.commits == 1 && std::abs(final.committed.x-1.75) < 1e-9 &&
             std::abs(final.committed.y-.5) < 1e-9,
-            "release must request and commit the actual final point even while its preview is pending");
+            "release commits the actual final endpoint only after its exact proposal");
 
     VertexPreviewFixture release_only;
     release_only.mouse(QEvent::MouseButtonPress,{1,1}); release_only.release({1.75,.5});
-    require(release_only.requests == 1 && release_only.commits == 1 &&
+    require(release_only.requests==1 && release_only.commits==0,"release-only motion waits for final geometry");
+    require(release_only.canvas.completeBoundaryVertexPreview(release_only.serial,release_only.exact({1.75,.5})),"release-only endpoint gets exact final proposal");
+    QApplication::processEvents();
+    require(release_only.commits == 1 &&
             std::abs(release_only.committed.x-1.75) < 1e-9,
             "release-only movement must request exact preview at the final point");
 

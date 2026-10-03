@@ -303,7 +303,7 @@ void owner_and_model_qualification_preserves_existing_floors() {
     other_boundary.type = "room_boundary";
     require(ProjectStore::required_format_version(fixture(other_boundary).snapshot()) == 2,
             "lineage collision on another known boundary type does not raise the floor");
-    for (const auto pair : std::vector<std::pair<int, int>>{{999, 2}, {2, 999}, {1, 2}}) {
+    for (const auto pair : std::vector<std::pair<int, int>>{{999, 2}, {2, 999}, {1, 2}, {3, 999}}) {
         auto future = stroke(true);
         future.properties["model"]["version"] = pair.first;
         future.properties["model"]["replay_version"] = pair.second;
@@ -315,6 +315,33 @@ void owner_and_model_qualification_preserves_existing_floors() {
         require_history_equal(opaque.snapshot(), ProjectStore::load(path).document.snapshot());
     }
 }
+void v3_edit_history_and_floor() {
+    TempDirectory temporary;
+    auto document=fixture(stroke(false));
+    auto edited=stroke(false);
+    BoundaryGeometryEdit edit;edit.boundary_id="stroke";edit.kind=BoundaryGeometryEditKind::resize_segment;
+    edit.target_id="stroke:e0";const auto length=parse_quantity("12 ft 6 in");edit.target_length_metres=length.metres;
+    const auto original=decode_measurement_linework_model(edited.properties.at("model"));
+    edited.properties["model"]=encode_measurement_linework_model(edited_measurement_linework(*original.model,edit,length));
+    document.apply(ApplyEntityChanges{document.revision(),{EntityChange::upsert(edited)},{},"Edit measured length"});
+    const auto current=document.snapshot();
+    document.undo(document.revision());const auto undone=document.snapshot();
+    document.redo(document.revision());document.apply(ApplyEntityChanges{document.revision(),{EntityChange::erase("stroke")},{},"Delete edited stroke"});
+    const auto deleted=document.snapshot();
+    const std::vector<DocumentSnapshot> snapshots{current,undone,deleted};
+    for(std::size_t i=0;i<snapshots.size();++i) {
+        require(ProjectStore::required_format_version(snapshots[i])==29,"recognized v3 edits require29 throughout retained history");
+        const auto path=temporary.path/("edit-"+std::to_string(i)+".vertex");(void)ProjectStore::save(path,snapshots[i]);require_format(path,29);
+        const auto loaded=ProjectStore::load(path);require_history_equal(snapshots[i],loaded.document.snapshot());
+        const auto exchange=extracted(loaded.document.snapshot(),temporary.path/("edit-extract-"+std::to_string(i)));
+        require(exchange.at("exchange_version")==27,"recognized v3 retained edits require extraction27");
+    }
+    const auto path=temporary.path/"false-28.vertex";(void)ProjectStore::save(path,deleted);set_stored_format(path,deleted,28);
+    const auto fingerprint=ProjectStore::file_sha256(path);
+    try {(void)ProjectStore::load(path);throw std::runtime_error("v3 edit disguised as native28 must reject");}
+    catch(const StorageError& error){require(error.code()==StorageErrorCode::unsupported_format,"v3 downgrade rejects at reader floor");}
+    require(ProjectStore::file_sha256(path)==fingerprint,"rejecting a downgraded edited stroke preserves original bytes");
+}
 } // namespace
 
 int main() {
@@ -324,6 +351,7 @@ int main() {
         lineage_current_undo_and_deleted_history();
         legacy_v1_lineage_opens_and_upgrade_preserves_original();
         owner_and_model_qualification_preserves_existing_floors();
+        v3_edit_history_and_floor();
         std::cout << "measurement linework storage checks passed\n";
         return 0;
     } catch (const std::exception& error) {

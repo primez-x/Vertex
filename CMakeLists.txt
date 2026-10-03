@@ -407,6 +407,9 @@ if(BUILD_TESTING)
   add_executable(measurement_linework_transform_tests tests/measurement_linework_transform_tests.cpp)
   target_link_libraries(measurement_linework_transform_tests PRIVATE sketch_measurement_linework)
   add_test(NAME measurement_linework_transform COMMAND measurement_linework_transform_tests)
+  add_executable(measurement_linework_edit_tests tests/measurement_linework_edit_tests.cpp)
+  target_link_libraries(measurement_linework_edit_tests PRIVATE sketch_measurement_linework)
+  add_test(NAME measurement_linework_edit COMMAND measurement_linework_edit_tests)
   add_executable(measurement_linework_source_tests tests/measurement_linework_source_tests.cpp)
   target_link_libraries(measurement_linework_source_tests PRIVATE sketch_measurement_linework_source sketch_appraisal_document)
   add_test(NAME measurement_linework_source COMMAND measurement_linework_source_tests)
@@ -415,7 +418,7 @@ if(BUILD_TESTING)
   add_test(NAME measurement_linework_storage COMMAND measurement_linework_storage_tests)
   set_tests_properties(measurement_linework_storage PROPERTIES ENVIRONMENT_MODIFICATION
     "PATH=path_list_prepend:${CMAKE_SOURCE_DIR}/.deps/native/x64-windows/$<IF:$<CONFIG:Debug>,debug/bin,bin>")
-  set_tests_properties(measurement_linework_source measurement_linework_transform PROPERTIES ENVIRONMENT_MODIFICATION
+  set_tests_properties(measurement_linework_source measurement_linework_transform measurement_linework_edit PROPERTIES ENVIRONMENT_MODIFICATION
     "PATH=path_list_prepend:${CMAKE_SOURCE_DIR}/.deps/native/x64-windows/$<IF:$<CONFIG:Debug>,debug/bin,bin>")
   add_executable(measurement_linework_exchange_tests tests/measurement_linework_exchange_tests.cpp)
   target_link_libraries(measurement_linework_exchange_tests PRIVATE sketch_measurement_linework sketch_dxf_project_exchange)

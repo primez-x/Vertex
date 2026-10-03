@@ -120,10 +120,11 @@ public:
     // appearance requires v24; explicit SVG instance colors require v25;
     // compact mixed asset references require v26; verified connected wall
     // rigid-transform proofs require v27; schema/replay-two measured linework
-    // and identified measured areas retaining linework sources require v28.
+    // and identified measured areas retaining linework sources require v28;
+    // schema/replay-three measured stroke edit derivations require v29.
     // Any may include
     // the optional recovery ledger. Absent proofs preserve historical formats.
-    static constexpr std::uint32_t format_version = 28;
+    static constexpr std::uint32_t format_version = 29;
     static constexpr std::uint32_t recovery_format_version = 4;
     [[nodiscard]] static std::uint32_t required_format_version(const DocumentSnapshot& snapshot);
     static constexpr std::uint64_t maximum_file_bytes = 4ULL * 1024ULL * 1024ULL * 1024ULL;
@@ -138,7 +139,7 @@ public:
                                           const DocumentSnapshot& snapshot,
                                           const SaveOptions& options = {});
     [[nodiscard]] static LoadResult load(const std::filesystem::path& source);
-    // Recovery-bearing v4 through v28 only. A document-only path never drops a ledger.
+    // Recovery-bearing v4 through v29 only. A document-only path never drops a ledger.
     [[nodiscard]] static SaveReceipt save_archive(const std::filesystem::path& destination,
         const ProjectArchiveSnapshot&, const SaveOptions& options = {});
     [[nodiscard]] static ArchiveLoadResult load_archive(const std::filesystem::path& source, ArchiveRole role);

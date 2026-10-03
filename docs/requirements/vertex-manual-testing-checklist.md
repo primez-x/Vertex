@@ -302,6 +302,8 @@ drawing; switching modes does not change existing geometry.
 - [ ] **U049 — Jump to another point without drawing a connecting edge**
   - Steps: Choose Measured lines in Draw. Click a start and two endpoints, then finish with Enter. Select the stroke, choose Tools → Jump to measured or boundary vertex and choose a saved vertex. Click a new endpoint and finish. Repeat using Tools → Lift measured pen while drawing, then click a new starting point. Save and reopen; Undo and Redo the accepted edges.
   - Expected: Jump starts the next independent stroke at the exact chosen vertex. Lift measured pen allows a separate starting point. Neither adds a connecting edge, wall thickness or area total. Previously committed edges remain when Enter, stationary right-click or Escape finishes a stroke.
+  - Also try: Select a saved measured stroke and drag an endpoint handle. Double-click the stroke, choose Geometry, and enter a new edge length with either its start or end fixed. Try moving all other vertices together. Switch to Vertex position and enter exact X/Y coordinates. Preview, Cancel, Apply, Undo, Redo, save and reopen.
+  - Expected: Endpoint handles identify the actual stable vertices. The editor shows original and proposed geometry and edge lengths before Apply. The chosen anchor stays fixed; connected movement is explicit. Cancel, invalid values and stale edits leave the document unchanged. One Undo restores the edit and affected measured areas. Original entered measurements remain retained in project history.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 

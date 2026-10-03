@@ -1866,7 +1866,7 @@ void PlanCanvas::pointerPress(QPointF position, Qt::MouseButton button,
 
 void PlanCanvas::pointerMove(QPointF position, Qt::KeyboardModifiers modifiers) {
     m_last_mouse_position = position;
-    if (m_move_release_pending || m_transform_release_pending) return;
+    if (m_move_release_pending || m_transform_release_pending || m_vertex_release_pending) return;
     if (m_gesture_button == Qt::RightButton && !m_right_dragging &&
         (position - m_right_start).manhattanLength() >= QApplication::startDragDistance()) {
         m_right_dragging = true;
@@ -2076,6 +2076,16 @@ void PlanCanvas::pointerRelease(QPointF position, Qt::MouseButton button,
             if (m_entities_move_rejected) m_entities_move_rejected(move_ids,delta);
             return;
         }
+        if (gesture==LeftGesture::vertex_move && dragging && m_boundary_vertex_preview_requested) {
+            // Keep the final source capture alive until the exact release-point
+            // projection finishes. Missing/invalid proposals cannot authorize
+            // a commit merely because the core might accept its coordinates.
+            m_vertex_release_pending=true;
+            m_gesture_button=Qt::NoButton;
+            if (!m_boundary_vertex_preview_pending)
+                finishBoundaryVertexPreview(m_boundary_vertex_preview_serial);
+            return;
+        }
         if ((gesture == LeftGesture::selection_resize || gesture == LeftGesture::selection_rotate) &&
             dragging && m_transform_preview_exact) {
             if (m_transform_preview_pending) {
@@ -2230,6 +2240,7 @@ void PlanCanvas::resetGesture() {
     m_boundary_vertex_metrics_preview.reset();
     m_boundary_vertex_preview_valid = false;
     m_boundary_vertex_preview_pending = false;
+    m_vertex_release_pending = false;
     m_boundary_vertex_preview_request_in_progress = false;
     m_boundary_vertex_preview_pointer.reset();
     m_opening_width_handle.reset();
@@ -3156,6 +3167,7 @@ bool PlanCanvas::applyBoundaryVertexPreview(std::uint64_t serial,
     if (invalid_metrics || !result || std::none_of(result->begin(), result->end(),
         [&](const CanvasEntity& entity) { return entity.id == m_vertex_move_handle->entity_id; })) {
         update();
+        if (m_vertex_release_pending) QTimer::singleShot(0,this,[this,serial]{finishBoundaryVertexPreview(serial);});
         return true;
     }
     for (auto& entity : *result) {
@@ -3180,7 +3192,20 @@ bool PlanCanvas::applyBoundaryVertexPreview(std::uint64_t serial,
     m_boundary_vertex_metrics_preview = metrics;
     m_boundary_vertex_preview_valid = true;
     update();
+    if (m_vertex_release_pending) QTimer::singleShot(0,this,[this,serial]{finishBoundaryVertexPreview(serial);});
     return true;
+}
+
+void PlanCanvas::finishBoundaryVertexPreview(std::uint64_t serial) {
+    if (serial!=m_boundary_vertex_preview_serial || !m_vertex_release_pending || !m_vertex_move_handle) return;
+    const auto handle=*m_vertex_move_handle;
+    const auto target=m_vertex_move_preview;
+    const bool accepted=m_boundary_vertex_preview_valid && target &&
+        std::isfinite(target->x) && std::isfinite(target->y) &&
+        (target->x!=handle.source_position.x || target->y!=handle.source_position.y);
+    const auto callback=m_boundary_vertex_move_requested;
+    resetGesture();update();
+    if (accepted && callback) (void)callback(handle.entity_id,handle.vertex_id,*target,handle.source_revision);
 }
 
 std::optional<PlanCanvas::VertexHandleHit> PlanCanvas::vertexHandleAt(
@@ -3744,7 +3769,7 @@ void PlanCanvas::keyPressEvent(QKeyEvent* event) {
     if (event->key() == Qt::Key_Escape) {
         m_drawing_witnesses.clear();
         update();
-        if (m_touch_active || m_gesture_button != Qt::NoButton || m_move_release_pending || m_transform_frame_start) {
+        if (m_touch_active || m_gesture_button != Qt::NoButton || m_move_release_pending || m_vertex_release_pending || m_transform_frame_start) {
             resetGesture();
             resetTouchInput();
             event->accept();

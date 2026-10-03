@@ -1,4 +1,4 @@
-# Vertex project formats v1 through v28
+# Vertex project formats v1 through v29
 
 ## Measurement linework model v1
 
@@ -29,6 +29,38 @@ Independent version-one strokes do not increase the SQLite envelope floor:
 the required entity mechanism protects earlier readers. Canvas authoring,
 dimensions, point jumping, analytical output and derived face detection use this
 model. These implemented adapters do not establish certified Draw First parity.
+
+## Measured-stroke geometry derivations (v29)
+
+The recognized `(version: 3, replay_version: 3)` pair retains the original
+`anchor`, `segments`, exact construction receipts and opaque `extensions`. It
+requires an ordered `operations` array and forbids the version-two `transforms`
+field. Each operation is exactly one of:
+
+- `{ "type": "transform", "transform": <version-one rigid transform> }`.
+- `{ "type": "edit", "edit": <stable geometry-edit intent>,
+  "authored_length": <exact quantity or null> }`.
+
+The edit intent uses the strict boundary geometry-edit codec, restricted to
+`move_vertex` and `resize_segment` with the actual stroke identity. Irrelevant
+fields, unknown operations, invalid values and redundant persisted edits reject.
+An exact authored length uses the construction-receipt quantity codec and must
+equal the resize intent's target length. Vertex edits cannot carry that quantity.
+
+Replay reconstructs the original analytical stroke, then applies operations in
+order. Moving a stable vertex updates every occurrence of that identity. Resizing
+retains the chosen start or end point, chord direction and signed curve sweep;
+connected mode translates all other vertices together. Original inputs are not
+rewritten to impersonate the changed geometry. Subsequent rigid transforms act on
+the edited world geometry. Precision loss, degeneracy and nonfinite results reject
+atomically. Open, crossing and retraced strokes remain valid linework.
+
+An effective API no-op retains the exact existing dialect. A real edit promotes
+version one or two to version three, migrating prior rigid transforms into the
+ordered operations without changing their order. Any recognized version-three
+stroke anywhere in retained history requires native format 29 and extraction 27.
+An old envelope cannot admit these semantics by lowering its version marker.
+Other positive schema/replay pairs retain the existing opaque read-only policy.
 
 ## Rigid measured-line frames and live area sources (v28)
 

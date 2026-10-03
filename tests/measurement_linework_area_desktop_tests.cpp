@@ -20,6 +20,11 @@
 #include <QComboBox>
 #include <QTabWidget>
 #include <QLabel>
+#include <QDialog>
+#include <QDialogButtonBox>
+#include <QLineEdit>
+#include <QPushButton>
+#include <QTimer>
 #include <QStandardPaths>
 #include <QTemporaryDir>
 #include <QUuid>
@@ -288,6 +293,103 @@ void test_derived_area_move_keeps_sources() {
     for(const auto& id:areas)require(checks.at(id.toStdString()).current,"shared source areas remain current after dragging the area body");
     require(window.undoCommand() && window.document().snapshot().entities()==before.entities(),"derived area and shared source movement undo together");
 }
+void test_saved_stroke_vertex_and_length_edits() {
+    MainWindow window(fixture());window.setAttribute(Qt::WA_DontShowOnScreen,true);
+    window.resize(1400,900);window.show();QCoreApplication::processEvents();
+    require(window.selectEntity("outline"),"select source to define editable areas");
+    const auto areas=window.detectRoomBoundariesFromExistingWalls("living");require(areas.size()==2,"two source faces exist");
+    const auto declarations=window.document().snapshot();
+    auto property=declarations.entities().at("p");property.properties["calculation_workflow"]="appraisal";
+    property.properties["appraisal_policy"]={{"policy_kind","residential_declared"},{"version",1},{"property_kind","detached_single_family"},{"measurement_basis","exterior"}};
+    auto floor=declarations.entities().at("f");floor.properties["appraisal_facts"]={{"grade","above"}};
+    std::vector<EntityChange> facts{EntityChange::upsert(property),EntityChange::upsert(floor)};
+    for (const auto& id : areas) {
+        auto area=declarations.entities().at(id.toStdString());const bool dwelling=boundary_bounds(boundary_geometry(decode_identified_boundary_entity(area))).minimum.x==0;
+        area.properties["appraisal_facts"]={{"finish","finished"},{"access","direct_interior"},{"ceiling_eligibility","standard"},{"area_use",dwelling?"dwelling":"garage"},{"boundary_role","measured_area"}};
+        facts.push_back(EntityChange::upsert(std::move(area)));
+    }
+    window.document().apply(ApplyEntityChanges{declarations.revision(),std::move(facts),{},"Declare editable source area facts"});
+    require(window.selectEntity("separator"),"select saved measured stroke");
+    auto* canvas=dynamic_cast<PlanCanvas*>(window.findChild<QWidget*>("measurementPlanCanvas"));require(canvas,"vertex editing canvas exists");
+    const auto item=std::find_if(canvas->entities().begin(),canvas->entities().end(),[](const auto& value){return value.id=="separator";});
+    require(item!=canvas->entities().end() && item->vertex_handles.size()==2,"open saved stroke exposes both stable endpoint handles");
+    canvas->setOverviewMapEnabled(false);canvas->setSnapEnabled(false);canvas->setWallSnapEnabled(false);canvas->setViewTransform({2,2},65);
+    const auto before=window.document().snapshot();
+    const auto center=QRectF(canvas->rect()).center();
+    const auto grab=center+QPointF(0,195),target=grab+QPointF(65,0);
+    mouse(*canvas,QEvent::MouseButtonPress,grab);mouse(*canvas,QEvent::MouseMove,target);
+    require(wait([&]{return !canvas->boundaryVertexPreviewEntities().empty();}),"saved stroke endpoint drag previews actual proposed geometry");
+    require(window.document().snapshot().entities()==before.entities(),"vertex preview leaves document unchanged");
+    mouse(*canvas,QEvent::MouseButtonRelease,target);
+    require(wait([&]{return window.document().revision()==before.revision()+1;}),"stroke endpoint release commits one revision");
+    const auto edited=window.document().snapshot();
+    const auto model=decode_measurement_linework_model(edited.entities().at("separator").properties.at("model"));
+    const auto replay=replay_measurement_linework(*model.model);
+    require(replay.anchor.x==3 && replay.anchor.y==-1 && replay.edges.front().segment.end.x==2,"only the dragged stable vertex moves");
+    require(edited.entities().at("separator").properties.at("model").at("segments")==before.entities().at("separator").properties.at("model").at("segments"),"vertex edits preserve original construction receipts");
+    const auto checks=measurement_linework_source_checks(edited.entities());
+    double total=0;
+    for(const auto& id:areas) {require(checks.at(id.toStdString()).current,"vertex edit refreshes each uniquely matched area");total+=std::abs(signed_area(boundary_geometry(decode_identified_boundary_entity(edited.entities().at(id.toStdString())))));}
+    require(std::abs(total-16)<1e-9,"source vertex edit does not lose or duplicate area coverage");
+    const auto report=build_appraisal_document_report(edited,"p",AreaUnit::square_metre);
+    require(report.qualified && std::abs(report.calculation->property.gla().total.square_metres-10)<1e-9,"stable vertex edit automatically recalculates actual dwelling GLA to ten square metres");
+    const auto capture=qEnvironmentVariable("VERTEX_TEST_CAPTURE_DIR");
+    if(!capture.isEmpty()) {QDir().mkpath(capture);require(window.grab().save(QDir(capture).filePath("measured-stroke-vertex-edit.png")),"capture actual selected stroke vertex editing");}
+    require(window.undoCommand() && window.document().snapshot().entities()==before.entities(),"one undo restores source and all area consequences");
+    require(window.selectEntity("separator"),"reselect stroke for exact length");
+    canvas->setViewTransform({2,2},65);const auto release_source=window.document().snapshot();
+    mouse(*canvas,QEvent::MouseButtonPress,grab);mouse(*canvas,QEvent::MouseButtonRelease,target);
+    require(canvas->boundaryVertexPreviewPending() && window.document().snapshot().entities()==release_source.entities(),"release-only endpoint drag waits for its exact native proposal");
+    require(wait([&]{return window.document().revision()==release_source.revision()+1 && !canvas->boundaryVertexPreviewPending();}),"exact final endpoint proposal commits released drag once");
+    require(window.undoCommand() && window.document().snapshot().entities()==release_source.entities(),"release-only endpoint edit and area consequences undo together");
+    require(window.editSelectedBoundaryEdgeLength("separator:e1","8 m",BoundaryFixedEndpoint::start,false),"saved stroke accepts typed anchored length edit");
+    const auto resized=window.document().snapshot();
+    const auto length_model=decode_measurement_linework_model(resized.entities().at("separator").properties.at("model"));
+    const auto length_replay=replay_measurement_linework(*length_model.model);
+    require(length_replay.anchor.x==2 && length_replay.anchor.y==-1 && std::abs(segment_length(length_replay.edges.front().segment)-8)<1e-10,"typed length retains fixed start endpoint and actual analytical length");
+    require(!window.moveSelectedBoundaryVertex("separator:v0",{9,9},before.revision()),"stale vertex edit is rejected");
+    require(window.document().snapshot().entities()==resized.entities(),"stale edit does not modify source or areas");
+    QTemporaryDir temp;const auto path=temp.filePath("edited-stroke.vertex");require(window.saveProjectAs(path) && window.openProject(path),"edited source saves and reopens");
+    require(window.document().snapshot().entities()==resized.entities(),"reopen preserves exact edit intents and consequences");
+}
+void test_saved_stroke_geometry_dialog() {
+    MainWindow window(fixture());window.setMetricUnits(true);window.setAttribute(Qt::WA_DontShowOnScreen,true);
+    window.resize(1400,900);window.show();QCoreApplication::processEvents();require(window.selectEntity("separator"),"select stroke for geometry dialog");
+    auto* open=window.findChild<QPushButton*>("editBoundaryGeometry");require(open && open->isEnabled(),"measured stroke quick properties expose Geometry action");
+    const auto before=window.document().snapshot();
+    std::exception_ptr failure;bool visited=false;
+    QTimer::singleShot(0,&window,[&] {
+        auto* dialog=window.findChild<QDialog*>("measuredStrokeGeometryDialog");
+        try {
+            require(dialog,"Geometry opens a measured-stroke editor");visited=true;
+            auto* length=dialog->findChild<QLineEdit*>("measuredStrokeLength");auto* buttons=dialog->findChild<QDialogButtonBox*>("measuredStrokeGeometryButtons");
+            require(length && buttons,"length and Apply/Cancel controls exist");require(!buttons->button(QDialogButtonBox::Apply)->isEnabled(),"unchanged geometry does not create an edit");
+            length->setText("invalid length");require(!buttons->button(QDialogButtonBox::Apply)->isEnabled(),"invalid typed length disables Apply");
+            length->setText("8 m");require(buttons->button(QDialogButtonBox::Apply)->isEnabled(),"valid anchored edit enables Apply");
+            auto* preview=dynamic_cast<PlanCanvas*>(dialog->findChild<QWidget*>("measuredStrokeGeometryPreview"));
+            require(preview && preview->entities().size()==2 && preview->entities().back().segments.front().end.y==7,"dialog preview shows exact proposed anchored endpoint");
+            require(window.document().snapshot().entities()==before.entities(),"dialog preview does not mutate document");
+            const auto capture=qEnvironmentVariable("VERTEX_TEST_CAPTURE_DIR");
+            if(!capture.isEmpty()){QDir().mkpath(capture);require(dialog->grab().save(QDir(capture).filePath("measured-stroke-length-preview.png")),"capture real exact length preview dialog");}
+        } catch (...) {failure=std::current_exception();}
+        if(dialog)dialog->reject();
+    });
+    open->click();if(failure)std::rethrow_exception(failure);require(visited,"dialog cancellation flow executed");
+    require(window.document().snapshot().entities()==before.entities() && window.document().revision()==before.revision(),"Cancel preserves geometry and history");
+    visited=false;
+    QTimer::singleShot(0,&window,[&] {
+        auto* dialog=window.findChild<QDialog*>("measuredStrokeGeometryDialog");
+        try {
+            require(dialog,"Apply flow opens same editor");visited=true;
+            dialog->findChild<QLineEdit*>("measuredStrokeLength")->setText("8 m");
+            dialog->findChild<QDialogButtonBox*>("measuredStrokeGeometryButtons")->button(QDialogButtonBox::Apply)->click();
+        } catch (...) {failure=std::current_exception();if(dialog)dialog->reject();}
+    });
+    open->click();if(failure)std::rethrow_exception(failure);require(visited && window.document().revision()==before.revision()+1,"Apply commits exactly one captured command");
+    const auto edited=window.document().snapshot();const auto replay=replay_measurement_linework(*decode_measurement_linework_model(edited.entities().at("separator").properties.at("model")).model);
+    require(replay.edges.front().segment.start.y==-1 && replay.edges.front().segment.end.y==7,"committed endpoint equals preview");
+    require(window.undoCommand() && window.document().snapshot().entities()==before.entities(),"dialog edit is reversible in one step");
+}
 }
 int main(int argc,char** argv) {
     sketch::testing::noninteractive_errors(); QStandardPaths::setTestModeEnabled(true); QApplication app(argc,argv);
@@ -295,7 +397,7 @@ int main(int argc,char** argv) {
     try {
         require(QFontDatabase::addApplicationFont(QStringLiteral(":/fonts/Inter.ttf"))>=0,"bundled Inter font loads");
         app.setFont(QFont(QStringLiteral("Inter"),10));
-        test_define_areas_and_history();test_ansi_profile_dimensions();test_canvas_source_move_and_live_gla();test_canvas_source_rotation();test_saved_plan_move_frame();test_derived_area_move_keeps_sources();std::cout<<"measurement linework area desktop checks passed\n";return 0;
+        test_define_areas_and_history();test_ansi_profile_dimensions();test_canvas_source_move_and_live_gla();test_canvas_source_rotation();test_saved_plan_move_frame();test_derived_area_move_keeps_sources();test_saved_stroke_vertex_and_length_edits();test_saved_stroke_geometry_dialog();std::cout<<"measurement linework area desktop checks passed\n";return 0;
     }
     catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}
 }

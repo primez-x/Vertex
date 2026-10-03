@@ -1,22 +1,32 @@
 #pragma once
 
 #include "sketch/boundary_receipt.hpp"
+#include "sketch/boundary_edit.hpp"
 
 #include <cstdint>
 #include <optional>
 #include <string>
 #include <vector>
+#include <variant>
 
 namespace sketch {
 
 inline constexpr std::uint32_t measurement_linework_schema_version_v1 = 1;
 inline constexpr std::uint32_t measurement_linework_schema_version_v2 = 2;
+inline constexpr std::uint32_t measurement_linework_schema_version_v3 = 3;
 inline constexpr std::uint32_t measurement_linework_schema_version = measurement_linework_schema_version_v1;
-inline constexpr std::uint32_t measurement_linework_latest_schema_version = measurement_linework_schema_version_v2;
+inline constexpr std::uint32_t measurement_linework_latest_schema_version = measurement_linework_schema_version_v3;
 inline constexpr std::uint32_t measurement_linework_replay_version_v1 = 1;
 inline constexpr std::uint32_t measurement_linework_replay_version_v2 = 2;
+inline constexpr std::uint32_t measurement_linework_replay_version_v3 = 3;
 inline constexpr std::uint32_t measurement_linework_replay_version = measurement_linework_replay_version_v1;
-inline constexpr std::uint32_t measurement_linework_latest_replay_version = measurement_linework_replay_version_v2;
+inline constexpr std::uint32_t measurement_linework_latest_replay_version = measurement_linework_replay_version_v3;
+
+struct MeasurementLineworkEdit {
+    BoundaryGeometryEdit intent;
+    std::optional<Quantity> authored_length;
+};
+using MeasurementLineworkOperation = std::variant<PlanarTransform, MeasurementLineworkEdit>;
 
 // One analytical measurement stroke, independent of physical walls and areas.
 // Entity adapters own property/building/floor/layer context and place this
@@ -33,6 +43,10 @@ struct MeasurementLinework {
     nlohmann::json extensions = nlohmann::json::object();
     // Schema/replay two: ordered world operations; all receipts stay local.
     std::vector<PlanarTransform> transforms;
+    // Schema/replay three: ordered derivations in the world frame at that
+    // operation. Receipts remain the original immutable authoring evidence.
+    // The historical transforms member must be empty in this dialect.
+    std::vector<MeasurementLineworkOperation> operations;
 };
 
 struct MeasurementLineworkReplay {
@@ -67,9 +81,20 @@ struct MeasurementLineworkReplay {
 [[nodiscard]] MeasurementLinework transformed_measurement_linework(
     const MeasurementLinework& model, const PlanarTransform& transform);
 
+// Supports move_vertex and resize_segment only. Every occurrence of a stable
+// vertex moves together; open, crossing and retraced strokes remain valid.
+// Resize retains chord direction and signed sweep. move_connected translates
+// all vertices except the fixed endpoint. Optional exact input is valid only
+// for resize and must equal its target_length_metres. No-ops retain the source
+// dialect; invalid/precision-losing edits throw without source mutation.
+[[nodiscard]] MeasurementLinework edited_measurement_linework(
+    const MeasurementLinework& model, const BoundaryGeometryEdit& edit,
+    std::optional<Quantity> authored_length = std::nullopt);
+
 enum class MeasurementLineworkFormat {
     supported_v1,
     supported_v2,
+    supported_v3,
     unsupported_version,
     unsupported_replay_version,
 };
@@ -100,9 +125,14 @@ struct MeasurementLineworkDecodeResult {
 // field, and neither dialect accepts uniform scaling. Inspection reads only the object
 // and its positive integral version, plus a required positive integral
 // replay_version for a known schema. Decode validates/replays known pairs
-// (1,1) and (2,2); unknown positive schema/replay pairs return exact opaque JSON for a
+// (1,1), (2,2) and (3,3); unknown positive schema/replay pairs return exact opaque JSON for a
 // caller to preserve without decoding. Encode validates and retains original
-// expressions and extensions. Malformed known models throw invalid_argument.
+// expressions and extensions. V3 forbids transforms and requires operations:
+// {type: "transform", transform: <v1 transform>} or {type: "edit", edit:
+// <strict v1 move_vertex/resize_segment boundary intent>, authored_length:
+// <strict exact quantity or null>}. Every edit must name this stroke and an
+// existing child, contain only relevant fields, and change its geometry.
+// Malformed known models throw invalid_argument.
 [[nodiscard]] MeasurementLineworkVersion inspect_measurement_linework_model(
     const nlohmann::json& model);
 [[nodiscard]] MeasurementLineworkDecodeResult decode_measurement_linework_model(

@@ -1591,6 +1591,10 @@
     },
     {
       "category": "docs",
+      "path": "docs/plans/2026-10-03-measured-stroke-geometry-editing.md"
+    },
+    {
+      "category": "docs",
       "path": "docs/plans/2026-10-03-measurement-linework-canvas.md"
     },
     {
@@ -2504,6 +2508,10 @@
     {
       "category": "docs",
       "path": "docs/verification/measured-group-movement-2026-09-30.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/verification/measured-stroke-geometry-2026-10-03.md"
     },
     {
       "category": "docs",
@@ -4444,6 +4452,10 @@
     {
       "category": "source",
       "path": "tests/measurement_linework_document_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/measurement_linework_edit_tests.cpp"
     },
     {
       "category": "source",
