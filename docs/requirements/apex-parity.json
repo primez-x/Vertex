@@ -807,7 +807,8 @@
       "requirement": "Provide alignment, snapping, point jumping, automatic closure, and bay-window completion while retaining exact geometry.",
       "source_urls": [
         "https://www.apexwin.com/support/ApexSketchv7/ApexSketchv7-DrawingAngles.pdf",
-        "https://www.apexwin.com/support/ApexSketchv7/ApexSketchv7-DefineFirst.pdf"
+        "https://www.apexwin.com/support/ApexSketchv7/ApexSketchv7-DefineFirst.pdf",
+        "https://apexwin.com/support/ApexSketchv7/ApexSketchv7-DrawFirst.pdf"
       ],
       "evidence_status": "documented",
       "implementation_status": "in_progress",
@@ -823,10 +824,11 @@
         "src/desktop/main_window.cpp",
         "tests/bay_return_desktop_tests.cpp",
         "tests/witness_alignment_desktop_tests.cpp",
+        "tests/directional_alignment_canvas_tests.cpp",
         "scripts/generate_workflow_acceptance_evidence.py",
         "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "Selected-boundary point jump, exact closure, alignment/snap and logical shortcut mappings have bounded geometry/UI foundations. Canvas B and Tools/Commands add a matching bay return with normal dimensions, history and true-outline closure. Active X/Y starting-point witnesses and adaptive A closure use exact model geometry without changing accepted sides; Define First retains manual dimension placement. The separate disconnected point-jump workflow, other mapped keyboard alignment behavior, complete physical shortcut qualification, native Apex compatibility and production parity remain open. Focused bay-return native Release evidence remains bounded; historical Debug/Release evidence retains its named-source qualification boundary."
+      "implementation_note": "Selected-boundary cursor jump, exact closure, alignment/snap and logical shortcut mappings have bounded geometry/UI foundations. B matches bay returns; X/Y propose original-start coordinate alignment and A closes the actual outline. Ctrl+Arrow advances through visible structural endpoint coordinates; Ctrl+Shift+Arrow proposes actual analytical line/arc ray intersections. Enter accepts the revision-bound proposal through ordinary geometry/history; Define First retains manual dimensions. The disconnected open-linework point-jump workflow, other keyboard semantics, physical shortcut qualification, native Apex compatibility and production parity remain open. Historical evidence retains its named-source qualification boundary."
     },
     {
       "id": "GEO-CON-001",

@@ -1,6 +1,6 @@
 # Vertex user testing checklist
 
-366 practical tasks, grouped by how you use the app (including U100a). This replaces the earlier engineering-oriented checklist. The old 130-item list is preserved separately as engineering-requirements-checklist.md.
+367 practical tasks, grouped by how you use the app (including U100a). This replaces the earlier engineering-oriented checklist. The old 130-item list is preserved separately as engineering-requirements-checklist.md.
 
 This is a user acceptance list for the intended app, not a claim that every listed action is implemented or working in the current preview. If you cannot find a control, or a feature is absent, mark **Blocked / missing** and describe it. Specialized sections can be skipped if you do not use them or lack the device or sample files.
 
@@ -2159,6 +2159,14 @@ drawing; switching modes does not change existing geometry.
   - Expected: X ends the next horizontal side at the starting point's X coordinate. Y ends the next vertical side at its Y coordinate. The guide shows its length. X/Y preview a side without creating it; Enter commits the exact proposed endpoint. The starting point and previous sides stay in place. The committed side uses normal dimensions and drawing history.
   - Also try: Move the mouse after proposing a side, cancel with Escape, use X/Y while typing in a name field, and hold Ctrl while pressing them. Change the active layer or undo an earlier side before accepting a proposal.
   - Expected: An abandoned or stale proposal cannot commit. Typing and modified keys keep their ordinary behavior. A zero-length alignment is unavailable.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **U366 — Align a drawing side with other walls using the arrow keys**
+  - Steps: Draw a wall above the area where you will draw another outline. Start that outline below it. Press Ctrl+Right repeatedly to preview alignment with the existing wall's endpoint X coordinates, then Enter to accept the desired side. Try the other arrow directions. Press Ctrl+Shift+Arrow toward a wall crossing the cursor's horizontal or vertical path. Repeat in Measurement and Define First, placing each pending dimension before the next side. Try the same operations from Tools → Directional alignment. Undo, Redo, save and reopen the finished drawing.
+  - Expected: Ctrl+Arrow advances through visible structural endpoint coordinates without changing the other coordinate. Ctrl+Shift+Arrow stops at an actual line or curve intersection in that direction. The guide displays the proposed length, and only Enter creates the side. A direction with no target leaves the cursor and proposal unchanged. Accepted geometry and dimensions use normal history and persist after reopening.
+  - Also try: Move the pointer after proposing a side, change the displayed scene, type Ctrl+Arrow inside a text field, and use the keys during canvas dragging. Hide the target wall's layer. Place a symbol or reference image near the proposed path.
+  - Expected: Abandoned or stale proposals cannot commit. Text navigation and canvas dragging remain available. Hidden walls, symbol artwork, reference images and grid lines do not become alignment targets.
   - Result: Not tested
   - Notes: ______________________________
 

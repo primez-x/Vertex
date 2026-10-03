@@ -1009,3 +1009,24 @@ fields, modified shortcuts and active navigation keep their normal behavior.
 Witness guides are transient screen controls and do not print or export.
 The separate disconnected point-jump workflow and complete physical Apex keyboard
 qualification remain open requirements.
+
+## Directional keyboard alignment
+
+In an active Wall or Measurement drawing, **Ctrl+Arrow** proposes the next
+visible structural endpoint coordinate in that direction. Repeating the key
+advances through the available coordinates. The other coordinate stays exact.
+**Ctrl+Shift+Arrow** instead proposes the nearest actual intersection with a
+wall or boundary on that horizontal or vertical ray, including analytical curves.
+For a collinear overlap, the next finite structural endpoint is used.
+
+The highlighted guide shows the proposed length and an Enter cue. **Enter**
+adds the side through ordinary drawing and history. A missing target leaves the
+cursor and proposal unchanged. Pointer movement or a refreshed scene abandons
+the proposal. Define First still requires the pending dimension to be placed
+before proposing another side. Tools → Directional alignment and Commands
+provide the same operations without remembering their keys.
+
+Alignment uses visible model geometry, independent of zoom and grid spacing.
+Symbol artwork, annotations, reference images, grid lines, and the unaccepted
+rubber band are not structural targets. These operations do not implement
+disconnected open measurement linework or the complete Apex keyboard preset.

@@ -2439,6 +2439,10 @@
     },
     {
       "category": "docs",
+      "path": "docs/verification/directional-keyboard-alignment-2026-10-03.md"
+    },
+    {
+      "category": "docs",
       "path": "docs/verification/drawing-and-appraisal-details-2026-10-02.md"
     },
     {
@@ -4232,6 +4236,10 @@
     {
       "category": "source",
       "path": "tests/desktop_workspace_recovery_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/directional_alignment_canvas_tests.cpp"
     },
     {
       "category": "source",

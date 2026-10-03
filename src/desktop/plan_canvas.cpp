@@ -1509,6 +1509,10 @@ void PlanCanvas::setWitnessAlignmentRequested(std::function<void(bool)> callback
     m_witness_alignment_requested = std::move(callback);
 }
 
+void PlanCanvas::setDirectionalAlignmentRequested(std::function<void(int, int, bool)> callback) {
+    m_directional_alignment_requested = std::move(callback);
+}
+
 void PlanCanvas::setAutoCloseDrawingRequested(std::function<void()> callback) {
     m_auto_close_drawing_requested = std::move(callback);
 }
@@ -3653,6 +3657,30 @@ void PlanCanvas::wheelEvent(QWheelEvent* event) {
 }
 
 void PlanCanvas::keyPressEvent(QKeyEvent* event) {
+    const bool directional_modifiers = event->modifiers() == Qt::ControlModifier ||
+        event->modifiers() == (Qt::ControlModifier | Qt::ShiftModifier);
+    if (hasFocus() && directional_modifiers && drawingCommandIdle() &&
+        !m_point_placement_requested && selectedIds().isEmpty() &&
+        (m_tool == CanvasTool::boundary || m_tool == CanvasTool::wall) &&
+        m_directional_alignment_requested) {
+        int dx = 0, dy = 0;
+        switch (event->key()) {
+        case Qt::Key_Left: dx = -1; break;
+        case Qt::Key_Right: dx = 1; break;
+        case Qt::Key_Up: dy = 1; break;
+        case Qt::Key_Down: dy = -1; break;
+        default: break;
+        }
+        if (dx != 0 || dy != 0) {
+            if (!event->isAutoRepeat()) {
+                beginPerformanceMeasurement(PerformanceMetric::input);
+                m_directional_alignment_requested(dx, dy,
+                    event->modifiers() == (Qt::ControlModifier | Qt::ShiftModifier));
+            }
+            event->accept();
+            return;
+        }
+    }
     // Exact entry returns focus here. A held key must not finish/cancel the
     // draft or reopen a modal after its initial input action was consumed.
     if (event->isAutoRepeat() &&
@@ -3855,6 +3883,210 @@ std::optional<Vec2> PlanCanvas::drawingOrigin() const {
         (m_tool==CanvasTool::boundary || m_tool==CanvasTool::select))
         return m_boundary_draft_preview->pen_position;
     return std::nullopt;
+}
+
+std::optional<Vec2> PlanCanvas::directionalDrawingAlignment(
+    Vec2 origin, int dx, int dy, bool intersections_only) const {
+    const bool cardinal = ((dx == -1 || dx == 1) && dy == 0) ||
+        ((dy == -1 || dy == 1) && dx == 0);
+    if (!std::isfinite(origin.x) || !std::isfinite(origin.y) || !cardinal) return std::nullopt;
+    const bool horizontal = dx != 0;
+    const int direction = horizontal ? dx : dy;
+    const auto coordinate = [&](Vec2 point) { return horizontal ? point.x : point.y; };
+    const auto transverse = [&](Vec2 point) { return horizontal ? point.y : point.x; };
+    std::optional<Vec2> best;
+    const auto consider = [&](double value, double minimum_distance = 0.0) {
+        if (!std::isfinite(value)) return;
+        const auto origin_coordinate = coordinate(origin);
+        if (direction > 0 ? value <= origin_coordinate : value >= origin_coordinate) return;
+        // Compare world coordinates directly. Subtracting a distant origin
+        // can round distinct targets to the same distance or overflow.
+        if (best && (direction > 0 ? value >= coordinate(*best) : value <= coordinate(*best))) return;
+        // Only analytical arc contacts need a tiny roundoff exclusion near
+        // the ray origin; endpoint admission and ordering remain exact.
+        if (minimum_distance > 0.0 &&
+            (static_cast<long double>(value)-origin_coordinate)*direction <= minimum_distance) return;
+        best = horizontal ? Vec2{value, origin.y} : Vec2{origin.x, value};
+    };
+    const auto segment_target = [&](const Segment& segment) {
+        try {
+            // Validate retained analytical geometry before using its endpoints.
+            const auto source_length = segment_length(segment);
+            if (!std::isfinite(source_length) || source_length <= 0.0) return;
+            auto bounds = segment_bounds(segment);
+            if (!intersections_only) {
+                consider(coordinate(segment.start));
+                consider(coordinate(segment.end));
+                return;
+            }
+            if (segment.sweep_radians == 0.0) {
+                // Work in long-double local differences: the transverse axis
+                // must actually cross the line, without a screen snap radius.
+                const auto start = transverse(segment.start);
+                const auto end = transverse(segment.end);
+                const auto axis = transverse(origin);
+                if (start == end) {
+                    if (start == axis) {
+                        // An overlapping ray has no isolated closest contact.
+                        // Its next finite structural endpoint is deterministic.
+                        consider(coordinate(segment.start));
+                        consider(coordinate(segment.end));
+                    }
+                } else if (axis >= std::min(start, end) && axis <= std::max(start, end)) {
+                    const long double fraction = (static_cast<long double>(axis)-start)/
+                        (static_cast<long double>(end)-start);
+                    const auto value = static_cast<double>(static_cast<long double>(coordinate(segment.start)) +
+                        (static_cast<long double>(coordinate(segment.end))-coordinate(segment.start))*fraction);
+                    consider(value);
+                }
+                return;
+            }
+            const Vec2 chord{segment.end.x-segment.start.x, segment.end.y-segment.start.y};
+            const auto chord_length = std::hypot(chord.x, chord.y);
+            if (!std::isfinite(chord_length) || chord_length <= 0.0) return;
+            const Vec2 midpoint{std::midpoint(segment.start.x, segment.end.x),
+                std::midpoint(segment.start.y, segment.end.y)};
+            const Vec2 normal{-chord.y/chord_length, chord.x/chord_length};
+            const bool half_turn = std::abs(segment.sweep_radians) == std::numbers::pi;
+            if (half_turn) {
+                // An exact represented half-turn has a midpoint center. Use
+                // its canonical extrema for both clipping and tangent proof;
+                // trigonometric residue must not expand or shrink the circle.
+                bounds = {{std::min(segment.start.x, segment.end.x), std::min(segment.start.y, segment.end.y)},
+                    {std::max(segment.start.x, segment.end.x), std::max(segment.start.y, segment.end.y)}};
+                for (const auto direction_vector : std::array{Vec2{1,0}, Vec2{0,1}, Vec2{-1,0}, Vec2{0,-1}}) {
+                    const auto side = direction_vector.x*normal.x + direction_vector.y*normal.y;
+                    if (std::copysign(1.0, segment.sweep_radians)*side > 0.0) continue;
+                    const Vec2 point{midpoint.x + direction_vector.x*(chord_length*0.5),
+                        midpoint.y + direction_vector.y*(chord_length*0.5)};
+                    if (!std::isfinite(point.x) || !std::isfinite(point.y)) return;
+                    bounds.minimum.x = std::min(bounds.minimum.x, point.x);
+                    bounds.minimum.y = std::min(bounds.minimum.y, point.y);
+                    bounds.maximum.x = std::max(bounds.maximum.x, point.x);
+                    bounds.maximum.y = std::max(bounds.maximum.y, point.y);
+                }
+            }
+            // Exact endpoint contacts do not depend on the circle solve.
+            const auto axis = transverse(origin);
+            if (transverse(segment.start) == axis) consider(coordinate(segment.start));
+            if (transverse(segment.end) == axis) consider(coordinate(segment.end));
+            // Restrict the ray to the arc's analytical box. Empty distance
+            // before the arc must not inflate the contact tolerance or cause
+            // translated line/circle calculations to lose nearby roots.
+            if (axis < transverse(bounds.minimum) || axis > transverse(bounds.maximum)) return;
+            const auto start_coordinate = direction > 0
+                ? std::max(coordinate(origin), coordinate(bounds.minimum))
+                : std::min(coordinate(origin), coordinate(bounds.maximum));
+            const auto extreme = coordinate(direction > 0 ? bounds.maximum : bounds.minimum);
+            const auto length = (static_cast<long double>(extreme)-start_coordinate)*direction;
+            if (!(length > 0.0) || length > std::numeric_limits<double>::max()) return;
+            const Vec2 start = horizontal ? Vec2{start_coordinate, origin.y} : Vec2{origin.x, start_coordinate};
+            const Vec2 end = horizontal ? Vec2{extreme, origin.y} : Vec2{origin.x, extreme};
+            // Numerical roundoff only, independent of display zoom, grid and
+            // the canvas's metre-based mouse snapping tolerance.
+            const auto tolerance = 32.0 * std::numeric_limits<double>::epsilon() *
+                std::max({1.0, static_cast<double>(length), source_length});
+            if (!std::isfinite(tolerance)) return;
+            // A chord-frame circle equation avoids subtracting two enormous
+            // radius squares for shallow arcs. It also avoids constructing a
+            // distant center whose low bits cannot retain the ray offset.
+            const Vec2 offset{start.x-midpoint.x, start.y-midpoint.y};
+            const Vec2 ray{end.x-start.x, end.y-start.y};
+            const auto scale = std::max({chord_length, std::abs(offset.x), std::abs(offset.y),
+                std::abs(ray.x), std::abs(ray.y)});
+            if (!std::isfinite(scale) || scale <= 0.0) return;
+            const Vec2 p{offset.x/scale, offset.y/scale}, d{ray.x/scale, ray.y/scale};
+            const auto half_chord = (chord_length/scale)*0.5;
+            const auto sine = half_turn ? std::copysign(1.0, segment.sweep_radians) : std::sin(segment.sweep_radians*0.5);
+            const auto half_chord_cosine = half_turn ? 0.0 : half_chord*std::cos(segment.sweep_radians*0.5);
+            const auto dot = [](Vec2 a, Vec2 b) { return std::fma(a.x, b.x, a.y*b.y); };
+            double a = sine*dot(d, d);
+            double b = 2.0*std::fma(sine, dot(p, d), -half_chord_cosine*dot(d, normal));
+            double k = std::fma(sine, std::fma(p.x, p.x, std::fma(p.y, p.y, -half_chord*half_chord)),
+                -2.0*half_chord_cosine*dot(p, normal));
+            constexpr auto epsilon = std::numeric_limits<double>::epsilon();
+            double error_a = 32.0*epsilon*std::abs(sine)*(d.x*d.x+d.y*d.y);
+            double error_b = 64.0*epsilon*(std::abs(sine)*(std::abs(p.x*d.x)+std::abs(p.y*d.y)) +
+                std::abs(half_chord_cosine)*(std::abs(d.x*normal.x)+std::abs(d.y*normal.y)));
+            double error_k = 64.0*epsilon*(std::abs(sine)*(p.x*p.x+p.y*p.y+half_chord*half_chord) +
+                2.0*std::abs(half_chord_cosine)*(std::abs(p.x*normal.x)+std::abs(p.y*normal.y)));
+            const auto coefficient_scale = std::max({std::abs(a), std::abs(b), std::abs(k)});
+            if (!std::isfinite(coefficient_scale) || coefficient_scale <= 0.0) return;
+            a /= coefficient_scale; b /= coefficient_scale; k /= coefficient_scale;
+            error_a /= coefficient_scale; error_b /= coefficient_scale; error_k /= coefficient_scale;
+            if (!std::isfinite(error_a) || !std::isfinite(error_b) || !std::isfinite(error_k)) return;
+            const auto admit_root = [&](double root) {
+                if (!std::isfinite(root)) return;
+                const auto range_error = 64.0*epsilon*std::max(1.0, std::abs(root));
+                if (root < -range_error || root > 1.0+range_error) return;
+                root = std::clamp(root, 0.0, 1.0);
+                const auto residual = std::fma(std::fma(a, root, b), root, k);
+                const auto residual_error = error_a*root*root + error_b*std::abs(root) + error_k +
+                    64.0*epsilon*(std::abs(a)*root*root+std::abs(b*root)+std::abs(k));
+                if (!std::isfinite(residual) || !std::isfinite(residual_error) ||
+                    std::abs(residual) > residual_error) return;
+                const Vec2 local{std::fma(root, d.x, p.x), std::fma(root, d.y, p.y)};
+                const auto side = dot(local, normal);
+                const auto side_error = 32.0*epsilon*(std::abs(local.x*normal.x)+std::abs(local.y*normal.y));
+                if (!std::isfinite(side) || !std::isfinite(side_error) ||
+                    std::copysign(1.0, segment.sweep_radians)*side > side_error) return;
+                consider(std::fma(root, coordinate(end)-coordinate(start), coordinate(start)), tolerance);
+            };
+            if (a == 0.0) {
+                if (b != 0.0) admit_root(-k/b);
+                return;
+            }
+            const auto discriminant = std::fma(b, b, -4.0*a*k);
+            const auto discriminant_error = 2.0*std::abs(b)*error_b +
+                4.0*(std::abs(k)*error_a+std::abs(a)*error_k) +
+                64.0*epsilon*(b*b+4.0*std::abs(a*k));
+            if (!std::isfinite(discriminant) || !std::isfinite(discriminant_error) ||
+                discriminant < -discriminant_error) return;
+            const bool interior_extremum =
+                (axis == transverse(bounds.minimum) || axis == transverse(bounds.maximum)) &&
+                axis != transverse(segment.start) && axis != transverse(segment.end);
+            if (interior_extremum && discriminant <= discriminant_error) {
+                // Roundoff alone cannot turn a near miss into a tangent.
+                // A bound distinct from both endpoints independently proves
+                // an interior cardinal tangency, including a slightly
+                // positive rounded discriminant at that exact extremum.
+                admit_root(-b/(2.0*a));
+                return;
+            }
+            if (discriminant <= 0.0) return;
+            // Even a tiny positive discriminant represents two contacts.
+            const auto q = -0.5*(b+std::copysign(std::sqrt(discriminant), b));
+            if (q == 0.0) admit_root(-b/(2.0*a));
+            else { admit_root(q/a); admit_root(k/q); }
+        } catch (const std::exception&) {
+            // Invalid or numerically unresolved geometry cannot move the pen.
+        }
+    };
+    for (const auto& entity : m_entities) {
+        const bool wall = entity.type == QStringLiteral("wall");
+        const bool boundary = entity.type == QStringLiteral("boundary") ||
+            entity.type == QStringLiteral("measurement_boundary") ||
+            entity.type == QStringLiteral("room_boundary");
+        if ((!wall && !boundary) || entity.svg_symbol) continue;
+        if (!intersections_only) {
+            for (const auto point : entity.snap_points) {
+                if (std::isfinite(point.x) && std::isfinite(point.y)) consider(coordinate(point));
+            }
+        }
+        // A painted wall footprint is not its exact authoring baseline.
+        const auto& segments = wall
+            ? (entity.drawing_alignment_segments.empty() ? entity.snap_segments : entity.drawing_alignment_segments)
+            : (entity.snap_segments.empty() ? entity.segments : entity.snap_segments);
+        for (const auto& segment : segments) segment_target(segment);
+        if (boundary) {
+            for (const auto& hole : entity.holes)
+                for (const auto& segment : hole) segment_target(segment);
+        }
+    }
+    if (m_boundary_draft_preview) {
+        for (const auto& segment : m_boundary_draft_preview->segments) segment_target(segment);
+    }
+    return best;
 }
 
 Vec2 PlanCanvas::snapped(Vec2 point) const {
@@ -4632,7 +4864,9 @@ void PlanCanvas::drawDrawingWitnesses(QPainter& painter, const QRectF& viewport,
         font.setPixelSize(12);
         font.setWeight(witness.selected ? QFont::DemiBold : QFont::Medium);
         painter.setFont(font);
-        QString text = witness.horizontal ? QStringLiteral("X") : QStringLiteral("Y");
+        QString text = witness.command_text.isEmpty()
+            ? (witness.horizontal ? QStringLiteral("X") : QStringLiteral("Y"))
+            : witness.command_text;
         if (!witness.dimension_text.isEmpty()) text += QStringLiteral("  ") + witness.dimension_text;
         if (witness.selected) text += QStringLiteral("  •  ") + tr("Enter");
         const QFontMetricsF metrics(font, painter.device());

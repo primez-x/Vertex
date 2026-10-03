@@ -18575,6 +18575,27 @@ public:
         }
     }
 
+    Vec2 drawingAlignmentStart() const {
+        if (!drawingInputReady() || m_text_placement_context || m_plan_label_context)
+            throw std::invalid_argument("Continue an active wall or measurement outline first.");
+        const auto snapshot = m_document->snapshot();
+        if (m_tool == CanvasTool::boundary) {
+            if (m_boundary_document != m_document || !m_boundary_source || !m_boundary_context ||
+                m_boundary_context->layer_id != m_active_layer_id.toStdString() ||
+                inspect_boundary_recovery_source(snapshot,
+                    capture_boundary_recovery_source(*m_boundary_source, *m_boundary_context)) !=
+                    BoundaryRecoverySourceStatus::current)
+                throw std::invalid_argument("The unfinished outline's drawing context changed.");
+            const auto chain = m_boundary_session->active_chain();
+            if (!chain) throw std::invalid_argument("Place the outline's starting point first.");
+            return chain->segments.empty() ? chain->anchor : chain->segments.back().segment.end;
+        }
+        if (!m_pending_wall_start || !m_wall_chain_anchor || m_boundary_session)
+            throw std::invalid_argument("Place the wall's starting point first.");
+        if (m_wall_chain_has_segments) (void)activeWallChainGeometry(snapshot);
+        return *m_pending_wall_start;
+    }
+
     std::pair<Vec2, Vec2> drawingWitnessEndpoints() const {
         if (!drawingInputReady() || m_text_placement_context || m_plan_label_context)
             throw std::invalid_argument("Continue an active wall or measurement outline first.");
@@ -18664,6 +18685,10 @@ public:
             m_wall_chain_previous_id != proposal.wall_previous_id || m_wall_chain_owner_ids != proposal.wall_owner_ids ||
             m_wall_chain_has_segments != proposal.wall_has_segments) return false;
         try {
+            if (proposal.directional) {
+                const auto origin = drawingAlignmentStart();
+                return origin.x == proposal.segment.start.x && origin.y == proposal.segment.start.y;
+            }
             const auto edge = drawingWitnessSegment(proposal.horizontal);
             return edge.start.x == proposal.segment.start.x && edge.start.y == proposal.segment.start.y &&
                 edge.end.x == proposal.segment.end.x && edge.end.y == proposal.segment.end.y;
@@ -18692,9 +18717,16 @@ public:
             try {
                 const auto edge = drawingWitnessSegment(horizontal);
                 witnesses.push_back({edge, horizontal,
-                    m_drawing_alignment && m_drawing_alignment->horizontal == horizontal,
+                    m_drawing_alignment && !m_drawing_alignment->directional &&
+                        m_drawing_alignment->horizontal == horizontal,
                     PlanCanvas::drawingLengthText(segment_length(edge), m_metric_units)});
             } catch (const std::exception&) { /* An unavailable alignment has no witness. */ }
+        }
+        if (m_drawing_alignment && m_drawing_alignment->directional) {
+            const auto& proposal = *m_drawing_alignment;
+            witnesses.push_back({proposal.segment, proposal.horizontal, true,
+                PlanCanvas::drawingLengthText(segment_length(proposal.segment), m_metric_units),
+                proposal.command_text});
         }
         m_measurementCanvas->setDrawingWitnesses(witnesses);
         m_architecturalCanvas->setDrawingWitnesses(std::move(witnesses));
@@ -18743,6 +18775,62 @@ public:
         }
     }
 
+    void proposeDirectionalDrawingAlignment(int dx, int dy, bool intersections_only) {
+        try {
+            if (!m_measurementCanvas || !m_measurementCanvas->drawingCommandIdle() ||
+                !m_selected_ids.isEmpty() || std::abs(dx) + std::abs(dy) != 1)
+                throw std::invalid_argument("Finish the active canvas gesture before aligning a side.");
+            const auto start = drawingAlignmentStart();
+            const auto current = m_document->snapshot();
+            if (m_drawing_alignment_scene_document != m_document || !m_drawing_alignment_scene_source ||
+                current.revision() != m_drawing_alignment_scene_source->revision() ||
+                current.entities() != m_drawing_alignment_scene_source->entities() ||
+                current.assets() != m_drawing_alignment_scene_source->assets())
+                throw std::invalid_argument("The visible drawing changed. Refresh it before aligning a side.");
+            if (m_drawing_alignment && !drawingAlignmentContextCurrent()) {
+                clearDrawingAlignment();
+                throw std::invalid_argument("The drawing changed. Move the pointer and align again.");
+            }
+            // Mouse screen/model conversion can land just before the retained
+            // endpoint. Normalize only the searched axis near that endpoint;
+            // the transverse cursor coordinate remains authoritative.
+            auto cursor = m_drawing_alignment ? m_drawing_alignment->segment.end : m_last_cursor;
+            if (!m_drawing_alignment &&
+                std::hypot(cursor.x - start.x, cursor.y - start.y) <= drawingGeometryTolerance()) {
+                if (dx != 0) cursor.x = start.x;
+                else cursor.y = start.y;
+            }
+            const auto endpoint = m_measurementCanvas->directionalDrawingAlignment(cursor, dx, dy, intersections_only);
+            // No candidate leaves the current proposal and cursor exactly as they were.
+            if (!endpoint) {
+                owner->statusBar()->showMessage(QStringLiteral("No drawing alignment in that direction"), 2500);
+                return;
+            }
+            const auto length = std::hypot(endpoint->x - start.x, endpoint->y - start.y);
+            if (!std::isfinite(length) || length <= drawingGeometryTolerance())
+                throw std::invalid_argument("This alignment has no representable positive side.");
+            auto boundary = m_boundary_session ? std::optional{m_boundary_session->view()} : std::nullopt;
+            if (boundary) boundary->pointer.reset();
+            const auto snapshot = m_document->snapshot();
+            const auto command = dx > 0 ? QStringLiteral("→") : dx < 0 ? QStringLiteral("←") :
+                                 dy > 0 ? QStringLiteral("↑") : QStringLiteral("↓");
+            m_drawing_alignment = DrawingAlignmentProposal{Segment{start, *endpoint, 0}, dx != 0,
+                captureModalContext(), snapshot, m_tool, m_workspace,
+                organize_project(snapshot).drawing_context(m_active_layer_id.toStdString()),
+                boundary, m_pending_wall_start, m_wall_chain_anchor, m_wall_chain_previous_id,
+                m_wall_chain_owner_ids, m_wall_chain_has_segments, true,
+                command + (intersections_only ? QStringLiteral(" intersection") : QStringLiteral(" alignment"))};
+            m_drawing_alignment_invalidated = false;
+            resetDrawingInputContext();
+            if (m_drawing_input) m_drawing_input->clearInput();
+            if (m_boundary_session) refreshBoundaryPreview();
+            else refreshWallPreview(*endpoint);
+            clearError();
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Directional alignment: %1").arg(QString::fromUtf8(error.what())));
+        }
+    }
+
     void acceptDrawingAlignment() {
         if (!m_measurementCanvas || !m_measurementCanvas->drawingCommandIdle() ||
             QApplication::keyboardModifiers() != Qt::NoModifier) {
@@ -18758,7 +18846,7 @@ public:
         }
         const auto proposal = *m_drawing_alignment;
         try {
-            const auto anchor = drawingWitnessEndpoints().second;
+            const auto anchor = m_boundary_session ? m_boundary_session->active_chain()->anchor : *m_wall_chain_anchor;
             if (proposal.segment.end.x == anchor.x && proposal.segment.end.y == anchor.y) {
                 Boundary geometry;
                 if (m_boundary_session) {
@@ -18782,6 +18870,10 @@ public:
         receipt.start = proposal.segment.start;
         receipt.chord_end = proposal.segment.end;
         onCanvasPoint(proposal.segment.end, proposal.context.revision, receipt);
+        if (proposal.directional && m_last_error.isEmpty()) {
+            m_last_cursor = proposal.segment.end;
+            refreshCursorLabel(m_last_cursor);
+        }
     }
 
     bool autoCloseBoundaryDraft() {
@@ -25151,6 +25243,14 @@ public:
             {QStringLiteral("Jump to boundary vertex"), [this] { showBoundaryVertexJump(); }},
             {QStringLiteral("Align side to original start X (X)"), [this] { (void)proposeDrawingAlignment(true); }},
             {QStringLiteral("Align side to original start Y (Y)"), [this] { (void)proposeDrawingAlignment(false); }},
+            {QStringLiteral("Align right (Ctrl+Right)"), [this] { proposeDirectionalDrawingAlignment(1, 0, false); }},
+            {QStringLiteral("Align left (Ctrl+Left)"), [this] { proposeDirectionalDrawingAlignment(-1, 0, false); }},
+            {QStringLiteral("Align up (Ctrl+Up)"), [this] { proposeDirectionalDrawingAlignment(0, 1, false); }},
+            {QStringLiteral("Align down (Ctrl+Down)"), [this] { proposeDirectionalDrawingAlignment(0, -1, false); }},
+            {QStringLiteral("Intersect right (Ctrl+Shift+Right)"), [this] { proposeDirectionalDrawingAlignment(1, 0, true); }},
+            {QStringLiteral("Intersect left (Ctrl+Shift+Left)"), [this] { proposeDirectionalDrawingAlignment(-1, 0, true); }},
+            {QStringLiteral("Intersect up (Ctrl+Shift+Up)"), [this] { proposeDirectionalDrawingAlignment(0, 1, true); }},
+            {QStringLiteral("Intersect down (Ctrl+Shift+Down)"), [this] { proposeDirectionalDrawingAlignment(0, -1, true); }},
             {QStringLiteral("Auto close active drawing (A)"), [this] { (void)autoCloseActiveDrawing(); }},
             {QStringLiteral("Complete bay-window return (B)"), [this] { (void)completeBayWindowReturn(); }},
             {QStringLiteral("Redefine boundary"), [this] { showBoundaryRedefinition(); }},
@@ -26639,6 +26739,20 @@ private:
         more_menu->addAction(jump_vertex_action);
         more_menu->addAction(align_x_action);
         more_menu->addAction(align_y_action);
+        auto* directional_menu = more_menu->addMenu(QStringLiteral("Directional alignment"));
+        for (const auto& [name, dx, dy] : std::array{
+                 std::tuple{QStringLiteral("Right"), 1, 0},
+                 std::tuple{QStringLiteral("Left"), -1, 0},
+                 std::tuple{QStringLiteral("Up"), 0, 1},
+                 std::tuple{QStringLiteral("Down"), 0, -1}}) {
+            for (const bool intersect : {false, true}) {
+                auto* action = directional_menu->addAction(intersect
+                    ? QStringLiteral("Intersect %1 (Ctrl+Shift+%1)").arg(name)
+                    : QStringLiteral("Align %1 (Ctrl+%1)").arg(name));
+                QObject::connect(action, &QAction::triggered, owner,
+                    [this, dx, dy, intersect] { proposeDirectionalDrawingAlignment(dx, dy, intersect); });
+            }
+        }
         more_menu->addAction(auto_close_action);
         more_menu->addAction(bay_return_action);
         more_menu->addSeparator();
@@ -28920,6 +29034,10 @@ private:
         });
         canvas->setBayWindowReturnRequested([this] { (void)completeBayWindowReturn(); });
         canvas->setWitnessAlignmentRequested([this](bool horizontal) { (void)proposeDrawingAlignment(horizontal); });
+        canvas->setDirectionalAlignmentRequested([this, canvas](int dx, int dy, bool intersections_only) {
+            if (canvas == m_measurementCanvas && m_workspace == Workspace::measurement)
+                proposeDirectionalDrawingAlignment(dx, dy, intersections_only);
+        });
         canvas->setAutoCloseDrawingRequested([this] { (void)autoCloseActiveDrawing(); });
         canvas->setDraftRedoRequested([this] {
             (void)redoCommand();
@@ -29887,6 +30005,10 @@ private:
             if (visible_ids.contains(entity.id.toStdString()) &&
                 !presentation_hidden_ids.contains(entity.id.toStdString())) {
                 const auto source = snapshot.entities().find(entity.id.toStdString());
+                if (source != snapshot.entities().end() && source->second.type == "wall") {
+                    const auto baseline = read_required_segment(source->second.properties, "baseline");
+                    if (baseline) entity.drawing_alignment_segments = {*baseline};
+                }
                 if (source != snapshot.entities().end() && active_snap_context &&
                     (source->second.type == "wall" || is_closed_boundary_entity(source->second.type))) {
                     const auto context = organization.drawing_context(source->second.id);
@@ -30187,6 +30309,12 @@ private:
         return 15;
     }
     void refreshCanvases() {
+        m_drawing_alignment_scene_source.reset();
+        m_drawing_alignment_scene_document.reset();
+        if (m_drawing_alignment && m_drawing_alignment->directional) {
+            m_drawing_alignment.reset();
+            m_drawing_alignment_invalidated = true;
+        }
         // A shared Document can replace its head without changing its address
         // or revision. Every refreshed scene needs a new immutable preview source.
         m_opening_preview_source.reset();
@@ -30925,6 +31053,8 @@ private:
             }
         }
         m_measurementCanvas->setEntities(geometry);
+        m_drawing_alignment_scene_source = snapshot;
+        m_drawing_alignment_scene_document = m_document;
         m_architectural_view_entities = std::move(visible_view_geometry);
         m_architecturalCanvas->setEntities(
             m_architectural_view_entities[architectural_view_index(m_architectural_view_kind)]);
@@ -34447,6 +34577,8 @@ private:
         QString wall_previous_id;
         QStringList wall_owner_ids;
         bool wall_has_segments;
+        bool directional{};
+        QString command_text;
     };
 
     ModalContext captureModalContext() const {
@@ -36197,6 +36329,8 @@ private:
     QString m_last_boundary_classification{QStringLiteral("measurement")};
     std::optional<Vec2> m_pending_wall_start;
     std::optional<DrawingAlignmentProposal> m_drawing_alignment;
+    std::optional<DocumentSnapshot> m_drawing_alignment_scene_source;
+    std::shared_ptr<Document> m_drawing_alignment_scene_document;
     bool m_drawing_alignment_invalidated{};
     std::optional<ModalContext> m_drawing_witness_context;
     CanvasTool m_drawing_witness_tool{CanvasTool::select};

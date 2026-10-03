@@ -146,6 +146,9 @@ struct CanvasEntity {
     Boundary hit_segments;
     // Derived comparison presentation only; historical geometry stays exact.
     bool dashed_stroke{false};
+    // Analytical baselines for directional alignment of visible walls,
+    // independent of the active floor's ordinary mouse snap candidates.
+    Boundary drawing_alignment_segments;
 };
 
 // A retained document annotation. Unlike BoundaryDraftPreview, labels are
@@ -277,6 +280,7 @@ struct DrawingWitness {
     bool horizontal{};
     bool selected{};
     QString dimension_text;
+    QString command_text;
 };
 
 class PlanCanvas final : public QWidget {
@@ -492,6 +496,12 @@ public:
     void setPreciseInputRequested(std::function<void()> callback);
     void setBayWindowReturnRequested(std::function<void()> callback);
     void setWitnessAlignmentRequested(std::function<void(bool horizontal)> callback);
+    void setDirectionalAlignmentRequested(
+        std::function<void(int dx, int dy, bool intersections_only)> callback);
+    // Exact world-axis targets from visible structural source geometry. Ctrl
+    // uses endpoint coordinates; Ctrl+Shift requires an actual ray contact.
+    [[nodiscard]] std::optional<Vec2> directionalDrawingAlignment(
+        Vec2 origin, int dx, int dy, bool intersections_only) const;
     void setAutoCloseDrawingRequested(std::function<void()> callback);
     [[nodiscard]] bool drawingCommandIdle() const noexcept;
     // A numeric key can start the host's exact drawing input. The host owns
@@ -791,6 +801,7 @@ private:
     std::function<void()> m_precise_input_requested;
     std::function<void()> m_bay_window_return_requested;
     std::function<void(bool)> m_witness_alignment_requested;
+    std::function<void(int, int, bool)> m_directional_alignment_requested;
     std::function<void()> m_auto_close_drawing_requested;
     std::function<bool(const QString&)> m_drawing_text_requested;
     std::function<void()> m_draft_undo_requested;
