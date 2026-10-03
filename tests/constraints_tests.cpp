@@ -297,6 +297,59 @@ void test_invalid_input_is_rejected_without_solver_entry() {
             "degenerate direction segments should reject before solver entry");
 }
 
+void test_affine_stations_solve_with_persistent_controls() {
+    for (const int control : {0,1,2}) {
+        ConstraintSolveRequest request;
+        request.points = {{"s",2.1,-0.1},{"e",2,1},{"c",2,0.5},{"far",3,0.5}};
+        request.constraints = {AffineStationConstraint{"station","c","s","e",0.5,0},
+            FixedAnchorConstraint{"shell","s",2.1,-0.1}};
+        if (control == 0) request.constraints.push_back(FixedAnchorConstraint{"station-anchor","c",2,0.5});
+        else {
+            request.constraints.push_back(FixedAnchorConstraint{"far-anchor","far",3,0.5});
+            if (control == 1) request.constraints.push_back(FixedLengthConstraint{"branch-length","c","far",1});
+            else request.constraints.push_back(HorizontalConstraint{"branch-horizontal","c","far"});
+        }
+        const auto original = request.points;
+        const auto preview = solve_planar_constraints(request);
+        print_rejection(preview);
+        require(preview.accepted(),"affine T station overconstrained a solvable persistent control");
+        require(request.points == original,"affine station solve mutated the request");
+        const auto& s = point(preview,"s"); const auto& e = point(preview,"e"); const auto& c = point(preview,"c");
+        require_near(c.x,(s.x+e.x)/2,1e-7,"simultaneous line station X");
+        require_near(c.y,(s.y+e.y)/2,1e-7,"simultaneous line station Y");
+        if (control == 0) {
+            require_near(e.x,1.9,1e-7,"station anchor must move the free host endpoint X");
+            require_near(e.y,1.1,1e-7,"station anchor must move the free host endpoint Y");
+        } else if (control == 1)
+            require_near(std::hypot(c.x-3,c.y-0.5),1,1e-7,"station controlled by saved branch length");
+        else require_near(c.y,0.5,1e-7,"station controlled by saved direction");
+    }
+    for (const double sweep : {0.0001,0.6,-0.6,-0.5,-2.0,4.0}) {
+        const double b = -0.5*std::tan(sweep/4);
+        ConstraintSolveRequest request;
+        request.points = {{"s",2.1,-0.1},{"e",2,1},{"c",2-b,0.5}};
+        request.constraints = {AffineStationConstraint{"arc-station","c","s","e",0.5,b},
+            FixedAnchorConstraint{"shell","s",2.1,-0.1},FixedAnchorConstraint{"station-anchor","c",2-b,0.5}};
+        const auto preview = solve_planar_constraints(request);
+        print_rejection(preview);
+        require(preview.accepted(),"fixed-sweep curved T station rejected its movable host endpoint");
+        const auto& s = point(preview,"s"); const auto& e = point(preview,"e"); const auto& c = point(preview,"c");
+        require_near(c.x,(s.x+e.x)/2-b*(e.y-s.y),1e-7,"curved station X cross coupling");
+        require_near(c.y,(s.y+e.y)/2+b*(e.x-s.x),1e-7,"curved station Y cross coupling");
+    }
+    ConstraintSolveRequest invalid;
+    invalid.points = {{"s",0,0},{"e",0,1},{"c",0,0.5}};
+    for (const auto relation : {AffineStationConstraint{"bad","missing","s","e",0.5,0},
+        AffineStationConstraint{"bad","c","s","e",std::numeric_limits<double>::infinity(),0},
+        AffineStationConstraint{"bad","c","s","e",1e100,0},
+        AffineStationConstraint{"bad","c","s","e",0.5,0,0}}) {
+        invalid.constraints = {relation};
+        const auto preview = solve_planar_constraints(invalid);
+        require(preview.status == ConstraintSolveStatus::rejected_invalid_input && preview.points == invalid.points,
+            "invalid affine station should reject atomically before solver entry");
+    }
+}
+
 }  // namespace
 
 void test_diagnostic_only_rank_preserves_coordinates() {
@@ -323,6 +376,7 @@ void test_diagnostic_only_rank_preserves_coordinates() {
 }
 
 int main() {
+    test_affine_stations_solve_with_persistent_controls();
     test_diagnostic_only_rank_preserves_coordinates();
     test_anchored_rectangle_previews_twelve_to_fourteen_feet();
     test_impossible_locked_measurements_reject_atomically();

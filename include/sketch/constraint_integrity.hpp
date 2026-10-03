@@ -25,4 +25,10 @@ void validate_constraint_edit_topology(
     const std::map<std::string, Entity, std::less<>>& before,
     const std::map<std::string, Entity, std::less<>>& after);
 
+// Exterior-corner v8 alone validates active physical phase geometry at its
+// resolved elevations. Historical typed commands keep the original policy.
+void validate_exterior_corner_edit_topology(
+    const std::map<std::string, Entity, std::less<>>& before,
+    const std::map<std::string, Entity, std::less<>>& after);
+
 } // namespace sketch

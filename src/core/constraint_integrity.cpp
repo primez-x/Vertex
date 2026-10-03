@@ -6,6 +6,7 @@
 #include "sketch/wall_semantics.hpp"
 #include "sketch/constraint_wall_edit.hpp"
 #include "sketch/project_organization.hpp"
+#include "sketch/model_phases.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -693,5 +694,45 @@ void validate_constraint_edit_topology(const Entities& before,const Entities& af
     }
     };
     for (const auto& group : groups) { validate_cycles(before,group); validate_cycles(after,group); }
+}
+void validate_exterior_corner_edit_topology(const Entities& before,const Entities& after) {
+    const auto active_physical = [](const Entities& entities) {
+        auto result = entities;
+        std::set<std::string,std::less<>> unavailable;
+        for (const auto& [id,entity] : entities) {
+            (void)id;
+            if (entity.type != "model_phases") continue;
+            const auto model = ModelPhases::from_json(entity.properties.at("model"));
+            const auto active = model.active_state();
+            for (const auto& owner : model.entity_ids())
+                if (!active.contains(owner) || active.at(owner) == ModelPhase::demolished) unavailable.insert(owner);
+        }
+        for (const auto& [id,entity] : entities) {
+            if (!topology_physical_wall(entity)) continue;
+            if (unavailable.contains(id)) result.erase(id);
+            else result.at(id) = resolve_vertical_placement(entities,entity);
+        }
+        return result;
+    };
+    const auto active_before = active_physical(before), active_after = active_physical(after);
+    for (const auto& [id,entity] : before)
+        if (topology_physical_wall(entity) && !active_before.contains(id) &&
+            (!after.contains(id) || after.at(id) != entity))
+            invalid("Exterior corner cannot edit an unavailable physical phase wall: " + id);
+    std::set<std::string> phases;
+    for (const auto& [id,entity] : active_after) {
+        (void)id;
+        if (topology_physical_wall(entity)) phases.insert(entity.properties.value("phase_id",json(nullptr)).dump());
+    }
+    for (const auto& phase : phases) {
+        auto phase_before = active_before, phase_after = active_after;
+        std::erase_if(phase_before,[&](const auto& item) {
+            return topology_physical_wall(item.second) && item.second.properties.value("phase_id",json(nullptr)).dump() != phase;
+        });
+        std::erase_if(phase_after,[&](const auto& item) {
+            return topology_physical_wall(item.second) && item.second.properties.value("phase_id",json(nullptr)).dump() != phase;
+        });
+        validate_constraint_edit_topology(phase_before,phase_after);
+    }
 }
 } // namespace sketch

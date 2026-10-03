@@ -260,7 +260,7 @@ private:
 };
 
 // Weighted Linear Combination
-class ConstraintWeightedLinearCombination: public Constraint
+class SketcherExport ConstraintWeightedLinearCombination: public Constraint
 {
     double* thepoint()
     {

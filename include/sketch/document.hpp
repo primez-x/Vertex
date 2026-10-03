@@ -144,6 +144,15 @@ struct ConstraintWallGeometryEdit {
     std::uint64_t version{1};
 };
 
+// An exterior analytical corner edit is replayed through the physical source
+// walls, never through an independently editable measured-outline payload.
+struct ExteriorCornerMoveIntent {
+    std::string boundary_id;
+    std::string vertex_id;
+    Vec2 target_position;
+    bool move_connected_objects{true};
+};
+
 // Geometry is replayed before the relation changes are validated.
 // The original entity_changes lane contains only constraints. Version six's
 // physical lane admits existing-wall changes under ordinary provenance rules;
@@ -173,6 +182,9 @@ struct ApplyBoundaryConstraintChanges {
     std::vector<AssetChange> supplemental_asset_changes;
     // Retains version seven even if its supplemental vectors are removed.
     bool supplemental_source_completion{};
+    // Envelope version eight independently reconstructs the complete physical
+    // change from this intent before validating its exact exterior redraws.
+    std::optional<ExteriorCornerMoveIntent> exterior_corner_move;
 };
 
 using Command = std::variant<ApplyEntityChanges, NameRevision, TranslateBoundary,

@@ -32757,7 +32757,8 @@ public:
             auto* layout = new QVBoxLayout(&dialog);
             auto* help = new QLabel(QStringLiteral(
                 "Length and vertex edits preserve curve sweeps. Curvature reconstruction keeps both endpoints fixed. "
-                "Vertex X/Y are absolute plan coordinates; bare values use the current length units."), &dialog);
+                "Vertex X/Y are absolute plan coordinates; bare values use the current length units. "
+                "For a wall-derived exterior, moving a corner also updates its physical source walls and attached geometry."), &dialog);
             help->setWordWrap(true);
             layout->addWidget(help);
             auto* form = new QFormLayout;

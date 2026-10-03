@@ -1,4 +1,4 @@
-# Vertex project formats v1 through v20
+# Vertex project formats v1 through v22
 
 ## Original typed wall input
 
@@ -196,9 +196,10 @@ construction transforms, v15 fixed-chord boundary curvature edits, v16
 reviewed exterior wall-source replacements, and v17 explicit fresh-topology
 boundary replacements, v18 measured group rigid transforms, and v19 coordinated
 physical wall/exterior measurement changes, and v20 mixed ordinary object/asset
-and exterior changes, plus v4 through v21 archives through
+and exterior changes, v21 ANSI-oriented appraisal evidence, and v22 coordinated
+exterior-corner edits, plus v4 through v22 archives through
 recovery-aware APIs.
-Under-versioned semantic data and versions above 20 reject. Legacy-only history
+Under-versioned semantic data and versions above 22 reject. Legacy-only history
 is still written as v1. Unknown boundary entity
 versions in v2 remain preserved read-only. See `boundary-entity-format.md`.
 Version 2 also recognizes `dimension` entities. Segment-length dimensions refer
@@ -651,7 +652,7 @@ unknown project `format_version` is rejected rather than opened unsafely.
 ## SQLite schema
 
 The SQLite `application_id` is `0x50535444` (`PSTD`). `user_version` and metadata
-`format_version` are equal and range from `1` through `21`, according to the
+`format_version` are equal and range from `1` through `22`, according to the
 retained semantics. The baseline application tables below are shared; later
 versions add the proof columns and recovery data documented in this file.
 
@@ -1361,3 +1362,37 @@ properties outside the property/floor/boundary appraisal namespaces remain
 opaque and do not raise this floor. Older documents retain their existing
 minimum format and digest representations. Extraction is a documented data
 export and does not itself provide project import.
+
+### Coordinated exterior-corner edits (v22)
+
+Constraint-command envelope version 8 retains an `exterior_corner_move` intent.
+Its strict version-1 object contains `version`, `boundary_id`, `vertex_id`,
+`position` (finite X/Y in model metres), and `move_connected_objects`.
+The boundary and vertex IDs identify a current physical-wall-derived measured
+exterior. A stale or ambiguous source cannot authorize this operation.
+
+Replay independently reconstructs physical walls from the requested analytical
+outline, wall thicknesses and retained source lineage, then regenerates affected
+measured owners. It validates the desired outline against the forward derivation
+within the existing 1e-7-metre geometry tolerance. Stored boundary bytes remain
+the forward-derived authority; the requested coordinate is never substituted
+into derived geometry merely to make a source look current. Stable measured
+edge/vertex IDs remain retained.
+
+This intent supplies narrowly scoped authority for physical arc reconstruction.
+Original measured curve inputs and previous derivation operations remain
+archived. Existing fixed-sweep wall proof versions keep their original rules.
+Unproved ordinary physical or asset supplements cannot use version 8's corner
+authority. Saved constraints, hosted-opening fit, physical contact topology,
+deductions and all previously-current source consumers require final validation.
+Preview and Apply use the same command; the complete edit occupies one revision.
+
+Endpoint joints and fractional T stations are reconstructed as temporary solver
+relations from the original physical contacts. They do not introduce a persisted
+constraint kind. The version-8 topology check uses resolved elevations and active
+physical phases, preserving unavailable wall payloads. Earlier envelopes keep
+their historical topology policy.
+
+Every retained version-8 command requires native format 22, including undone or
+deleted history. JSON/assets extraction advertises exchange version 20.
+Older document semantics retain their existing format floors and command bytes.

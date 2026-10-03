@@ -1964,6 +1964,20 @@ drawing; switching modes does not change existing geometry.
   - Result: Not tested
   - Notes: ______________________________
 
+## Exterior corner corrections
+
+- [ ] **U337 — Correct an exterior measurement and its physical walls together**
+  - Steps: Draw a closed exterior wall loop with different wall thicknesses. Create its measured exterior. In the measured area's geometry editor, choose Vertex position, select a corner and enter X/Y. Inspect the proposed walls, area and dimensions; cancel once, then apply. Check the physical walls, other corners and GLA in Details. Undo, Redo, save and reopen. Repeat in Imperial and Metric and with a curved exterior wall.
+  - Expected: The physical walls reshape to produce the requested exterior corner. Other exterior corners and wall thicknesses remain unchanged. Measurements, dimensions and GLA use the resulting geometry. Cancel changes nothing; one Undo restores all affected geometry. Saved source correspondence and original construction history remain intact. Invalid geometry or conflicting locks give an explanation and cannot apply.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **U338 — Drag an exterior corner with attached walls and openings**
+  - Steps: Add a partition attached to an exterior wall and a hosted door or window. Derive the exterior measurement. Select it and drag a corner handle, checking the live walls and measurements. Release, Undo and Redo. Try a change that makes an opening too large for its host and a change conflicting with a fixed measurement.
+  - Expected: The live preview and committed geometry agree. Partitions stay attached and hosted openings follow their physical wall. A refused edit preserves the entire drawing and history. The accepted change updates the measured exterior and its calculation in one Undo step.
+  - Result: Not tested
+  - Notes: ______________________________
+
 ## Issue report template
 
 - Task ID(s):

@@ -28,6 +28,9 @@ void transform_wall_curve_input(Entity& wall, const PlanarTransform& transform);
 // Explicit curve construction after an endpoint derivation keeps its full
 // archived source and records the independently validated new construction.
 void preserve_wall_curve_construction(Entity& candidate,const Entity& source);
+// Qualified exterior-corner reconstruction may change circular signed sweep.
+// Retains the original input and every prior operation as an exact archive.
+[[nodiscard]] Entity reconstruct_exterior_corner_wall(const Entity& source, const Segment& baseline);
 // Endpoint-only deformations require typed replay. Full independently
 // validated constructions may append without changing prior provenance.
 void validate_constraint_wall_geometry_transition(

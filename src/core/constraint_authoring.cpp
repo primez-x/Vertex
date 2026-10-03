@@ -226,7 +226,8 @@ ConstraintAuthoringIntent normalize_intent(const ConstraintAuthoringIntent& inpu
     const auto coordinate_intents = static_cast<unsigned>(result.wall_resize.has_value()) +
         static_cast<unsigned>(result.wall_geometry_move.has_value()) +
         static_cast<unsigned>(result.boundary_resize.has_value()) +
-        static_cast<unsigned>(result.boundary_vertex_move.has_value());
+        static_cast<unsigned>(result.boundary_vertex_move.has_value()) +
+        static_cast<unsigned>(result.exterior_corner_move.has_value());
     if (coordinate_intents > 1)
         invalid("Only one wall or boundary coordinate intent may be authored at a time");
     if (result.boundary_resize.has_value()) {
@@ -244,6 +245,7 @@ ConstraintAuthoringIntent normalize_intent(const ConstraintAuthoringIntent& inpu
             invalid("Boundary vertex move intent requires a vertex move edit");
         validate_boundary_geometry_edit(edit);
     }
+    if (result.exterior_corner_move) (void)encode_exterior_corner_move(*result.exterior_corner_move);
     if (result.wall_resize.has_value()) {
         if (result.wall_resize->wall_id.empty()) {
             invalid("Wall resize id cannot be empty");
@@ -305,6 +307,7 @@ ConstraintAuthoringIntent normalize_intent(const ConstraintAuthoringIntent& inpu
     if (!result.wall_resize.has_value() && !result.wall_geometry_move.has_value() &&
         !result.boundary_resize.has_value() &&
         !result.boundary_vertex_move.has_value() &&
+        !result.exterior_corner_move.has_value() &&
         result.relation_mutations.empty()) {
         invalid("Constraint authoring intent has no changes");
     }
@@ -392,6 +395,19 @@ bool points_near(Vec2 first, Vec2 second, double tolerance = kPointComparisonTol
 bool has_organization_reference(const Entity& entity) {
     return entity.properties.contains("layer_id") || entity.properties.contains("floor_id") ||
         entity.properties.contains("building_id") || entity.properties.contains("property_id");
+}
+
+// At a fixed signed sweep, an analytical station is affine in both endpoints:
+// C = S + (a I + b J)(E-S). It participates in the simultaneous solve.
+std::pair<double,double> station_coefficients(double sweep,double fraction) {
+    if (sweep == 0) return {fraction,0};
+    const auto tangent = std::tan(sweep/2);
+    if (!std::isfinite(tangent) || tangent == 0) invalid("Circular T station is numerically indeterminate");
+    const auto phi = sweep*fraction;
+    const auto half_sine = std::sin(phi/2);
+    const auto one_minus_cosine = 2*half_sine*half_sine;
+    const auto h = 0.5/tangent;
+    return {0.5*one_minus_cosine+h*std::sin(phi), h*one_minus_cosine-0.5*std::sin(phi)};
 }
 
 bool baseline_same(const Segment& first, const Segment& second) {
@@ -569,6 +585,15 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(
                                                         : snapshot.read_only_reason());
         }
         result.normalized_intent_ = normalize_intent(raw_intent);
+        if (result.normalized_intent_.boundary_vertex_move) {
+            const auto move = *result.normalized_intent_.boundary_vertex_move;
+            const auto owner = snapshot.entities().find(move.edit.boundary_id);
+            if (owner != snapshot.entities().end() && owner->second.properties.contains("wall_measurement_source")) {
+                result.normalized_intent_.exterior_corner_move = ExteriorCornerMoveIntent{
+                    move.edit.boundary_id, move.edit.target_id, move.edit.target_position, move.move_related_objects};
+                result.normalized_intent_.boundary_vertex_move.reset();
+            }
+        }
         const auto& intent = result.normalized_intent_;
         const BoundaryGeometryEdit* boundary_edit = intent.boundary_resize
             ? &intent.boundary_resize->edit
@@ -579,7 +604,32 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(
         const auto organization = organize_project(snapshot);
         const auto before_constraints = decode_supported_constraints(snapshot.entities());
         auto candidate = snapshot.entities();
+        std::optional<Entities> exterior_physical;
+        std::set<std::string, std::less<>> exterior_physical_ids, exterior_owner_ids;
+        std::set<std::string, std::less<>> exterior_ring_ids;
+        std::vector<ExteriorCornerPhysicalContact> exterior_contacts;
+        std::vector<ExteriorCornerPhysicalContact> exterior_t_contacts;
+        if (intent.exterior_corner_move) {
+            const auto ring_ids = exterior_corner_perimeter_ids(snapshot.entities(),snapshot.entities().at(intent.exterior_corner_move->boundary_id));
+            exterior_ring_ids.insert(ring_ids.begin(),ring_ids.end());
+            exterior_contacts = exterior_corner_physical_contact_graph(snapshot.entities());
+            for (const auto& contact : exterior_contacts)
+                if (contact.station != 0 && contact.station != 1) exterior_t_contacts.push_back(contact);
+            exterior_physical = exterior_corner_physical_entities(snapshot.entities(), *intent.exterior_corner_move);
+            for (const auto& [id, entity] : *exterior_physical)
+                if (entity != snapshot.entities().at(id)) exterior_physical_ids.insert(id);
+            candidate = *exterior_physical;
+            const auto redraws = exterior_wall_measurement_source_updates(snapshot.entities(), candidate, false);
+            for (const auto& redraw : redraws) exterior_owner_ids.insert(redraw.boundary_id);
+            candidate = edited_boundary_entities_batch(candidate, redraws);
+        }
         std::set<std::string, std::less<>> seeds;
+        seeds.insert(exterior_physical_ids.begin(), exterior_physical_ids.end());
+        seeds.insert(exterior_owner_ids.begin(), exterior_owner_ids.end());
+        if (intent.exterior_corner_move) {
+            const auto ids = exterior_wall_measurement_source_ids(snapshot.entities().at(intent.exterior_corner_move->boundary_id));
+            seeds.insert(ids.begin(), ids.end());
+        }
         bool has_upsert = false;
 
         for (const auto& mutation : intent.relation_mutations) {
@@ -654,6 +704,11 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(
             adjacency[seed];
         }
 
+        for (const auto& contact : exterior_contacts) {
+            adjacency[contact.owner].insert(contact.host);
+            adjacency[contact.host].insert(contact.owner);
+        }
+
         std::set<std::string, std::less<>> affected;
         std::vector<std::string> queue(seeds.begin(), seeds.end());
         while (!queue.empty()) {
@@ -708,7 +763,8 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(
             const auto owner = candidate.find(wall_id);
             if (owner == candidate.end()) invalid("Constraint owner does not exist: " + wall_id);
             if (can_recognize_boundary_entity_type(owner->second.type)) {
-                auto boundary = decode_identified_boundary_entity(owner->second);
+                auto boundary = decode_identified_boundary_entity(snapshot.entities().at(wall_id));
+                const auto initial_boundary = decode_identified_boundary_entity(owner->second);
                 WindingInvariant winding;
                 winding.orientation = signed_area(boundary_geometry(boundary)) > 0
                     ? WindingOrientation::counter_clockwise : WindingOrientation::clockwise;
@@ -718,7 +774,14 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(
                     const auto id = point_id(binding);
                     point_bindings.emplace(id, binding);
                     positions.emplace(id, edge.segment.start);
-                    request.points.push_back({id, edge.segment.start.x, edge.segment.start.y});
+                    auto initial = edge.segment.start;
+                    if (intent.exterior_corner_move) {
+                        const auto initial_edge = std::find_if(initial_boundary.segments.begin(),initial_boundary.segments.end(),
+                            [&](const auto& value) { return value.start_vertex_id == edge.start_vertex_id; });
+                        if (initial_edge == initial_boundary.segments.end()) invalid("Derived exterior corner lineage is missing");
+                        initial = initial_edge->segment.start;
+                    }
+                    request.points.push_back({id, initial.x, initial.y});
                     winding.loop.push_back(id);
                 }
                 if (std::all_of(boundary.segments.begin(),boundary.segments.end(),
@@ -727,7 +790,7 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(
                 boundaries.emplace(wall_id, std::move(boundary));
                 continue;
             }
-            const auto baseline = read_baseline(require_wall(candidate, wall_id));
+            const auto baseline = read_baseline(require_wall(snapshot.entities(), wall_id));
             old_baselines.emplace(wall_id, baseline);
             affected_walls.insert(wall_id);
             for (const auto role : {WallEndpointRole::start, WallEndpointRole::end}) {
@@ -736,7 +799,9 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(
                 const auto position = endpoint_position(baseline, role);
                 point_bindings.emplace(id, binding);
                 positions.emplace(id, position);
-                request.points.push_back({id, position.x, position.y});
+                const auto initial = intent.exterior_corner_move
+                    ? endpoint_position(read_baseline(owner->second),role) : position;
+                request.points.push_back({id, initial.x, initial.y});
             }
         }
         const auto resolve = [&](const WallEndpointBinding& binding) {
@@ -768,6 +833,32 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(
             }
         }
 
+        std::set<std::pair<std::string,std::string>> physical_joints;
+        for (const auto& contact : exterior_contacts) {
+            if ((contact.station != 0 && contact.station != 1) ||
+                !affected.contains(contact.owner) || !affected.contains(contact.host)) continue;
+            const auto first = resolve({contact.owner,contact.start ? WallEndpointRole::start : WallEndpointRole::end});
+            const auto second = resolve({contact.host,contact.station == 0 ? WallEndpointRole::start : WallEndpointRole::end});
+            const auto pair = std::minmax(first,second);
+            if (!physical_joints.emplace(pair.first,pair.second).second) continue;
+            const auto id = unique_temporary_id(persistent_ids,physical_joints.size());
+            persistent_ids.insert(id);
+            request.constraints.push_back(CoincidentConstraint{id,first,second});
+            constraint_descriptions.emplace(id,"existing physical wall endpoint joint");
+        }
+
+        for (const auto& contact : exterior_t_contacts) {
+            if (!affected.contains(contact.owner) || !affected.contains(contact.host)) continue;
+            const auto point = resolve({contact.owner,contact.start ? WallEndpointRole::start : WallEndpointRole::end});
+            const auto start = resolve({contact.host,WallEndpointRole::start});
+            const auto end = resolve({contact.host,WallEndpointRole::end});
+            const auto [a,b] = station_coefficients(read_baseline(candidate.at(contact.host)).sweep_radians,contact.station);
+            const auto id = unique_temporary_id(persistent_ids,persistent_ids.size());
+            persistent_ids.insert(id);
+            request.constraints.push_back(AffineStationConstraint{id,point,start,end,a,b});
+            constraint_descriptions.emplace(id,"existing physical wall T station");
+        }
+
         std::map<std::string, Vec2, std::less<>> fixed_points;
         const auto add_fixed = [&](const WallEndpointBinding& binding, Vec2 position) {
             validate_binding(binding);
@@ -782,7 +873,21 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(
             fixed_points[id] = position;
         };
 
-        if (intent.wall_geometry_move.has_value()) {
+        if (intent.exterior_corner_move) {
+            for (const auto& [id, position] : positions) {
+                const auto& binding = point_bindings.at(id);
+                if (exterior_ring_ids.contains(binding.owner_id))
+                    add_fixed(binding, endpoint_position(read_baseline(candidate.at(binding.owner_id)), binding.role));
+                else if (exterior_owner_ids.contains(binding.owner_id)) {
+                    const auto boundary = decode_identified_boundary_entity(candidate.at(binding.owner_id));
+                    const auto edge = std::find_if(boundary.segments.begin(), boundary.segments.end(),
+                        [&](const auto& value) { return value.start_vertex_id == binding.vertex_id; });
+                    if (edge == boundary.segments.end()) invalid("Derived exterior corner lineage is missing");
+                    add_fixed(binding, edge->segment.start);
+                } else if (!intent.exterior_corner_move->move_connected_objects)
+                    add_fixed(binding, position);
+            }
+        } else if (intent.wall_geometry_move.has_value()) {
             const auto& move = *intent.wall_geometry_move;
             std::set<std::string, std::less<>> selected_walls;
             std::set<std::string, std::less<>> movable_component;
@@ -926,61 +1031,63 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(
             add_fixed(anchor, positions.at(resolve(anchor)));
         }
 
-        std::size_t temporary_index = 0;
-        for (const auto& [id, position] : fixed_points) {
-            const auto temporary_id = unique_temporary_id(persistent_ids, temporary_index++);
-            request.constraints.push_back(
-                FixedAnchorConstraint{temporary_id, id, position.x, position.y});
-            constraint_descriptions.emplace(
-                temporary_id,
-                "fixed endpoint: " + endpoint_description(candidate, point_bindings.at(id)));
-        }
-        const auto solver_preview = solve_planar_constraints(request);
-        result.degrees_of_freedom_ = solver_preview.degrees_of_freedom;
-        result.diagnostics_ = solver_diagnostics(solver_preview, constraint_descriptions);
-        if (!solver_preview.accepted()) {
-            if (result.diagnostics_.empty()) {
-                result.diagnostics_.push_back("Constraint solver rejected the authoring intent");
-            }
-            return result;
-        }
-
         std::map<std::string, Vec2, std::less<>> solved_points;
-        for (const auto& solved : solver_preview.points) {
-            solved_points.emplace(solved.id, Vec2{solved.x, solved.y});
-        }
-        for (const auto& [id, position] : fixed_points) {
-            const auto solved = solved_points.find(id);
-            if (solved == solved_points.end() ||
-                !points_near(solved->second, position, constraint_linear_tolerance_metres)) {
-                invalid("Constraint solver did not preserve an authoring anchor");
+        {
+            std::size_t temporary_index = 0;
+            for (const auto& [id, position] : fixed_points) {
+                const auto temporary_id = unique_temporary_id(persistent_ids, temporary_index++);
+                request.constraints.push_back(FixedAnchorConstraint{temporary_id, id, position.x, position.y});
+                constraint_descriptions.insert_or_assign(temporary_id,
+                    "fixed endpoint: " + endpoint_description(candidate, point_bindings.at(id)));
             }
-            solved->second = position;
+            const auto solver_preview = solve_planar_constraints(request);
+            result.degrees_of_freedom_ = solver_preview.degrees_of_freedom;
+            result.diagnostics_ = solver_diagnostics(solver_preview, constraint_descriptions);
+            if (!solver_preview.accepted()) {
+                if (result.diagnostics_.empty()) result.diagnostics_.push_back("Constraint solver rejected the authoring intent");
+                return result;
+            }
+            solved_points.clear();
+            for (const auto& solved : solver_preview.points) solved_points.emplace(solved.id, Vec2{solved.x, solved.y});
+            for (const auto& [id, position] : fixed_points) {
+                const auto solved = solved_points.find(id);
+                if (solved == solved_points.end() || !points_near(solved->second, position, constraint_linear_tolerance_metres))
+                    invalid("Constraint solver did not preserve an authoring anchor");
+                solved->second = position;
+            }
         }
 
         for (const auto& wall_id : affected_walls) {
             const auto old = old_baselines.at(wall_id);
             Segment proposed{
                 solved_points.at(point_id({wall_id, WallEndpointRole::start})),
-                solved_points.at(point_id({wall_id, WallEndpointRole::end})), old.sweep_radians};
+                solved_points.at(point_id({wall_id, WallEndpointRole::end})),
+                exterior_physical_ids.contains(wall_id) ? read_baseline(candidate.at(wall_id)).sweep_radians : old.sweep_radians};
             if (baseline_same(old, proposed)) {
                 proposed = old;
             }
             if (proposed.start.x == old.start.x && proposed.start.y == old.start.y &&
-                proposed.end.x == old.end.x && proposed.end.y == old.end.y) {
+                proposed.end.x == old.end.x && proposed.end.y == old.end.y && proposed.sweep_radians == old.sweep_radians) {
+                // A saved constraint can solve an attachment back to its
+                // original geometry. Discard its provisional contact redraw.
+                if (intent.exterior_corner_move && !exterior_ring_ids.contains(wall_id))
+                    candidate.at(wall_id) = snapshot.entities().at(wall_id);
                 continue;
             }
             validate_endpoint_identity_not_swapped(old, proposed, wall_id);
             auto& wall_entity = candidate.at(wall_id);
             const bool resized = intent.wall_resize.has_value() &&
                 intent.wall_resize->wall_id == wall_id;
+            const auto& original_wall = snapshot.entities().at(wall_id);
             const auto length_entry = resized
                 ? std::optional<Quantity>{intent.wall_resize->exact_length}
-                : unchanged_wall_length_entry(wall_entity, old, proposed);
+                : unchanged_wall_length_entry(original_wall, old, proposed);
             const auto proof_version = old.sweep_radians == 0.0
                 ? 1ULL : length_entry.has_value() ? 3ULL : 2ULL;
-            wall_entity = replay_constraint_wall_edit(
-                wall_entity, {wall_id, proposed, length_entry, proof_version});
+            if (exterior_ring_ids.contains(wall_id))
+                wall_entity = reconstruct_exterior_corner_wall(snapshot.entities().at(wall_id), proposed);
+            else wall_entity = replay_constraint_wall_edit(
+                original_wall, {wall_id, proposed, length_entry, proof_version});
             validate_constraint_wall_host(wall_id, candidate);
             result.changed_walls_.push_back({wall_id, old, proposed});
         }
@@ -991,6 +1098,7 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(
                 continue;
             if (boundary_edit && binding.owner_id == boundary_edit->boundary_id)
                 continue;
+            if (exterior_owner_ids.contains(binding.owner_id)) continue;
             BoundaryGeometryEdit edit;
             edit.boundary_id = binding.owner_id;
             edit.target_id = binding.vertex_id;
@@ -998,6 +1106,9 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(
             result.boundary_edits_.push_back(std::move(edit));
         }
         candidate = edited_boundary_entities_batch(candidate, result.boundary_edits_);
+        // Recompute every redraw from the original measured owners and final
+        // solved physical geometry; the intermediate derived copies are pins.
+        for (const auto& id : exterior_owner_ids) candidate.at(id) = snapshot.entities().at(id);
         result.exterior_source_edits_ = exterior_wall_measurement_source_updates(
             snapshot.entities(), candidate);
         for (const auto& edit : result.exterior_source_edits_) {
@@ -1008,11 +1119,18 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(
                 decode_identified_boundary_entity(snapshot.entities().at(edit.boundary_id)));
         }
         candidate = edited_boundary_entities_batch(candidate, result.exterior_source_edits_);
+        for (const auto& [id, owner] : snapshot.entities())
+            if (owner.properties.contains("wall_measurement_source") &&
+                wall_measurement_source_current(snapshot, owner) &&
+                (!candidate.contains(id) || !wall_measurement_source_current(candidate, candidate.at(id))))
+                invalid("Constraint authoring would stale the current source walls: " + id);
         for (const auto& [id, before] : boundaries) {
             const auto after = decode_identified_boundary_entity(candidate.at(id));
             if (after != before) result.changed_boundaries_.push_back({before, after});
         }
-        validate_constraint_edit_topology(snapshot.entities(),candidate);
+        if (intent.exterior_corner_move) validate_exterior_corner_edit_topology(snapshot.entities(),candidate);
+        else validate_constraint_edit_topology(snapshot.entities(),candidate);
+        if (intent.exterior_corner_move) validate_exterior_corner_physical_contacts(snapshot.entities(), candidate);
         (void)validate_boundary_integrity(candidate);
         (void)validate_constraint_integrity(candidate);
 
@@ -1325,7 +1443,12 @@ Command constraint_authoring_verified_command(const DocumentSnapshot& current,
             std::move(constraint_changes), recomputed.normalized_intent_.message};
         command.exterior_source_edits = recomputed.exterior_source_edits_;
         command.exterior_source_completion = !recomputed.exterior_source_edits_.empty();
+        command.exterior_corner_move = recomputed.normalized_intent_.exterior_corner_move;
         for (const auto& wall : recomputed.changed_walls_) {
+            if (command.exterior_corner_move) {
+                const auto ids = exterior_corner_perimeter_ids(current.entities(),current.entities().at(command.exterior_corner_move->boundary_id));
+                if (std::find(ids.begin(),ids.end(),wall.wall_id) != ids.end()) continue;
+            }
             const auto& resize = recomputed.normalized_intent_.wall_resize;
             const bool resized = resize && resize->wall_id == wall.wall_id;
             const auto length_entry = resized

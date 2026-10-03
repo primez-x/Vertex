@@ -3,6 +3,7 @@
 #include "sketch/boundary_entity.hpp"
 #include "sketch/boundary_integrity.hpp"
 #include "sketch/constraint_integrity.hpp"
+#include "sketch/constraint_wall_edit.hpp"
 #include "sketch/geometry_operations.hpp"
 #include "sketch/project_organization.hpp"
 #include "sketch/model_phases.hpp"
@@ -1150,6 +1151,11 @@ WallMeasurementResult derive_legacy_replacement_exterior_wall_measurement(
 }
 
 bool wall_measurement_source_current(const DocumentSnapshot& document, const Entity& boundary) {
+    return wall_measurement_source_current(document.entities(), boundary);
+}
+
+bool wall_measurement_source_current(const std::map<std::string, Entity, std::less<>>& entities,
+    const Entity& boundary) {
     try {
         if (!boundary.properties.is_object()) return false;
         const auto source_property = boundary.properties.find("wall_measurement_source");
@@ -1160,7 +1166,7 @@ bool wall_measurement_source_current(const DocumentSnapshot& document, const Ent
         const auto actual = actual_boundary_geometry(boundary);
         if (!validate_boundary(actual).empty()) return false;
         const auto matches = [&](OffsetKernel kernel) {
-            const auto expected = derive_exterior_wall_measurement_impl(document.entities(), wall_ids, kernel);
+            const auto expected = derive_exterior_wall_measurement_impl(entities, wall_ids, kernel);
             return normalize_source_order(*source_property) == expected.source &&
                 boundary_context_matches(boundary, expected.source) &&
                 edge_keys(actual) == edge_keys(expected.boundary);
@@ -1177,9 +1183,277 @@ bool wall_measurement_source_current(const DocumentSnapshot& document, const Ent
     }
 }
 
-std::vector<BoundaryGeometryEdit> exterior_wall_measurement_source_updates(
+nlohmann::json encode_exterior_corner_move(const ExteriorCornerMoveIntent& intent) {
+    BoundaryGeometryEdit edit;
+    edit.boundary_id = intent.boundary_id;
+    edit.target_id = intent.vertex_id;
+    edit.target_position = intent.target_position;
+    validate_boundary_geometry_edit(edit);
+    return {{"version", 1}, {"boundary_id", intent.boundary_id}, {"vertex_id", intent.vertex_id},
+        {"position", {intent.target_position.x, intent.target_position.y}},
+        {"move_connected_objects", intent.move_connected_objects}};
+}
+
+namespace {
+using PhysicalContact = ExteriorCornerPhysicalContact;
+std::vector<PhysicalContact> physical_contacts(const std::map<std::string, Entity, std::less<>>& original) {
+    struct PhysicalWall { Segment geometry; std::string property, building, floor; Json phase; double low, high; };
+    std::map<std::string, PhysicalWall, std::less<>> walls;
+    const auto organization = organize_project(original);
+    std::set<std::string, std::less<>> unavailable;
+    for (const auto& [id,entity] : original) {
+        (void)id;
+        if (entity.type != "model_phases") continue;
+        const auto model = ModelPhases::from_json(entity.properties.at("model"));
+        const auto active = model.active_state();
+        for (const auto& entity_id : model.entity_ids())
+            if (!active.contains(entity_id) || active.at(entity_id) == ModelPhase::demolished)
+                unavailable.insert(entity_id);
+    }
+    for (const auto& [id, entity] : original) {
+        if (entity.type != "wall" || !entity.properties.contains("baseline") || unavailable.contains(id)) continue;
+        const auto context = organization.drawing_context(id);
+        if (!context && (entity.properties.contains("property_id") || entity.properties.contains("building_id") ||
+            entity.properties.contains("floor_id") || entity.properties.contains("layer_id")))
+            reject("Physical wall contact has unresolved drawing context: " + id);
+        const auto placement = resolve_vertical_placement(original, entity);
+        auto field = placement.properties.find("elevation_m");
+        if (field == placement.properties.end()) field = placement.properties.find("elevation");
+        const auto low = field == placement.properties.end() ? 0.0 : number(*field, "Wall elevation");
+        const auto high = low + number(placement.properties.at("height_m"), "Wall height");
+        if (!std::isfinite(high)) reject("Physical wall contact vertical extent exceeds supported range");
+        walls.emplace(id, PhysicalWall{baseline(entity.properties), context ? context->property_id : "",
+            context ? context->building_id : "", context ? context->floor_id : "",
+            entity.properties.value("phase_id", Json(nullptr)), low, high});
+    }
+    std::vector<PhysicalContact> contacts;
+    for (const auto& [id, wall] : walls)
+        for (const auto& [host_id, host] : walls) {
+            if (id == host_id || wall.property != host.property || wall.building != host.building ||
+                wall.floor != host.floor || wall.phase != host.phase ||
+                std::max(wall.low,host.low) >= std::min(wall.high,host.high) + default_geometry_tolerance_metres) continue;
+            const auto& before = wall.geometry;
+            const auto& old_host = host.geometry;
+            for (const bool start : {true, false}) {
+                const auto endpoint = start ? before.start : before.end;
+                std::optional<double> station;
+                if (distance(endpoint, old_host.start) <= default_geometry_tolerance_metres) station = 0;
+                else if (distance(endpoint, old_host.end) <= default_geometry_tolerance_metres) station = 1;
+                else if (old_host.sweep_radians != 0) station = arc_fraction_if_on(old_host, endpoint);
+                else {
+                    const auto chord = subtract(old_host.end, old_host.start);
+                    const auto fraction = dot(subtract(endpoint, old_host.start), chord) / dot(chord, chord);
+                    if (fraction >= 0 && fraction <= 1 &&
+                        distance(endpoint, point_at_fraction(old_host, fraction)) <= default_geometry_tolerance_metres) station = fraction;
+                }
+                if (station) {
+                    if (contacts.size() >= maximum_network_edges)
+                        reject("Physical wall contact graph exceeds the supported contact count");
+                    contacts.push_back({id,start,host_id,*station});
+                }
+            }
+        }
+    return contacts;
+}
+}
+
+std::vector<ExteriorCornerPhysicalContact> exterior_corner_physical_contact_graph(
+    const std::map<std::string, Entity, std::less<>>& original) { return physical_contacts(original); }
+
+void validate_exterior_corner_physical_contacts(
     const std::map<std::string, Entity, std::less<>>& original,
     const std::map<std::string, Entity, std::less<>>& proposed) {
+    for (const auto& contact : physical_contacts(original)) {
+        if (!proposed.contains(contact.owner) || !proposed.contains(contact.host))
+            reject("Exterior corner cannot remove an existing physical wall contact owner");
+        const auto after = baseline(proposed.at(contact.owner).properties);
+        const auto host = baseline(proposed.at(contact.host).properties);
+        const auto target = contact.station == 0 ? host.start : contact.station == 1 ? host.end : point_at_fraction(host,contact.station);
+        if (distance(contact.start ? after.start : after.end,target) > default_geometry_tolerance_metres)
+            reject("Exterior corner would detach an existing physical wall corner or T station");
+    }
+}
+
+ExteriorCornerMoveIntent decode_exterior_corner_move(const nlohmann::json& value) {
+    if (!value.is_object() || value.size() != 5 || !value.contains("version") ||
+        !value.at("version").is_number_integer() || value.at("version") != 1 ||
+        !value.contains("boundary_id") || !value.at("boundary_id").is_string() ||
+        !value.contains("vertex_id") || !value.at("vertex_id").is_string() ||
+        !value.contains("position") || !value.contains("move_connected_objects") ||
+        !value.at("move_connected_objects").is_boolean())
+        reject("Exterior corner move proof contains unsupported fields");
+    ExteriorCornerMoveIntent result{value.at("boundary_id").get<std::string>(),
+        value.at("vertex_id").get<std::string>(), point(value.at("position"), "Exterior target"),
+        value.at("move_connected_objects").get<bool>()};
+    (void)encode_exterior_corner_move(result);
+    return result;
+}
+
+std::vector<std::string> exterior_corner_perimeter_ids(
+    const std::map<std::string, Entity, std::less<>>& original, const Entity& owner) {
+    const auto ids = exterior_wall_measurement_source_ids(owner);
+    try { return derive_exterior_wall_measurement(original,ids).ordered_wall_ids; }
+    catch (const std::invalid_argument&) { return derive_legacy_exterior_wall_measurement(original,ids).ordered_wall_ids; }
+}
+
+std::map<std::string, Entity, std::less<>> exterior_corner_physical_entities(
+    const std::map<std::string, Entity, std::less<>>& original,
+    const ExteriorCornerMoveIntent& intent) {
+    (void)encode_exterior_corner_move(intent);
+    const auto found = original.find(intent.boundary_id);
+    if (found == original.end()) reject("Exterior corner measured owner does not exist");
+    const auto& owner = found->second;
+    const auto ids = exterior_wall_measurement_source_ids(owner);
+    const auto identified = decode_identified_boundary_entity(owner);
+    const auto actual = boundary_geometry(identified);
+    std::optional<WallMeasurementResult> old;
+    std::size_t alignment{};
+    bool reversed{};
+    unsigned matches{};
+    const auto exact = [](const Segment& a, const Segment& b) {
+        return a.start.x == b.start.x && a.start.y == b.start.y && a.end.x == b.end.x &&
+            a.end.y == b.end.y && a.sweep_radians == b.sweep_radians;
+    };
+    for (const auto kernel : {OffsetKernel::stable, OffsetKernel::legacy_v1}) {
+        WallMeasurementResult derived;
+        try { derived = derive_exterior_wall_measurement_impl(original, ids, kernel); }
+        catch (const std::invalid_argument&) { continue; }
+        if (normalize_source_order(owner.properties.at("wall_measurement_source")) != derived.source ||
+            !boundary_context_matches(owner, derived.source) || actual.size() != derived.boundary.size()) continue;
+        for (std::size_t offset = 0; offset < actual.size(); ++offset)
+            for (const bool reverse : {false, true}) {
+                bool match = true;
+                for (std::size_t i = 0; i < actual.size(); ++i) {
+                    auto edge = derived.boundary[(offset + (reverse ? actual.size() - i : i)) % actual.size()];
+                    if (reverse) { std::swap(edge.start, edge.end); edge.sweep_radians = -edge.sweep_radians; }
+                    if (!exact(actual[i], edge)) { match = false; break; }
+                }
+                if (match) { ++matches; alignment = offset; reversed = reverse; }
+            }
+        if (matches) { old = std::move(derived); break; }
+    }
+    if (!old || matches != 1) reject("Exterior corner requires a current unambiguous physical wall source");
+    auto requested = actual;
+    bool vertex_found = false;
+    for (std::size_t i = 0; i < identified.segments.size(); ++i)
+        if (identified.segments[i].start_vertex_id == intent.vertex_id) {
+            requested[i].start = intent.target_position;
+            requested[(i + requested.size() - 1) % requested.size()].end = intent.target_position;
+            vertex_found = true;
+        }
+    if (!vertex_found) reject("Exterior corner stable vertex does not exist");
+    if (const auto errors = validate_boundary(requested); !errors.empty())
+        reject("Exterior corner requested outline is invalid: " + errors.front().message);
+    const auto walls = read_source_walls(original, ids);
+    std::map<std::string, SourceWall, std::less<>> by_id;
+    for (const auto& wall : walls) by_id.emplace(wall.id, wall);
+    std::vector<SourceWall> ordered;
+    for (std::size_t i = 0; i < actual.size(); ++i) {
+        auto wall = by_id.at(old->ordered_wall_ids[(alignment + (reversed ? actual.size() - i : i)) % actual.size()]);
+        wall.thickness = -wall.thickness; // Exact analytical inverse, including unequal thicknesses.
+        ordered.push_back(std::move(wall));
+    }
+    const auto inverse = offset_loop(requested, ordered, OffsetKernel::stable);
+    auto candidate = original;
+    std::map<std::string, Segment, std::less<>> targets;
+    for (std::size_t i = 0; i < inverse.size(); ++i) {
+        auto next = inverse[i];
+        const auto& old_baseline = ordered[i].baseline;
+        if (dot(subtract(actual[i].end, actual[i].start), subtract(old_baseline.end, old_baseline.start)) < 0) {
+            std::swap(next.start, next.end); next.sweep_radians = -next.sweep_radians;
+        }
+        if (distance(next.start, old_baseline.start) <= 1e-12 &&
+            distance(next.end, old_baseline.end) <= 1e-12 &&
+            std::abs(next.sweep_radians - old_baseline.sweep_radians) <= 1e-12)
+            next = old_baseline;
+        targets.emplace(ordered[i].id, next);
+    }
+    // Preserve existing physical endpoint contacts and T stations, including
+    // multiple-host agreement. A partition's unattached endpoint stays fixed.
+    const auto contacts = physical_contacts(original);
+    std::map<std::string, std::vector<PhysicalContact>, std::less<>> contacts_by_owner;
+    for (const auto& contact : contacts) contacts_by_owner[contact.owner].push_back(contact);
+    const std::set<std::string, std::less<>> source_ids(old->ordered_wall_ids.begin(), old->ordered_wall_ids.end());
+    bool converged = false;
+    for (std::size_t iteration = 0; iteration <= contacts_by_owner.size(); ++iteration) {
+        const auto previous_targets = targets;
+    for (const auto& [id, entity] : original) {
+        if (entity.type != "wall" || source_ids.contains(id) || !entity.properties.contains("baseline")) continue;
+        const auto previous = baseline(entity.properties);
+        auto next = previous;
+        for (const bool start : {true, false}) {
+            const auto endpoint = start ? previous.start : previous.end;
+            std::optional<Vec2> destination;
+            for (const auto& contact : contacts_by_owner[id]) {
+                if (contact.start != start || !previous_targets.contains(contact.host)) continue;
+                const auto& host = previous_targets.at(contact.host);
+                const auto proposed = contact.station == 0 ? host.start :
+                    contact.station == 1 ? host.end : point_at_fraction(host, contact.station);
+                if (destination && distance(*destination, proposed) > default_geometry_tolerance_metres) {
+                    if (distance(*destination, endpoint) <= default_geometry_tolerance_metres) destination = proposed;
+                    else if (distance(proposed, endpoint) > default_geometry_tolerance_metres)
+                        reject("Exterior corner attached endpoint has contradictory physical hosts");
+                } else destination = proposed;
+            }
+            if (destination && distance(endpoint, *destination) > 1e-12) {
+                if (!intent.move_connected_objects) reject("Exterior corner would detach a frozen connected wall");
+                (start ? next.start : next.end) = *destination;
+            }
+        }
+        if (!exact(previous, next)) targets.insert_or_assign(id, next);
+    }
+        bool changed = targets.size() != previous_targets.size();
+        for (const auto& [id, target] : targets)
+            changed = changed || !previous_targets.contains(id) || !exact(target, previous_targets.at(id));
+        if (!changed) { converged = true; break; }
+    }
+    if (!converged) reject("Exterior corner physical attachment propagation did not converge");
+    for (const auto& [id, target] : targets) {
+        if (source_ids.contains(id)) candidate.at(id) = reconstruct_exterior_corner_wall(original.at(id), target);
+        else {
+            // Provisional attachment coordinates feed the solve. Their final
+            // geometry/provenance is replayed from the original typed wall edit.
+            auto& recorded = candidate.at(id).properties["baseline"];
+            recorded["start"] = {target.start.x,target.start.y};
+            recorded["end"] = {target.end.x,target.end.y};
+            recorded["sweep_radians"] = target.sweep_radians;
+        }
+    }
+    validate_exterior_corner_physical_contacts(original, candidate);
+    for (const auto& id : source_ids) validate_constraint_wall_host(id, candidate);
+    // Compare against the actual forward result; never replace these bytes with
+    // the user's target coordinates merely to make exact currentness pass.
+    const auto forward = derive_replacement_exterior_wall_measurement(candidate, owner, ids);
+    std::map<std::string, Segment, std::less<>> exterior;
+    for (std::size_t i = 0; i < forward.boundary.size(); ++i)
+        exterior.emplace(forward.ordered_wall_ids[i], forward.boundary[i]);
+    for (std::size_t i = 0; i < requested.size(); ++i) {
+        auto edge = exterior.at(ordered[i].id);
+        if (reversed) { std::swap(edge.start, edge.end); edge.sweep_radians = -edge.sweep_radians; }
+        if ((edge.sweep_radians == 0) != (requested[i].sweep_radians == 0) ||
+            (edge.sweep_radians != 0 &&
+                (std::signbit(edge.sweep_radians) != std::signbit(requested[i].sweep_radians) ||
+                 (((std::abs(edge.sweep_radians) > std::numbers::pi) != (std::abs(requested[i].sweep_radians) > std::numbers::pi)) &&
+                    std::min(std::abs(std::abs(edge.sweep_radians)-std::numbers::pi),
+                        std::abs(std::abs(requested[i].sweep_radians)-std::numbers::pi)) *
+                    std::max(arc_support(edge).radius,arc_support(requested[i]).radius) > default_geometry_tolerance_metres) ||
+                 std::max(arc_support(edge).radius, arc_support(requested[i]).radius) *
+                    std::abs(edge.sweep_radians - requested[i].sweep_radians) > default_geometry_tolerance_metres)))
+            reject("Exterior corner cannot reproduce the requested circular sweep and branch");
+        if (distance(edge.start, requested[i].start) > default_geometry_tolerance_metres ||
+            distance(edge.end, requested[i].end) > default_geometry_tolerance_metres ||
+            distance(point_at_fraction(edge, 0.25), point_at_fraction(requested[i], 0.25)) > default_geometry_tolerance_metres ||
+            distance(point_at_fraction(edge, 0.5), point_at_fraction(requested[i], 0.5)) > default_geometry_tolerance_metres ||
+            distance(point_at_fraction(edge, 0.75), point_at_fraction(requested[i], 0.75)) > default_geometry_tolerance_metres)
+            reject("Exterior corner cannot reproduce the requested analytical outline within roundoff tolerance");
+    }
+    return candidate;
+}
+
+std::vector<BoundaryGeometryEdit> exterior_wall_measurement_source_updates(
+    const std::map<std::string, Entity, std::less<>>& original,
+    const std::map<std::string, Entity, std::less<>>& proposed,
+    bool validate_final_constraints) {
     const auto same_segment = [](const Segment& a, const Segment& b) {
         return a.start.x == b.start.x && a.start.y == b.start.y &&
             a.end.x == b.end.x && a.end.y == b.end.y && a.sweep_radians == b.sweep_radians;
@@ -1314,7 +1588,8 @@ std::vector<BoundaryGeometryEdit> exterior_wall_measurement_source_updates(
     for (const auto& [id, edit] : updates) { (void)edit; append(append, id); }
     auto completed = edited_boundary_entities_batch(proposed, result);
     if (const auto unsupported = validate_boundary_integrity(completed)) reject(*unsupported);
-    if (const auto unsupported = validate_constraint_integrity(completed)) reject(*unsupported);
+    if (validate_final_constraints)
+        if (const auto unsupported = validate_constraint_integrity(completed)) reject(*unsupported);
     // Also validate unchanged parents of updated deductions against final state.
     for (const auto& [id, owner] : completed) {
         (void)id;

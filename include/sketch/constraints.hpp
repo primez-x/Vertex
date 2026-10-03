@@ -69,10 +69,23 @@ struct FixedAnchorConstraint {
     double y{};
 };
 
+// Transient analytical station: point = start + (a I + b J)(end-start),
+// where J rotates a vector counter-clockwise by 90 degrees. It supports a
+// linear station (a=f,b=0) and a fixed-signed-sweep circular station.
+struct AffineStationConstraint {
+    ConstraintId id;
+    ConstraintPointId point;
+    ConstraintPointId start;
+    ConstraintPointId end;
+    double a{};
+    double b{};
+    double residual_tolerance_metres{1e-7};
+};
+
 using PlanarConstraint =
     std::variant<HorizontalConstraint, VerticalConstraint, CoincidentConstraint,
                  FixedLengthConstraint, ParallelConstraint, PerpendicularConstraint,
-                 FixedAnchorConstraint>;
+                 FixedAnchorConstraint, AffineStationConstraint>;
 
 enum class WindingOrientation { clockwise = -1, counter_clockwise = 1 };
 

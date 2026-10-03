@@ -1363,7 +1363,7 @@ static bool v6_physical_wall_extensions_supported(const Entity& previous, const 
 
 bool has_exterior_source_completion(const ApplyBoundaryConstraintChanges& command) {
     return command.exterior_source_completion || !command.physical_entity_changes.empty() ||
-        !command.exterior_source_edits.empty() || has_supplemental_source_completion(command);
+        !command.exterior_source_edits.empty() || has_supplemental_source_completion(command) || command.exterior_corner_move.has_value();
 }
 
 static std::map<std::string, Asset, std::less<>> boundary_constraint_assets(
@@ -1404,6 +1404,17 @@ void validate_completed_constraint_change(const std::map<std::string, Entity, st
         std::set<std::string> typed_ids;
         for (const auto& edit : command.wall_edits) typed_ids.insert(edit.wall_id);
         auto ordinary_before = before, typed_before = before;
+        if (command.exterior_corner_move) {
+            const auto reconstructed = exterior_corner_physical_entities(before, *command.exterior_corner_move);
+            const auto source_ids = exterior_corner_perimeter_ids(before,before.at(command.exterior_corner_move->boundary_id));
+            for (const auto& id : source_ids) {
+                    const auto& entity = reconstructed.at(id);
+                    if (!after.contains(id) || after.at(id) != entity)
+                        throw std::invalid_argument("Exterior corner proof differs from independently reconstructed physical source walls");
+                    ordinary_before.erase(id);
+                    typed_before.erase(id);
+                }
+        }
         for (const auto& [id, entity] : before) {
             if (entity.type != "wall") continue;
             if (typed_ids.contains(id)) ordinary_before.erase(id);
@@ -1446,6 +1457,19 @@ std::map<std::string, Entity, std::less<>> boundary_constraint_entities(
         document_error(DocumentErrorCode::invalid_entity,
                        "Boundary constraint transaction requires geometry edits");
     auto result = source;
+    std::unordered_set<std::string> corner_physical_ids;
+    if (command.exterior_corner_move) {
+        if (!command.physical_entity_changes.empty() || has_supplemental_source_completion(command))
+            document_error(DocumentErrorCode::invalid_entity, "Exterior corner proof cannot carry ordinary physical or asset supplements");
+        try {
+            const auto reconstructed = exterior_corner_physical_entities(source, *command.exterior_corner_move);
+            const auto ids = exterior_corner_perimeter_ids(source,source.at(command.exterior_corner_move->boundary_id));
+            for (const auto& id : ids) {
+                result.at(id) = reconstructed.at(id);
+                corner_physical_ids.insert(id);
+            }
+        } catch (const std::exception& error) { document_error(DocumentErrorCode::invalid_entity, error.what()); }
+    }
     try {
         if (!command.boundary_edits.empty()) result = retained_replay
             ? replayed_boundary_entities_batch(result, command.boundary_edits)
@@ -1454,6 +1478,7 @@ std::map<std::string, Entity, std::less<>> boundary_constraint_entities(
         document_error(DocumentErrorCode::invalid_entity, error.what());
     }
     std::unordered_set<std::string> touched;
+    touched.insert(corner_physical_ids.begin(), corner_physical_ids.end());
     const bool supplemental_completion = has_supplemental_source_completion(command);
     if (supplemental_completion) {
         // Reserve every primary boundary output, including generated dimensions
@@ -1587,10 +1612,14 @@ std::map<std::string, Entity, std::less<>> boundary_constraint_entities(
         try { validate_constraint_wall_host(edit.wall_id, result); }
         catch (const std::exception& error) { document_error(DocumentErrorCode::invalid_entity,error.what()); }
     }
-    try { validate_constraint_edit_topology(source,result); }
+    try {
+        if (command.exterior_corner_move) validate_exterior_corner_edit_topology(source,result);
+        else validate_constraint_edit_topology(source,result);
+    }
     catch (const std::exception& error) { document_error(DocumentErrorCode::invalid_entity,error.what()); }
     if (source_completion) {
         try {
+            if (command.exterior_corner_move) validate_exterior_corner_physical_contacts(source, result);
             if (command.exterior_source_edits.empty())
                 throw std::invalid_argument("Exterior source completion requires explicit redraws");
             const auto expected = exterior_wall_measurement_source_updates(source, result);
@@ -2302,6 +2331,12 @@ nlohmann::json command_to_json(const Command& command) {
                         encoded["supplemental_entity_changes"] = supplements.at("entity_changes");
                         encoded["supplemental_asset_changes"] = supplements.at("asset_changes");
                     }
+                    if (typed.exterior_corner_move) {
+                        if (has_supplemental_source_completion(typed) || !typed.physical_entity_changes.empty())
+                            throw std::invalid_argument("Exterior corner proof cannot carry ordinary physical or asset supplements");
+                        encoded["version"] = 8;
+                        encoded["exterior_corner_move"] = encode_exterior_corner_move(*typed.exterior_corner_move);
+                    }
                     if (encoded.dump().size() > 1024 * 1024)
                         throw std::invalid_argument("Exterior source completion exceeds the persisted proof budget");
                 }
@@ -2346,7 +2381,7 @@ Command command_from_json(const nlohmann::json& value) {
     try {
         if (!value.is_object() || !value.contains("version") || !value.contains("kind") ||
             !value.at("version").is_number_integer() ||
-            (value.at("version") != 1 && value.at("version") != 2 && value.at("version") != 3 && value.at("version") != 4 && value.at("version") != 5 && value.at("version") != 6 && value.at("version") != 7) ||
+            (value.at("version") != 1 && value.at("version") != 2 && value.at("version") != 3 && value.at("version") != 4 && value.at("version") != 5 && value.at("version") != 6 && value.at("version") != 7 && value.at("version") != 8) ||
             !value.at("kind").is_string()) {
             document_error(DocumentErrorCode::invalid_entity, "serialized command envelope is invalid");
         }
@@ -2404,8 +2439,12 @@ Command command_from_json(const nlohmann::json& value) {
         if (kind == "apply_boundary_constraint_changes") {
             const bool mixed = value.at("version") != 1;
             const bool supplements = value.at("version") == 7;
-            const bool source_completion = value.at("version") == 6 || supplements;
-            if (supplements) {
+            const bool corner_move = value.at("version") == 8;
+            const bool source_completion = value.at("version") == 6 || supplements || corner_move;
+            if (corner_move) command_exact_fields(value, {"version","kind","expected_revision","message",
+                "entity_changes","boundary_edits","wall_edits","physical_entity_changes","exterior_source_edits","exterior_corner_move"},
+                DocumentErrorCode::invalid_entity,"serialized exterior corner command");
+            else if (supplements) {
                 command_exact_fields(value, {"version","kind","expected_revision","message",
                     "entity_changes","boundary_edits","wall_edits","physical_entity_changes","exterior_source_edits",
                     "supplemental_entity_changes","supplemental_asset_changes"},
@@ -2437,6 +2476,7 @@ Command command_from_json(const nlohmann::json& value) {
             ordinary.erase("exterior_source_edits");
             ordinary.erase("supplemental_entity_changes");
             ordinary.erase("supplemental_asset_changes");
+            ordinary.erase("exterior_corner_move");
             ordinary["asset_changes"] = nlohmann::json::array();
             const auto changes = std::get<ApplyEntityChanges>(command_from_json(ordinary));
             ApplyBoundaryConstraintChanges result{
@@ -2444,6 +2484,12 @@ Command command_from_json(const nlohmann::json& value) {
             result.exterior_source_completion = source_completion;
             result.supplemental_source_completion = supplements;
             try {
+                if (corner_move) {
+                    if (value.dump().size() > 1024 * 1024) throw std::invalid_argument("Exterior corner proof exceeds the persisted proof budget");
+                    result.exterior_corner_move = decode_exterior_corner_move(value.at("exterior_corner_move"));
+                    if (!value.at("physical_entity_changes").is_array() || !value.at("physical_entity_changes").empty())
+                        throw std::invalid_argument("Exterior corner proof cannot contain raw physical wall changes");
+                }
                 for (const auto& edit : value.at("boundary_edits"))
                     result.boundary_edits.push_back(decode_boundary_geometry_edit(edit));
                 if (mixed) {

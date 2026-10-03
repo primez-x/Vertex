@@ -5,7 +5,7 @@ commit `145529fe741292ff0b3977a01195bf0247425794`:
 
 <https://github.com/FreeCAD/FreeCAD/tree/145529fe741292ff0b3977a01195bf0247425794/src/Mod/Sketcher/App/planegcs>
 
-The unmodified upstream files are the PlaneGCS `GCS`, `Geo`, `Constraints`,
+The original upstream files are the PlaneGCS `GCS`, `Geo`, `Constraints`,
 `SubSystem`, `Util`, and `qp_eq` headers and sources, plus
 `src/boost_graph_adjacency_list.hpp` and the repository `LICENSE`. They were
 extracted with `git archive` from that exact commit. The four compatibility
@@ -13,13 +13,20 @@ headers under `upstream/src/Base`, `upstream/src/FCConfig.h`, and
 `upstream/src/Mod/Sketcher/SketcherGlobal.h` are local, narrowly scoped shims;
 they are not represented as upstream FreeCAD files.
 
-SHA-256 of the unmodified extracted files:
+Vertex adds `SketcherExport` to `ConstraintWeightedLinearCombination` in
+`Constraints.h` so the existing implementation is accessible through the
+replaceable PlaneGCS DLL. This changes export visibility only; the constraint
+implementation remains upstream. The original unmodified `Constraints.h`
+SHA-256 was `2b32626a5d9976ef1b14343692faec55058875433f6982523504ca3d77f76a15`.
+The records below and the source-kit manifest verify the distributed bytes.
+
+SHA-256 of the distributed extracted files (unmodified except the noted export):
 
 ```text
 7ffe1954587c77dfba1cf8eb9b2ea743671fa6e63f9e7a2f258119d42e14eefe  upstream/LICENSE
 e3eec1b131456c2a8a7981425bb3b5707260c6392e2f513946ceaff8a847c738  upstream/src/boost_graph_adjacency_list.hpp
 cb709b3f179c7540f749e3723669a652877156a1ec5d10d7e97ad0fd7f4a812b  upstream/src/Mod/Sketcher/App/planegcs/Constraints.cpp
-2b32626a5d9976ef1b14343692faec55058875433f6982523504ca3d77f76a15  upstream/src/Mod/Sketcher/App/planegcs/Constraints.h
+af915db7be3056434fa3c52dc92de9341c7b76f80b0b84a5e9a324060f4831c4  upstream/src/Mod/Sketcher/App/planegcs/Constraints.h
 501f0d279ea57e39b61f49ca433e05c54fff3a0a7bfe6fe657b0f83f3464355c  upstream/src/Mod/Sketcher/App/planegcs/GCS.cpp
 79a0683acd84273efd8fb2dce36d2dac23011b10b2c693ec5615ce9eb786f18a  upstream/src/Mod/Sketcher/App/planegcs/GCS.h
 166a01743bba5e98640bbdbfa5fa615557dd2e9b507f7450de1e6a4649db8ed9  upstream/src/Mod/Sketcher/App/planegcs/Geo.cpp

@@ -114,9 +114,10 @@ public:
     // fresh topology redefinition requires v17; grouped rigid transforms
     // require v18; live exterior source completion requires v19; mixed source
     // completion with supplemental entities or assets requires v20; retained
-    // ANSI-oriented appraisal policies or measured evidence require v21. Any may include
+    // ANSI-oriented appraisal policies or measured evidence require v21;
+    // physical exterior corner inverse proofs require v22. Any may include
     // the optional recovery ledger. Absent proofs preserve historical formats.
-    static constexpr std::uint32_t format_version = 21;
+    static constexpr std::uint32_t format_version = 22;
     static constexpr std::uint32_t recovery_format_version = 4;
     [[nodiscard]] static std::uint32_t required_format_version(const DocumentSnapshot& snapshot);
     static constexpr std::uint64_t maximum_file_bytes = 4ULL * 1024ULL * 1024ULL * 1024ULL;
@@ -131,7 +132,7 @@ public:
                                           const DocumentSnapshot& snapshot,
                                           const SaveOptions& options = {});
     [[nodiscard]] static LoadResult load(const std::filesystem::path& source);
-    // Recovery-bearing v4 through v21 only. A document-only path never drops a ledger.
+    // Recovery-bearing v4 through v22 only. A document-only path never drops a ledger.
     [[nodiscard]] static SaveReceipt save_archive(const std::filesystem::path& destination,
         const ProjectArchiveSnapshot&, const SaveOptions& options = {});
     [[nodiscard]] static ArchiveLoadResult load_archive(const std::filesystem::path& source, ArchiveRole role);

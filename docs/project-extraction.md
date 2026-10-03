@@ -76,6 +76,11 @@ rollback with an exact destination residual, preservation of foreign additions,
 and a racing destination creator. This is internal format extraction; it is not
 Apex native-file compatibility certification.
 
+Retained coordinated exterior-corner commands use exchange version 20 and native
+format 22. Extraction preserves the version-8 constraint envelope, its exact
+corner intent, source redraws, physical construction history and all document
+revisions. Earlier semantic histories retain their existing exchange floors.
+
 API references: [NtCreateFile](https://learn.microsoft.com/en-us/windows/win32/api/winternl/nf-winternl-ntcreatefile),
 [FILE_RENAME_INFORMATION](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/ns-ntifs-_file_rename_information),
 and [FILE_RENAME_INFO](https://learn.microsoft.com/en-us/windows/win32/api/winbase/ns-winbase-file_rename_info).

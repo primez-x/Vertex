@@ -1571,6 +1571,10 @@
     },
     {
       "category": "docs",
+      "path": "docs/plans/2026-10-02-source-corner-editing.md"
+    },
+    {
+      "category": "docs",
       "path": "docs/product-scope.md"
     },
     {
@@ -2448,6 +2452,10 @@
     {
       "category": "docs",
       "path": "docs/verification/shared-topology-admission-2026-09-30.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/verification/source-corner-editing-20261002.md"
     },
     {
       "category": "docs",

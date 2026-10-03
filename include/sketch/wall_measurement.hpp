@@ -4,6 +4,7 @@
 #include "sketch/geometry.hpp"
 
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace sketch {
@@ -16,6 +17,23 @@ struct WallMeasurementResult {
     std::vector<std::string> ordered_wall_ids;
 };
 
+// Reconstructs physical sources and existing corner/T endpoint contacts. The
+// measured owners remain unchanged until source completion derives their exact
+// geometry. Rejects stale input, ambiguous contacts and unrepresentable inverses.
+[[nodiscard]] std::map<std::string, Entity, std::less<>> exterior_corner_physical_entities(
+    const std::map<std::string, Entity, std::less<>>& original,
+    const ExteriorCornerMoveIntent& intent);
+[[nodiscard]] nlohmann::json encode_exterior_corner_move(const ExteriorCornerMoveIntent& intent);
+[[nodiscard]] ExteriorCornerMoveIntent decode_exterior_corner_move(const nlohmann::json& value);
+void validate_exterior_corner_physical_contacts(
+    const std::map<std::string, Entity, std::less<>>& original,
+    const std::map<std::string, Entity, std::less<>>& proposed);
+struct ExteriorCornerPhysicalContact { std::string owner; bool start; std::string host; double station; };
+[[nodiscard]] std::vector<ExteriorCornerPhysicalContact> exterior_corner_physical_contact_graph(
+    const std::map<std::string, Entity, std::less<>>& original);
+[[nodiscard]] std::vector<std::string> exterior_corner_perimeter_ids(
+    const std::map<std::string, Entity, std::less<>>& original, const Entity& owner);
+
 // Proves old edge/corner correspondence through physical wall identity, then
 // derives stable-coordinate redraws for every affected existing source owner.
 // Initially stale and anonymous sources retain explicit repair behavior.
@@ -23,7 +41,8 @@ struct WallMeasurementResult {
 // context, joins, deductions and constraints; no identities are minted.
 [[nodiscard]] std::vector<BoundaryGeometryEdit> exterior_wall_measurement_source_updates(
     const std::map<std::string, Entity, std::less<>>& original,
-    const std::map<std::string, Entity, std::less<>>& proposed);
+    const std::map<std::string, Entity, std::less<>>& proposed,
+    bool validate_final_constraints = true);
 
 // Authored edits opt in explicitly. Completes ordinary wall changes or typed
 // constraint changes through one v6 command; other command types and commands
@@ -77,5 +96,7 @@ struct WallMeasurementResult {
 // rewritten. Openings do not change the measured exterior outline.
 [[nodiscard]] bool wall_measurement_source_current(
     const DocumentSnapshot& document, const Entity& boundary);
+[[nodiscard]] bool wall_measurement_source_current(
+    const std::map<std::string, Entity, std::less<>>& entities, const Entity& boundary);
 
 } // namespace sketch

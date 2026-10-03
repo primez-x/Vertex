@@ -3,9 +3,11 @@
 #include "sketch/boundary_entity.hpp"
 #include "sketch/constraint_entity.hpp"
 #include "sketch/constraint_authoring.hpp"
+#include "sketch/appraisal_document.hpp"
 #include "sketch/desktop/main_window.hpp"
 #include "sketch/wall_measurement.hpp"
 #include "support/noninteractive_errors.hpp"
+#include "../src/desktop/plan_canvas.hpp"
 
 #include <QAction>
 #include <QApplication>
@@ -16,8 +18,10 @@
 #include <QDir>
 #include <QFont>
 #include <QFontDatabase>
+#include <QEventLoop>
 #include <QLabel>
 #include <QLineEdit>
+#include <QMouseEvent>
 #include <QPushButton>
 #include <QStandardPaths>
 #include <QTemporaryDir>
@@ -401,7 +405,171 @@ void exact_vertex_editor(bool metric) {
         "one restored Redo must atomically restore persisted exact corner and all related owners");
 }
 
-void exact_vertex_refuses_locked_source_and_stale_context() {
+void source_corner_editor(bool metric) {
+    QTemporaryDir directory;
+    require(directory.isValid(), "source corner test has an isolated project directory");
+    MainWindow window({}, nullptr, directory.filePath("text-library.json"));
+    window.setAttribute(Qt::WA_DontShowOnScreen);
+    window.setMetricUnits(metric);
+    window.resize(1100,780);window.show();QApplication::processEvents();
+    const QStringList walls{window.createStraightWall({0,0},{6,0},"exterior"),
+        window.createStraightWall({6,0},{6,4},"exterior"),window.createStraightWall({6,4},{0,4},"exterior"),
+        window.createStraightWall({0,4},{0,0},"exterior")};
+    for (qsizetype i=0;i<walls.size();++i) {
+        require(!walls[i].isEmpty() && window.selectEntity(walls[i]) &&
+            window.editSelectedThickness(i==0 ? "200 mm" : "150 mm"),
+            "physical perimeter retains differing wall thickness");
+    }
+    for (qsizetype i=0;i<walls.size();++i)
+        require(window.selectEntity(walls[i],i!=0),"select exterior source walls");
+    const auto area=window.createMeasurementBoundaryFromSelectedWalls();
+    require(!area.isEmpty(),"derive current measured exterior");
+    const auto declaration=QStringLiteral(R"({"appraisal_policy":{"policy_kind":"ansi_z765_2021","version":1,"property_kind":"detached_single_family","measurement_basis":"exterior","ansi":{"interior_inspected":true,"direct_measurement":true,"acquisition_increment":"tenth_foot","limitations_statement":"No inaccessible portions in this fixture."}},"floor_appraisal_facts":{"grade":"above","ansi":{"any_part_below_grade":false}},"appraisal_facts":{"finish":"finished","access":"direct_interior","ceiling_eligibility":"standard","area_use":"dwelling","boundary_role":"measured_area","ansi":{"year_round_suitable":true,"finish_matches_dwelling":true,"dwelling_identity":"primary","ceiling":{"kind":"flat","minimum_height_m":2.4384}}}})");
+    require(window.editSelectedAppraisalFacts(declaration),"declare measured area for automatic GLA");
+    modal_interaction(window,"appraisalSetupDialog",[&]{child<QPushButton>(window,"appraisalDetailsSetup").click();},[&](QDialog& dialog){
+        child<QCheckBox>(dialog,"appraisalSetupEnabled").setChecked(true);
+        child<QDialogButtonBox>(dialog,"appraisalSetupButtons").button(QDialogButtonBox::Save)->click();
+        require(dialog.result()==QDialog::Accepted,"enable appraisal through native Setup using retained ANSI declarations");
+    });
+    const auto before=window.document().snapshot();
+    const auto original=sketch::decode_identified_boundary_entity(before.entities().at(area.toStdString()));
+    const auto vertex=original.segments.front().start_vertex_id;
+    const auto point=original.segments.front().segment.start;
+    const sketch::Vec2 target{point.x+0.25,point.y-0.125};
+    sketch::ConstraintAuthoringIntent intent;
+    intent.boundary_vertex_move=sketch::BoundaryVertexMoveIntent{
+        {area.toStdString(),sketch::BoundaryGeometryEditKind::move_vertex,vertex,target},true};
+    const auto preview=sketch::preview_constraint_authoring(before,intent);
+    require(preview.accepted(),"coordinated source corner has a valid core candidate");
+    const auto candidate=sketch::preview_constraint_authoring_snapshot(before,preview);
+    require(sketch::wall_measurement_source_current(candidate,candidate.entities().at(area.toStdString())),
+        "source corner preview retains exact physical correspondence");
+    const auto property=before.entities().at(area.toStdString()).properties.at("property_id").get<std::string>();
+    const auto original_report=sketch::build_appraisal_document_report(before,property);
+    const auto proposed_report=sketch::build_appraisal_document_report(candidate,property);
+    require(original_report.qualified && original_report.calculation && proposed_report.qualified && proposed_report.calculation &&
+        original_report.calculation->property.gla().total.display.text!=proposed_report.calculation->property.gla().total.display.text,
+        "source corner changes authoritative GLA in the proposed document");
+    const auto edit=[&](bool apply) {
+        window.setWorkspaceTheme(apply ? sketch::WorkspaceTheme::dark : sketch::WorkspaceTheme::light);
+        require(window.selectEntity(area),"select sourced area for exact exterior corner editing");
+        modal_interaction(window,"boundaryGeometryDialog",[&] { child<QPushButton>(window,"editBoundaryGeometry").click(); },[&](QDialog& dialog) {
+            choose_data(child<QComboBox>(dialog,"boundaryEditOperation"),"vertex");
+            choose_data(child<QComboBox>(dialog,"boundaryVertex"),QString::fromStdString(vertex));
+            child<QLineEdit>(dialog,"boundaryVertexX").setText(QString::number(target.x,'g',17)+" m");
+            child<QLineEdit>(dialog,"boundaryVertexY").setText(QString::number(target.y,'g',17)+" m");
+            auto& buttons=child<QDialogButtonBox>(dialog,"boundaryGeometryButtons");
+            require(buttons.button(QDialogButtonBox::Apply)->isEnabled(),
+                QStringLiteral("Valid source corner Apply refused: %1").arg(child<QLabel>(dialog,"boundaryGeometryStatus").text()).toStdString());
+            require(child<QTableWidget>(dialog,"boundaryGeometryChanges").rowCount()>=5 &&
+                window.document().snapshot().entities()==before.entities(),
+                "source corner preview exposes wall consequences without committing");
+            capture(dialog,QStringLiteral("source-corner-%1-%2.png").arg(metric ? "metric" : "imperial",apply ? "dark" : "light"));
+            buttons.button(apply ? QDialogButtonBox::Apply : QDialogButtonBox::Cancel)->click();
+        });
+    };
+    edit(false);
+    require(window.document().snapshot().entities()==before.entities() && window.document().revision()==before.revision(),
+        "source corner Cancel is mutation free");
+    edit(true);
+    const auto after=window.document().snapshot();
+    require(after.entities()==candidate.entities() && after.revision()==before.revision()+1,
+        "source corner commits exactly the previewed complete document in one revision");
+    const auto result=sketch::decode_identified_boundary_entity(after.entities().at(area.toStdString()));
+    require(std::hypot(result.segments.front().segment.start.x-target.x,result.segments.front().segment.start.y-target.y)<=1e-7,
+        "committed forward-derived corner matches entered model coordinates");
+    for (std::size_t i=0;i<original.segments.size();++i) {
+        require(result.segments[i].segment_id==original.segments[i].segment_id &&
+            result.segments[i].start_vertex_id==original.segments[i].start_vertex_id,
+            "source correction preserves stable edges and vertices");
+        if(i!=0)require(std::hypot(result.segments[i].segment.start.x-original.segments[i].segment.start.x,
+            result.segments[i].segment.start.y-original.segments[i].segment.start.y)<=1e-7,
+            "other exterior corners remain anchored");
+    }
+    bool changed=false;
+    for(const auto& wall:walls) {
+        changed|=after.entities().at(wall.toStdString())!=before.entities().at(wall.toStdString());
+        require(after.entities().at(wall.toStdString()).properties.at("thickness_m")==
+            before.entities().at(wall.toStdString()).properties.at("thickness_m"),"source edit preserves physical thickness");
+    }
+    require(changed && sketch::wall_measurement_source_current(after,after.entities().at(area.toStdString())),
+        "source correction changes physical walls and retains a current measured exterior");
+    require(window.undoCommand() && window.document().snapshot().entities()==before.entities() &&
+        window.redoCommand() && window.document().snapshot().entities()==after.entities(),"source corner Undo/Redo is atomic");
+    const auto project=directory.filePath(metric ? "source-corner-metric.bldproj" : "source-corner-imperial.bldproj");
+    require(window.saveProjectAs(project) && window.createNewProject(),"persist coordinated source edit and release project lease");
+    MainWindow reopened({},nullptr,directory.filePath("other-text-library.json"));
+    require(reopened.openProject(project) && reopened.document().is_editable() && reopened.document().snapshot().entities()==after.entities(),
+        "source proof and physical correspondence survive editable reopen");
+    require(reopened.undoCommand() && reopened.document().snapshot().entities()==before.entities(),"restored source corner Undo is atomic");
+    reopened.setAttribute(Qt::WA_DontShowOnScreen);reopened.resize(1100,780);reopened.show();
+    reopened.setWorkspace(sketch::desktop::Workspace::measurement);
+    require(reopened.selectEntity(area),"select restored sourced exterior for actual handle drag");
+    auto* canvas=dynamic_cast<sketch::desktop::PlanCanvas*>(reopened.findChild<QWidget*>("measurementPlanCanvas"));
+    require(canvas!=nullptr,"measurement canvas exists for source corner drag");
+      canvas->setSnapEnabled(false);canvas->setOverviewMapEnabled(false);canvas->fitView();canvas->zoomBy(.8);
+      QApplication::processEvents();
+      // Settle the newly shown window's initial focus/navigation events before
+      // beginning a pointer gesture, as an interactive user necessarily does.
+      canvas->setFocus();QApplication::processEvents();QApplication::processEvents();
+      require(reopened.selectEntity(area),"retain measured owner after initial window focus settles");
+      canvas->setSnapEnabled(false);
+      const auto drag_before=reopened.document().snapshot();
+    const auto mouse=[&](QEvent::Type type,sketch::Vec2 world) {
+        const auto center=QRectF(canvas->rect()).center();const auto view=canvas->viewCenter();
+        const QPointF pixel{center.x()+(world.x-view.x)*canvas->viewScale(),center.y()-(world.y-view.y)*canvas->viewScale()};
+        QMouseEvent event(type,pixel,canvas->mapToGlobal(pixel.toPoint()),
+            type==QEvent::MouseMove ? Qt::NoButton : Qt::LeftButton,
+            type==QEvent::MouseButtonRelease ? Qt::NoButton : Qt::LeftButton,Qt::NoModifier);
+        QApplication::sendEvent(canvas,&event);
+    };
+    mouse(QEvent::MouseButtonPress,point);mouse(QEvent::MouseMove,target);
+    auto* poll=reopened.findChild<QTimer*>("boundaryVertexPreviewPoll");
+    require(poll && poll->isActive(),"actual source corner drag requests deferred preview");
+    QEventLoop loop;QTimer observe,deadline;observe.setInterval(10);deadline.setSingleShot(true);
+    QObject::connect(&observe,&QTimer::timeout,&loop,[&]{if(!poll->isActive())loop.quit();});
+    QObject::connect(&deadline,&QTimer::timeout,&loop,&QEventLoop::quit);
+      observe.start();deadline.start(15000);loop.exec();
+      if (poll->isActive() || !canvas->boundaryVertexPreviewMetrics()) {
+          capture(*canvas,QStringLiteral("source-corner-drag-failure-%1.png").arg(metric ? "metric" : "imperial"));
+          std::cerr << "source drag: pending=" << poll->isActive()
+                    << " metrics=" << canvas->boundaryVertexPreviewMetrics().has_value()
+                    << " projected=" << canvas->boundaryVertexPreviewEntities().size()
+                    << " error=" << reopened.lastError().toStdString() << '\n';
+      }
+      require(!poll->isActive() && canvas->boundaryVertexPreviewMetrics() &&
+          reopened.document().snapshot().entities()==drag_before.entities(),"actual source drag preview completes without mutation");
+    const auto projected=canvas->boundaryVertexPreviewEntities();
+    require(std::any_of(projected.begin(),projected.end(),[&](const auto& value){return value.id==area;}) &&
+        std::any_of(projected.begin(),projected.end(),[&](const auto& value){return walls.contains(value.id);}),
+        "actual source drag previews both measured exterior and physical walls");
+    capture(*canvas,QStringLiteral("source-corner-drag-%1.png").arg(metric ? "metric" : "imperial"));
+      mouse(QEvent::MouseButtonRelease,target);
+      const auto dragged=reopened.document().snapshot();
+      if (!reopened.lastError().isEmpty() || dragged.revision()!=drag_before.revision()+1) {
+          std::cerr << "source drag release: revision=" << dragged.revision()
+                    << " expected=" << drag_before.revision()+1
+                    << " error=" << reopened.lastError().toStdString() << '\n';
+          capture(*canvas,QStringLiteral("source-corner-release-failure-%1.png").arg(metric ? "metric" : "imperial"));
+      }
+      require(reopened.lastError().isEmpty() && dragged.revision()==drag_before.revision()+1 &&
+        sketch::wall_measurement_source_current(dragged,dragged.entities().at(area.toStdString())),
+        "actual canvas-handle release commits one current coordinated source corner document");
+    for(const auto& proposed:projected) {
+        const auto committed=std::find_if(canvas->entities().begin(),canvas->entities().end(),[&](const auto& value){return value.id==proposed.id;});
+        require(committed!=canvas->entities().end() && proposed.segments.size()==committed->segments.size() &&
+            std::equal(proposed.segments.begin(),proposed.segments.end(),committed->segments.begin(),[](const auto& a,const auto& b){
+                return std::hypot(a.start.x-b.start.x,a.start.y-b.start.y)<=1e-7 &&
+                    std::hypot(a.end.x-b.end.x,a.end.y-b.end.y)<=1e-7 && std::abs(a.sweep_radians-b.sweep_radians)<=1e-8;
+            }),"source corner release matches every previewed physical and measured object");
+    }
+    const auto dragged_report=sketch::build_appraisal_document_report(dragged,property);
+    require(dragged_report.qualified && dragged_report.calculation &&
+        dragged_report.calculation->property.gla().total.display.text==proposed_report.calculation->property.gla().total.display.text,
+        "actual canvas edit updates GLA consistently with numeric exterior correction");
+}
+
+void exact_vertex_refuses_locked_and_stale_context() {
     QTemporaryDir directory;
     MainWindow window({}, nullptr, directory.filePath("text-library.json"));
     window.setAttribute(Qt::WA_DontShowOnScreen);
@@ -416,28 +584,14 @@ void exact_vertex_refuses_locked_source_and_stale_context() {
         {{area.toStdString(),sketch::WallEndpointRole::start,edge.segment_id,edge.start_vertex_id}}, std::nullopt, sketch::Vec2{4,0}};
     window.document().apply(sketch::ApplyEntityChanges{window.document().revision(),
         {sketch::EntityChange::upsert(sketch::encode_constraint_entity(lock))},{},"Exact corner locked fixture"});
-    const auto refuses = [&](const QString& owner, const std::string& vertex, bool source) {
+    const auto refuses = [&](const QString& owner, const std::string& vertex) {
         require(window.selectEntity(owner), "select corner for refusal validation");
         const auto before = window.document().snapshot();
         const auto model = sketch::decode_identified_boundary_entity(before.entities().at(owner.toStdString()));
         const auto target = std::find_if(model.segments.begin(),model.segments.end(),
             [&](const auto& item) { return item.start_vertex_id==vertex; });
         require(target!=model.segments.end(), "refusal fixture must resolve its exact stable corner");
-        const sketch::Vec2 proposed_point{source ? target->segment.start.x+0.2 : 5.0,target->segment.start.y};
-        if (source) {
-            sketch::ConstraintAuthoringIntent intent;
-            intent.boundary_vertex_move = sketch::BoundaryVertexMoveIntent{
-                {owner.toStdString(),sketch::BoundaryGeometryEditKind::move_vertex,vertex,proposed_point},true};
-            const auto preview = sketch::preview_constraint_authoring(before,intent);
-            require(preview.accepted(), "source refusal fixture must use a geometrically valid exact corner movement");
-            const auto candidate = sketch::preview_constraint_authoring_snapshot(before,preview);
-            require(sketch::wall_measurement_source_current(before,before.entities().at(owner.toStdString())) &&
-                !sketch::wall_measurement_source_current(candidate,candidate.entities().at(owner.toStdString())),
-                "source refusal fixture must specifically stale a previously current measured exterior");
-            for (const auto& wall : sketch::exterior_wall_measurement_source_ids(before.entities().at(owner.toStdString())))
-                require(candidate.entities().at(wall)==before.entities().at(wall),
-                    "source refusal fixture must retain every authoritative physical source wall");
-        }
+        const sketch::Vec2 proposed_point{5.0,target->segment.start.y};
         auto& button = child<QPushButton>(window,"editBoundaryGeometry");
         modal_interaction(window,"boundaryGeometryDialog",[&] { button.click(); },[&](QDialog& dialog) {
             choose_data(child<QComboBox>(dialog,"boundaryEditOperation"),QStringLiteral("vertex"));
@@ -445,15 +599,15 @@ void exact_vertex_refuses_locked_source_and_stale_context() {
             child<QLineEdit>(dialog,"boundaryVertexX").setText(QString::number(proposed_point.x,'g',17)+QStringLiteral(" m"));
             auto& status = child<QLabel>(dialog,"boundaryGeometryStatus");
             const auto enabled = child<QDialogButtonBox>(dialog,"boundaryGeometryButtons").button(QDialogButtonBox::Apply)->isEnabled();
-            require(!enabled && !status.text().isEmpty() && (!source || status.text().contains("source walls",Qt::CaseInsensitive)),
-                QStringLiteral("Locked/source corner refusal failed: owner=%1 vertex=%2 source=%3 Apply=%4 X=%5 status=%6")
-                    .arg(owner,QString::fromStdString(vertex)).arg(source).arg(enabled)
+            require(!enabled && !status.text().isEmpty(),
+                QStringLiteral("Locked corner refusal failed: owner=%1 vertex=%2 Apply=%3 X=%4 status=%5")
+                    .arg(owner,QString::fromStdString(vertex)).arg(enabled)
                     .arg(child<QLineEdit>(dialog,"boundaryVertexX").text(),status.text()).toStdString());
         });
         require(window.document().snapshot().entities()==before.entities() && window.document().revision()==before.revision(),
             "refused exact movement must preserve source geometry, constraints and history");
     };
-    refuses(area, edge.start_vertex_id, false);
+    refuses(area, edge.start_vertex_id);
     const QStringList walls{window.createStraightWall({10,0},{14,0},"exterior"),
         window.createStraightWall({14,0},{14,3},"exterior"),window.createStraightWall({14,3},{10,3},"exterior"),
         window.createStraightWall({10,3},{10,0},"exterior")};
@@ -465,7 +619,6 @@ void exact_vertex_refuses_locked_source_and_stale_context() {
     const auto source_boundary = sketch::decode_identified_boundary_entity(source_snapshot.entities().at(sourced.toStdString()));
     require(sketch::wall_measurement_source_current(source_snapshot,source_snapshot.entities().at(sourced.toStdString())),
         "source refusal fixture begins with a current physical source");
-    refuses(sourced, source_boundary.segments.front().start_vertex_id, true);
     const auto& source_edge = source_boundary.segments.front();
     const auto shared_point = source_edge.segment.start;
     const sketch::Vec2 triangle_second{shared_point.x-1,shared_point.y-2};
@@ -490,16 +643,8 @@ void exact_vertex_refuses_locked_source_and_stale_context() {
         {joined_free.toStdString(),sketch::BoundaryGeometryEditKind::move_vertex,
             triangle_edge.start_vertex_id,indirect_target},true};
     const auto unconstrained_source_preview = sketch::preview_constraint_authoring(indirect_before,indirect_intent);
-    require(unconstrained_source_preview.accepted() &&
-        unconstrained_source_preview.candidate_entities().at(sourced.toStdString()) !=
-            indirect_before.entities().at(sourced.toStdString()),
-        "indirect source regression must exercise a geometrically valid shared-corner candidate");
-    const auto indirect_candidate = sketch::preview_constraint_authoring_snapshot(indirect_before,unconstrained_source_preview);
-    require(!sketch::wall_measurement_source_current(indirect_candidate,indirect_candidate.entities().at(sourced.toStdString())),
-        "indirect source regression must specifically stale its previously current measured neighbor");
-    for (const auto& wall : walls)
-        require(unconstrained_source_preview.candidate_entities().at(wall.toStdString())==indirect_before.entities().at(wall.toStdString()),
-            "shared boundary corner candidate leaves authoritative physical source walls fixed");
+    require(!unconstrained_source_preview.accepted(),
+        "core and canvas preview must refuse an indirect edit that would stale a current measured source");
     require(window.selectEntity(joined_free), "select the free triangle rather than its source-derived neighbor");
     auto& indirect_button = child<QPushButton>(window,"editBoundaryGeometry");
     modal_interaction(window,"boundaryGeometryDialog",[&] { indirect_button.click(); },[&](QDialog& dialog) {
@@ -863,7 +1008,9 @@ int main(int argc, char** argv) {
         if (app.arguments().contains(QStringLiteral("--exact-vertex-only"))) {
             exact_vertex_editor(false);
             exact_vertex_editor(true);
-            exact_vertex_refuses_locked_source_and_stale_context();
+            source_corner_editor(false);
+            source_corner_editor(true);
+            exact_vertex_refuses_locked_and_stale_context();
             std::cout << "exact completed-boundary vertex editor passed\n";
             return 0;
         }
@@ -886,7 +1033,9 @@ int main(int argc, char** argv) {
         default_length_operation_remains_available();
         exact_vertex_editor(false);
         exact_vertex_editor(true);
-        exact_vertex_refuses_locked_source_and_stale_context();
+        source_corner_editor(false);
+        source_corner_editor(true);
+        exact_vertex_refuses_locked_and_stale_context();
         curved_edge_resize_offers_related_object_choice(false);
         curved_edge_resize_offers_related_object_choice(true);
         const ArcCase cases[]{

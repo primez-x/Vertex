@@ -7,10 +7,13 @@
 #include "sketch/appraisal_document.hpp"
 #include "sketch/wall_measurement.hpp"
 #include "sketch/project_store.hpp"
+#include "sketch/vertical_levels.hpp"
+#include "sketch/model_phases.hpp"
 #include "support/noninteractive_errors.hpp"
 
 #include <algorithm>
 #include <cmath>
+#include <chrono>
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
@@ -2870,9 +2873,449 @@ void test_source_measured_stale_owner_keeps_explicit_repair_workflow() {
     require(document.snapshot().entities() == before.entities(), "stale repair workflow Undo did not restore the prior state");
 }
 
+Document exterior_corner_fixture(double bottom_sweep = 0, double right_sweep = 0,
+    bool reverse_sources = false, bool partitions = false) {
+    auto entities = source_measured_constraint_fixture().snapshot().entities();
+    for (auto it = entities.begin(); it != entities.end();)
+        if (it->second.type == "constraint") it = entities.erase(it); else ++it;
+    entities.at("bottom").properties["baseline"]["sweep_radians"] = bottom_sweep;
+    entities.at("right").properties["baseline"]["sweep_radians"] = right_sweep;
+    entities.at("bottom").properties["thickness_m"] = 0.2;
+    entities.at("right").properties["thickness_m"] = 0.3;
+    entities.at("left").properties["thickness_m"] = 0.24;
+    if (reverse_sources) for (const auto* id : {"bottom", "right", "top", "left"}) {
+        auto old = baseline(entities.at(id));
+        entities.at(id).properties["baseline"] = segment_json(old.end, old.start, -old.sweep_radians);
+    }
+    if (bottom_sweep != 0) {
+        auto& source = entities.at("bottom");
+        const auto b = baseline(source);
+        const auto angle = angle_from_radians(b.sweep_radians);
+        source.extensions["curve_input"] = {{"version", 2}, {"construction", "angle"},
+            {"measure", angle.original_expression}, {"measure_value", b.sweep_radians},
+            {"radians", b.sweep_radians}, {"clockwise", b.sweep_radians < 0},
+            {"start", {b.start.x,b.start.y}}, {"end", {b.end.x,b.end.y}}, {"vendor", "exact-source"}};
+    }
+    const auto measured = derive_exterior_wall_measurement(entities, {"bottom","right","top","left"});
+    for (const auto* id : {"area", "consumer"}) {
+        auto owner = decode_identified_boundary_entity(entities.at(id));
+        for (std::size_t i = 0; i < measured.boundary.size(); ++i) owner.segments[i].segment = measured.boundary[i];
+        if (reverse_sources) {
+            std::reverse(owner.segments.begin(), owner.segments.end());
+            for (auto& edge : owner.segments) {
+                std::swap(edge.start_vertex_id, edge.end_vertex_id);
+                std::swap(edge.segment.start, edge.segment.end);
+                edge.segment.sweep_radians = -edge.segment.sweep_radians;
+            }
+        }
+        auto changed = encode_identified_boundary_entity(owner);
+        entities.at(id).properties["segments"] = changed.properties.at("segments");
+        entities.at(id).properties["wall_measurement_source"] = measured.source;
+    }
+    // Fixtures retain measured dimensions, while recomputing their initial
+    // automatic placements is irrelevant to the corner transaction contract.
+    entities.erase("length-dimension");
+    if (partitions) {
+        auto first = wall("partition-a", {2,0}, {2,1});
+        auto second = wall("partition-b", {2,0.5}, {3,0.5});
+        for (auto* entity : {&first, &second})
+            for (const auto* key : {"property_id","building_id","floor_id","layer_id"})
+                entity->properties[key] = entities.at("bottom").properties.at(key);
+        // Non-identical base elevations still share a physical vertical span.
+        first.properties["elevation_m"] = 0.2;
+        second.properties["elevation_m"] = 0.4;
+        entities.emplace(first.id, first); entities.emplace(second.id, second);
+    }
+    entities.emplace("hosted", opening("hosted", "bottom", 0.4, 0.5));
+    std::vector<Entity> values;
+    for (auto& [id, entity] : entities) { (void)id; values.push_back(std::move(entity)); }
+    return Document::create(std::move(values));
+}
+
+ConstraintAuthoringIntent exterior_corner_intent(const DocumentSnapshot& source) {
+    const auto owner = decode_identified_boundary_entity(source.entities().at("area"));
+    const auto edge = std::max_element(owner.segments.begin(), owner.segments.end(), [](const auto& a, const auto& b) {
+        return a.segment.start.x - a.segment.start.y < b.segment.start.x - b.segment.start.y;
+    });
+    BoundaryGeometryEdit edit;
+    edit.boundary_id = "area"; edit.target_id = edge->start_vertex_id;
+    edit.target_position = {edge->segment.start.x + 0.35, edge->segment.start.y - 0.12};
+    ConstraintAuthoringIntent intent;
+    intent.boundary_vertex_move = BoundaryVertexMoveIntent{edit, true};
+    return intent;
+}
+
+void test_exterior_corner_inverse_curve_lineage_and_replay() {
+    for (const auto sweeps : {std::pair{0.0,0.0}, std::pair{0.6,0.0}, std::pair{-0.6,0.0}, std::pair{0.6,0.4}, std::pair{4.0,0.0}, std::pair{0.001,0.0}})
+        for (const bool reversed : {false,true}) {
+        auto document = exterior_corner_fixture(sweeps.first, sweeps.second, reversed);
+        const auto before = document.snapshot();
+        const auto intent = exterior_corner_intent(before);
+        const auto preview = preview_constraint_authoring(before, intent);
+        require_accepted(preview, "exterior analytical corner inverse rejected valid line/arc shell");
+        const auto candidate = preview_constraint_authoring_snapshot(before, preview);
+        const auto original = decode_identified_boundary_entity(before.entities().at("area"));
+        const auto changed = decode_identified_boundary_entity(candidate.entities().at("area"));
+        for (std::size_t i = 0; i < original.segments.size(); ++i) {
+            const auto expected = original.segments[i].start_vertex_id == intent.boundary_vertex_move->edit.target_id
+                ? intent.boundary_vertex_move->edit.target_position : original.segments[i].segment.start;
+            require_near(changed.segments[i].segment.start.x, expected.x, 1e-7, "inverse changed a requested exterior X coordinate");
+            require_near(changed.segments[i].segment.start.y, expected.y, 1e-7, "inverse changed a requested exterior Y coordinate");
+            require(changed.segments[i].segment_id == original.segments[i].segment_id, "inverse lost stable exterior edge identity");
+        }
+        for (const auto* id : {"area","consumer"})
+            require(wall_measurement_source_current(candidate, candidate.entities().at(id)), "inverse left another source consumer stale");
+        require(candidate.entities().at("hosted") == before.entities().at("hosted"), "corner edit changed physical opening station metadata");
+        for (const auto* id : {"bottom","right","top","left"})
+            require(candidate.entities().at(id).properties.at("thickness_m") == before.entities().at(id).properties.at("thickness_m"),
+                "inverse lost unequal physical wall thickness");
+        const auto proof = *candidate.history().back().boundary_constraint_changes;
+        auto encoded = command_to_json(Command{proof});
+        require(encoded.at("version") == 8 && proof.exterior_corner_move.has_value(), "corner edit lacks its dedicated persisted intent");
+        require(command_to_json(command_from_json(encoded)) == encoded, "corner proof codec does not preserve exact bytes");
+        require(ProjectStore::required_format_version(candidate) == 22, "corner proof did not raise native format floor");
+        auto tampered = encoded;
+        tampered["exterior_corner_move"]["position"][0] = intent.boundary_vertex_move->edit.target_position.x + 0.01;
+        bool refused = false;
+        try { (void)Document::preview_command(before, command_from_json(tampered)); } catch (const std::exception&) { refused = true; }
+        require(refused, "corner proof accepted a target that differs from its retained redraws");
+        (void)apply_constraint_authoring(document, preview);
+        require(Document::fork(document.snapshot()).snapshot().entities() == candidate.entities(), "corner history does not exactly replay");
+        document.undo(document.revision());
+        require(document.snapshot().entities() == before.entities(), "corner Undo did not restore source geometry and provenance");
+        document.redo(document.revision());
+        require(document.snapshot().entities() == candidate.entities(), "corner Redo did not restore complete derived state");
+        if (sweeps.first == 0.6 && sweeps.second == 0.4 && reversed) {
+            const auto path = std::filesystem::temp_directory_path() / ("exterior-corner-" + make_stable_id() + ".sketchproj");
+            (void)ProjectStore::save(path, document.snapshot());
+            auto reopened = ProjectStore::load(path);
+            require(reopened.document.snapshot().entities() == candidate.entities(), "native corner reopen differs from the sealed preview");
+            reopened.document.undo(reopened.document.revision());
+            require(reopened.document.snapshot().entities() == before.entities(), "native corner reopen lost exact Undo state");
+            reopened.document.redo(reopened.document.revision());
+            require(reopened.document.snapshot().entities() == candidate.entities(), "native corner reopen lost exact Redo state");
+            std::error_code ignored;
+            std::filesystem::remove(path, ignored);
+        }
+        if (sweeps.first != 0) {
+            const auto& archive = candidate.entities().at("bottom").extensions.at("curve_input_derivation");
+            require(archive.at("source_input") == before.entities().at("bottom").extensions.at("curve_input"), "corner curve reconstruction lost exact original input");
+            validate_wall_curve_input(candidate.entities().at("bottom"));
+        }
+    }
+}
+
+void test_exterior_corner_partitions_constraints_and_refusals() {
+    auto document = exterior_corner_fixture(0,0,false,true);
+    const auto before = document.snapshot();
+    bool branch_source_refused = false;
+    try { (void)derive_exterior_wall_measurement(before,{"bottom","right","top","left","partition-a"}); }
+    catch (const std::invalid_argument&) { branch_source_refused = true; }
+    require(branch_source_refused,"source derivation unexpectedly admitted an interior branch as perimeter lineage");
+    auto intent = exterior_corner_intent(before);
+    const auto preview = preview_constraint_authoring(before, intent);
+    require_accepted(preview, "exterior corner with partition T chain rejected");
+    const auto candidate = preview_constraint_authoring_snapshot(before, preview);
+    const auto first = baseline(candidate.entities().at("partition-a"));
+    const auto host = baseline(candidate.entities().at("bottom"));
+    require_near(first.start.x, (host.start.x + host.end.x)/2, 1e-7, "partition T station X did not follow source host");
+    require_near(first.start.y, (host.start.y + host.end.y)/2, 1e-7, "partition T station Y did not follow source host");
+    require(first.end.x == 2 && first.end.y == 1, "partition unattached endpoint moved");
+    const auto second = baseline(candidate.entities().at("partition-b"));
+    require_near(second.start.x, (first.start.x + first.end.x)/2, 1e-7, "partition chain lost its original T station");
+    require_near(second.start.y, (first.start.y + first.end.y)/2, 1e-7, "partition chain lost its original T station Y");
+    auto frozen = intent;
+    frozen.boundary_vertex_move->move_related_objects = false;
+    require(!preview_constraint_authoring(before, frozen).accepted(), "frozen partitions silently detached");
+    auto stale = before.entities();
+    for (auto& edge : stale.at("area").properties.at("segments"))
+        for (const auto* endpoint : {"start","end"}) edge[endpoint][0] = edge.at(endpoint).at(0).get<double>() + 0.2;
+    std::vector<Entity> values;
+    for (auto& [id, entity] : stale) { (void)id; values.push_back(std::move(entity)); }
+    auto stale_document = Document::create(std::move(values));
+    require(!preview_constraint_authoring(stale_document.snapshot(), intent).accepted(), "stale source accepted an exterior inverse");
+    // A relation from the derived corner to an independent wall must solve
+    // against the final exterior coordinates rather than an intermediate shell.
+    auto related = exterior_corner_fixture().snapshot().entities();
+    const auto relation_intent = exterior_corner_intent(exterior_corner_fixture().snapshot());
+    const auto outline = decode_identified_boundary_entity(related.at("area"));
+    const auto edge = std::find_if(outline.segments.begin(),outline.segments.end(), [&](const auto& value) {
+        return value.start_vertex_id == relation_intent.boundary_vertex_move->edit.target_id;
+    });
+    auto remote = wall("related", edge->segment.start, {edge->segment.start.x + 1, edge->segment.start.y - 1});
+    related.emplace(remote.id, remote);
+    auto join = relation("measured-join", ConstraintRelationKind::coincident,
+        {{"area", WallEndpointRole::start,edge->segment_id,edge->start_vertex_id}, endpoint("related",WallEndpointRole::start)});
+    related.emplace(join.id, encode_constraint_entity(join));
+    values.clear();
+    for (auto& [id, entity] : related) { (void)id; values.push_back(std::move(entity)); }
+    auto related_document = Document::create(std::move(values));
+    const auto related_preview = preview_constraint_authoring(related_document.snapshot(), relation_intent);
+    require_accepted(related_preview, "measured corner relation rejected before complete derived solve");
+    const auto related_candidate = preview_constraint_authoring_snapshot(related_document.snapshot(), related_preview);
+    require_near(baseline(related_candidate.entities().at("related")).start.x, relation_intent.boundary_vertex_move->edit.target_position.x,
+        1e-7, "related wall did not follow final derived measured corner");
+    auto short_host = exterior_corner_fixture().snapshot().entities();
+    short_host.at("hosted").properties["offset_m"] = 3.7;
+    short_host.at("hosted").properties["width_m"] = 0.25;
+    values.clear();
+    for (auto& [id, entity] : short_host) { (void)id; values.push_back(std::move(entity)); }
+    auto host_document = Document::create(std::move(values));
+    auto shrink = exterior_corner_intent(host_document.snapshot());
+    shrink.boundary_vertex_move->edit.target_position.x -= 1.35;
+    const auto no_fit = preview_constraint_authoring(host_document.snapshot(), shrink);
+    require(!no_fit.accepted() && no_fit.candidate_entities() == host_document.snapshot().entities(),
+        "exterior corner shortened a source past its hosted opening fit");
+    auto curved = exterior_corner_fixture(0.6).snapshot().entities();
+    auto lock = relation("physical-curve-lock",ConstraintRelationKind::fixed_arc_length,
+        {endpoint("bottom",WallEndpointRole::start), endpoint("bottom",WallEndpointRole::end)});
+    lock.length = parse_quantity(std::to_string(segment_length(baseline(curved.at("bottom")))) + " m");
+    curved.emplace(lock.id, encode_constraint_entity(lock));
+    values.clear();
+    for (auto& [id, entity] : curved) { (void)id; values.push_back(std::move(entity)); }
+    auto curve_document = Document::create(std::move(values));
+    const auto locked = preview_constraint_authoring(curve_document.snapshot(), exterior_corner_intent(curve_document.snapshot()));
+    require(!locked.accepted() && locked.candidate_entities() == curve_document.snapshot().entities(),
+        "exterior corner bypassed a persisted physical curve-length lock");
+}
+
+void test_exterior_corner_cross_layer_locked_partition_chain() {
+    auto entities = exterior_corner_fixture(0,0,false,true).snapshot().entities();
+    entities.emplace("partition-layer", Entity{"partition-layer","layer",{{"floor_id","floor"}}});
+    entities.at("partition-a").properties["layer_id"] = "partition-layer";
+    entities.at("partition-b").properties["layer_id"] = "partition-layer";
+    auto joint_branch = wall("partition-joint",{2,1},{3,1});
+    for (const auto* key : {"property_id","building_id","floor_id","layer_id"})
+        joint_branch.properties[key] = entities.at("partition-a").properties.at(key);
+    joint_branch.properties["elevation_m"] = 0.3;
+    entities.emplace(joint_branch.id,joint_branch);
+    auto lock = relation("partition-length",ConstraintRelationKind::fixed_length,
+        {endpoint("partition-a",WallEndpointRole::start), endpoint("partition-a",WallEndpointRole::end)});
+    lock.length = parse_quantity("1 m");
+    entities.emplace(lock.id,encode_constraint_entity(lock));
+    entities.emplace("partition-opening",opening("partition-opening","partition-a",0.7,0.25));
+    entities.emplace("other-floor",Entity{"other-floor","floor",{{"building_id","building"}}});
+    entities.emplace("other-layer",Entity{"other-layer","layer",{{"floor_id","other-floor"}}});
+    auto unrelated = entities.at("partition-a");
+    unrelated.id = "unrelated-floor-wall";
+    unrelated.properties["floor_id"] = "other-floor";
+    unrelated.properties["layer_id"] = "other-layer";
+    entities.emplace(unrelated.id,unrelated);
+    auto inactive = entities.at("partition-a");
+    inactive.id = "inactive-alternative-partition";
+    auto demolished = inactive; demolished.id = "demolished-partition";
+    entities.emplace(inactive.id,inactive); entities.emplace(demolished.id,demolished);
+    const std::vector<std::string> baseline_ids{"bottom","right","top","left","partition-a","partition-b","partition-joint",demolished.id};
+    auto registry_ids = baseline_ids; registry_ids.push_back(inactive.id);
+    const auto phases = ModelPhases::create(registry_ids,baseline_ids,
+        {{"active","Active",{demolished.id},{}},{"inactive","Inactive",{}, {inactive.id}}},"active");
+    entities.emplace("phase-model",Entity{"phase-model","model_phases",{{"model",phases.to_json()}}});
+    std::vector<Entity> values;
+    for (const auto& [id,entity] : entities) { (void)id; values.push_back(entity); }
+    auto document = Document::create(values);
+    const auto before = document.snapshot();
+    auto intent = exterior_corner_intent(before);
+    intent.boundary_vertex_move->edit.target_position.y += 0.52; // Provisional host is too short for its opening.
+    const auto preview = preview_constraint_authoring(before,intent);
+    require_accepted(preview,"cross-layer attached partition with solvable length lock rejected");
+    const auto candidate = preview_constraint_authoring_snapshot(before,preview);
+    const auto a = baseline(candidate.entities().at("partition-a"));
+    const auto b = baseline(candidate.entities().at("partition-b"));
+    const auto joint = baseline(candidate.entities().at("partition-joint"));
+    const auto host = baseline(candidate.entities().at("bottom"));
+    require_near(a.start.x,(host.start.x+host.end.x)/2,1e-7,"cross-layer source T station detached");
+    require_near(a.start.y,(host.start.y+host.end.y)/2,1e-7,"cross-layer source T station Y detached");
+    require_near(segment_length(a),1,1e-6,"partition free endpoint did not solve its retained length lock");
+    require_near(b.start.x,(a.start.x+a.end.x)/2,1e-7,"partition chain did not follow final solved host");
+    require_near(b.start.y,(a.start.y+a.end.y)/2,1e-7,"partition chain did not follow final solved host Y");
+    require_near(joint.start.x,a.end.x,1e-7,"reciprocal partition joint did not follow the length-locked free endpoint");
+    require_near(joint.start.y,a.end.y,1e-7,"reciprocal partition joint did not follow the length-locked free endpoint Y");
+    require(candidate.entities().at(unrelated.id) == before.entities().at(unrelated.id),"another-floor coincidence moved with source shell");
+    require(candidate.entities().at(inactive.id) == before.entities().at(inactive.id) &&
+        candidate.entities().at(demolished.id) == before.entities().at(demolished.id),
+        "inactive alternative or demolished coincident wall moved with current physical contacts");
+    require(candidate.entities().at("partition-opening") == before.entities().at("partition-opening"),"partition opening offset metadata changed");
+    validate_constraint_wall_host("partition-a",candidate.entities());
+    auto smuggled = *candidate.history().back().boundary_constraint_changes;
+    auto hidden_geometry = baseline(before.entities().at(inactive.id));
+    hidden_geometry.start.x += 0.1;
+    smuggled.wall_edits.push_back({inactive.id,hidden_geometry,std::nullopt,1});
+    bool refused_hidden_edit = false;
+    try { (void)Document::preview_command(before,Command{smuggled}); }
+    catch (const std::exception&) { refused_hidden_edit = true; }
+    require(refused_hidden_edit,"qualified exterior topology authority admitted an inactive alternative wall edit");
+    (void)apply_constraint_authoring(document,preview);
+    require(Document::fork(document.snapshot()).snapshot().entities() == candidate.entities(),"locked attachment typed proof differs on history replay");
+    const auto path = std::filesystem::temp_directory_path() / ("locked-partition-joint-" + make_stable_id() + ".bldproj");
+    (void)ProjectStore::save(path,document.snapshot());
+    auto reopened = ProjectStore::load(path);
+    require(reopened.document.snapshot().entities() == candidate.entities(),"locked reciprocal partition joint did not reopen exactly");
+    reopened.document.undo(reopened.document.revision());
+    require(reopened.document.snapshot().entities() == before.entities(),"locked reciprocal partition joint reopen lost Undo");
+    std::filesystem::remove(path);
+    document.undo(document.revision());
+    require(document.snapshot().entities() == before.entities(),"locked attachment Undo lost original geometry");
+    auto anchor = relation("partition-free-end-lock",ConstraintRelationKind::fixed_anchor,
+        {endpoint("partition-a",WallEndpointRole::end)});
+    anchor.anchor = Vec2{2,1};
+    entities.emplace(anchor.id,encode_constraint_entity(anchor));
+    values.clear();
+    for (const auto& [id,entity] : entities) { (void)id; values.push_back(entity); }
+    auto conflict = Document::create(values);
+    const auto rejected = preview_constraint_authoring(conflict.snapshot(),intent);
+    require(!rejected.accepted() && rejected.candidate_entities() == conflict.snapshot().entities(),"conflicting attachment locks did not refuse atomically");
+}
+
+void test_exterior_corner_t_station_persistent_controls() {
+    for (const int control : {0,1,2,3,4,5,6}) {
+        auto entities = exterior_corner_fixture(0,0,false,true).snapshot().entities();
+        const double sweep = control == 3 ? 0.6 : control == 4 ? -0.6 : control == 5 ? -0.5 : control == 6 ? -2.0 : 0;
+        const Vec2 station{2+0.5*std::tan(sweep/4),0.5};
+        entities.at("partition-a").properties["baseline"]["sweep_radians"] = sweep;
+        entities.at("partition-b").properties["baseline"] = segment_json(station,{station.x+1,station.y},0);
+        if (control == 0 || control >= 3) {
+            auto anchor = relation("T-anchor",ConstraintRelationKind::fixed_anchor,
+                {endpoint("partition-b",WallEndpointRole::start)});
+            anchor.anchor = station;
+            entities.emplace(anchor.id,encode_constraint_entity(anchor));
+        } else {
+            auto anchor = relation("branch-far-anchor",ConstraintRelationKind::fixed_anchor,
+                {endpoint("partition-b",WallEndpointRole::end)});
+            anchor.anchor = Vec2{station.x+1,station.y};
+            entities.emplace(anchor.id,encode_constraint_entity(anchor));
+            auto control_relation = relation("branch-control",control == 1 ? ConstraintRelationKind::fixed_length : ConstraintRelationKind::horizontal,
+                {endpoint("partition-b",WallEndpointRole::start),endpoint("partition-b",WallEndpointRole::end)});
+            if (control == 1) control_relation.length = parse_quantity("1 m");
+            entities.emplace(control_relation.id,encode_constraint_entity(control_relation));
+        }
+        std::vector<Entity> values;
+        for (const auto& [id,entity] : entities) { (void)id; values.push_back(entity); }
+        auto document = Document::create(values);
+        const auto before = document.snapshot();
+        const auto preview = preview_constraint_authoring(before,exterior_corner_intent(before));
+        if (!preview.accepted()) std::cerr << "T station fixture control=" << control << " sweep=" << sweep << '\n';
+        require_accepted(preview,"persistent T control overpinned a solvable physical host");
+        const auto candidate = preview_constraint_authoring_snapshot(before,preview);
+        const auto host = baseline(candidate.entities().at("partition-a"));
+        const auto branch = baseline(candidate.entities().at("partition-b"));
+        const double b = -0.5*std::tan(sweep/4);
+        require_near(branch.start.x,(host.start.x+host.end.x)/2-b*(host.end.y-host.start.y),1e-7,"saved T fraction X did not follow final solved host");
+        require_near(branch.start.y,(host.start.y+host.end.y)/2+b*(host.end.x-host.start.x),1e-7,"saved T fraction Y did not follow final solved host");
+        if (control == 0 || control >= 3) {
+            require_near(branch.start.x,station.x,1e-7,"saved T point anchor X moved");
+            require_near(branch.start.y,station.y,1e-7,"saved T point anchor Y moved");
+            require(candidate.entities().at("partition-b") == before.entities().at("partition-b"),
+                "unchanged solved attachment retained a provisional contact redraw");
+        } else if (control == 1) require_near(segment_length(branch),1,1e-6,"saved branch length did not control T point");
+        else require_near(branch.start.y,branch.end.y,1e-6,"saved branch direction did not control T point");
+        validate_exterior_corner_physical_contacts(before.entities(),candidate.entities());
+        (void)apply_constraint_authoring(document,preview);
+        require(document.snapshot().entities() == candidate.entities(),"T control Apply differs from preview");
+        require(Document::fork(document.snapshot()).snapshot().entities() == candidate.entities(),"T control typed proof differs on replay");
+        const auto path = std::filesystem::temp_directory_path() / ("T-control-" + make_stable_id() + ".bldproj");
+        (void)ProjectStore::save(path,document.snapshot());
+        auto reopened = ProjectStore::load(path);
+        require(reopened.document.snapshot().entities() == candidate.entities(),"T control native reopen differs from preview");
+        reopened.document.undo(reopened.document.revision());
+        require(reopened.document.snapshot().entities() == before.entities(),"T control native Undo lost original geometry");
+        std::filesystem::remove(path);
+    }
+}
+
+void test_exterior_corner_preserves_future_receipt_metadata() {
+    for (const bool future_section : {true,false}) {
+        auto source = wall("opaque-length",{0,0},{4,0});
+        source.extensions["constraint_authoring"] = future_section
+            ? json{{"version",2},{"last_length_entry",{{"vendor","opaque"}}}}
+            : json{{"version",1},{"last_length_entry",{{"version",99},{"vendor","opaque"}}}};
+        const auto before = source;
+        bool refused = false;
+        try { (void)reconstruct_exterior_corner_wall(source,{{0,1},{4,1},0}); }
+        catch (const std::exception&) { refused = true; }
+        require(refused && source == before,"length-preserving exterior deformation rewrote future receipt metadata");
+    }
+}
+
+void test_exterior_corner_retained_legacy_tangent_source() {
+    auto entities = exterior_corner_fixture().snapshot().entities();
+    const auto pi = std::acos(-1.0);
+    entities.at("bottom").properties["baseline"] = segment_json({0,0},{5,0});
+    entities.at("right").properties["baseline"] = segment_json({5,0},{5,3},pi);
+    entities.at("top").properties["baseline"] = segment_json({5,3},{0,3});
+    entities.at("left").properties["baseline"] = segment_json({0,3},{0,0},pi);
+    for (const auto* id : {"bottom","right","top","left"}) entities.at(id).properties["thickness_m"] = 0.4;
+    entities.at("top").properties["thickness_m"] = 0.400000002;
+    bool stable_refused = false;
+    try { (void)derive_exterior_wall_measurement(entities,{"bottom","right","top","left"}); }
+    catch (const std::invalid_argument&) { stable_refused = true; }
+    require(stable_refused,"legacy tangent fixture must exercise stable derivation refusal");
+    const auto retained = derive_legacy_exterior_wall_measurement(entities,{"bottom","right","top","left"});
+    for (const auto* id : {"area","consumer"}) {
+        auto owner = decode_identified_boundary_entity(entities.at(id));
+        for (std::size_t i = 0; i < owner.segments.size(); ++i) owner.segments[i].segment = retained.boundary[i];
+        entities.at(id).properties["segments"] = encode_identified_boundary_entity(owner).properties.at("segments");
+        entities.at(id).properties["wall_measurement_source"] = retained.source;
+    }
+    std::vector<Entity> values;
+    for (const auto& [id,entity] : entities) { (void)id; values.push_back(entity); }
+    auto document = Document::create(values);
+    const auto before = document.snapshot();
+    require(wall_measurement_source_current(before,before.entities().at("area")),"retained legacy tangent owner lost current-source compatibility");
+    const auto boundary = decode_identified_boundary_entity(before.entities().at("area"));
+    const auto edge = std::max_element(boundary.segments.begin(),boundary.segments.end(),[](const auto& a,const auto& b) {
+        return a.segment.start.x + a.segment.start.y < b.segment.start.x + b.segment.start.y;
+    });
+    ConstraintAuthoringIntent intent;
+    intent.exterior_corner_move = ExteriorCornerMoveIntent{"area",edge->start_vertex_id,
+        {edge->segment.start.x+0.3,edge->segment.start.y+0.1},true};
+    const auto preview = preview_constraint_authoring(before,intent);
+    require_accepted(preview,"current retained legacy tangent outline did not enter supported exterior inverse lane");
+    const auto candidate = preview_constraint_authoring_snapshot(before,preview);
+    require(wall_measurement_source_current(candidate,candidate.entities().at("area")),"legacy tangent inverse retained a stale analytical outline");
+}
+
+void test_exterior_corner_scaled_level_bound_contact_graph() {
+    auto entities = exterior_corner_fixture(0,0,false,true).snapshot().entities();
+    const VerticalLevelGraph levels({{"ground",0},{"upper",3}},{{"storey","ground","upper"}});
+    entities.emplace("levels",Entity{"levels","vertical_levels",{{"model",json::parse(levels.serialize())}}});
+    entities.emplace("upper-floor",Entity{"upper-floor","floor",{{"building_id","building"},
+        {"vertical_level_binding",{{"version",1},{"graph_id","levels"},{"level_id","upper"}}}}});
+    entities.emplace("upper-layer",Entity{"upper-layer","layer",{{"floor_id","upper-floor"}}});
+    for (unsigned i = 0; i < 360; ++i) {
+        auto entity = wall("unrelated-"+std::to_string(i),{100+2.0*i,10},{101+2.0*i,10});
+        entity.properties["property_id"] = "property"; entity.properties["building_id"] = "building";
+        entity.properties["floor_id"] = "upper-floor"; entity.properties["layer_id"] = "upper-layer";
+        entity.properties["vertical_placement"] = {{"version",1},{"mode","level"},{"offset_m",0.0}};
+        const auto id = entity.id;
+        entities.emplace(id,std::move(entity));
+    }
+    std::vector<Entity> values;
+    for (const auto& [id,entity] : entities) { (void)id; values.push_back(entity); }
+    auto document = Document::create(values);
+    const auto before = document.snapshot();
+    const auto started = std::chrono::steady_clock::now();
+    const auto preview = preview_constraint_authoring(before,exterior_corner_intent(before));
+    const auto elapsed = std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-started).count();
+    std::cout << "Exterior corner preview with 366 walls (360 level-bound unrelated): " << elapsed << " ms\n";
+    require_accepted(preview,"scaled physical contact graph rejected a supported partition chain");
+    for (unsigned i = 0; i < 360; ++i) {
+        const auto id = "unrelated-"+std::to_string(i);
+        require(preview.candidate_entities().at(id) == before.entities().at(id),"scaled contact discovery altered an unrelated level-bound wall");
+    }
+    require(wall_measurement_source_current(preview.candidate_entities(),preview.candidate_entities().at("area")),
+        "scaled contact candidate left its source owner stale");
+}
+
 int main() {
     sketch::testing::noninteractive_errors();
     try {
+        test_exterior_corner_inverse_curve_lineage_and_replay();
+        test_exterior_corner_partitions_constraints_and_refusals();
+        test_exterior_corner_cross_layer_locked_partition_chain();
+        test_exterior_corner_t_station_persistent_controls();
+        test_exterior_corner_preserves_future_receipt_metadata();
+        test_exterior_corner_retained_legacy_tangent_source();
+        test_exterior_corner_scaled_level_bound_contact_graph();
         test_source_measured_resize_seals_all_consumers_and_replays_one_event();
         test_source_measured_connected_corner_move_and_proof_tampering();
         test_source_measured_invalid_dependencies_reject_before_sealing();

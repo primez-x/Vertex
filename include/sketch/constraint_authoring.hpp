@@ -109,6 +109,7 @@ struct ConstraintAuthoringIntent {
     std::string message;
     std::optional<BoundaryResizeIntent> boundary_resize;
     std::optional<BoundaryVertexMoveIntent> boundary_vertex_move;
+    std::optional<ExteriorCornerMoveIntent> exterior_corner_move;
 };
 
 struct ConstraintWallChange {

@@ -1,6 +1,7 @@
 #include "sketch/constraints.hpp"
 
 #include "GCS.h"
+#include "Constraints.h"
 
 #include <algorithm>
 #include <cmath>
@@ -213,6 +214,38 @@ bool validate_request(const ConstraintSolveRequest& request,
                                    || std::is_same_v<Item, PerpendicularConstraint>) {
                     return validate_segment_ids(item, point_indices, request.points, message);
                 }
+                else if constexpr (std::is_same_v<Item, AffineStationConstraint>) {
+                    if (!point_indices.contains(item.point) || !point_indices.contains(item.start) || !point_indices.contains(item.end)) {
+                        message = "affine station references a missing point id"; return false;
+                    }
+                    if (item.point == item.start || item.point == item.end || item.start == item.end) {
+                        message = "affine station requires three distinct point ids"; return false;
+                    }
+                    if (!std::isfinite(item.a) || !std::isfinite(item.b) ||
+                        !std::isfinite(item.residual_tolerance_metres) || item.residual_tolerance_metres <= 0 ||
+                        item.residual_tolerance_metres > constraint_linear_tolerance_metres) {
+                        message = "affine station coefficients and tolerance must be finite and supported"; return false;
+                    }
+                    // Four-term row accumulation rounds normally even though
+                    // its analytical sum is one. Bound both that roundoff and
+                    // conditioning; the independent geometric residual below
+                    // still verifies the original affine equation.
+                    const double scale = std::abs(1.0-item.a)+std::abs(item.a)+2*std::abs(item.b);
+                    const double row_roundoff = 8*std::numeric_limits<double>::epsilon()*std::max(1.0,scale);
+                    const double x_sum = ((1.0-item.a)+item.a)+item.b-item.b;
+                    const double y_sum = ((1.0-item.a)+item.a)-item.b+item.b;
+                    if (!std::isfinite(row_roundoff) || row_roundoff > 1e-8 ||
+                        !std::isfinite(x_sum) || !std::isfinite(y_sum) ||
+                        std::abs(x_sum-1.0) > row_roundoff || std::abs(y_sum-1.0) > row_roundoff) {
+                        message = "affine station coefficient rows are numerically ill-conditioned"; return false;
+                    }
+                    const auto& start = request.points[point_indices.at(item.start)];
+                    const auto& end = request.points[point_indices.at(item.end)];
+                    if (!finite_separation(start,end) || stable_distance(start,end) == 0) {
+                        message = "affine station requires a finite nondegenerate host"; return false;
+                    }
+                    return true;
+                }
                 else {
                     const auto found = point_indices.find(item.point);
                     if (found == point_indices.end()) {
@@ -395,6 +428,26 @@ static ConstraintPreview planar_constraint_preview(const ConstraintSolveRequest&
                                                           solver_point(item.second_start),
                                                           solver_point(item.second_end), tag);
                     }
+                    else if constexpr (std::is_same_v<Item, AffineStationConstraint>) {
+                        auto& point = solver_point(item.point);
+                        auto& start = solver_point(item.start);
+                        auto& end = solver_point(item.end);
+                        target_values.push_back(1.0);
+                        double* weight = &target_values.back();
+                        const auto add_station_coordinate = [&](double* coordinate, std::vector<double*> poles,
+                            const std::vector<double>& coefficients) {
+                            std::vector<double*> values{coordinate};
+                            values.insert(values.end(),poles.begin(),poles.end());
+                            for (std::size_t i = 0; i < poles.size(); ++i) values.push_back(weight);
+                            // Constant weights stay outside declareUnknowns; the
+                            // coefficient row sums to one, yielding q=sum(c_i*p_i).
+                            auto* relation = new GCS::ConstraintWeightedLinearCombination(poles.size(),values,coefficients);
+                            relation->setTag(tag); relation->setDriving(true);
+                            system.addConstraint(relation);
+                        };
+                        add_station_coordinate(point.x,{start.x,end.x,start.y,end.y},{1-item.a,item.a,item.b,-item.b});
+                        add_station_coordinate(point.y,{start.y,end.y,start.x,end.x},{1-item.a,item.a,-item.b,item.b});
+                    }
                     else {
                         target_values.push_back(item.x);
                         double* anchor_x = &target_values.back();
@@ -472,6 +525,7 @@ static ConstraintPreview planar_constraint_preview(const ConstraintSolveRequest&
                     };
                     double linear_residual = 0.0;
                     double angular_residual = 0.0;
+                    double linear_tolerance = constraint_linear_tolerance_metres;
                     if constexpr (std::is_same_v<Item, HorizontalConstraint>) {
                         linear_residual = std::abs(solved(item.first).y - solved(item.second).y);
                     }
@@ -497,6 +551,17 @@ static ConstraintPreview planar_constraint_preview(const ConstraintSolveRequest&
                             solved(item.first_start), solved(item.first_end),
                             solved(item.second_start), solved(item.second_end), true);
                         angular_residual = residual.value;
+                    }
+                    else if constexpr (std::is_same_v<Item, AffineStationConstraint>) {
+                        const auto& start = solved(item.start); const auto& end = solved(item.end);
+                        const auto& point = solved(item.point);
+                        const long double dx = static_cast<long double>(end.x)-start.x;
+                        const long double dy = static_cast<long double>(end.y)-start.y;
+                        const long double x = static_cast<long double>(start.x)+item.a*dx-item.b*dy;
+                        const long double y = static_cast<long double>(start.y)+item.a*dy+item.b*dx;
+                        linear_residual = static_cast<double>(std::hypot(static_cast<long double>(point.x)-x,
+                            static_cast<long double>(point.y)-y));
+                        linear_tolerance = item.residual_tolerance_metres;
                     }
                     else {
                         const MutablePoint target{item.x, item.y};
@@ -526,7 +591,7 @@ static ConstraintPreview planar_constraint_preview(const ConstraintSolveRequest&
                             std::numeric_limits<double>::infinity();
                     }
                     if ((!std::isfinite(linear_residual)
-                         || linear_residual > constraint_linear_tolerance_metres)
+                         || linear_residual > linear_tolerance)
                         || (!std::isfinite(angular_residual)
                             || angular_residual > constraint_angular_tolerance_radians)) {
                         residual_failed = true;

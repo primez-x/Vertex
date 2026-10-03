@@ -460,6 +460,49 @@ void preserve_wall_curve_construction(Entity& candidate,const Entity& source) {
     validate_wall_curve_input(candidate);
 }
 
+Entity reconstruct_exterior_corner_wall(const Entity& source, const Segment& baseline) {
+    validate_wall_curve_input(source);
+    validate_wall_length_input(source);
+    const auto old = read_baseline(source);
+    if (same_baseline(old, baseline)) return source;
+    if ((old.sweep_radians == 0) != (baseline.sweep_radians == 0) ||
+        !std::isfinite(segment_length(baseline)) ||
+        segment_length(baseline) <= constraint_linear_tolerance_metres)
+        invalid("Exterior corner reconstruction changed analytical wall kind or collapsed its baseline");
+    auto result = source;
+    // Preserve known length receipts only when their physical measure survives.
+    if (std::abs(segment_length(old) - segment_length(baseline)) > constraint_linear_tolerance_metres)
+        clear_wall_length_input(result);
+    else if (old.sweep_radians == baseline.sweep_radians) rebase_wall_length_receipt(result, baseline);
+    else if (result.extensions.contains("constraint_authoring")) {
+        auto& section = result.extensions["constraint_authoring"];
+        if (!section.is_object() || !section.contains("version") ||
+            !section.at("version").is_number_integer() || section.at("version") != 1)
+            invalid("Exterior corner cannot rewrite unsupported constraint_authoring metadata: " + source.id);
+        if (section.contains("last_length_entry")) {
+            (void)validate_length_receipt(section.at("last_length_entry"),source);
+            update_baseline_json(section["last_length_entry"]["baseline"], baseline);
+        }
+    }
+    if (old.sweep_radians != 0 && source.extensions.contains("curve_input")) {
+        (void)arc_from_chord_angle(baseline.start, baseline.end, baseline.sweep_radians);
+        if (!result.extensions.contains("curve_input_derivation"))
+            result.extensions["curve_input_derivation"] = {{"version", 1},
+                {"source_input", source.extensions.at("curve_input")},
+                {"source_baseline", source.properties.at("baseline")}, {"operations", json::array()}};
+        const auto input = derived_angle_input(source.extensions.at("curve_input"), baseline);
+        auto recorded = source.properties.at("baseline");
+        update_baseline_json(recorded, baseline);
+        result.extensions["curve_input_derivation"]["operations"].push_back(
+            {{"baseline", recorded}, {"input", input}});
+        result.extensions["curve_input"] = input;
+    }
+    set_baseline(result, baseline);
+    validate_wall_curve_input(result);
+    validate_wall_length_input(result);
+    return result;
+}
+
 void validate_constraint_wall_geometry_transition(const std::map<std::string,Entity,std::less<>>& before,
     const std::map<std::string,Entity,std::less<>>& after,bool qualified) {
     for (const auto& [id,source] : before) {
