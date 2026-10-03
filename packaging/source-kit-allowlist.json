@@ -1591,6 +1591,10 @@
     },
     {
       "category": "docs",
+      "path": "docs/plans/2026-10-03-symbol-svg-palette.md"
+    },
+    {
+      "category": "docs",
       "path": "docs/product-scope.md"
     },
     {
@@ -2299,6 +2303,30 @@
     },
     {
       "category": "docs",
+      "path": "docs/superpowers/plans/2026-10-03-analytical-dxf-circles.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/superpowers/plans/2026-10-03-automatic-appraisal-wall-closure.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/superpowers/plans/2026-10-03-compact-mixed-asset-proof.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/superpowers/plans/2026-10-03-connected-curve-rigid-intent.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/superpowers/plans/2026-10-03-saved-view-constraint-preview.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/superpowers/plans/2026-10-03-visual-revision-comparison.md"
+    },
+    {
+      "category": "docs",
       "path": "docs/survey-georeferencing-contracts.md"
     },
     {
@@ -2316,6 +2344,10 @@
     {
       "category": "docs",
       "path": "docs/user-guide.html"
+    },
+    {
+      "category": "docs",
+      "path": "docs/verification/analytical-dxf-circles-20261003.md"
     },
     {
       "category": "docs",
@@ -2363,15 +2395,15 @@
     },
     {
       "category": "docs",
+      "path": "docs/verification/automatic-appraisal-wall-closure-20261003.md"
+    },
+    {
+      "category": "docs",
       "path": "docs/verification/boundary-curvature-and-diagnostics-2026-10-01.md"
     },
     {
       "category": "docs",
       "path": "docs/verification/building-object-appearance-20261003.md"
-    },
-    {
-      "category": "docs",
-      "path": "docs/verification/output-view-appearance-20261003.md"
     },
     {
       "category": "docs",
@@ -2455,6 +2487,10 @@
     },
     {
       "category": "docs",
+      "path": "docs/verification/output-view-appearance-20261003.md"
+    },
+    {
+      "category": "docs",
       "path": "docs/verification/pasted-selection-headless-build-2026-10-01.md"
     },
     {
@@ -2475,6 +2511,10 @@
     },
     {
       "category": "docs",
+      "path": "docs/verification/saved-view-preview-and-compact-assets-20261003.md"
+    },
+    {
+      "category": "docs",
       "path": "docs/verification/selection-measurement-readability-2026-10-02.md"
     },
     {
@@ -2491,11 +2531,19 @@
     },
     {
       "category": "docs",
+      "path": "docs/verification/symbol-svg-palette-20261003.md"
+    },
+    {
+      "category": "docs",
       "path": "docs/verification/text-library-2026-10-01.md"
     },
     {
       "category": "docs",
       "path": "docs/verification/touch-navigation-and-legacy-upgrade-2026-09-30.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/verification/visual-revision-comparison-20261003.md"
     },
     {
       "category": "docs",
@@ -2532,6 +2580,10 @@
     {
       "category": "docs",
       "path": "docs/verification/wall-workflow-repair-2026-10-01.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/verification/witness-alignment-and-manual-dimensions-2026-10-03.md"
     },
     {
       "category": "docs",
@@ -2756,6 +2808,10 @@
     {
       "category": "source",
       "path": "include/sketch/desktop/sheet_layout_dialog.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/desktop/symbol_svg_palette.hpp"
     },
     {
       "category": "source",
@@ -3907,6 +3963,10 @@
     },
     {
       "category": "source",
+      "path": "src/desktop/symbol_svg_palette.cpp"
+    },
+    {
+      "category": "source",
       "path": "src/desktop/text_library_dialog.cpp"
     },
     {
@@ -4223,6 +4283,10 @@
     },
     {
       "category": "fixtures",
+      "path": "tests/fixtures/dxf/circle-mm.dxf"
+    },
+    {
+      "category": "fixtures",
       "path": "tests/fixtures/ifc-window-v1/curved-ccw.ifc"
     },
     {
@@ -4335,10 +4399,6 @@
     },
     {
       "category": "source",
-      "path": "tests/output_view_appearance_desktop_tests.cpp"
-    },
-    {
-      "category": "source",
       "path": "tests/offline_policy_tests.cpp"
     },
     {
@@ -4348,6 +4408,10 @@
     {
       "category": "source",
       "path": "tests/output_fingerprint_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/output_view_appearance_desktop_tests.cpp"
     },
     {
       "category": "source",
@@ -4547,7 +4611,15 @@
     },
     {
       "category": "source",
+      "path": "tests/symbol_palette_desktop_tests.cpp"
+    },
+    {
+      "category": "source",
       "path": "tests/symbol_svg_desktop_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/symbol_svg_palette_tests.cpp"
     },
     {
       "category": "source",
@@ -4779,6 +4851,10 @@
     },
     {
       "category": "source",
+      "path": "tests/witness_alignment_desktop_tests.cpp"
+    },
+    {
+      "category": "source",
       "path": "tests/workspace_accessibility_tests.cpp"
     },
     {
@@ -4948,74 +5024,6 @@
     {
       "category": "build",
       "path": "vcpkg.json"
-    },
-    {
-      "category": "docs",
-      "path": "docs/plans/2026-10-03-symbol-svg-palette.md"
-    },
-    {
-      "category": "docs",
-      "path": "docs/verification/symbol-svg-palette-20261003.md"
-    },
-    {
-      "category": "source",
-      "path": "include/sketch/desktop/symbol_svg_palette.hpp"
-    },
-    {
-      "category": "source",
-      "path": "src/desktop/symbol_svg_palette.cpp"
-    },
-    {
-      "category": "source",
-      "path": "tests/symbol_palette_desktop_tests.cpp"
-    },
-    {
-      "category": "source",
-      "path": "tests/symbol_svg_palette_tests.cpp"
-    },
-    {
-      "category": "docs",
-      "path": "docs/superpowers/plans/2026-10-03-saved-view-constraint-preview.md"
-    },
-    {
-      "category": "docs",
-      "path": "docs/superpowers/plans/2026-10-03-compact-mixed-asset-proof.md"
-    },
-    {
-      "category": "docs",
-      "path": "docs/superpowers/plans/2026-10-03-connected-curve-rigid-intent.md"
-    },
-    {
-      "category": "docs",
-      "path": "docs/verification/saved-view-preview-and-compact-assets-20261003.md"
-    },
-    {
-      "category": "docs",
-      "path": "docs/superpowers/plans/2026-10-03-automatic-appraisal-wall-closure.md"
-    },
-    {
-      "category": "docs",
-      "path": "docs/verification/automatic-appraisal-wall-closure-20261003.md"
-    },
-    {
-      "category": "docs",
-      "path": "docs/superpowers/plans/2026-10-03-visual-revision-comparison.md"
-    },
-    {
-      "category": "docs",
-      "path": "docs/verification/visual-revision-comparison-20261003.md"
-    },
-    {
-      "category": "docs",
-      "path": "docs/superpowers/plans/2026-10-03-analytical-dxf-circles.md"
-    },
-    {
-      "category": "docs",
-      "path": "docs/verification/analytical-dxf-circles-20261003.md"
-    },
-    {
-      "category": "fixtures",
-      "path": "tests/fixtures/dxf/circle-mm.dxf"
     }
   ]
 }

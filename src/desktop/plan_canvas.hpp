@@ -270,6 +270,15 @@ struct WallDraftPreview {
     QString dimension_text;
 };
 
+// Model-authorized alignment choices for the active drawing session. These
+// guides are screen-only; the host owns selection, validation and acceptance.
+struct DrawingWitness {
+    Segment segment;
+    bool horizontal{};
+    bool selected{};
+    QString dimension_text;
+};
+
 class PlanCanvas final : public QWidget {
 public:
     explicit PlanCanvas(QWidget* parent = nullptr);
@@ -326,6 +335,10 @@ public:
     }
     [[nodiscard]] const std::optional<WallDraftPreview>& wallPreview() const noexcept {
         return m_wall_preview;
+    }
+    void setDrawingWitnesses(std::vector<DrawingWitness> witnesses);
+    [[nodiscard]] const std::vector<DrawingWitness>& drawingWitnesses() const noexcept {
+        return m_drawing_witnesses;
     }
     void setBoundaryDraftPreview(std::optional<BoundaryDraftPreview> preview);
     [[nodiscard]] const std::optional<BoundaryDraftPreview>& boundaryDraftPreview() const noexcept {
@@ -478,6 +491,8 @@ public:
     void setCancelRequested(std::function<void()> callback);
     void setPreciseInputRequested(std::function<void()> callback);
     void setBayWindowReturnRequested(std::function<void()> callback);
+    void setWitnessAlignmentRequested(std::function<void(bool horizontal)> callback);
+    void setAutoCloseDrawingRequested(std::function<void()> callback);
     [[nodiscard]] bool drawingCommandIdle() const noexcept;
     // A numeric key can start the host's exact drawing input. The host owns
     // applicability, parsing and document mutation; false preserves shortcuts.
@@ -609,6 +624,8 @@ private:
                                  std::optional<double> paper_pixels_per_mm) const;
     void drawCursorReadout(QPainter& painter, const QRectF& viewport,
                            QColor background) const;
+    void drawDrawingWitnesses(QPainter& painter, const QRectF& viewport, double scale,
+                              Vec2 view_center, QColor background) const;
     void drawEntity(QPainter& painter, const CanvasEntity& entity, bool output,
                     QColor background,
                     std::optional<double> paper_pixels_per_mm) const;
@@ -638,6 +655,7 @@ private:
     QString m_selection_caption;
     std::vector<Vec2> m_boundary_preview;
     std::optional<WallDraftPreview> m_wall_preview;
+    std::vector<DrawingWitness> m_drawing_witnesses;
     std::optional<BoundaryDraftPreview> m_boundary_draft_preview;
     CanvasTool m_tool{CanvasTool::select};
     bool m_grid_enabled{true};
@@ -772,6 +790,8 @@ private:
     std::function<void()> m_cancel_requested;
     std::function<void()> m_precise_input_requested;
     std::function<void()> m_bay_window_return_requested;
+    std::function<void(bool)> m_witness_alignment_requested;
+    std::function<void()> m_auto_close_drawing_requested;
     std::function<bool(const QString&)> m_drawing_text_requested;
     std::function<void()> m_draft_undo_requested;
     std::function<void()> m_draft_redo_requested;

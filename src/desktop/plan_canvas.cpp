@@ -625,6 +625,11 @@ void PlanCanvas::setWallPreview(std::optional<WallDraftPreview> wall) {
     update();
 }
 
+void PlanCanvas::setDrawingWitnesses(std::vector<DrawingWitness> witnesses) {
+    m_drawing_witnesses = std::move(witnesses);
+    update();
+}
+
 void PlanCanvas::setBoundaryDraftPreview(std::optional<BoundaryDraftPreview> preview) {
     m_boundary_draft_preview = std::move(preview);
     update();
@@ -633,6 +638,7 @@ void PlanCanvas::setBoundaryDraftPreview(std::optional<BoundaryDraftPreview> pre
 void PlanCanvas::clearPreview() {
     m_boundary_preview.clear();
     m_wall_preview.reset();
+    m_drawing_witnesses.clear();
     m_boundary_draft_preview.reset();
     update();
 }
@@ -1222,7 +1228,10 @@ void PlanCanvas::renderSceneWithTransform(QPainter& painter, const QRectF& viewp
         }
         painter.restore();
     }
-    if (!output) drawOverviewMap(painter);
+    if (!output) {
+        drawDrawingWitnesses(painter, viewport, scale, view_center, background);
+        drawOverviewMap(painter);
+    }
 }
 
 void PlanCanvas::drawOverviewMap(QPainter& painter) const {
@@ -1494,6 +1503,14 @@ void PlanCanvas::setPreciseInputRequested(std::function<void()> callback) {
 
 void PlanCanvas::setBayWindowReturnRequested(std::function<void()> callback) {
     m_bay_window_return_requested = std::move(callback);
+}
+
+void PlanCanvas::setWitnessAlignmentRequested(std::function<void(bool)> callback) {
+    m_witness_alignment_requested = std::move(callback);
+}
+
+void PlanCanvas::setAutoCloseDrawingRequested(std::function<void()> callback) {
+    m_auto_close_drawing_requested = std::move(callback);
 }
 
 bool PlanCanvas::drawingCommandIdle() const noexcept {
@@ -3684,6 +3701,12 @@ void PlanCanvas::keyPressEvent(QKeyEvent* event) {
         return;
     }
     if (event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter) {
+        // Navigation may already have abandoned a selected proposal. Never
+        // fall through to ordinary Finish while that gesture is still active.
+        if (event->modifiers() != Qt::NoModifier || !drawingCommandIdle()) {
+            event->accept();
+            return;
+        }
         if (m_finish_requested) {
             m_finish_requested();
         }
@@ -3691,6 +3714,8 @@ void PlanCanvas::keyPressEvent(QKeyEvent* event) {
         return;
     }
     if (event->key() == Qt::Key_Escape) {
+        m_drawing_witnesses.clear();
+        update();
         if (m_touch_active || m_gesture_button != Qt::NoButton || m_move_release_pending || m_transform_frame_start) {
             resetGesture();
             resetTouchInput();
@@ -3719,6 +3744,24 @@ void PlanCanvas::keyPressEvent(QKeyEvent* event) {
         if (m_bay_window_return_requested) m_bay_window_return_requested();
         event->accept();
         return;
+    }
+    if (hasFocus() && !event->isAutoRepeat() &&
+        !(event->modifiers() & (Qt::ControlModifier | Qt::AltModifier | Qt::MetaModifier)) &&
+        drawingCommandIdle() && !m_point_placement_requested &&
+        (m_tool == CanvasTool::boundary || m_tool == CanvasTool::wall)) {
+        if ((event->key() == Qt::Key_X || event->key() == Qt::Key_Y) &&
+            m_witness_alignment_requested) {
+            beginPerformanceMeasurement(PerformanceMetric::input);
+            m_witness_alignment_requested(event->key() == Qt::Key_X);
+            event->accept();
+            return;
+        }
+        if (event->key() == Qt::Key_A && m_auto_close_drawing_requested) {
+            beginPerformanceMeasurement(PerformanceMetric::input);
+            m_auto_close_drawing_requested();
+            event->accept();
+            return;
+        }
     }
     if (event->key() == Qt::Key_F) {
         fitView();
@@ -4544,6 +4587,78 @@ void PlanCanvas::drawReferenceGridLabels(QPainter& painter, const QRectF& viewpo
             painter.setBrush(Qt::NoBrush);
             painter.drawText(bounds, Qt::AlignCenter, text);
         }
+    }
+    painter.restore();
+}
+
+void PlanCanvas::drawDrawingWitnesses(QPainter& painter, const QRectF& viewport, double scale,
+                                      Vec2 view_center, QColor background) const {
+    if (m_drawing_witnesses.empty() ||
+        (m_tool != CanvasTool::boundary && m_tool != CanvasTool::wall)) return;
+
+    painter.save();
+    painter.setClipRect(viewport);
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    painter.setRenderHint(QPainter::TextAntialiasing, true);
+    const bool light = background.lightnessF() > 0.5;
+    const auto surface = light ? QColor(255, 255, 255, 244) : QColor(24, 34, 49, 246);
+    const auto foreground = light ? QColor(31, 48, 69) : QColor(232, 240, 251);
+    const auto to_screen = [&](Vec2 point) {
+        return QPointF(viewport.center().x() + (point.x - view_center.x) * scale,
+                       viewport.center().y() - (point.y - view_center.y) * scale);
+    };
+    std::vector<QRectF> label_bounds;
+    for (const auto& witness : m_drawing_witnesses) {
+        const auto start = to_screen(witness.segment.start);
+        const auto end = to_screen(witness.segment.end);
+        if (!std::isfinite(start.x()) || !std::isfinite(start.y()) ||
+            !std::isfinite(end.x()) || !std::isfinite(end.y())) continue;
+        const QColor accent = witness.horizontal
+            ? (light ? QColor(37, 99, 235) : QColor(103, 202, 255))
+            : (light ? QColor(126, 58, 190) : QColor(202, 158, 255));
+        painter.setPen(QPen(accent, witness.selected ? 2.4 : 1.4,
+                            Qt::DashLine, Qt::RoundCap));
+        painter.setBrush(Qt::NoBrush);
+        painter.drawLine(start, end);
+        const double radius = witness.selected ? 7.0 : 5.0;
+        painter.setPen(QPen(accent, witness.selected ? 2.2 : 1.5));
+        painter.setBrush(witness.selected ? accent : surface);
+        painter.drawEllipse(end, radius, radius);
+        painter.setPen(QPen(witness.selected ? surface : accent, 1.2));
+        painter.drawLine(end + QPointF(-3.0, 0.0), end + QPointF(3.0, 0.0));
+        painter.drawLine(end + QPointF(0.0, -3.0), end + QPointF(0.0, 3.0));
+
+        QFont font = painter.font();
+        font.setPixelSize(12);
+        font.setWeight(witness.selected ? QFont::DemiBold : QFont::Medium);
+        painter.setFont(font);
+        QString text = witness.horizontal ? QStringLiteral("X") : QStringLiteral("Y");
+        if (!witness.dimension_text.isEmpty()) text += QStringLiteral("  ") + witness.dimension_text;
+        if (witness.selected) text += QStringLiteral("  •  ") + tr("Enter");
+        const QFontMetricsF metrics(font, painter.device());
+        const QSizeF size(metrics.horizontalAdvance(text) + 12.0, metrics.height() + 6.0);
+        const QPointF midpoint((start.x() + end.x()) * 0.5, (start.y() + end.y()) * 0.5);
+        QPointF position = witness.horizontal
+            ? midpoint + QPointF(-size.width() * 0.5, -size.height() - 12.0)
+            : midpoint + QPointF(12.0, -size.height() * 0.5);
+        const auto clamp_position = [&](QPointF point) {
+            point.setX(std::clamp(point.x(), viewport.left() + 6.0,
+                std::max(viewport.left() + 6.0, viewport.right() - size.width() - 6.0)));
+            point.setY(std::clamp(point.y(), viewport.top() + 6.0,
+                std::max(viewport.top() + 6.0, viewport.bottom() - size.height() - 6.0)));
+            return point;
+        };
+        QRectF bounds(clamp_position(position), size);
+        for (const auto& occupied : label_bounds) {
+            if (bounds.intersects(occupied.adjusted(-3.0, -3.0, 3.0, 3.0)))
+                bounds.moveTopLeft(clamp_position(QPointF(bounds.left(), occupied.bottom() + 6.0)));
+        }
+        label_bounds.push_back(bounds);
+        painter.setPen(QPen(accent, witness.selected ? 1.8 : 1.0));
+        painter.setBrush(surface);
+        painter.drawRoundedRect(bounds, 3.0, 3.0);
+        painter.setPen(foreground);
+        painter.drawText(bounds, Qt::AlignCenter, text);
     }
     painter.restore();
 }

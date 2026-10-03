@@ -806,10 +806,11 @@
       "area": "geometry",
       "requirement": "Provide alignment, snapping, point jumping, automatic closure, and bay-window completion while retaining exact geometry.",
       "source_urls": [
-        "https://www.apexwin.com/support/ApexSketchv7/ApexSketchv7-DrawingAngles.pdf"
+        "https://www.apexwin.com/support/ApexSketchv7/ApexSketchv7-DrawingAngles.pdf",
+        "https://www.apexwin.com/support/ApexSketchv7/ApexSketchv7-DefineFirst.pdf"
       ],
       "evidence_status": "documented",
-      "implementation_status": "verified",
+      "implementation_status": "in_progress",
       "acceptance": "Keyboard and pointer fixtures show each behavior, expose the resulting constraint or closure, and reopen without drift.",
       "package": 4,
       "blocker": null,
@@ -821,10 +822,11 @@
         "src/desktop/plan_canvas.cpp",
         "src/desktop/main_window.cpp",
         "tests/bay_return_desktop_tests.cpp",
+        "tests/witness_alignment_desktop_tests.cpp",
         "scripts/generate_workflow_acceptance_evidence.py",
         "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "Point jump, exact closure, alignment/snap and logical shortcut mappings have bounded geometry/UI foundations. Canvas B and a Tools/Commands action add a matching bay return to an existing physical wall or measurement outline, retaining normal dimensions, draft/document history and true-outline closure. Focused native Release checks cover exact/rotated returns, continuation, automatic exterior measurement, Define First dimensions and save/reopen. Broader physical shortcut qualification, native Apex compatibility and production parity remain open; historical Debug/Release evidence retains its named-source qualification boundary."
+      "implementation_note": "Selected-boundary point jump, exact closure, alignment/snap and logical shortcut mappings have bounded geometry/UI foundations. Canvas B and Tools/Commands add a matching bay return with normal dimensions, history and true-outline closure. Active X/Y starting-point witnesses and adaptive A closure use exact model geometry without changing accepted sides; Define First retains manual dimension placement. The separate disconnected point-jump workflow, other mapped keyboard alignment behavior, complete physical shortcut qualification, native Apex compatibility and production parity remain open. Focused bay-return native Release evidence remains bounded; historical Debug/Release evidence retains its named-source qualification boundary."
     },
     {
       "id": "GEO-CON-001",
@@ -1148,10 +1150,11 @@
       "area": "apex_parity",
       "requirement": "Support point jumping, automatic closure, and bay-window completion as explicit geometry operations.",
       "source_urls": [
-        "https://www.apexwin.com/support/ApexSketchv7/ApexSketchv7-DrawingAngles.pdf"
+        "https://www.apexwin.com/support/ApexSketchv7/ApexSketchv7-DrawingAngles.pdf",
+        "https://www.apexwin.com/support/ApexSketchv7/ApexSketchv7-DefineFirst.pdf"
       ],
       "evidence_status": "documented",
-      "implementation_status": "verified",
+      "implementation_status": "in_progress",
       "acceptance": "Each operation is observable in command history, produces the expected topology, and is undoable.",
       "package": 4,
       "blocker": null,
@@ -1165,10 +1168,11 @@
         "tests/desktop_smoke.cpp",
         "src/desktop/plan_canvas.cpp",
         "tests/bay_return_desktop_tests.cpp",
+        "tests/witness_alignment_desktop_tests.cpp",
         "scripts/generate_workflow_acceptance_evidence.py",
         "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "Point jumping is dispatched without dirtying the project and automatic closure publishes identified-boundary commands. The canvas B and Tools/Commands bay-return action match the documented v7 two-sides-then-return workflow in both physical Wall and Measurement drawing. The return uses ordinary exact construction receipts and history, preserves manual Define First dimensions, and continues the outline unless it reaches the actual original anchor. Focused native Release checks cover B/menu, rotation, Undo/Redo, true closure with atomic exterior measurement and save/reopen; full physical Apex shortcut qualification, native Apex fixtures and production certification remain open."
+      "implementation_note": "Selected-boundary point jumping is dispatched without dirtying the project. Active X/Y witness proposals align the next side with the original start's coordinate; Enter accepts through ordinary construction and A closes the actual outline. Define First keeps the closing dimension pending. Wall closure follows the atomic source-linked exterior appraisal path. B matches the documented two-sides-then-return workflow and continues unless it reaches the actual original anchor. The disconnected point-jump workflow, full physical Apex shortcut qualification, native Apex fixtures and production certification remain open; historical evidence retains its named-source qualification boundary."
     },
     {
       "id": "APX-CURVE-001",

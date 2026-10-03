@@ -434,9 +434,11 @@ public:
     // changing document history. When a boundary draft is active, the same
     // pointer is handed to its authoring session for the next anchor/edge.
     [[nodiscard]] bool jumpSelectedBoundaryVertex(const QString& vertex_id);
-    // Explicitly invokes the exact automatic-closure operation on the active
-    // boundary draft and publishes one named document command.
+    // Closes the active measurement outline. Define First retains manual
+    // placement of the closing dimension before publishing the area.
     [[nodiscard]] bool autoCloseBoundaryDraft();
+    [[nodiscard]] bool proposeDrawingAlignment(bool horizontal);
+    [[nodiscard]] bool autoCloseActiveDrawing();
     // Reflects the last accepted bay side across its front, adds only the
     // matching return side, and continues the active boundary or wall chain.
     [[nodiscard]] bool completeBayWindowReturn();

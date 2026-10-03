@@ -148,13 +148,13 @@ Vec2 jump_to_boundary_vertex(const IdentifiedBoundary& source,std::string_view i
     for(const auto& e:source.segments) if(e.start_vertex_id==id) return e.segment.start;
     throw std::invalid_argument("Unknown vertex ID");
 }
-Boundary automatically_close_boundary(const Boundary& source) {
+Boundary automatically_close_boundary(const Boundary& source, double tolerance_metres) {
     if(source.empty()) throw std::invalid_argument("Cannot close an empty chain");
     Boundary result=source;
     for(std::size_t i=1;i<result.size();++i)
         if(!same(result[i-1].end,result[i].start)) throw std::invalid_argument("Chain must join exactly");
     if(!same(result.back().end,result.front().start)) result.push_back({result.back().end,result.front().start,0});
-    const auto diagnostics=validate_boundary(result);
+    const auto diagnostics=validate_boundary(result,tolerance_metres);
     if(!diagnostics.empty()) throw std::invalid_argument(diagnostics.front().message);
     return result;
 }

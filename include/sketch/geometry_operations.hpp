@@ -43,7 +43,8 @@ enum class BoundaryFlipAxis { horizontal, vertical };
     const IdentifiedBoundary&, std::string_view segment_id,
     const ConstructionReceipt& arc_construction);
 // Helpers operate on geometry only. Closure never snaps or repairs existing points.
-[[nodiscard]] Boundary automatically_close_boundary(const Boundary& open_chain);
+[[nodiscard]] Boundary automatically_close_boundary(const Boundary& open_chain,
+    double tolerance_metres = default_geometry_tolerance_metres);
 // Completes start -> shoulder1 -> shoulder2 -> end with three straight segments.
 [[nodiscard]] Boundary complete_bay_window(Vec2 start, Vec2 shoulder1, Vec2 shoulder2, Vec2 end);
 // Reflects the entering shoulder direction across the bay front and returns

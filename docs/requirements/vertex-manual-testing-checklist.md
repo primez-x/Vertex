@@ -1,6 +1,6 @@
 # Vertex user testing checklist
 
-335 practical tasks, grouped by how you use the app (including U100a). This replaces the earlier engineering-oriented checklist. The old 130-item list is preserved separately as engineering-requirements-checklist.md.
+366 practical tasks, grouped by how you use the app (including U100a). This replaces the earlier engineering-oriented checklist. The old 130-item list is preserved separately as engineering-requirements-checklist.md.
 
 This is a user acceptance list for the intended app, not a claim that every listed action is implemented or working in the current preview. If you cannot find a control, or a feature is absent, mark **Blocked / missing** and describe it. Specialized sections can be skipped if you do not use them or lack the device or sample files.
 
@@ -44,6 +44,7 @@ Start with the workspace, draw a room, close it with the mouse, drag-select it, 
 - Appraisal area rotation and reflection (1 task)
 - Project appraisal details (1 task)
 - ANSI-oriented measurements (4 tasks)
+- Keyboard alignment while drawing (1 task)
 
 ## Start a project and arrange the workspace
 
@@ -304,7 +305,8 @@ drawing; switching modes does not change existing geometry.
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U050 — Automatically close a nearly finished boundary**
-  - Expected: Closure produces a valid shape and explains an impossible closure.
+  - Steps: In Wall mode, draw three sides of a rectangle and press A. Inspect the closing wall and its dimensions, then Undo and Redo. Repeat in Measurement mode. In Define First, place each side's dimension before pressing A, then move the pointer to position the closing dimension and press Enter to anchor it. Also try clicking to place a dimension. Try A with only one side or an outline whose closing edge crosses another side.
+  - Expected: A adds the remaining side to the original starting point using normal wall or measurement geometry. Define First waits for the closing dimension instead of placing it automatically. Invalid closure is explained without adding geometry. In an Appraisal/Exterior project, closing the wall outline also creates its exterior measurement in the same undoable operation.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
@@ -2147,6 +2149,16 @@ drawing; switching modes does not change existing geometry.
 - [ ] **U364 — Keep annotation layers when exporting CAD**
   - Steps: Put two text labels and two components on different named layers. Export DXF and import the result into another project. Inspect source layers in the import review. Repeat with labels imported earlier into a chosen destination layer.
   - Expected: Labels and component linework use the layers you assigned. Reviewed imported labels retain the destination layer on later export. Export notes disclose unsupported symbol artwork rather than promising full native component fidelity.
+  - Result: Not tested
+  - Notes: ______________________________
+
+## Keyboard alignment while drawing
+
+- [ ] **U365 — Align a side with the outline's starting point**
+  - Steps: Start an outline in Wall mode and draw two sides ending diagonally from the starting point. Check the X and Y guide choices. Press X; inspect the proposed horizontal side, then press Enter to accept it. Repeat with Y for a vertical side. Continue and close the outline. Repeat in Measurement mode and in Define First, placing each dimension before proposing the next side. Undo, Redo, save and reopen.
+  - Expected: X ends the next horizontal side at the starting point's X coordinate. Y ends the next vertical side at its Y coordinate. The guide shows its length. X/Y preview a side without creating it; Enter commits the exact proposed endpoint. The starting point and previous sides stay in place. The committed side uses normal dimensions and drawing history.
+  - Also try: Move the mouse after proposing a side, cancel with Escape, use X/Y while typing in a name field, and hold Ctrl while pressing them. Change the active layer or undo an earlier side before accepting a proposal.
+  - Expected: An abandoned or stale proposal cannot commit. Typing and modified keys keep their ordinary behavior. A zero-length alignment is unavailable.
   - Result: Not tested
   - Notes: ______________________________
 

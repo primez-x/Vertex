@@ -430,6 +430,13 @@ int main() {
         rejects([&]{ (void)jump_to_boundary_vertex(source,"missing"); });
         auto open=boundary_geometry(source); open.pop_back();
         require(automatically_close_boundary(open).size()==4);
+        const Boundary thin_open{{{0,0},{1,0},0},{{1,0},{2,0.001},0}};
+        require(automatically_close_boundary(thin_open).size()==3,
+                "default closure accepts a representable thin triangle");
+        rejects([&]{ (void)automatically_close_boundary(thin_open,0.01); },
+                "closure must validate with the active authoring tolerance before publishing");
+        require(thin_open.size()==2 && thin_open.back().end.y==0.001,
+                "rejected tolerance-specific closure preserves its input");
         require(automatically_close_boundary(boundary_geometry(source)).size()==4);
         open[1].start.x+=0.00000001;
         rejects([&]{ (void)automatically_close_boundary(open); });

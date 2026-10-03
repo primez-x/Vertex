@@ -984,3 +984,28 @@ appraisal and need no appraisal facts; Vertex rejects using one as a building
 deduction. Vertex qualification does not certify ANSI or BOMA compliance.
 The same revision-bound result is available to **Sheet layout...** as the
 **Appraisal area summary** schedule for print and drawing-set PDF output.
+
+## Starting-point alignment while drawing
+
+While drawing a Wall or Measurement outline, the canvas shows available X/Y
+witness guides to the original starting point's coordinates. **X** proposes a
+horizontal side ending at the starting X coordinate. **Y** proposes a vertical
+side ending at the starting Y coordinate. Each guide shows the proposed length;
+**Enter** accepts the selected proposal through ordinary exact construction.
+The keys do not move the original starting point or change already drawn sides.
+Moving the pointer or changing the drawing context abandons the proposal.
+
+**A** closes the actual outline using normal wall or measured-boundary geometry.
+Define First still requires placement of each pending dimension, including the
+closing dimension. Move the pointer to place the displayed label, then click or
+press **Enter** to anchor it. Enter does not substitute automatic placement.
+An impossible closure reports the problem without committing
+geometry. In an explicitly configured Appraisal/Exterior project, a valid wall
+closure creates its source-linked exterior measurement in the same history step.
+This produces measured geometry; GLA qualification still requires observed facts.
+
+These letter commands belong to the focused, idle drawing canvas. Typing in
+fields, modified shortcuts and active navigation keep their normal behavior.
+Witness guides are transient screen controls and do not print or export.
+The separate disconnected point-jump workflow and complete physical Apex keyboard
+qualification remain open requirements.
