@@ -4,6 +4,8 @@
 namespace sketch {
 // Reconstructs the baseline and its exact entry/derivation receipt. All
 // unrelated wall and receipt metadata remains owned by the original entity.
+// Version four first verifies the exact selected curve transform, then rebases
+// its retained construction archive and physical receipt independently.
 [[nodiscard]] Entity replay_constraint_wall_edit(
     const Entity& source, const ConstraintWallGeometryEdit& edit);
 [[nodiscard]] nlohmann::json encode_constraint_wall_edit(const ConstraintWallGeometryEdit& edit);

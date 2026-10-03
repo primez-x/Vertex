@@ -32,7 +32,9 @@ void require(bool condition, const char* message) {
     if (!condition) throw std::runtime_error(message);
 }
 void require_near(double actual, double expected) {
-    require(std::isfinite(actual) && std::abs(actual - expected) < 1e-7, "unexpected anchored wall coordinate");
+    if (!std::isfinite(actual) || std::abs(actual - expected) >= 1e-7)
+        throw std::runtime_error("unexpected anchored wall coordinate: expected " + std::to_string(expected) +
+            ", actual " + std::to_string(actual));
 }
 Entity wall() {
     return {"wall-a", "wall", {{"baseline", {{"start", {0.0, 0.0}}, {"end", {3.6576, 0.0}}, {"sweep_radians", 0.0}}},
@@ -168,17 +170,33 @@ void fresh_measured_curve_transform_preserves_source() {
     };
     for (const auto workspace : {Workspace::measurement, Workspace::architectural}) {
         MainWindow window;
+        window.setAttribute(Qt::WA_DontShowOnScreen, true);
         window.setWorkspace(workspace);
         const auto id = window.createCurvedWallFromConstruction({0, 0}, {4, 0}, "arc_length", "5 m");
         require(!id.isEmpty() && window.selectEntity(id), "fresh measured curve transform fixture failed");
         auto measured = window.document().snapshot().entities().at(id.toStdString());
         measured.extensions["curve_input"]["vendor_note"] = {{"exact", "original measured input"}};
         measured.properties["baseline"]["vendor_note"] = "original baseline";
+        const Entity opening{"measured-curve-opening", "opening", {{"wall_id", id.toStdString()}, {"offset_m", 1.0},
+            {"width_m", 0.5}, {"sill_m", 0.0}, {"height_m", 2.0}}, false, {{"vendor_note", "original host metadata"}}};
         window.document().apply(ApplyEntityChanges{window.document().revision(),
-            {EntityChange::upsert(measured)}, {}, "retain unknown measured curve metadata"});
+            {EntityChange::upsert(measured), EntityChange::upsert(opening)}, {}, "retain unknown measured curve metadata and host"});
         const auto source = window.document().snapshot();
         const auto source_input = measured.extensions.at("curve_input");
         const auto source_baseline = measured.properties.at("baseline");
+        const auto unchanged_transform = [&] {
+            const auto before = window.document().snapshot();
+            const auto selected = window.selectedEntityId();
+            for (const auto& zero : {QStringLiteral("0"), QStringLiteral("-0.0")}) {
+                require(window.transformSelectedBoundary(zero, false, false, zero, zero, false),
+                    "equivalent numeric zero transforms must succeed");
+                const auto after = window.document().snapshot();
+                require(after.revision() == before.revision() && after.entities() == before.entities() &&
+                        window.selectedEntityId() == selected,
+                    "no-op transform must preserve geometry, provenance, selection and history");
+            }
+        };
+        unchanged_transform();
         const auto archive = [&](const Entity& entity) {
             require(entity.extensions.contains("curve_input_derivation"),
                 "fresh measured curve reflection must archive its exact defining input");
@@ -206,21 +224,51 @@ void fresh_measured_curve_transform_preserves_source() {
                 {std::midpoint(old_curve.start.x, old_curve.end.x), std::midpoint(old_curve.start.y, old_curve.end.y)},
                 angle.toDouble() * std::numbers::pi / 180.0, horizontal, vertical,
                 {parse_quantity(x.toStdString()).metres, parse_quantity(y.toStdString()).metres}});
-            require(window.transformSelectedBoundary(angle, horizontal, vertical, x, y, clone),
-                "archived measured curve transform failed");
+            if (!window.transformSelectedBoundary(angle, horizontal, vertical, x, y, clone)) {
+                throw std::runtime_error(QStringLiteral(
+                    "archived measured curve transform failed (workspace=%1, angle=%2, horizontal=%3, vertical=%4, x=%5, y=%6, clone=%7): %8")
+                    .arg(static_cast<int>(workspace)).arg(angle).arg(horizontal).arg(vertical)
+                    .arg(x).arg(y).arg(clone).arg(window.lastError()).toStdString());
+            }
             const auto current = window.document().snapshot();
-            const auto& entity = current.entities().at(window.selectedEntityId().toStdString());
+            const auto selected = window.selectedEntityId();
+            const auto& entity = current.entities().at(selected.toStdString());
+            require(current.revision() == before.revision() + 1,
+                "rigid curve transform must record one atomic command");
+            auto expected_opening = opening;
+            expected_opening.properties["wall_id"] = selected.toStdString();
+            std::size_t hosts = 0;
+            for (const auto& [opening_id, candidate] : current.entities()) {
+                if (candidate.type != "opening" || candidate.properties.value("wall_id", "") != selected.toStdString()) continue;
+                expected_opening.id = opening_id;
+                require(candidate == expected_opening, "rigid curve transforms must preserve exact hosted opening station and metadata");
+                require(!clone || opening_id != opening.id, "curve clone must give its hosted opening an independent identity");
+                ++hosts;
+            }
+            require(hosts == 1, "transformed curve must retain exactly one hosted opening");
             archive(entity);
             const auto actual = read_curve(entity);
-            require_near(actual.start.x, expected.start.x); require_near(actual.start.y, expected.start.y);
-            require_near(actual.end.x, expected.end.x); require_near(actual.end.y, expected.end.y);
+            try {
+                require_near(actual.start.x, expected.start.x); require_near(actual.start.y, expected.start.y);
+                require_near(actual.end.x, expected.end.x); require_near(actual.end.y, expected.end.y);
+            } catch (const std::exception& error) {
+                throw std::runtime_error(QStringLiteral("measured rigid coordinates (workspace=%1, angle=%2, horizontal=%3, vertical=%4, clone=%5): %6")
+                    .arg(static_cast<int>(workspace)).arg(angle).arg(horizontal).arg(vertical).arg(clone)
+                    .arg(QString::fromUtf8(error.what())).toStdString());
+            }
             require(actual.sweep_radians == expected.sweep_radians,
                 "native wall transform must use the archived rotation, reflection and translation order");
             const auto& operations = entity.extensions.at("curve_input_derivation").at("operations");
             require(operations.size() == previous_ops.size() + 1, "rigid transform must append one provenance operation");
             for (std::size_t index = 0; index < previous_ops.size(); ++index)
                 require(operations[index] == previous_ops[index], "rigid transform rewrote a retained provenance operation");
+            require(operations.back().at("kind") == "rigid_transform",
+                "explicit curve transform must retain typed rigid provenance");
             previous_ops = operations;
+            require(window.undoCommand() && window.document().snapshot().entities() == before.entities() &&
+                    window.redoCommand() && window.document().snapshot().entities() == current.entities() &&
+                    window.selectEntity(selected),
+                "rigid curve transform and clone must undo and redo exactly");
         };
         transformed("0", false, true, "0", "0", false);
         transformed("0", false, true, "0", "0", false);
@@ -228,8 +276,13 @@ void fresh_measured_curve_transform_preserves_source() {
         transformed("0", true, true, "0", "0", false);
         require(window.document().snapshot().entities().at(id.toStdString()).properties.at("baseline").at("sweep_radians") == before_double,
             "two-axis reflection must preserve signed sweep");
+        transformed("17", false, false, "0", "0", false);
+        transformed("0", false, false, "1 m", "2 m", false);
+        unchanged_transform();
         transformed("37", true, false, "1 m", "2 m", false);
-        transformed("23", false, true, "2 m", "0", true);
+        // Keep the copied curve clear of its source: the following length edit
+        // exercises provenance, rather than changing a wall crossing.
+        transformed("23", false, true, "20 m", "20 m", true);
         const auto clone = window.selectedEntityId();
         require(clone != id && window.document().snapshot().entities().contains(id.toStdString()),
             "transformed curve clone must retain its source owner and receive a new identity");
@@ -244,6 +297,8 @@ void fresh_measured_curve_transform_preserves_source() {
         });
         window.showConstraintEditor();
         const auto resized = window.document().snapshot();
+        if (resized.revision()!=before_resize.revision()+1)
+            throw std::runtime_error("physical resize after rigid clone did not commit: " + window.lastError().toStdString());
         const auto& resized_entity = resized.entities().at(clone.toStdString());
         archive(resized_entity);
         require_near(segment_length(read_curve(resized_entity)), 6);
@@ -264,10 +319,136 @@ void fresh_measured_curve_transform_preserves_source() {
             "construction after reflected physical resize must undo and redo exactly");
         QTemporaryDir directory;
         MainWindow reopened;
+        reopened.setAttribute(Qt::WA_DontShowOnScreen, true);
         require(directory.isValid() && window.saveProjectAs(directory.filePath("measured-curve-transforms.bldproj")) &&
                 reopened.openProject(directory.filePath("measured-curve-transforms.bldproj")) &&
                 reopened.document().snapshot().entities() == reconstructed.entities(),
             "fresh and archived measured curve transforms, clone, resize and construction must save and replay exactly");
+    }
+}
+
+void connected_curve_rigid_transforms_preserve_supported_motion() {
+    for (const auto workspace : {Workspace::measurement, Workspace::architectural}) {
+        for (const bool measured : {false, true}) {
+            for (const bool rotate : {false, true}) {
+                MainWindow window;
+                window.setAttribute(Qt::WA_DontShowOnScreen, true);
+                window.setWorkspace(workspace);
+                QString id = "wall-a";
+                if (measured) {
+                    id = window.createCurvedWallFromConstruction({0, 0}, {4, 0}, "arc_length", "5 m");
+                    require(!id.isEmpty(), "connected measured curve fixture failed");
+                } else {
+                    auto curve = wall();
+                    curve.properties["baseline"] = {{"start", {0.0, 0.0}}, {"end", {4.0, 0.0}},
+                        {"sweep_radians", std::numbers::pi / 2}, {"vendor_note", "connected generic curve"}};
+                    window.document().apply(ApplyEntityChanges{window.document().revision(),
+                        {EntityChange::upsert(curve)}, {}, "connected generic curve fixture"});
+                }
+                auto neighbor = wall(); neighbor.id = "connected-neighbor";
+                neighbor.properties["baseline"]["start"] = {4.0, 0.0};
+                neighbor.properties["baseline"]["end"] = {7.0, 0.0};
+                const PersistentConstraint join{"connected-rigid-join", ConstraintRelationKind::coincident,
+                    {{id.toStdString(), WallEndpointRole::end}, {neighbor.id, WallEndpointRole::start}}};
+                const Entity opening{"connected-rigid-opening", "opening", {{"wall_id", id.toStdString()},
+                    {"offset_m", 1.0}, {"width_m", 0.5}, {"sill_m", 0.0}, {"height_m", 2.0}}, false,
+                    {{"vendor_note", "retain exact host"}}};
+                window.document().apply(ApplyEntityChanges{window.document().revision(),
+                    {EntityChange::upsert(neighbor), EntityChange::upsert(encode_constraint_entity(join)),
+                     EntityChange::upsert(opening)}, {}, "persist supported curve connection"});
+                require(window.selectEntity(id), "connected curve selection failed");
+                const auto before = window.document().snapshot();
+                const auto& line = before.entities().at(id.toStdString()).properties.at("baseline");
+                const auto diagonal=std::sqrt(2.0);
+                const Segment expected{rotate ? Vec2{2-diagonal,-diagonal} : Vec2{1,2},
+                    rotate ? Vec2{2+diagonal,diagonal} : Vec2{5,2},line.at("sweep_radians").get<double>()};
+                if (!window.transformSelectedBoundary(rotate ? "45" : "0", false, false,
+                        rotate ? "0" : "1 m", rotate ? "0" : "2 m", false))
+                    throw std::runtime_error("supported connected curve rigid transform refused: " + window.lastError().toStdString());
+                const auto after = window.document().snapshot();
+                const auto& selected = after.entities().at(id.toStdString()).properties.at("baseline");
+                const auto& linked = after.entities().at(neighbor.id).properties.at("baseline");
+                require_near(selected.at("start")[0].get<double>(), expected.start.x);
+                require_near(selected.at("start")[1].get<double>(), expected.start.y);
+                require_near(selected.at("end")[0].get<double>(), expected.end.x);
+                require_near(selected.at("end")[1].get<double>(), expected.end.y);
+                require_near(linked.at("start")[0].get<double>(), expected.end.x);
+                require_near(linked.at("start")[1].get<double>(), expected.end.y);
+                require(after.entities().at(opening.id) == opening && after.revision() == before.revision() + 1,
+                    "connected rigid transform must retain host and use one command");
+                require(window.undoCommand() && window.document().snapshot().entities() == before.entities() &&
+                        window.redoCommand() && window.document().snapshot().entities() == after.entities(),
+                    "connected rigid transform must undo and redo every owner exactly");
+                QTemporaryDir directory;
+                MainWindow reopened; reopened.setAttribute(Qt::WA_DontShowOnScreen,true);
+                require(directory.isValid() && window.saveProjectAs(directory.filePath("connected-rigid.bldproj")) &&
+                        reopened.openProject(directory.filePath("connected-rigid.bldproj")) &&
+                        reopened.document().snapshot().entities()==after.entities(),
+                    "connected rigid geometry and history must save and reopen exactly");
+            }
+        }
+    }
+}
+
+void generic_curve_transform_and_connected_refusal() {
+    for (const auto workspace : {Workspace::measurement, Workspace::architectural}) {
+        MainWindow window;
+        window.setAttribute(Qt::WA_DontShowOnScreen, true);
+        window.setWorkspace(workspace);
+        auto curve = wall();
+        curve.properties["baseline"] = {{"start", {0.0, 0.0}}, {"end", {4.0, 0.0}},
+            {"sweep_radians", std::numbers::pi / 2}, {"vendor_note", "generic analytical curve"}};
+        window.document().apply(ApplyEntityChanges{window.document().revision(), {EntityChange::upsert(curve)}, {},
+            "generic analytical curve without construction receipt"});
+        require(window.selectEntity("wall-a"), "generic curve selection failed");
+        const auto transform = [&](QString angle, bool horizontal, bool vertical, QString x, QString y) {
+            const auto before = window.document().snapshot();
+            const auto& line = before.entities().at("wall-a").properties.at("baseline");
+            const Segment old{{line.at("start")[0].get<double>(), line.at("start")[1].get<double>()},
+                {line.at("end")[0].get<double>(), line.at("end")[1].get<double>()}, line.at("sweep_radians").get<double>()};
+            const auto expected = transform_segment(old, {
+                {std::midpoint(old.start.x, old.end.x), std::midpoint(old.start.y, old.end.y)},
+                angle.toDouble() * std::numbers::pi / 180.0, horizontal, vertical,
+                {parse_quantity(x.toStdString()).metres, parse_quantity(y.toStdString()).metres}});
+            if (!window.transformSelectedBoundary(angle, horizontal, vertical, x, y, false))
+                throw std::runtime_error("generic curved wall rigid transform failed: " + window.lastError().toStdString());
+            const auto after = window.document().snapshot();
+            const auto& result = after.entities().at("wall-a");
+            const auto& actual = result.properties.at("baseline");
+            require_near(actual.at("start")[0].get<double>(), expected.start.x);
+            require_near(actual.at("start")[1].get<double>(), expected.start.y);
+            require_near(actual.at("end")[0].get<double>(), expected.end.x);
+            require_near(actual.at("end")[1].get<double>(), expected.end.y);
+            require(actual.at("sweep_radians") == expected.sweep_radians &&
+                    actual.at("vendor_note") == line.at("vendor_note") && result.extensions == curve.extensions,
+                "generic rigid curve transform must preserve analytical sweep and opaque metadata without inventing receipts");
+            require(after.revision() == before.revision() + 1 && window.undoCommand() &&
+                    window.document().snapshot().entities() == before.entities() && window.redoCommand() &&
+                    window.document().snapshot().entities() == after.entities(),
+                "generic rigid curve transforms must undo and redo atomically");
+        };
+        transform("0", true, true, "0", "0");
+        transform("131", false, false, "0", "0");
+        transform("0", false, false, "1 m", "2 m");
+        transform("17", true, false, "0", "0");
+
+        const auto before_join = window.document().snapshot();
+        const auto& line = before_join.entities().at("wall-a").properties.at("baseline");
+        auto neighbor = wall(); neighbor.id = "connected-neighbor";
+        neighbor.properties["baseline"]["start"] = line.at("end");
+        neighbor.properties["baseline"]["end"] = {line.at("end")[0].get<double>() + 3, line.at("end")[1].get<double>()};
+        const PersistentConstraint join{"curve-transform-join", ConstraintRelationKind::coincident,
+            {{"wall-a", WallEndpointRole::end}, {neighbor.id, WallEndpointRole::start}}};
+        const Entity opening{"joined-curve-opening", "opening", {{"wall_id", "wall-a"}, {"offset_m", 1.0},
+            {"width_m", 0.5}, {"sill_m", 0.0}, {"height_m", 2.0}}, false, nlohmann::json::object()};
+        window.document().apply(ApplyEntityChanges{before_join.revision(), {EntityChange::upsert(neighbor),
+            EntityChange::upsert(encode_constraint_entity(join)), EntityChange::upsert(opening)}, {}, "join generic curved wall"});
+        const auto joined = window.document().snapshot();
+        require(!window.transformSelectedBoundary("0", true, true, "0", "0", false) && !window.lastError().isEmpty(),
+            "rigid curve transform must explain an incompatible persisted endpoint join");
+        require(window.document().revision() == joined.revision() && window.document().snapshot().entities() == joined.entities() &&
+                window.selectedEntityId() == "wall-a",
+            "rejected linked curve transform must retain connected walls, host, relation, selection and history atomically");
     }
 }
 
@@ -1050,7 +1231,14 @@ int main(int argc, char** argv) {
     QFontDatabase::addApplicationFont(QStringLiteral(":/fonts/Inter.ttf"));
     app.setFont(QFont(QStringLiteral("Inter"), 10));
     try {
+        if (app.arguments().contains(QStringLiteral("--connected-rigid-only"))) {
+            connected_curve_rigid_transforms_preserve_supported_motion();
+            std::cout << "Connected curve rigid workflows passed\n";
+            return 0;
+        }
         fresh_measured_curve_transform_preserves_source();
+        connected_curve_rigid_transforms_preserve_supported_motion();
+        generic_curve_transform_and_connected_refusal();
         direct_curve_length_resize_workflow();
         direct_curve_length_connected_boundary_and_host();
         direct_curve_length_workspace_entrypoints();

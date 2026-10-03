@@ -106,6 +106,8 @@ std::uint32_t ProjectStore::required_format_version(const DocumentSnapshot& snap
         if (revision.boundary_constraint_changes) {
             required = std::max(required, 8U);
             const auto& command = *revision.boundary_constraint_changes;
+            if (command.rigid_wall_transform_completion) required = std::max(required,27U);
+            if (command.supplemental_asset_reference_completion) required = std::max(required,26U);
             if (std::any_of(command.boundary_edits.begin(), command.boundary_edits.end(),
                 [](const auto& edit) { return edit.allow_automatic_angle_removal; }) ||
                 std::any_of(command.exterior_source_edits.begin(), command.exterior_source_edits.end(),
@@ -134,6 +136,7 @@ std::uint32_t ProjectStore::required_format_version(const DocumentSnapshot& snap
             for (const auto& edit : revision.boundary_constraint_changes->wall_edits) {
                 if (edit.version == 2) required = std::max(required, 10U);
                 if (edit.version == 3) required = std::max(required, 13U);
+                if (edit.version == 4) required = std::max(required, 27U);
             }
         }
         if (revision.boundary_translations) required = std::max(required, 9U);
@@ -1555,6 +1558,8 @@ bool verify_sqlite_schema(sqlite3* database, bool allow_recovery = false) {
          sqlite3_column_int(user_version.get(), 0) != 23 &&
          sqlite3_column_int(user_version.get(), 0) != 24 &&
          sqlite3_column_int(user_version.get(), 0) != 25 &&
+         sqlite3_column_int(user_version.get(), 0) != 26 &&
+         sqlite3_column_int(user_version.get(), 0) != 27 &&
          !(allow_recovery && sqlite3_column_int(user_version.get(), 0) == 4))) {
         storage_error(StorageErrorCode::unsupported_format,
                       "unsupported SQLite project user_version");
@@ -1766,11 +1771,11 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
                                std::string* verified_digest = nullptr) {
     const auto format = required_metadata(database, "format_version");
     if (format != "1" && format != "2" && format != "3" && format != "5" &&
-        format != "6" && format != "7" && format != "8" && format != "9" && format != "10" && format != "11" && format != "12" && format != "13" && format != "14" && format != "15" && format != "16" && format != "17" && format != "18" && format != "19" && format != "20" && format != "21" && format != "22" && format != "23" && format != "24" && format != "25" && !(recovery && format == "4")) {
+        format != "6" && format != "7" && format != "8" && format != "9" && format != "10" && format != "11" && format != "12" && format != "13" && format != "14" && format != "15" && format != "16" && format != "17" && format != "18" && format != "19" && format != "20" && format != "21" && format != "22" && format != "23" && format != "24" && format != "25" && format != "26" && format != "27" && !(recovery && format == "4")) {
         storage_error(StorageErrorCode::unsupported_format,
                       "unsupported project format version: " + format);
     }
-    const auto format_number = format == "25" ? 25U : format == "24" ? 24U : format == "23" ? 23U : format == "22" ? 22U : format == "21" ? 21U : format == "20" ? 20U : format == "19" ? 19U : format == "18" ? 18U : format == "17" ? 17U : format == "16" ? 16U : format == "15" ? 15U : format == "14" ? 14U : format == "13" ? 13U : format == "12" ? 12U : format == "11" ? 11U : format == "10" ? 10U : format == "9" ? 9U : format == "8" ? 8U : format == "7" ? 7U : (format == "6" ? 6U :
+    const auto format_number = format == "27" ? 27U : format == "26" ? 26U : format == "25" ? 25U : format == "24" ? 24U : format == "23" ? 23U : format == "22" ? 22U : format == "21" ? 21U : format == "20" ? 20U : format == "19" ? 19U : format == "18" ? 18U : format == "17" ? 17U : format == "16" ? 16U : format == "15" ? 15U : format == "14" ? 14U : format == "13" ? 13U : format == "12" ? 12U : format == "11" ? 11U : format == "10" ? 10U : format == "9" ? 9U : format == "8" ? 8U : format == "7" ? 7U : (format == "6" ? 6U :
         (format == "5" ? 5U : (format == "4" ? 4U : (format == "3" ? 3U :
         (format == "2" ? 2U : 1U)))));
     Statement format_marker(database, "PRAGMA user_version");
@@ -1816,6 +1821,7 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
               "undo_stack_json,redo_stack_json,boundary_translation_json FROM revisions ORDER BY revision"
             : "SELECT revision,parent_revision,source_revision,action,name,"
               "undo_stack_json,redo_stack_json FROM revisions ORDER BY revision");
+    std::map<Revision,nlohmann::json> deferred_asset_proofs;
     while (revisions.row()) {
         auto& history = ProjectStoreAccess::history(snapshot);
         if (history.size() >= static_cast<std::size_t>(ProjectStore::maximum_revision_count)) {
@@ -1866,11 +1872,31 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
             const auto proof = parse_budgeted_json(
                 column_text(revisions.get(), 10, kMaximumJsonBytes, "boundary_constraint_changes_json"), true,
                 "boundary_constraint_changes_json", decode_budget);
+            const bool rigid_proof=proof.is_object() && proof.contains("version") &&
+                proof.at("version").is_number_integer() && proof.at("version")==10;
+            const bool compact_assets=proof.is_object() && proof.contains("version") &&
+                proof.at("version").is_number_integer() && (proof.at("version")==9 ||
+                (rigid_proof && proof.contains("supplemental_asset_reference_completion") &&
+                proof.at("supplemental_asset_reference_completion").is_boolean() &&
+                proof.at("supplemental_asset_reference_completion").get<bool>()));
+            if(rigid_proof && format_number<27)
+                storage_error(StorageErrorCode::unsupported_format,"verified connected wall rigid transforms require project format v27");
+            if(compact_assets && format_number<26)
+                storage_error(StorageErrorCode::unsupported_format,"compact mixed asset references require project format v26");
+            if(format_number<27 && proof.is_object() && proof.contains("wall_edits") && proof.at("wall_edits").is_array())
+                for(const auto& edit:proof.at("wall_edits"))
+                    if(edit.is_object() && edit.contains("version") && edit.at("version").is_number_integer() && edit.at("version")==4)
+                        storage_error(StorageErrorCode::unsupported_format,"verified connected wall rigid transforms require project format v27");
             try {
-                const auto command = command_from_json(proof);
-                const auto* changes = std::get_if<ApplyBoundaryConstraintChanges>(&command);
-                if (!changes) throw std::invalid_argument("constraint proof must contain a boundary constraint command");
-                record.boundary_constraint_changes = *changes;
+                if(compact_assets) {
+                    if(!deferred_asset_proofs.emplace(record.revision,proof).second)
+                        throw std::invalid_argument("duplicate compact asset proof revision");
+                } else {
+                    const auto command = command_from_json(proof);
+                    const auto* changes = std::get_if<ApplyBoundaryConstraintChanges>(&command);
+                    if (!changes) throw std::invalid_argument("constraint proof must contain a boundary constraint command");
+                    record.boundary_constraint_changes = *changes;
+                }
             } catch (const std::exception& error) {
                 storage_error(StorageErrorCode::integrity_failure, error.what());
             }
@@ -1984,6 +2010,23 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
         }
     }
 
+    // Hydrate only from independently validated assets in this result revision.
+    // Normal history replay then compares the complete before/after state.
+    for(const auto& [revision,proof]:deferred_asset_proofs) {
+        auto& history=ProjectStoreAccess::history(snapshot);
+        if(revision>=history.size() || history[static_cast<std::size_t>(revision)].revision!=revision)
+            storage_error(StorageErrorCode::integrity_failure,"compact asset proof revision is invalid");
+        auto& record=history[static_cast<std::size_t>(revision)];
+        try {
+            const auto decoded=command_from_json(proof,[&record](std::string_view id)->const Asset* {
+                const auto found=record.assets.find(std::string(id));
+                return found==record.assets.end()?nullptr:&found->second;
+            });
+            const auto* changes=std::get_if<ApplyBoundaryConstraintChanges>(&decoded);
+            if(!changes)throw std::invalid_argument("compact asset proof is not the expected command");
+            record.boundary_constraint_changes=*changes;
+        }catch(const std::exception& error){storage_error(StorageErrorCode::integrity_failure,error.what());}
+    }
     Statement names(database, "SELECT name,revision FROM named_revisions ORDER BY name");
     while (names.row()) {
         const auto name = column_text(names.get(), 0, 256, "revision name");
@@ -1996,7 +2039,7 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
 
     const auto required_format = ProjectStore::required_format_version(snapshot);
     if (required_format > format_number) {
-        const auto reason = required_format >= 25 ? "SVG symbol palette" : required_format >= 24 ? "saved-view drawing appearance" : required_format >= 23 ? "explicit automatic-angle removal during redraw" : required_format >= 22 ? "coordinated exterior corner edit" : required_format >= 21 ? "ANSI-oriented appraisal policy or measurement evidence" : required_format >= 20 ? "mixed live exterior wall-source completion" : required_format >= 19 ? "live exterior wall-source completion" : required_format >= 18 ? "boundary rigid transform group" : required_format >= 17 ? "explicit fresh-topology redefinition" : required_format >= 16 ? "reviewed exterior wall-source replacement" : required_format >= 15 ? "boundary curvature reconstruction proof" : required_format >= 14 ? "rigid curve-transform construction archive" : required_format >= 13 ? "physical curve-length input or edit proof" : required_format >= 12 ? "physical arc-length constraint" : required_format >= 11 ? "straight wall-only endpoint proof" : required_format >= 10 ? "curved endpoint constraint or wall proof" : required_format >= 9 ? "boundary translation group" : required_format >= 8 ? "boundary constraint changes" : required_format >= 7 ? "boundary geometry edit" :
+        const auto reason = required_format >= 27 ? "verified connected wall rigid transform" : required_format >= 26 ? "compact mixed asset references" : required_format >= 25 ? "SVG symbol palette" : required_format >= 24 ? "saved-view drawing appearance" : required_format >= 23 ? "explicit automatic-angle removal during redraw" : required_format >= 22 ? "coordinated exterior corner edit" : required_format >= 21 ? "ANSI-oriented appraisal policy or measurement evidence" : required_format >= 20 ? "mixed live exterior wall-source completion" : required_format >= 19 ? "live exterior wall-source completion" : required_format >= 18 ? "boundary rigid transform group" : required_format >= 17 ? "explicit fresh-topology redefinition" : required_format >= 16 ? "reviewed exterior wall-source replacement" : required_format >= 15 ? "boundary curvature reconstruction proof" : required_format >= 14 ? "rigid curve-transform construction archive" : required_format >= 13 ? "physical curve-length input or edit proof" : required_format >= 12 ? "physical arc-length constraint" : required_format >= 11 ? "straight wall-only endpoint proof" : required_format >= 10 ? "curved endpoint constraint or wall proof" : required_format >= 9 ? "boundary translation group" : required_format >= 8 ? "boundary constraint changes" : required_format >= 7 ? "boundary geometry edit" :
             required_format >= 6 ? "boundary transform" : required_format >= 5 ? "boundary translation" : required_format >= 3 ? "boundary_authoring" :
                             "identified boundary, dimension or boundary draft";
         storage_error(StorageErrorCode::unsupported_format,

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "sketch/document.hpp"
+#include <set>
 
 namespace sketch {
 
@@ -16,14 +17,16 @@ namespace sketch {
 void validate_constraint_transition(
     const std::map<std::string, Entity, std::less<>>& before,
     const std::map<std::string, Entity, std::less<>>& after,
-    bool qualified_rigid_endpoint_transform = false);
+    bool qualified_rigid_endpoint_transform = false,
+    const std::set<std::string,std::less<>>& verified_rigid_wall_ids = {});
 
 // Endpoint-authoring and typed replay share this solver-free admission.
 // Only changed geometry is checked against the original drawing topology;
 // ordinary explicit construction/transform commands do not call this policy.
 void validate_constraint_edit_topology(
     const std::map<std::string, Entity, std::less<>>& before,
-    const std::map<std::string, Entity, std::less<>>& after);
+    const std::map<std::string, Entity, std::less<>>& after,
+    const std::set<std::string,std::less<>>& verified_rigid_wall_ids = {});
 
 // Exterior-corner v8 alone validates active physical phase geometry at its
 // resolved elevations. Historical typed commands keep the original policy.

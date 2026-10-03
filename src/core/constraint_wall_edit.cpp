@@ -630,13 +630,16 @@ bool valid_wall_identifier(const std::string& id) {
 void validate_edit(const ConstraintWallGeometryEdit& edit) {
     const auto& b = edit.baseline;
     const auto baseline_length = std::hypot(b.end.x-b.start.x,b.end.y-b.start.y);
-    if (!valid_wall_identifier(edit.wall_id) || (edit.version!=1 && edit.version!=2 && edit.version!=3) ||
+    if (!valid_wall_identifier(edit.wall_id) || (edit.version!=1 && edit.version!=2 && edit.version!=3 && edit.version!=4) ||
         (edit.version==1 ? b.sweep_radians!=0.0 : b.sweep_radians==0.0) || !std::isfinite(b.sweep_radians) ||
         !std::isfinite(b.start.x) || !std::isfinite(b.start.y) ||
         !std::isfinite(b.end.x) || !std::isfinite(b.end.y) ||
         !std::isfinite(baseline_length) || baseline_length <= constraint_linear_tolerance_metres)
         invalid("Wall constraint edit requires an identified finite versioned nondegenerate baseline");
     if (edit.version>=2) (void)arc_from_chord_angle(b.start,b.end,b.sweep_radians);
+    if ((edit.version==4) != edit.rigid_transform.has_value())
+        invalid("Selected rigid wall proof requires its exact transform and version four");
+    if (edit.rigid_transform) (void)decode_rigid_transform(encode_rigid_transform(*edit.rigid_transform));
     if (edit.version==3 && !edit.length_entry) invalid("Curved physical length proof requires an exact length entry");
     if (edit.length_entry) {
         if (edit.version==2) invalid("Curved endpoint edits cannot contain physical length entries");
@@ -659,6 +662,35 @@ Entity replay_constraint_wall_edit(const Entity& source, const ConstraintWallGeo
     if (source.id != edit.wall_id || source.type != "wall")
         invalid("Wall constraint edit owner is not its original wall");
     const auto old = read_baseline(source);
+    if (edit.version==4) {
+        if (old.sweep_radians==0.0)
+            invalid("Selected rigid wall proof requires an original curved wall");
+        const auto expected=rigid_curve_baseline(old,*edit.rigid_transform);
+        if (!same_baseline(expected,edit.baseline) || same_baseline(old,expected))
+            invalid("Selected rigid wall proof does not exactly reconstruct its changed baseline");
+        const auto section=source.extensions.find("constraint_authoring");
+        const json* receipt=nullptr;
+        if (section!=source.extensions.end() && section->is_object() && section->contains("last_length_entry"))
+            receipt=&section->at("last_length_entry");
+        if (static_cast<bool>(receipt)!=edit.length_entry.has_value())
+            invalid("Selected rigid wall proof must retain its existing exact length entry");
+        if (receipt) {
+            (void)validate_length_receipt(*receipt,source);
+            const auto& entry=*edit.length_entry;
+            if (receipt->at("original_expression")!=entry.original_expression ||
+                receipt->at("entered_unit")!=unit_name(entry.entered_unit) ||
+                receipt->at("exact_metres").at("numerator")!=entry.exact_metres.numerator ||
+                receipt->at("exact_metres").at("denominator")!=entry.exact_metres.denominator)
+                invalid("Selected rigid wall proof cannot replace its existing exact length entry");
+        }
+        auto result=source;
+        transform_wall_curve_input(result,*edit.rigid_transform);
+        rebase_wall_length_receipt(result,expected);
+        set_baseline(result,expected);
+        validate_wall_curve_input(result);
+        validate_wall_length_input(result);
+        return result;
+    }
     if ((edit.version==1 && old.sweep_radians!=0.0) ||
         (edit.version>=2 && (old.sweep_radians==0.0 || old.sweep_radians!=edit.baseline.sweep_radians)))
         invalid("Wall constraint proof must preserve the source signed sweep");
@@ -689,13 +721,15 @@ nlohmann::json encode_constraint_wall_edit(const ConstraintWallGeometryEdit& edi
     }
     json result={{"wall_id",edit.wall_id},{"baseline",b},{"length_entry",receipt}};
     if (edit.version>=2) result["version"]=edit.version;
+    if (edit.version==4) result["rigid_transform"]=encode_rigid_transform(*edit.rigid_transform);
     return result;
 }
 
 ConstraintWallGeometryEdit decode_constraint_wall_edit(const nlohmann::json& value) {
     if (value.contains("version")) {
-        exact_fields(value,{"version","wall_id","baseline","length_entry"});
-        if (!value.at("version").is_number_integer() || (value.at("version")!=2 && value.at("version")!=3))
+        if (value.at("version")==4) exact_fields(value,{"version","wall_id","baseline","length_entry","rigid_transform"});
+        else exact_fields(value,{"version","wall_id","baseline","length_entry"});
+        if (!value.at("version").is_number_integer() || (value.at("version")!=2 && value.at("version")!=3 && value.at("version")!=4))
             invalid("Unsupported wall constraint proof version");
     } else exact_fields(value,{"wall_id","baseline","length_entry"});
     exact_fields(value.at("baseline"),{"start","end","sweep_radians"});
@@ -703,6 +737,7 @@ ConstraintWallGeometryEdit decode_constraint_wall_edit(const nlohmann::json& val
     Entity temporary{value.at("wall_id").get<std::string>(),"wall",{{"baseline",value.at("baseline")}}};
     ConstraintWallGeometryEdit result{temporary.id,read_baseline(temporary),std::nullopt};
     result.version=value.contains("version") ? value.at("version").get<std::uint64_t>() : 1;
+    if (result.version==4) result.rigid_transform=decode_rigid_transform(value.at("rigid_transform"));
     const auto& entry = value.at("length_entry");
     if (!entry.is_null()) {
         exact_fields(entry,{"original_expression","entered_unit","exact_metres"});

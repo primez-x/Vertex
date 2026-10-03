@@ -730,7 +730,9 @@ bool ConstraintDialog::supportsEntity(const Entity& entity) noexcept {
 
 ConstraintDialog::ConstraintDialog(DocumentSnapshot snapshot, QString selected_entity_id,
                                    bool metric_units, QWidget* parent)
-    : QDialog(parent), m_impl(std::make_unique<Impl>(this, std::move(snapshot), std::move(selected_entity_id), metric_units)) {}
+    : QDialog(parent), m_impl(std::make_unique<Impl>(this, std::move(snapshot), std::move(selected_entity_id), metric_units)) {
+    if (parent && parent->testAttribute(Qt::WA_DontShowOnScreen)) setAttribute(Qt::WA_DontShowOnScreen);
+}
 ConstraintDialog::~ConstraintDialog() = default;
 void ConstraintDialog::setLengthExpression(const QString& expression) { m_impl->length->setText(expression); }
 bool ConstraintDialog::previewEdit() { return m_impl->previewEdit(); }

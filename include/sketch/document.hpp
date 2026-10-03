@@ -9,6 +9,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <map>
 #include <optional>
 #include <span>
@@ -142,6 +143,9 @@ struct ConstraintWallGeometryEdit {
     // an existing signed curve sweep during endpoint-coordinate editing.
     // Version three records a physical curve-length entry at that fixed sweep.
     std::uint64_t version{1};
+    // Version four independently reconstructs a selected curved wall's rigid
+    // motion. Dependent endpoint edits retain versions one through three.
+    std::optional<PlanarTransform> rigid_transform;
 };
 
 // An exterior analytical corner edit is replayed through the physical source
@@ -185,6 +189,11 @@ struct ApplyBoundaryConstraintChanges {
     // Envelope version eight independently reconstructs the complete physical
     // change from this intent before validating its exact exterior redraws.
     std::optional<ExteriorCornerMoveIntent> exterior_corner_move;
+    // Version nine retains compact supplemental asset references, including
+    // when the reference list is emptied. Earlier inline proofs keep version seven.
+    bool supplemental_asset_reference_completion{};
+    // Retains envelope ten even if its selected rigid wall proofs are removed.
+    bool rigid_wall_transform_completion{};
 };
 
 using Command = std::variant<ApplyEntityChanges, NameRevision, TranslateBoundary,
@@ -196,7 +205,8 @@ using Command = std::variant<ApplyEntityChanges, NameRevision, TranslateBoundary
 // exact entity/asset payloads; decoding performs structural validation before
 // a caller is allowed to apply the command to a live document.
 [[nodiscard]] nlohmann::json command_to_json(const Command& command);
-[[nodiscard]] Command command_from_json(const nlohmann::json& value);
+[[nodiscard]] Command command_from_json(const nlohmann::json& value,
+    const std::function<const Asset*(std::string_view)>& asset_resolver = {});
 
 enum class DocumentErrorCode {
     stale_revision,

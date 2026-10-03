@@ -1,4 +1,70 @@
-# Vertex project formats v1 through v25
+# Vertex project formats v1 through v27
+
+## Connected curved-wall rigid intent (v27)
+
+Constraint-command envelope 10 retains the ordinary, boundary, wall, physical,
+exterior-source and supplemental lanes. It adds explicit boolean
+`source_completion`, `supplemental_source_completion` and
+`supplemental_asset_reference_completion`. Every lane remains an array, including
+empty lanes. False flags cannot carry their corresponding changes. Envelope 10
+never carries corner-edit authority. Its retained discriminator requires native
+format 27 and extraction 25 even when its selected wall lane is empty.
+
+Selected curved-wall proof 4 has exactly `version`, `wall_id`, `baseline`,
+`length_entry` and `rigid_transform`. The transform contains exactly `version: 1`,
+`pivot`, `rotation_radians`, `flip_horizontal`, `flip_vertical` and `offset`.
+Replaying the original analytical segment must reproduce the submitted baseline
+exactly. The original construction input and earlier operations remain intact;
+one rigid operation is appended and any existing exact length receipt is rebased.
+Missing or substituted receipts, malformed transforms and mismatched baselines
+are rejected. Proofs 1 through 3 retain their old wire and replay contracts.
+
+Connected owners continue through existing endpoint solving. Only independently
+verified selected rigid wall IDs receive the endpoint-coordinate exchange
+exception; dependent owners retain ordinary reversal guards. Persisted hard
+relations, analytical crossing topology, live exterior-source correspondence
+and hosted-object validity still apply to the complete transaction.
+
+Supplemental assets can use the same compact references as envelope 9, resolved
+only against independently validated full assets from the result revision.
+Envelope 10 requires the newer floor whether or not compact references are
+present. Existing resource budgets and legacy envelopes 1 through 9 are unchanged.
+
+## Compact compound asset history (v26)
+
+Constraint-command envelope 9 retains the version-7 entity and exterior-source
+lanes, with compact `supplemental_asset_changes`. An upsert has exactly `kind`
+and `asset`; its asset reference has exactly `id`, `media_type`, `sha256`,
+`byte_size` and `metadata_sha256`. The metadata hash covers the UTF-8 bytes of
+canonical `metadata.dump()`. It binds metadata independently of the binary
+content hash. An erase has exactly `kind` and `asset_id`. References never embed
+binary bytes or metadata. The explicit envelope remains version 9 even with an
+empty supplemental list; it cannot acquire version-8 corner-edit authority.
+
+New compound measured-wall operations use this representation for changed
+assets. Exact unchanged upserts and erases of absent assets need no supplement.
+Legacy envelopes 1 through 8 keep their original wire and replay semantics,
+including inline assets in envelope 7 and independent corner intent in 8.
+
+Full asset payloads remain in the immutable result revision's `revision_assets`
+rows. Native loading validates those rows before resolving envelope-9 references
+against that same revision. A resolver is mandatory for an upsert. Missing
+assets, mismatched IDs, media types, sizes, binary hashes or metadata hashes,
+duplicate references, unknown fields and malformed records are refused. Existing
+deterministic history replay compares the complete resulting entity and asset
+state; a reference does not authorize an unrelated change.
+
+Any retained envelope-9 marker requires native format 26 and extraction version
+24, including Undo and deleted history and recovery archives. Both SQLite
+markers and the logical digest retain that floor; recomputing a digest cannot
+authorize downgrading it. Extraction publishes full assets separately and keeps
+references in revision proof JSON. It remains an export, not a JSON importer.
+
+The existing budgets are unchanged: 256 MiB per asset,
+512 MiB aggregate persisted assets across retained history,
+1 MiB per persisted JSON column and 64 MiB aggregate persisted JSON.
+Compact history removes duplicated hexadecimal asset bytes from the bounded
+proof; it does not remove document, archive or metadata admission limits.
 
 ## SVG component colors (v25)
 
@@ -279,9 +345,10 @@ boundary replacements, v18 measured group rigid transforms, and v19 coordinated
 physical wall/exterior measurement changes, and v20 mixed ordinary object/asset
 and exterior changes, v21 ANSI-oriented appraisal evidence, and v22 coordinated
 exterior-corner edits, v23 explicit automatic-angle removal during redraw,
-and v24 saved-view drawing appearance, plus v4 through v24 archives through
+v24 saved-view drawing appearance, v25 SVG component palettes, v26 compact
+compound asset references and v27 connected curved-wall rigid proofs, plus v4 through v27 archives through
 recovery-aware APIs.
-Under-versioned semantic data and versions above 24 reject. Legacy-only history
+Under-versioned semantic data and versions above 27 reject. Legacy-only history
 is still written as v1. Unknown boundary entity
 versions in v2 remain preserved read-only. See `boundary-entity-format.md`.
 Version 2 also recognizes `dimension` entities. Segment-length dimensions refer
@@ -395,8 +462,10 @@ rounding never changes these stored values.
 
 ### Typed command envelopes
 
-Application edits cross the workspace boundary as a version-1 JSON command
-envelope. `sketch::command_to_json` and `sketch::command_from_json` preserve
+Application edits cross the workspace boundary as typed JSON command envelopes.
+Ordinary edits use version 1; later envelopes retain the specialized geometry,
+source-completion and asset-reference intent described below.
+`sketch::command_to_json` and `sketch::command_from_json` preserve
 the command kind, expected revision, entity and asset changes, quantities,
 metadata, and boundary transforms. Known envelopes reject unknown fields,
 unsupported versions, invalid identifiers, non-finite coordinates, malformed
@@ -1411,12 +1480,9 @@ after Undo or deletion. Its proof uses the existing revision JSON column. Loweri
 format markers remains invalid even when digests are recomputed. Earlier formats
 and command digests retain their prior semantics.
 
-The retained command keeps the existing one-MiB encoded proof ceiling. Asset
-bytes in supplemental intent are hex-encoded and count toward that ceiling;
-this is smaller than the standalone asset size limit. Exact unchanged asset
-upserts need no retained supplement. Large changed assets combined with a wall
-edit therefore require further storage work; this is an implementation gap,
-not removal of portable reference imagery from the production scope.
+Legacy envelope 7 keeps its original one-MiB encoded proof ceiling and inline
+hexadecimal asset bytes. New changed-asset source completion uses envelope 9
+and native format 26, described above, to avoid duplicating those bytes in JSON.
 
 ### ANSI-oriented appraisal evidence (v21)
 

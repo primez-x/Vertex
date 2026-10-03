@@ -1,6 +1,7 @@
 #include "sketch/document.hpp"
 #include "sketch/boundary_entity.hpp"
 #include "sketch/constraint_entity.hpp"
+#include "sketch/constraint_integrity.hpp"
 #include "sketch/project_store.hpp"
 #include "support/noninteractive_errors.hpp"
 
@@ -254,6 +255,36 @@ void test_wall_reversal_requires_explicit_binding_remap() {
             "undo did not restore constraint bindings");
 }
 
+void test_verified_rigid_endpoint_exception_is_owner_scoped() {
+    auto second=wall("wall-b");
+    second.properties["baseline"]["start"]={0.0,10.0};
+    second.properties["baseline"]["end"]={4.0,10.0};
+    auto second_lock=horizontal(); second_lock.id="horizontal-b";
+    second_lock.properties["wall_ids"]={"wall-b"};
+    second_lock.properties["bindings"]={binding("wall-b","start"),binding("wall-b","end")};
+    const auto before=Document::create({wall(),horizontal(),second,second_lock}).snapshot().entities();
+    auto after=before;
+    after.at("wall-a").properties["baseline"]["start"]={4.0,0.0};
+    after.at("wall-a").properties["baseline"]["end"]={0.0,0.0};
+    const std::set<std::string,std::less<>> verified{"wall-a"};
+    validate_constraint_transition(before,after,false,verified);
+    validate_constraint_edit_topology(before,after,verified);
+    after.at("wall-b").properties["baseline"]["start"]={4.0,10.0};
+    after.at("wall-b").properties["baseline"]["end"]={0.0,10.0};
+    bool transition_rejected=false,topology_rejected=false;
+    try { validate_constraint_transition(before,after,false,verified); }
+    catch(const std::exception&) { transition_rejected=true; }
+    try { validate_constraint_edit_topology(before,after,verified); }
+    catch(const std::exception&) { topology_rejected=true; }
+    require(transition_rejected && topology_rejected,
+        "selected rigid authority disabled endpoint identity protection on another owner");
+    after=before; after.at("wall-a").properties["baseline"]["end"]={4.0,1.0};
+    bool residual_rejected=false;
+    try { (void)validate_constraint_integrity(after); }
+    catch(const std::exception&) { residual_rejected=true; }
+    require(residual_rejected,"verified rigid owner bypassed its persisted horizontal relation");
+}
+
 void test_save_reopen_preserves_enforcement_and_history() {
     const auto directory = std::filesystem::temp_directory_path() /
         ("property-constraint-integrity-" + make_stable_id());
@@ -391,6 +422,7 @@ int main() {
         test_physical_arc_length_has_independent_persisted_admission();
         test_nested_owner_list_must_be_complete();
         test_wall_reversal_requires_explicit_binding_remap();
+        test_verified_rigid_endpoint_exception_is_owner_scoped();
         test_save_reopen_preserves_enforcement_and_history();
         std::cout << "Persistent constraint integrity tests passed\n";
         return 0;

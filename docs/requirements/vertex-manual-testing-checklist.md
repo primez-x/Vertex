@@ -2055,6 +2055,26 @@ drawing; switching modes does not change existing geometry.
   - Result: Not tested
   - Notes: ______________________________
 
+## Editing within styled saved views
+
+- [ ] **U351 — Move a wall into a saved view's crop**
+  - Steps: Draw two connected walls and add a window. Make a saved plan view with a crop excluding one wall. Hide that wall globally, then restore it in this view through Drawing appearance and give it a different outline color. Select the connected wall and drag it so the restored wall enters the crop. Inspect the live proposal; cancel once, then repeat and commit. Undo and Redo.
+  - Expected: The restored wall appears as it enters the crop, using its view-specific color. Its hosted window follows the proposed wall and respects host visibility. The committed result agrees with the preview. Cancel and Undo restore the original drawing. Other saved views keep their own visibility and style.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **U352 — Preview and apply an exact length in a saved view**
+  - Steps: In a styled saved plan view, select a wall and open its length/constraint editor. Enter a new length and choose Preview. Cancel once, then repeat and Apply. Check the resulting wall, connected geometry and view-specific appearance. Undo the edit.
+  - Expected: The comparison diagram shows the proposed geometric change. Cancel preserves the drawing. Apply updates the geometry in one edit while the saved view retains its styling and visibility. Undo restores the previous dimensions and appearance.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **U353 — Rotate and reflect a measured curved wall**
+  - Steps: Create a curved wall from an arc length. Open Transform selection, flip it horizontally, then vertically, then flip both axes together. Rotate it by 37 degrees and translate it. Repeat with Copy enabled. Undo and Redo each edit, change the copied wall's length, then save and reopen.
+  - Expected: The actual curve follows the chosen rigid transform. A single reflection reverses its bend; two reflections preserve its bend. Rotation and translation preserve arc length. Copy leaves the original in place. Original construction information and properties survive the edits, Undo/Redo and reopening. Conflicting locked connections refuse the complete change with an explanation.
+  - Result: Not tested
+  - Notes: ______________________________
+
 ## Issue report template
 
 - Task ID(s):

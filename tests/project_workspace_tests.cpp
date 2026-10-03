@@ -5,8 +5,10 @@
 #include "sketch/boundary_dimension.hpp"
 #include "sketch/project_store.hpp"
 #include "sketch/workspace_lifecycle_validation.hpp"
+#include "sketch/wall_measurement.hpp"
 #include "support/noninteractive_errors.hpp"
 #include <algorithm>
+#include <array>
 #include <filesystem>
 #include <iostream>
 #include <stdexcept>
@@ -93,6 +95,73 @@ void check_publication() {
     require(workspace.document_history() == history, "history snapshots must be detached");
     require(document_snapshot_digest(document.snapshot()) == document_snapshot_digest(initial),
             "workspace must not retain mutable access to source Document");
+}
+void check_compact_mixed_asset_publication() {
+    std::vector<Entity> entities{
+        {"p", "property", {{"name", "Property"}}}, {"b", "building", {{"property_id", "p"}}},
+        {"f", "floor", {{"building_id", "b"}}}, {"l", "layer", {{"floor_id", "f"}}},
+        {"unrelated", "label", {{"text", "Preserve"}}}};
+    const std::array<Vec2, 4> vertices{{{0, 0}, {4, 0}, {4, 3}, {0, 3}}};
+    std::vector<std::string> wall_ids;
+    for (std::size_t i = 0; i < vertices.size(); ++i) {
+        const auto a = vertices[i], b = vertices[(i + 1) % vertices.size()];
+        const auto id = "wall-" + std::to_string(i);
+        wall_ids.push_back(id);
+        entities.push_back({id, "wall", {{"baseline", {{"start", {a.x, a.y}}, {"end", {b.x, b.y}}, {"sweep_radians", 0.0}}},
+            {"thickness_m", 0.2}, {"height_m", 3.0}, {"elevation_m", 0.0},
+            {"property_id", "p"}, {"building_id", "b"}, {"floor_id", "f"}, {"layer_id", "l"}}});
+    }
+    const auto measured = derive_exterior_wall_measurement(Document::create(entities).snapshot(), wall_ids);
+    IdentifiedBoundary boundary{"measured-area", "measurement_boundary", {}};
+    for (std::size_t i = 0; i < measured.boundary.size(); ++i)
+        boundary.segments.push_back({"edge-" + std::to_string(i), "vertex-" + std::to_string(i),
+            "vertex-" + std::to_string((i + 1) % measured.boundary.size()), measured.boundary[i]});
+    auto owner = encode_identified_boundary_entity(boundary);
+    owner.properties["property_id"] = "p"; owner.properties["building_id"] = "b";
+    owner.properties["floor_id"] = "f"; owner.properties["layer_id"] = "l";
+    owner.properties["wall_measurement_source"] = measured.source;
+    owner.properties["calculation_scope"] = "building";
+    entities.push_back(owner);
+    const auto source = Document::create(entities).snapshot();
+    auto wall = source.entities().at("wall-0"); wall.properties["thickness_m"] = 0.4;
+    const auto image = Asset::create("large-image", "image/png", std::vector<std::byte>(10 * 1024 * 1024, std::byte{42}),
+        {{"description", std::string(64 * 1024, 'm')}});
+    const auto completed = complete_exterior_wall_measurement_command(source,
+        ApplyEntityChanges{source.revision(), {EntityChange::upsert(wall)}, {AssetChange::upsert(image)}, "Wall and ten-MiB image"});
+    const auto wire = command_to_json(completed);
+    require(wire.at("version") == 9 && wire.dump().size() < 16 * 1024 &&
+        wire.at("supplemental_asset_changes").front().at("asset").at("byte_size") == 10 * 1024 * 1024,
+        "large bytes and metadata must retain a compact proof within the unchanged JSON budget");
+    ProjectWorkspace workspace(source);
+    for (const auto fault : {"bytes", "duplicate", "kind", "message"}) {
+        auto bad = std::get<ApplyBoundaryConstraintChanges>(completed);
+        if (std::string_view(fault) == "bytes") bad.supplemental_asset_changes.front().asset.bytes.front() = std::byte{99};
+        if (std::string_view(fault) == "duplicate") bad.supplemental_asset_changes.push_back(bad.supplemental_asset_changes.front());
+        if (std::string_view(fault) == "kind") bad.supplemental_asset_changes.front().kind = static_cast<AssetChangeKind>(99);
+        if (std::string_view(fault) == "message") bad.message.assign(1025, 'x');
+        bool refused = false;
+        try { (void)workspace.prepare(bad); } catch (const DocumentError&) { refused = true; }
+        require(refused && workspace.epoch() == 0 && workspace.snapshot().revision() == source.revision() &&
+            workspace.snapshot().entities() == source.entities() && workspace.snapshot().assets() == source.assets(),
+            "workspace must fully validate hydrated compact commands before publishing any state");
+    }
+    auto prepared = workspace.prepare(completed);
+    require(workspace.snapshot().assets().empty(), "prepared compact edit must leave authoritative assets untouched");
+    (void)workspace.commit(prepared);
+    const auto candidate = workspace.snapshot();
+    require(candidate.assets().at(image.id) == image && candidate.entities().at(wall.id) == wall &&
+        candidate.entities().at("unrelated") == source.entities().at("unrelated") &&
+        wall_measurement_source_current(candidate, candidate.entities().at(owner.id)) &&
+        workspace.document_history().events.size() == 1,
+        "workspace publishes the exact large asset, wall and source refresh through one document event");
+    require(Document::fork(candidate).snapshot().assets() == candidate.assets(),
+        "retained compact proof must reconstruct exact large assets");
+    prepared = workspace.prepare_undo(); (void)workspace.commit(prepared);
+    require(workspace.snapshot().entities() == source.entities() && workspace.snapshot().assets() == source.assets(),
+        "one workspace undo restores the exact pre-image source");
+    prepared = workspace.prepare_redo(); (void)workspace.commit(prepared);
+    require(workspace.snapshot().entities() == candidate.entities() && workspace.snapshot().assets() == candidate.assets(),
+        "one workspace redo restores the exact large-asset candidate");
 }
 void check_rejections() {
     auto locked = Document::create({Entity::create("future_required", nlohmann::json::object(), true)});
@@ -531,7 +600,7 @@ void check_subtraction_recovery_finish_and_revise() {
 int main() {
     sketch::testing::noninteractive_errors();
     try { check_legacy_classification_only_finished_archive(); check_subtraction_recovery_finish_and_revise();
-          check_publication(); check_rejections(); check_checkpoint_policy();
+          check_publication(); check_compact_mixed_asset_publication(); check_rejections(); check_checkpoint_policy();
           check_archived_redraw_reference_plan(); check_archived_automatic_angle_removal();
           check_reviewed_geometry_identity_binding(); check_rejected_archived_redraw_plans(); }
     catch (const std::exception& e) { std::cerr << e.what() << '\n'; return 1; }

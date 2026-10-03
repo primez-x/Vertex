@@ -117,9 +117,11 @@ public:
     // ANSI-oriented appraisal policies or measured evidence require v21;
     // physical exterior corner inverse proofs require v22; explicit automatic
     // angle removal during redraw requires v23; explicit saved-view drawing
-    // appearance requires v24; explicit SVG instance colors require v25. Any may include
+    // appearance requires v24; explicit SVG instance colors require v25;
+    // compact mixed asset references require v26; verified connected wall
+    // rigid-transform proofs require v27. Any may include
     // the optional recovery ledger. Absent proofs preserve historical formats.
-    static constexpr std::uint32_t format_version = 25;
+    static constexpr std::uint32_t format_version = 27;
     static constexpr std::uint32_t recovery_format_version = 4;
     [[nodiscard]] static std::uint32_t required_format_version(const DocumentSnapshot& snapshot);
     static constexpr std::uint64_t maximum_file_bytes = 4ULL * 1024ULL * 1024ULL * 1024ULL;
@@ -134,7 +136,7 @@ public:
                                           const DocumentSnapshot& snapshot,
                                           const SaveOptions& options = {});
     [[nodiscard]] static LoadResult load(const std::filesystem::path& source);
-    // Recovery-bearing v4 through v25 only. A document-only path never drops a ledger.
+    // Recovery-bearing v4 through v27 only. A document-only path never drops a ledger.
     [[nodiscard]] static SaveReceipt save_archive(const std::filesystem::path& destination,
         const ProjectArchiveSnapshot&, const SaveOptions& options = {});
     [[nodiscard]] static ArchiveLoadResult load_archive(const std::filesystem::path& source, ArchiveRole role);

@@ -1509,9 +1509,85 @@ void automatic_source_completion_preserves_mixed_objects_and_assets_atomically()
     const auto raw = Document::preview_command(source, ordinary);
     const auto completed = complete_exterior_wall_measurement_command(source, ordinary);
     const auto wire = command_to_json(completed);
-    require(wire.at("version") == 7 && command_to_json(command_from_json(wire)) == wire,
-        "mixed completion has an exact additive version-seven command round trip");
-    const auto candidate = Document::preview_command(source, command_from_json(wire));
+    const auto resolve = [&](std::string_view id) -> const Asset* { return id == new_asset.id ? &new_asset : nullptr; };
+    require(wire.at("version") == 9 && command_to_json(command_from_json(wire, resolve)) == wire,
+        "mixed completion has an exact compact version-nine command round trip");
+    auto legacy_completion = std::get<ApplyBoundaryConstraintChanges>(completed);
+    legacy_completion.supplemental_asset_reference_completion = false;
+    const auto legacy_wire = command_to_json(legacy_completion);
+    require(legacy_wire.at("version") == 7 && command_to_json(command_from_json(legacy_wire)) == legacy_wire &&
+        legacy_wire.at("supplemental_asset_changes").back().at("asset").contains("bytes_hex"),
+        "legacy inline version-seven asset proofs retain their exact contextless round trip");
+    const auto candidate = Document::preview_command(source, command_from_json(wire, resolve));
+    const auto legacy_candidate = Document::preview_command(source, command_from_json(legacy_wire));
+    require(candidate.entities() == legacy_candidate.entities() && candidate.assets() == legacy_candidate.assets(),
+        "compact and retained inline asset proofs reproduce the same exact candidate");
+    const auto rejects_reference_wire = [&](const Json& bad, const std::function<const Asset*(std::string_view)>& resolver) {
+        bool refused = false;
+        try { (void)command_from_json(bad, resolver); } catch (const DocumentError&) { refused = true; }
+        require(refused, "malformed or unresolved compact asset proofs reject at the codec boundary");
+    };
+    rejects_reference_wire(wire, {});
+    rejects_reference_wire(wire, [](std::string_view) -> const Asset* { return nullptr; });
+    for (const auto fault : {"id", "bytes", "media", "metadata", "sha256"}) {
+        auto changed_asset = new_asset;
+        if (std::string_view(fault) == "id") changed_asset.id = "foreign-image";
+        if (std::string_view(fault) == "bytes") changed_asset.bytes.front() = std::byte{99};
+        if (std::string_view(fault) == "media") changed_asset.media_type = "image/jpeg";
+        if (std::string_view(fault) == "metadata") changed_asset.metadata["original_filename"] = "foreign.png";
+        if (std::string_view(fault) == "sha256") changed_asset.sha256.front() = 'f';
+        rejects_reference_wire(wire, [&](std::string_view) -> const Asset* { return &changed_asset; });
+    }
+    for (const auto field : {"id", "media_type", "sha256", "byte_size", "metadata_sha256"}) {
+        auto malformed = wire;
+        malformed["supplemental_asset_changes"].back()["asset"].erase(field);
+        rejects_reference_wire(malformed, resolve);
+        malformed = wire;
+        malformed["supplemental_asset_changes"].back()["asset"][field] = nullptr;
+        rejects_reference_wire(malformed, resolve);
+    }
+    for (const auto field : {"bytes_hex", "metadata", "unknown"}) {
+        auto malformed = wire;
+        malformed["supplemental_asset_changes"].back()["asset"][field] = "injected";
+        rejects_reference_wire(malformed, resolve);
+    }
+    for (const auto field : {"sha256", "metadata_sha256"}) {
+        auto malformed = wire;
+        malformed["supplemental_asset_changes"].back()["asset"][field] = std::string(64, '0');
+        rejects_reference_wire(malformed, resolve);
+    }
+    for (const Json size : {Json(-1), Json(3.0), Json(4), Json(256ULL * 1024 * 1024 + 1)}) {
+        auto malformed = wire;
+        malformed["supplemental_asset_changes"].back()["asset"]["byte_size"] = size;
+        rejects_reference_wire(malformed, resolve);
+    }
+    auto malformed_reference = wire;
+    malformed_reference["supplemental_asset_changes"] = nullptr;
+    rejects_reference_wire(malformed_reference, resolve);
+    malformed_reference = wire;
+    malformed_reference["supplemental_asset_changes"].back()["kind"] = "unknown";
+    rejects_reference_wire(malformed_reference, resolve);
+    malformed_reference = wire;
+    malformed_reference["supplemental_asset_changes"].back()["unknown"] = true;
+    rejects_reference_wire(malformed_reference, resolve);
+    malformed_reference = wire;
+    malformed_reference["supplemental_asset_changes"].front()["asset_id"] = nullptr;
+    rejects_reference_wire(malformed_reference, resolve);
+    malformed_reference = wire;
+    malformed_reference["supplemental_asset_changes"].push_back(wire.at("supplemental_asset_changes").back());
+    rejects_reference_wire(malformed_reference, resolve);
+    for (const Json version : {Json(7), Json(8), Json(6), Json(9.0), Json(nullptr)}) {
+        auto malformed = wire;
+        malformed["version"] = version;
+        rejects_reference_wire(malformed, resolve);
+    }
+    malformed_reference = wire;
+    malformed_reference.erase("version");
+    rejects_reference_wire(malformed_reference, resolve);
+    auto empty_references = wire;
+    empty_references["supplemental_asset_changes"] = Json::array();
+    require(command_to_json(command_from_json(empty_references)) == empty_references,
+        "version-nine marker survives empty references without requiring a resolver or downgrading");
     require(candidate.entities().at(symbol.id) == moved_symbol && candidate.entities().at(note.id) == note &&
         !candidate.entities().contains(old_note.id) && candidate.entities().at(building.id) == building &&
         candidate.entities().at(reference.id) == new_reference && candidate.assets() == raw.assets() &&
@@ -1548,32 +1624,34 @@ void automatic_source_completion_preserves_mixed_objects_and_assets_atomically()
     };
     auto bad_wire = wire;
     bad_wire["supplemental_entity_changes"].push_back(wire.at("supplemental_entity_changes").front());
-    refuses_atomically(command_from_json(bad_wire));
+    refuses_atomically(command_from_json(bad_wire, resolve));
     auto raw_dimension = dimension;
     raw_dimension.extensions["vendor"] = "Raw dimension metadata supplement";
     bad_wire = wire;
     bad_wire["supplemental_entity_changes"].push_back(command_to_json(ApplyEntityChanges{source.revision(),
         {EntityChange::upsert(raw_dimension)}, {}, {}}).at("entity_changes").front());
-    refuses_atomically(command_from_json(bad_wire));
+    refuses_atomically(command_from_json(bad_wire, resolve));
     bad_wire = wire;
     bad_wire["supplemental_entity_changes"] = command_to_json(ApplyEntityChanges{source.revision(),
         {EntityChange::upsert(bottom)}, {}, {}}).at("entity_changes");
-    refuses_atomically(command_from_json(bad_wire));
+    refuses_atomically(command_from_json(bad_wire, resolve));
     auto raw_owner = owner;
     raw_owner.properties["name"] = "Raw measured owner supplement";
     bad_wire = wire;
     bad_wire["supplemental_entity_changes"].push_back(command_to_json(ApplyEntityChanges{source.revision(),
         {EntityChange::upsert(raw_owner)}, {}, {}}).at("entity_changes").front());
-    refuses_atomically(command_from_json(bad_wire));
+    refuses_atomically(command_from_json(bad_wire, resolve));
     bad_wire = wire;
     bad_wire["supplemental_asset_changes"] = Json::array();
-    refuses_atomically(command_from_json(bad_wire));
+    refuses_atomically(command_from_json(bad_wire, resolve));
     bad_wire = wire;
     bad_wire["supplemental_asset_changes"].push_back(wire.at("supplemental_asset_changes").front());
-    refuses_atomically(command_from_json(bad_wire));
+    bool duplicate_rejected = false;
+    try { (void)command_from_json(bad_wire, resolve); } catch (const std::exception&) { duplicate_rejected = true; }
+    require(duplicate_rejected, "duplicate compact asset references reject at the codec boundary");
     bad_wire = wire;
     bad_wire["exterior_source_edits"][0]["replacement_segments"][0]["start"][0] = 999.0;
-    refuses_atomically(command_from_json(bad_wire));
+    refuses_atomically(command_from_json(bad_wire, resolve));
     auto invalid = ordinary;
     invalid.entity_changes.push_back(EntityChange::upsert(entity("bad-note", "label", {{"layer_id", "missing-layer"}})));
     bool rejected = false;
@@ -1589,12 +1667,20 @@ void automatic_source_completion_preserves_mixed_objects_and_assets_atomically()
     require(rejected, "mixed completion retains ordinary asset integrity admission");
     const auto large_asset = Asset::create("proof-budget-image", "image/png", std::vector<std::byte>(530 * 1024, std::byte{42}));
     const ApplyEntityChanges bounded{source.revision(), {EntityChange::upsert(bottom)}, {AssetChange::upsert(large_asset)},
-        "Retain defensive source proof byte budget"};
+        "Complete ordinary image edit with compact source proof"};
     require(Document::preview_command(source, bounded).assets().contains(large_asset.id),
         "ordinary asset admission is independent of the typed proof byte ceiling");
-    rejected = false;
-    try { (void)complete_exterior_wall_measurement_command(source, bounded); } catch (const std::exception&) { rejected = true; }
-    require(rejected, "mixed completion rejects assets exceeding the retained source proof byte budget");
+    const auto compact_completion = complete_exterior_wall_measurement_command(source, bounded);
+    const auto compact_wire = command_to_json(compact_completion);
+    const auto compact_candidate = Document::preview_command(source, compact_completion);
+    require(compact_wire.at("version") == 9 && compact_wire.dump().size() < 1024 * 1024 &&
+        !compact_wire.at("supplemental_asset_changes").front().at("asset").contains("bytes_hex") &&
+        !compact_wire.at("supplemental_asset_changes").front().at("asset").contains("metadata"),
+        "ordinary admitted image edits retain a compact version-nine source proof within the existing JSON ceiling");
+    require(compact_candidate.assets().at(large_asset.id) == large_asset &&
+        compact_candidate.entities().at(bottom.id) == bottom &&
+        wall_measurement_source_current(compact_candidate, compact_candidate.entities().at(owner.id)),
+        "compact mixed completion preserves the exact asset and wall edit while refreshing the measured source");
     const auto metadata_only = complete_exterior_wall_measurement_command(source,
         ApplyEntityChanges{source.revision(), {EntityChange::upsert(bottom), EntityChange::upsert(building)}, {}, "Wall plus metadata"});
     require(command_to_json(metadata_only).at("version") == 7 &&
@@ -1604,6 +1690,45 @@ void automatic_source_completion_preserves_mixed_objects_and_assets_atomically()
     retained_marker["supplemental_entity_changes"] = Json::array();
     require(command_to_json(command_from_json(retained_marker)) == retained_marker,
         "version-seven marker survives empty supplemental lists without silently downgrading the envelope");
+    auto changed_metadata_asset = old_asset;
+    changed_metadata_asset.metadata = {{"revision", 1.0}};
+    const auto metadata_asset_completion = complete_exterior_wall_measurement_command(source,
+        ApplyEntityChanges{source.revision(), {EntityChange::upsert(bottom)},
+            {AssetChange::upsert(changed_metadata_asset)}, "Asset metadata replacement"});
+    const auto metadata_asset_wire = command_to_json(metadata_asset_completion);
+    const auto metadata_resolve = [&](std::string_view id) -> const Asset* {
+        return id == changed_metadata_asset.id ? &changed_metadata_asset : nullptr;
+    };
+    const auto metadata_asset_candidate = Document::preview_command(source,
+        command_from_json(metadata_asset_wire, metadata_resolve));
+    require(metadata_asset_wire.at("version") == 9 &&
+        metadata_asset_candidate.assets().at(old_asset.id).bytes == old_asset.bytes &&
+        metadata_asset_candidate.assets().at(old_asset.id).metadata.dump() == "{\"revision\":1.0}",
+        "compact references bind exact metadata replacement even when asset content bytes are unchanged");
+    auto integer_metadata_asset = changed_metadata_asset;
+    integer_metadata_asset.metadata["revision"] = 1;
+    rejects_reference_wire(metadata_asset_wire, [&](std::string_view) -> const Asset* { return &integer_metadata_asset; });
+    rejects_reference_wire(metadata_asset_wire, [&](std::string_view) -> const Asset* { return &old_asset; });
+    const auto erased_asset_completion = complete_exterior_wall_measurement_command(source,
+        ApplyEntityChanges{source.revision(), {EntityChange::upsert(bottom), EntityChange::erase(reference.id)},
+            {AssetChange::erase(old_asset.id)}, "Erase reference image"});
+    const auto erased_asset_wire = command_to_json(erased_asset_completion);
+    require(erased_asset_wire.at("version") == 9 &&
+        command_to_json(command_from_json(erased_asset_wire)) == erased_asset_wire &&
+        !Document::preview_command(source, command_from_json(erased_asset_wire)).assets().contains(old_asset.id),
+        "erase-only compact proofs retain exact erasure without requiring an asset resolver");
+    const auto unchanged_asset_completion = complete_exterior_wall_measurement_command(source,
+        ApplyEntityChanges{source.revision(), {EntityChange::upsert(bottom)},
+            {AssetChange::upsert(old_asset), AssetChange::erase("absent-image")}, "Unchanged asset payload"});
+    require(command_to_json(unchanged_asset_completion).at("version") == 6 &&
+        Document::preview_command(source, unchanged_asset_completion).assets() == source.assets(),
+        "exact unchanged assets and absent erases carry no compact reference intent");
+    auto corner_with_reference_marker = std::get<ApplyBoundaryConstraintChanges>(compact_completion);
+    corner_with_reference_marker.supplemental_asset_changes.clear();
+    corner_with_reference_marker.exterior_corner_move = ExteriorCornerMoveIntent{owner.id, "corner", {0, 0}, true};
+    bool corner_marker_rejected = false;
+    try { (void)command_to_json(corner_with_reference_marker); } catch (const DocumentError&) { corner_marker_rejected = true; }
+    require(corner_marker_rejected, "corner version-eight intent cannot borrow the compact-reference marker");
 }
 
 void automatic_source_completion_admits_physical_and_relationship_changes_together() {
@@ -1670,7 +1795,8 @@ void automatic_source_completion_preserves_json_numeric_representation() {
     const ApplyEntityChanges ordinary{source.revision(), changes, {AssetChange::upsert(changed_asset)}, "Preserve authored JSON forms"};
     const auto raw = Document::preview_command(source, ordinary);
     const auto completed = complete_exterior_wall_measurement_command(source, ordinary);
-    const auto candidate = Document::preview_command(source, command_from_json(command_to_json(completed)));
+    const auto candidate = Document::preview_command(source, command_from_json(command_to_json(completed),
+        [&](std::string_view id)->const Asset* { return id==changed_asset.id ? &changed_asset : nullptr; }));
     require(candidate.entities().at(note.id).properties.dump() == raw.entities().at(note.id).properties.dump() &&
         candidate.assets().at(asset.id).metadata.dump() == raw.assets().at(asset.id).metadata.dump() &&
         candidate.entities().at("wall-right").properties.dump() == raw.entities().at("wall-right").properties.dump(),

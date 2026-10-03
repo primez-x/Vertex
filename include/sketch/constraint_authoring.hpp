@@ -58,6 +58,9 @@ struct WallGeometryMoveTarget {
     std::string wall_id;
     Vec2 proposed_start;
     Vec2 proposed_end;
+    // Selected curves may carry exact rigid intent; connected owners continue
+    // to solve through ordinary endpoint edits without this authority.
+    std::optional<PlanarTransform> rigid_transform;
 };
 
 // Explicit endpoint targets for selected walls. Targets are independent of

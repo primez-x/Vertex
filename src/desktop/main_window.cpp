@@ -4953,7 +4953,13 @@ public:
             PlanarTransform{pivot, radians, flip_horizontal, flip_vertical, translation});
         const auto baseline = transform_segment(wall.baseline, transform);
         const bool reflected = transform.flip_horizontal != transform.flip_vertical;
-        if (!clone && !reflected && !detached_group)
+        std::optional<Command> connected_curve_command;
+        if (!clone && !detached_group && wall.baseline.sweep_radians != 0.0) {
+            connected_curve_command=wallGeometryCommand(source,
+                {{original.id,baseline.start,baseline.end,transform}}, "Transform wall and connected corners");
+            if (!reflected) return {*connected_curve_command,original.id};
+        }
+        if (!clone && !reflected && !detached_group && wall.baseline.sweep_radians == 0.0)
             return {wallGeometryCommand(source, {{original.id,baseline.start,baseline.end}},
                 "Transform wall and connected corners"), original.id};
         wall.baseline = baseline;
@@ -4965,6 +4971,7 @@ public:
         std::vector<EntityChange> changes;
         for (auto entity : graph) {
             if (entity.type == "wall") {
+                if (connected_curve_command) continue;
                 transform_wall_curve_input(entity, transform);
                 rebase_wall_length_receipt(entity, baseline);
                 const auto geometry = segment_json(baseline);
@@ -4993,6 +5000,15 @@ public:
                 changes.push_back(EntityChange::upsert(std::move(entity)));
         }
         if (clone_graph_ids) clone_graph_ids->insert(identities.begin(),identities.end());
+        if (connected_curve_command) {
+            if (!changes.empty()) {
+                auto* proof=std::get_if<ApplyBoundaryConstraintChanges>(&*connected_curve_command);
+                if (!proof) throw std::invalid_argument("Reflected wall host edits require a changed rigid wall proof.");
+                proof->supplemental_entity_changes=std::move(changes);
+                proof->supplemental_source_completion=true;
+            }
+            return {*connected_curve_command,original.id};
+        }
         return {ApplyEntityChanges{source.revision(), std::move(changes), {},
             clone ? "Clone transformed wall" : "Transform wall"},
             clone ? identities.at(original.id) : original.id};
@@ -15146,7 +15162,8 @@ public:
             const auto& entity=source.entities().at(target.wall_id);
             const auto baseline=read_segment(entity.properties.at("baseline"));
             return baseline && baseline->start.x==target.proposed_start.x && baseline->start.y==target.proposed_start.y &&
-                baseline->end.x==target.proposed_end.x && baseline->end.y==target.proposed_end.y;
+                baseline->end.x==target.proposed_end.x && baseline->end.y==target.proposed_end.y &&
+                (!target.rigid_transform || transform_segment(*baseline,*target.rigid_transform).sweep_radians==baseline->sweep_radians);
         });
         if (unchanged) return ApplyEntityChanges{source.revision(),{}, {},message};
         ConstraintAuthoringIntent intent;
@@ -15195,6 +15212,62 @@ public:
         }
         return intent;
     }
+
+    struct ViewPhysicalAppearancePolicy {
+        const ViewAppearance* appearance{};
+        std::map<std::string,const ViewObjectAppearance*,std::less<>> objects;
+
+        explicit ViewPhysicalAppearancePolicy(const std::optional<ViewAppearance>& value)
+            : appearance(value ? &*value : nullptr) {
+            if (appearance) for (const auto& object : appearance->objects)
+                objects.emplace(object.object_id,&object);
+        }
+
+        void applyStyle(CanvasEntity& entity) const {
+            if (!supportsObjectAppearance(entity.type.toStdString()) && entity.type!=QStringLiteral("window")) return;
+            const ViewAppearanceStyle* style=appearance && appearance->style ? &*appearance->style : nullptr;
+            if (const auto found=objects.find(entity.id.toStdString());found!=objects.end() && found->second->style)
+                style=&*found->second->style;
+            if (!style) return;
+            entity.stroke_color=QColor(QString::fromStdString(style->outline_color));entity.dark_stroke_color=QColor{};
+            entity.fill_color=QColor(QString::fromStdString(style->fill_color));
+            entity.hatch_pattern=QString::fromStdString(style->fill_pattern);entity.hatch_scale=style->hatch_scale;
+            entity.filled=style->fill_pattern!="none";
+            entity.stroke_width_metres=style->line_width_mm/1000;
+            entity.output_stroke_width_mm=style->line_width_mm;entity.paper_stroke_width_on_screen=true;
+        }
+
+        bool physicalVisible(const std::string& id,
+            const std::set<std::string,std::less<>>& semantic_ids,
+            const std::set<std::string,std::less<>>& hidden_ids,
+            const std::set<std::string,std::less<>>& object_hidden_ids) const {
+            if ((appearance && !appearance->visible) || !semantic_ids.contains(id)) return false;
+            bool visible=!hidden_ids.contains(id);
+            if (!hidden_ids.contains(id) || object_hidden_ids.contains(id))
+                if (const auto found=objects.find(id);found!=objects.end() && found->second->visible)
+                    visible=*found->second->visible;
+            return visible;
+        }
+
+        bool visible(const CanvasEntity& entity,const DocumentSnapshot& source,
+            const std::set<std::string,std::less<>>& semantic_ids,
+            const std::set<std::string,std::less<>>& hidden_ids,
+            const std::set<std::string,std::less<>>& object_hidden_ids) const {
+            if (appearance && !appearance->visible) return false;
+            if (entity.type==QStringLiteral("section_overlay")) return true;
+            const auto id=entity.id.toStdString();
+            if (!semantic_ids.contains(id)) return false;
+            if (!supportsObjectAppearance(entity.type.toStdString()) && entity.type!=QStringLiteral("window"))
+                return !hidden_ids.contains(id);
+            if (!physicalVisible(id,semantic_ids,hidden_ids,object_hidden_ids)) return false;
+            const auto found=source.entities().find(id);
+            if (found!=source.entities().end() && found->second.type=="opening") {
+                const auto host=read_string(found->second.properties,"wall_id");
+                if (host && !physicalVisible(*host,semantic_ids,hidden_ids,object_hidden_ids)) return false;
+            }
+            return true;
+        }
+    };
 
     static std::optional<VertexPreviewProjection> computeBoundaryVertexPreview(
         const DocumentSnapshot& source,const std::vector<CanvasEntity>& retained,
@@ -15307,6 +15380,13 @@ public:
                     if (override.target_kind == "area" && !override.inherit_appearance)
                         explicit_area_appearances.insert(override.target_id);
                 }
+            }
+            if (view_context && view_context->presentation.appearance) {
+                const auto& appearance=*view_context->presentation.appearance;
+                for (const auto& [id,entity] : candidate)
+                    if (is_closed_boundary_entity(entity.type) && appearance.style) explicit_area_appearances.insert(id);
+                for (const auto& object : appearance.objects)
+                    if (object.style) explicit_area_appearances.insert(object.object_id);
             }
             for (const auto& item : eligible) projection_sources.emplace(item.id, item);
             for (const auto& item : retained) {
@@ -15714,19 +15794,23 @@ public:
             if (m_vertex_preview_view_context) {
                 // Capture the model visibility mask independently of crop
                 // and success of an analytical projection.
-                const auto& available=m_plan_visible_model_ids;
+                const auto& available=m_plan_semantic_model_ids;
                 std::set<std::string, std::less<>> unavailable;
                 for (const auto& [owner_id, entity] : m_vertex_preview_source->entities()) {
                     (void)entity;
-                    if (!available.contains(owner_id)) unavailable.insert(owner_id);
+                    if (!available.contains(owner_id) || (m_plan_presentation_hidden_ids.contains(owner_id) &&
+                        !m_plan_object_hidden_ids.contains(owner_id))) unavailable.insert(owner_id);
                 }
                 const auto& context=*m_vertex_preview_view_context;
+                const ViewPhysicalAppearancePolicy appearance(context.presentation.appearance);
                 const auto referenced=architectural_view_references(context,m_vertex_preview_source->entities(),unavailable);
                 const bool restricted=context.restrict_to_objects || !context.object_ids.empty();
                 const bool solid_view=!analytical_plan_context(BuildingViewKind::plan,context);
-                for (const auto& item : m_measurementCanvas->entities()) {
+                for (const auto& item : m_constraint_preview_source_geometry) {
+                    if (!solid_view && item.segments.empty() && item.holes.empty()) continue;
                     const auto found=m_vertex_preview_source->entities().find(item.id.toStdString());
-                    if (found==m_vertex_preview_source->entities().end() || !available.contains(found->first) ||
+                    if (found==m_vertex_preview_source->entities().end() ||
+                        !appearance.visible(item,*m_vertex_preview_source,available,m_plan_presentation_hidden_ids,m_plan_object_hidden_ids) ||
                         (restricted && !referenced.contains(found->first))) continue;
                     const auto& entity=found->second;
                     if (entity.type=="opening" &&
@@ -15736,26 +15820,19 @@ public:
                         canonical=CanvasEntity{item.id,QString::fromStdString(entity.type),{},
                             entity.type=="wall" ? item.thickness_metres : 0.0,item.selected};
                     }
-                    if (solid_view) canonical.output_stroke_width_mm=context.presentation.projection_line_mm;
-                    eligible->push_back(std::move(canonical));
-                }
-                if (solid_view) {
-                    // A valid architectural solid need not have a retained
-                    // analytical 2D symbol. Visibility, rather than success of
-                    // that other projection, determines candidate eligibility.
-                    for (const auto& [owner_id, entity] : m_vertex_preview_source->entities()) {
-                        if ((entity.type!="wall" && entity.type!="opening") || !available.contains(owner_id) ||
-                            (restricted && !referenced.contains(owner_id)) ||
-                            std::any_of(eligible->begin(),eligible->end(),[&](const auto& item) {
-                                return item.id.toStdString()==owner_id;
-                            })) continue;
-                        if (entity.type=="opening" &&
-                            !available.contains(read_string(entity.properties,"wall_id").value_or(""))) continue;
-                        CanvasEntity canonical{id_from(owner_id),QString::fromStdString(entity.type),{},
-                            entity.type=="wall" ? read_number(entity.properties,"thickness_m",0.08) : 0.0,false};
-                        canonical.output_stroke_width_mm=context.presentation.projection_line_mm;
-                        eligible->push_back(std::move(canonical));
+                    if (solid_view) {
+                        // Keep global appearance from the immutable source even
+                        // when a solid needs a fresh analytical placeholder.
+                        canonical.stroke_color=item.stroke_color;canonical.dark_stroke_color=item.dark_stroke_color;
+                        canonical.fill_color=item.fill_color;canonical.filled=item.filled;
+                        canonical.hatch_pattern=item.hatch_pattern;canonical.hatch_scale=item.hatch_scale;
+                        canonical.stroke_width_metres=item.stroke_width_metres;
+                        canonical.paper_stroke_width_on_screen=item.paper_stroke_width_on_screen;
                     }
+                    canonical.output_stroke_width_mm=item.paper_stroke_width_on_screen
+                        ? item.output_stroke_width_mm : context.presentation.projection_line_mm;
+                    appearance.applyStyle(canonical);
+                    eligible->push_back(std::move(canonical));
                 }
             }
             m_vertex_preview_eligible=std::move(eligible);
@@ -29556,8 +29633,23 @@ private:
             m_object_appearance_defaults.try_emplace(source->first, std::move(defaults));
         }
         std::vector<CanvasEntity> geometry;
-        m_plan_visible_model_ids=visible_ids;
-        std::erase_if(m_plan_visible_model_ids,[&](const auto& id) { return presentation_hidden_ids.contains(id); });
+        // Exact previews need uncropped sources with presentation still
+        // recoverable in the captured saved view. The measurement canvas has
+        // already lost globally hidden owners and cannot supply that source.
+        m_plan_semantic_model_ids=visible_ids;
+        m_plan_presentation_hidden_ids=presentation_hidden_ids;
+        m_plan_object_hidden_ids=object_hidden_ids;
+        m_constraint_preview_source_geometry=all_geometry;
+        for (const auto& [id,entity] : snapshot.entities()) {
+            if ((entity.type!="wall" && entity.type!="opening") ||
+                std::any_of(m_constraint_preview_source_geometry.begin(),m_constraint_preview_source_geometry.end(),
+                    [&](const auto& item){return item.id.toStdString()==id;})) continue;
+            // Architectural solids may be valid without a retained analytical
+            // symbol. Keep the source's appearance for that existing fallback.
+            m_constraint_preview_source_geometry.push_back(CanvasEntity{id_from(id),QString::fromStdString(entity.type),{},
+                entity.type=="wall" ? read_number(entity.properties,"thickness_m",0.08) : 0.0,false});
+        }
+        for (auto& entity : m_constraint_preview_source_geometry) apply_object_appearance(entity);
         std::array<std::vector<CanvasEntity>, 3> visible_view_geometry;
         geometry.reserve(all_geometry.size());
         const auto active_snap_context = organization.drawing_context(m_active_layer_id.toStdString());
@@ -29630,51 +29722,13 @@ private:
             const auto view = std::find_if(model.views().begin(),model.views().end(),
                 [&](const auto& value){return value.id==view_id.second;});
             if (view==model.views().end()) {entities.clear();continue;}
-            const auto* appearance = view->presentation.appearance ? &*view->presentation.appearance : nullptr;
-            if (appearance && !appearance->visible) {entities.clear();continue;}
-            std::map<std::string,const ViewObjectAppearance*,std::less<>> scoped;
-            if (appearance)for(const auto& object:appearance->objects)scoped.emplace(object.object_id,&object);
-            const auto style_entity = [](CanvasEntity& entity,const ViewAppearanceStyle& style) {
-                entity.stroke_color=QColor(QString::fromStdString(style.outline_color));entity.dark_stroke_color=QColor{};
-                entity.fill_color=QColor(QString::fromStdString(style.fill_color));
-                entity.hatch_pattern=QString::fromStdString(style.fill_pattern);entity.hatch_scale=style.hatch_scale;
-                entity.filled=style.fill_pattern!="none";
-                entity.stroke_width_metres=style.line_width_mm/1000;
-                entity.output_stroke_width_mm=style.line_width_mm;entity.paper_stroke_width_on_screen=true;
-            };
+            const ViewPhysicalAppearancePolicy appearance(view->presentation.appearance);
             for (auto& entity : entities) {
                 apply_object_appearance(entity);
-                if (!supportsObjectAppearance(entity.type.toStdString()) && entity.type!=QStringLiteral("window")) continue;
-                if(appearance && appearance->style)style_entity(entity,*appearance->style);
-                if(const auto found=scoped.find(entity.id.toStdString());found!=scoped.end() && found->second->style)
-                    style_entity(entity,*found->second->style);
+                appearance.applyStyle(entity);
             }
-            const auto physical_visible = [&](const std::string& id) {
-                if(!visible_ids.contains(id))return false;
-                bool visible=!presentation_hidden_ids.contains(id);
-                if(!presentation_hidden_ids.contains(id) || object_hidden_ids.contains(id))
-                    if(const auto found=scoped.find(id);found!=scoped.end() && found->second->visible)
-                        visible=*found->second->visible;
-                return visible;
-            };
             std::erase_if(entities, [&](const auto& entity) {
-                if (entity.type == QStringLiteral("section_overlay")) return false;
-                const auto id=entity.id.toStdString();
-                if(!visible_ids.contains(id))return true;
-                if(supportsObjectAppearance(entity.type.toStdString()) || entity.type==QStringLiteral("window")) {
-                    if(!physical_visible(id))return true;
-                    // A hosted glyph inherits its wall's presentation mask.
-                    // A local wall recovery restores its children unless they
-                    // have their own hidden intent; no child bypasses its host.
-                    const auto source=snapshot.entities().find(id);
-                    if(source!=snapshot.entities().end() && source->second.type=="opening") {
-                        const auto host=read_string(source->second.properties,"wall_id");
-                        if(host && !physical_visible(*host))return true;
-                    }
-                    return false;
-                }
-                bool visible=!presentation_hidden_ids.contains(id);
-                return !visible;
+                return !appearance.visible(entity,snapshot,visible_ids,presentation_hidden_ids,object_hidden_ids);
             });
             std::stable_sort(entities.begin(), entities.end(),
                              [&](const auto& left, const auto& right) {
@@ -34895,7 +34949,10 @@ private:
     bool m_entity_transform_ready{};
     std::shared_ptr<const std::vector<CanvasEntity>> m_vertex_preview_scene;
     std::shared_ptr<const std::vector<CanvasEntity>> m_vertex_preview_eligible;
-    std::set<std::string, std::less<>> m_plan_visible_model_ids;
+    std::set<std::string, std::less<>> m_plan_semantic_model_ids;
+    std::set<std::string, std::less<>> m_plan_presentation_hidden_ids;
+    std::set<std::string, std::less<>> m_plan_object_hidden_ids;
+    std::vector<CanvasEntity> m_constraint_preview_source_geometry;
     std::set<std::string, std::less<>> m_plan_appraisal_area_ids;
     std::shared_ptr<const std::vector<CanvasLabel>> m_vertex_preview_labels;
     std::shared_ptr<const std::set<std::string, std::less<>>> m_vertex_preview_appraisal_area_ids;

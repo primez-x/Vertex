@@ -415,6 +415,14 @@ bool baseline_same(const Segment& first, const Segment& second) {
         points_near(first.end, second.end);
 }
 
+std::optional<PlanarTransform> selected_wall_rigid_transform(
+    const ConstraintAuthoringIntent& intent, const std::string& wall_id) {
+    if (intent.wall_geometry_move)
+        for (const auto& target : intent.wall_geometry_move->targets)
+            if (target.wall_id==wall_id) return target.rigid_transform;
+    return std::nullopt;
+}
+
 void validate_endpoint_identity_not_swapped(const Segment& before, const Segment& after,
                                             const std::string& wall_id) {
     if (points_near(before.start, after.end, constraint_linear_tolerance_metres) &&
@@ -900,7 +908,12 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(
                             target.wall_id);
                 }
                 const Segment proposed{target.proposed_start, target.proposed_end,
-                                       old.sweep_radians};
+                    target.rigid_transform ? transform_segment(old,*target.rigid_transform).sweep_radians : old.sweep_radians};
+                if (target.rigid_transform) {
+                    const auto entry=unchanged_wall_length_entry(snapshot.entities().at(target.wall_id),old,proposed);
+                    (void)replay_constraint_wall_edit(snapshot.entities().at(target.wall_id),
+                        {target.wall_id,proposed,entry,4,target.rigid_transform});
+                }
                 const auto proposed_length = segment_length(proposed);
                 if (!std::isfinite(proposed_length) ||
                     proposed_length <= default_geometry_tolerance_metres) {
@@ -1057,13 +1070,16 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(
             }
         }
 
+        std::set<std::string,std::less<>> selected_rigid_ids;
         for (const auto& wall_id : affected_walls) {
             const auto old = old_baselines.at(wall_id);
+            const auto rigid_transform=selected_wall_rigid_transform(intent,wall_id);
             Segment proposed{
                 solved_points.at(point_id({wall_id, WallEndpointRole::start})),
                 solved_points.at(point_id({wall_id, WallEndpointRole::end})),
-                exterior_physical_ids.contains(wall_id) ? read_baseline(candidate.at(wall_id)).sweep_radians : old.sweep_radians};
-            if (baseline_same(old, proposed)) {
+                rigid_transform ? transform_segment(old,*rigid_transform).sweep_radians :
+                    exterior_physical_ids.contains(wall_id) ? read_baseline(candidate.at(wall_id)).sweep_radians : old.sweep_radians};
+            if (!rigid_transform && baseline_same(old, proposed)) {
                 proposed = old;
             }
             if (proposed.start.x == old.start.x && proposed.start.y == old.start.y &&
@@ -1074,7 +1090,7 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(
                     candidate.at(wall_id) = snapshot.entities().at(wall_id);
                 continue;
             }
-            validate_endpoint_identity_not_swapped(old, proposed, wall_id);
+            if (!rigid_transform) validate_endpoint_identity_not_swapped(old, proposed, wall_id);
             auto& wall_entity = candidate.at(wall_id);
             const bool resized = intent.wall_resize.has_value() &&
                 intent.wall_resize->wall_id == wall_id;
@@ -1082,12 +1098,13 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(
             const auto length_entry = resized
                 ? std::optional<Quantity>{intent.wall_resize->exact_length}
                 : unchanged_wall_length_entry(original_wall, old, proposed);
-            const auto proof_version = old.sweep_radians == 0.0
+            const auto proof_version = rigid_transform ? 4ULL : old.sweep_radians == 0.0
                 ? 1ULL : length_entry.has_value() ? 3ULL : 2ULL;
             if (exterior_ring_ids.contains(wall_id))
                 wall_entity = reconstruct_exterior_corner_wall(snapshot.entities().at(wall_id), proposed);
             else wall_entity = replay_constraint_wall_edit(
-                original_wall, {wall_id, proposed, length_entry, proof_version});
+                original_wall, {wall_id, proposed, length_entry, proof_version,rigid_transform});
+            if (rigid_transform) selected_rigid_ids.insert(wall_id);
             validate_constraint_wall_host(wall_id, candidate);
             result.changed_walls_.push_back({wall_id, old, proposed});
         }
@@ -1129,7 +1146,7 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(
             if (after != before) result.changed_boundaries_.push_back({before, after});
         }
         if (intent.exterior_corner_move) validate_exterior_corner_edit_topology(snapshot.entities(),candidate);
-        else validate_constraint_edit_topology(snapshot.entities(),candidate);
+        else validate_constraint_edit_topology(snapshot.entities(),candidate,selected_rigid_ids);
         if (intent.exterior_corner_move) validate_exterior_corner_physical_contacts(snapshot.entities(), candidate);
         (void)validate_boundary_integrity(candidate);
         (void)validate_constraint_integrity(candidate);
@@ -1206,6 +1223,7 @@ int ConstraintAuthoringPreview::degrees_of_freedom() const noexcept { return deg
 const std::vector<BoundaryGeometryEdit>& ConstraintAuthoringPreview::boundary_edits() const noexcept {
     return boundary_edits_;
 }
+
 const std::vector<BoundaryGeometryEdit>& ConstraintAuthoringPreview::exterior_source_edits() const noexcept {
     return exterior_source_edits_;
 }
@@ -1455,10 +1473,12 @@ Command constraint_authoring_verified_command(const DocumentSnapshot& current,
                 ? std::optional<Quantity>{resize->exact_length}
                 : unchanged_wall_length_entry(current.entities().at(wall.wall_id),
                     wall.old_baseline, wall.proposed_baseline);
-            const auto proof_version = wall.old_baseline.sweep_radians == 0.0
+            const auto rigid_transform=selected_wall_rigid_transform(recomputed.normalized_intent_,wall.wall_id);
+            const auto proof_version = rigid_transform ? 4ULL : wall.old_baseline.sweep_radians == 0.0
                 ? 1ULL : length_entry.has_value() ? 3ULL : 2ULL;
             command.wall_edits.push_back({wall.wall_id, wall.proposed_baseline,
-                length_entry, proof_version});
+                length_entry, proof_version,rigid_transform});
+            command.rigid_wall_transform_completion=command.rigid_wall_transform_completion || rigid_transform.has_value();
         }
         const auto verified = Document::preview_command(current, Command{command});
         if (verified.entities() != recomputed.candidate_entities_ ||

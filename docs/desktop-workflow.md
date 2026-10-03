@@ -471,6 +471,14 @@ appearance settings for later reuse. Accepted edits survive Undo/Redo and
 save/reopen and use the same derived scene in the canvas and sheet/PDF output.
 Unchanged Apply and Cancel do not create history.
 
+Exact geometry previews use the selected saved view's appearance and visibility
+over the original, uncropped sources. A wall restored only in that view can move
+into its crop during a preview, retaining its view-specific style and hosted
+openings. Hidden layers, phases, excluded sources and hidden hosts still apply.
+Cancel restores the retained scene; the accepted canvas result uses the same
+presentation policy. The numeric constraint dialog's before/after diagram uses
+its own comparison colors rather than saved-view styling.
+
 ## Named revisions and comparison
 
 The **Named revisions** command is available from **More** and the command
@@ -553,8 +561,10 @@ wall thickness, opening size and host relationships, measurement text and
 appraisal facts remain unchanged. Select a hidden object in **Layers** to open
 its properties and restore visibility. Reset removes only that object's custom
 appearance. Accepted edits are undoable and survive save/reopen; unchanged
-Apply and Cancel do not add history. SVG component coloring and independent
-output-view appearance remain separate implementation gaps.
+Apply and Cancel do not add history. For an SVG component, quick properties
+provide **Colors** to edit that instance's outline and surface or restore its
+library colors. For independent output-view styling, use the saved-view controls
+described above. These presentation settings do not change source geometry.
 
 Drag the outward circular handle to rotate a selected object. Its selection
 frame and handle retain the committed angle after release, so the next drag

@@ -13,9 +13,12 @@
 #include <QDialogButtonBox>
 #include <QDir>
 #include <QDoubleSpinBox>
+#include <QElapsedTimer>
+#include <QEventLoop>
 #include <QFontDatabase>
 #include <QFile>
 #include <QLabel>
+#include <QKeyEvent>
 #include <QLineEdit>
 #include <QMouseEvent>
 #include <QPainter>
@@ -23,8 +26,11 @@
 #include <QPushButton>
 #include <QSettings>
 #include <QTemporaryDir>
+#include <QTableWidget>
+#include <QThread>
 #include <QTimer>
 #include <algorithm>
+#include <cmath>
 #include <exception>
 #include <functional>
 #include <iostream>
@@ -128,6 +134,155 @@ void source_preserved(const sketch::DocumentSnapshot& before,const sketch::Docum
     for(const auto& [id,entity]:before.entities())if(entity.type!=sketch::kSheetViewEntityType)
         require(after.entities().at(id)==entity,"view appearance preserves exact geometry, quantities, appraisal facts, annotations and assets");
     require(before.assets()==after.assets(),"view appearance preserves source assets");
+}
+void saved_view_constraint_previews() {
+    QTemporaryDir dir;MainWindow window({},nullptr,dir.filePath("constraint-library.json"));display(window);
+    const auto first=window.createStraightWall({0,0},{3,0});
+    const auto neighbor=window.createStraightWall({3,0},{3,2});
+    require(!first.isEmpty() && !neighbor.isEmpty(),"constraint fixture creates connected physical walls");
+    const auto opening=window.createHostedOpening("window",".2 m",".5 m",".8 m","1 m");
+    require(!opening.isEmpty(),"constraint fixture creates real hosted window outside crop");
+    auto source=window.document().snapshot();sketch::Entity owner;
+    for(const auto& [id,entity]:source.entities())if(entity.type==sketch::kSheetViewEntityType){(void)id;owner=entity;break;}
+    require(!owner.id.empty(),"constraint fixture has saved-view owner");
+    sketch::CoordinatedView view;view.id="constraint-plan";view.name="Constraint plan";
+    view.presentation.crop=sketch::ViewCrop{-1,2.8,-1,3};
+    owner.properties=sketch::make_sheet_view_entity(owner.id,sketch::SheetViewModel::create({view},{})).properties;
+    auto duplicate=sketch::make_sheet_view_entity("zz-constraint-owner",sketch::SheetViewModel::create({view},{}));
+    sketch::AnnotationState annotations;sketch::PresentationOverride global;
+    global.target_kind="object";global.target_id=neighbor.toStdString();global.visible=false;
+    annotations.overrides.push_back(global);
+    window.document().apply(sketch::ApplyEntityChanges{source.revision(),{sketch::EntityChange::upsert(owner),
+        sketch::EntityChange::upsert(duplicate),sketch::EntityChange::upsert(sketch::make_annotation_entity("constraint-global-hidden",annotations))}, {},"seed saved-view constraint presentation"});
+    require(window.selectEntity({}),"refresh constraint fixture");select_view(window,"constraint-plan",QString::fromStdString(owner.id));
+    style(window,{},"#b12d73","#31ba69");style(window,neighbor,"#d26218","#31ba69");
+    editor(window,[&](QDialog& dialog){scope(dialog,neighbor);child<QCheckBox>(dialog,"viewAppearanceVisible").setChecked(true);apply(dialog);});
+    require(has(window,first) && !has(window,neighbor) && !has(window,opening),"recovered neighbor and child begin wholly outside crop");
+    auto& drawing=canvas(window);
+    const auto mouse=[&](QEvent::Type type,QPointF point,Qt::MouseButton button,Qt::MouseButtons buttons) {
+        QMouseEvent event(type,point,drawing.mapToGlobal(point.toPoint()),button,buttons,Qt::NoModifier);
+        QApplication::sendEvent(&drawing,&event);QApplication::processEvents();
+    };
+    const auto wait=[&](const std::function<bool()>& ready) {
+        QElapsedTimer timer;timer.start();
+        do {QApplication::processEvents(QEventLoop::AllEvents,20);if(ready())return true;QThread::msleep(1);}while(timer.elapsed()<5000);
+        return false;
+    };
+    const auto find=[](const std::vector<sketch::desktop::CanvasEntity>& entities,const QString& id) -> const sketch::desktop::CanvasEntity* {
+        const auto it=std::find_if(entities.begin(),entities.end(),[&](const auto& entity){return entity.id==id;});
+        return it==entities.end()?nullptr:&*it;
+    };
+    const auto start_drag=[&] {
+        require(window.selectEntity(first),"select retained wall for real saved-view drag");drawing.fitView();QApplication::processEvents();
+        drawing.setSnapEnabled(false);drawing.setWallSnapEnabled(false);
+        const auto center=drawing.viewCenter();const auto scale=drawing.viewScale();const auto viewport=QRectF(drawing.rect());
+        const QPointF midpoint(viewport.center().x()+(1.5-center.x)*scale,viewport.center().y()+center.y*scale);
+        const auto* wall=find(drawing.entities(),first);require(wall,"selected wall remains visible");
+        const auto frame=drawing.selectionBounds();require(frame.has_value(),"selected wall exposes actual move frame");
+        auto grab=midpoint+QPointF(26,wall->thickness_metres*scale*.5+3);
+        if(!frame->contains(grab))grab.setY(midpoint.y()-wall->thickness_metres*scale*.5-3);
+        require(frame->contains(grab),"real move gesture starts in wall frame");
+        const auto target=grab+QPointF(-scale,0);
+        mouse(QEvent::MouseButtonPress,grab,Qt::LeftButton,Qt::LeftButton);
+        mouse(QEvent::MouseMove,target,Qt::NoButton,Qt::LeftButton);
+        require(wait([&]{return !drawing.entitiesMovePreviewPending() && !drawing.entitiesMovePreview().empty();}),"saved-view exact constraint preview completes");
+        return target;
+    };
+    const auto before=window.document().snapshot();const auto target=start_drag();const auto preview=drawing.entitiesMovePreview();
+    const auto* proposed_neighbor=find(preview,neighbor);const auto* proposed_opening=find(preview,opening);
+    require(proposed_neighbor && !proposed_neighbor->segments.empty(),"locally recovered connected wall entering crop appears in exact constraint preview");
+    require(proposed_opening && !proposed_opening->segments.empty(),"recovered host restores inherited window entering crop in preview");
+    require(proposed_neighbor->stroke_color==QColor("#d26218") && proposed_opening->stroke_color==QColor("#b12d73") &&
+        proposed_neighbor->output_stroke_width_mm==.8 && proposed_opening->paper_stroke_width_on_screen,
+        "newly eligible preview sources resolve exact saved owner view and object styles");
+    require(window.document().snapshot().entities()==before.entities() && window.document().revision()==before.revision(),"exact appearance preview preserves document and history");
+    capture(drawing,"output-view-constraint-crop-entry-preview.png");
+    mouse(QEvent::MouseButtonRelease,target,Qt::LeftButton,Qt::NoButton);
+    require(wait([&]{return window.document().revision()==before.revision()+1 && !drawing.entitiesMovePreviewPending();}),"exact release commits connected move once");
+    for(const auto& proposed:preview) {
+        const auto* committed=find(drawing.entities(),proposed.id);
+        require(committed && committed->segments.size()==proposed.segments.size() && committed->stroke_color==proposed.stroke_color &&
+            committed->fill_color==proposed.fill_color && committed->output_stroke_width_mm==proposed.output_stroke_width_mm,
+            "committed scene agrees with candidate geometry and saved-view appearance");
+        for(std::size_t i=0;i<proposed.segments.size();++i) {
+            const auto& a=proposed.segments[i];const auto& b=committed->segments[i];
+            require(std::abs(a.start.x-b.start.x)<1e-7 && std::abs(a.start.y-b.start.y)<1e-7 &&
+                std::abs(a.end.x-b.end.x)<1e-7 && std::abs(a.end.y-b.end.y)<1e-7,"committed crop strokes match exact constraint preview");
+        }
+    }
+    // The same local view ID in another graph retains global host hiding.
+    select_view(window,"constraint-plan",QString::fromStdString(duplicate.id));
+    require(!has(window,neighbor) && !has(window,opening),"duplicate owner never borrows primary recovered visibility");
+    start_drag();const auto hidden_preview=drawing.entitiesMovePreview();
+    require(!find(hidden_preview,neighbor) && !find(hidden_preview,opening),"globally hidden sources do not leak into another owner preview");
+    QKeyEvent escape(QEvent::KeyPress,Qt::Key_Escape,Qt::NoModifier);QApplication::sendEvent(&drawing,&escape);QApplication::processEvents();
+    select_view(window,"constraint-plan",QString::fromStdString(owner.id));
+    // Numeric constraints remain detached until actual Apply, even on a recovered source.
+    require(window.selectEntity(neighbor),"numeric constraint selects recovered wall");
+    const auto numeric_before=window.document().snapshot();
+    const auto numeric=[&](bool accept) {
+        std::exception_ptr failure;bool seen=false;
+        QTimer::singleShot(0,&window,[&] {
+            auto* dialog=window.findChild<QDialog*>("constraintDialog");
+            try {
+                require(dialog && dialog->testAttribute(Qt::WA_DontShowOnScreen),"actual numeric constraint dialog stays offscreen");seen=true;
+                child<QLineEdit>(*dialog,"constraintLength").setText("2.5 m");
+                child<QComboBox>(*dialog,"constraintAnchor").setCurrentIndex(0);
+                child<QPushButton>(*dialog,"constraintPreviewButton").click();
+                auto& submit=child<QPushButton>(*dialog,"constraintApplyButton");require(submit.isEnabled(),"numeric recovered-wall length proposal accepted");
+                auto& changes=child<QTableWidget>(*dialog,"constraintChanges");
+                bool reports_length=false;
+                for(int row=0;row<changes.rowCount();++row)
+                    if(changes.item(row,0) && changes.item(row,0)->toolTip()==neighbor && changes.item(row,2))
+                        reports_length=changes.item(row,2)->text()==QStringLiteral("2.5 m");
+                require(reports_length,"actual numeric constraint preview reports requested physical length for the selected wall");
+                require(window.document().snapshot().entities()==numeric_before.entities(),"numeric Preview leaves recovered geometry and presentation detached");
+                capture(*dialog,"output-view-recovered-wall-numeric-constraint-preview.png");
+                if(accept)submit.click();else dialog->reject();
+            }catch(...){failure=std::current_exception();if(dialog)dialog->reject();}
+        });
+        window.showConstraintEditor();if(failure)std::rethrow_exception(failure);require(seen,"numeric constraint control workflow exercised");
+    };
+    numeric(false);require(window.document().revision()==numeric_before.revision(),"numeric Cancel adds no history");numeric(true);
+    require(window.document().revision()==numeric_before.revision()+1 && has(window,neighbor),"numeric Apply commits once and retains local recovery");
+    const auto baseline=window.document().snapshot().entities().at(neighbor.toStdString()).properties.at("baseline");
+    require(std::abs(std::hypot(baseline.at("end")[0].get<double>()-baseline.at("start")[0].get<double>(),
+        baseline.at("end")[1].get<double>()-baseline.at("start")[1].get<double>())-2.5)<1e-7,
+        "numeric Apply agrees with preview physical length");
+    styled(window,neighbor,"#d26218");
+    require(window.undoCommand() && window.document().snapshot().entities()==numeric_before.entities(),"numeric Undo restores exact source and appearance");
+    // Hidden child intent remains authoritative after a recovered host moves.
+    editor(window,[&](QDialog& dialog){scope(dialog,opening);child<QCheckBox>(dialog,"viewAppearanceVisible").setChecked(false);apply(dialog);});
+    const auto hidden_child_source=window.document().snapshot();start_drag();
+    const auto child_preview=drawing.entitiesMovePreview();
+    require(find(child_preview,neighbor) && !find(child_preview,opening),"recovered-host preview respects explicit child hiding");
+    QApplication::sendEvent(&drawing,&escape);QApplication::processEvents();
+    require(window.document().snapshot().entities()==hidden_child_source.entities(),"Escape preserves hidden child intent and exact geometry");
+    // Locally hidden sources must not use the globally visible eligibility path.
+    source=window.document().snapshot();auto visible_global=source.entities().at("constraint-global-hidden");
+    auto state=sketch::decode_annotation_entity(visible_global);state.overrides[0].visible=true;
+    visible_global.properties=sketch::make_annotation_entity(visible_global.id,state).properties;
+    window.document().apply(sketch::ApplyEntityChanges{source.revision(),{sketch::EntityChange::upsert(visible_global)}, {},"fixture globally visible locally hidden source"});
+    require(window.selectEntity({}),"refresh globally visible guard");
+    editor(window,[&](QDialog& dialog){scope(dialog,neighbor);child<QCheckBox>(dialog,"viewAppearanceVisible").setChecked(false);apply(dialog);});
+    require(!has(window,neighbor) && !has(window,opening),"local host hiding suppresses retained physical sources");
+    const auto hidden_source=window.document().snapshot();start_drag();const auto locally_hidden=drawing.entitiesMovePreview();
+    require(!find(locally_hidden,neighbor) && !find(locally_hidden,opening),"locally hidden connected sources do not leak into exact preview");
+    QApplication::sendEvent(&drawing,&escape);QApplication::processEvents();
+    require(window.document().snapshot().entities()==hidden_source.entities(),"hidden-source preview and cancellation do not mutate source");
+    // Explicit recovery cannot bypass the view's restricted source list.
+    source=window.document().snapshot();auto restricted=source.entities().at(owner.id);
+    auto model=sketch::decode_sheet_view_entity(restricted);auto views=model.views();
+    views[0].restrict_to_objects=true;views[0].object_ids={first.toStdString()};
+    restricted.properties=sketch::make_sheet_view_entity(restricted.id,sketch::SheetViewModel::create(views,model.sheets())).properties;
+    window.document().apply(sketch::ApplyEntityChanges{source.revision(),{sketch::EntityChange::upsert(restricted)}, {},"fixture restricted preview source list"});
+    require(window.selectEntity({}),"refresh restricted view");
+    editor(window,[&](QDialog& dialog){scope(dialog,neighbor);child<QCheckBox>(dialog,"viewAppearanceVisible").setChecked(true);apply(dialog);});
+    start_drag();const auto restricted_preview=drawing.entitiesMovePreview();
+    require(!find(restricted_preview,neighbor) && !find(restricted_preview,opening),"local recovery cannot bypass exact preview source restriction");
+    QApplication::sendEvent(&drawing,&escape);QApplication::processEvents();
+    editor(window,[](QDialog& dialog){child<QCheckBox>(dialog,"viewAppearanceVisible").setChecked(false);apply(dialog);});
+    require(drawing.entities().empty() && drawing.labels().empty(),"whole-view hiding suppresses recovered constraint scene");
 }
 void workflow() {
     QTemporaryDir dir;MainWindow window({},nullptr,dir.filePath("library.json"));display(window);
@@ -387,7 +542,8 @@ int main(int argc,char** argv) {
     QSettings::setDefaultFormat(QSettings::IniFormat);QSettings::setPath(QSettings::IniFormat,QSettings::UserScope,settings.path());
     try {require(QFontDatabase::addApplicationFont(":/fonts/Inter.ttf")>=0,"bundled test font loads");
         saved_view_clipboard();
-        if(!app.arguments().contains("--clipboard-only")){workflow();hosted_visibility_and_section_identity();}
+        if(app.arguments().contains("--constraint-only"))saved_view_constraint_previews();
+        else if(!app.arguments().contains("--clipboard-only")){workflow();hosted_visibility_and_section_identity();saved_view_constraint_previews();}
         std::cout<<"output_view_appearance_desktop_tests passed\n";return 0;}
     catch(const std::exception& error){std::cerr<<"output_view_appearance_desktop_tests: "<<error.what()<<'\n';return 1;}
 }

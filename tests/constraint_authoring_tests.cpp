@@ -2340,6 +2340,106 @@ void test_boundary_vertex_move_propagates_explicit_relations() {
     require(!preview_constraint_authoring(detached_before,intent).accepted(),"wall resize plus boundary vertex move must reject");
 }
 
+void test_selected_curve_rigid_proof_and_connected_motion() {
+    const auto measured_baseline=arc_from_chord_arc_length({0,0},{4,0},5,false);
+    auto measured=wall("selected",{0,0},{4,0},measured_baseline.sweep_radians);
+    const auto angle=angle_from_radians(measured_baseline.sweep_radians);
+    measured.properties["baseline"]["vendor"]="original baseline";
+    measured.extensions["curve_input"]={{"version",2},{"construction","arc_length"},
+        {"measure","5 m"},{"normalized_measure","5 m"},{"measure_value",5.0},{"clockwise",false},
+        {"start",{0,0}},{"end",{4,0}},{"radians",measured_baseline.sweep_radians},
+        {"sweep",angle.original_expression},{"normalized_sweep",angle.normalized_expression},{"vendor",17}};
+    measured.extensions["constraint_authoring"]={{"version",1},{"last_length_entry",{
+        {"version",2},{"original_expression","5 m"},{"entered_unit","m"},
+        {"exact_metres",{{"numerator",5},{"denominator",1},{"vendor",23}}},
+        {"baseline",measured.properties.at("baseline")},{"vendor","exact entry"}}}};
+    auto isolated=Document::create({measured,opening("door","selected",1,0.5)});
+    for (const auto transform : {PlanarTransform{{2,0},0,true,true,{}},
+            PlanarTransform{{2,0},0,true,false,{}}, PlanarTransform{{2,0},0,false,true,{}},
+            PlanarTransform{{2,0},0.3,false,false,{1,2}}}) {
+        const auto before=isolated.snapshot();
+        const auto old=baseline(before.entities().at("selected"));
+        const auto target=transform_segment(old,transform);
+        ConstraintAuthoringIntent intent;
+        intent.wall_geometry_move=WallGeometryMoveIntent{{{"selected",target.start,target.end,transform}},true};
+        const auto preview=preview_constraint_authoring(before,intent);
+        require_accepted(preview,"selected rigid curve proof must accept exact rotation/reflection/translation");
+        (void)apply_constraint_authoring(isolated,preview);
+        const auto after=isolated.snapshot();
+        const auto& proof=*after.history().back().boundary_constraint_changes;
+        require(proof.rigid_wall_transform_completion && proof.wall_edits.size()==1 &&
+            proof.wall_edits.front().version==4 && proof.wall_edits.front().rigid_transform==transform,
+            "selected curve transform must retain independently replayable rigid intent");
+        const auto& entity=after.entities().at("selected");
+        require(entity.extensions.at("curve_input_derivation").at("source_input")==measured.extensions.at("curve_input") &&
+            entity.extensions.at("curve_input_derivation").at("source_baseline")==measured.properties.at("baseline") &&
+            entity.extensions.at("constraint_authoring").at("last_length_entry").at("vendor")=="exact entry" &&
+            after.entities().at("door")==before.entities().at("door"),
+            "selected rigid proof lost source, receipt metadata or hosted station");
+        const auto encoded=encode_constraint_wall_edit(proof.wall_edits.front());
+        require(encode_constraint_wall_edit(decode_constraint_wall_edit(encoded))==encoded,
+            "selected rigid proof codec lost exact fields");
+        for (int corrupt=0;corrupt<5;++corrupt) {
+            auto invalid=encoded;
+            if (corrupt==0) invalid.erase("rigid_transform");
+            if (corrupt==1) invalid["rigid_transform"]=nullptr;
+            if (corrupt==2) invalid["rigid_transform"]["future_authority"]=true;
+            if (corrupt==3) invalid["version"]=3;
+            if (corrupt==4) invalid["rigid_transform"]["rotation_radians"]=std::numeric_limits<double>::infinity();
+            bool rejected=false;
+            try { (void)decode_constraint_wall_edit(invalid); } catch (const std::exception&) { rejected=true; }
+            require(rejected,"selected rigid proof accepted missing/null/unknown/nonfinite/version-mismatched transform");
+        }
+        auto forged=proof.wall_edits.front(); forged.baseline.start.x+=0.000001; forged.baseline.end.x+=0.000001;
+        bool rejected=false;
+        try { (void)replay_constraint_wall_edit(before.entities().at("selected"),forged); }
+        catch (const std::exception&) { rejected=true; }
+        require(rejected,"selected rigid proof accepted a baseline not exactly reconstructed by its transform");
+        forged=proof.wall_edits.front(); forged.length_entry.reset(); rejected=false;
+        try { (void)replay_constraint_wall_edit(before.entities().at("selected"),forged); }
+        catch (const std::exception&) { rejected=true; }
+        require(rejected,"selected rigid proof dropped a retained exact physical length entry");
+        require(Document::fork(after).snapshot().entities()==after.entities(),"selected rigid proof history cannot replay");
+        isolated.undo(isolated.revision()); require(isolated.snapshot().entities()==before.entities(),"rigid proof undo changed source");
+        isolated.redo(isolated.revision()); require(isolated.snapshot().entities()==after.entities(),"rigid proof redo changed candidate");
+    }
+    for (const bool has_input : {false,true}) for (const double rotation : {0.0,0.5}) {
+        auto selected=has_input ? measured : wall("selected",{0,0},{4,0},0.6);
+        const auto join=encode_constraint_entity(relation("join",ConstraintRelationKind::coincident,
+            {endpoint("selected",WallEndpointRole::end),endpoint("neighbor",WallEndpointRole::start)}));
+        auto pin=relation("pin",ConstraintRelationKind::fixed_anchor,{endpoint("neighbor",WallEndpointRole::end)});
+        pin.anchor=Vec2{7,0};
+        auto document=Document::create({selected,wall("neighbor",{4,0},{7,0}),join,encode_constraint_entity(pin),
+            opening("host","selected",1,0.5)});
+        const auto before=document.snapshot();
+        const PlanarTransform transform{{2,0},rotation,false,false,rotation==0 ? Vec2{1,2} : Vec2{}};
+        const auto target=transform_segment(baseline(selected),transform);
+        ConstraintAuthoringIntent intent;
+        intent.wall_geometry_move=WallGeometryMoveIntent{{{"selected",target.start,target.end,transform}},true};
+        const auto preview=preview_constraint_authoring(before,intent);
+        require_accepted(preview,"selected curve rigid intent lost compatible connected translation/rotation");
+        const auto neighbor=baseline(preview.candidate_entities().at("neighbor"));
+        require_near(neighbor.start.x,target.end.x,1e-7,"linked curve endpoint x did not follow");
+        require_near(neighbor.start.y,target.end.y,1e-7,"linked curve endpoint y did not follow");
+        require(neighbor.end.x==7 && neighbor.end.y==0,"linked endpoint lock moved");
+        (void)apply_constraint_authoring(document,preview);
+        const auto after=document.snapshot();
+        const auto& proof=*after.history().back().boundary_constraint_changes;
+        require(proof.wall_edits.size()==2,"rigid selected and connected wall must share one command");
+        for (const auto& edit : proof.wall_edits)
+            require(edit.wall_id=="selected" ? edit.version==4 && edit.rigid_transform.has_value() :
+                edit.version==1 && !edit.rigid_transform,"dependent wall borrowed selected rigid authority");
+        auto frozen=intent; frozen.wall_geometry_move->move_connected_walls=false;
+        require(!preview_constraint_authoring(before,frozen).accepted(),"disabled connected movement admitted a hard relation conflict");
+        auto pinned=Document::fork(before);
+        auto selected_pin=relation("selected-pin",ConstraintRelationKind::fixed_anchor,{endpoint("selected",WallEndpointRole::start)});
+        selected_pin.anchor=Vec2{0,0};
+        pinned.apply(ApplyEntityChanges{pinned.revision(),{EntityChange::upsert(encode_constraint_entity(selected_pin))},{},"pin selected source"});
+        require(!preview_constraint_authoring(pinned.snapshot(),intent).accepted(),"rigid selected proof bypassed a persisted anchor");
+        require(Document::fork(after).snapshot().entities()==after.entities(),"linked rigid proof history cannot replay");
+    }
+}
+
 void test_wall_geometry_move_propagates_explicit_connections_only() {
     auto document = Document::create({wall("wall-a", {0,0}, {2,0}),
         wall("wall-b", {2,0}, {2,3}), wall("wall-c", {2,0}, {3,0})});
@@ -3430,6 +3530,7 @@ int main() {
         test_source_measured_invalid_dependencies_reject_before_sealing();
         test_source_measured_stale_owner_keeps_explicit_repair_workflow();
         test_calculation_candidate_snapshot_replays_without_mutation();
+        test_selected_curve_rigid_proof_and_connected_motion();
         test_wall_geometry_move_propagates_explicit_connections_only();
         test_wall_geometry_move_multiselection_validation_and_hosting();
         test_wall_geometry_move_preserves_arc_provenance_and_exact_length_receipt();

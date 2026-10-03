@@ -247,11 +247,12 @@ void rewrite_logical_digest(const std::filesystem::path& path) {
                 SQLITE_OK,
             "test should open database to recompute digest");
     const auto format = std::stoul(metadata_value(database, "format_version"));
+    const auto saved = metadata_value(database, "saved_revision");
     nlohmann::json manifest = {
         {"format_version", format},
         {"document_id", metadata_value(database, "document_id")},
         {"head_revision", std::stoull(metadata_value(database, "head_revision"))},
-        {"saved_revision", std::stoull(metadata_value(database, "saved_revision"))},
+        {"saved_revision", saved == "null" ? nlohmann::json(nullptr) : nlohmann::json(std::stoull(saved))},
         {"history", nlohmann::json::array()},
         {"named_revisions", nlohmann::json::object()},
     };
@@ -361,6 +362,22 @@ void rewrite_logical_digest(const std::filesystem::path& path) {
     }
     sqlite3_finalize(statement);
 
+    require(sqlite3_prepare_v2(database,
+        "SELECT count(*) FROM sqlite_schema WHERE name='project_recovery_records'",-1,&statement,nullptr)==SQLITE_OK,
+        "test should detect archive recovery table");
+    require(sqlite3_step(statement)==SQLITE_ROW,"test archive query should return a row");
+    const bool archive=sqlite3_column_int(statement,0)!=0;
+    sqlite3_finalize(statement);
+    if(archive) {
+        manifest["recovery_records"]=nlohmann::json::array();
+        require(sqlite3_prepare_v2(database,
+            "SELECT record_id,record_kind,envelope_json FROM project_recovery_records ORDER BY record_id",
+            -1,&statement,nullptr)==SQLITE_OK,"test should read recovery records for digest");
+        while(sqlite3_step(statement)==SQLITE_ROW)
+            manifest["recovery_records"].push_back({{"record_id",sqlite_text(statement,0)},
+                {"record_kind",sqlite_text(statement,1)},{"envelope",nlohmann::json::parse(sqlite_text(statement,2))}});
+        sqlite3_finalize(statement);
+    }
     const auto encoded = manifest.dump();
     const auto digest = sketch::sha256_hex(
         std::as_bytes(std::span<const char>(encoded.data(), encoded.size())));
@@ -2427,7 +2444,149 @@ void test_rigid_group_storage_and_history_floors() {
     }
 }
 
-void test_live_exterior_source_storage_and_history_floor(bool mixed = false) {
+void test_selected_rigid_curve_storage_v27(bool compact = false) {
+    TempDirectory temp;
+    auto source = curved_constraint_wall();
+    const auto curve = sketch::arc_from_chord_arc_length({0,0}, {4,0}, 5.0, false);
+    const auto angle = sketch::angle_from_radians(curve.sweep_radians);
+    source.properties["baseline"]["sweep_radians"] = curve.sweep_radians;
+    source.properties["baseline"]["vendor"] = "exact original baseline";
+    source.extensions["curve_input"] = {{"version",2},{"construction","arc_length"},{"measure","5 m"},
+        {"normalized_measure","5 m"},{"measure_value",5.0},{"clockwise",false},{"start",{0,0}},{"end",{4,0}},
+        {"sweep",angle.original_expression},{"normalized_sweep",angle.normalized_expression},
+        {"radians",curve.sweep_radians},{"vendor",{{"retain","exact original input"}}}};
+    auto neighbor = curved_constraint_wall(); neighbor.id = "rigid-neighbor";
+    neighbor.properties["baseline"] = {{"start",{4,0}},{"end",{8,0}},{"sweep_radians",0.0}};
+    const sketch::PersistentConstraint join{"rigid-join",sketch::ConstraintRelationKind::coincident,
+        {{source.id,sketch::WallEndpointRole::end},{neighbor.id,sketch::WallEndpointRole::start}}};
+    auto opening = entity("rigid-opening","opening",{{"wall_id",source.id},{"offset_m",1.0},
+        {"width_m",0.5},{"sill_m",0.0},{"height_m",2.0}},false,{{"vendor","exact opening"}});
+    std::vector<Entity> values{source,neighbor,opening,sketch::encode_constraint_entity(join)};
+    std::vector<Asset> assets;
+    if (compact) {
+        values.push_back(entity("rigid-label","label",{{"text","Before"}}));
+        values.push_back(entity("rigid-object","object",{{"asset_id","rigid-image"}}));
+        assets.push_back(Asset::create("rigid-image","application/octet-stream",{std::byte{1}},{{"caption","Before"}}));
+    }
+    auto document = Document::create(values,assets);
+    const auto before = document.snapshot();
+    const sketch::PlanarTransform transform{{2,0},0.2,false,false,{1,1}};
+    const auto target = sketch::transform_segment(curve,transform);
+    // Storage admission is independent of the authoring solver. Prove the
+    // selected rigid motion and an ordinary connected endpoint adjustment.
+    sketch::ApplyBoundaryConstraintChanges typed;
+    typed.expected_revision=before.revision();
+    typed.wall_edits={{source.id,target,std::nullopt,4,transform},
+        {neighbor.id,{target.end,{8,0},0},std::nullopt,1}};
+    typed.rigid_wall_transform_completion=true;
+    sketch::Command command=typed;
+    if (compact) {
+        auto& proof = std::get<sketch::ApplyBoundaryConstraintChanges>(command);
+        auto label = before.entities().at("rigid-label"); label.properties["text"] = "After";
+        proof.supplemental_entity_changes.push_back(EntityChange::upsert(label));
+        proof.supplemental_asset_changes.push_back(AssetChange::upsert(Asset::create("rigid-image","application/octet-stream",
+            std::vector<std::byte>(530*1024,std::byte{42}),{{"caption","After"},{"vendor",{{"exact",true}}}})));
+        proof.supplemental_source_completion = true;
+        proof.supplemental_asset_reference_completion = true;
+    }
+    const auto wire = sketch::command_to_json(command);
+    require(wire.at("version")==10 && wire.at("wall_edits")[0].at("version")==4 &&
+        !wire.at("wall_edits")[1].contains("version") && wire.at("source_completion")==false,
+        "selected rigid proof must retain outer ten and only qualify its selected wall");
+    if (compact) require(wire.dump().size()<1024*1024 &&
+        !wire.at("supplemental_asset_changes")[0].at("asset").contains("bytes_hex"),
+        "rigid ten mixed proof must use bounded compact references without exterior authority");
+    document.apply(command);
+    const auto changed = document.snapshot();
+    const auto& archive = changed.entities().at(source.id).extensions.at("curve_input_derivation");
+    require(archive.at("source_input")==source.extensions.at("curve_input") &&
+        archive.at("source_baseline")==source.properties.at("baseline") && changed.entities().at(opening.id)==opening &&
+        changed.entities().at(neighbor.id)!=neighbor,"rigid native fixture must preserve exact source and host while propagating its join");
+    auto emptied = changed;
+    auto& marker = *const_cast<std::vector<sketch::RevisionRecord>&>(emptied.history())[1].boundary_constraint_changes;
+    marker.wall_edits.clear(); marker.supplemental_entity_changes.clear(); marker.supplemental_asset_changes.clear();
+    require(ProjectStore::required_format_version(emptied)==27,"empty retained rigid ten marker must retain native27");
+    auto deleted = Document::fork(changed);
+    deleted.apply(ApplyEntityChanges{deleted.revision(),{EntityChange::erase(source.id),EntityChange::erase(opening.id),
+        EntityChange::erase(join.id)}, {}, "Delete selected rigid curve later"});
+    document.undo(document.revision());
+    for (const auto& snapshot : {changed,document.snapshot(),deleted.snapshot()}) {
+        require(ProjectStore::required_format_version(snapshot)==27,"head, Undo and deleted rigid history require native27");
+        const auto path = temp.path/("selected-rigid-"+sketch::make_stable_id()+".bldproj");
+        (void)ProjectStore::save(path,snapshot);
+        auto loaded = ProjectStore::load(path);
+        const auto restored = loaded.document.snapshot();
+        require(restored.entities()==snapshot.entities() && restored.assets()==snapshot.assets() &&
+            sketch::command_to_json(*restored.history()[1].boundary_constraint_changes)==wire &&
+            sketch::document_authoring_source_digest_v1(restored)==sketch::document_authoring_source_digest_v1(snapshot),
+            "native27 must hydrate exact selected rigid proof, assets and history navigation");
+        if (snapshot.entities()==before.entities()) {
+            loaded.document.redo(loaded.document.revision());
+            require(loaded.document.snapshot().entities()==changed.entities() && loaded.document.snapshot().assets()==changed.assets(),
+                "reopened rigid Undo must redo geometry and supplemental assets together");
+        }
+        execute_sql(path,"PRAGMA user_version=26; UPDATE metadata SET value='26' WHERE key='format_version'");
+        rewrite_logical_digest(path); const auto hash = ProjectStore::file_sha256(path);
+        require_error([&]{(void)ProjectStore::load(path);},StorageErrorCode::unsupported_format,
+            "recomputed digest must not admit retained rigid ten history below native27");
+        require(ProjectStore::file_sha256(path)==hash,"rigid floor refusal must preserve source bytes");
+    }
+    sketch::ProjectWorkspace workspace(document.snapshot()); const auto capture = workspace.capture();
+    const auto history = sketch::capture_workspace_history_record(capture);
+    sketch::RecoveryLedger ledger{{"rigid-history","workspace_history",
+        sketch::encode_workspace_history_record(capture.document(),history,std::nullopt)}};
+    const auto recovery = temp.path/"selected-rigid-recovery.bldproj";
+    (void)ProjectStore::save_archive(recovery,{capture.document(),ledger,sketch::ArchiveRole::ordinary});
+    const auto recovered = ProjectStore::load_archive(recovery,sketch::ArchiveRole::ordinary);
+    require(recovered.supported() && recovered.archive->document().entities()==document.snapshot().entities() &&
+        recovered.archive->document().assets()==document.snapshot().assets() &&
+        sketch::command_to_json(*recovered.archive->document().history()[1].boundary_constraint_changes)==wire &&
+        ProjectStore::required_format_version(recovered.archive->document())==27,
+        "recovery archive must hydrate selected rigid ten history even while its asset update is undone");
+    const auto downgraded_recovery = temp.path/"selected-rigid-recovery-underfloor.bldproj";
+    std::filesystem::copy_file(recovery,downgraded_recovery);
+    rewrite_logical_digest(downgraded_recovery);
+    require(ProjectStore::load_archive(downgraded_recovery,sketch::ArchiveRole::ordinary).supported(),
+        "test digest recomputation must preserve an unchanged recovery archive");
+    execute_sql(downgraded_recovery,"PRAGMA user_version=26; UPDATE metadata SET value='26' WHERE key='format_version'");
+    rewrite_logical_digest(downgraded_recovery); const auto recovery_hash = ProjectStore::file_sha256(downgraded_recovery);
+    require_error([&]{(void)ProjectStore::load_archive(downgraded_recovery,sketch::ArchiveRole::ordinary);},
+        StorageErrorCode::unsupported_format,"recovery loading must retain native27 admission for undone rigid ten history");
+    require(ProjectStore::file_sha256(downgraded_recovery)==recovery_hash,"rigid recovery floor refusal preserves archive bytes");
+    const auto original = temp.path/"selected-rigid-original.bldproj";
+    (void)ProjectStore::save(original,changed); const auto original_hash = ProjectStore::file_sha256(original);
+    for (const auto* mutation : {
+        "UPDATE revisions SET boundary_constraint_changes_json=json_set(boundary_constraint_changes_json,'$.wall_edits[0].rigid_transform.offset[0]',99) WHERE revision=1",
+        "UPDATE revisions SET boundary_constraint_changes_json=json_set(boundary_constraint_changes_json,'$.wall_edits[0].baseline.end[0]',99) WHERE revision=1"}) {
+        const auto forged = temp.path/("selected-rigid-forged-"+sketch::make_stable_id()+".bldproj");
+        std::filesystem::copy_file(original,forged); execute_sql(forged,mutation); rewrite_logical_digest(forged);
+        const auto hash = ProjectStore::file_sha256(forged);
+        require_error([&]{(void)ProjectStore::load(forged);},StorageErrorCode::integrity_failure,
+            "recomputed digest cannot bless a mismatched selected rigid transform or baseline");
+        require(ProjectStore::file_sha256(forged)==hash,"rigid forgery refusal preserves source bytes");
+    }
+    const auto empty_floor = temp.path/"selected-rigid-empty-underfloor.bldproj";
+    std::filesystem::copy_file(original,empty_floor);
+    execute_sql(empty_floor,"PRAGMA user_version=26; UPDATE metadata SET value='26' WHERE key='format_version'; UPDATE revisions SET boundary_constraint_changes_json=json_set(boundary_constraint_changes_json,'$.wall_edits',json('[]')) WHERE revision=1");
+    rewrite_logical_digest(empty_floor);
+    const auto empty_hash = ProjectStore::file_sha256(empty_floor);
+    require_error([&]{(void)ProjectStore::load(empty_floor);},StorageErrorCode::unsupported_format,
+        "empty rigid ten marker must reject native26 before history replay");
+    require(ProjectStore::file_sha256(empty_floor)==empty_hash,"empty rigid marker refusal preserves source bytes");
+    if (compact) for (const auto* mutation : {
+        "UPDATE revisions SET boundary_constraint_changes_json=json_set(boundary_constraint_changes_json,'$.supplemental_asset_changes[0].asset.metadata_sha256','0000000000000000000000000000000000000000000000000000000000000000') WHERE revision=1",
+        "DELETE FROM revision_assets WHERE revision=1 AND asset_id='rigid-image'"}) {
+        const auto forged = temp.path/("rigid-compact-forged-"+sketch::make_stable_id()+".bldproj");
+        std::filesystem::copy_file(original,forged); execute_sql(forged,mutation); rewrite_logical_digest(forged);
+        const auto hash = ProjectStore::file_sha256(forged);
+        require_error([&]{(void)ProjectStore::load(forged);},StorageErrorCode::integrity_failure,
+            "rigid compact ten hydration must reject missing or metadata-mismatched revision assets");
+        require(ProjectStore::file_sha256(forged)==hash,"rigid hydration refusal preserves exact source bytes");
+    }
+    require(ProjectStore::file_sha256(original)==original_hash,"rigid admission refusals must preserve the valid archive");
+}
+
+void test_live_exterior_source_storage_and_history_floor(bool mixed = false, bool compact = false) {
     TempDirectory temp;
     std::vector<Entity> values{
         entity("live-property", "property"),
@@ -2470,16 +2629,30 @@ void test_live_exterior_source_storage_and_history_floor(bool mixed = false) {
         ordinary.entity_changes.push_back(EntityChange::upsert(label));
         ordinary.entity_changes.push_back(EntityChange::upsert(object));
         ordinary.asset_changes.push_back(AssetChange::upsert(Asset::create("live-image", "application/octet-stream",
-            {std::byte{2}, std::byte{3}}, {{"caption", "After"}})));
+            compact ? std::vector<std::byte>(530*1024,std::byte{42}) : std::vector<std::byte>{std::byte{2},std::byte{3}}, {{"caption", "After"}})));
     }
-    const auto command = sketch::complete_exterior_wall_measurement_command(before, ordinary);
+    auto command = sketch::complete_exterior_wall_measurement_command(before, ordinary);
+    if(mixed && !compact)std::get<sketch::ApplyBoundaryConstraintChanges>(command).supplemental_asset_reference_completion=false;
     const auto wire = sketch::command_to_json(command);
-    require(wire.at("version") == (mixed ? 7 : 6) && wire.at("physical_entity_changes").size() == 1 &&
+    const auto native_floor=compact ? 26U : mixed ? 20U : 19U;
+    require(wire.at("version") == (compact ? 9 : mixed ? 7 : 6) && wire.at("physical_entity_changes").size() == 1 &&
         wire.at("exterior_source_edits").size() == 1, "fixture must join physical and measured source intent");
     if (mixed) require(wire.at("supplemental_entity_changes").size() == 2 &&
         wire.at("supplemental_asset_changes").size() == 1, "v7 fixture must retain label, object and asset intents");
     document.apply(command);
     const auto changed = document.snapshot();
+    if(compact) {
+        require(wire.dump().size()<1024*1024 && !wire.at("supplemental_asset_changes")[0].at("asset").contains("bytes_hex"),"compact asset proof preserves bounded JSON without duplicate bytes");
+        sketch::ProjectWorkspace workspace(changed);const auto capture=workspace.capture();
+        const auto history=sketch::capture_workspace_history_record(capture);
+        sketch::RecoveryLedger ledger{{"compact-history","workspace_history",sketch::encode_workspace_history_record(capture.document(),history,std::nullopt)}};
+        const auto archive_path=temp.path/"compact-archive.bldproj";
+        (void)ProjectStore::save_archive(archive_path,{capture.document(),ledger,sketch::ArchiveRole::ordinary});
+        const auto archive=ProjectStore::load_archive(archive_path,sketch::ArchiveRole::ordinary);
+        require(archive.supported() && archive.archive->document().assets()==changed.assets() &&
+            sketch::command_to_json(*archive.archive->document().history()[1].boundary_constraint_changes)==wire &&
+            ProjectStore::required_format_version(archive.archive->document())==26,"recovery archive retains exact compact proof and independently stored asset");
+    }
     std::vector<Entity> imported_values;
     for (const auto& [id, value] : changed.entities()) { (void)id; imported_values.push_back(value); }
     std::vector<Asset> imported_assets;
@@ -2495,13 +2668,13 @@ void test_live_exterior_source_storage_and_history_floor(bool mixed = false) {
         retained_proof.supplemental_entity_changes.clear();
         retained_proof.supplemental_asset_changes.clear();
     }
-    require(ProjectStore::required_format_version(emptied_proof) == (mixed ? 20U : 19U),
+    require(ProjectStore::required_format_version(emptied_proof) == native_floor,
         "retained source discriminator must keep the native floor even when command lanes are removed");
     auto deleted = Document::fork(changed);
     deleted.apply(ApplyEntityChanges{deleted.revision(), {EntityChange::erase("live-area")}, {}, "Delete source owner later"});
     document.undo(document.revision());
     for (const auto& snapshot : {changed, document.snapshot(), deleted.snapshot()}) {
-        require(ProjectStore::required_format_version(snapshot) == (mixed ? 20U : 19U),
+        require(ProjectStore::required_format_version(snapshot) == native_floor,
             "current, undone and deleted source history requires its native format floor");
         const auto path = temp.path / ("live-source-" + sketch::make_stable_id() + ".bldproj");
         (void)ProjectStore::save(path, snapshot);
@@ -2517,7 +2690,7 @@ void test_live_exterior_source_storage_and_history_floor(bool mixed = false) {
             require(loaded.document.snapshot().entities() == changed.entities() && loaded.document.snapshot().assets() == changed.assets(),
                 "reopened Undo must retain one Redo for geometry, supplemental entities and assets");
         }
-        execute_sql(path, mixed ? "PRAGMA user_version=19; UPDATE metadata SET value='19' WHERE key='format_version'" :
+        execute_sql(path, compact ? "PRAGMA user_version=25; UPDATE metadata SET value='25' WHERE key='format_version'" : mixed ? "PRAGMA user_version=19; UPDATE metadata SET value='19' WHERE key='format_version'" :
             "PRAGMA user_version=18; UPDATE metadata SET value='18' WHERE key='format_version'");
         rewrite_logical_digest(path);
         const auto hash = ProjectStore::file_sha256(path);
@@ -2527,6 +2700,16 @@ void test_live_exterior_source_storage_and_history_floor(bool mixed = false) {
     }
     const auto original = temp.path / "live-original.bldproj";
     (void)ProjectStore::save(original, changed);
+    if(compact)for(const auto* mutation:{
+        "UPDATE revisions SET boundary_constraint_changes_json=json_set(boundary_constraint_changes_json,'$.supplemental_asset_changes[0].asset.byte_size',1) WHERE revision=1",
+        "UPDATE revisions SET boundary_constraint_changes_json=json_set(boundary_constraint_changes_json,'$.supplemental_asset_changes[0].asset.media_type','image/png') WHERE revision=1",
+        "UPDATE revision_assets SET metadata_json=json_set(metadata_json,'$.caption','Forged') WHERE revision=1 AND asset_id='live-image'",
+        "DELETE FROM revision_assets WHERE revision=1 AND asset_id='live-image'"}) {
+        const auto forged=temp.path/("compact-forged-"+sketch::make_stable_id()+".bldproj");std::filesystem::copy_file(original,forged);
+        execute_sql(forged,mutation);rewrite_logical_digest(forged);const auto hash=ProjectStore::file_sha256(forged);
+        require_error([&]{(void)ProjectStore::load(forged);},StorageErrorCode::integrity_failure,"compact hydration refuses missing or mismatched exact result assets despite recomputed digest");
+        require(ProjectStore::file_sha256(forged)==hash,"refused compact hydration preserves source bytes");
+    }
     for (const auto* mutation : {
         "UPDATE revisions SET boundary_constraint_changes_json=NULL WHERE revision=1",
         "UPDATE revisions SET boundary_constraint_changes_json=json_set(boundary_constraint_changes_json,'$.physical_entity_changes[0].entity.properties.thickness_m',0.6) WHERE revision=1",
@@ -2862,6 +3045,9 @@ int main() {
         test_rigid_group_storage_and_history_floors();
         test_live_exterior_source_storage_and_history_floor();
         test_live_exterior_source_storage_and_history_floor(true);
+        test_live_exterior_source_storage_and_history_floor(true,true);
+        test_selected_rigid_curve_storage_v27();
+        test_selected_rigid_curve_storage_v27(true);
         test_reviewed_exterior_source_reader_floor();
         test_physical_arc_length_history_requires_v12();
         test_direct_curve_length_history_requires_v13();

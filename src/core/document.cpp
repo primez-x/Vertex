@@ -1142,9 +1142,10 @@ void validate_constraint_change(const std::map<std::string, Entity, std::less<>>
                                 const std::map<std::string, Entity, std::less<>>& after,
                                 bool qualified_curve_edits=false,
                                 bool validate_curve_provenance=true,
-                                bool qualified_rigid_transform=false) {
+                                bool qualified_rigid_transform=false,
+                                const std::set<std::string,std::less<>>& verified_rigid_wall_ids={}) {
     try {
-        validate_constraint_transition(before, after, qualified_rigid_transform);
+        validate_constraint_transition(before, after, qualified_rigid_transform, verified_rigid_wall_ids);
         if (validate_curve_provenance)
             validate_constraint_wall_geometry_transition(before,after,qualified_curve_edits);
     }
@@ -1339,8 +1340,14 @@ Asset Asset::create(std::string media_type, std::vector<std::byte> bytes,
 }
 
 static bool has_supplemental_source_completion(const ApplyBoundaryConstraintChanges& command) {
-    return command.supplemental_source_completion || !command.supplemental_entity_changes.empty() ||
+    return command.supplemental_source_completion || command.supplemental_asset_reference_completion ||
+        !command.supplemental_entity_changes.empty() ||
         !command.supplemental_asset_changes.empty();
+}
+
+static bool has_rigid_wall_transform(const ApplyBoundaryConstraintChanges& command) {
+    return command.rigid_wall_transform_completion || std::any_of(command.wall_edits.begin(),command.wall_edits.end(),
+        [](const auto& edit){return edit.version==4;});
 }
 
 static bool exact_entity_payload(const Entity& left, const Entity& right) {
@@ -1372,7 +1379,7 @@ static bool v6_physical_wall_extensions_supported(const Entity& previous, const 
 
 bool has_exterior_source_completion(const ApplyBoundaryConstraintChanges& command) {
     return command.exterior_source_completion || !command.physical_entity_changes.empty() ||
-        !command.exterior_source_edits.empty() || has_supplemental_source_completion(command) || command.exterior_corner_move.has_value();
+        !command.exterior_source_edits.empty() || (!has_rigid_wall_transform(command) && has_supplemental_source_completion(command)) || command.exterior_corner_move.has_value();
 }
 
 static std::map<std::string, Asset, std::less<>> boundary_constraint_assets(
@@ -1401,12 +1408,20 @@ static std::map<std::string, Asset, std::less<>> boundary_constraint_assets(
 void validate_completed_constraint_change(const std::map<std::string, Entity, std::less<>>& before,
     const std::map<std::string, Entity, std::less<>>& after,
     const ApplyBoundaryConstraintChanges& command) {
+    std::set<std::string,std::less<>> rigid_ids;
+    for(const auto& edit:command.wall_edits)if(edit.version==4) {
+        const auto found=before.find(edit.wall_id);
+        if(found==before.end() || !after.contains(edit.wall_id) ||
+            !exact_entity_payload(replay_constraint_wall_edit(found->second,edit),after.at(edit.wall_id)))
+            document_error(DocumentErrorCode::constraint_violation,"Rigid wall proof differs from independently reconstructed source");
+        rigid_ids.insert(edit.wall_id);
+    }
     if (!has_exterior_source_completion(command)) {
-        validate_constraint_change(before, after, true);
+        validate_constraint_change(before, after, true, true, false, rigid_ids);
         return;
     }
     try {
-        validate_constraint_transition(before, after);
+        validate_constraint_transition(before, after, false, rigid_ids);
         // Typed endpoint authority applies only to its explicitly proved
         // walls. Independently constructed ordinary curves must retain the
         // ordinary reconstruction path, including archived input operations.
@@ -1487,6 +1502,7 @@ std::map<std::string, Entity, std::less<>> boundary_constraint_entities(
         document_error(DocumentErrorCode::invalid_entity, error.what());
     }
     std::unordered_set<std::string> touched;
+    std::set<std::string,std::less<>> rigid_wall_ids;
     touched.insert(corner_physical_ids.begin(), corner_physical_ids.end());
     const bool supplemental_completion = has_supplemental_source_completion(command);
     if (supplemental_completion) {
@@ -1509,6 +1525,7 @@ std::map<std::string, Entity, std::less<>> boundary_constraint_entities(
             document_error(DocumentErrorCode::invalid_entity,"Wall constraint edit owner does not exist");
         try { result.at(edit.wall_id) = replay_constraint_wall_edit(previous->second, edit); }
         catch (const std::exception& error) { document_error(DocumentErrorCode::invalid_entity,error.what()); }
+        if(edit.version==4)rigid_wall_ids.insert(edit.wall_id);
     }
     for (const auto& change : command.entity_changes) {
         if (change.kind != EntityChangeKind::upsert && change.kind != EntityChangeKind::erase)
@@ -1623,7 +1640,7 @@ std::map<std::string, Entity, std::less<>> boundary_constraint_entities(
     }
     try {
         if (command.exterior_corner_move) validate_exterior_corner_edit_topology(source,result);
-        else validate_constraint_edit_topology(source,result);
+        else validate_constraint_edit_topology(source,result,rigid_wall_ids);
     }
     catch (const std::exception& error) { document_error(DocumentErrorCode::invalid_entity,error.what()); }
     if (source_completion) {
@@ -1678,11 +1695,14 @@ Command complete_exterior_wall_measurement_command(const DocumentSnapshot& sourc
     if (ordinary) {
         completed.message = ordinary->message;
         for (const auto& change : ordinary->asset_changes) {
-            const auto previous = source.assets().find(change.asset.id);
+            const auto& id = change.kind == AssetChangeKind::upsert ? change.asset.id : change.asset_id;
+            const auto previous = source.assets().find(id);
             if (change.kind == AssetChangeKind::upsert && previous != source.assets().end() &&
                 exact_asset_payload(previous->second, change.asset)) continue;
+            if (change.kind == AssetChangeKind::erase && previous == source.assets().end()) continue;
             completed.supplemental_asset_changes.push_back(change);
         }
+        completed.supplemental_asset_reference_completion = !completed.supplemental_asset_changes.empty();
         const auto read = [](const Entity& wall) {
             const auto& b = wall.properties.at("baseline");
             return Segment{{b.at("start")[0].get<double>(), b.at("start")[1].get<double>()},
@@ -2232,6 +2252,90 @@ Asset command_asset_from_json(const nlohmann::json& value) {
     return result;
 }
 
+std::string command_asset_metadata_sha256(const Asset& asset) {
+    const auto canonical = asset.metadata.dump();
+    return sha256_hex(std::as_bytes(std::span(canonical.data(), canonical.size())));
+}
+
+nlohmann::json command_asset_references_to_json(const std::vector<AssetChange>& changes) {
+    auto result = nlohmann::json::array();
+    std::unordered_set<std::string> touched;
+    for (const auto& change : changes) {
+        if (change.kind != AssetChangeKind::upsert && change.kind != AssetChangeKind::erase)
+            document_error(DocumentErrorCode::invalid_asset, "Invalid supplemental asset reference kind");
+        const auto& id = change.kind == AssetChangeKind::upsert ? change.asset.id : change.asset_id;
+        if (!is_valid_identifier(id))
+            document_error(DocumentErrorCode::invalid_asset, "Supplemental asset reference ID is invalid");
+        if (!touched.insert(id).second)
+            document_error(DocumentErrorCode::duplicate_change, "Supplemental asset reference is changed more than once: " + id);
+        if (change.kind == AssetChangeKind::erase) {
+            result.push_back({{"kind", "erase"}, {"asset_id", id}});
+        } else {
+            validate_asset(change.asset);
+            result.push_back({{"kind", "upsert"}, {"asset", {
+                {"id", id}, {"media_type", change.asset.media_type}, {"sha256", change.asset.sha256},
+                {"byte_size", change.asset.bytes.size()},
+                {"metadata_sha256", command_asset_metadata_sha256(change.asset)}}}});
+        }
+    }
+    return result;
+}
+
+std::vector<AssetChange> command_asset_references_from_json(const nlohmann::json& value,
+    const std::function<const Asset*(std::string_view)>& resolver) {
+    if (!value.is_array())
+        document_error(DocumentErrorCode::invalid_asset, "Supplemental asset references must be an array");
+    std::vector<AssetChange> result;
+    std::unordered_set<std::string> touched;
+    for (const auto& change : value) {
+        if (!change.is_object() || !change.contains("kind") || !change.at("kind").is_string())
+            document_error(DocumentErrorCode::invalid_asset, "Supplemental asset reference is invalid");
+        const auto kind = change.at("kind").get<std::string>();
+        std::string id;
+        if (kind == "erase") {
+            command_exact_fields(change, {"kind", "asset_id"}, DocumentErrorCode::invalid_asset,
+                "supplemental asset reference erase");
+            id = command_string(change.at("asset_id"), "supplemental asset reference ID", kMaximumIdBytes);
+        } else if (kind == "upsert") {
+            command_exact_fields(change, {"kind", "asset"}, DocumentErrorCode::invalid_asset,
+                "supplemental asset reference upsert");
+            command_exact_fields(change.at("asset"), {"id", "media_type", "sha256", "byte_size", "metadata_sha256"},
+                DocumentErrorCode::invalid_asset, "supplemental asset reference");
+            id = command_string(change.at("asset").at("id"), "supplemental asset reference ID", kMaximumIdBytes);
+        } else {
+            document_error(DocumentErrorCode::invalid_asset, "Unknown supplemental asset reference kind");
+        }
+        if (!is_valid_identifier(id))
+            document_error(DocumentErrorCode::invalid_asset, "Supplemental asset reference ID is invalid");
+        if (!touched.insert(id).second)
+            document_error(DocumentErrorCode::duplicate_change, "Supplemental asset reference is changed more than once: " + id);
+        if (kind == "erase") {
+            result.push_back(AssetChange::erase(std::move(id)));
+            continue;
+        }
+        const auto& reference = change.at("asset");
+        const auto media_type = command_string(reference.at("media_type"), "supplemental asset media type", 256);
+        const auto digest = command_string(reference.at("sha256"), "supplemental asset SHA-256", 64);
+        const auto metadata_digest = command_string(reference.at("metadata_sha256"), "supplemental asset metadata SHA-256", 64);
+        const auto& size = reference.at("byte_size");
+        if ((!size.is_number_integer() && !size.is_number_unsigned()) ||
+            (size.is_number_integer() && !size.is_number_unsigned() && size.get<std::int64_t>() < 0) ||
+            size.get<std::uint64_t>() > kMaximumAssetBytes)
+            document_error(DocumentErrorCode::invalid_asset, "Supplemental asset byte size is invalid");
+        if (!resolver)
+            document_error(DocumentErrorCode::invalid_asset, "Supplemental asset reference requires an asset resolver");
+        const auto* asset = resolver(id);
+        if (!asset)
+            document_error(DocumentErrorCode::invalid_asset, "Supplemental asset reference is missing: " + id);
+        validate_asset(*asset);
+        if (asset->id != id || asset->media_type != media_type || asset->sha256 != digest ||
+            asset->bytes.size() != size.get<std::uint64_t>() || command_asset_metadata_sha256(*asset) != metadata_digest)
+            document_error(DocumentErrorCode::invalid_asset, "Supplemental asset reference does not match its resolved payload: " + id);
+        result.push_back(AssetChange::upsert(*asset));
+    }
+    return result;
+}
+
 }  // namespace
 
 nlohmann::json command_to_json(const Command& command) {
@@ -2333,12 +2437,14 @@ nlohmann::json command_to_json(const Command& command) {
                         encoded["exterior_source_edits"].push_back(encode_boundary_geometry_edit(edit));
                     }
                     if (has_supplemental_source_completion(typed)) {
-                        encoded["version"] = 7;
+                        encoded["version"] = typed.supplemental_asset_reference_completion ? 9 : 7;
                         const auto supplements = command_to_json(ApplyEntityChanges{
                             typed.expected_revision, typed.supplemental_entity_changes,
-                            typed.supplemental_asset_changes, typed.message});
+                            typed.supplemental_asset_reference_completion ? std::vector<AssetChange>{} :
+                                typed.supplemental_asset_changes, typed.message});
                         encoded["supplemental_entity_changes"] = supplements.at("entity_changes");
-                        encoded["supplemental_asset_changes"] = supplements.at("asset_changes");
+                        encoded["supplemental_asset_changes"] = typed.supplemental_asset_reference_completion ?
+                            command_asset_references_to_json(typed.supplemental_asset_changes) : supplements.at("asset_changes");
                     }
                     if (typed.exterior_corner_move) {
                         if (has_supplemental_source_completion(typed) || !typed.physical_entity_changes.empty())
@@ -2348,6 +2454,23 @@ nlohmann::json command_to_json(const Command& command) {
                     }
                     if (encoded.dump().size() > 1024 * 1024)
                         throw std::invalid_argument("Exterior source completion exceeds the persisted proof budget");
+                }
+                if(has_rigid_wall_transform(typed)) {
+                    if(typed.exterior_corner_move)throw std::invalid_argument("Rigid wall envelope cannot borrow exterior corner authority");
+                    encoded["version"]=10;
+                    if(!encoded.contains("wall_edits"))encoded["wall_edits"]=nlohmann::json::array();
+                    encoded["source_completion"]=has_exterior_source_completion(typed);
+                    encoded["supplemental_source_completion"]=has_supplemental_source_completion(typed);
+                    encoded["supplemental_asset_reference_completion"]=typed.supplemental_asset_reference_completion;
+                    encoded["physical_entity_changes"]=command_to_json(ApplyEntityChanges{
+                        typed.expected_revision,typed.physical_entity_changes,{},typed.message}).at("entity_changes");
+                    if(!encoded.contains("exterior_source_edits"))encoded["exterior_source_edits"]=nlohmann::json::array();
+                    const auto supplements=command_to_json(ApplyEntityChanges{typed.expected_revision,typed.supplemental_entity_changes,
+                        typed.supplemental_asset_reference_completion ? std::vector<AssetChange>{} : typed.supplemental_asset_changes,typed.message});
+                    encoded["supplemental_entity_changes"]=supplements.at("entity_changes");
+                    encoded["supplemental_asset_changes"]=typed.supplemental_asset_reference_completion ?
+                        command_asset_references_to_json(typed.supplemental_asset_changes) : supplements.at("asset_changes");
+                    if(encoded.dump().size()>1024*1024)throw std::invalid_argument("Rigid wall proof exceeds the persisted proof budget");
                 }
             } catch (const std::exception& error) {
                 document_error(DocumentErrorCode::invalid_entity, error.what());
@@ -2386,11 +2509,12 @@ nlohmann::json command_to_json(const Command& command) {
     }, command);
 }
 
-Command command_from_json(const nlohmann::json& value) {
+Command command_from_json(const nlohmann::json& value,
+    const std::function<const Asset*(std::string_view)>& asset_resolver) {
     try {
         if (!value.is_object() || !value.contains("version") || !value.contains("kind") ||
             !value.at("version").is_number_integer() ||
-            (value.at("version") != 1 && value.at("version") != 2 && value.at("version") != 3 && value.at("version") != 4 && value.at("version") != 5 && value.at("version") != 6 && value.at("version") != 7 && value.at("version") != 8) ||
+            (value.at("version") != 1 && value.at("version") != 2 && value.at("version") != 3 && value.at("version") != 4 && value.at("version") != 5 && value.at("version") != 6 && value.at("version") != 7 && value.at("version") != 8 && value.at("version") != 9 && value.at("version") != 10) ||
             !value.at("kind").is_string()) {
             document_error(DocumentErrorCode::invalid_entity, "serialized command envelope is invalid");
         }
@@ -2446,11 +2570,29 @@ Command command_from_json(const nlohmann::json& value) {
             return result;
         }
         if (kind == "apply_boundary_constraint_changes") {
+            const bool rigid_envelope=value.at("version")==10;
+            if(rigid_envelope) {
+                command_exact_fields(value,{"version","kind","expected_revision","message","entity_changes","boundary_edits","wall_edits",
+                    "physical_entity_changes","exterior_source_edits","supplemental_entity_changes","supplemental_asset_changes",
+                    "source_completion","supplemental_source_completion","supplemental_asset_reference_completion"},
+                    DocumentErrorCode::invalid_entity,"serialized rigid wall command");
+                for(const auto* flag:{"source_completion","supplemental_source_completion","supplemental_asset_reference_completion"})
+                    if(!value.at(flag).is_boolean())document_error(DocumentErrorCode::invalid_entity,"Rigid wall completion modes must be booleans");
+                if(value.dump().size()>1024*1024)document_error(DocumentErrorCode::invalid_entity,"Rigid wall proof exceeds the persisted proof budget");
+            }
             const bool mixed = value.at("version") != 1;
-            const bool supplements = value.at("version") == 7;
+            const bool asset_references = rigid_envelope ? value.at("supplemental_asset_reference_completion").get<bool>() : value.at("version") == 9;
+            const bool supplements = rigid_envelope ? value.at("supplemental_source_completion").get<bool>() : value.at("version") == 7 || asset_references;
             const bool corner_move = value.at("version") == 8;
-            const bool source_completion = value.at("version") == 6 || supplements || corner_move;
-            if (corner_move) command_exact_fields(value, {"version","kind","expected_revision","message",
+            const bool source_completion = rigid_envelope ? value.at("source_completion").get<bool>() : value.at("version") == 6 || supplements || corner_move;
+            if(rigid_envelope) {
+                for(const auto* lane:{"physical_entity_changes","exterior_source_edits","supplemental_entity_changes","supplemental_asset_changes"})
+                    if(!value.at(lane).is_array())document_error(DocumentErrorCode::invalid_entity,"Rigid wall command lanes must be arrays");
+                if((!source_completion && (!value.at("physical_entity_changes").empty() || !value.at("exterior_source_edits").empty())) ||
+                    (!supplements && (asset_references || !value.at("supplemental_entity_changes").empty() || !value.at("supplemental_asset_changes").empty())))
+                    document_error(DocumentErrorCode::invalid_entity,"Rigid wall completion modes disagree with retained lanes");
+            }
+            else if (corner_move) command_exact_fields(value, {"version","kind","expected_revision","message",
                 "entity_changes","boundary_edits","wall_edits","physical_entity_changes","exterior_source_edits","exterior_corner_move"},
                 DocumentErrorCode::invalid_entity,"serialized exterior corner command");
             else if (supplements) {
@@ -2472,7 +2614,7 @@ Command command_from_json(const nlohmann::json& value) {
                                           "entity_changes", "boundary_edits"},
                                  DocumentErrorCode::invalid_entity, "serialized boundary constraint command");
             if (!value.at("boundary_edits").is_array() ||
-                (value.at("boundary_edits").empty() && value.at("version")!=3 && value.at("version")!=4 && value.at("version")!=5 && !source_completion))
+                (value.at("boundary_edits").empty() && value.at("version")!=3 && value.at("version")!=4 && value.at("version")!=5 && !source_completion && !rigid_envelope))
                 document_error(DocumentErrorCode::invalid_entity, "Boundary edits must be a nonempty array");
             if (value.at("version")==4 && !value.at("boundary_edits").empty())
                 document_error(DocumentErrorCode::invalid_entity, "Version 4 requires a straight wall-only transaction");
@@ -2486,12 +2628,17 @@ Command command_from_json(const nlohmann::json& value) {
             ordinary.erase("supplemental_entity_changes");
             ordinary.erase("supplemental_asset_changes");
             ordinary.erase("exterior_corner_move");
+            ordinary.erase("source_completion");
+            ordinary.erase("supplemental_source_completion");
+            ordinary.erase("supplemental_asset_reference_completion");
             ordinary["asset_changes"] = nlohmann::json::array();
             const auto changes = std::get<ApplyEntityChanges>(command_from_json(ordinary));
             ApplyBoundaryConstraintChanges result{
                 changes.expected_revision, {}, changes.entity_changes, changes.message};
             result.exterior_source_completion = source_completion;
             result.supplemental_source_completion = supplements;
+            result.supplemental_asset_reference_completion = asset_references;
+            result.rigid_wall_transform_completion=rigid_envelope;
             try {
                 if (corner_move) {
                     if (value.dump().size() > 1024 * 1024) throw std::invalid_argument("Exterior corner proof exceeds the persisted proof budget");
@@ -2502,17 +2649,19 @@ Command command_from_json(const nlohmann::json& value) {
                 for (const auto& edit : value.at("boundary_edits"))
                     result.boundary_edits.push_back(decode_boundary_geometry_edit(edit));
                 if (mixed) {
-                    if (!value.at("wall_edits").is_array() || (value.at("wall_edits").empty() && !source_completion))
+                    if (!value.at("wall_edits").is_array() || (value.at("wall_edits").empty() && !source_completion && !rigid_envelope))
                         document_error(DocumentErrorCode::invalid_entity,"Versioned wall transaction requires nonempty wall edits");
                     for (const auto& edit : value.at("wall_edits"))
                         result.wall_edits.push_back(decode_constraint_wall_edit(edit));
+                    if(!rigid_envelope && std::any_of(result.wall_edits.begin(),result.wall_edits.end(),[](const auto& edit){return edit.version==4;}))
+                        document_error(DocumentErrorCode::invalid_entity,"Rigid wall proof requires command envelope 10");
                     const bool physical_curve=std::any_of(result.wall_edits.begin(),result.wall_edits.end(),
                         [](const auto& edit) { return edit.version==3; });
                     const bool curved=std::any_of(result.wall_edits.begin(),result.wall_edits.end(),
                         [](const auto& edit) { return edit.version==2; });
-                    if (!source_completion && physical_curve!=(value.at("version")==5))
+                    if (!source_completion && !rigid_envelope && physical_curve!=(value.at("version")==5))
                         document_error(DocumentErrorCode::invalid_entity,"Physical curve-length proof requires exactly command version 5");
-                    if (!source_completion && !physical_curve && curved!=(value.at("version")==3))
+                    if (!source_completion && !rigid_envelope && !physical_curve && curved!=(value.at("version")==3))
                         document_error(DocumentErrorCode::invalid_entity,"Curved wall proof requires exactly command version 3");
                 }
                 if (source_completion) {
@@ -2532,10 +2681,11 @@ Command command_from_json(const nlohmann::json& value) {
                 if (supplements) {
                     auto supplemental = ordinary;
                     supplemental["entity_changes"] = value.at("supplemental_entity_changes");
-                    supplemental["asset_changes"] = value.at("supplemental_asset_changes");
+                    supplemental["asset_changes"] = asset_references ? nlohmann::json::array() : value.at("supplemental_asset_changes");
                     const auto decoded = std::get<ApplyEntityChanges>(command_from_json(supplemental));
                     result.supplemental_entity_changes = decoded.entity_changes;
-                    result.supplemental_asset_changes = decoded.asset_changes;
+                    result.supplemental_asset_changes = asset_references ?
+                        command_asset_references_from_json(value.at("supplemental_asset_changes"), asset_resolver) : decoded.asset_changes;
                 }
             } catch (const std::exception& error) {
                 document_error(DocumentErrorCode::invalid_entity, error.what());
@@ -3113,7 +3263,8 @@ Document Document::restore(DocumentSnapshot snapshot) {
         // Undo/redo restores an exact retained state and its provenance. The
         // source-state and stack checks below validate navigation; mutation
         // rules must not reject restoration of a shorter derivation prefix.
-        if (record.boundary_constraint_changes && has_exterior_source_completion(*record.boundary_constraint_changes))
+        if (record.boundary_constraint_changes && (has_exterior_source_completion(*record.boundary_constraint_changes) ||
+            has_rigid_wall_transform(*record.boundary_constraint_changes)))
             validate_completed_constraint_change(previous.entities, record.entities, *record.boundary_constraint_changes);
         else validate_constraint_change(previous.entities, record.entities,
                 record.boundary_constraint_changes.has_value(), !record.source_revision.has_value(),

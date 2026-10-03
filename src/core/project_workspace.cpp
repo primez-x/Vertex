@@ -277,7 +277,13 @@ PreparedWorkspaceEdit ProjectWorkspace::prepare_document_edit(const Command& com
     // command envelope.  Round-tripping before isolated application prevents
     // an in-memory variant from bypassing the structural command contract.
     const auto encoded = command_to_json(command);
-    const auto decoded = command_from_json(encoded);
+    const auto decoded = command_from_json(encoded, [&command](std::string_view id) -> const Asset* {
+        const auto* constrained = std::get_if<ApplyBoundaryConstraintChanges>(&command);
+        if (!constrained) return nullptr;
+        for (const auto& change : constrained->supplemental_asset_changes)
+            if (change.kind == AssetChangeKind::upsert && change.asset.id == id) return &change.asset;
+        return nullptr;
+    });
     event.after_revision = candidate.document->apply(decoded);
     append_document_event(candidate, event, WorkspaceDocumentEventKind::edit);
     candidate.navigation = record_workspace_operation(candidate.navigation, event.event_id,

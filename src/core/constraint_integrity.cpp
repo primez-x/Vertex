@@ -229,7 +229,8 @@ std::optional<std::string> validate_constraint_integrity(const Entities& entitie
 }
 
 void validate_constraint_transition(const Entities& before, const Entities& after,
-                                   bool qualified_rigid_endpoint_transform) {
+                                   bool qualified_rigid_endpoint_transform,
+                                   const std::set<std::string,std::less<>>& verified_rigid_wall_ids) {
     // A verified rigid transform moves named endpoints without reversing
     // their identities, even when its coordinates exchange start and end.
     // Exact history navigation likewise restores those retained identities.
@@ -243,7 +244,7 @@ void validate_constraint_transition(const Entities& before, const Entities& afte
         if (!decoded.constraint) continue; // Unsupported documents are read-only.
         for (const auto& binding : decoded.constraint->bindings) {
             if (!binding.segment_id.empty()) continue;
-            if (reversed.contains(binding.owner_id) || !after.contains(binding.owner_id)) continue;
+            if (verified_rigid_wall_ids.contains(binding.owner_id) || reversed.contains(binding.owner_id) || !after.contains(binding.owner_id)) continue;
             const auto& old_baseline = before.at(binding.owner_id).properties.at("baseline");
             const auto& new_baseline = after.at(binding.owner_id).properties.at("baseline");
             if (same_point(point(old_baseline.at("start"), "Wall start"),
@@ -352,7 +353,8 @@ void validate_topology_cycle(const std::vector<std::pair<std::string,bool>>& edg
 }
 }
 
-void validate_constraint_edit_topology(const Entities& before,const Entities& after) {
+void validate_constraint_edit_topology(const Entities& before,const Entities& after,
+    const std::set<std::string,std::less<>>& verified_rigid_wall_ids) {
     std::set<std::string,std::less<>> changed_walls;
     for (const auto& [id,owner] : after) {
         const auto previous=before.find(id);
@@ -361,7 +363,7 @@ void validate_constraint_edit_topology(const Entities& before,const Entities& af
             if (previous->second.type!="wall") invalid("Constraint edit changed wall owner type");
             if (owner.properties.at("baseline")!=previous->second.properties.at("baseline")) {
                 const auto old=topology_baseline(previous->second); const auto current=topology_baseline(owner);
-                if (topology_near(old.start,current.end) && topology_near(old.end,current.start))
+                if (!verified_rigid_wall_ids.contains(id) && topology_near(old.start,current.end) && topology_near(old.end,current.start))
                     invalid("Constraint edit would reverse wall endpoint identity: "+id);
                 changed_walls.insert(id);
             }

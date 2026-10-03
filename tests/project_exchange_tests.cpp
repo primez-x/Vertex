@@ -18,6 +18,7 @@
 #include <fstream>
 #include <iostream>
 #include <iterator>
+#include <map>
 #include <numbers>
 #include <set>
 #include <stdexcept>
@@ -182,7 +183,128 @@ void test_view_appearance_export_floor(const std::filesystem::path& root) {
   }
 }
 
-void test_live_exterior_source_exchange_v17(const std::filesystem::path& root, bool mixed = false) {
+void test_selected_rigid_curve_exchange_v25(const std::filesystem::path& root, bool compact = false) {
+  const auto curve = sketch::arc_from_chord_arc_length({0,0},{4,0},5.0,false);
+  const auto angle = sketch::angle_from_radians(curve.sweep_radians);
+  sketch::Entity source{"selected-rigid-curve","wall",{{"baseline",{{"start",{0,0}},{"end",{4,0}},
+      {"sweep_radians",curve.sweep_radians},{"vendor","original geometry"}}},{"thickness_m",0.14},
+      {"height_m",2.4},{"elevation_m",0}},false,{{"curve_input",{{"version",2},{"construction","arc_length"},
+      {"measure","5 m"},{"normalized_measure","5 m"},{"measure_value",5.0},{"clockwise",false},
+      {"start",{0,0}},{"end",{4,0}},{"sweep",angle.original_expression},{"normalized_sweep",angle.normalized_expression},
+      {"radians",curve.sweep_radians},{"vendor",{{"exact","original input"}}}}}}};
+  auto neighbor = source; neighbor.id = "selected-rigid-neighbor"; neighbor.extensions = nlohmann::json::object();
+  neighbor.properties["baseline"] = {{"start",{4,0}},{"end",{8,0}},{"sweep_radians",0.0}};
+  const sketch::PersistentConstraint join{"selected-rigid-join",sketch::ConstraintRelationKind::coincident,
+      {{source.id,sketch::WallEndpointRole::end},{neighbor.id,sketch::WallEndpointRole::start}}};
+  const sketch::Entity opening{"selected-rigid-opening","opening",{{"wall_id",source.id},{"offset_m",1.0},
+      {"width_m",0.5},{"sill_m",0.0},{"height_m",2.0}},false,{{"vendor","exact host"}}};
+  std::vector<sketch::Entity> values{source,neighbor,opening,sketch::encode_constraint_entity(join)};
+  std::vector<sketch::Asset> assets;
+  if (compact) {
+    values.push_back({"rigid-exchange-label","label",{{"text","Before"}},false,nlohmann::json::object()});
+    values.push_back({"rigid-exchange-object","object",{{"asset_id","rigid-exchange-image"}},false,nlohmann::json::object()});
+    assets.push_back(sketch::Asset::create("rigid-exchange-image","application/octet-stream",{std::byte{1}},{{"caption","Before"}}));
+  }
+  auto document = sketch::Document::create(values,assets);
+  const auto before = document.snapshot();
+  const sketch::PlanarTransform transform{{2,0},0.2,false,false,{1,1}};
+  const auto target = sketch::transform_segment(curve,transform);
+  sketch::ApplyBoundaryConstraintChanges typed;
+  typed.expected_revision=before.revision();
+  typed.wall_edits={{source.id,target,std::nullopt,4,transform},
+      {neighbor.id,{target.end,{8,0},0},std::nullopt,1}};
+  typed.rigid_wall_transform_completion=true;
+  sketch::Command command=typed;
+  if (compact) {
+    auto& proof = std::get<sketch::ApplyBoundaryConstraintChanges>(command);
+    auto label = before.entities().at("rigid-exchange-label"); label.properties["text"] = "After";
+    proof.supplemental_entity_changes.push_back(sketch::EntityChange::upsert(label));
+    proof.supplemental_asset_changes.push_back(sketch::AssetChange::upsert(sketch::Asset::create("rigid-exchange-image",
+        "application/octet-stream",std::vector<std::byte>(530*1024,std::byte{42}),{{"caption","After"},{"vendor",{{"exact",true}}}})));
+    proof.supplemental_source_completion = true; proof.supplemental_asset_reference_completion = true;
+  }
+  const auto wire = sketch::command_to_json(command);
+  check(wire.at("version")==10 && wire.at("wall_edits")[0].at("version")==4 &&
+      wire.at("source_completion")==false,"rigid extraction fixture must retain outer10 selected proof without exterior authority");
+  document.apply(command); const auto changed = document.snapshot();
+  check(changed.entities().at(source.id).extensions.at("curve_input_derivation").at("source_input")==source.extensions.at("curve_input") &&
+      changed.entities().at(source.id).extensions.at("curve_input_derivation").at("source_baseline")==source.properties.at("baseline") &&
+      changed.entities().at(opening.id)==opening && changed.entities().at(neighbor.id)!=neighbor,
+      "extracted rigid motion must retain original source and host while moving its joined neighbor");
+  auto deleted = sketch::Document::fork(changed);
+  deleted.apply(sketch::ApplyEntityChanges{deleted.revision(),{sketch::EntityChange::erase(source.id),
+      sketch::EntityChange::erase(opening.id),sketch::EntityChange::erase(join.id)}, {}, "Delete selected curve later"});
+  document.undo(document.revision());
+  for (const auto& snapshot : {changed,document.snapshot(),deleted.snapshot()}) {
+    const auto destination = root/("selected-rigid-v25-"+sketch::make_stable_id());
+    sketch::extract_project(snapshot,destination);
+    std::ifstream input(destination/"project.json"); const auto exchanged = nlohmann::json::parse(input);
+    const auto& rows = exchanged.at("revisions");
+    check(exchanged.at("exchange_version")==25 && rows.size()==snapshot.history().size() &&
+        rows[1].at("boundary_constraint_changes")==wire,
+        "head, Undo and deleted selected rigid history must retain exact exchange25 proof");
+    for (std::size_t i=0;i<rows.size();++i)
+      check(rows[i].at("undo_stack")==nlohmann::json(snapshot.history()[i].undo_stack) &&
+          rows[i].at("redo_stack")==nlohmann::json(snapshot.history()[i].redo_stack),"rigid extraction must retain exact navigation stacks");
+    std::map<std::string,sketch::Asset> published;
+    for (const auto& row : rows[1].at("assets")) {
+      std::ifstream bytes_file(destination/row.at("path").get<std::string>(),std::ios::binary);
+      const std::string payload{std::istreambuf_iterator<char>(bytes_file),std::istreambuf_iterator<char>()};
+      std::vector<std::byte> bytes(payload.size());
+      std::transform(payload.begin(),payload.end(),bytes.begin(),[](char value){return static_cast<std::byte>(static_cast<unsigned char>(value));});
+      auto asset = sketch::Asset::create(row.at("id").get<std::string>(),row.at("media_type").get<std::string>(),std::move(bytes),row.at("metadata"));
+      check(asset.sha256==row.at("sha256").get<std::string>(),"rigid result asset bytes must retain their exact published identity");
+      if (compact) check(payload==std::string(530*1024,'*'),"rigid compact extraction must publish all exact supplemental bytes");
+      published.emplace(asset.id,std::move(asset));
+    }
+    const auto resolver = [&published](std::string_view id)->const sketch::Asset* {
+      const auto found=published.find(std::string(id)); return found==published.end()?nullptr:&found->second;
+    };
+    if (compact) check(wire.dump().size()<1024*1024 &&
+        !wire.at("supplemental_asset_changes")[0].at("asset").contains("bytes_hex"),"outer10 extraction must retain bounded compact references");
+    auto replay = sketch::Document::create(values,assets);
+    replay.apply(sketch::command_from_json(rows[1].at("boundary_constraint_changes"),resolver));
+    check(replay.snapshot().entities()==changed.entities() && replay.snapshot().assets()==changed.assets(),
+        "hydrated exchange25 proof must independently reproduce geometry, provenance and assets");
+    replay.undo(replay.revision());
+    check(replay.snapshot().entities()==before.entities() && replay.snapshot().assets()==before.assets(),"hydrated rigid proof must undo once exactly");
+    replay.redo(replay.revision());
+    check(replay.snapshot().entities()==changed.entities() && replay.snapshot().assets()==changed.assets(),"hydrated rigid proof must redo once exactly");
+    for (const int mutation : {0,1,2}) {
+      auto forged=wire;
+      if (mutation==0) forged["wall_edits"][0]["rigid_transform"]["offset"][0]=99.0;
+      if (mutation==1) forged["wall_edits"][0]["baseline"]["end"][0]=99.0;
+      if (mutation==2) forged["wall_edits"][0]["rigid_transform"]["unknown"]=true;
+      auto refused=sketch::Document::create(values,assets); const auto digest=sketch::document_snapshot_digest(refused.snapshot());
+      bool rejected=false; try { refused.apply(sketch::command_from_json(forged,resolver)); } catch (const std::exception&) { rejected=true; }
+      check(rejected && sketch::document_snapshot_digest(refused.snapshot())==digest,
+          "rigid extraction transform/baseline/unknown-field tampering must reject atomically");
+    }
+    if (compact) {
+      auto forged=wire; forged["supplemental_asset_changes"][0]["asset"]["metadata_sha256"]=std::string(64,'0');
+      bool rejected=false; try { (void)sketch::command_from_json(forged,resolver); } catch (const std::exception&) { rejected=true; }
+      check(rejected,"rigid extraction hydration must reject mismatched exact metadata digest");
+      rejected=false; try { (void)sketch::command_from_json(wire); } catch (const std::exception&) { rejected=true; }
+      check(rejected,"rigid extraction compact proof must require its published result assets");
+    }
+  }
+  sketch::ProjectWorkspace workspace(document.snapshot()); const auto capture=workspace.capture();
+  const auto history=sketch::capture_workspace_history_record(capture);
+  sketch::RecoveryLedger ledger{{"selected-rigid-history","workspace_history",
+      sketch::encode_workspace_history_record(capture.document(),history,std::nullopt)}};
+  const auto native=root/("selected-rigid-recovery-"+sketch::make_stable_id()+".bldproj");
+  (void)sketch::ProjectStore::save_archive(native,{capture.document(),ledger,sketch::ArchiveRole::ordinary});
+  const auto recovered=sketch::ProjectStore::load_archive(native,sketch::ArchiveRole::ordinary);
+  check(recovered.supported(),"rigid extraction recovery fixture must hydrate its native history");
+  const auto destination=root/("selected-rigid-recovery-exchange-"+sketch::make_stable_id());
+  sketch::extract_project_archive(*recovered.archive,destination);
+  std::ifstream input(destination/"project.json"); const auto archive=nlohmann::json::parse(input);
+  check(archive.at("exchange_version")==25 && archive.at("revisions")[1].at("boundary_constraint_changes")==wire &&
+      archive.at("recovery_records")[0].at("envelope")==ledger[0].envelope,
+      "recovery extraction must preserve rigid ten proof, assets and raw ledger at exchange25 while undone");
+}
+
+void test_live_exterior_source_exchange_v17(const std::filesystem::path& root, bool mixed = false, bool compact = false) {
   std::vector<sketch::Entity> values{
       {"exchange-property", "property", nlohmann::json::object(), false, nlohmann::json::object()},
       {"exchange-building", "building", {{"property_id", "exchange-property"}}, false, nlohmann::json::object()},
@@ -224,9 +346,10 @@ void test_live_exterior_source_exchange_v17(const std::filesystem::path& root, b
     ordinary.entity_changes.push_back(sketch::EntityChange::upsert(label));
     ordinary.entity_changes.push_back(sketch::EntityChange::upsert(object));
     ordinary.asset_changes.push_back(sketch::AssetChange::upsert(sketch::Asset::create("exchange-image",
-        "application/octet-stream", {std::byte{2}, std::byte{3}}, {{"caption", "After"}})));
+        "application/octet-stream", compact ? std::vector<std::byte>(530*1024,std::byte{42}) : std::vector<std::byte>{std::byte{2},std::byte{3}}, {{"caption", "After"}})));
   }
-  const auto command = sketch::complete_exterior_wall_measurement_command(before, ordinary);
+  auto command = sketch::complete_exterior_wall_measurement_command(before, ordinary);
+  if(mixed && !compact)std::get<sketch::ApplyBoundaryConstraintChanges>(command).supplemental_asset_reference_completion=false;
   document.apply(command);
   const auto changed = document.snapshot();
   auto deleted = sketch::Document::fork(changed);
@@ -238,7 +361,7 @@ void test_live_exterior_source_exchange_v17(const std::filesystem::path& root, b
     std::ifstream input(destination / "project.json");
     const auto exchanged = nlohmann::json::parse(input);
     const auto& rows = exchanged.at("revisions");
-    check(exchanged.at("exchange_version") == (mixed ? 18 : 17) && rows.size() == snapshot.history().size() &&
+    check(exchanged.at("exchange_version") == (compact ? 24 : mixed ? 18 : 17) && rows.size() == snapshot.history().size() &&
         rows[1].at("boundary_constraint_changes") == sketch::command_to_json(command),
         "current, undone and deleted live source history must advertise its exchange floor and retain exact proof");
     for (std::size_t i = 0; i < rows.size(); ++i) {
@@ -253,7 +376,19 @@ void test_live_exterior_source_exchange_v17(const std::filesystem::path& root, b
       source_values.push_back({value.at("id").get<std::string>(), value.at("type").get<std::string>(),
           value.at("properties"), value.at("required").get<bool>(), value.at("extensions")});
     auto replay = sketch::Document::create(source_values, assets);
-    replay.apply(sketch::command_from_json(rows[1].at("boundary_constraint_changes")));
+    std::map<std::string,sketch::Asset> published_assets;
+    for(const auto& row:rows[1].at("assets")) {
+      std::ifstream payload_file(destination/row.at("path").get<std::string>(),std::ios::binary);
+      const std::string payload{std::istreambuf_iterator<char>(payload_file),std::istreambuf_iterator<char>()};
+      std::vector<std::byte> bytes(payload.size());
+      std::transform(payload.begin(),payload.end(),bytes.begin(),[](char value){return static_cast<std::byte>(static_cast<unsigned char>(value));});
+      auto asset=sketch::Asset::create(row.at("id").get<std::string>(),row.at("media_type").get<std::string>(),std::move(bytes),row.at("metadata"));
+      check(asset.sha256==row.at("sha256").get<std::string>(),"published result assets retain validated exact content identity");published_assets.emplace(asset.id,std::move(asset));
+    }
+    const auto resolver=[&published_assets](std::string_view id)->const sketch::Asset* {
+      const auto found=published_assets.find(std::string(id));return found==published_assets.end()?nullptr:&found->second;
+    };
+    replay.apply(sketch::command_from_json(rows[1].at("boundary_constraint_changes"),resolver));
     check(replay.snapshot().entities() == changed.entities() && replay.snapshot().assets() == changed.assets() &&
         sketch::wall_measurement_source_current(replay.snapshot(), replay.snapshot().entities().at("exchange-area")),
         "decoded exchange source completion must replay exact current physical and measured geometry");
@@ -271,7 +406,7 @@ void test_live_exterior_source_exchange_v17(const std::filesystem::path& root, b
       auto refused = sketch::Document::create(source_values, assets);
       const auto untouched = sketch::document_snapshot_digest(refused.snapshot());
       bool rejected = false;
-      try { refused.apply(sketch::command_from_json(forged)); }
+      try { refused.apply(sketch::command_from_json(forged,resolver)); }
       catch (const std::exception&) { rejected = true; }
       check(rejected && sketch::document_snapshot_digest(refused.snapshot()) == untouched,
           "exchanged source proof tampering must reject atomically at document admission");
@@ -282,23 +417,27 @@ void test_live_exterior_source_exchange_v17(const std::filesystem::path& root, b
           "mixed extraction must retain the referenced asset identity and exact byte digest");
       std::ifstream asset_input(destination / asset_rows[0].at("path").get<std::string>(), std::ios::binary);
       const std::string extracted_bytes{std::istreambuf_iterator<char>(asset_input), std::istreambuf_iterator<char>()};
-      check(extracted_bytes == std::string("\x02\x03", 2), "mixed extraction must publish exact supplemental asset bytes");
+      check(extracted_bytes == (compact ? std::string(530*1024,'*') : std::string("\x02\x03", 2)), "mixed extraction must publish exact supplemental asset bytes");
+      if(compact)check(rows[1].at("boundary_constraint_changes").dump().size()<1024*1024 &&
+          !rows[1].at("boundary_constraint_changes").at("supplemental_asset_changes")[0].at("asset").contains("bytes_hex"),"extraction24 keeps large assets separate from compact proof JSON");
       for (const int mutation : {0, 1, 2, 3}) {
         auto forged = rows[1].at("boundary_constraint_changes");
         if (mutation == 0) forged["supplemental_entity_changes"][0]["entity"]["properties"]["text"] = "Forged";
-        if (mutation == 1) forged["supplemental_asset_changes"][0]["asset"]["metadata"]["caption"] = "Forged";
+        if (mutation == 1) {
+          if(compact)forged["supplemental_asset_changes"][0]["asset"]["metadata_sha256"]=std::string(64,'0');
+          else forged["supplemental_asset_changes"][0]["asset"]["metadata"]["caption"] = "Forged";
+        }
         if (mutation == 2) forged.erase("supplemental_asset_changes");
         if (mutation == 3) forged["version"] = 6;
         if (mutation < 2) {
           auto tampered = snapshot;
           auto& proof = *const_cast<std::vector<sketch::RevisionRecord>&>(tampered.history())[1].boundary_constraint_changes;
-          proof = std::get<sketch::ApplyBoundaryConstraintChanges>(sketch::command_from_json(forged));
           bool rejected = false;
-          try { (void)sketch::Document::fork(tampered); } catch (const std::exception&) { rejected = true; }
+          try { proof=std::get<sketch::ApplyBoundaryConstraintChanges>(sketch::command_from_json(forged,resolver));(void)sketch::Document::fork(tampered); } catch (const std::exception&) { rejected = true; }
           check(rejected, "extracted supplemental proof must independently reproduce the recorded entities and assets");
         } else {
           bool rejected = false;
-          try { (void)sketch::command_from_json(forged); } catch (const std::exception&) { rejected = true; }
+          try { (void)sketch::command_from_json(forged,resolver); } catch (const std::exception&) { rejected = true; }
           check(rejected, "extracted v7 proof must reject removed lanes and downgraded envelopes");
         }
       }
@@ -545,8 +684,6 @@ void test_safe_curved_wall_history_exchange_replays(const std::filesystem::path&
   const auto source_hash = sketch::ProjectStore::file_sha256(source_path);
   bool rejected = false;
   try {
-    test_live_exterior_source_exchange_v17(root);
-    test_live_exterior_source_exchange_v17(root, true);
     refused.apply(forged_command);
   } catch (const sketch::DocumentError& error) {
     rejected = std::string_view(error.what()).find("topology") != std::string_view::npos;
@@ -1131,6 +1268,11 @@ int main() {
           "current, undone and deleted appraisal evidence must advertise exchange19 without dropping history");
     }
     test_view_appearance_export_floor(root);
+    test_live_exterior_source_exchange_v17(root);
+    test_live_exterior_source_exchange_v17(root, true);
+    test_live_exterior_source_exchange_v17(root, true,true);
+    test_selected_rigid_curve_exchange_v25(root);
+    test_selected_rigid_curve_exchange_v25(root,true);
     test_svg_palette_export_floor(root);
     test_translation_export(root);
     test_reviewed_source_export_floor(root);

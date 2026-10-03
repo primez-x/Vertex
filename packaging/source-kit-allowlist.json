@@ -4964,6 +4964,22 @@
     {
       "category": "source",
       "path": "tests/symbol_svg_palette_tests.cpp"
+    },
+    {
+      "category": "docs",
+      "path": "docs/superpowers/plans/2026-10-03-saved-view-constraint-preview.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/superpowers/plans/2026-10-03-compact-mixed-asset-proof.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/superpowers/plans/2026-10-03-connected-curve-rigid-intent.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/verification/saved-view-preview-and-compact-assets-20261003.md"
     }
   ]
 }

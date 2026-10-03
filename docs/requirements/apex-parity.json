@@ -318,9 +318,18 @@
         "tests/project_store_tests.cpp",
         "docs/project-format.md",
         "scripts/generate_workflow_acceptance_evidence.py",
-        "tests/test_workflow_acceptance_evidence.py"
+        "tests/test_workflow_acceptance_evidence.py",
+        "docs/superpowers/plans/2026-10-03-compact-mixed-asset-proof.md",
+        "docs/verification/saved-view-preview-and-compact-assets-20261003.md",
+        "include/sketch/document.hpp",
+        "src/core/document.cpp",
+        "src/core/project_workspace.cpp",
+        "src/core/project_exchange.cpp",
+        "tests/wall_measurement_tests.cpp",
+        "tests/project_workspace_tests.cpp",
+        "tests/project_exchange_tests.cpp"
       ],
-      "implementation_note": "ProjectStore saves immutable snapshots through validated staging and publication. Project-store fixtures cover exact-revision snapshot saves, post-snapshot edits that do not leak into saved bytes, compare-and-swap destination checks, verified backups, external-change rejection, injected pre-publication rollback, and staging-handle/path tamper resistance. Clean-machine storage-fault evidence and the production gate remain open. Current Debug/Release acceptance evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
+      "implementation_note": "ProjectStore saves immutable snapshots through validated staging and publication. Project-store fixtures cover exact-revision snapshot saves, post-snapshot edits that do not leak into saved bytes, compare-and-swap destination checks, verified backups, external-change rejection, injected pre-publication rollback, and staging-handle/path tamper resistance. Clean-machine storage-fault evidence and the production gate remain open. Current Debug/Release acceptance evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit. Compact mixed-asset proof 9 removes duplicate binary/metadata payloads from measured-wall completion JSON while preserving full immutable assets, strict resolver identity checks and exact deterministic replay. Native26/extraction24 apply across retained Undo/deleted history and recovery; legacy inline7/corner8 remain distinct. Rigid selected-wall proof4/envelope10 uses native27/extraction25 and can retain the same compact supplemental references without borrowing exterior authority. Focused core/native/extraction checks cover 530 KiB and 10 MiB assets, metadata-only edits, erases/no-ops, exact numeric forms and recomputed-digest tamper/downgrade refusal. Existing resource limits and broader production qualifications remain unchanged."
     },
     {
       "id": "CORE-DOC-004",
@@ -358,9 +367,19 @@
         "src/core/project_workspace_preview_adapters.cpp",
         "tests/project_workspace_preview_adapters_tests.cpp",
         "scripts/generate_workflow_acceptance_evidence.py",
-        "tests/test_workflow_acceptance_evidence.py"
+        "tests/test_workflow_acceptance_evidence.py",
+        "docs/superpowers/plans/2026-10-03-compact-mixed-asset-proof.md",
+        "docs/verification/saved-view-preview-and-compact-assets-20261003.md",
+        "include/sketch/document.hpp",
+        "src/core/project_workspace.cpp",
+        "src/core/project_store.cpp",
+        "src/core/project_exchange.cpp",
+        "tests/wall_measurement_tests.cpp",
+        "tests/project_workspace_tests.cpp",
+        "tests/project_store_tests.cpp",
+        "tests/project_exchange_tests.cpp"
       ],
-      "implementation_note": "Version-1 JSON command envelopes now preserve every typed Document command, complete entity/asset payloads, SHA-256 checked asset bytes, finite transforms, and strict field/version validation. ProjectWorkspace::prepare round-trips commands through the codec on an immutable fork before staging one revision; compound edits remain atomic, revision-fenced, and undoable. Debug document and workspace adapter tests cover canonical round trips, tampering rejection, assets, transforms, stale sources, and one-step undo/redo; production gate evidence remains open. Current Debug/Release acceptance evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
+      "implementation_note": "Typed JSON command envelopes preserve Document command kinds, complete entity/asset payloads, SHA-256 checked asset bytes, finite transforms, and strict field/version validation. ProjectWorkspace::prepare round-trips commands through the codec on an immutable fork before staging one revision; compound edits remain atomic, revision-fenced, and undoable. Debug document and workspace adapter tests cover canonical round trips, tampering rejection, assets, transforms, stale sources, and one-step undo/redo; production gate evidence remains open. Current Debug/Release acceptance evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit. Compact mixed-asset proof 9 removes duplicate binary/metadata payloads from measured-wall completion JSON while preserving full immutable assets, strict resolver identity checks and exact deterministic replay. Native26/extraction24 apply across retained Undo/deleted history and recovery; legacy inline7/corner8 remain distinct. Rigid selected-wall proof4/envelope10 uses native27/extraction25 and can retain the same compact supplemental references without borrowing exterior authority. Focused core/native/extraction checks cover 530 KiB and 10 MiB assets, metadata-only edits, erases/no-ops, exact numeric forms and recomputed-digest tamper/downgrade refusal. Existing resource limits and broader production qualifications remain unchanged."
     },
     {
       "id": "CORE-DOC-006",
@@ -424,9 +443,18 @@
         "tests/project_store_tests.cpp",
         "docs/project-format.md",
         "scripts/generate_workflow_acceptance_evidence.py",
-        "tests/test_workflow_acceptance_evidence.py"
+        "tests/test_workflow_acceptance_evidence.py",
+        "docs/superpowers/plans/2026-10-03-compact-mixed-asset-proof.md",
+        "docs/verification/saved-view-preview-and-compact-assets-20261003.md",
+        "include/sketch/document.hpp",
+        "src/core/document.cpp",
+        "src/core/project_workspace.cpp",
+        "src/core/project_exchange.cpp",
+        "tests/wall_measurement_tests.cpp",
+        "tests/project_workspace_tests.cpp",
+        "tests/project_exchange_tests.cpp"
       ],
-      "implementation_note": "Versioned project load/save preserves opaque unknown data, reopens unknown required entities read-only, rejects downgraded or unsupported markers before acceptance, and refuses document-only writes over future recovery archives. Project-store fixtures retain exact source bytes while exercising v1-v6 markers, authoring receipts, future schemas, and rollback boundaries; a complete migration matrix and the production gate remain open. Current Debug/Release acceptance evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
+      "implementation_note": "Versioned project load/save preserves opaque unknown data, reopens unknown required entities read-only, rejects downgraded or unsupported markers before acceptance, and refuses document-only writes over future recovery archives. Project-store fixtures retain exact source bytes while exercising v1-v6 markers, authoring receipts, future schemas, and rollback boundaries; a complete migration matrix and the production gate remain open. Current Debug/Release acceptance evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit. Compact mixed-asset proof 9 removes duplicate binary/metadata payloads from measured-wall completion JSON while preserving full immutable assets, strict resolver identity checks and exact deterministic replay. Native26/extraction24 apply across retained Undo/deleted history and recovery; legacy inline7/corner8 remain distinct. Rigid selected-wall proof4/envelope10 uses native27/extraction25 and can retain the same compact supplemental references without borrowing exterior authority. Focused core/native/extraction checks cover 530 KiB and 10 MiB assets, metadata-only edits, erases/no-ops, exact numeric forms and recomputed-digest tamper/downgrade refusal. Existing resource limits and broader production qualifications remain unchanged."
     },
     {
       "id": "CORE-DOC-009",
@@ -443,9 +471,20 @@
         "tests/test_cli.py",
         "docs/project-format.md",
         "scripts/generate_workflow_acceptance_evidence.py",
-        "tests/test_workflow_acceptance_evidence.py"
+        "tests/test_workflow_acceptance_evidence.py",
+        "docs/superpowers/plans/2026-10-03-compact-mixed-asset-proof.md",
+        "docs/verification/saved-view-preview-and-compact-assets-20261003.md",
+        "include/sketch/document.hpp",
+        "src/core/document.cpp",
+        "src/core/project_workspace.cpp",
+        "src/core/project_store.cpp",
+        "src/core/project_exchange.cpp",
+        "tests/wall_measurement_tests.cpp",
+        "tests/project_workspace_tests.cpp",
+        "tests/project_store_tests.cpp",
+        "tests/project_exchange_tests.cpp"
       ],
-      "implementation_note": "Inspect, validate, extract, and copy-based migrate commands now report local fingerprints and preserve the source; the current Debug/Release CLI fixture covers good, malformed, incomplete, asset-extraction, migration, Unicode-filename, and constraint-integrity cases. Native Apex migration fidelity and production qualification remain open."
+      "implementation_note": "Inspect, validate, extract, and copy-based migrate commands now report local fingerprints and preserve the source; the current Debug/Release CLI fixture covers good, malformed, incomplete, asset-extraction, migration, Unicode-filename, and constraint-integrity cases. Native Apex migration fidelity and production qualification remain open. Compact mixed-asset proof 9 removes duplicate binary/metadata payloads from measured-wall completion JSON while preserving full immutable assets, strict resolver identity checks and exact deterministic replay. Native26/extraction24 apply across retained Undo/deleted history and recovery; legacy inline7/corner8 remain distinct. Rigid selected-wall proof4/envelope10 uses native27/extraction25 and can retain the same compact supplemental references without borrowing exterior authority. Focused core/native/extraction checks cover 530 KiB and 10 MiB assets, metadata-only edits, erases/no-ops, exact numeric forms and recomputed-digest tamper/downgrade refusal. Existing resource limits and broader production qualifications remain unchanged."
     },
     {
       "id": "CORE-DOC-010",
@@ -1194,9 +1233,18 @@
         "tests/desktop_smoke.cpp",
         "docs/desktop-workflow.md",
         "scripts/generate_workflow_acceptance_evidence.py",
-        "tests/test_workflow_acceptance_evidence.py"
+        "tests/test_workflow_acceptance_evidence.py",
+        "docs/superpowers/plans/2026-10-03-connected-curve-rigid-intent.md",
+        "docs/verification/saved-view-preview-and-compact-assets-20261003.md",
+        "include/sketch/constraint_wall_edit.hpp",
+        "src/core/constraint_wall_edit.cpp",
+        "src/core/constraint_integrity.cpp",
+        "tests/constraint_integrity_tests.cpp",
+        "tests/constraint_dialog_tests.cpp",
+        "tests/project_store_tests.cpp",
+        "tests/project_exchange_tests.cpp"
       ],
-      "implementation_note": "The desktop exposes rotation around a deterministic bounding-box pivot, independent horizontal/vertical reflection, and offsets for identified closed boundaries. Receipt-backed copies and in-place transforms preserve original local construction inputs, topology identities where retained, metadata, and attached dimension placement through atomic commands. Architectural rigid group transforms now rebase exact wall-length receipts and supported curve-input provenance while retaining entered expressions; unsupported provenance and scaling of retained measurements reject. The architectural transaction path applies type-aware transforms to canonical building geometry, dimensions, and local vectors while removing stale generic transform markers. Typed transform history uses format 6 for deterministic reconstruction across save, recovery, and exchange. Broader reference/annotation coverage, linked-relationship propagation, visible architectural binding, and production qualification remain open. Current Debug/Release acceptance evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
+      "implementation_note": "The desktop exposes rotation around a deterministic bounding-box pivot, independent horizontal/vertical reflection, and offsets for identified closed boundaries. Receipt-backed copies and in-place transforms preserve original local construction inputs, topology identities where retained, metadata, and attached dimension placement through atomic commands. Architectural rigid group transforms now rebase exact wall-length receipts and supported curve-input provenance while retaining entered expressions; unsupported provenance and scaling of retained measurements reject. The architectural transaction path applies type-aware transforms to canonical building geometry, dimensions, and local vectors while removing stale generic transform markers. Typed transform history uses format 6 for deterministic reconstruction across save, recovery, and exchange. Broader reference/annotation coverage, linked-relationship propagation, visible architectural binding, and production qualification remain open. Current Debug/Release acceptance evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit. Selected curved-wall rigid intent now retains exact construction, receipts and hosted objects while connected owners continue through persisted endpoint solving. Independently reconstructed proof4/envelope10 grants coordinate-exchange authority only to selected wall IDs; dependents keep old guards. Native27/extraction25 preserve this through Undo/deleted/recovery history. Focused authoring, desktop and persistence checks cover both workspaces, generic/measured curves, rotation/reflection/translation, explicit hard conflicts, exact Undo/Redo/save/reopen, strict codecs, compact assets and tamper/downgrade refusal. Broader compatibility and production qualification remain open."
     },
     {
       "id": "APX-EDIT-003",
@@ -1473,9 +1521,12 @@
         "tests/symbol_svg_palette_tests.cpp",
         "tests/symbol_palette_desktop_tests.cpp",
         "docs/plans/2026-10-03-symbol-svg-palette.md",
-        "docs/verification/symbol-svg-palette-20261003.md"
+        "docs/verification/symbol-svg-palette-20261003.md",
+        "docs/superpowers/plans/2026-10-03-saved-view-constraint-preview.md",
+        "docs/verification/saved-view-preview-and-compact-assets-20261003.md",
+        "src/desktop/constraint_dialog.cpp"
       ],
-      "implementation_note": "Presentation styles, fills, visibility, and target overrides are validated separately from analytical geometry. The shared desktop appearance editor changes closed-area or physical building-object outline/fill colors, fill pattern, hatch scale, paper line width and visibility, or resets only that target. Revision-guarded raw edits preserve owner protection, opaque metadata and siblings. Object styles apply after physical plan/elevation/section projection, including multiple shapes belonging to one source, and remain independent of measurement labels. Quick properties and contextual actions expose the physical-object editor; hidden objects remain recoverable through Layers. Focused native workflows exercise rendered output, history, save/reopen, no-op, reset, stale/read-only and source preservation. Saved plan/elevation/section views now retain independent whole-view and physical-object style/visibility, resolved once for canvas and sheet/PDF. Graph-owner and local-view identity prevent cross-view edits and labels. Hosted openings inherit resolved host visibility; hidden presentation overlays do not block visible output. Native fixtures cover actual editor controls, source preservation, same-sheet independent colors, full scene hiding/recovery, exact owner identity, history, native reopen, deletion repair and legacy/current clipboard remapping. Optional model7 appearance requires native24/extraction22 across all retained history, with downgrade refusal and strict reference admission. SVG components now retain optional per-instance outline/surface colors using an immutable derived render copy and palette-aware cache. Quick properties expose Colors and library reset; source bytes, gradients, protected recess/glass paint, geometry, owner policy and opaque metadata survive targeted edits, clipboard, history and native reopen. Annotation7/native25/extraction23 preserve explicit intent across all retained history. Native fixtures cover independent same-artwork colors on screen and actual PDF, reset/no-op/cancel/stale/read-only behavior, unsupported saved profile diagnostics and refusal preserving an existing PDF and fingerprint sidecar, then recovery through reset. All 322 catalog assets pass the explicit paint-role contract. Constraint previews of locally recovered sources and full production visual/print qualification remain open; this scoped implementation does not certify full parity or shaded 3D material editing. Historical evidence remains hash-bound to its original sources and fixtures."
+      "implementation_note": "Presentation styles, fills, visibility, and target overrides are validated separately from analytical geometry. The shared desktop appearance editor changes closed-area or physical building-object outline/fill colors, fill pattern, hatch scale, paper line width and visibility, or resets only that target. Revision-guarded raw edits preserve owner protection, opaque metadata and siblings. Object styles apply after physical plan/elevation/section projection, including multiple shapes belonging to one source, and remain independent of measurement labels. Quick properties and contextual actions expose the physical-object editor; hidden objects remain recoverable through Layers. Focused native workflows exercise rendered output, history, save/reopen, no-op, reset, stale/read-only and source preservation. Saved plan/elevation/section views now retain independent whole-view and physical-object style/visibility, resolved once for canvas and sheet/PDF. Graph-owner and local-view identity prevent cross-view edits and labels. Hosted openings inherit resolved host visibility; hidden presentation overlays do not block visible output. Native fixtures cover actual editor controls, source preservation, same-sheet independent colors, full scene hiding/recovery, exact owner identity, history, native reopen, deletion repair and legacy/current clipboard remapping. Optional model7 appearance requires native24/extraction22 across all retained history, with downgrade refusal and strict reference admission. SVG components now retain optional per-instance outline/surface colors using an immutable derived render copy and palette-aware cache. Quick properties expose Colors and library reset; source bytes, gradients, protected recess/glass paint, geometry, owner policy and opaque metadata survive targeted edits, clipboard, history and native reopen. Annotation7/native25/extraction23 preserve explicit intent across all retained history. Native fixtures cover independent same-artwork colors on screen and actual PDF, reset/no-op/cancel/stale/read-only behavior, unsupported saved profile diagnostics and refusal preserving an existing PDF and fingerprint sidecar, then recovery through reset. All 322 catalog assets pass the explicit paint-role contract. Exact saved-view previews now resolve immutable uncropped sources through the same visibility/style policy as the committed canvas, including locally recovered walls and hosted openings entering a crop. Native checks cover graph-owner identity, source/host/child masks, numeric Preview/Cancel/Apply/Undo and preview/commit agreement. Full production visual/print qualification remains open; this scoped implementation does not certify full parity or shaded 3D material editing. Historical evidence remains hash-bound to its original sources and fixtures."
     },
     {
       "id": "APX-SYM-001",
