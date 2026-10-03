@@ -81,6 +81,16 @@ format 22. Extraction preserves the version-8 constraint envelope, its exact
 corner intent, source redraws, physical construction history and all document
 revisions. Earlier semantic histories retain their existing exchange floors.
 
+Explicit automatic-angle removal during area redraw uses exchange version 21
+and native format 23. Extraction retains the canonical version-5 redraw intent,
+its true `allow_automatic_angle_removal` decision and exact reference removals.
+Undone and deleted edits keep this floor through retained history. Imported
+boundary entities retain the same intent in their geometry derivation, even
+without the original command history. Recovery exports also preserve the
+version-3 `desktop_operation` seal binding the reviewed decision to its target,
+replacement geometry, child mappings and removed references. Earlier redraw
+intents and proof-free projects retain their existing exchange versions.
+
 API references: [NtCreateFile](https://learn.microsoft.com/en-us/windows/win32/api/winternl/nf-winternl-ntcreatefile),
 [FILE_RENAME_INFORMATION](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/ns-ntifs-_file_rename_information),
 and [FILE_RENAME_INFO](https://learn.microsoft.com/en-us/windows/win32/api/winbase/ns-winbase-file_rename_info).

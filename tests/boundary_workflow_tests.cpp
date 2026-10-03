@@ -148,6 +148,16 @@ Vec2 snap_to_known_grid(Vec2 point, double grid) {
     return {std::round(point.x / grid) * grid, std::round(point.y / grid) * grid};
 }
 
+Vec2 snap_to_known_drawing_length(Vec2 origin, Vec2 raw, double increment) {
+    // Fixture-owned intervals are supplied explicitly by each zoom/unit case.
+    const auto dx = raw.x - origin.x;
+    const auto dy = raw.y - origin.y;
+    const auto length = std::hypot(dx, dy);
+    const auto rounded_length = std::round(length / increment) * increment;
+    const auto factor = rounded_length / length;
+    return {origin.x + dx * factor, origin.y + dy * factor};
+}
+
 void send_click_at_screen(PlanCanvas& canvas, QPoint point) {
     require(canvas.rect().adjusted(1, 1, -1, -1).contains(point),
             "workflow fixture screen point must be inside the plan canvas");
@@ -1070,7 +1080,7 @@ void inspect_off_grid_point_commit(const DocumentSnapshot& before,
             "off-grid rectangle fixture must retain four analytical edges");
     require(same_point(boundary.segments.front().segment.start, {0.0, 0.0}) &&
                 same_point(boundary.segments.front().segment.end, expected_first_end),
-            "snap-disabled click must retain the exact off-grid boundary endpoint");
+            "point click must retain the exact effective boundary endpoint");
     for (std::size_t index = 1; index < boundary.segments.size(); ++index) {
         require(same_point(boundary.segments[index - 1].segment.end,
                            boundary.segments[index].segment.start),
@@ -1132,9 +1142,12 @@ void test_off_grid_snap_cursor_rubberband_and_point_receipt_in_both_canvases() {
     const auto measurement_screen = anchor_screen + QPoint(37, 0);
     const auto measurement_raw = canvas_to_model(*measurement, measurement_screen);
     require(measurement->viewScale() == 80.0, "metric cursor fixture must use the known empty-view zoom");
-    const auto measurement_snapped = snap_to_known_grid(measurement_raw, 0.2);
+    // The exact horizontal guide removes integer-pixel Y rounding; the
+    // 80 px/m metric drawing interval is 10 cm, not the painted 20 cm grid.
+    const auto measurement_snapped = snap_to_known_drawing_length(
+        {0, 0}, {measurement_raw.x, 0}, 0.1);
     require(!same_point(measurement_raw, measurement_snapped),
-            "measurement off-grid cursor fixture must differ from its 20 cm grid snap");
+            "measurement cursor fixture must differ from its 10 cm length snap");
 
     send_move_at_screen(*measurement, measurement_screen);
     auto snapped_draft = preview(*measurement);
@@ -1146,7 +1159,7 @@ void test_off_grid_snap_cursor_rubberband_and_point_receipt_in_both_canvases() {
             "snap-enabled Draw First rubber band must use the effective snapped cursor");
     const auto snapped_status = window.statusBar()->currentMessage();
     require(snapped_status.contains(QStringLiteral("Cursor")) &&
-                snapped_status.contains(QStringLiteral("400.0 mm")),
+                snapped_status.contains(QStringLiteral("500.0 mm")),
             "snap-enabled cursor status must report the snapped measurement coordinate");
 
     measurement->setSnapEnabled(false);
@@ -1235,9 +1248,10 @@ void test_off_grid_define_first_pending_dimension_preview_and_placement() {
             const auto edge_screen = anchor_screen + QPoint(37, 0);
             const auto edge_raw = canvas_to_model(*active_canvas, edge_screen);
             require(active_canvas->viewScale() == 80.0, "dimension cursor fixture must use the known empty-view zoom");
-            const auto edge_snapped = snap_to_known_grid(edge_raw, 0.2);
+            const auto edge_snapped = snap_to_known_drawing_length(
+                {0, 0}, {edge_raw.x, 0}, 0.1);
             require(!same_point(edge_raw, edge_snapped),
-                    "Define First edge fixture must differ from its 20 cm grid snap");
+                    "Define First edge fixture must differ from its 10 cm length snap");
 
             // The first move is still the endpoint rubber band. Clicking that point
             // records the edge and enters the explicit per-edge dimension phase.
@@ -1249,11 +1263,14 @@ void test_off_grid_define_first_pending_dimension_preview_and_placement() {
             send_click_at_screen(*active_canvas, edge_screen);
             const auto pending = preview(*active_canvas);
             require(pending.segments.size() == 1 && pending.labels.size() == 1 &&
-                        same_point(pending.labels.front().position, edge_snapped) &&
+                        same_point(pending.segments.front().end, edge_snapped) &&
+                        same_point(pending.labels.front().position, snap_to_known_grid(edge_raw, 0.2)) &&
                         pending.instruction.contains(QStringLiteral("place this edge")),
-                    "Define First must preview the pending edge dimension at the snapped endpoint");
+                    "Define First must retain the measured endpoint while switching the label cursor to grid placement");
 
-            // Move the pointer without clicking. The pending label must follow the
+            // Length magnets are inactive during dimension placement, so this
+            // cursor still uses the known 20 cm world grid. Move without clicking.
+            // The pending label must follow the
             // effective cursor, and toggling snap later must do the same without a
             // second move event.
             const auto dimension_screen = anchor_screen + QPoint(49, -31);
@@ -1315,13 +1332,20 @@ void test_off_grid_snapped_commit_in_each_workspace() {
         const auto origin = model_to_canvas(*target, {0.0, 0.0});
         const auto endpoint = origin + QPoint(37, 0);
         require(target->viewScale() == 80.0, "imperial receipt fixture must use the known empty-view zoom");
-        const auto expected = snap_to_known_grid(canvas_to_model(*target, endpoint), 0.3048);
+        const auto raw = canvas_to_model(*target, endpoint);
+        // Exact horizontal guide; the 80 px/m Imperial drawing interval is
+        // three inches (a quarter foot), finer than the painted one-foot grid.
+        const auto expected = snap_to_known_drawing_length(
+            {0, 0}, {raw.x, 0}, 3.0 * 0.0254);
         send_click_at_screen(*target, origin);
         send_move_at_screen(*target, endpoint);
         require(preview(*target).rubber_band &&
                     same_point(preview(*target).rubber_band->end, expected),
                 "snapped endpoint must be visible before placing it");
         send_click_at_screen(*target, endpoint);
+        require(preview(*target).segments.size() == 1 &&
+                    same_point(preview(*target).segments.front().end, expected),
+                "Imperial point placement must retain the previewed quarter-foot endpoint");
         send_click_at_screen(*target, endpoint + QPoint(0, -160));
         send_click_at_screen(*target, origin + QPoint(0, -160));
         const auto before = window.document().snapshot();
@@ -1402,8 +1426,10 @@ void test_receipt_boundary_offset_copy() {
         window.transformSelectedBoundary("0",false,false,"1 m","2 m",false),
         "receipt-backed boundary must translate in place through the typed command");
     const auto moved = window.document().snapshot();
-    require(moved.history().back().boundary_translation.has_value() &&
-        moved.history().back().boundary_translation->boundary_id == copy_id &&
+    require(moved.history().back().boundary_transforms.has_value() &&
+        moved.history().back().boundary_transforms->transformations.size() == 1 &&
+        moved.history().back().boundary_transforms->transformations.front().boundary_id == copy_id &&
+        same_point(moved.history().back().boundary_transforms->transformations.front().transform.offset, {1, 2}) &&
         moved.entities().at(boundary_id) == source.entities().at(boundary_id),
         "in-place move must retain a typed history proof and preserve the other boundary");
     require(window.saveProjectAs(path) && window.openProject(path) &&
@@ -1443,9 +1469,10 @@ void test_receipt_boundary_offset_copy() {
         window.transformSelectedBoundary("90",true,false,"3 m","-1 m",false),
         "an original measured boundary must rotate and reflect in place");
     const auto in_place = window.document().snapshot();
-    require(in_place.history().back().boundary_transform.has_value() &&
+    require(in_place.history().back().boundary_transforms.has_value() &&
+        in_place.history().back().boundary_transforms->transformations.size() == 1 &&
         !in_place.history().back().boundary_translation.has_value() &&
-        in_place.history().back().boundary_transform->boundary_id == boundary_id &&
+        in_place.history().back().boundary_transforms->transformations.front().boundary_id == boundary_id &&
         window.selectedEntityId().toStdString() == boundary_id,
         "in-place rotation must preserve selection and retain its own transform proof");
     const auto in_place_record = sketch::decode_boundary_receipt_envelope(
@@ -1453,7 +1480,7 @@ void test_receipt_boundary_offset_copy() {
     require(in_place_record.record->edges == original_record.record->edges &&
         in_place_record.record->transforms.size() == 1,
         "in-place rotation must preserve original receipt inputs and topology identities");
-    const auto operation = in_place.history().back().boundary_transform->transform;
+    const auto operation = in_place.history().back().boundary_transforms->transformations.front().transform;
     for (const auto& [id, before] : rotated_state.entities()) {
         if (id == boundary_id) continue;
         const auto& after = in_place.entities().at(id);
@@ -2761,33 +2788,58 @@ void test_adaptive_grid_boundary_commit() {
     require(window.beginBoundaryDrawing(BoundaryAuthoringMode::draw_first, "living"),
             "adaptive-grid workflow must start a measured area");
     send_click(*drawing, {0, 0});
-    send_move_at_screen(*drawing, model_to_canvas(*drawing, {0.37, 0.01}));
+    const auto first_screen = model_to_canvas(*drawing, {0.37, 0});
+    send_move_at_screen(*drawing, first_screen);
     require(preview(*drawing).rubber_band &&
                 same_point(preview(*drawing).rubber_band->end, {0.4, 0}),
-            "metric cursor must preview a 20 cm grid point");
-    send_click(*drawing, {0.37, 0.01});
+            "metric cursor must preview the nearest practical 10 cm length");
+    send_click_at_screen(*drawing, first_screen);
     drawing->zoomBy(10.0, QRectF(drawing->rect()).center());
     require(std::abs(drawing->gridSpacingMetres() - 0.02) < 1e-12 &&
                 same_point(preview(*drawing).segments.front().end, {0.4, 0}),
             "closer zoom must refine the grid without rounding an existing draft edge");
-    send_click(*drawing, {0.435, 0.235});
-    require(same_point(preview(*drawing).segments.back().end, {0.44, 0.24}),
-            "closer metric node placement must use the displayed 2 cm interval");
+    // Independent length oracle: at 800 px/m the metric length magnet is
+    // 1 cm, finer than the painted 2 cm grid. Use the actual integer event
+    // coordinate so pixel rounding cannot masquerade as a heading change.
+    const auto metric_screen = model_to_canvas(*drawing, {0.435, 0.235});
+    const auto metric_raw = canvas_to_model(*drawing, metric_screen);
+    const auto metric_end = snap_to_known_drawing_length({0.4, 0}, metric_raw, 0.01);
+    require(!same_point(metric_end, snap_to_known_grid(metric_raw, 0.02)),
+            "diagonal fixture must distinguish length magnets from world-grid rounding");
+    send_move_at_screen(*drawing, metric_screen);
+    require(preview(*drawing).rubber_band &&
+                same_point(preview(*drawing).rubber_band->end, metric_end),
+            "closer metric cursor must preserve raw heading at a 1 cm length interval");
+    send_click_at_screen(*drawing, metric_screen);
+    require(same_point(preview(*drawing).segments.back().end, metric_end),
+            "metric committed draft edge must agree with its cursor preview");
     window.setMetricUnits(false);
     require(std::abs(drawing->gridSpacingMetres() - 0.0254) < 1e-12 &&
                 std::abs(views->gridSpacingMetres() - 0.3048) < 1e-12 &&
-                same_point(preview(*drawing).segments.back().end, {0.44, 0.24}),
+                same_point(preview(*drawing).segments.front().end, {0.4, 0}) &&
+                same_point(preview(*drawing).segments.back().end, metric_end),
             "unit changes must update both zooms without changing measured draft geometry");
-    send_click(*drawing, {0, 0.23});
+    // At the same zoom Imperial drawing lengths use half-inch fractions.
+    const auto imperial_screen = model_to_canvas(*drawing, {-0.03, 0.3});
+    const auto imperial_raw = canvas_to_model(*drawing, imperial_screen);
+    const auto imperial_end = snap_to_known_drawing_length(metric_end, imperial_raw, 0.0254 / 2.0);
+    send_move_at_screen(*drawing, imperial_screen);
+    require(preview(*drawing).rubber_band &&
+                same_point(preview(*drawing).rubber_band->end, imperial_end),
+            "Imperial cursor must preserve raw heading at a half-inch length interval");
+    send_click_at_screen(*drawing, imperial_screen);
+    require(same_point(preview(*drawing).segments.back().end, imperial_end),
+            "Imperial committed draft edge must agree with its cursor preview");
     send_key(*drawing, Qt::Key_Return);
     require(!drawing->boundaryDraftPreview(), "adaptive-grid measured area must close and commit");
     const auto boundary = sketch::decode_identified_boundary_entity(
         committed_boundary(window.document().snapshot()));
     require(boundary.segments.size() == 4 &&
                 same_point(boundary.segments[0].segment.end, {0.4, 0}) &&
-                same_point(boundary.segments[1].segment.end, {0.44, 0.24}) &&
-                same_point(boundary.segments[2].segment.end, {0, 0.2286}),
-            "committed point receipts must retain the actual grid coordinates at each zoom and unit");
+                same_point(boundary.segments[1].segment.end, metric_end) &&
+                same_point(boundary.segments[2].segment.end, imperial_end) &&
+                same_point(boundary.segments[3].segment.end, {0, 0}),
+            "persisted boundary must retain the previewed model coordinates and exact closing anchor");
 }
 
 }  // namespace

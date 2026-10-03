@@ -1,4 +1,32 @@
-# Vertex project formats v1 through v22
+# Vertex project formats v1 through v23
+
+## Explicit automatic-angle removal during redraw (v23)
+
+Boundary redefinition intent v5 opts into `allow_automatic_angle_removal: true`.
+It contains every v4 redefinition field, including `fresh_topology` as an explicit
+boolean, `replacement_wall_source_ids`, child mappings and removed-reference
+IDs. The fresh flag may be false when the segment count changes. Other edit
+kinds cannot carry this policy; the removal list must be nonempty.
+
+Live application independently requires at least one listed affected automatic
+angle dimension. Unrelated or unknown IDs, automatic edge lengths, area
+dimensions and unused permission are refused. Automatic edge measurements
+regenerate normally; kept angle targets require explicit incident edge/corner
+mappings. Nothing is removed merely because an old corner disappears.
+
+The normal redraw finish archives `desktop_operation` v3: the exact v2 target,
+map, removal list and replacement-segment hash, plus the true policy flag.
+The typed command must match that full archive. Removing, changing or
+downgrading the flag cannot authorize another finish or survive archive replay.
+Undo restores the original annotation exactly; Redo reapplies the same decision.
+
+Any retained v5 intent requires native format 23 and extraction format 21,
+including undone/deleted revisions or imported geometry-derivation evidence.
+Both SQLite format markers and the logical digest retain that reader floor.
+Extraction preserves the complete versioned intent and history; it remains
+an extraction format, not a JSON project importer. Existing v1-v4 intent
+encodings and their original removal rules remain unchanged. Older files
+without this policy retain their previous required format.
 
 ## Original typed wall input
 
@@ -197,9 +225,10 @@ reviewed exterior wall-source replacements, and v17 explicit fresh-topology
 boundary replacements, v18 measured group rigid transforms, and v19 coordinated
 physical wall/exterior measurement changes, and v20 mixed ordinary object/asset
 and exterior changes, v21 ANSI-oriented appraisal evidence, and v22 coordinated
-exterior-corner edits, plus v4 through v22 archives through
+exterior-corner edits, and v23 explicit automatic-angle removal during redraw,
+plus v4 through v23 archives through
 recovery-aware APIs.
-Under-versioned semantic data and versions above 22 reject. Legacy-only history
+Under-versioned semantic data and versions above 23 reject. Legacy-only history
 is still written as v1. Unknown boundary entity
 versions in v2 remain preserved read-only. See `boundary-entity-format.md`.
 Version 2 also recognizes `dimension` entities. Segment-length dimensions refer
@@ -674,7 +703,7 @@ unknown project `format_version` is rejected rather than opened unsafely.
 ## SQLite schema
 
 The SQLite `application_id` is `0x50535444` (`PSTD`). `user_version` and metadata
-`format_version` are equal and range from `1` through `22`, according to the
+`format_version` are equal and range from `1` through `23`, according to the
 retained semantics. The baseline application tables below are shared; later
 versions add the proof columns and recovery data documented in this file.
 

@@ -130,7 +130,7 @@ IdentifiedBoundary apply_geometry_edit(const IdentifiedBoundary& source,
         const auto replacement = decode_identified_boundary_entity(Entity{source.id, source.type,
             {{"boundary_model_version", 1}, {"segments", edit.replacement_segments}}, false, nlohmann::json::object()});
         if (!edit.fresh_topology && replacement.segments.size() == source.segments.size()) {
-            if (!edit.replacement_child_mapping.empty() || !edit.replacement_removed_reference_ids.empty())
+            if (!edit.replacement_child_mapping.empty() || !edit.replacement_removed_reference_ids.empty() || edit.allow_automatic_angle_removal)
                 throw std::invalid_argument("Reference decisions require changed boundary topology");
             for (std::size_t i = 0; i < source.segments.size(); ++i)
                 if (replacement.segments[i].segment_id != source.segments[i].segment_id ||
@@ -717,7 +717,7 @@ static std::map<std::string, Entity, std::less<>> edited_boundary_entities_impl(
             {"operations", nlohmann::json::array()}};
         metadata.properties.erase("boundary_authoring");
     }
-    if ((replacement_source || edit.fresh_topology) && !had_derivation &&
+    if ((replacement_source || edit.fresh_topology || edit.allow_automatic_angle_removal) && !had_derivation &&
         !metadata.extensions.contains("boundary_geometry_derivation")) {
         metadata.extensions["boundary_geometry_derivation"] = {
             {"version", 2}, {"source_boundary", {
@@ -771,6 +771,7 @@ static std::map<std::string, Entity, std::less<>> edited_boundary_entities_impl(
         const std::set<std::string> removed_references(edit.replacement_removed_reference_ids.begin(),
             edit.replacement_removed_reference_ids.end());
         std::set<std::string> accepted_removals;
+        bool removed_automatic_angle = false;
         std::set<std::pair<std::string, std::string>> used_mapping;
         const auto mapped_child = [&](const std::string& old_id, const char* group) {
             if (edit.replacement_child_mapping.empty())
@@ -822,8 +823,11 @@ static std::map<std::string, Entity, std::less<>> edited_boundary_entities_impl(
                     if (!automatic_template) automatic_template = &source.at(id);
                     retired_dimensions.push_back(id);
                 } else if (removed_references.contains(id)) {
-                    if (dimension.placement != BoundaryDimensionPlacement::manual)
-                        throw std::invalid_argument("Only affected manual dimensions can be explicitly removed by redraw");
+                    if (dimension.placement != BoundaryDimensionPlacement::manual) {
+                        if (!edit.allow_automatic_angle_removal || dimension.kind != BoundaryDimensionKind::angle)
+                            throw std::invalid_argument("Automatic angle removal requires explicit version-five redraw policy");
+                        removed_automatic_angle = true;
+                    }
                     accepted_removals.insert(id);
                 } else {
                     // Replace only analytical targets. Re-encoding would
@@ -854,7 +858,9 @@ static std::map<std::string, Entity, std::less<>> edited_boundary_entities_impl(
         if (edit.replacement_dimension_ids.size() != expected_count)
             throw std::invalid_argument("Redefinition dimension IDs do not match its automatic placement policy");
         if (accepted_removals != removed_references)
-            throw std::invalid_argument("Removed redraw references must be supported affected manual dimensions or endpoint constraints");
+            throw std::invalid_argument("Removed redraw references must be supported affected dimensions or endpoint constraints");
+        if (edit.allow_automatic_angle_removal && !removed_automatic_angle)
+            throw std::invalid_argument("Automatic angle removal policy must remove an affected automatic angle");
         const auto mapping_count = edit.replacement_child_mapping.empty() ? std::size_t{0} :
             edit.replacement_child_mapping.at("segments").size() + edit.replacement_child_mapping.at("vertices").size();
         if (used_mapping.size() != mapping_count)

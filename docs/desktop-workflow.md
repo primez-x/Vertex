@@ -876,8 +876,9 @@ outside this checkpoint.
 Select a closed area and run **Redefine boundary** from Commands to redraw it
 in place. Normal Draw First areas and areas edited afterward retain their exact
 original inputs and new construction evidence. A different number of edges
-creates fresh edge identities and automatic dimensions. Attached manual dimensions
-and endpoint constraints open **Review redraw references** before finishing.
+creates fresh edge identities and automatic edge dimensions. Attached manual
+dimensions, automatic angle dimensions and endpoint constraints open
+**Review redraw references** before finishing.
 The two canvases number original and replacement edges (`E1`, `E2`, …) and corners
 (`V1`, `V2`, …). Choose **Keep and map** or **Remove** for each reference; then
 choose replacement children for kept references. The preview reports the resulting
@@ -886,7 +887,9 @@ targets and conflicting locks disable Apply. Cancelling keeps the completed redr
 editable and leaves the source unchanged. Accepted choices are stored with the
 archived input, bound to the exact reviewed replacement geometry and identities,
 and cannot be substituted during replay. Finishing updates the shape and retires the
-draft in one history operation; Undo restores the previous shape and retains
+draft in one history operation. Removing an automatic angle is an explicit
+versioned decision; automatic edge measurements still regenerate from the
+replacement outline. Undo restores the previous shape and retains
 the redraw input for recovery. The selected layer is activated before redraw,
 and appraisal categories remain separate from measurement classifications.
 

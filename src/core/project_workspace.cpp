@@ -382,7 +382,7 @@ void validate_workspace_boundary_redefinition_input(const DocumentSnapshot& sour
     const auto operation = input.extensions.find("desktop_operation");
     const bool has_reference_plan = !command.edit.replacement_child_mapping.empty() ||
         !command.edit.replacement_removed_reference_ids.empty();
-    nlohmann::json expected_operation{{"version", has_reference_plan ? 2 : 1},
+    nlohmann::json expected_operation{{"version", command.edit.allow_automatic_angle_removal ? 3 : has_reference_plan ? 2 : 1},
         {"kind", "redefine"}, {"target_id", command.edit.boundary_id}};
     if (has_reference_plan) {
         expected_operation["replacement_child_mapping"] = command.edit.replacement_child_mapping;
@@ -390,9 +390,12 @@ void validate_workspace_boundary_redefinition_input(const DocumentSnapshot& sour
         const auto geometry_json = command.edit.replacement_segments.dump();
         expected_operation["replacement_segments_sha256"] = sha256_hex(std::as_bytes(std::span(geometry_json.data(), geometry_json.size())));
     }
+    if (command.edit.allow_automatic_angle_removal)
+        expected_operation["allow_automatic_angle_removal"] = true;
     // The archived decision is part of the accepted input, not an authority
     // granted to a later finish command. Exact encoding binds types, ordered
-    // removals, reviewed geometry identities and the complete three/six-field envelope without extension keys.
+    // removals, reviewed geometry identities and the complete versioned envelope
+    // without extension keys. Opt-in angle removal is part of that exact seal.
     if (operation == input.extensions.end() || !operation->is_object() ||
         !operation->contains("version") || !operation->at("version").is_number_integer() ||
         operation->dump() != expected_operation.dump() ||

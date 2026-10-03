@@ -9,6 +9,7 @@
 #include "sketch/constraint_wall_edit.hpp"
 #include "sketch/wall_measurement.hpp"
 #include "support/noninteractive_errors.hpp"
+#include "support/redraw_angle_fixture.hpp"
 
 #include <sqlite3.h>
 
@@ -2624,6 +2625,40 @@ void test_reviewed_exterior_source_reader_floor() {
   }
 }
 
+void test_automatic_angle_redraw_reader_floor() {
+    TempDirectory temp;
+    auto document = sketch::testing::document_with_removed_automatic_angle();
+    const auto changed = document.snapshot();
+    std::vector<Entity> entities;
+    for (const auto& [id, value] : changed.entities()) { (void)id; entities.push_back(value); }
+    const auto imported = Document::create(std::move(entities));
+    const auto imported_snapshot = imported.snapshot();
+    const auto& imported_intent = imported_snapshot.entities().at("angle-area")
+        .extensions.at("boundary_geometry_derivation").at("operations").at(0).at("value");
+    require(imported_intent.at("version") == 5 &&
+        imported_intent.at("allow_automatic_angle_removal") == true &&
+        imported_intent.at("replacement_removed_reference_ids") == nlohmann::json::array({"automatic-angle"}),
+        "imported geometry must retain the exact version-five automatic-angle decision");
+    auto deleted = Document::fork(changed);
+    deleted.apply(ApplyEntityChanges{deleted.revision(), {EntityChange::erase("angle-area")}, {}, "Delete later"});
+    document.undo(document.revision());
+    for (const auto& snapshot : {changed, document.snapshot(), imported_snapshot, deleted.snapshot()}) {
+        require(ProjectStore::required_format_version(snapshot) == 23,
+            "current, undone, imported and deleted automatic-angle redraw requires reader23");
+        const auto path = temp.path / ("angle-redraw-" + sketch::make_stable_id() + ".bldproj");
+        (void)ProjectStore::save(path, snapshot);
+        const auto reopened = ProjectStore::load(path).document.snapshot();
+        require(reopened.entities() == snapshot.entities() && reopened.history().size() == snapshot.history().size(),
+            "reader23 must reopen exact state and retained redraw history");
+        execute_sql(path, "PRAGMA user_version=22; UPDATE metadata SET value='22' WHERE key='format_version'");
+        rewrite_logical_digest(path);
+        const auto original_hash = ProjectStore::file_sha256(path);
+        require_error([&] { (void)ProjectStore::load(path); }, StorageErrorCode::unsupported_format,
+            "recomputed digest cannot downgrade automatic-angle redraw intent");
+        require(ProjectStore::file_sha256(path) == original_hash, "refused downgrade must preserve original bytes");
+    }
+}
+
 void test_ansi_appraisal_reader_floor_retains_history() {
     TempDirectory temp;
     auto property = entity("ansi-property", "property", {{"name", "Appraisal"}});
@@ -2701,6 +2736,7 @@ int main() {
     sketch::testing::noninteractive_errors();
     try {
         test_ansi_appraisal_reader_floor_retains_history();
+        test_automatic_angle_redraw_reader_floor();
         test_rigid_group_storage_and_history_floors();
         test_live_exterior_source_storage_and_history_floor();
         test_live_exterior_source_storage_and_history_floor(true);

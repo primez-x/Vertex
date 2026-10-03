@@ -11,6 +11,7 @@
 #include "sketch/wall_measurement.hpp"
 #include "sketch/document_digest.hpp"
 #include "support/noninteractive_errors.hpp"
+#include "support/redraw_angle_fixture.hpp"
 #include <fstream>
 #include <iostream>
 #include <iterator>
@@ -302,6 +303,40 @@ void test_reviewed_source_export_floor(const std::filesystem::path& root) {
   check(exported.at("exchange_version") == (fresh ? 15 : 14), "retained imported source redefinition requires the appropriate exchange reader floor");
   check(document.snapshot().entities().at(owner.id) == owner, "source extraction must preserve the imported analytical proof");
  }
+}
+
+void test_automatic_angle_redraw_export_floor(const std::filesystem::path& root) {
+  auto document = sketch::testing::document_with_removed_automatic_angle();
+  const auto changed = document.snapshot();
+  std::vector<sketch::Entity> entities;
+  for (const auto& [id, value] : changed.entities()) { (void)id; entities.push_back(value); }
+  const auto imported = sketch::Document::create(std::move(entities));
+  auto deleted = sketch::Document::fork(changed);
+  deleted.apply(sketch::ApplyEntityChanges{deleted.revision(), {sketch::EntityChange::erase("angle-area")}, {}, "Delete later"});
+  document.undo(document.revision());
+  int sequence = 0;
+  for (const auto& snapshot : {changed, document.snapshot(), imported.snapshot(), deleted.snapshot()}) {
+    const auto destination = root / ("angle-redraw-" + std::to_string(sequence++));
+    sketch::extract_project(snapshot, destination);
+    std::ifstream input(destination / "project.json");
+    const auto encoded = nlohmann::json::parse(input);
+    check(encoded.at("exchange_version") == 21 && encoded.at("revisions").size() == snapshot.history().size(),
+        "automatic-angle redraw extraction requires exchange21 without dropping history");
+    if (snapshot.history().size() > 1) {
+      check(encoded.at("revisions")[1].at("boundary_geometry_edit").at("version") == 5 &&
+          encoded.at("revisions")[1].at("boundary_geometry_edit").at("allow_automatic_angle_removal") == true,
+          "extraction must retain the exact explicit version-five decision");
+    } else {
+      bool found = false;
+      for (const auto& owner : encoded.at("revisions")[0].at("entities")) {
+        if (owner.at("id") != "angle-area") continue;
+        found = true;
+        check(owner.at("extensions").dump() == snapshot.entities().at("angle-area").extensions.dump(),
+            "history-free extraction must retain the exact imported version-five geometry proof");
+      }
+      check(found, "history-free extraction must retain its measured boundary");
+    }
+  }
 }
 
 void test_curved_constraint_export_floor(const std::filesystem::path& root) {
@@ -1054,6 +1089,7 @@ int main() {
     }
     test_translation_export(root);
     test_reviewed_source_export_floor(root);
+    test_automatic_angle_redraw_export_floor(root);
     test_curved_constraint_export_floor(root);
     check(std::filesystem::equivalent(
               std::filesystem::canonical(root).parent_path(),

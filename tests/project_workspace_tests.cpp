@@ -144,7 +144,8 @@ struct RedrawPlanFixture {
     EditBoundaryGeometry command;
     std::string manual_id;
 };
-RedrawPlanFixture redraw_plan_fixture(bool remove_reference = false, bool with_reference = true) {
+RedrawPlanFixture redraw_plan_fixture(bool remove_reference = false, bool with_reference = true,
+    bool automatic_angle = false) {
     auto document = Document::create({
         {"p", "property", {{"name", "Property"}}}, {"b", "building", {{"property_id", "p"}}},
         {"f", "floor", {{"building_id", "b"}}}, {"l", "layer", {{"floor_id", "f"}}},
@@ -170,6 +171,13 @@ RedrawPlanFixture redraw_plan_fixture(bool remove_reference = false, bool with_r
     const std::string manual_id = with_reference ? "workspace-manual-dimension" : "";
     if (with_reference) {
         BoundaryDimension manual{manual_id, owner.id, identified.segments.front().segment_id, {2, -1}};
+        if (automatic_angle) {
+            manual.kind = BoundaryDimensionKind::angle;
+            manual.placement = BoundaryDimensionPlacement::automatic;
+            manual.automatic_placement_version = 2;
+            manual.secondary_segment_id = identified.segments[1].segment_id;
+            manual.vertex_id = identified.segments.front().end_vertex_id;
+        }
         auto entity = encode_boundary_dimension_entity(manual);
         entity.extensions["opaque_manual"] = {{"number", 1.0}};
         auto addition = original.prepare(ApplyEntityChanges{.expected_revision = source.revision(),
@@ -197,13 +205,16 @@ RedrawPlanFixture redraw_plan_fixture(bool remove_reference = false, bool with_r
         else edit.replacement_child_mapping = {{"segments", {{identified.segments.front().segment_id, "workspace-plan-e0"}}},
             {"vertices", nlohmann::json::object()}};
     }
-    nlohmann::json operation{{"version", with_reference ? 2 : 1}, {"kind", "redefine"}, {"target_id", owner.id}};
+    edit.allow_automatic_angle_removal = automatic_angle && remove_reference;
+    nlohmann::json operation{{"version", edit.allow_automatic_angle_removal ? 3 : with_reference ? 2 : 1},
+        {"kind", "redefine"}, {"target_id", owner.id}};
     if (with_reference) {
         operation["replacement_child_mapping"] = edit.replacement_child_mapping;
         operation["replacement_removed_reference_ids"] = edit.replacement_removed_reference_ids;
         const auto geometry_json = edit.replacement_segments.dump();
         operation["replacement_segments_sha256"] = sha256_hex(std::as_bytes(std::span(geometry_json.data(), geometry_json.size())));
     }
+    if (edit.allow_automatic_angle_removal) operation["allow_automatic_angle_removal"] = true;
     BoundaryActiveRecovery active{capture_boundary_recovery_source(source, {"p", "b", "f", "l"}),
         triangle.recovery_checkpoint(), {{"desktop_operation", operation}, {"opaque_input", {{"number", 1.0}}}}};
     return {source, active, EditBoundaryGeometry{source.revision(), edit}, manual_id};
@@ -284,6 +295,57 @@ void check_archived_redraw_reference_plan() {
             "redo after reopen must restore exact mapped/removed references");
     }
 }
+void check_archived_automatic_angle_removal() {
+    const auto fixture = redraw_plan_fixture(true, true, true);
+    require(fixture.command.edit.allow_automatic_angle_removal &&
+        fixture.active.extensions.at("desktop_operation").at("version") == 3,
+        "automatic angle decision must use the explicit archived policy");
+    ProjectWorkspace workspace(fixture.source);
+    activate_redraw(workspace, fixture.active);
+    const auto canonical = Document::preview_command(fixture.source, fixture.command);
+    auto finish = workspace.prepare_finish_boundary(fixture.command);
+    (void)workspace.commit(finish);
+    const auto finished = workspace.capture();
+    require(finished.document().entities() == canonical.entities() &&
+        !finished.document().entities().contains(fixture.manual_id),
+        "version-three finish must remove only the reviewed automatic angle");
+    validate_workspace_finish_deltas(finished.document(), finished.lifecycle_history());
+    for (const std::string fault : {"missing", "false", "old_version", "changed_removals"}) {
+        auto forged = finished.lifecycle_history();
+        auto input = fixture.active;
+        auto& operation = input.extensions["desktop_operation"];
+        if (fault == "missing") operation.erase("allow_automatic_angle_removal");
+        else if (fault == "false") operation["allow_automatic_angle_removal"] = false;
+        else if (fault == "old_version") operation["version"] = 2;
+        else operation["replacement_removed_reference_ids"] = nlohmann::json::array({"unrelated"});
+        forged.back().input->value = std::make_shared<const BoundaryActiveRecovery>(input);
+        rejected([&] { validate_workspace_finish_deltas(finished.document(), forged); });
+        ProjectWorkspace live(fixture.source);
+        activate_redraw(live, input);
+        unchanged_finish_rejection(live, [&] { (void)live.prepare_finish_boundary(fixture.command); });
+    }
+    auto downgraded_command = fixture.command;
+    downgraded_command.edit.allow_automatic_angle_removal = false;
+    ProjectWorkspace live(fixture.source);
+    activate_redraw(live, fixture.active);
+    unchanged_finish_rejection(live, [&] { (void)live.prepare_finish_boundary(downgraded_command); });
+    const auto path = std::filesystem::temp_directory_path() / ("workspace-angle-removal-" + make_stable_id() + ".bldproj");
+    struct Cleanup { std::filesystem::path path; ~Cleanup() { std::error_code error; std::filesystem::remove(path, error); } } cleanup{path};
+    RecoveryLedger ledger{{"history", "workspace_history", encode_workspace_history_record(
+        finished.document(), capture_workspace_history_record(finished), finished.active_boundary())}};
+    (void)ProjectStore::save_archive(path, ProjectArchiveSnapshot(finished.document(), ledger, ArchiveRole::ordinary));
+    const auto loaded = ProjectStore::load_archive(path, ArchiveRole::ordinary);
+    require(loaded.supported(), "automatic-angle finish archive must remain supported");
+    auto restored = ProjectWorkspace::restore_archive(*loaded.archive, *loaded.recovery.decoded);
+    require(restored->snapshot().entities() == finished.document().entities(), "archive must preserve exact removal result");
+    auto undo = restored->prepare_undo(); (void)restored->commit(undo);
+    require(restored->snapshot().entities() == fixture.source.entities() &&
+        restored->retired_boundary(fixture.active.checkpoint.identity_namespace) == std::optional{fixture.active},
+        "undo after reopen must restore the angle and exact accepted decision");
+    auto redo = restored->prepare_redo(); (void)restored->commit(redo);
+    require(restored->snapshot().entities() == finished.document().entities(), "redo must reapply the same removal");
+}
+
 void check_reviewed_geometry_identity_binding() {
     auto fixture = redraw_plan_fixture(false);
     auto substituted = fixture.command;
@@ -470,7 +532,8 @@ int main() {
     sketch::testing::noninteractive_errors();
     try { check_legacy_classification_only_finished_archive(); check_subtraction_recovery_finish_and_revise();
           check_publication(); check_rejections(); check_checkpoint_policy();
-          check_archived_redraw_reference_plan(); check_reviewed_geometry_identity_binding(); check_rejected_archived_redraw_plans(); }
+          check_archived_redraw_reference_plan(); check_archived_automatic_angle_removal();
+          check_reviewed_geometry_identity_binding(); check_rejected_archived_redraw_plans(); }
     catch (const std::exception& e) { std::cerr << e.what() << '\n'; return 1; }
     return 0;
 }

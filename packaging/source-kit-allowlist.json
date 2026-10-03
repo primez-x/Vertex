@@ -1579,6 +1579,10 @@
     },
     {
       "category": "docs",
+      "path": "docs/plans/2026-10-03-redraw-angle-reference-removal.md"
+    },
+    {
+      "category": "docs",
       "path": "docs/product-scope.md"
     },
     {
@@ -2444,6 +2448,10 @@
     {
       "category": "docs",
       "path": "docs/verification/plan-label-placement-2026-10-01.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/verification/redraw-angle-reference-removal-20261003.md"
     },
     {
       "category": "docs",
@@ -4411,6 +4419,10 @@
     },
     {
       "category": "source",
+      "path": "tests/redraw_angle_removal_desktop_tests.cpp"
+    },
+    {
+      "category": "source",
       "path": "tests/reference_asset_tests.cpp"
     },
     {
@@ -4476,6 +4488,10 @@
     {
       "category": "source",
       "path": "tests/support/noninteractive_errors.hpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/support/redraw_angle_fixture.hpp"
     },
     {
       "category": "source",

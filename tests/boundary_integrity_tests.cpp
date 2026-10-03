@@ -1125,6 +1125,265 @@ void test_changed_topology_explicit_reference_resolution() {
     require_invalid_snapshot_not_published(forged);
 }
 
+void test_redraw_automatic_angle_removal_requires_version_five() {
+    const auto owner = rectangle();
+    auto neighbor = owner;
+    neighbor.id = "angle-neighbor";
+    BoundaryDimension angle{"removed-auto-angle", owner.id, "edge-0", {4.5,0.5}};
+    angle.kind = BoundaryDimensionKind::angle;
+    angle.vertex_id = "vertex-1";
+    angle.secondary_segment_id = "edge-1";
+    angle.placement = BoundaryDimensionPlacement::automatic;
+    angle.automatic_placement_version = 2;
+    auto angle_entity = encode_boundary_dimension_entity(angle);
+    angle_entity.properties["opaque_style"] = {{"number", 1.0}};
+    angle_entity.extensions["opaque_dimension"] = {{"number", 1.0}};
+    auto unrelated_angle = angle;
+    unrelated_angle.id = "unrelated-auto-angle";
+    unrelated_angle.boundary_id = neighbor.id;
+    const auto unrelated_entity = encode_boundary_dimension_entity(unrelated_angle);
+    BoundaryDimension manual{"reviewed-manual-length", owner.id, "edge-0", {1,-1}};
+    const auto manual_entity = encode_boundary_dimension_entity(manual);
+    auto retained_angle = angle;
+    retained_angle.id = "retained-auto-angle";
+    const auto retained_entity = encode_boundary_dimension_entity(retained_angle);
+    BoundaryDimension area{"retained-area", owner.id, {}, {2,1}};
+    area.kind = BoundaryDimensionKind::area;
+    const auto area_entity = encode_boundary_dimension_entity(area);
+    const auto lock = encode_constraint_entity(PersistentConstraint{"reviewed-length-lock", ConstraintRelationKind::fixed_length,
+        {{owner.id, WallEndpointRole::start, "edge-0", "vertex-0"},
+         {owner.id, WallEndpointRole::end, "edge-0", "vertex-1"}}, parse_quantity("4 m")});
+    std::vector<Entity> entities{owner, neighbor, angle_entity, unrelated_entity, manual_entity, retained_entity, area_entity, lock};
+    for (std::size_t i = 0; i < 4; ++i) {
+        BoundaryDimension edge{"old-auto-length-" + std::to_string(i), owner.id, "edge-" + std::to_string(i), {1,-1}};
+        edge.placement = BoundaryDimensionPlacement::automatic;
+        edge.automatic_placement_version = 2;
+        entities.push_back(encode_boundary_dimension_entity(edge));
+    }
+    auto document = Document::create(entities);
+    const auto before = document.snapshot();
+    IdentifiedBoundary triangle{owner.id, owner.type, {{"angle-e0","angle-v0","angle-v1",{{0,0},{4,0},0}},
+        {"angle-e1","angle-v1","angle-v2",{{4,0},{2,3},0}}, {"angle-e2","angle-v2","angle-v0",{{2,3},{0,0},0}}}};
+    BoundaryGeometryEdit edit;
+    edit.kind = BoundaryGeometryEditKind::redefine_boundary;
+    edit.boundary_id = edit.target_id = owner.id;
+    edit.replacement_segments = encode_identified_boundary_entity(triangle).properties.at("segments");
+    edit.replacement_dimension_ids = {"angle-d0", "angle-d1", "angle-d2"};
+    edit.replacement_child_mapping = {{"segments", {{"edge-0", "angle-e0"}, {"edge-1", "angle-e1"}}},
+        {"vertices", {{"vertex-0", "angle-v0"}, {"vertex-1", "angle-v1"}}}};
+    edit.replacement_removed_reference_ids = {angle.id};
+    edit.allow_automatic_angle_removal = true;
+    const auto exact_entities = [](const auto& actual, const auto& expected) {
+        if (actual != expected) return false;
+        for (const auto& [id, entity] : actual) {
+            const auto& other = expected.at(id);
+            if (entity.properties.dump() != other.properties.dump() || entity.extensions.dump() != other.extensions.dump())
+                return false;
+        }
+        return true;
+    };
+    const auto preview = Document::preview_command(before, EditBoundaryGeometry{before.revision(), edit});
+    document.apply(EditBoundaryGeometry{document.revision(), edit});
+    const auto after = document.snapshot();
+    require(exact_entities(after.entities(), preview.entities()) && !after.entities().contains(angle.id),
+        "version five must remove the explicitly affected automatic angle in its atomic preview");
+    require(after.entities().at(unrelated_angle.id) == unrelated_entity && after.entities().at(area.id) == area_entity &&
+        after.entities().contains(retained_angle.id) && after.entities().contains(manual.id) && after.entities().contains(lock.id),
+        "automatic angle removal must retain area dimensions, unrelated owners and references with explicit mappings");
+    require(std::isfinite(decode_boundary_dimension_entity(after.entities().at(retained_angle.id)).dimension->resolve(after.entities().at(owner.id)).angle()),
+        "an automatic angle omitted from the removal list must remain and resolve through its explicit mapping");
+    for (std::size_t i = 0; i < 4; ++i)
+        require(!after.entities().contains("old-auto-length-" + std::to_string(i)), "redraw must retire old automatic edge dimensions");
+    for (const auto& id : edit.replacement_dimension_ids)
+        require(decode_boundary_dimension_entity(after.entities().at(id)).dimension->resolve(after.entities().at(owner.id)).segment_length() > 0,
+            "automatic angle removal must preserve automatic edge regeneration");
+    require(exact_entities(replayed_boundary_entities(before.entities(), edit), after.entities()),
+        "version five semantic replay must reproduce exact entities");
+    auto reopened = reopen(after, 23);
+    require(exact_entities(reopened.snapshot().entities(), after.entities()) &&
+        reopened.snapshot().history().back().boundary_geometry_edit == edit,
+        "version five intent and numeric JSON must survive project history restoration");
+    reopened.undo(reopened.revision());
+    require(exact_entities(reopened.snapshot().entities(), before.entities()), "reopened angle removal undo must restore exact source bytes");
+    reopened.redo(reopened.revision());
+    require(exact_entities(reopened.snapshot().entities(), after.entities()), "reopened angle removal redo must restore exact result bytes");
+
+    const auto rejected = [&](BoundaryGeometryEdit invalid, std::string_view message) {
+        auto candidate = Document::fork(before);
+        bool failed = false;
+        try { candidate.apply(EditBoundaryGeometry{candidate.revision(), std::move(invalid)}); }
+        catch (const DocumentError&) { failed = true; }
+        require(failed && exact_entities(candidate.snapshot().entities(), before.entities()) && candidate.revision() == before.revision(), message);
+    };
+    auto invalid = edit;
+    invalid.allow_automatic_angle_removal = false;
+    require(encode_boundary_geometry_edit(invalid).at("version") == 2, "old reference decisions must still encode as version two");
+    rejected(decode_boundary_geometry_edit(encode_boundary_geometry_edit(invalid)), "version two must keep rejecting explicit automatic angle removal");
+    invalid.fresh_topology = true;
+    require(encode_boundary_geometry_edit(invalid).at("version") == 4, "old fresh topology decisions must still encode as version four");
+    rejected(decode_boundary_geometry_edit(encode_boundary_geometry_edit(invalid)), "version four must keep rejecting explicit automatic angle removal");
+    invalid = edit;
+    invalid.allow_automatic_angle_removal = false;
+    invalid.replacement_removed_reference_ids.clear();
+    invalid.replacement_child_mapping = Json::object();
+    require(encode_boundary_geometry_edit(invalid).at("version") == 1, "unreviewed redraw must still encode as version one");
+    rejected(decode_boundary_geometry_edit(encode_boundary_geometry_edit(invalid)), "version one redraw must not implicitly delete automatic angles");
+    invalid = edit;
+    invalid.replacement_removed_reference_ids = {manual.id};
+    rejected(invalid, "the automatic angle removal flag must reject when no automatic angle is actually removed");
+    invalid = edit;
+    invalid.replacement_removed_reference_ids.push_back("old-auto-length-0");
+    rejected(invalid, "the angle removal flag cannot authorize removing automatic segment lengths");
+    invalid = edit;
+    invalid.replacement_removed_reference_ids.push_back(area.id);
+    rejected(invalid, "the angle removal flag cannot authorize removing area dimensions");
+    invalid = edit;
+    invalid.replacement_removed_reference_ids.push_back(unrelated_angle.id);
+    rejected(invalid, "the angle removal flag cannot authorize removing another boundary's angle");
+    invalid = edit;
+    invalid.replacement_removed_reference_ids.push_back("unknown-reference");
+    rejected(invalid, "the angle removal flag cannot authorize unknown references");
+    invalid = edit;
+    invalid.replacement_segments = encode_identified_boundary_entity(decode_identified_boundary_entity(owner)).properties.at("segments");
+    invalid.replacement_dimension_ids.clear();
+    rejected(invalid, "automatic angle removal decisions require changed topology");
+    invalid = edit;
+    invalid.replacement_child_mapping["segments"].erase("edge-1");
+    rejected(invalid, "an unreviewed automatic angle must not be implicitly deleted when its mapping is missing");
+
+    auto mixed = edit;
+    mixed.replacement_removed_reference_ids = {angle.id, manual.id, lock.id};
+    mixed.replacement_child_mapping["vertices"].erase("vertex-0");
+    auto mixed_document = Document::fork(before);
+    mixed_document.apply(EditBoundaryGeometry{mixed_document.revision(), mixed});
+    const auto mixed_after = mixed_document.snapshot();
+    require(!mixed_after.entities().contains(angle.id) && !mixed_after.entities().contains(manual.id) &&
+        !mixed_after.entities().contains(lock.id) && mixed_after.entities().contains(retained_angle.id),
+        "one reviewed redraw must remove automatic angles, manual dimensions and constraints together");
+    require(exact_entities(reopen(mixed_after, 23).snapshot().entities(), mixed_after.entities()), "mixed version five decisions must reopen exactly");
+    mixed_document.undo(mixed_document.revision());
+    require(exact_entities(mixed_document.snapshot().entities(), before.entities()), "mixed angle removal undo must restore every reference exactly");
+    mixed_document.redo(mixed_document.revision());
+    require(exact_entities(mixed_document.snapshot().entities(), mixed_after.entities()), "mixed angle removal redo must reproduce every reference exactly");
+
+    auto removal_only = edit;
+    removal_only.replacement_child_mapping = Json::object();
+    removal_only.replacement_removed_reference_ids = {angle.id, retained_angle.id, manual.id, lock.id};
+    auto removal_document = Document::fork(before);
+    removal_document.apply(EditBoundaryGeometry{removal_document.revision(), removal_only});
+    const auto removed_after = removal_document.snapshot();
+    require(!removed_after.entities().contains(angle.id) && !removed_after.entities().contains(retained_angle.id) &&
+        !removed_after.entities().contains(manual.id) && !removed_after.entities().contains(lock.id) &&
+        removed_after.entities().at(area.id) == area_entity && removed_after.entities().at(unrelated_angle.id) == unrelated_entity,
+        "canonical empty mappings must remove all explicitly reviewed affected references and preserve other owners");
+    require(exact_entities(reopen(removed_after, 23).snapshot().entities(), removed_after.entities()),
+        "removal-only version five decisions must restore exact project entities");
+    removal_document.undo(removal_document.revision());
+    require(exact_entities(removal_document.snapshot().entities(), before.entities()), "removal-only undo must restore exact automatic angle bytes");
+    removal_document.redo(removal_document.revision());
+    require(exact_entities(removal_document.snapshot().entities(), removed_after.entities()), "removal-only redo must reproduce the exact reviewed result");
+
+    auto fresh = edit;
+    const IdentifiedBoundary square{owner.id, owner.type, {{"fresh-e0","fresh-v0","fresh-v1",{{0,0},{4,0},0}},
+        {"fresh-e1","fresh-v1","fresh-v2",{{4,0},{4,3},0}}, {"fresh-e2","fresh-v2","fresh-v3",{{4,3},{0,3},0}},
+        {"fresh-e3","fresh-v3","fresh-v0",{{0,3},{0,0},0}}}};
+    fresh.fresh_topology = true;
+    fresh.replacement_segments = encode_identified_boundary_entity(square).properties.at("segments");
+    fresh.replacement_dimension_ids = {"fresh-d0", "fresh-d1", "fresh-d2", "fresh-d3"};
+    fresh.replacement_child_mapping = {{"segments", {{"edge-0", "fresh-e0"}, {"edge-1", "fresh-e1"}}},
+        {"vertices", {{"vertex-0", "fresh-v0"}, {"vertex-1", "fresh-v1"}}}};
+    auto fresh_document = Document::fork(before);
+    fresh_document.apply(EditBoundaryGeometry{fresh_document.revision(), fresh});
+    require(!fresh_document.snapshot().entities().contains(angle.id) &&
+        exact_entities(reopen(fresh_document.snapshot(), 23).snapshot().entities(), fresh_document.snapshot().entities()),
+        "reviewed same-count fresh topology must support automatic angle removal and derivation replay");
+    auto forged = after;
+    auto forged_edit = edit;
+    forged_edit.allow_automatic_angle_removal = false;
+    const_cast<std::vector<RevisionRecord>&>(forged.history()).back().boundary_geometry_edit = forged_edit;
+    require_invalid_snapshot_not_published(forged);
+}
+
+void test_automatic_angle_removal_codec_is_canonical_and_versioned() {
+    const auto owner = rectangle();
+    BoundaryGeometryEdit edit;
+    edit.kind = BoundaryGeometryEditKind::redefine_boundary;
+    edit.boundary_id = edit.target_id = owner.id;
+    edit.replacement_segments = owner.properties.at("segments");
+    edit.replacement_removed_reference_ids = {"reviewed-angle"};
+    edit.allow_automatic_angle_removal = true;
+    const auto canonical = encode_boundary_geometry_edit(edit);
+    const Json expected{{"version", 5}, {"kind", "redefine_boundary"}, {"boundary_id", owner.id},
+        {"replacement_segments", edit.replacement_segments}, {"replacement_authoring", nullptr},
+        {"replacement_properties", Json::object()}, {"replacement_dimension_ids", Json::array()},
+        {"replacement_child_mapping", Json::object()}, {"replacement_removed_reference_ids", {"reviewed-angle"}},
+        {"replacement_wall_source_ids", Json::array()}, {"fresh_topology", false}, {"allow_automatic_angle_removal", true}};
+    require(canonical.dump() == expected.dump() && decode_boundary_geometry_edit(canonical) == edit &&
+        encode_boundary_geometry_edit(decode_boundary_geometry_edit(canonical)).dump() == canonical.dump(),
+        "version five must persist the complete canonical policy including false fresh topology and empty wall sources");
+    auto other = edit;
+    other.allow_automatic_angle_removal = false;
+    require(other != edit, "automatic angle policy must participate in semantic intent equality");
+    const auto invalid_codec = [&](Json value) {
+        bool failed = false;
+        try { (void)decode_boundary_geometry_edit(value); } catch (const std::exception&) { failed = true; }
+        require(failed, "malformed automatic angle policy must be rejected by the strict codec");
+    };
+    for (const auto* field : {"allow_automatic_angle_removal", "fresh_topology", "replacement_wall_source_ids",
+            "replacement_child_mapping", "replacement_removed_reference_ids"}) {
+        auto invalid = canonical;
+        invalid.erase(field);
+        invalid_codec(invalid);
+    }
+    for (const Json value : {Json(false), Json(1), Json(nullptr), Json("true")}) {
+        auto invalid = canonical;
+        invalid["allow_automatic_angle_removal"] = value;
+        invalid_codec(invalid);
+    }
+    auto invalid = canonical;
+    invalid["fresh_topology"] = 1; invalid_codec(invalid);
+    invalid = canonical;
+    invalid["replacement_wall_source_ids"] = Json::object(); invalid_codec(invalid);
+    invalid = canonical;
+    invalid["replacement_removed_reference_ids"] = Json::array(); invalid_codec(invalid);
+    invalid = canonical;
+    invalid["replacement_removed_reference_ids"] = {1}; invalid_codec(invalid);
+    invalid = canonical;
+    invalid["replacement_removed_reference_ids"] = {"invalid reference"}; invalid_codec(invalid);
+    invalid = canonical;
+    invalid["replacement_removed_reference_ids"] = {"reviewed-angle", "reviewed-angle"}; invalid_codec(invalid);
+    invalid = canonical;
+    invalid["unreviewed_policy"] = true; invalid_codec(invalid);
+    invalid = canonical;
+    invalid["replacement_child_mapping"] = Json::array(); invalid_codec(invalid);
+    invalid = canonical;
+    invalid["kind"] = "move_vertex"; invalid_codec(invalid);
+    for (int version = 1; version <= 4; ++version) {
+        invalid = canonical;
+        invalid["version"] = version;
+        invalid_codec(invalid);
+        auto legacy = other;
+        if (version == 1) legacy.replacement_removed_reference_ids.clear();
+        if (version == 3) legacy.replacement_wall_source_ids = {"wall-a", "wall-b", "wall-c"};
+        if (version == 4) legacy.fresh_topology = true;
+        const auto encoded = encode_boundary_geometry_edit(legacy);
+        require(encoded.at("version") == version && !encoded.contains("allow_automatic_angle_removal") &&
+            encode_boundary_geometry_edit(decode_boundary_geometry_edit(encoded)).dump() == encoded.dump(),
+            "version one through four envelopes must keep their exact field sets and round-trip bytes");
+    }
+    for (const auto kind : {BoundaryGeometryEditKind::move_vertex, BoundaryGeometryEditKind::resize_segment,
+            BoundaryGeometryEditKind::insert_vertex, BoundaryGeometryEditKind::reconstruct_arc}) {
+        BoundaryGeometryEdit coordinate;
+        coordinate.boundary_id = owner.id;
+        coordinate.target_id = "edge-0";
+        coordinate.kind = kind;
+        coordinate.allow_automatic_angle_removal = true;
+        bool failed = false;
+        try { (void)encode_boundary_geometry_edit(coordinate); } catch (const std::exception&) { failed = true; }
+        require(failed, "automatic angle removal is exclusively a boundary redefinition policy");
+    }
+}
+
 void test_redraw_reference_mapping_separates_child_namespaces() {
     auto owner = rectangle();
     for (auto& edge : owner.properties.at("segments")) {
@@ -1233,6 +1492,8 @@ int main() {
         test_typed_vertex_split_preserves_identity_and_rejects_forgery();
         test_boundary_redefinition_proofs_and_reference_policy();
         test_changed_topology_explicit_reference_resolution();
+        test_redraw_automatic_angle_removal_requires_version_five();
+        test_automatic_angle_removal_codec_is_canonical_and_versioned();
         test_redraw_reference_mapping_separates_child_namespaces();
         test_downgrade_is_rejected_but_upgrade_undo_is_valid();
         test_future_boundary_version_is_preserved_read_only();

@@ -53,6 +53,9 @@ struct BoundaryGeometryEdit {
     // Explicit reviewed redraw intent. All child identities are fresh even
     // when the replacement has the same number of edges as the old outline.
     bool fresh_topology{};
+    // Version-five redraw policy. Only explicit removal of affected automatic
+    // angle dimensions is authorized; automatic edge lengths still regenerate.
+    bool allow_automatic_angle_removal{};
 
     bool operator==(const BoundaryGeometryEdit& other) const {
         return boundary_id == other.boundary_id && kind == other.kind &&
@@ -69,7 +72,8 @@ struct BoundaryGeometryEdit {
             replacement_removed_reference_ids == other.replacement_removed_reference_ids &&
             arc_construction == other.arc_construction &&
             replacement_wall_source_ids == other.replacement_wall_source_ids &&
-            fresh_topology == other.fresh_topology;
+            fresh_topology == other.fresh_topology &&
+            allow_automatic_angle_removal == other.allow_automatic_angle_removal;
     }
 };
 
@@ -91,7 +95,7 @@ inline void validate_boundary_geometry_edit(const BoundaryGeometryEdit& edit) {
         (!edit.replacement_segments.is_null() || !edit.replacement_authoring.is_null() ||
          !edit.replacement_properties.empty() || !edit.replacement_dimension_ids.empty() ||
          !edit.replacement_child_mapping.empty() || !edit.replacement_removed_reference_ids.empty() ||
-         !edit.replacement_wall_source_ids.empty() || edit.fresh_topology))
+         !edit.replacement_wall_source_ids.empty() || edit.fresh_topology || edit.allow_automatic_angle_removal))
         throw std::invalid_argument("Boundary coordinate edit contains redefinition fields");
     if (edit.kind != BoundaryGeometryEditKind::reconstruct_arc && edit.arc_construction)
         throw std::invalid_argument("Boundary geometry edit contains arc reconstruction fields");
@@ -153,6 +157,8 @@ inline void validate_boundary_geometry_edit(const BoundaryGeometryEdit& edit) {
         for (const auto& id : edit.replacement_removed_reference_ids)
             if (!valid_id(id) || !removed.insert(id).second)
                 throw std::invalid_argument("Boundary redefinition removed reference IDs are invalid");
+        if (edit.allow_automatic_angle_removal && removed.empty())
+            throw std::invalid_argument("Automatic angle removal requires explicit removed reference IDs");
         if (!edit.replacement_wall_source_ids.empty()) {
             if (edit.replacement_wall_source_ids.size() < 3 || edit.replacement_wall_source_ids.size() > 2048)
                 throw std::invalid_argument("Boundary wall source replacement requires 3 to 2048 walls");
@@ -169,7 +175,8 @@ inline void validate_boundary_geometry_edit(const BoundaryGeometryEdit& edit) {
             edit.replacement_properties.dump().size() + nlohmann::json(edit.replacement_dimension_ids).dump().size() +
             reference_plan_bytes + (edit.replacement_wall_source_ids.empty() ? std::size_t{0} :
                 nlohmann::json(edit.replacement_wall_source_ids).dump().size()) +
-            (edit.fresh_topology ? std::size_t{40} : std::size_t{0}) >
+            (edit.fresh_topology ? std::size_t{40} : std::size_t{0}) +
+            (edit.allow_automatic_angle_removal ? std::size_t{80} : std::size_t{0}) >
             1024 * 1024 - 4096)
             throw std::invalid_argument("Boundary redefinition exceeds the persisted proof budget");
     } else if (edit.kind == BoundaryGeometryEditKind::reconstruct_arc) {
@@ -224,6 +231,14 @@ inline nlohmann::json encode_boundary_geometry_edit(const BoundaryGeometryEdit& 
             result["replacement_child_mapping"] = edit.replacement_child_mapping;
             result["replacement_removed_reference_ids"] = edit.replacement_removed_reference_ids;
         }
+        if (edit.allow_automatic_angle_removal) {
+            result["version"] = 5;
+            result["allow_automatic_angle_removal"] = true;
+            result["fresh_topology"] = edit.fresh_topology;
+            result["replacement_wall_source_ids"] = edit.replacement_wall_source_ids;
+            result["replacement_child_mapping"] = edit.replacement_child_mapping;
+            result["replacement_removed_reference_ids"] = edit.replacement_removed_reference_ids;
+        }
         return result;
     }
     if (edit.kind == BoundaryGeometryEditKind::reconstruct_arc) {
@@ -241,17 +256,18 @@ inline nlohmann::json encode_boundary_geometry_edit(const BoundaryGeometryEdit& 
 
 inline BoundaryGeometryEdit decode_boundary_geometry_edit(const nlohmann::json& value) {
     if (!value.is_object() || !value.contains("version") ||
-        !value.at("version").is_number_integer() || (value.at("version") != 1 && value.at("version") != 2 && value.at("version") != 3 && value.at("version") != 4) ||
+        !value.at("version").is_number_integer() || (value.at("version") != 1 && value.at("version") != 2 && value.at("version") != 3 && value.at("version") != 4 && value.at("version") != 5) ||
         !value.contains("kind") || !value.at("kind").is_string() ||
         !value.contains("boundary_id") || !value.at("boundary_id").is_string()) {
         throw std::invalid_argument("Boundary geometry edit envelope is invalid");
     }
     const auto kind = value.at("kind").get<std::string>();
-    const bool fresh_topology = value.at("version") == 4;
+    const bool automatic_angle_removal = value.at("version") == 5;
+    const bool fresh_topology = value.at("version") == 4 || automatic_angle_removal;
     const bool wall_source_replacement = value.at("version") == 3 || fresh_topology;
     const bool reference_plan = value.at("version") == 2 || wall_source_replacement;
     if (reference_plan && kind != "redefine_boundary")
-        throw std::invalid_argument("Boundary redefinition versions two through four require redefinition intent");
+        throw std::invalid_argument("Boundary redefinition versions two through five require redefinition intent");
     BoundaryGeometryEdit result;
     result.boundary_id = value.at("boundary_id").get<std::string>();
     if (kind == "move_vertex") {
@@ -309,6 +325,7 @@ inline BoundaryGeometryEdit decode_boundary_geometry_edit(const nlohmann::json& 
         }
         if (wall_source_replacement) expected.insert("replacement_wall_source_ids");
         if (fresh_topology) expected.insert("fresh_topology");
+        if (automatic_angle_removal) expected.insert("allow_automatic_angle_removal");
         std::set<std::string> actual;
         for (const auto& [key, ignored] : value.items()) { (void)ignored; actual.insert(key); }
         if (actual != expected || !value.at("replacement_dimension_ids").is_array())
@@ -320,9 +337,14 @@ inline BoundaryGeometryEdit decode_boundary_geometry_edit(const nlohmann::json& 
         result.replacement_properties = value.at("replacement_properties");
         result.replacement_dimension_ids = value.at("replacement_dimension_ids").get<std::vector<std::string>>();
         if (fresh_topology) {
-            if (!value.at("fresh_topology").is_boolean() || value.at("fresh_topology") != true)
+            if (!value.at("fresh_topology").is_boolean() || (!automatic_angle_removal && value.at("fresh_topology") != true))
                 throw std::invalid_argument("Version four redefinition requires explicit fresh topology");
-            result.fresh_topology = true;
+            result.fresh_topology = value.at("fresh_topology").get<bool>();
+        }
+        if (automatic_angle_removal) {
+            if (!value.at("allow_automatic_angle_removal").is_boolean() || value.at("allow_automatic_angle_removal") != true)
+                throw std::invalid_argument("Version five redefinition requires explicit automatic angle removal");
+            result.allow_automatic_angle_removal = true;
         }
         if (reference_plan) {
             result.replacement_child_mapping = value.at("replacement_child_mapping");

@@ -18199,7 +18199,7 @@ public:
             std::string id;
             QString name;
             std::set<ReferenceChild> children;
-            bool removable{true};
+            bool automatic_angle{false};
         };
         std::vector<Reference> references;
         const auto child_name = [&](const std::string& id, bool vertex = false) {
@@ -18219,7 +18219,8 @@ public:
                      dimension.placement == BoundaryDimensionPlacement::automatic)) continue;
                 Reference reference{id, dimension.kind == BoundaryDimensionKind::angle
                     ? QStringLiteral("Angle dimension") : QStringLiteral("Length dimension"),
-                    {{false, dimension.segment_id}}, dimension.placement == BoundaryDimensionPlacement::manual};
+                    {{false, dimension.segment_id}}, dimension.kind == BoundaryDimensionKind::angle &&
+                        dimension.placement == BoundaryDimensionPlacement::automatic};
                 if (dimension.kind == BoundaryDimensionKind::angle) {
                     reference.children.insert({false, dimension.secondary_segment_id});
                     reference.children.insert({true, dimension.vertex_id});
@@ -18253,7 +18254,9 @@ public:
         auto* layout = new QVBoxLayout(&dialog);
         auto* help = new QLabel(QStringLiteral(
             "Choose what happens to each attached dimension and locked relationship. "
-            "For kept references, choose the numbered replacement edges and corners below."), &dialog);
+            "For kept references, choose the numbered replacement edges and corners below. "
+            "Automatic edge lengths regenerate for the replacement boundary. Angle dimensions, including automatic angles, "
+            "are retained on mapped corners or removed only when you choose Remove."), &dialog);
         help->setWordWrap(true);
         layout->addWidget(help);
         auto* scenes = new QHBoxLayout;
@@ -18314,7 +18317,7 @@ public:
             auto* choice = new QComboBox(choices);
             choice->addItem(QStringLiteral("Choose…"));
             choice->addItem(QStringLiteral("Keep and map"));
-            if (reference.removable) choice->addItem(QStringLiteral("Remove"));
+            choice->addItem(QStringLiteral("Remove"));
             choices->setCellWidget(row, 1, choice);
             choices->setItem(row, 2, new QTableWidgetItem);
             decisions.push_back(choice);
@@ -18370,12 +18373,16 @@ public:
             try {
                 if (!unchanged()) throw std::invalid_argument("The drawing context changed. Cancel and review the current redraw.");
                 auto proposed = command;
+                proposed.edit.allow_automatic_angle_removal = false;
                 std::set<ReferenceChild> needed;
                 bool incomplete = false;
                 for (std::size_t i = 0; i < references.size(); ++i) {
                     const auto decision = decisions[i]->currentIndex();
                     if (!decision) incomplete = true;
-                    if (decision == 2) proposed.edit.replacement_removed_reference_ids.push_back(references[i].id);
+                    if (decision == 2) {
+                        proposed.edit.replacement_removed_reference_ids.push_back(references[i].id);
+                        if (references[i].automatic_angle) proposed.edit.allow_automatic_angle_removal = true;
+                    }
                     else needed.insert(references[i].children.begin(), references[i].children.end());
                 }
                 if (!needed.empty()) proposed.edit.replacement_child_mapping = {{"segments", json::object()}, {"vertices", json::object()}};
@@ -31553,19 +31560,23 @@ private:
         if (found == active.extensions.end()) return std::nullopt; // Legacy create drafts.
         const auto& operation = *found;
         const bool version_two = operation.is_object() && operation.contains("version") && operation.at("version") == 2;
-        if (!operation.is_object() || operation.size() != (version_two ? 6 : 3) ||
+        const bool version_three = operation.is_object() && operation.contains("version") && operation.at("version") == 3;
+        if (!operation.is_object() || operation.size() != (version_three ? 7 : version_two ? 6 : 3) ||
             !operation.contains("version") || !operation.at("version").is_number_integer() ||
-            (!version_two && operation.at("version") != 1) ||
+            (!version_two && !version_three && operation.at("version") != 1) ||
             !operation.contains("kind") || operation.at("kind") != "redefine" ||
             !operation.contains("target_id") || !operation.at("target_id").is_string())
             throw std::invalid_argument("Unsupported boundary recovery operation.");
-        if (version_two && (!operation.contains("replacement_child_mapping") ||
+        if ((version_two || version_three) && (!operation.contains("replacement_child_mapping") ||
             !operation.at("replacement_child_mapping").is_object() ||
             !operation.contains("replacement_removed_reference_ids") ||
             !operation.at("replacement_removed_reference_ids").is_array() ||
             !operation.contains("replacement_segments_sha256") || !operation.at("replacement_segments_sha256").is_string() ||
             (operation.at("replacement_child_mapping").empty() && operation.at("replacement_removed_reference_ids").empty())))
             throw std::invalid_argument("Unsupported boundary recovery reference plan.");
+        if (version_three && (!operation.contains("allow_automatic_angle_removal") ||
+            operation.at("allow_automatic_angle_removal") != true || operation.at("replacement_removed_reference_ids").empty()))
+            throw std::invalid_argument("Unsupported boundary recovery automatic angle removal plan.");
         const auto id = operation.at("target_id").get<std::string>();
         const auto target = snapshot.entities().find(id);
         if (id.empty() || id.size() > 128 || target == snapshot.entities().end() ||
@@ -31629,7 +31640,8 @@ private:
                 {"target_id", m_redefine_boundary_id->toStdString()}};
             if (reviewed && (!reviewed->replacement_child_mapping.empty() || !reviewed->replacement_removed_reference_ids.empty())) {
                 auto& operation = active.extensions["desktop_operation"];
-                operation["version"] = 2;
+                operation["version"] = reviewed->allow_automatic_angle_removal ? 3 : 2;
+                if (reviewed->allow_automatic_angle_removal) operation["allow_automatic_angle_removal"] = true;
                 operation["replacement_child_mapping"] = reviewed->replacement_child_mapping;
                 operation["replacement_removed_reference_ids"] = reviewed->replacement_removed_reference_ids;
                 const auto geometry_json = reviewed->replacement_segments.dump();
