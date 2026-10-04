@@ -20,6 +20,7 @@
 #include "sketch/project_organization.hpp"
 #include "sketch/wall_semantics.hpp"
 #include "sketch/measurement_linework.hpp"
+#include "sketch/measurement_linework_source.hpp"
 #include "sketch/roof_join_semantics.hpp"
 #include "sketch/slab_semantics.hpp"
 #include "sketch/survey_source_version.hpp"
@@ -1485,6 +1486,46 @@ static bool has_rigid_wall_transform(const ApplyBoundaryConstraintChanges& comma
         [](const auto& edit){return edit.version==4;});
 }
 
+static bool has_measured_source_completion(const ApplyBoundaryConstraintChanges& command) {
+    return command.measured_source_completion || !command.measured_stroke_edits.empty();
+}
+
+static void validate_measured_stroke_edit(const ApplyBoundaryConstraintChanges::MeasuredStrokeEdit& edit) {
+    if(!is_valid_identifier(edit.stroke_id) || (edit.authored_edit && edit.rigid_transform) ||
+       (edit.authored_length && (!edit.authored_edit || edit.authored_edit->kind!=BoundaryGeometryEditKind::resize_segment)) ||
+       (!edit.authored_edit && !edit.rigid_transform && edit.vertex_edits.empty()))
+        throw std::invalid_argument("Measured stroke proof has incompatible or empty intent");
+    if(edit.authored_length)(void)encode_constraint_quantity_receipt(*edit.authored_length);
+    const auto validate=[&](const BoundaryGeometryEdit& value,bool vertex_only) {
+        validate_boundary_geometry_edit(value);
+        if(value.boundary_id!=edit.stroke_id ||
+           (value.kind!=BoundaryGeometryEditKind::move_vertex &&
+            (vertex_only || value.kind!=BoundaryGeometryEditKind::resize_segment)))
+            throw std::invalid_argument("Measured stroke proof requires same-owner endpoint edits");
+    };
+    if(edit.authored_edit)validate(*edit.authored_edit,false);
+    std::set<std::string,std::less<>> vertices;
+    for(const auto& value:edit.vertex_edits) {
+        validate(value,true);
+        if(!vertices.insert(value.target_id).second)throw std::invalid_argument("Measured stroke proof repeats a vertex");
+    }
+}
+
+static Entity replay_measured_stroke_edit(const Entity& source,
+    const ApplyBoundaryConstraintChanges::MeasuredStrokeEdit& edit) {
+    validate_measured_stroke_edit(edit);
+    if(source.id!=edit.stroke_id || source.type!="measurement_linework")
+        throw std::invalid_argument("Measured stroke proof owner does not exist");
+    const auto decoded=decode_measurement_linework_model(source.properties.at("model"));
+    if(!decoded.supported())throw std::invalid_argument(decoded.diagnostic);
+    auto model=*decoded.model;
+    if(edit.authored_edit)model=edited_measurement_linework(model,*edit.authored_edit,edit.authored_length);
+    if(edit.rigid_transform)model=transformed_measurement_linework(model,*edit.rigid_transform);
+    if(!edit.vertex_edits.empty())model=edited_measurement_linework_vertices(model,edit.vertex_edits);
+    auto result=source;result.properties["model"]=encode_measurement_linework_model(model);
+    return result;
+}
+
 static bool exact_entity_payload(const Entity& left, const Entity& right) {
     return left == right && left.properties.dump() == right.properties.dump() &&
         left.extensions.dump() == right.extensions.dump();
@@ -1514,7 +1555,43 @@ static bool v6_physical_wall_extensions_supported(const Entity& previous, const 
 
 bool has_exterior_source_completion(const ApplyBoundaryConstraintChanges& command) {
     return command.exterior_source_completion || !command.physical_entity_changes.empty() ||
-        !command.exterior_source_edits.empty() || (!has_rigid_wall_transform(command) && has_supplemental_source_completion(command)) || command.exterior_corner_move.has_value();
+        !command.exterior_source_edits.empty() || (!has_rigid_wall_transform(command) &&
+            !has_measured_source_completion(command) && has_supplemental_source_completion(command)) || command.exterior_corner_move.has_value();
+}
+
+static void complete_measured_stroke_annotations(const std::map<std::string,Entity,std::less<>>& source,
+    std::map<std::string,Entity,std::less<>>& entities,
+    const ApplyBoundaryConstraintChanges& command) {
+    std::map<std::string,PlanarTransform,std::less<>> transforms;
+    for(const auto& edit:command.measured_stroke_edits)if(edit.rigid_transform) {
+        const auto& value=*edit.rigid_transform;
+        if(value.rotation_radians==0 && !value.flip_horizontal && !value.flip_vertical)continue;
+        transforms.emplace(edit.stroke_id,PlanarTransform{{},value.rotation_radians,value.flip_horizontal,value.flip_vertical,{}});
+    }
+    if(transforms.empty())return;
+    for(const auto& [id,original]:source) {
+        if(original.type!=kAnnotationEntityType)continue;
+        for(const auto& record:original.properties.at("state").at("overrides")) {
+            if(record.at("target_kind")!="area" || !record.contains("plan_label_offset_m"))continue;
+            const auto found=transforms.find(record.at("target_id").get<std::string>());
+            if(found==transforms.end())continue;
+            const auto owner=entities.find(id);
+            if(owner==entities.end() || owner->second.type!=kAnnotationEntityType)
+                throw std::invalid_argument("Measured transform overlaps removal of its label owner");
+            auto& entity=owner->second;validate_annotation_entity(entity);
+            auto& overrides=entity.properties.at("state").at("overrides");
+            const auto target=std::find_if(overrides.begin(),overrides.end(),[&](const auto& candidate) {
+                return candidate.at("target_id")==record.at("target_id") && candidate.at("target_kind")==record.at("target_kind");
+            });
+            if(target==overrides.end() || !target->contains("plan_label_offset_m") ||
+               target->at("plan_label_offset_m")!=record.at("plan_label_offset_m"))
+                throw std::invalid_argument("Measured transform overlaps an edit of its label offset");
+            const auto& offset=record.at("plan_label_offset_m");
+            const auto transformed=transform_point({offset.at(0).get<double>(),offset.at(1).get<double>()},found->second);
+            (*target)["plan_label_offset_m"]=nlohmann::json::array({transformed.x,transformed.y});
+            validate_annotation_entity(entity);
+        }
+    }
 }
 
 static std::map<std::string, Asset, std::less<>> boundary_constraint_assets(
@@ -1611,8 +1688,9 @@ std::map<std::string, Entity, std::less<>> boundary_constraint_entities(
     const std::map<std::string, Entity, std::less<>>& source,
     const ApplyBoundaryConstraintChanges& command, bool retained_replay = false) {
     const bool source_completion = has_exterior_source_completion(command);
-    if (source_completion) (void)command_to_json(Command{command});
-    if (command.boundary_edits.empty() && command.wall_edits.empty() && !source_completion)
+    const bool measured_completion=has_measured_source_completion(command);
+    if (source_completion || measured_completion) (void)command_to_json(Command{command});
+    if (command.boundary_edits.empty() && command.wall_edits.empty() && !source_completion && !measured_completion)
         document_error(DocumentErrorCode::invalid_entity,
                        "Boundary constraint transaction requires geometry edits");
     auto result = source;
@@ -1661,6 +1739,14 @@ std::map<std::string, Entity, std::less<>> boundary_constraint_entities(
         try { result.at(edit.wall_id) = replay_constraint_wall_edit(previous->second, edit); }
         catch (const std::exception& error) { document_error(DocumentErrorCode::invalid_entity,error.what()); }
         if(edit.version==4)rigid_wall_ids.insert(edit.wall_id);
+    }
+    for(const auto& edit:command.measured_stroke_edits) {
+        if(!touched.insert(edit.stroke_id).second)
+            document_error(DocumentErrorCode::duplicate_change,"Measured stroke is changed more than once: "+edit.stroke_id);
+        const auto previous=source.find(edit.stroke_id);
+        if(previous==source.end())document_error(DocumentErrorCode::invalid_entity,"Measured stroke proof owner does not exist");
+        try {result.at(edit.stroke_id)=replay_measured_stroke_edit(previous->second,edit);}
+        catch(const std::exception& error){document_error(DocumentErrorCode::invalid_entity,error.what());}
     }
     for (const auto& change : command.entity_changes) {
         if (change.kind != EntityChangeKind::upsert && change.kind != EntityChangeKind::erase)
@@ -1729,10 +1815,10 @@ std::map<std::string, Entity, std::less<>> boundary_constraint_entities(
         for (const auto& edit : command.boundary_edits) protected_ids.insert(edit.boundary_id);
         for (const auto& edit : command.exterior_source_edits) protected_ids.insert(edit.boundary_id);
         for (const auto& [id, entity] : source)
-            if (can_recognize_boundary_entity_type(entity.type) ||
+            if ((measured_completion && entity.type=="measurement_linework") || can_recognize_boundary_entity_type(entity.type) ||
                 can_recognize_boundary_dimension_entity_type(entity.type)) protected_ids.insert(id);
         for (const auto& [id, entity] : before_ordinary)
-            if (can_recognize_boundary_entity_type(entity.type) ||
+            if ((measured_completion && entity.type=="measurement_linework") || can_recognize_boundary_entity_type(entity.type) ||
                 can_recognize_boundary_dimension_entity_type(entity.type)) protected_ids.insert(id);
         for (const auto& change : command.supplemental_entity_changes) {
             if (change.kind != EntityChangeKind::upsert && change.kind != EntityChangeKind::erase)
@@ -1741,7 +1827,7 @@ std::map<std::string, Entity, std::less<>> boundary_constraint_entities(
             if (!is_valid_identifier(id))
                 document_error(DocumentErrorCode::invalid_entity, "Supplemental entity ID is invalid");
             if (protected_ids.contains(id) || (change.kind == EntityChangeKind::upsert &&
-                (can_recognize_boundary_entity_type(change.entity.type) ||
+                ((measured_completion && change.entity.type=="measurement_linework") || can_recognize_boundary_entity_type(change.entity.type) ||
                  can_recognize_boundary_dimension_entity_type(change.entity.type))))
                 document_error(DocumentErrorCode::invalid_entity,
                     "Exterior supplements cannot raw-edit a measured owner or dimension");
@@ -1796,6 +1882,13 @@ std::map<std::string, Entity, std::less<>> boundary_constraint_entities(
         } catch (const std::exception& error) {
             document_error(DocumentErrorCode::invalid_entity, error.what());
         }
+    }
+    if(measured_completion) {
+        try {
+            result=complete_measurement_linework_sources(source,result);
+            complete_measured_stroke_annotations(source,result,command);
+        }
+        catch(const std::exception& error){document_error(DocumentErrorCode::invalid_entity,error.what());}
     }
     return result;
 }
@@ -2310,6 +2403,31 @@ PlanarTransform command_transform_from_json(const nlohmann::json& value) {
             command_vec2_from_json(value.at("offset"), "command transformation offset")};
 }
 
+nlohmann::json command_measured_stroke_edit_to_json(const ApplyBoundaryConstraintChanges::MeasuredStrokeEdit& edit) {
+    validate_measured_stroke_edit(edit);
+    auto vertices=nlohmann::json::array();
+    for(const auto& vertex:edit.vertex_edits)vertices.push_back(encode_boundary_geometry_edit(vertex));
+    if(edit.rigid_transform)(void)command_transform_from_json(command_transform_to_json(*edit.rigid_transform));
+    return {{"stroke_id",edit.stroke_id},
+        {"authored_edit",edit.authored_edit ? encode_boundary_geometry_edit(*edit.authored_edit) : nlohmann::json(nullptr)},
+        {"authored_length",edit.authored_length ? encode_constraint_quantity_receipt(*edit.authored_length) : nlohmann::json(nullptr)},
+        {"rigid_transform",edit.rigid_transform ? command_transform_to_json(*edit.rigid_transform) : nlohmann::json(nullptr)},
+        {"vertex_edits",std::move(vertices)}};
+}
+
+ApplyBoundaryConstraintChanges::MeasuredStrokeEdit command_measured_stroke_edit_from_json(const nlohmann::json& value) {
+    command_exact_fields(value,{"stroke_id","authored_edit","authored_length","rigid_transform","vertex_edits"},
+        DocumentErrorCode::invalid_entity,"measured stroke proof");
+    if(!value.at("stroke_id").is_string() || !value.at("vertex_edits").is_array())
+        throw std::invalid_argument("Measured stroke proof has malformed identity or vertices");
+    ApplyBoundaryConstraintChanges::MeasuredStrokeEdit result;result.stroke_id=value.at("stroke_id").get<std::string>();
+    if(!value.at("authored_edit").is_null())result.authored_edit=decode_boundary_geometry_edit(value.at("authored_edit"));
+    if(!value.at("authored_length").is_null())result.authored_length=decode_constraint_quantity_receipt(value.at("authored_length"));
+    if(!value.at("rigid_transform").is_null())result.rigid_transform=command_transform_from_json(value.at("rigid_transform"));
+    for(const auto& vertex:value.at("vertex_edits"))result.vertex_edits.push_back(decode_boundary_geometry_edit(vertex));
+    validate_measured_stroke_edit(result);return result;
+}
+
 std::string command_bytes_to_hex(std::span<const std::byte> bytes) {
     static constexpr char hex[] = "0123456789abcdef";
     std::string result(bytes.size() * 2, '0');
@@ -2607,6 +2725,31 @@ nlohmann::json command_to_json(const Command& command) {
                         command_asset_references_to_json(typed.supplemental_asset_changes) : supplements.at("asset_changes");
                     if(encoded.dump().size()>1024*1024)throw std::invalid_argument("Rigid wall proof exceeds the persisted proof budget");
                 }
+                if(has_measured_source_completion(typed)) {
+                    encoded["version"]=11;
+                    if(!encoded.contains("wall_edits"))encoded["wall_edits"]=nlohmann::json::array();
+                    encoded["source_completion"]=has_exterior_source_completion(typed);
+                    encoded["supplemental_source_completion"]=has_supplemental_source_completion(typed);
+                    encoded["supplemental_asset_reference_completion"]=typed.supplemental_asset_reference_completion;
+                    encoded["rigid_wall_transform_completion"]=has_rigid_wall_transform(typed);
+                    encoded["measured_source_completion"]=true;
+                    encoded["measured_stroke_edits"]=nlohmann::json::array();
+                    std::set<std::string,std::less<>> owners;
+                    for(const auto& edit:typed.measured_stroke_edits) {
+                        if(!owners.insert(edit.stroke_id).second)throw std::invalid_argument("Measured stroke proof repeats an owner");
+                        encoded["measured_stroke_edits"].push_back(command_measured_stroke_edit_to_json(edit));
+                    }
+                    encoded["physical_entity_changes"]=command_to_json(ApplyEntityChanges{
+                        typed.expected_revision,typed.physical_entity_changes,{},typed.message}).at("entity_changes");
+                    if(!encoded.contains("exterior_source_edits"))encoded["exterior_source_edits"]=nlohmann::json::array();
+                    const auto supplements=command_to_json(ApplyEntityChanges{typed.expected_revision,typed.supplemental_entity_changes,
+                        typed.supplemental_asset_reference_completion ? std::vector<AssetChange>{} : typed.supplemental_asset_changes,typed.message});
+                    encoded["supplemental_entity_changes"]=supplements.at("entity_changes");
+                    encoded["supplemental_asset_changes"]=typed.supplemental_asset_reference_completion ?
+                        command_asset_references_to_json(typed.supplemental_asset_changes) : supplements.at("asset_changes");
+                    encoded["exterior_corner_move"]=typed.exterior_corner_move ? encode_exterior_corner_move(*typed.exterior_corner_move) : nlohmann::json(nullptr);
+                    if(encoded.dump().size()>1024*1024)throw std::invalid_argument("Measured constraint proof exceeds the persisted proof budget");
+                }
             } catch (const std::exception& error) {
                 document_error(DocumentErrorCode::invalid_entity, error.what());
             }
@@ -2649,7 +2792,7 @@ Command command_from_json(const nlohmann::json& value,
     try {
         if (!value.is_object() || !value.contains("version") || !value.contains("kind") ||
             !value.at("version").is_number_integer() ||
-            (value.at("version") != 1 && value.at("version") != 2 && value.at("version") != 3 && value.at("version") != 4 && value.at("version") != 5 && value.at("version") != 6 && value.at("version") != 7 && value.at("version") != 8 && value.at("version") != 9 && value.at("version") != 10) ||
+            (value.at("version") != 1 && value.at("version") != 2 && value.at("version") != 3 && value.at("version") != 4 && value.at("version") != 5 && value.at("version") != 6 && value.at("version") != 7 && value.at("version") != 8 && value.at("version") != 9 && value.at("version") != 10 && value.at("version") != 11) ||
             !value.at("kind").is_string()) {
             document_error(DocumentErrorCode::invalid_entity, "serialized command envelope is invalid");
         }
@@ -2705,8 +2848,23 @@ Command command_from_json(const nlohmann::json& value,
             return result;
         }
         if (kind == "apply_boundary_constraint_changes") {
-            const bool rigid_envelope=value.at("version")==10;
-            if(rigid_envelope) {
+            const bool measured_envelope=value.at("version")==11;
+            const bool combined_envelope=value.at("version")==10 || measured_envelope;
+            if(measured_envelope) {
+                command_exact_fields(value,{"version","kind","expected_revision","message","entity_changes","boundary_edits","wall_edits",
+                    "physical_entity_changes","exterior_source_edits","supplemental_entity_changes","supplemental_asset_changes",
+                    "source_completion","supplemental_source_completion","supplemental_asset_reference_completion",
+                    "rigid_wall_transform_completion","measured_source_completion","measured_stroke_edits","exterior_corner_move"},
+                    DocumentErrorCode::invalid_entity,"serialized measured constraint command");
+                for(const auto* flag:{"rigid_wall_transform_completion","measured_source_completion"})
+                    if(!value.at(flag).is_boolean())document_error(DocumentErrorCode::invalid_entity,"Measured completion modes must be booleans");
+                if(!value.at("measured_source_completion").get<bool>() || !value.at("measured_stroke_edits").is_array())
+                    document_error(DocumentErrorCode::invalid_entity,"Envelope eleven requires measured source completion");
+            }
+            const bool rigid_envelope=value.at("version")==10 ||
+                (measured_envelope && value.at("rigid_wall_transform_completion").get<bool>());
+            if(combined_envelope) {
+                if(!measured_envelope)
                 command_exact_fields(value,{"version","kind","expected_revision","message","entity_changes","boundary_edits","wall_edits",
                     "physical_entity_changes","exterior_source_edits","supplemental_entity_changes","supplemental_asset_changes",
                     "source_completion","supplemental_source_completion","supplemental_asset_reference_completion"},
@@ -2716,16 +2874,18 @@ Command command_from_json(const nlohmann::json& value,
                 if(value.dump().size()>1024*1024)document_error(DocumentErrorCode::invalid_entity,"Rigid wall proof exceeds the persisted proof budget");
             }
             const bool mixed = value.at("version") != 1;
-            const bool asset_references = rigid_envelope ? value.at("supplemental_asset_reference_completion").get<bool>() : value.at("version") == 9;
-            const bool supplements = rigid_envelope ? value.at("supplemental_source_completion").get<bool>() : value.at("version") == 7 || asset_references;
-            const bool corner_move = value.at("version") == 8;
-            const bool source_completion = rigid_envelope ? value.at("source_completion").get<bool>() : value.at("version") == 6 || supplements || corner_move;
-            if(rigid_envelope) {
+            const bool asset_references = combined_envelope ? value.at("supplemental_asset_reference_completion").get<bool>() : value.at("version") == 9;
+            const bool supplements = combined_envelope ? value.at("supplemental_source_completion").get<bool>() : value.at("version") == 7 || asset_references;
+            const bool corner_move = value.at("version") == 8 || (measured_envelope && !value.at("exterior_corner_move").is_null());
+            const bool source_completion = combined_envelope ? value.at("source_completion").get<bool>() : value.at("version") == 6 || supplements || corner_move;
+            if(combined_envelope) {
                 for(const auto* lane:{"physical_entity_changes","exterior_source_edits","supplemental_entity_changes","supplemental_asset_changes"})
                     if(!value.at(lane).is_array())document_error(DocumentErrorCode::invalid_entity,"Rigid wall command lanes must be arrays");
                 if((!source_completion && (!value.at("physical_entity_changes").empty() || !value.at("exterior_source_edits").empty())) ||
                     (!supplements && (asset_references || !value.at("supplemental_entity_changes").empty() || !value.at("supplemental_asset_changes").empty())))
                     document_error(DocumentErrorCode::invalid_entity,"Rigid wall completion modes disagree with retained lanes");
+                if(corner_move && (!source_completion || supplements || rigid_envelope))
+                    document_error(DocumentErrorCode::invalid_entity,"Exterior corner mode conflicts with other completion modes");
             }
             else if (corner_move) command_exact_fields(value, {"version","kind","expected_revision","message",
                 "entity_changes","boundary_edits","wall_edits","physical_entity_changes","exterior_source_edits","exterior_corner_move"},
@@ -2749,7 +2909,7 @@ Command command_from_json(const nlohmann::json& value,
                                           "entity_changes", "boundary_edits"},
                                  DocumentErrorCode::invalid_entity, "serialized boundary constraint command");
             if (!value.at("boundary_edits").is_array() ||
-                (value.at("boundary_edits").empty() && value.at("version")!=3 && value.at("version")!=4 && value.at("version")!=5 && !source_completion && !rigid_envelope))
+                (value.at("boundary_edits").empty() && value.at("version")!=3 && value.at("version")!=4 && value.at("version")!=5 && !source_completion && !rigid_envelope && !measured_envelope))
                 document_error(DocumentErrorCode::invalid_entity, "Boundary edits must be a nonempty array");
             if (value.at("version")==4 && !value.at("boundary_edits").empty())
                 document_error(DocumentErrorCode::invalid_entity, "Version 4 requires a straight wall-only transaction");
@@ -2766,6 +2926,9 @@ Command command_from_json(const nlohmann::json& value,
             ordinary.erase("source_completion");
             ordinary.erase("supplemental_source_completion");
             ordinary.erase("supplemental_asset_reference_completion");
+            ordinary.erase("rigid_wall_transform_completion");
+            ordinary.erase("measured_source_completion");
+            ordinary.erase("measured_stroke_edits");
             ordinary["asset_changes"] = nlohmann::json::array();
             const auto changes = std::get<ApplyEntityChanges>(command_from_json(ordinary));
             ApplyBoundaryConstraintChanges result{
@@ -2774,7 +2937,16 @@ Command command_from_json(const nlohmann::json& value,
             result.supplemental_source_completion = supplements;
             result.supplemental_asset_reference_completion = asset_references;
             result.rigid_wall_transform_completion=rigid_envelope;
+            result.measured_source_completion=measured_envelope;
             try {
+                if(measured_envelope) {
+                    std::set<std::string,std::less<>> owners;
+                    for(const auto& edit:value.at("measured_stroke_edits")) {
+                        auto decoded=command_measured_stroke_edit_from_json(edit);
+                        if(!owners.insert(decoded.stroke_id).second)throw std::invalid_argument("Measured stroke proof repeats an owner");
+                        result.measured_stroke_edits.push_back(std::move(decoded));
+                    }
+                }
                 if (corner_move) {
                     if (value.dump().size() > 1024 * 1024) throw std::invalid_argument("Exterior corner proof exceeds the persisted proof budget");
                     result.exterior_corner_move = decode_exterior_corner_move(value.at("exterior_corner_move"));
@@ -2784,7 +2956,7 @@ Command command_from_json(const nlohmann::json& value,
                 for (const auto& edit : value.at("boundary_edits"))
                     result.boundary_edits.push_back(decode_boundary_geometry_edit(edit));
                 if (mixed) {
-                    if (!value.at("wall_edits").is_array() || (value.at("wall_edits").empty() && !source_completion && !rigid_envelope))
+                    if (!value.at("wall_edits").is_array() || (value.at("wall_edits").empty() && !source_completion && !rigid_envelope && !measured_envelope))
                         document_error(DocumentErrorCode::invalid_entity,"Versioned wall transaction requires nonempty wall edits");
                     for (const auto& edit : value.at("wall_edits"))
                         result.wall_edits.push_back(decode_constraint_wall_edit(edit));
@@ -2794,9 +2966,9 @@ Command command_from_json(const nlohmann::json& value,
                         [](const auto& edit) { return edit.version==3; });
                     const bool curved=std::any_of(result.wall_edits.begin(),result.wall_edits.end(),
                         [](const auto& edit) { return edit.version==2; });
-                    if (!source_completion && !rigid_envelope && physical_curve!=(value.at("version")==5))
+                    if (!source_completion && !rigid_envelope && !measured_envelope && physical_curve!=(value.at("version")==5))
                         document_error(DocumentErrorCode::invalid_entity,"Physical curve-length proof requires exactly command version 5");
-                    if (!source_completion && !rigid_envelope && !physical_curve && curved!=(value.at("version")==3))
+                    if (!source_completion && !rigid_envelope && !measured_envelope && !physical_curve && curved!=(value.at("version")==3))
                         document_error(DocumentErrorCode::invalid_entity,"Curved wall proof requires exactly command version 3");
                 }
                 if (source_completion) {

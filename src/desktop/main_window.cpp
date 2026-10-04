@@ -347,6 +347,10 @@ void remap_entity_references(Entity& entity,
         for (auto& operation : model.operations)
             if (auto* edit = std::get_if<MeasurementLineworkEdit>(&operation)) {
                 identity(edit->intent.boundary_id); identity(edit->intent.target_id);
+            } else if(auto* batch=std::get_if<MeasurementLineworkVertexBatch>(&operation)) {
+                for(auto& vertex_edit:batch->edits) {
+                    identity(vertex_edit.boundary_id);identity(vertex_edit.target_id);
+                }
             }
         properties["model"] = encode_measurement_linework_model(model);
     }
@@ -5291,11 +5295,61 @@ public:
             throw std::invalid_argument("The selected measured stroke is unavailable.");
         const auto decoded=decode_measurement_linework_model(found->second.properties.at("model"));
         if (!decoded.supported()) throw std::invalid_argument(decoded.diagnostic);
-        auto replacement=found->second;
-        replacement.properties["model"]=encode_measurement_linework_model(
-            edited_measurement_linework(*decoded.model,edit,std::move(authored_length)));
-        return completeMeasuredAreaConsequences(source,Command{ApplyEntityChanges{source.revision(),
-            {EntityChange::upsert(std::move(replacement))},{},"edit measured stroke geometry"}});
+        const auto edited=edited_measurement_linework(*decoded.model,edit,authored_length);
+        if(encode_measurement_linework_model(edited)==found->second.properties.at("model"))
+            return ApplyEntityChanges{source.revision(),{}, {},"Edit measured stroke"};
+        ConstraintAuthoringIntent intent;intent.message="Edit measured stroke and connected geometry";
+        if(edit.kind==BoundaryGeometryEditKind::move_vertex)
+            intent.measured_stroke_vertex_move=MeasuredStrokeVertexMoveIntent{edit,true};
+        else {
+            if(!authored_length)throw std::invalid_argument("Enter the measured edge's new length explicitly.");
+            intent.measured_stroke_resize=MeasuredStrokeResizeIntent{edit,*authored_length,true};
+        }
+        const auto preview=preview_constraint_authoring(source,intent);
+        requireAcceptedConstraintPreview(preview);
+        auto document=Document::fork(source);apply_constraint_authoring(document,preview);
+        const auto candidate=document.snapshot();
+        const auto& proof=candidate.history().back().boundary_constraint_changes;
+        if(!proof)throw std::invalid_argument("Measured edit did not retain its typed geometry history.");
+        return *proof;
+    }
+
+    static Command measuredStrokeTransformCommand(const DocumentSnapshot& source,
+        const QStringList& ids,const PlanarTransform& transform) {
+        if(transform.rotation_radians==0.0 && !transform.flip_horizontal && !transform.flip_vertical &&
+           transform.offset.x==0.0 && transform.offset.y==0.0)
+            return ApplyEntityChanges{source.revision(),{}, {},"Transform measured strokes"};
+        ConstraintAuthoringIntent intent;intent.message="Transform measured strokes and connected geometry";
+        MeasuredStrokeTransformIntent movement;std::set<std::string,std::less<>> selected;
+        for(const auto& id:ids) {
+            selected.insert(id.toStdString());movement.targets.push_back({id.toStdString(),transform});
+        }
+        intent.measured_stroke_transform=std::move(movement);
+        for(const auto& [id,entity]:source.entities()) {
+            (void)id;if(entity.type!="constraint")continue;
+            const auto decoded=decode_constraint_entity(entity);
+            if(!decoded.supported())throw std::invalid_argument(decoded.unsupported_reason);
+            auto constraint=*decoded.constraint;
+            if(!std::all_of(constraint.bindings.begin(),constraint.bindings.end(),
+                [&](const auto& binding){return selected.contains(binding.owner_id);}))continue;
+            if(constraint.anchor)constraint.anchor=transform_point(*constraint.anchor,transform);
+            if(constraint.relation==ConstraintRelationKind::horizontal || constraint.relation==ConstraintRelationKind::vertical) {
+                if(std::abs(std::remainder(transform.rotation_radians,std::numbers::pi/2))>1e-12)
+                    throw std::invalid_argument("A horizontal or vertical lock requires quarter-turn rotation. Review the relation before using another angle.");
+                if(std::llround(transform.rotation_radians/(std::numbers::pi/2))%2!=0)
+                    constraint.relation=constraint.relation==ConstraintRelationKind::horizontal
+                        ? ConstraintRelationKind::vertical : ConstraintRelationKind::horizontal;
+            }
+            if(encode_constraint_entity(constraint,&entity)!=entity)
+                intent.relation_mutations.push_back(ConstraintRelationMutation::upsert(std::move(constraint)));
+        }
+        const auto preview=preview_constraint_authoring(source,intent);
+        requireAcceptedConstraintPreview(preview);
+        auto document=Document::fork(source);apply_constraint_authoring(document,preview);
+        const auto candidate=document.snapshot();
+        const auto& proof=candidate.history().back().boundary_constraint_changes;
+        if(!proof)throw std::invalid_argument("Measured transform did not retain its typed geometry history.");
+        return *proof;
     }
 
     static void includeMeasuredAreaSources(const DocumentSnapshot& source,std::vector<Entity>& graph) {
@@ -5326,6 +5380,9 @@ public:
     Command makeSelectionGeometryTransformCommand(const DocumentSnapshot& source,
         const QStringList& root_ids, const PlanarTransform& transform,
         std::vector<EntityChange> supplemental_changes = {}) {
+        if(supplemental_changes.empty() && !root_ids.isEmpty() &&
+           std::all_of(root_ids.begin(),root_ids.end(),[&](const auto& id){return source.entities().at(id.toStdString()).type=="measurement_linework";}))
+            return measuredStrokeTransformCommand(source,root_ids,transform);
         std::vector<Entity> selected_roots;
         for (const auto& id : root_ids) {
             const auto found=source.entities().find(id.toStdString());
@@ -5411,6 +5468,9 @@ public:
 
     Command makeSelectionGeometryTranslationCommand(const DocumentSnapshot& source,
         QStringList model_ids, Vec2 offset, std::vector<EntityChange> changes = {}) {
+        if(changes.empty() && !model_ids.isEmpty() &&
+           std::all_of(model_ids.begin(),model_ids.end(),[&](const auto& id){return source.entities().at(id.toStdString()).type=="measurement_linework";}))
+            return measuredStrokeTransformCommand(source,model_ids,PlanarTransform{{},0.0,false,false,offset});
         std::vector<Entity> selected_roots;
         for (const auto& id : model_ids) {
             const auto found = source.entities().find(id.toStdString());
@@ -21060,7 +21120,7 @@ public:
                 setError(dialog.lastError());
                 return false;
             }
-            applyConstraintPreview(*dialog.acceptedPreview());
+            if (const auto preview = dialog.acceptedPreview()) applyConstraintPreview(*preview);
             clearError();
             refresh();
             return true;
@@ -36605,7 +36665,7 @@ public:
             if (dialog.exec() != QDialog::Accepted) { refreshInspector(); return; }
             if (!modalContextUnchanged(context)) return;
             const auto preview = dialog.acceptedPreview();
-            if (!preview) return;
+            if (!preview) { clearError(); refreshInspector(); return; }
             applyConstraintPreview(*preview);
             clearError();
             refresh();

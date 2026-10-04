@@ -187,6 +187,13 @@ std::string digest_shown_result(const ConstraintAuthoringPreview& preview) {
     auto exterior_source_edits = ordered_json::array();
     for (const auto& edit : preview.exterior_source_edits())
         exterior_source_edits.push_back(encode_boundary_geometry_edit(edit));
+    auto measured_changes = ordered_json::array();
+    for (const auto& change : preview.changed_measured_strokes()) {
+        auto before = ordered_json::array(), after = ordered_json::array();
+        for (const auto& edge : change.before.edges) before.push_back(segment_json(edge.segment));
+        for (const auto& edge : change.after.edges) after.push_back(segment_json(edge.segment));
+        measured_changes.push_back({{"stroke_id",change.stroke_id},{"before",before},{"after",after}});
+    }
     return digest_json({{"accepted", preview.accepted()},
                         {"document_id", preview.document_id()},
                         {"revision", preview.expected_revision()},
@@ -194,6 +201,7 @@ std::string digest_shown_result(const ConstraintAuthoringPreview& preview) {
                         {"candidate_digest", preview.candidate_digest()},
                         {"changes", std::move(changes)},
                         {"boundary_changes", std::move(boundary_changes)},
+                        {"measured_changes", std::move(measured_changes)},
                         {"degrees_of_freedom", preview.degrees_of_freedom()},
                         {"boundary_edits", std::move(boundary_edits)},
                         {"exterior_source_edits", std::move(exterior_source_edits)},
@@ -227,9 +235,35 @@ ConstraintAuthoringIntent normalize_intent(const ConstraintAuthoringIntent& inpu
         static_cast<unsigned>(result.wall_geometry_move.has_value()) +
         static_cast<unsigned>(result.boundary_resize.has_value()) +
         static_cast<unsigned>(result.boundary_vertex_move.has_value()) +
-        static_cast<unsigned>(result.exterior_corner_move.has_value());
+        static_cast<unsigned>(result.exterior_corner_move.has_value()) +
+        static_cast<unsigned>(result.measured_stroke_resize.has_value()) +
+        static_cast<unsigned>(result.measured_stroke_vertex_move.has_value()) +
+        static_cast<unsigned>(result.measured_stroke_transform.has_value());
     if (coordinate_intents > 1)
         invalid("Only one wall or boundary coordinate intent may be authored at a time");
+    if (result.measured_stroke_resize) {
+        auto& resize = *result.measured_stroke_resize;
+        if (resize.edit.kind != BoundaryGeometryEditKind::resize_segment)
+            invalid("Measured stroke resize requires a resize intent");
+        validate_boundary_geometry_edit(resize.edit);
+        resize.exact_length = normalize_positive_quantity(resize.exact_length);
+        if (resize.exact_length.metres != resize.edit.target_length_metres)
+            invalid("Measured stroke resize differs from its exact entered quantity");
+    }
+    if (result.measured_stroke_vertex_move) {
+        const auto& edit = result.measured_stroke_vertex_move->edit;
+        if (edit.kind != BoundaryGeometryEditKind::move_vertex)
+            invalid("Measured stroke vertex move requires a move intent");
+        validate_boundary_geometry_edit(edit);
+    }
+    if (result.measured_stroke_transform) {
+        const auto& move = *result.measured_stroke_transform;
+        if (move.targets.empty()) invalid("Measured stroke transform requires selected owners");
+        std::set<std::string,std::less<>> ids;
+        for (const auto& target : move.targets)
+            if (target.stroke_id.empty() || !ids.insert(target.stroke_id).second)
+                invalid("Measured stroke transform owners must be unique and nonempty");
+    }
     if (result.boundary_resize.has_value()) {
         const auto& edit = result.boundary_resize->edit;
         if (edit.kind != BoundaryGeometryEditKind::resize_segment)
@@ -308,6 +342,7 @@ ConstraintAuthoringIntent normalize_intent(const ConstraintAuthoringIntent& inpu
         !result.boundary_resize.has_value() &&
         !result.boundary_vertex_move.has_value() &&
         !result.exterior_corner_move.has_value() &&
+        !result.measured_stroke_resize && !result.measured_stroke_vertex_move && !result.measured_stroke_transform &&
         result.relation_mutations.empty()) {
         invalid("Constraint authoring intent has no changes");
     }
@@ -577,6 +612,7 @@ class ConstraintAuthoringBuilder final {
 public:
     static ConstraintAuthoringPreview build(const DocumentSnapshot& snapshot,
                                              const ConstraintAuthoringIntent& raw_intent);
+    static Command command_for(const DocumentSnapshot& snapshot, const ConstraintAuthoringPreview& preview);
 };
 
 ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(
@@ -690,6 +726,31 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(
         if (boundary_edit) {
             seeds.insert(boundary_edit->boundary_id);
         }
+        std::map<std::string, ApplyBoundaryConstraintChanges::MeasuredStrokeEdit, std::less<>> selected_stroke_edits;
+        const auto admit_stroke = [&](ApplyBoundaryConstraintChanges::MeasuredStrokeEdit edit) {
+            const auto found = candidate.find(edit.stroke_id);
+            if (found == candidate.end() || found->second.type != "measurement_linework")
+                invalid("Measured coordinate intent requires an existing measured stroke");
+            const auto decoded = decode_measurement_linework_model(found->second.properties.at("model"));
+            if (!decoded.supported()) invalid(decoded.diagnostic);
+            auto model = *decoded.model;
+            if (edit.authored_edit) model = edited_measurement_linework(model,*edit.authored_edit,edit.authored_length);
+            if (edit.rigid_transform) model = transformed_measurement_linework(model,*edit.rigid_transform);
+            found->second.properties["model"] = encode_measurement_linework_model(model);
+            seeds.insert(edit.stroke_id);
+            selected_stroke_edits.emplace(edit.stroke_id,std::move(edit));
+        };
+        if (intent.measured_stroke_resize) {
+            const auto& resize = *intent.measured_stroke_resize;
+            admit_stroke({resize.edit.boundary_id,resize.edit,resize.exact_length,std::nullopt,{}});
+        }
+        if (intent.measured_stroke_vertex_move) {
+            const auto& move = *intent.measured_stroke_vertex_move;
+            admit_stroke({move.edit.boundary_id,move.edit,std::nullopt,std::nullopt,{}});
+        }
+        if (intent.measured_stroke_transform)
+            for (const auto& target : intent.measured_stroke_transform->targets)
+                admit_stroke({target.stroke_id,std::nullopt,std::nullopt,target.transform,{}});
         const auto constraints = decode_supported_constraints(candidate);
         std::map<std::string, std::set<std::string, std::less<>>, std::less<>> adjacency;
         for (const auto& [id, value] : constraints) {
@@ -761,6 +822,7 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(
 
         std::map<std::string, Segment, std::less<>> old_baselines;
         std::map<std::string, IdentifiedBoundary, std::less<>> boundaries;
+        std::map<std::string, IdentifiedBoundary, std::less<>> measured_strokes;
         std::map<std::string, Vec2, std::less<>> positions;
         std::set<std::string, std::less<>> affected_walls;
         std::map<std::string, WallEndpointBinding, std::less<>> point_bindings;
@@ -770,6 +832,23 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(
         for (const auto& wall_id : affected) {
             const auto owner = candidate.find(wall_id);
             if (owner == candidate.end()) invalid("Constraint owner does not exist: " + wall_id);
+            if (owner->second.type == "measurement_linework") {
+                auto stroke = resolve_constraint_segment_owner(snapshot.entities().at(wall_id));
+                result.measured_source_completion_ = true;
+                for (const auto& edge : stroke.segments)
+                    for (const auto role : {WallEndpointRole::start,WallEndpointRole::end}) {
+                        WallEndpointBinding binding{wall_id,role,edge.segment_id,
+                            role == WallEndpointRole::start ? edge.start_vertex_id : edge.end_vertex_id};
+                        const auto id = point_id(binding);
+                        const auto position = endpoint_position(edge.segment,role);
+                        if (positions.emplace(id,position).second) {
+                            point_bindings.emplace(id,binding);
+                            request.points.push_back({id,position.x,position.y});
+                        }
+                    }
+                measured_strokes.emplace(wall_id,std::move(stroke));
+                continue;
+            }
             if (can_recognize_boundary_entity_type(owner->second.type)) {
                 auto boundary = decode_identified_boundary_entity(snapshot.entities().at(wall_id));
                 const auto initial_boundary = decode_identified_boundary_entity(owner->second);
@@ -815,8 +894,9 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(
         const auto resolve = [&](const WallEndpointBinding& binding) {
             validate_binding(binding);
             const auto boundary = boundaries.find(binding.owner_id);
-            if (boundary != boundaries.end()) {
-                const auto& edges = boundary->second.segments;
+            const auto stroke = measured_strokes.find(binding.owner_id);
+            if (boundary != boundaries.end() || stroke != measured_strokes.end()) {
+                const auto& edges = boundary != boundaries.end() ? boundary->second.segments : stroke->second.segments;
                 const auto edge = std::find_if(edges.begin(), edges.end(),
                     [&](const auto& e) { return e.segment_id == binding.segment_id; });
                 if (edge == edges.end() ||
@@ -998,6 +1078,29 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(
                     add_fixed(binding, position);
                 }
             }
+        } else if (!selected_stroke_edits.empty()) {
+            std::set<std::string,std::less<>> movable_component;
+            for (const auto& [owner_id, edit] : selected_stroke_edits) {
+                (void)edit;
+                const auto proposed = resolve_constraint_segment_owner(candidate.at(owner_id));
+                for (const auto& edge : proposed.segments)
+                    for (const auto role : {WallEndpointRole::start,WallEndpointRole::end})
+                        add_fixed({owner_id,role,edge.segment_id,
+                            role == WallEndpointRole::start ? edge.start_vertex_id : edge.end_vertex_id},
+                            endpoint_position(edge.segment,role));
+                const auto component = connected_from(owner_id);
+                movable_component.insert(component.begin(),component.end());
+            }
+            if (has_upsert && intent.relation_anchor && !movable_component.contains(intent.relation_anchor->owner_id))
+                invalid("Relation anchor is outside the edited measured component");
+            const bool move_related = intent.measured_stroke_resize ? intent.measured_stroke_resize->move_related_objects :
+                intent.measured_stroke_vertex_move ? intent.measured_stroke_vertex_move->move_related_objects :
+                intent.measured_stroke_transform->move_related_objects;
+            for (const auto& [id,position] : positions) {
+                const auto& binding = point_bindings.at(id);
+                if (selected_stroke_edits.contains(binding.owner_id)) continue;
+                if (!move_related || !movable_component.contains(binding.owner_id)) add_fixed(binding,position);
+            }
         } else if (boundary_edit) {
             const auto& owner_id = boundary_edit->boundary_id;
             if (!boundaries.contains(owner_id))
@@ -1039,7 +1142,7 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(
         }
         if (has_upsert && intent.relation_anchor.has_value() &&
             (intent.wall_resize.has_value() || intent.wall_geometry_move.has_value() ||
-             boundary_edit)) {
+             boundary_edit || !selected_stroke_edits.empty())) {
             const auto& anchor = *intent.relation_anchor;
             add_fixed(anchor, positions.at(resolve(anchor)));
         }
@@ -1123,6 +1226,34 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(
             result.boundary_edits_.push_back(std::move(edit));
         }
         candidate = edited_boundary_entities_batch(candidate, result.boundary_edits_);
+        for (const auto& [owner_id, before] : measured_strokes) {
+            auto proof = selected_stroke_edits.contains(owner_id) ? selected_stroke_edits.at(owner_id) :
+                ApplyBoundaryConstraintChanges::MeasuredStrokeEdit{owner_id,std::nullopt,std::nullopt,std::nullopt,{}};
+            const auto current = resolve_constraint_segment_owner(candidate.at(owner_id));
+            std::set<std::string,std::less<>> seen;
+            for (const auto& edge : current.segments)
+                for (const auto role : {WallEndpointRole::start,WallEndpointRole::end}) {
+                    const auto& vertex = role == WallEndpointRole::start ? edge.start_vertex_id : edge.end_vertex_id;
+                    if (!seen.insert(vertex).second) continue;
+                    WallEndpointBinding binding{owner_id,role,edge.segment_id,vertex};
+                    const auto solved = solved_points.at(point_id(binding));
+                    if (points_near(solved,endpoint_position(edge.segment,role))) continue;
+                    BoundaryGeometryEdit edit;
+                    edit.boundary_id = owner_id; edit.target_id = vertex; edit.target_position = solved;
+                    proof.vertex_edits.push_back(std::move(edit));
+                }
+            auto& entity = candidate.at(owner_id);
+            const auto model = decode_measurement_linework_model(entity.properties.at("model"));
+            entity.properties["model"] = encode_measurement_linework_model(
+                edited_measurement_linework_vertices(*model.model,proof.vertex_edits));
+            if (entity != snapshot.entities().at(owner_id)) {
+                result.measured_stroke_edits_.push_back(std::move(proof));
+                result.changed_measured_strokes_.push_back({owner_id,
+                    replay_measurement_linework(*decode_measurement_linework_model(snapshot.entities().at(owner_id).properties.at("model")).model),
+                    replay_measurement_linework(*decode_measurement_linework_model(entity.properties.at("model")).model)});
+            }
+            (void)before;
+        }
         // Recompute every redraw from the original measured owners and final
         // solved physical geometry; the intermediate derived copies are pins.
         for (const auto& id : exterior_owner_ids) candidate.at(id) = snapshot.entities().at(id);
@@ -1166,12 +1297,29 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(
             result.changed_boundaries_.clear();
             result.boundary_edits_.clear();
             result.exterior_source_edits_.clear();
+            result.changed_measured_strokes_.clear();
+            result.measured_stroke_edits_.clear();
             result.diagnostics_.push_back("Constraint authoring intent makes no document change");
             return result;
         }
 
         result.accepted_ = true;
         result.candidate_entities_ = std::move(candidate);
+        if (result.measured_source_completion_) {
+            const auto completed = Document::preview_command(snapshot,command_for(snapshot,result));
+            result.candidate_entities_ = completed.entities();
+            (void)validate_constraint_integrity(result.candidate_entities_);
+            result.changed_boundaries_.clear();
+            for (const auto& [id, before] : snapshot.entities()) {
+                const auto after = result.candidate_entities_.find(id);
+                if (!can_recognize_boundary_entity_type(before.type) || after == result.candidate_entities_.end() ||
+                    before == after->second || inspect_boundary_entity_version(before).format != BoundaryEntityFormat::identified_v1)
+                    continue;
+                const auto original = decode_identified_boundary_entity(before);
+                const auto proposed = decode_identified_boundary_entity(after->second);
+                if (original != proposed) result.changed_boundaries_.push_back({original,proposed});
+            }
+        }
         result.candidate_digest_ = entity_map_digest(result.candidate_entities_);
         result.shown_result_digest_ = digest_shown_result(result);
         return result;
@@ -1181,6 +1329,8 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(
         result.changed_boundaries_.clear();
         result.boundary_edits_.clear();
         result.exterior_source_edits_.clear();
+        result.changed_measured_strokes_.clear();
+        result.measured_stroke_edits_.clear();
         result.candidate_entities_ = snapshot.entities();
         result.candidate_digest_.clear();
         result.shown_result_digest_.clear();
@@ -1222,6 +1372,9 @@ const std::vector<ConstraintBoundaryChange>& ConstraintAuthoringPreview::changed
 int ConstraintAuthoringPreview::degrees_of_freedom() const noexcept { return degrees_of_freedom_; }
 const std::vector<BoundaryGeometryEdit>& ConstraintAuthoringPreview::boundary_edits() const noexcept {
     return boundary_edits_;
+}
+const std::vector<ConstraintMeasuredStrokeChange>& ConstraintAuthoringPreview::changed_measured_strokes() const noexcept {
+    return changed_measured_strokes_;
 }
 
 const std::vector<BoundaryGeometryEdit>& ConstraintAuthoringPreview::exterior_source_edits() const noexcept {
@@ -1331,10 +1484,12 @@ PersistentConstraintComponentAnalysis analyze_persistent_constraint_component(
                 walls.emplace(id, baseline);
                 for (const auto role : {WallEndpointRole::start, WallEndpointRole::end})
                     add_point({id,role}, endpoint_position(baseline,role));
-            } else if (can_recognize_boundary_entity_type(entity.type)) {
-                auto boundary = decode_identified_boundary_entity(entity);
+            } else if (can_recognize_boundary_entity_type(entity.type) || entity.type == "measurement_linework") {
+                auto boundary = resolve_constraint_segment_owner(entity);
                 for (const auto& edge : boundary.segments) {
                     add_point({id,WallEndpointRole::start,edge.segment_id,edge.start_vertex_id}, edge.segment.start);
+                    if (entity.type == "measurement_linework")
+                        add_point({id,WallEndpointRole::end,edge.segment_id,edge.end_vertex_id},edge.segment.end);
                 }
                 boundaries.emplace(id, std::move(boundary));
             } else {
@@ -1423,6 +1578,17 @@ Command constraint_authoring_verified_command(const DocumentSnapshot& current,
                             "Constraint preview no longer reproduces the shown result");
     }
 
+    const auto command = ConstraintAuthoringBuilder::command_for(current,recomputed);
+    const auto verified = Document::preview_command(current,command);
+    if (verified.entities() != recomputed.candidate_entities_ || verified.assets() != current.assets())
+        throw DocumentError(DocumentErrorCode::invalid_entity,
+                            "Constraint replay does not reproduce the shown result");
+    if (candidate) *candidate = verified;
+    return command;
+}
+
+Command ConstraintAuthoringBuilder::command_for(const DocumentSnapshot& current,
+    const ConstraintAuthoringPreview& recomputed) {
     std::vector<EntityChange> changes;
     for (const auto& [id, entity] : current.entities()) {
         const auto found = recomputed.candidate_entities_.find(id);
@@ -1442,7 +1608,7 @@ Command constraint_authoring_verified_command(const DocumentSnapshot& current,
                             "Constraint preview does not contain a document change");
     }
     if (!recomputed.boundary_edits_.empty() || !recomputed.changed_walls_.empty() ||
-        !recomputed.exterior_source_edits_.empty()) {
+        !recomputed.exterior_source_edits_.empty() || recomputed.measured_source_completion_) {
         std::vector<EntityChange> constraint_changes;
         for (const auto& change : changes) {
             const auto id = change.kind == EntityChangeKind::upsert
@@ -1462,6 +1628,8 @@ Command constraint_authoring_verified_command(const DocumentSnapshot& current,
         command.exterior_source_edits = recomputed.exterior_source_edits_;
         command.exterior_source_completion = !recomputed.exterior_source_edits_.empty();
         command.exterior_corner_move = recomputed.normalized_intent_.exterior_corner_move;
+        command.measured_stroke_edits = recomputed.measured_stroke_edits_;
+        command.measured_source_completion = recomputed.measured_source_completion_;
         for (const auto& wall : recomputed.changed_walls_) {
             if (command.exterior_corner_move) {
                 const auto ids = exterior_corner_perimeter_ids(current.entities(),current.entities().at(command.exterior_corner_move->boundary_id));
@@ -1480,13 +1648,6 @@ Command constraint_authoring_verified_command(const DocumentSnapshot& current,
                 length_entry, proof_version,rigid_transform});
             command.rigid_wall_transform_completion=command.rigid_wall_transform_completion || rigid_transform.has_value();
         }
-        const auto verified = Document::preview_command(current, Command{command});
-        if (verified.entities() != recomputed.candidate_entities_ ||
-            verified.assets() != current.assets()) {
-            throw DocumentError(DocumentErrorCode::invalid_entity,
-                                "Typed boundary constraint replay does not reproduce the shown result");
-        }
-        if (candidate) *candidate = verified;
         return Command{std::move(command)};
     }
     Command command = ApplyEntityChanges{
@@ -1494,11 +1655,6 @@ Command constraint_authoring_verified_command(const DocumentSnapshot& current,
         .entity_changes = std::move(changes),
         .message = recomputed.normalized_intent_.message,
     };
-    const auto verified = Document::preview_command(current, command);
-    if (verified.entities() != recomputed.candidate_entities_ || verified.assets() != current.assets())
-        throw DocumentError(DocumentErrorCode::invalid_entity,
-                            "Constraint replay does not reproduce the shown result");
-    if (candidate) *candidate = verified;
     return command;
 }
 

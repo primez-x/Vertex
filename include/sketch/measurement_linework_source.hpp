@@ -27,6 +27,13 @@ struct MeasurementLineworkSourceCheck {
 [[nodiscard]] std::map<std::string,MeasurementLineworkSourceCheck,std::less<>>
 measurement_linework_source_checks(const std::map<std::string,Entity,std::less<>>& entities,
     const std::set<std::string,std::less<>>* semantic_visible=nullptr);
+// Reconstruct only previously current, unambiguous, unauthored consumers
+// from the final source geometry. Preserves area IDs, facts and topology.
+// Active semantic phases apply; presentation visibility does not.
+[[nodiscard]] std::map<std::string,Entity,std::less<>>
+complete_measurement_linework_sources(
+    const std::map<std::string,Entity,std::less<>>& before,
+    const std::map<std::string,Entity,std::less<>>& candidate);
 [[nodiscard]] bool measurement_linework_sources_visible(const Entity& area,
     const std::set<std::string,std::less<>>* semantic_visible);
 [[nodiscard]] inline bool measurement_linework_source_current(

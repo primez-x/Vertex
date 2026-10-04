@@ -47,6 +47,21 @@ Segment baseline(const Entity& entity) {
     return {point(value.at("start")), point(value.at("end")), value.at("sweep_radians").get<double>()};
 }
 
+struct EndpointEdge { std::string segment_id, start_vertex_id, end_vertex_id; Segment segment; };
+std::vector<EndpointEdge> endpoint_edges(const Entity& entity) {
+    std::vector<EndpointEdge> result;
+    if(entity.type=="measurement_linework") {
+        const auto decoded=decode_measurement_linework_model(entity.properties.at("model"));
+        if(!decoded.supported())throw std::invalid_argument(decoded.diagnostic);
+        for(const auto& edge:replay_measurement_linework(*decoded.model).edges)
+            result.push_back({edge.segment_id,edge.start_vertex_id,edge.end_vertex_id,edge.segment});
+    } else {
+        for(const auto& edge:decode_identified_boundary_entity(entity).segments)
+            result.push_back({edge.segment_id,edge.start_vertex_id,edge.end_vertex_id,edge.segment});
+    }
+    return result;
+}
+
 QString dimension(double metres, bool metric) {
     return QString::number(metric ? metres : metres / 0.3048, 'g', 9) +
         (metric ? QStringLiteral(" m") : QStringLiteral(" ft"));
@@ -134,10 +149,11 @@ public:
         owner->setObjectName(QStringLiteral("constraintDialog"));
         const auto& selected = snapshot.entities().at(selected_id);
         if (!ConstraintDialog::supportsEntity(selected))
-            throw std::invalid_argument("Select a valid wall or an identified boundary");
+            throw std::invalid_argument("Select a valid wall, measured stroke or identified boundary");
+        measured_mode = selected.type == "measurement_linework";
         boundary_mode = selected.type != "wall";
         curved_wall = !boundary_mode && baseline(selected).sweep_radians != 0.0;
-        owner->setWindowTitle(boundary_mode ? QStringLiteral("Boundary dimensions and constraints") : QStringLiteral("Wall dimensions and constraints"));
+        owner->setWindowTitle(measured_mode ? QStringLiteral("Measured stroke dimensions and constraints") : boundary_mode ? QStringLiteral("Boundary dimensions and constraints") : QStringLiteral("Wall dimensions and constraints"));
         const auto available = owner->screen()->availableGeometry();
         owner->resize(std::min(710, std::max(360, available.width() - 48)),
                       std::min(730, std::max(300, available.height() - 48)));
@@ -158,12 +174,17 @@ public:
         form->setRowWrapPolicy(QFormLayout::WrapLongRows);
         mode = new QComboBox(body);
         mode->setObjectName(QStringLiteral("constraintOperation"));
-        if (!boundary_mode)
-            mode->addItem(curved_wall ? QStringLiteral("Change curve length") : QStringLiteral("Change wall length"), 0);
+        if (!boundary_mode || measured_mode)
+            mode->addItem(measured_mode ? QStringLiteral("Change segment length") : curved_wall ? QStringLiteral("Change curve length") : QStringLiteral("Change wall length"), 0);
         mode->addItem(QStringLiteral("Add constraint"), 1);
         mode->addItem(QStringLiteral("Edit constraint"), 2);
         mode->addItem(QStringLiteral("Remove constraint"), 3);
         form->addRow(QStringLiteral("Operation"), mode);
+        stroke_segment = new QComboBox(body);
+        stroke_segment->setObjectName(QStringLiteral("constraintStrokeSegment"));
+        if(measured_mode)for(const auto& edge:endpoint_edges(selected))
+            stroke_segment->addItem(QStringLiteral("Segment %1").arg(stroke_segment->count()+1),text(edge.segment_id));
+        form->addRow(QStringLiteral("Segment"),stroke_segment);
         existing = new QComboBox(body);
         existing->setObjectName(QStringLiteral("existingConstraint"));
         existing->setMinimumWidth(0);
@@ -179,15 +200,15 @@ public:
                         endpoint_labels.push_back(QStringLiteral("Wall · ") + text(name) + QStringLiteral(" · ") + text(wall_endpoint_role_name(role)));
                     }
                 } catch (const std::exception&) { /* Invalid walls are not available as endpoints. */ }
-            } else if (can_recognize_boundary_entity_type(entity.type) && ConstraintDialog::supportsEntity(entity)) {
-                const auto boundary = decode_identified_boundary_entity(entity);
+            } else if ((entity.type=="measurement_linework" || can_recognize_boundary_entity_type(entity.type)) && ConstraintDialog::supportsEntity(entity)) {
+                const auto edges = endpoint_edges(entity);
                 const auto name = text(entity.properties.value("name", id));
-                for (std::size_t i = 0; i < boundary.segments.size(); ++i) {
-                    const auto& edge = boundary.segments[i];
+                for (std::size_t i = 0; i < edges.size(); ++i) {
+                    const auto& edge = edges[i];
                     for (const auto role : {WallEndpointRole::start, WallEndpointRole::end}) {
                         const auto& vertex = role == WallEndpointRole::start ? edge.start_vertex_id : edge.end_vertex_id;
                         endpoints.push_back({id, role, edge.segment_id, vertex});
-                        endpoint_labels.push_back((entity.type == "room_boundary" ? QStringLiteral("Room boundary · ") : QStringLiteral("Boundary · ")) +
+                        endpoint_labels.push_back((entity.type == "measurement_linework" ? QStringLiteral("Measured stroke · ") : entity.type == "room_boundary" ? QStringLiteral("Room boundary · ") : QStringLiteral("Boundary · ")) +
                             name + QStringLiteral(" · Edge %1 · ").arg(i + 1) + text(wall_endpoint_role_name(role)));
                     }
                 }
@@ -208,7 +229,7 @@ public:
             ConstraintRelationKind::parallel, ConstraintRelationKind::perpendicular, ConstraintRelationKind::fixed_anchor,
             ConstraintRelationKind::fixed_arc_length})
             relation->addItem(relation_label(kind), static_cast<int>(kind));
-        relation->setToolTip(QStringLiteral("Curve length measures along a curved wall or boundary edge. Endpoint distance measures straight between points. Direction relationships use the straight line between endpoints."));
+        relation->setToolTip(QStringLiteral("Curve length measures along a curved wall, measured segment or boundary edge. Endpoint distance measures straight between points. Direction relationships use the straight line between endpoints."));
         form->addRow(QStringLiteral("Relationship"), relation);
         for (std::size_t index = 0; index < bindings.size(); ++index) {
             bindings[index] = new QComboBox(body);
@@ -243,7 +264,7 @@ public:
         body_layout->addWidget(canvas, 1);
         changes = new QTableWidget(0, 4, body);
         changes->setObjectName(QStringLiteral("constraintChanges"));
-        changes->setHorizontalHeaderLabels({QStringLiteral("Wall / boundary edge"), QStringLiteral("Current length"),
+        changes->setHorizontalHeaderLabels({QStringLiteral("Wall / measured segment / boundary edge"), QStringLiteral("Current length"),
             QStringLiteral("Proposed length"), QStringLiteral("Max endpoint move")});
         changes->horizontalHeader()->setSectionResizeMode(QHeaderView::ResizeToContents);
         changes->horizontalHeader()->setStretchLastSection(true);
@@ -275,6 +296,7 @@ public:
         QObject::connect(apply_button, &QPushButton::clicked, owner, [this] { (void)submit(); });
         QObject::connect(buttons, &QDialogButtonBox::rejected, owner, &QDialog::reject);
         QObject::connect(mode, &QComboBox::currentIndexChanged, owner, [this] { configure(true); });
+        QObject::connect(stroke_segment,&QComboBox::currentIndexChanged,owner,[this] {if(!loading)configure(true);});
         QObject::connect(existing, &QComboBox::currentIndexChanged, owner, [this] { configure(true); });
         QObject::connect(relation, &QComboBox::currentIndexChanged, owner, [this] { if (!loading) configure(false); });
         for (auto* field : {length, anchor_x, anchor_y})
@@ -367,6 +389,7 @@ public:
     QString owner_label(const std::string& id) const {
         const auto& entity = snapshot.entities().at(id);
         return (entity.type == "wall" ? QStringLiteral("Wall · ") :
+            entity.type == "measurement_linework" ? QStringLiteral("Measured stroke · ") :
             entity.type == "room_boundary" ? QStringLiteral("Room boundary · ") : QStringLiteral("Boundary · ")) +
             text(entity.properties.value("name", id));
     }
@@ -378,9 +401,9 @@ public:
             const auto line = baseline(entity);
             drawing.push_back({owner_label(id), line, line});
         } else {
-            const auto boundary = decode_identified_boundary_entity(entity);
-            for (std::size_t i = 0; i < boundary.segments.size(); ++i) {
-                const auto& edge = boundary.segments[i].segment;
+            const auto edges = endpoint_edges(entity);
+            for (std::size_t i = 0; i < edges.size(); ++i) {
+                const auto& edge = edges[i].segment;
                 drawing.push_back({owner_label(id) + QStringLiteral(" · Edge %1").arg(i + 1), edge, edge});
             }
         }
@@ -388,7 +411,7 @@ public:
 
     void invalidate() {
         if (loading) return;
-        preview.reset(); accepted.reset(); apply_button->setEnabled(false);
+        preview.reset(); accepted.reset(); unchanged_resize = false; apply_button->setEnabled(false);
         showPersistentFreedom();
         std::vector<WallPreviewDrawing> current;
         appendCurrentGeometry(current, selected_id);
@@ -407,8 +430,7 @@ public:
         const auto found = snapshot.entities().find(binding.owner_id);
         if (found == snapshot.entities().end()) return std::nullopt;
         if (found->second.type == "wall") return baseline(found->second);
-        const auto boundary = decode_identified_boundary_entity(found->second);
-        for (const auto& edge : boundary.segments)
+        for (const auto& edge : endpoint_edges(found->second))
             if (edge.segment_id == binding.segment_id) return edge.segment;
         return std::nullopt;
     }
@@ -469,7 +491,7 @@ public:
         if (anchor->count() == 0 || anchor_for_wall_resize != wall_resize) {
             anchor->clear();
             if (wall_resize) {
-                anchor->addItems({QStringLiteral("Keep selected wall start fixed"), QStringLiteral("Keep selected wall end fixed")});
+                anchor->addItems(measured_mode ? QStringList{QStringLiteral("Keep segment start fixed"),QStringLiteral("Keep segment end fixed")} : QStringList{QStringLiteral("Keep selected wall start fixed"), QStringLiteral("Keep selected wall end fixed")});
             } else {
                 for (std::size_t i = 0; i < endpoints.size(); ++i)
                     anchor->addItem(QStringLiteral("Keep ") + endpoint_labels[static_cast<int>(i)] + QStringLiteral(" fixed"), static_cast<int>(i));
@@ -502,7 +524,8 @@ public:
                         selectBinding(2, endpoints[i]); selectBinding(3, endpoints[i + 1]); break;
                     }
                 try {
-                    const auto segment = boundary_mode ? decode_identified_boundary_entity(snapshot.entities().at(selected_id)).segments.front().segment : baseline(snapshot.entities().at(selected_id));
+                    const auto edges = boundary_mode ? endpoint_edges(snapshot.entities().at(selected_id)) : std::vector<EndpointEdge>{};
+                    const auto segment = boundary_mode ? edges.at(measured_mode ? static_cast<std::size_t>(std::max(0,stroke_segment->currentIndex())) : 0).segment : baseline(snapshot.entities().at(selected_id));
                     length->setText(editable_dimension(wall_resize ? segment_length(segment) :
                         std::hypot(segment.end.x - segment.start.x, segment.end.y - segment.start.y), metric));
                     anchor_x->setText(editable_dimension(segment.start.x, true));
@@ -521,10 +544,11 @@ public:
         if (editing_relation && !load_values && kind == ConstraintRelationKind::fixed_length &&
             configured_relation == ConstraintRelationKind::fixed_arc_length) prefillEndpointDistance();
         if (auto* label = qobject_cast<QLabel*>(form->labelForField(length)))
-            label->setText(wall_resize ? (curved_wall ? QStringLiteral("Curve length") : QStringLiteral("Wall length")) : kind == ConstraintRelationKind::fixed_arc_length
+            label->setText(wall_resize ? (measured_mode ? QStringLiteral("Segment length") : curved_wall ? QStringLiteral("Curve length") : QStringLiteral("Wall length")) : kind == ConstraintRelationKind::fixed_arc_length
                 ? QStringLiteral("Curve length") : QStringLiteral("Endpoint distance"));
         const auto count = kind == ConstraintRelationKind::fixed_anchor ? 1U :
             (kind == ConstraintRelationKind::parallel || kind == ConstraintRelationKind::perpendicular ? 4U : 2U);
+        form->setRowVisible(stroke_segment,measured_mode && operation==0);
         form->setRowVisible(existing, operation >= 2);
         form->setRowVisible(relation, editing_relation);
         for (std::size_t i = 0; i < bindings.size(); ++i) form->setRowVisible(bindings[i], editing_relation && i < count);
@@ -545,6 +569,15 @@ public:
         const auto role = anchor->currentIndex() == 0 ? WallEndpointRole::start : WallEndpointRole::end;
         const auto operation = mode->currentData().toInt();
         if (operation == 0) {
+            if(measured_mode) {
+                BoundaryGeometryEdit edit;edit.boundary_id=selected_id;edit.kind=BoundaryGeometryEditKind::resize_segment;
+                edit.target_id=stroke_segment->currentData().toString().toStdString();
+                const auto quantity=parse_quantity(length->text().toStdString(),unit);edit.target_length_metres=quantity.metres;
+                edit.fixed_endpoint=role==WallEndpointRole::start?BoundaryFixedEndpoint::start:BoundaryFixedEndpoint::end;
+                result.measured_stroke_resize=MeasuredStrokeResizeIntent{edit,quantity,connected->isChecked()};
+                result.message="change measured segment length with preview";
+                return result;
+            }
             result.wall_resize = WallResizeIntent{selected_id, parse_quantity(length->text().toStdString(), unit),
                 role == WallEndpointRole::start ? WallResizeAnchor::start : WallResizeAnchor::end, connected->isChecked()};
             result.message = curved_wall ? "change curve length with preview" : "change wall length with preview";
@@ -578,7 +611,7 @@ public:
                 const auto segment = bindingSegment(first);
                 if (first.owner_id != second.owner_id || first.segment_id != second.segment_id ||
                     first.role == second.role || !segment || segment->sweep_radians == 0.0)
-                    throw std::invalid_argument("Choose both ends of the same curved wall or boundary edge for Curve length");
+                    throw std::invalid_argument("Choose both ends of the same curved wall, measured segment or boundary edge for Curve length");
             }
             if (value.relation == ConstraintRelationKind::fixed_length || value.relation == ConstraintRelationKind::fixed_arc_length)
                 value.length = parse_quantity(length->text().toStdString(), unit);
@@ -597,6 +630,20 @@ public:
         invalidate();
         try {
             const auto command = intent();
+            // A validated unchanged resize closes the dialog without inventing
+            // an accepted service receipt or recording an empty history event.
+            if (command.measured_stroke_resize) {
+                const auto decoded = decode_measurement_linework_model(snapshot.entities().at(selected_id).properties.at("model"));
+                if (!decoded.supported()) throw std::invalid_argument(decoded.diagnostic);
+                const auto& resize = *command.measured_stroke_resize;
+                const auto edited = edited_measurement_linework(*decoded.model, resize.edit, resize.exact_length);
+                if (encode_measurement_linework_model(edited) == encode_measurement_linework_model(*decoded.model)) {
+                    unchanged_resize = true;
+                    apply_button->setEnabled(true);
+                    status->setPlainText(QStringLiteral("Length is unchanged. Apply closes this dialog without adding an undo step."));
+                    return true;
+                }
+            }
             auto candidate = preview_constraint_authoring(snapshot, command);
             if (!candidate.accepted()) {
                 QStringList reasons;
@@ -647,6 +694,19 @@ public:
                 }
                 summary.push_back(QStringLiteral("%1: boundary movement shown in preview.").arg(text(boundary.before.id)));
             }
+            for(const auto& stroke:candidate.changed_measured_strokes()) {
+                drawn_owners.insert(stroke.stroke_id);
+                for(std::size_t index=0;index<stroke.before.edges.size();++index) {
+                    const auto& before=stroke.before.edges[index].segment;const auto& after=stroke.after.edges[index].segment;
+                    const auto label=owner_label(stroke.stroke_id)+QStringLiteral(" · Segment %1").arg(index+1);
+                    drawing.push_back({label,before,after});changes->insertRow(row);
+                    const auto displacement=std::max(std::hypot(before.start.x-after.start.x,before.start.y-after.start.y),std::hypot(before.end.x-after.end.x,before.end.y-after.end.y));
+                    const QStringList values{label,dimension(segment_length(before),metric),dimension(segment_length(after),metric),dimension(displacement,metric)};
+                    for(int column=0;column<values.size();++column)changes->setItem(row,column,new QTableWidgetItem(values[column]));
+                    ++row;
+                }
+                summary.push_back(QStringLiteral("%1: measured segment movement shown in preview.").arg(text(stroke.stroke_id)));
+            }
             std::set<std::string> context_owners{selected_id};
             if (command.relation_anchor) context_owners.insert(command.relation_anchor->owner_id);
             if (selected_constraint)
@@ -681,6 +741,10 @@ public:
     }
 
     bool submit() {
+        if (unchanged_resize) {
+            owner->accept();
+            return true;
+        }
         if (!preview || !preview->accepted()) {
             if (error.isEmpty()) error = QStringLiteral("Preview the current edit before applying it.");
             status->setPlainText(error);
@@ -696,8 +760,10 @@ public:
     std::string selected_id;
     bool metric{};
     bool boundary_mode{};
+    bool measured_mode{};
     bool curved_wall{};
     bool loading{};
+    bool unchanged_resize{};
     bool anchor_for_wall_resize{};
     std::string new_constraint_id = make_stable_id();
     std::vector<WallEndpointBinding> endpoints;
@@ -708,7 +774,7 @@ public:
     PersistentConstraintComponentAnalysis source_freedom;
     QString error;
     QFormLayout* form{};
-    QComboBox *mode{}, *existing{}, *relation{}, *anchor{};
+    QComboBox *mode{}, *existing{}, *relation{}, *anchor{}, *stroke_segment{};
     std::array<QComboBox*, 4> bindings{};
     QLineEdit *length{}, *anchor_x{}, *anchor_y{};
     QCheckBox* connected{};
@@ -722,6 +788,7 @@ public:
 bool ConstraintDialog::supportsEntity(const Entity& entity) noexcept {
     try {
         if (entity.type == "wall") return segment_length(baseline(entity)) > default_geometry_tolerance_metres;
+        if (entity.type == "measurement_linework") return !endpoint_edges(entity).empty();
         if (!can_recognize_boundary_entity_type(entity.type)) return false;
         const auto boundary = decode_identified_boundary_entity(entity);
         return !boundary.segments.empty();

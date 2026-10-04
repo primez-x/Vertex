@@ -1,4 +1,29 @@
-# Vertex project formats v1 through v34
+# Vertex project formats v1 through v35
+
+## Persistent measured-stroke constraints (v35)
+
+Measured linework schema/replay v5 adds ordered `vertex_batch` operations. Each
+contains `edits`, an array of typed `move_vertex` edits naming unique existing
+stable vertices of the same stroke. Replay installs every target before final
+geometry validation. Original construction receipts, identities and signed
+sweeps remain authoritative. Existing edit and transform operations keep their
+semantics; entered resize quantities and reflected arc sweeps are not replaced
+by solver coordinates. Empty or all-no-op public batches preserve the original
+dialect; meaningless persisted batches are rejected.
+
+Constraint command envelope 11 retains independent Boolean measured, rigid-wall,
+exterior and supplemental completion modes. Its `measured_stroke_edits` lane
+names a stroke, optional authored edit/quantity or rigid transform, and final
+vertex edits. The authored edit and transform are mutually exclusive. Geometry
+and eligible measured consumers are independently reconstructed before final
+validation; raw area payloads do not supply this authority. Previously stale,
+ambiguous or authored consumers remain subject to explicit source review.
+
+Native format 35 and extraction version 33 apply across all retained revisions,
+including Undo and deletion. Already-satisfied relation-only stroke bindings
+also require this floor, even when the stroke itself remains v1. No SQLite
+columns change. Downgraded markers reject; unsupported stroke payloads remain
+preserved under read-only protection rather than being interpreted as boundaries.
 
 ## Curved survey source provenance (v34)
 

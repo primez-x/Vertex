@@ -15,20 +15,26 @@ inline constexpr std::uint32_t measurement_linework_schema_version_v1 = 1;
 inline constexpr std::uint32_t measurement_linework_schema_version_v2 = 2;
 inline constexpr std::uint32_t measurement_linework_schema_version_v3 = 3;
 inline constexpr std::uint32_t measurement_linework_schema_version_v4 = 4;
+inline constexpr std::uint32_t measurement_linework_schema_version_v5 = 5;
 inline constexpr std::uint32_t measurement_linework_schema_version = measurement_linework_schema_version_v1;
-inline constexpr std::uint32_t measurement_linework_latest_schema_version = measurement_linework_schema_version_v4;
+inline constexpr std::uint32_t measurement_linework_latest_schema_version = measurement_linework_schema_version_v5;
 inline constexpr std::uint32_t measurement_linework_replay_version_v1 = 1;
 inline constexpr std::uint32_t measurement_linework_replay_version_v2 = 2;
 inline constexpr std::uint32_t measurement_linework_replay_version_v3 = 3;
 inline constexpr std::uint32_t measurement_linework_replay_version_v4 = 4;
+inline constexpr std::uint32_t measurement_linework_replay_version_v5 = 5;
 inline constexpr std::uint32_t measurement_linework_replay_version = measurement_linework_replay_version_v1;
-inline constexpr std::uint32_t measurement_linework_latest_replay_version = measurement_linework_replay_version_v4;
+inline constexpr std::uint32_t measurement_linework_latest_replay_version = measurement_linework_replay_version_v5;
 
 struct MeasurementLineworkEdit {
     BoundaryGeometryEdit intent;
     std::optional<Quantity> authored_length;
 };
-using MeasurementLineworkOperation = std::variant<PlanarTransform, MeasurementLineworkEdit>;
+struct MeasurementLineworkVertexBatch {
+    std::vector<BoundaryGeometryEdit> edits;
+};
+using MeasurementLineworkOperation = std::variant<PlanarTransform, MeasurementLineworkEdit,
+    MeasurementLineworkVertexBatch>;
 
 // One analytical measurement stroke, independent of physical walls and areas.
 // Entity adapters own property/building/floor/layer context and place this
@@ -45,7 +51,7 @@ struct MeasurementLinework {
     nlohmann::json extensions = nlohmann::json::object();
     // Schema/replay two: ordered world operations; all receipts stay local.
     std::vector<PlanarTransform> transforms;
-    // Schema/replay three/four: ordered derivations in the world frame at that
+    // Schema/replay three/four/five: ordered derivations in the world frame at that
     // operation. Receipts remain the original immutable authoring evidence.
     // The historical transforms member must be empty in this dialect.
     std::vector<MeasurementLineworkOperation> operations;
@@ -98,11 +104,21 @@ struct MeasurementLineworkReplay {
     const MeasurementLinework& model, const BoundaryGeometryEdit& edit,
     std::optional<Quantity> authored_length = std::nullopt);
 
+// Simultaneous plain move_vertex intents for unique existing stable vertices
+// of this stroke. All occurrences move together; only the final geometry is
+// admitted. Real changes append one schema/replay-five operation preserving
+// receipts and metadata; empty/all-no-op batches retain the exact source.
+// Invalid targets, duplicate targets, final degeneracy or precision loss throw
+// without changing the source.
+[[nodiscard]] MeasurementLinework edited_measurement_linework_vertices(
+    const MeasurementLinework& model, const std::vector<BoundaryGeometryEdit>& edits);
+
 enum class MeasurementLineworkFormat {
     supported_v1,
     supported_v2,
     supported_v3,
     supported_v4,
+    supported_v5,
     unsupported_version,
     unsupported_replay_version,
 };
@@ -133,14 +149,17 @@ struct MeasurementLineworkDecodeResult {
 // field, and neither dialect accepts uniform scaling. Inspection reads only the object
 // and its positive integral version, plus a required positive integral
 // replay_version for a known schema. Decode validates/replays known pairs
-// (1,1), (2,2) and (3,3); unknown positive schema/replay pairs return exact opaque JSON for a
+// (1,1)..(5,5); unknown positive schema/replay pairs return exact opaque JSON for a
 // caller to preserve without decoding. Encode validates and retains original
 // expressions and extensions. V3 forbids transforms and requires operations:
 // {type: "transform", transform: <v1 transform>} or {type: "edit", edit:
 // <strict v1 move_vertex/resize_segment boundary intent>, authored_length:
 // <strict exact quantity or null>}. Every edit must name this stroke and an
 // existing child, contain only relevant fields, and change its geometry.
-// Malformed known models throw invalid_argument.
+// V4 admits typed chord receipts. V5 additionally admits
+// {type: "vertex_batch", edits: [<strict plain move_vertex intent>, ...]}.
+// Batches require unique existing targets and a nonredundant final change;
+// earlier dialects reject this operation. Malformed known models throw invalid_argument.
 [[nodiscard]] MeasurementLineworkVersion inspect_measurement_linework_model(
     const nlohmann::json& model);
 [[nodiscard]] MeasurementLineworkDecodeResult decode_measurement_linework_model(

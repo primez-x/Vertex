@@ -194,6 +194,20 @@ struct ApplyBoundaryConstraintChanges {
     bool supplemental_asset_reference_completion{};
     // Retains envelope ten even if its selected rigid wall proofs are removed.
     bool rigid_wall_transform_completion{};
+    // Envelope eleven independently replays measured-stroke intent, then
+    // rebuilds eligible current source-derived areas before final validation.
+    // Raw entity payloads never authorize changing measured geometry.
+    struct MeasuredStrokeEdit {
+        std::string stroke_id;
+        std::optional<BoundaryGeometryEdit> authored_edit;
+        std::optional<Quantity> authored_length;
+        std::optional<PlanarTransform> rigid_transform;
+        std::vector<BoundaryGeometryEdit> vertex_edits;
+    };
+    std::vector<MeasuredStrokeEdit> measured_stroke_edits;
+    // Retain envelope eleven even for relation-only stroke commands and when
+    // the stroke-edit vector is emptied. Other completion modes are separate.
+    bool measured_source_completion{};
 };
 
 using Command = std::variant<ApplyEntityChanges, NameRevision, TranslateBoundary,

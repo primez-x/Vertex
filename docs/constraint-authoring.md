@@ -5,7 +5,31 @@ to document editing. The solver already produces independently checked point
 previews. The [versioned wall constraint codec](constraint-entity-format.md) and
 document integrity checks are implemented. A command service and interactive
 preview/Apply dialog connect them to both workspaces for analytical walls and
-identified measurement and room boundaries.
+identified measurement and room boundaries, and receipt-backed measured strokes.
+
+Measured strokes use the same segment/vertex binding vocabulary. Their open
+terminal endpoint is selectable, and a revisited stable vertex is one solver
+point. Crossings and retracing do not acquire a closed-area winding invariant.
+Fixed length measures the endpoint chord; Fixed physical arc length measures
+the analytical curve. Selected typed edits retain entered quantities. Connected
+solver moves append one simultaneous vertex batch per affected stroke; rigid
+reflections retain an exact transform so signed sweep changes correctly.
+
+Envelope 11 reconstructs affected current source-derived areas in the core
+before preview sealing and final relation validation, using the persisted
+active phase. Automatic rebuilding requires previously current, unambiguous,
+unauthored consumers. Original observations, stable boundary identities and
+group lineage survive. Ambiguous, authored or already-stale consumers retain
+their evidence and require explicit source review. Apply and history restore
+the complete transaction together.
+
+Schema/replay 5, command envelope 11, native format 35 and extraction version 33
+protect these semantics across retained history. Source-owned annotation
+offsets follow rigid rotation/reflection once; translation leaves offsets
+unchanged. Ordinary supplemental metadata and assets compose independently
+of exterior completion. Overlapping raw measured geometry or owned placement
+changes are refused. An unchanged measured resize can close the dialog without
+adding an undo step; changing an input invalidates that preview.
 
 ## Semantic authority
 
@@ -41,9 +65,10 @@ The supported relations in the existing adapter are horizontal, vertical,
 coincident, endpoint distance, parallel, perpendicular, fixed anchor and physical
 curve length. Endpoint distance and direction relationships retain their
 point/chord meanings. Curve length applies to opposite endpoints of one genuine
-curved wall or identified edge and preserves its signed sweep. Tangent
-relationships and the level dependency graph remain separate required work;
-point solving never flattens a curved wall.
+curved wall, measured segment or identified edge and preserves its signed sweep.
+Tangent relationships and general planar-constraint-to-level propagation remain
+required work. The existing explicit level graph/editor is a separate implemented
+slice; point solving never flattens a curved wall.
 
 The Curve length relation uses version-3 constraint semantics and an exact
 positive length quantity. At a fixed sweep its solver target is the equivalent
@@ -53,8 +78,8 @@ edge's physical length, and previews an anchored change before Apply. Editing it
 target changes geometry; removing it preserves geometry. Straight segments or
 unrelated endpoint pairs cannot masquerade as an arc-length relationship.
 Retained relations require project format 12 and exchange version 9. Direct
-curved-wall resize receipts remain a separate gap; this relation workflow does
-not change the existing straight-wall resize operation.
+curved-wall resize is also implemented with physical-length input receipts
+and its own reader protection, described below.
 
 ## Preview and commit
 
@@ -240,3 +265,5 @@ document restore, save/reopen, exchange, digests, recovery budgets and archive
 paths validate it by deterministic replay. The dialog omits the wall-only
 baseline-resize operation in boundary mode and previews current/proposed edges,
 changed lengths, maximum endpoint movement, degrees of freedom and conflicts.
+Measured strokes expose replayed segments and both stable endpoints in the
+same dialog; chord distance and analytical physical curve length are distinct.

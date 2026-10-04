@@ -1,6 +1,7 @@
 #include "sketch/constraint_integrity.hpp"
 
 #include "sketch/constraint_entity.hpp"
+#include "sketch/measurement_linework.hpp"
 #include "sketch/boundary_entity.hpp"
 #include "sketch/constraint_tolerances.hpp"
 #include "sketch/wall_semantics.hpp"
@@ -132,6 +133,15 @@ WallEndpointRole reverse_role(WallEndpointRole role) {
 std::optional<std::string> validate_constraint_integrity(const Entities& entities) {
     std::optional<std::string> unsupported;
     std::map<std::string, Wall, std::less<>> owners;
+    std::set<std::string, std::less<>> opaque_strokes;
+    for (const auto& [id, owner] : entities) {
+        if (owner.type != "measurement_linework") continue;
+        const auto decoded = decode_measurement_linework_model(owner.properties.at("model"));
+        if (!decoded.supported()) {
+            opaque_strokes.insert(id);
+            if (!unsupported) unsupported = "Measured constraint owner " + id + ": " + decoded.diagnostic;
+        }
+    }
     const auto openings_by_wall = index_openings(entities);
     for (const auto& [id, entity] : entities) {
         if (entity.type != "constraint") continue;
@@ -152,8 +162,8 @@ std::optional<std::string> validate_constraint_integrity(const Entities& entitie
                         if (owner == entities.end()) invalid("Constraint owner does not exist");
                         if (owner->second.type == "wall")
                             (void)read_wall(owner->first, entities, openings_by_wall);
-                        else
-                            (void)decode_identified_boundary_entity(owner->second);
+                        else if (!opaque_strokes.contains(owner->first))
+                            (void)resolve_constraint_segment_owner(owner->second);
                     }
                 }
                 if (!unsupported) unsupported = "Constraint " + id + ": " + decoded.unsupported_reason;
@@ -161,11 +171,16 @@ std::optional<std::string> validate_constraint_integrity(const Entities& entitie
             }
             const auto& constraint = *decoded.constraint;
             std::vector<Vec2> points;
+            bool opaque_owner = false;
             for (const auto& binding : constraint.bindings) {
                 if (!binding.segment_id.empty()) {
                     const auto owner = entities.find(binding.owner_id);
                     if (owner == entities.end()) invalid("Boundary constraint owner is missing");
-                    const auto boundary = decode_identified_boundary_entity(owner->second);
+                    if (opaque_strokes.contains(binding.owner_id)) {
+                        opaque_owner = true;
+                        continue;
+                    }
+                    const auto boundary = resolve_constraint_segment_owner(owner->second);
                     const auto edge = std::find_if(boundary.segments.begin(), boundary.segments.end(),
                         [&](const auto& value) { return value.segment_id == binding.segment_id; });
                     if (edge == boundary.segments.end()) invalid("Boundary constraint segment is missing");
@@ -182,6 +197,9 @@ std::optional<std::string> validate_constraint_integrity(const Entities& entitie
                 points.push_back(binding.role == WallEndpointRole::start
                     ? found->second.baseline.start : found->second.baseline.end);
             }
+            // Keep an unknown measured model opaque while validating every
+            // other known owner and every unrelated known relation.
+            if (opaque_owner) continue;
             bool satisfied = false;
             switch (constraint.relation) {
             case ConstraintRelationKind::horizontal:

@@ -1,4 +1,5 @@
 #pragma once
+#include "sketch/boundary_entity.hpp"
 
 #include "sketch/document.hpp"
 #include "sketch/geometry.hpp"
@@ -12,6 +13,11 @@
 #include <vector>
 
 namespace sketch {
+
+// Resolves stable segment/vertex geometry from an identified boundary or the
+// authoritative replay of a supported measured stroke. This is an endpoint
+// view only: it never grants a stroke closed-boundary or area semantics.
+[[nodiscard]] IdentifiedBoundary resolve_constraint_segment_owner(const Entity& entity);
 
 // Existing names are stable v1/v2 relation spellings; fixed_arc_length is v3.
 // The codec deliberately does not expose solver point coordinates.
@@ -63,6 +69,10 @@ struct ConstraintEntityDecodeResult {
 
 [[nodiscard]] std::string_view constraint_relation_name(ConstraintRelationKind relation);
 [[nodiscard]] std::string_view wall_endpoint_role_name(WallEndpointRole role);
+// The same exact receipt codec is used by persisted relations and typed
+// measured-edit command proofs. It reparses and verifies the entered quantity.
+[[nodiscard]] nlohmann::json encode_constraint_quantity_receipt(const Quantity& quantity);
+[[nodiscard]] Quantity decode_constraint_quantity_receipt(const nlohmann::json& value);
 
 // Physical arc length is defined only by opposite endpoints of one genuine
 // curved wall baseline or one stable identified boundary segment.

@@ -1,6 +1,6 @@
 # Vertex user testing checklist
 
-411 practical tasks, grouped by how you use the app (including U100a). This replaces the earlier engineering-oriented checklist. The old 130-item list is preserved separately as engineering-requirements-checklist.md.
+415 practical tasks, grouped by how you use the app (including U100a). This replaces the earlier engineering-oriented checklist. The old 130-item list is preserved separately as engineering-requirements-checklist.md.
 
 This is a user acceptance list for the intended app, not a claim that every listed action is implemented or working in the current preview. If you cannot find a control, or a feature is absent, mark **Blocked / missing** and describe it. Specialized sections can be skipped if you do not use them or lack the device or sample files.
 
@@ -69,6 +69,7 @@ Start with the workspace, draw a room, close it with the mouse, drag-select it, 
 - Sloped-room appraisal calculations (2 tasks)
 - Appraisal detail readability and unfinished reports (2 tasks)
 - Combine measured regions (3 tasks)
+- Constraints on measured lines (4 tasks)
 
 ## Start a project and arrange the workspace
 
@@ -2499,6 +2500,32 @@ drawing; switching modes does not change existing geometry.
 - [ ] **U410 — Delete a measured line shared by two appraisal areas**
   - Steps: Draw a rectangular measured outline and a separator that divides it into two rooms. Detect and define both rooms, then record appraisal facts until Details shows qualified totals. Select and Delete the separator. Inspect both rooms and Details, save/reopen, then Undo the deletion.
   - Expected: Delete removes only the selected measured stroke. Both room boundaries and their facts remain; their missing measurement source is identified and qualified GLA is withheld. Unrelated lines stay unchanged. Reopening preserves the missing-source state. Undo restores the exact source and previous qualification.
+  - Result: Not tested
+  - Notes: ______________________________
+
+## Constraints on measured lines
+
+- [ ] **U411 — Lock the length of an open measured line**
+  - Steps: Draw an open measured stroke with two edges. Select it and open Dimensions and constraints. Add a fixed length to its last edge using an expression such as 10 ft. Preview, Cancel once, then Apply. Move its free end compatibly, then try an endpoint move or direct resize incompatible with the retained lock. Separately edit the relation's target length. Undo, Redo, save and reopen.
+  - Expected: The last endpoint is available. Preview shows proposed changes without modifying the drawing. Apply saves the relation. Compatible edits respect the lock; conflicting edits explain the problem and leave the drawing unchanged. Explicitly changing the relation's target previews and applies the new length. Undo and reopening preserve the entered measurement and relationship.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **U412 — Connect measured lines and align them with walls**
+  - Steps: Draw two open measured strokes and a physical wall. In Dimensions and constraints, connect one stroke's final endpoint to the other stroke's start using Coincident. Add Horizontal or Vertical and try Parallel and Perpendicular against the wall. Preview each relationship before applying. Move a connected endpoint, Undo, then remove a relationship.
+  - Expected: Segment names and both endpoints are selectable. Connected geometry moves together when permitted. Merely overlapping endpoints does not establish a relationship. Conflicting locks cannot apply; removing a relationship is reversible.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **U413 — Keep a curved measured line's physical length while reflecting it**
+  - Steps: Draw a curved measured stroke. Open Dimensions and constraints and compare Fixed length with Fixed physical arc length. Apply the physical arc-length lock. Reflect the stroke, rotate it, move it, then Undo, Redo and save/reopen. Copy and Paste the edited stroke and edit its copy.
+  - Expected: Chord distance and analytical physical curve length are distinguished. The reflected curve keeps its physical length and reverses its curvature correctly. Rotation and movement preserve the saved relationship. The copy has independent internal references and remains editable without changing the original.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **U414 — Update appraisal areas when their connected measured lines change**
+  - Steps: Draw and define two adjoining measured rooms, then record the required appraisal facts until Details shows qualified GLA. Add a relationship to the dividing line and move a connected endpoint. Inspect the geometry, room dimensions, deductions and GLA before accepting. Undo, Redo and save/reopen. Repeat with a combined measured area and an active remodeling alternative.
+  - Expected: Previously current, unambiguous, unauthored areas and measurements update in the same reversible edit, including combined-area member lineage. Recorded classifications and observations are retained. An ambiguous, authored or already-stale area requires source review and withholds qualified totals. The active design phase governs sources; hiding a layer alone does not change GLA.
   - Result: Not tested
   - Notes: ______________________________
 

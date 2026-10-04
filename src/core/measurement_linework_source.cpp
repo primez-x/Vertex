@@ -3,6 +3,7 @@
 #include "sketch/measurement_area_graph.hpp"
 #include "sketch/boundary_entity.hpp"
 #include "sketch/project_organization.hpp"
+#include "sketch/model_phases.hpp"
 #include <algorithm>
 #include <cmath>
 #include <stdexcept>
@@ -329,5 +330,58 @@ bool measurement_linework_sources_visible(const Entity& area,const std::set<std:
             if(!semantic_visible->contains(use.owner_id))return false;
         return true;
     }catch(const std::exception&){return false;}
+}
+std::map<std::string,Entity,std::less<>> complete_measurement_linework_sources(
+    const std::map<std::string,Entity,std::less<>>& before,
+    const std::map<std::string,Entity,std::less<>>& candidate) {
+    const auto semantic_visibility=[](const auto& entities) {
+        std::set<std::string,std::less<>> visible;
+        for(const auto& [id,entity]:entities) { (void)entity; visible.insert(id); }
+        // The document admits one persisted registry; ignore no view masks.
+        for(const auto& [id,entity]:entities) {
+            (void)id;
+            if(entity.type!="model_phases") continue;
+            const auto phases=ModelPhases::from_json(entity.properties.at("model"));
+            const auto active=phases.active_state();
+            for(const auto& member:phases.entity_ids()) {
+                const auto found=active.find(member);
+                if(found==active.end() || found->second==ModelPhase::demolished)visible.erase(member);
+            }
+            break;
+        }
+        return visible;
+    };
+    const auto before_visible=semantic_visibility(before);
+    const auto old_checks=measurement_linework_source_checks(before,&before_visible);
+    if(old_checks.empty())return candidate;
+    const auto after_visible=semantic_visibility(candidate);
+    const auto new_checks=measurement_linework_source_checks(candidate,&after_visible);
+    auto result=candidate;
+    std::set<std::string,std::less<>> refreshed;
+    for(const auto& [id,check]:new_checks) {
+        const auto old=old_checks.find(id);
+        if(check.current || old==old_checks.end() || !old->second.current || !check.proposed_boundary)continue;
+        const auto& area=candidate.at(id);
+        // Authored receipts need their own typed reconstruction; an inferred
+        // source update must not fabricate replacement authoring evidence.
+        if(area.properties.contains("boundary_authoring") || area.extensions.contains("boundary_geometry_derivation"))continue;
+        auto boundary=decode_identified_boundary_entity(area);
+        if(boundary.segments.size()!=check.proposed_boundary->size())continue;
+        if(area.extensions.contains("measurement_linework_group") && !check.proposed_group.is_object())continue;
+        for(std::size_t i=0;i<boundary.segments.size();++i)boundary.segments[i].segment=check.proposed_boundary->at(i);
+        auto replacement=encode_identified_boundary_entity(boundary,&area);
+        replacement.extensions["measurement_linework_sources"]=check.proposed_lineage;
+        if(area.extensions.contains("measurement_linework_group"))replacement.extensions["measurement_linework_group"]=check.proposed_group;
+        result.at(id)=std::move(replacement);refreshed.insert(id);
+    }
+    if(!refreshed.empty()) {
+        const auto verified=measurement_linework_source_checks(result,&after_visible);
+        for(const auto& id:refreshed) {
+            const auto found=verified.find(id);
+            if(found==verified.end() || !found->second.current)
+                throw std::invalid_argument("Measured source completion did not reproduce its current source geometry: "+id);
+        }
+    }
+    return result;
 }
 } // namespace sketch

@@ -1,4 +1,5 @@
 #include "sketch/constraint_entity.hpp"
+#include "sketch/measurement_linework.hpp"
 #include "sketch/boundary_entity.hpp"
 
 #include <algorithm>
@@ -684,6 +685,13 @@ std::string_view wall_endpoint_role_name(WallEndpointRole role) {
     invalid("unknown wall endpoint role");
 }
 
+nlohmann::json encode_constraint_quantity_receipt(const Quantity& quantity) {
+    return encode_quantity_receipt(quantity);
+}
+Quantity decode_constraint_quantity_receipt(const nlohmann::json& value) {
+    return decode_quantity_receipt(value);
+}
+
 ConstraintEntityDecodeResult decode_constraint_entity(const Entity& entity) {
     validate_entity_container(entity);
     const auto& properties = entity.properties;
@@ -817,6 +825,18 @@ Entity encode_constraint_entity(const PersistentConstraint& constraint, const En
     return result;
 }
 
+IdentifiedBoundary resolve_constraint_segment_owner(const Entity& entity) {
+    if (entity.type != "measurement_linework") return decode_identified_boundary_entity(entity);
+    const auto decoded = decode_measurement_linework_model(entity.properties.at("model"));
+    if (!decoded.supported()) invalid("Unsupported measured constraint owner: " + decoded.diagnostic);
+    const auto replay = replay_measurement_linework(*decoded.model);
+    if (replay.stroke_id != entity.id) invalid("Measured constraint owner identity differs from its model");
+    IdentifiedBoundary result{entity.id, entity.type, {}};
+    for (const auto& edge : replay.edges)
+        result.segments.push_back({edge.segment_id, edge.start_vertex_id, edge.end_vertex_id, edge.segment});
+    return result;
+}
+
 Segment resolve_constraint_arc_segment(const PersistentConstraint& constraint,
     const std::map<std::string,Entity,std::less<>>& entities) {
     validate_model(constraint);
@@ -845,7 +865,7 @@ Segment resolve_constraint_arc_segment(const PersistentConstraint& constraint,
         };
         segment={position("start"),position("end"),json_finite_double(baseline.at("sweep_radians"),"Arc sweep must be finite")};
     } else {
-        const auto boundary=decode_identified_boundary_entity(found->second);
+        const auto boundary=resolve_constraint_segment_owner(found->second);
         const auto edge=std::find_if(boundary.segments.begin(),boundary.segments.end(),
             [&](const auto& value) { return value.segment_id==first.segment_id; });
         if (edge==boundary.segments.end()) invalid("Fixed arc length stable boundary segment is missing");

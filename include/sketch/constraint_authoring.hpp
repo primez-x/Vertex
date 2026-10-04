@@ -6,6 +6,7 @@
 #include "sketch/document.hpp"
 #include "sketch/geometry.hpp"
 #include "sketch/quantity.hpp"
+#include "sketch/measurement_linework.hpp"
 
 #include <map>
 #include <cstddef>
@@ -85,6 +86,24 @@ struct BoundaryVertexMoveIntent {
     bool move_related_objects{true};
 };
 
+struct MeasuredStrokeResizeIntent {
+    BoundaryGeometryEdit edit;
+    Quantity exact_length;
+    bool move_related_objects{true};
+};
+struct MeasuredStrokeVertexMoveIntent {
+    BoundaryGeometryEdit edit;
+    bool move_related_objects{true};
+};
+struct MeasuredStrokeTransformTarget {
+    std::string stroke_id;
+    PlanarTransform transform;
+};
+struct MeasuredStrokeTransformIntent {
+    std::vector<MeasuredStrokeTransformTarget> targets;
+    bool move_related_objects{true};
+};
+
 enum class ConstraintRelationMutationKind { upsert, remove };
 
 struct ConstraintRelationMutation {
@@ -113,6 +132,9 @@ struct ConstraintAuthoringIntent {
     std::optional<BoundaryResizeIntent> boundary_resize;
     std::optional<BoundaryVertexMoveIntent> boundary_vertex_move;
     std::optional<ExteriorCornerMoveIntent> exterior_corner_move;
+    std::optional<MeasuredStrokeResizeIntent> measured_stroke_resize;
+    std::optional<MeasuredStrokeVertexMoveIntent> measured_stroke_vertex_move;
+    std::optional<MeasuredStrokeTransformIntent> measured_stroke_transform;
 };
 
 struct ConstraintWallChange {
@@ -124,6 +146,11 @@ struct ConstraintWallChange {
 struct ConstraintBoundaryChange {
     IdentifiedBoundary before;
     IdentifiedBoundary after;
+};
+struct ConstraintMeasuredStrokeChange {
+    std::string stroke_id;
+    MeasurementLineworkReplay before;
+    MeasurementLineworkReplay after;
 };
 
 // A preview is copyable for dialog ownership but cannot be constructed or
@@ -144,6 +171,7 @@ public:
     [[nodiscard]] const std::string& candidate_digest() const noexcept;
     [[nodiscard]] const std::vector<ConstraintWallChange>& changed_walls() const noexcept;
     [[nodiscard]] const std::vector<ConstraintBoundaryChange>& changed_boundaries() const noexcept;
+    [[nodiscard]] const std::vector<ConstraintMeasuredStrokeChange>& changed_measured_strokes() const noexcept;
     [[nodiscard]] int degrees_of_freedom() const noexcept;
     [[nodiscard]] const std::vector<BoundaryGeometryEdit>& boundary_edits() const noexcept;
     [[nodiscard]] const std::vector<BoundaryGeometryEdit>& exterior_source_edits() const noexcept;
@@ -162,6 +190,9 @@ private:
     std::string shown_result_digest_;
     std::vector<ConstraintWallChange> changed_walls_;
     std::vector<ConstraintBoundaryChange> changed_boundaries_;
+    std::vector<ConstraintMeasuredStrokeChange> changed_measured_strokes_;
+    std::vector<ApplyBoundaryConstraintChanges::MeasuredStrokeEdit> measured_stroke_edits_;
+    bool measured_source_completion_{};
     int degrees_of_freedom_{-1};
     std::vector<BoundaryGeometryEdit> boundary_edits_;
     std::vector<BoundaryGeometryEdit> exterior_source_edits_;

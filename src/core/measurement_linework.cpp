@@ -229,6 +229,52 @@ double checked_product(double left, double right, double tolerance) {
     return product;
 }
 
+void apply_vertices(MeasurementLineworkReplay& replay,
+                    const std::map<std::string, Vec2, std::less<>>& vertices,
+                    double tolerance) {
+    // Validate linework only, once all stable coordinates have been assigned.
+    // Analytical sweeps and immutable receipt evidence remain unchanged.
+    for (auto& edge : replay.edges) {
+        edge.segment.start = vertices.at(edge.start_vertex_id);
+        edge.segment.end = vertices.at(edge.end_vertex_id);
+        require_point(edge.segment.start, "edited measurement linework start");
+        require_point(edge.segment.end, "edited measurement linework end");
+        const auto dx = checked_sum(edge.segment.end.x, -edge.segment.start.x, tolerance);
+        const auto dy = checked_sum(edge.segment.end.y, -edge.segment.start.y, tolerance);
+        const auto chord = std::hypot(dx, dy);
+        const auto length = segment_length(edge.segment);
+        if (!std::isfinite(chord) || !(chord > tolerance) ||
+            !std::isfinite(length) || !(length > tolerance))
+            invalid("edited measurement linework segment is degenerate");
+    }
+    replay.anchor = vertices.at(replay.edges.front().start_vertex_id);
+}
+
+bool apply_vertex_batch(MeasurementLineworkReplay& replay,
+                        const MeasurementLineworkVertexBatch& operation, double tolerance) {
+    std::map<std::string, Vec2, std::less<>> vertices;
+    for (const auto& edge : replay.edges) {
+        record_vertex(vertices, edge.start_vertex_id, edge.segment.start);
+        record_vertex(vertices, edge.end_vertex_id, edge.segment.end);
+    }
+    std::set<std::string, std::less<>> targets;
+    bool changed = false;
+    for (const auto& edit : operation.edits) {
+        if (edit.kind != BoundaryGeometryEditKind::move_vertex)
+            invalid("measurement linework vertex batch supports only plain vertex moves");
+        validate_edit({edit, std::nullopt}, replay.stroke_id);
+        if (!targets.insert(edit.target_id).second)
+            invalid("measurement linework vertex batch contains duplicate target");
+        const auto found = vertices.find(edit.target_id);
+        if (found == vertices.end()) invalid("measurement linework vertex batch names unknown vertex");
+        changed = changed || !same_point(found->second, edit.target_position);
+        found->second = edit.target_position;
+    }
+    if (!changed) return false;
+    apply_vertices(replay, vertices, tolerance);
+    return true;
+}
+
 bool apply_edit(MeasurementLineworkReplay& replay, const MeasurementLineworkEdit& operation,
                 double tolerance) {
     validate_edit(operation, replay.stroke_id);
@@ -287,20 +333,12 @@ bool apply_edit(MeasurementLineworkReplay& replay, const MeasurementLineworkEdit
             }
         }
     }
-    // This is linework validation only: no enclosure, winding or area checks.
+    apply_vertices(replay, vertices, tolerance);
     for (std::size_t index = 0; index < replay.edges.size(); ++index) {
-        auto& edge = replay.edges[index];
-        edge.segment.start = vertices.at(edge.start_vertex_id);
-        edge.segment.end = vertices.at(edge.end_vertex_id);
-        require_point(edge.segment.start, "edited measurement linework start");
-        require_point(edge.segment.end, "edited measurement linework end");
+        const auto& edge = replay.edges[index];
         const auto dx = checked_sum(edge.segment.end.x, -edge.segment.start.x, tolerance);
         const auto dy = checked_sum(edge.segment.end.y, -edge.segment.start.y, tolerance);
-        const auto chord = std::hypot(dx, dy);
         const auto length = segment_length(edge.segment);
-        if (!std::isfinite(chord) || !(chord > tolerance) ||
-            !std::isfinite(length) || !(length > tolerance))
-            invalid("edited measurement linework segment is degenerate");
         if (!connected_reference.empty() && edge.start_vertex_id != connected_fixed_id &&
             edge.end_vertex_id != connected_fixed_id) {
             const auto& reference = connected_reference[index];
@@ -315,7 +353,6 @@ bool apply_edit(MeasurementLineworkReplay& replay, const MeasurementLineworkEdit
             std::abs(length - edit.target_length_metres) > tolerance)
             invalid("measurement linework resize loses target length precision");
     }
-    replay.anchor = vertices.at(replay.edges.front().start_vertex_id);
     return true;
 }
 
@@ -364,7 +401,9 @@ Quantity read_quantity(const Json& value) {
 }
 
 void promote_to_v3(MeasurementLinework& model) {
-    if (model.schema_version == measurement_linework_schema_version_v3 || model.schema_version == measurement_linework_schema_version_v4) return;
+    if (model.schema_version == measurement_linework_schema_version_v3 ||
+        model.schema_version == measurement_linework_schema_version_v4 ||
+        model.schema_version == measurement_linework_schema_version_v5) return;
     for (const auto& transform : model.transforms) model.operations.emplace_back(transform);
     model.transforms.clear();
     model.schema_version = measurement_linework_schema_version_v3;
@@ -376,11 +415,12 @@ void promote_to_v3(MeasurementLinework& model) {
 MeasurementLinework promoted_measurement_linework_for_typed_chord(const MeasurementLinework& model) {
     if (!model.edges.empty()) (void)replay_measurement_linework(model);
     else {
-        if (model.schema_version<1 || model.schema_version>4 || model.schema_version!=model.replay_version ||
+        if (model.schema_version<1 || model.schema_version>5 || model.schema_version!=model.replay_version ||
             model.closed || !model.transforms.empty() || !model.operations.empty()) invalid("unsupported empty measured authoring candidate");
         require_identifier(model.stroke_id,"measurement linework stroke_id");
         require_point(model.anchor,"measurement linework anchor"); require_object(model.extensions,"measurement linework extensions");
     }
+    if (model.schema_version == measurement_linework_schema_version_v5) return model;
     auto result=model;
     for (const auto& transform : result.transforms) result.operations.emplace_back(transform);
     result.transforms.clear(); result.schema_version=measurement_linework_schema_version_v4;
@@ -415,7 +455,9 @@ MeasurementLinework transformed_measurement_linework(
         return model;
     }
     auto result = model;
-    if (result.schema_version == measurement_linework_schema_version_v3 || result.schema_version == measurement_linework_schema_version_v4) {
+    if (result.schema_version == measurement_linework_schema_version_v3 ||
+        result.schema_version == measurement_linework_schema_version_v4 ||
+        result.schema_version == measurement_linework_schema_version_v5) {
         result.operations.emplace_back(transform);
     } else {
         result.schema_version = measurement_linework_schema_version_v2;
@@ -426,14 +468,32 @@ MeasurementLinework transformed_measurement_linework(
     return result;
 }
 
+MeasurementLinework edited_measurement_linework_vertices(
+    const MeasurementLinework& model, const std::vector<BoundaryGeometryEdit>& edits) {
+    auto replay = replay_measurement_linework(model);
+    MeasurementLineworkVertexBatch operation{edits};
+    if (!apply_vertex_batch(replay, operation, default_geometry_tolerance_metres)) return model;
+    auto result = model;
+    promote_to_v3(result);
+    result.schema_version = measurement_linework_schema_version_v5;
+    result.replay_version = measurement_linework_replay_version_v5;
+    result.operations.emplace_back(std::move(operation));
+    (void)replay_measurement_linework(result);
+    return result;
+}
+
 MeasurementLineworkReplay replay_measurement_linework(const MeasurementLinework& model,
                                                      double tolerance_metres) {
     if (!std::isfinite(tolerance_metres) || !(tolerance_metres > 0)) {
         invalid("measurement linework tolerance must be finite and positive");
     }
-    const bool typed_dialect=model.schema_version==measurement_linework_schema_version_v4 && model.replay_version==measurement_linework_replay_version_v4;
+    const bool batch_dialect = model.schema_version == measurement_linework_schema_version_v5 &&
+        model.replay_version == measurement_linework_replay_version_v5;
+    const bool typed_dialect = (model.schema_version == measurement_linework_schema_version_v4 &&
+        model.replay_version == measurement_linework_replay_version_v4) || batch_dialect;
     if ((model.schema_version == measurement_linework_schema_version_v3 &&
-        model.replay_version == measurement_linework_replay_version_v3) || (typed_dialect && !model.operations.empty())) {
+        model.replay_version == measurement_linework_replay_version_v3) || batch_dialect ||
+        (typed_dialect && !model.operations.empty())) {
         if (!model.transforms.empty())
             invalid("measurement linework version three forbids parallel transforms");
         auto local = model;
@@ -450,10 +510,15 @@ MeasurementLineworkReplay replay_measurement_linework(const MeasurementLinework&
                 } while (index < model.operations.size() &&
                     std::holds_alternative<PlanarTransform>(model.operations[index]));
                 apply_transforms(result, transforms, tolerance_metres);
-            } else {
-                if (!apply_edit(result, std::get<MeasurementLineworkEdit>(model.operations[index++]),
-                                tolerance_metres))
+            } else if (const auto* edit = std::get_if<MeasurementLineworkEdit>(&model.operations[index])) {
+                ++index;
+                if (!apply_edit(result, *edit, tolerance_metres))
                     invalid("measurement linework derivation contains a redundant edit");
+            } else {
+                if (!batch_dialect) invalid("measurement linework vertex batch requires schema/replay five");
+                if (!apply_vertex_batch(result, std::get<MeasurementLineworkVertexBatch>(model.operations[index++]),
+                                        tolerance_metres))
+                    invalid("measurement linework derivation contains a redundant vertex batch");
             }
         }
         return result;
@@ -557,7 +622,8 @@ MeasurementLineworkVersion inspect_measurement_linework_model(const Json& model)
     const auto version = read_positive_version(model.at("version"), "measurement linework version");
     if (version != measurement_linework_schema_version_v1 &&
         version != measurement_linework_schema_version_v2 &&
-        version != measurement_linework_schema_version_v3 && version != measurement_linework_schema_version_v4) {
+        version != measurement_linework_schema_version_v3 && version != measurement_linework_schema_version_v4 &&
+        version != measurement_linework_schema_version_v5) {
         return {MeasurementLineworkFormat::unsupported_version, version, std::nullopt,
                 "unsupported measurement linework schema version"};
     }
@@ -569,13 +635,15 @@ MeasurementLineworkVersion inspect_measurement_linework_model(const Json& model)
     if ((version == measurement_linework_schema_version_v1 && replay_version != measurement_linework_replay_version_v1) ||
         (version == measurement_linework_schema_version_v2 && replay_version != measurement_linework_replay_version_v2) ||
         (version == measurement_linework_schema_version_v3 && replay_version != measurement_linework_replay_version_v3) ||
-        (version == measurement_linework_schema_version_v4 && replay_version != measurement_linework_replay_version_v4)) {
+        (version == measurement_linework_schema_version_v4 && replay_version != measurement_linework_replay_version_v4) ||
+        (version == measurement_linework_schema_version_v5 && replay_version != measurement_linework_replay_version_v5)) {
         return {MeasurementLineworkFormat::unsupported_replay_version, version, replay_version,
                 "unsupported measurement linework replay version"};
     }
     return {version == measurement_linework_schema_version_v1 ? MeasurementLineworkFormat::supported_v1 :
             version == measurement_linework_schema_version_v2 ? MeasurementLineworkFormat::supported_v2 :
-            version == measurement_linework_schema_version_v3 ? MeasurementLineworkFormat::supported_v3 : MeasurementLineworkFormat::supported_v4,
+            version == measurement_linework_schema_version_v3 ? MeasurementLineworkFormat::supported_v3 :
+            version == measurement_linework_schema_version_v4 ? MeasurementLineworkFormat::supported_v4 : MeasurementLineworkFormat::supported_v5,
             version, replay_version, {}};
 }
 
@@ -583,11 +651,14 @@ MeasurementLineworkDecodeResult decode_measurement_linework_model(const Json& en
     const auto inspected = inspect_measurement_linework_model(encoded);
     if (inspected.format != MeasurementLineworkFormat::supported_v1 &&
         inspected.format != MeasurementLineworkFormat::supported_v2 &&
-        inspected.format != MeasurementLineworkFormat::supported_v3 && inspected.format != MeasurementLineworkFormat::supported_v4) {
+        inspected.format != MeasurementLineworkFormat::supported_v3 && inspected.format != MeasurementLineworkFormat::supported_v4 &&
+        inspected.format != MeasurementLineworkFormat::supported_v5) {
         return {std::nullopt, encoded, inspected.version, inspected.replay_version,
                 inspected.diagnostic};
     }
-    if (inspected.format == MeasurementLineworkFormat::supported_v3 || inspected.format == MeasurementLineworkFormat::supported_v4) {
+    const bool ordered = inspected.format == MeasurementLineworkFormat::supported_v3 ||
+        inspected.format == MeasurementLineworkFormat::supported_v4 || inspected.format == MeasurementLineworkFormat::supported_v5;
+    if (ordered) {
         require_keys(encoded, {"version", "replay_version", "stroke_id", "anchor", "closed",
                                "segments", "extensions", "operations"}, "measurement linework model");
     } else if (inspected.format == MeasurementLineworkFormat::supported_v2) {
@@ -611,7 +682,7 @@ MeasurementLineworkDecodeResult decode_measurement_linework_model(const Json& en
         if (!transforms.is_array()) invalid("measurement linework transforms must be an array");
         for (const auto& value : transforms) model.transforms.push_back(read_transform(value));
     }
-    if (inspected.format == MeasurementLineworkFormat::supported_v3 || inspected.format == MeasurementLineworkFormat::supported_v4) {
+    if (ordered) {
         const auto& operations = encoded.at("operations");
         if (!operations.is_array()) invalid("measurement linework operations must be an array");
         for (const auto& value : operations) {
@@ -629,6 +700,13 @@ MeasurementLineworkDecodeResult decode_measurement_linework_model(const Json& en
                     edit.authored_length = read_quantity(value.at("authored_length"));
                 validate_edit(edit, model.stroke_id);
                 model.operations.emplace_back(std::move(edit));
+            } else if (type == "vertex_batch" && inspected.format == MeasurementLineworkFormat::supported_v5) {
+                require_keys(value, {"type", "edits"}, "measurement linework vertex batch operation");
+                if (!value.at("edits").is_array()) invalid("measurement linework vertex batch edits must be an array");
+                MeasurementLineworkVertexBatch batch;
+                for (const auto& edit : value.at("edits"))
+                    batch.edits.push_back(decode_boundary_geometry_edit(edit));
+                model.operations.emplace_back(std::move(batch));
             } else {
                 invalid("measurement linework operation type is unsupported");
             }
@@ -670,17 +748,23 @@ Json encode_measurement_linework_model(const MeasurementLinework& model) {
             result["transforms"].push_back(write_transform(transform));
         }
     }
-    if (model.schema_version == measurement_linework_schema_version_v3 || model.schema_version == measurement_linework_schema_version_v4) {
+    if (model.schema_version == measurement_linework_schema_version_v3 ||
+        model.schema_version == measurement_linework_schema_version_v4 ||
+        model.schema_version == measurement_linework_schema_version_v5) {
         result["operations"] = Json::array();
         for (const auto& operation : model.operations) {
             if (const auto* transform = std::get_if<PlanarTransform>(&operation)) {
                 result["operations"].push_back(Json{{"type", "transform"},
                                                     {"transform", write_transform(*transform)}});
-            } else {
-                const auto& edit = std::get<MeasurementLineworkEdit>(operation);
+            } else if (const auto* edit = std::get_if<MeasurementLineworkEdit>(&operation)) {
                 result["operations"].push_back(Json{{"type", "edit"},
-                    {"edit", encode_boundary_geometry_edit(edit.intent)},
-                    {"authored_length", edit.authored_length ? write_quantity(*edit.authored_length) : Json(nullptr)}});
+                    {"edit", encode_boundary_geometry_edit(edit->intent)},
+                    {"authored_length", edit->authored_length ? write_quantity(*edit->authored_length) : Json(nullptr)}});
+            } else {
+                Json edits = Json::array();
+                for (const auto& vertex_edit : std::get<MeasurementLineworkVertexBatch>(operation).edits)
+                    edits.push_back(encode_boundary_geometry_edit(vertex_edit));
+                result["operations"].push_back(Json{{"type", "vertex_batch"}, {"edits", std::move(edits)}});
             }
         }
     }
