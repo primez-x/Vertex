@@ -1,4 +1,31 @@
-# Vertex project formats v1 through v39
+# Vertex project formats v1 through v40
+
+## Physical-source measured curve reconstruction (v40)
+
+Command envelope 14 retains an `exterior_segment_arc` intent containing the
+stable measured boundary and segment IDs, the exact chord ConstructionReceipt,
+and the related-object movement choice. Angle, height and arc-length inputs
+retain their expressions and exact values. Both measured chord endpoints and
+all unselected measured geometry remain fixed within analytical roundoff.
+Physical wall baselines are reconstructed from that requested exterior using
+their original unequal thicknesses. Their derived curve inputs describe the
+physical baselines, independently of the measured construction receipt.
+
+Replay reconstructs the physical perimeter independently and checks the entire
+final measured outline after source completion. Competing raw physical,
+supplemental, rigid, split, corner or resize authority is forbidden; frozen
+related objects cannot carry dependent wall, boundary or measured-stroke edits.
+Current measured consumers and attached dimensions derive from the resulting
+walls. Ordinary topology, host, source-currentness and constraint checks remain.
+
+Straight-to-arc conversion uses curve_input_derivation version 3 with null
+source_input and the exact original straight source_baseline. Its first operation
+records the derived physical arc input. Later ordinary, construction and rigid
+operations preserve that line origin and archive prefix. Earlier versions keep
+their historical curve-origin rules. Retained envelope-14 commands and v3 line
+origins require native 40 / extraction 38, including undone and deleted history.
+Entity-only snapshots with that origin require the same reader floor; histories
+without the new proof or provenance retain their previous minimum versions.
 
 ## Physical-source measured edge resizing (v39)
 

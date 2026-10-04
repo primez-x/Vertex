@@ -7,8 +7,9 @@ package adds a copy of every stored revision asset under a content-addressed
 document identity, format version, revision range, asset references, and
 integrity hashes.
 
-The packager accepts native formats 1 through 39, including whole-wall
-relationships and retained physical-source measured edge resize commands.
+The packager accepts native formats 1 through 40, including whole-wall
+relationships and retained physical-source measured edge resize and curve
+reconstruction commands.
 Future formats are rejected. Packaging preserves the database byte-for-byte;
 the application's reader remains responsible for semantic admission.
 

@@ -1671,6 +1671,10 @@
     },
     {
       "category": "docs",
+      "path": "docs/plans/2026-10-04-source-derived-arc-reconstruction.md"
+    },
+    {
+      "category": "docs",
       "path": "docs/plans/2026-10-04-source-derived-edge-resize.md"
     },
     {
@@ -2728,6 +2732,10 @@
     {
       "category": "docs",
       "path": "docs/verification/source-corner-editing-20261002.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/verification/source-derived-arc-edit-2026-10-04.md"
     },
     {
       "category": "docs",
@@ -4575,11 +4583,27 @@
     },
     {
       "category": "source",
+      "path": "tests/exterior_boundary_arc_edit_desktop_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/exterior_boundary_arc_edit_tests.cpp"
+    },
+    {
+      "category": "source",
       "path": "tests/exterior_boundary_resize_desktop_tests.cpp"
     },
     {
       "category": "source",
       "path": "tests/exterior_boundary_resize_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/exterior_segment_arc_inverse_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/exterior_segment_arc_proof_tests.cpp"
     },
     {
       "category": "source",

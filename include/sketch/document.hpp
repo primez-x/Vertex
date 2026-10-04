@@ -168,6 +168,15 @@ struct ExteriorSegmentResizeIntent {
     bool move_connected_objects{true};
 };
 
+// Reconstruct one measured exterior curve from its exact entered chord receipt.
+// Both measured chord endpoints remain fixed; physical wall geometry is derived.
+struct ExteriorSegmentArcIntent {
+    std::string boundary_id;
+    std::string segment_id;
+    ConstructionReceipt arc_construction;
+    bool move_connected_objects{true};
+};
+
 struct WallSplitMeasuredOwnerIds {
     std::string boundary_id;
     std::string vertex_id;
@@ -240,6 +249,8 @@ struct ApplyBoundaryConstraintChanges {
     std::optional<WallSplitIntent> wall_split;
     // Envelope thirteen retains source-reconstructed measured-edge resize authority.
     std::optional<ExteriorSegmentResizeIntent> exterior_segment_resize;
+    // Envelope fourteen independently reconstructs endpoint-fixed curvature.
+    std::optional<ExteriorSegmentArcIntent> exterior_segment_arc;
 };
 
 using Command = std::variant<ApplyEntityChanges, NameRevision, TranslateBoundary,

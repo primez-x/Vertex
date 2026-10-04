@@ -20343,11 +20343,20 @@ public:
         const BoundaryGeometryEdit& edit, bool move_related_objects,
         std::optional<Quantity> exact_length = std::nullopt) {
         ConstraintAuthoringIntent intent;
-        if (edit.kind==BoundaryGeometryEditKind::move_vertex)
+        if (edit.kind==BoundaryGeometryEditKind::reconstruct_arc) {
+            const auto owner=source.entities().find(edit.boundary_id);
+            if (owner==source.entities().end() || !owner->second.properties.contains("wall_measurement_source"))
+                return Command{EditBoundaryGeometry{source.revision(),edit}};
+            if (!edit.arc_construction)
+                throw std::invalid_argument("Exterior curve reconstruction requires its entered chord construction.");
+            intent.exterior_segment_arc=ExteriorSegmentArcIntent{
+                edit.boundary_id,edit.target_id,*edit.arc_construction,move_related_objects};
+        } else if (edit.kind==BoundaryGeometryEditKind::move_vertex)
             intent.boundary_vertex_move=BoundaryVertexMoveIntent{edit,move_related_objects};
         else intent.boundary_resize=BoundaryResizeIntent{edit,move_related_objects,std::move(exact_length)};
         intent.message=edit.kind==BoundaryGeometryEditKind::move_vertex
-            ? "move boundary vertex and related objects" : "resize boundary edge and related objects";
+            ? "move boundary vertex and related objects" : edit.kind==BoundaryGeometryEditKind::reconstruct_arc
+            ? "reconstruct exterior curve and related objects" : "resize boundary edge and related objects";
         const auto preview=preview_constraint_authoring(source,intent);
         if (!preview.accepted()) {
             QStringList diagnostics;
@@ -20384,7 +20393,8 @@ public:
             if (revision != source.revision())
                 throw std::invalid_argument("The boundary changed before the edit was committed.");
             const Command command=(edit.kind==BoundaryGeometryEditKind::resize_segment ||
-                                   edit.kind==BoundaryGeometryEditKind::move_vertex)
+                                   edit.kind==BoundaryGeometryEditKind::move_vertex ||
+                                   edit.kind==BoundaryGeometryEditKind::reconstruct_arc)
                 ? boundaryGeometryCommand(source,edit,true,std::move(exact_length))
                 : Command{EditBoundaryGeometry{revision,std::move(edit)}};
             (void)Document::preview_command(source, command);
@@ -37413,7 +37423,7 @@ public:
             auto* help = new QLabel(QStringLiteral(
                 "Length and vertex edits preserve curve sweeps. Curvature reconstruction keeps both endpoints fixed. "
                 "Vertex X/Y are absolute plan coordinates; bare values use the current length units. "
-                "For a wall-derived exterior, changing a length or moving a corner also updates its physical source walls. "
+                "For a wall-derived exterior, length, curve and corner edits also update its physical source walls. "
                 "Use Move related objects to control attached geometry."), &dialog);
             help->setWordWrap(true);
             layout->addWidget(help);
@@ -37631,8 +37641,7 @@ public:
                         edit.move_connected = connected->isChecked();
                     }
                     const auto anchor_endpoint=edit.fixed_endpoint;
-                    Command command = curve ? Command{EditBoundaryGeometry{source.revision(), edit}}
-                        : boundaryGeometryCommand(source,edit,related->isChecked(),exact_length);
+                    Command command = boundaryGeometryCommand(source,edit,related->isChecked(),exact_length);
                     const auto proposed = Document::preview_command(source, command);
                     const auto& proposed_entity = proposed.entities().at(selected->id);
                     if (vertex) {
@@ -37812,9 +37821,10 @@ public:
                 show_field(fixed, !curve && !vertex);
                 connected->setEnabled(!curve && !vertex);
                 show_field(connected, !curve && !vertex);
-                related->setEnabled(!curve);
-                show_field(related, !curve);
+                related->setEnabled(!curve || selected->properties.contains("wall_measurement_source"));
+                show_field(related, !curve || selected->properties.contains("wall_measurement_source"));
                 legend->setText(vertex ? QStringLiteral("Gray: original    Blue: proposed    Green: original corner")
+                    : curve ? QStringLiteral("Gray: original    Blue: proposed    Green: fixed chord endpoints")
                     : QStringLiteral("Gray: original    Blue: proposed    Green: fixed point"));
                 show_field(clockwise, mode == QStringLiteral("arc_length"));
                 show_field(chord, curve);

@@ -36,12 +36,16 @@ void preserve_wall_curve_construction(Entity& candidate,const Entity& source);
 // Qualified exterior-corner reconstruction may change circular signed sweep.
 // Retains the original input and every prior operation as an exact archive.
 [[nodiscard]] Entity reconstruct_exterior_corner_wall(const Entity& source, const Segment& baseline);
+// New typed measured-arc authority alone permits straight physical origins.
+// The v3 archive retains the actual straight baseline and a null source input.
+[[nodiscard]] Entity reconstruct_exterior_segment_arc_wall(const Entity& source, const Segment& baseline);
 // Endpoint-only deformations require typed replay. Full independently
 // validated constructions may append without changing prior provenance.
 void validate_constraint_wall_geometry_transition(
     const std::map<std::string, Entity, std::less<>>& before,
     const std::map<std::string, Entity, std::less<>>& after,
-    bool qualified_curve_edits = false);
+    bool qualified_curve_edits = false,
+    bool qualified_line_origin_curve_edits = false);
 void validate_constraint_wall_host(const std::string& wall_id,
     const std::map<std::string, Entity, std::less<>>& entities);
 }

@@ -140,6 +140,7 @@ struct ConstraintAuthoringIntent {
     std::optional<MeasuredStrokeVertexMoveIntent> measured_stroke_vertex_move;
     std::optional<MeasuredStrokeTransformIntent> measured_stroke_transform;
     std::optional<ExteriorSegmentResizeIntent> exterior_segment_resize;
+    std::optional<ExteriorSegmentArcIntent> exterior_segment_arc;
 };
 
 struct ConstraintWallChange {

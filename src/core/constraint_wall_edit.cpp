@@ -345,18 +345,25 @@ void validate_wall_curve_input(const Entity& wall) {
     if (derivation==wall.extensions.end()) return;
     const auto& proof=*derivation;
     if (!proof.is_object() || proof.size()!=4 ||
-        (proof.at("version")!=1 && proof.at("version")!=2) ||
-        (proof.at("version")==2 && !proof.at("version").is_number_integer()) ||
+        (proof.at("version")!=1 && proof.at("version")!=2 && proof.at("version")!=3) ||
+        (proof.at("version")!=1 && !proof.at("version").is_number_integer()) ||
         !proof.at("operations").is_array() || proof.at("operations").empty())
         invalid("Wall has unsupported curve input derivation: "+wall.id);
     auto source=wall; source.properties["baseline"]=proof.at("source_baseline");
     auto baseline=read_baseline(source);
-    validate_input(proof.at("source_input"),baseline,wall.id);
+    const bool line_origin=proof.at("version")==3;
+    if (line_origin) {
+        if (!proof.at("source_input").is_null() || baseline.sweep_radians!=0 ||
+            !std::isfinite(segment_length(baseline)) || segment_length(baseline)<=constraint_linear_tolerance_metres)
+            invalid("Line-origin curve derivation requires its finite original straight baseline and null input");
+    } else validate_input(proof.at("source_input"),baseline,wall.id);
     auto expected_input=proof.at("source_input");
     bool has_rigid=false;
+    bool first=true;
     for (const auto& operation : proof.at("operations")) {
         if (is_rigid_operation(operation)) {
-            if (proof.at("version")!=2 || operation.size()!=3 || operation.at("kind")!="rigid_transform" ||
+            if ((proof.at("version")!=2 && !line_origin) || (line_origin && first) ||
+                operation.size()!=3 || operation.at("kind")!="rigid_transform" ||
                 !operation.contains("transform") || !operation.contains("baseline"))
                 invalid("Wall curve derivation has an unsupported rigid operation");
             const auto transform=decode_rigid_transform(operation.at("transform"));
@@ -367,7 +374,7 @@ void validate_wall_curve_input(const Entity& wall) {
                 invalid("Wall curve rigid operation does not reproduce its changed baseline");
             expected_input=rigid_curve_input(expected_input,next,transform);
             validate_input(expected_input,next,wall.id);
-            baseline=next; has_rigid=true;
+            baseline=next; has_rigid=true; first=false;
             continue;
         }
         const bool construction=operation.contains("input");
@@ -380,7 +387,11 @@ void validate_wall_curve_input(const Entity& wall) {
         (void)arc_from_chord_angle(next.start,next.end,next.sweep_radians);
         if (construction) { validate_input(operation.at("input"),next,wall.id); expected_input=operation.at("input"); }
         else expected_input=derived_angle_input(expected_input,next);
+        if (line_origin && first && (!construction ||
+            expected_input!=derived_angle_input(json::object(),next)))
+            invalid("Line-origin curve derivation must begin with its canonical derived physical angle input");
         baseline=next;
+        first=false;
     }
     if (proof.at("version")==2 && !has_rigid)
         invalid("Wall curve derivation version two requires a rigid transform");
@@ -401,7 +412,7 @@ void transform_wall_curve_input(Entity& wall,const PlanarTransform& transform) {
         candidate.extensions["curve_input_derivation"]={{"version",2},{"source_input",*input},
             {"source_baseline",wall.properties.at("baseline")},{"operations",json::array()}};
         proof=candidate.extensions.find("curve_input_derivation");
-    } else (*proof)["version"]=2;
+    } else if (proof->at("version")!=3) (*proof)["version"]=2;
     auto recorded_baseline=wall.properties.at("baseline");
     update_baseline_json(recorded_baseline,transformed);
     (*proof)["operations"].push_back({{"kind","rigid_transform"},
@@ -503,6 +514,32 @@ Entity reconstruct_exterior_corner_wall(const Entity& source, const Segment& bas
     return result;
 }
 
+Entity reconstruct_exterior_segment_arc_wall(const Entity& source,const Segment& baseline) {
+    const auto old=read_baseline(source);
+    if (old.sweep_radians!=0 || baseline.sweep_radians==0)
+        return reconstruct_exterior_corner_wall(source,baseline);
+    validate_wall_curve_input(source);
+    validate_wall_length_input(source);
+    if (source.extensions.contains("curve_input") || source.extensions.contains("curve_input_derivation"))
+        invalid("Straight-origin arc reconstruction cannot discard existing curve provenance: "+source.id);
+    if (!std::isfinite(segment_length(baseline)) || segment_length(baseline)<=constraint_linear_tolerance_metres)
+        invalid("Measured arc reconstruction collapsed its physical baseline: "+source.id);
+    (void)arc_from_chord_angle(baseline.start,baseline.end,baseline.sweep_radians);
+    auto result=source;
+    clear_wall_length_input(result);
+    const auto input=derived_angle_input(json::object(),baseline);
+    auto recorded=source.properties.at("baseline");
+    update_baseline_json(recorded,baseline);
+    result.extensions["curve_input_derivation"]={{"version",3},{"source_input",nullptr},
+        {"source_baseline",source.properties.at("baseline")},
+        {"operations",json::array({json{{"baseline",recorded},{"input",input}}})}};
+    result.extensions["curve_input"]=input;
+    set_baseline(result,baseline);
+    validate_wall_curve_input(result);
+    validate_wall_length_input(result);
+    return result;
+}
+
 void validate_wall_split_archive(const Entity& wall) {
     const auto archive=wall.extensions.find("wall_split_archive");
     if(archive==wall.extensions.end())return;
@@ -560,7 +597,7 @@ Entity reconstruct_split_wall(const Entity& source,const Segment& baseline,doubl
 }
 
 void validate_constraint_wall_geometry_transition(const std::map<std::string,Entity,std::less<>>& before,
-    const std::map<std::string,Entity,std::less<>>& after,bool qualified) {
+    const std::map<std::string,Entity,std::less<>>& after,bool qualified,bool qualified_line_origin) {
     for (const auto& [id,source] : before) {
         const auto found=after.find(id);
         if (source.type!="wall" || found==after.end() || found->second.type!="wall") continue;
@@ -602,7 +639,14 @@ void validate_constraint_wall_geometry_transition(const std::map<std::string,Ent
         }
         if (!derived && found->second.extensions.contains("curve_input_derivation")) {
             const auto& proof=found->second.extensions.at("curve_input_derivation");
-            if ((!qualified && !rigid_append) || !source.extensions.contains("curve_input") ||
+            const bool line_origin=proof.at("version")==3;
+            if (line_origin) {
+                const auto expected=reconstruct_exterior_segment_arc_wall(source,next);
+                if (!qualified_line_origin || old.sweep_radians!=0 ||
+                    expected.extensions.at("curve_input_derivation")!=proof ||
+                    expected.extensions.at("curve_input")!=found->second.extensions.at("curve_input"))
+                    invalid("Line-origin curve derivation requires the new typed measured arc proof: "+id);
+            } else if ((!qualified && !rigid_append) || !source.extensions.contains("curve_input") ||
                 proof.at("source_input")!=source.extensions.at("curve_input") ||
                 proof.at("source_baseline")!=source.properties.at("baseline"))
                 invalid("New curve derivation must replay its exact source input through a typed proof: "+id);

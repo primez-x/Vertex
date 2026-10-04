@@ -2615,6 +2615,12 @@ drawing; switching modes does not change existing geometry.
   - Result: Not tested
   - Notes: ______________________________
 
+- [ ] **U428 — Change an exterior curve without losing its walls or GLA**
+  - Steps: Draw a closed wall outline and define its measured exterior. Record the appraisal facts in Details. Select the measured area, open Edit boundary geometry and choose a straight edge. Try Signed sweep angle, Signed arc height and Arc length; preview each, Cancel once and then Apply. Repeat on an existing curved edge and on the opposite side of the chord. Inspect the physical walls, dimensions and GLA. Undo/Redo, save and reopen. Try a partition attached to the edited wall with Move related objects enabled and disabled.
+  - Expected: Both measured chord endpoints stay fixed. Preview shows the proposed curve and physical-wall changes together. The area remains linked to its source walls, and dimensions and GLA update in the same undoable edit. The entered construction survives reopening. Frozen or locked geometry that cannot meet the proposal explains the conflict and cannot apply. Cancel changes nothing.
+  - Result: Not tested
+  - Notes: ______________________________
+
 ## Issue report template
 
 - Task ID(s):

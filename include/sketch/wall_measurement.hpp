@@ -43,6 +43,17 @@ void validate_exterior_segment_resize_result(
     const std::map<std::string, Entity, std::less<>>& original,
     const std::map<std::string, Entity, std::less<>>& final,
     const ExteriorSegmentResizeIntent& intent);
+// Reconstructs the selected measured chord arc through analytical physical
+// sources. The measured receipt is command authority, never a physical input.
+[[nodiscard]] std::map<std::string, Entity, std::less<>> exterior_segment_arc_physical_entities(
+    const std::map<std::string, Entity, std::less<>>& original,
+    const ExteriorSegmentArcIntent& intent);
+[[nodiscard]] nlohmann::json encode_exterior_segment_arc(const ExteriorSegmentArcIntent& intent);
+[[nodiscard]] ExteriorSegmentArcIntent decode_exterior_segment_arc(const nlohmann::json& value);
+void validate_exterior_segment_arc_result(
+    const std::map<std::string, Entity, std::less<>>& original,
+    const std::map<std::string, Entity, std::less<>>& final,
+    const ExteriorSegmentArcIntent& intent);
 void validate_exterior_corner_physical_contacts(
     const std::map<std::string, Entity, std::less<>>& original,
     const std::map<std::string, Entity, std::less<>>& proposed);

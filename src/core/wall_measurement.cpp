@@ -1323,10 +1323,53 @@ std::vector<std::string> exterior_corner_perimeter_ids(
     catch (const std::invalid_argument&) { return derive_legacy_exterior_wall_measurement(original,ids).ordered_wall_ids; }
 }
 
+// Forward/inverse offset joins use normalized tangents, circular supports and
+// line/circle intersections. Account for their coordinate additions, products
+// and angle subtraction, with the crossing-angle conditioning at each miter.
+// This is an arithmetic envelope, not permission to move a model vertex by the
+// ordinary geometry tolerance. Ill-conditioned requests fail closed.
+static double measured_arc_roundoff(const Boundary& target) {
+    double scale=1.0, conditioning=1.0;
+    for (std::size_t i=0;i<target.size();++i) {
+        const auto& edge=target[i];
+        scale=std::max(scale,std::abs(edge.start.x)+std::abs(edge.start.y)+
+            std::abs(edge.end.x)+std::abs(edge.end.y)+segment_length(edge));
+        if (edge.sweep_radians!=0) {
+            const auto support=arc_support(edge);
+            scale=std::max(scale,std::abs(support.center.x)+std::abs(support.center.y)+support.radius);
+        }
+        const auto& previous=target[(i+target.size()-1)%target.size()];
+        const auto entering=std::atan2(previous.end.y-previous.start.y,previous.end.x-previous.start.x)+
+            previous.sweep_radians*0.5;
+        const auto leaving=std::atan2(edge.end.y-edge.start.y,edge.end.x-edge.start.x)-edge.sweep_radians*0.5;
+        const auto crossing=std::abs(std::sin(leaving-entering));
+        if (crossing>parallel_direction_tolerance) conditioning=std::max(conditioning,1.0/crossing);
+        // At an exact tangent the stable intersection kernel clamps its
+        // discriminant inside the support-input roundoff envelope to zero;
+        // this avoids the square-root amplification of a rounded positive ulp.
+    }
+    const auto result=256.0*std::numeric_limits<double>::epsilon()*scale*conditioning;
+    if (!std::isfinite(result) || result>default_geometry_tolerance_metres)
+        reject("Measured arc inverse cannot establish endpoint fidelity within analytical roundoff");
+    return result;
+}
+
+static void validate_measured_arc_edge(const Segment& actual,const Segment& target,double tolerance) {
+    if ((actual.sweep_radians==0)!=(target.sweep_radians==0) ||
+        (actual.sweep_radians!=0 && (std::signbit(actual.sweep_radians)!=std::signbit(target.sweep_radians) ||
+            std::max(arc_support(actual).radius,arc_support(target).radius)*
+                std::abs(actual.sweep_radians-target.sweep_radians)>tolerance)) ||
+        distance(actual.start,target.start)>tolerance || distance(actual.end,target.end)>tolerance ||
+        distance(point_at_fraction(actual,0.25),point_at_fraction(target,0.25))>tolerance ||
+        distance(point_at_fraction(actual,0.5),point_at_fraction(target,0.5))>tolerance ||
+        distance(point_at_fraction(actual,0.75),point_at_fraction(target,0.75))>tolerance)
+        reject("Measured arc final forward geometry differs from its complete requested analytical outline");
+}
+
 static std::map<std::string, Entity, std::less<>> inverse_exterior_outline(
     const std::map<std::string, Entity, std::less<>>& original,
     const std::string& boundary_id, const Boundary& requested, bool move_connected_objects,
-    bool restore_shared_vertices = false) {
+    bool restore_shared_vertices = false, bool measured_arc_authority = false) {
     const auto found = original.find(boundary_id);
     if (found == original.end()) reject("Exterior corner measured owner does not exist");
     const auto& owner = found->second;
@@ -1456,7 +1499,9 @@ static std::map<std::string, Entity, std::less<>> inverse_exterior_outline(
     }
     if (!converged) reject("Exterior corner physical attachment propagation did not converge");
     for (const auto& [id, target] : targets) {
-        if (source_ids.contains(id)) candidate.at(id) = reconstruct_exterior_corner_wall(original.at(id), target);
+        if (source_ids.contains(id)) candidate.at(id) = measured_arc_authority ?
+            reconstruct_exterior_segment_arc_wall(original.at(id),target) :
+            reconstruct_exterior_corner_wall(original.at(id), target);
         else {
             // Provisional attachment coordinates feed the solve. Their final
             // geometry/provenance is replayed from the original typed wall edit.
@@ -1474,9 +1519,14 @@ static std::map<std::string, Entity, std::less<>> inverse_exterior_outline(
     std::map<std::string, Segment, std::less<>> exterior;
     for (std::size_t i = 0; i < forward.boundary.size(); ++i)
         exterior.emplace(forward.ordered_wall_ids[i], forward.boundary[i]);
+    const auto arc_tolerance=measured_arc_authority ? measured_arc_roundoff(requested) : 0.0;
     for (std::size_t i = 0; i < requested.size(); ++i) {
         auto edge = exterior.at(ordered[i].id);
         if (reversed) { std::swap(edge.start, edge.end); edge.sweep_radians = -edge.sweep_radians; }
+        if (measured_arc_authority) {
+            validate_measured_arc_edge(edge,requested[i],arc_tolerance);
+            continue;
+        }
         if ((edge.sweep_radians == 0) != (requested[i].sweep_radians == 0) ||
             (edge.sweep_radians != 0 &&
                 (std::signbit(edge.sweep_radians) != std::signbit(requested[i].sweep_radians) ||
@@ -1614,6 +1664,76 @@ void validate_exterior_segment_resize_result(
         distance(point_at_fraction(edge, 0.5), point_at_fraction(target, 0.5)) > default_geometry_tolerance_metres ||
         distance(point_at_fraction(edge, 0.75), point_at_fraction(target, 0.75)) > default_geometry_tolerance_metres)
         reject("Exterior resize final forward geometry differs from its requested length, anchor or circular sweep");
+}
+
+nlohmann::json encode_exterior_segment_arc(const ExteriorSegmentArcIntent& intent) {
+    BoundaryGeometryEdit edit;
+    edit.kind=BoundaryGeometryEditKind::reconstruct_arc;
+    edit.boundary_id=intent.boundary_id; edit.target_id=intent.segment_id;
+    edit.arc_construction=intent.arc_construction;
+    validate_boundary_geometry_edit(edit);
+    return {{"version",1},{"boundary_id",intent.boundary_id},{"segment_id",intent.segment_id},
+        {"arc_construction",encode_construction_receipt(intent.arc_construction)},
+        {"move_connected_objects",intent.move_connected_objects}};
+}
+
+ExteriorSegmentArcIntent decode_exterior_segment_arc(const nlohmann::json& value) {
+    if (!value.is_object() || value.size()!=5 || !value.contains("version") ||
+        !value.at("version").is_number_integer() || value.at("version")!=1 ||
+        !value.contains("boundary_id") || !value.at("boundary_id").is_string() ||
+        !value.contains("segment_id") || !value.at("segment_id").is_string() ||
+        !value.contains("arc_construction") || !value.contains("move_connected_objects") ||
+        !value.at("move_connected_objects").is_boolean())
+        reject("Exterior segment arc proof contains unsupported fields");
+    ExteriorSegmentArcIntent result{value.at("boundary_id").get<std::string>(),value.at("segment_id").get<std::string>(),
+        decode_construction_receipt(value.at("arc_construction")),value.at("move_connected_objects").get<bool>()};
+    if (encode_exterior_segment_arc(result)!=value)
+        reject("Exterior segment arc proof contains noncanonical construction fields");
+    return result;
+}
+
+std::map<std::string,Entity,std::less<>> exterior_segment_arc_physical_entities(
+    const std::map<std::string,Entity,std::less<>>& original,const ExteriorSegmentArcIntent& intent) {
+    (void)encode_exterior_segment_arc(intent);
+    const auto found=original.find(intent.boundary_id);
+    if (found==original.end()) reject("Exterior arc measured owner does not exist");
+    const auto requested=reconstruct_boundary_arc(decode_identified_boundary_entity(found->second),
+        intent.segment_id,intent.arc_construction);
+    const auto geometry=boundary_geometry(requested);
+    (void)measured_arc_roundoff(geometry);
+    return inverse_exterior_outline(original,intent.boundary_id,geometry,intent.move_connected_objects,true,true);
+}
+
+void validate_exterior_segment_arc_result(const std::map<std::string,Entity,std::less<>>& original,
+    const std::map<std::string,Entity,std::less<>>& final,const ExteriorSegmentArcIntent& intent) {
+    (void)encode_exterior_segment_arc(intent);
+    const auto old=original.find(intent.boundary_id), current=final.find(intent.boundary_id);
+    if (old==original.end() || current==final.end() ||
+        !old->second.properties.contains("wall_measurement_source") ||
+        !current->second.properties.contains("wall_measurement_source") ||
+        !wall_measurement_source_current(original,old->second) ||
+        !wall_measurement_source_current(final,current->second))
+        reject("Exterior arc result requires current original and final physical wall sources");
+    auto old_ids=exterior_wall_measurement_source_ids(old->second);
+    auto final_ids=exterior_wall_measurement_source_ids(current->second);
+    std::sort(old_ids.begin(),old_ids.end()); std::sort(final_ids.begin(),final_ids.end());
+    if (old_ids!=final_ids) reject("Exterior arc result changed its physical source identities");
+    const auto old_walls=read_source_walls(original,old_ids), final_walls=read_source_walls(final,final_ids);
+    for (std::size_t i=0;i<old_walls.size();++i)
+        if (old_walls[i].id!=final_walls[i].id || old_walls[i].thickness!=final_walls[i].thickness)
+            reject("Exterior arc result changed its physical wall thickness");
+    const auto requested=reconstruct_boundary_arc(decode_identified_boundary_entity(old->second),
+        intent.segment_id,intent.arc_construction);
+    const auto actual=decode_identified_boundary_entity(current->second);
+    if (actual.segments.size()!=requested.segments.size()) reject("Exterior arc result changed stable target topology");
+    const auto tolerance=measured_arc_roundoff(boundary_geometry(requested));
+    for (std::size_t i=0;i<requested.segments.size();++i) {
+        const auto& target=requested.segments[i]; const auto& edge=actual.segments[i];
+        if (edge.segment_id!=target.segment_id || edge.start_vertex_id!=target.start_vertex_id ||
+            edge.end_vertex_id!=target.end_vertex_id)
+            reject("Exterior arc result changed stable target edge or vertex identities");
+        validate_measured_arc_edge(edge.segment,target.segment,tolerance);
+    }
 }
 
 std::vector<BoundaryGeometryEdit> exterior_wall_measurement_source_updates(

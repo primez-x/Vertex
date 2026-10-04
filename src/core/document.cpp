@@ -1572,6 +1572,9 @@ static void validate_exterior_resize_related_edits(const ApplyBoundaryConstraint
     if (command.exterior_segment_resize && !command.exterior_segment_resize->move_connected_objects &&
         (!command.boundary_edits.empty() || !command.wall_edits.empty() || !command.measured_stroke_edits.empty()))
         throw std::invalid_argument("Exterior segment resize with frozen related objects cannot carry dependent geometry edits");
+    if (command.exterior_segment_arc && !command.exterior_segment_arc->move_connected_objects &&
+        (!command.boundary_edits.empty() || !command.wall_edits.empty() || !command.measured_stroke_edits.empty()))
+        throw std::invalid_argument("Exterior segment arc with frozen related objects cannot carry dependent geometry edits");
 }
 
 static void validate_measured_stroke_edit(const ApplyBoundaryConstraintChanges::MeasuredStrokeEdit& edit) {
@@ -1641,7 +1644,8 @@ bool has_exterior_source_completion(const ApplyBoundaryConstraintChanges& comman
     return command.exterior_source_completion || !command.physical_entity_changes.empty() ||
         !command.exterior_source_edits.empty() || (!has_rigid_wall_transform(command) &&
             !has_measured_source_completion(command) && has_supplemental_source_completion(command)) ||
-        command.exterior_corner_move.has_value() || command.exterior_segment_resize.has_value();
+        command.exterior_corner_move.has_value() || command.exterior_segment_resize.has_value() ||
+        command.exterior_segment_arc.has_value();
 }
 
 static bool has_measured_stroke_dimensions(const std::map<std::string,Entity,std::less<>>& source,
@@ -1816,6 +1820,17 @@ void validate_completed_constraint_change(const std::map<std::string, Entity, st
             }
             validate_exterior_segment_resize_result(before, after, *command.exterior_segment_resize);
         }
+        if (command.exterior_segment_arc) {
+            const auto reconstructed = exterior_segment_arc_physical_entities(before, *command.exterior_segment_arc);
+            const auto source_ids = exterior_corner_perimeter_ids(before,before.at(command.exterior_segment_arc->boundary_id));
+            for (const auto& id : source_ids) {
+                if (!after.contains(id) || !exact_entity_payload(after.at(id), reconstructed.at(id)))
+                    throw std::invalid_argument("Exterior segment arc differs from independently reconstructed physical source walls");
+                ordinary_before.erase(id);
+                typed_before.erase(id);
+            }
+            validate_exterior_segment_arc_result(before, after, *command.exterior_segment_arc);
+        }
         for (const auto& [id, entity] : before) {
             if (entity.type != "wall") continue;
             if (typed_ids.contains(id)) ordinary_before.erase(id);
@@ -1902,6 +1917,16 @@ std::map<std::string, Entity, std::less<>> boundary_constraint_entities(
         try {
             const auto reconstructed = exterior_segment_resize_physical_entities(source, *command.exterior_segment_resize);
             const auto ids = exterior_corner_perimeter_ids(source,source.at(command.exterior_segment_resize->boundary_id));
+            for (const auto& id : ids) {
+                result.at(id) = reconstructed.at(id);
+                corner_physical_ids.insert(id);
+            }
+        } catch (const std::exception& error) { document_error(DocumentErrorCode::invalid_entity, error.what()); }
+    }
+    if (command.exterior_segment_arc) {
+        try {
+            const auto reconstructed = exterior_segment_arc_physical_entities(source, *command.exterior_segment_arc);
+            const auto ids = exterior_corner_perimeter_ids(source,source.at(command.exterior_segment_arc->boundary_id));
             for (const auto& id : ids) {
                 result.at(id) = reconstructed.at(id);
                 corner_physical_ids.insert(id);
@@ -2061,13 +2086,13 @@ std::map<std::string, Entity, std::less<>> boundary_constraint_entities(
         catch (const std::exception& error) { document_error(DocumentErrorCode::invalid_entity,error.what()); }
     }
     try {
-        if (command.exterior_corner_move || command.exterior_segment_resize) validate_exterior_corner_edit_topology(source,result);
+        if (command.exterior_corner_move || command.exterior_segment_resize || command.exterior_segment_arc) validate_exterior_corner_edit_topology(source,result);
         else validate_constraint_edit_topology(source,result,rigid_wall_ids);
     }
     catch (const std::exception& error) { document_error(DocumentErrorCode::invalid_entity,error.what()); }
     if (source_completion) {
         try {
-            if (command.exterior_corner_move || command.exterior_segment_resize) validate_exterior_corner_physical_contacts(source, result);
+            if (command.exterior_corner_move || command.exterior_segment_resize || command.exterior_segment_arc) validate_exterior_corner_physical_contacts(source, result);
             if (command.exterior_source_edits.empty())
                 throw std::invalid_argument("Exterior source completion requires explicit redraws");
             const auto expected = exterior_wall_measurement_source_updates(source, result);
@@ -2097,6 +2122,10 @@ std::map<std::string, Entity, std::less<>> boundary_constraint_entities(
     }
     if (command.exterior_segment_resize) {
         try { validate_exterior_segment_resize_result(source, result, *command.exterior_segment_resize); }
+        catch(const std::exception& error){document_error(DocumentErrorCode::invalid_entity,error.what());}
+    }
+    if (command.exterior_segment_arc) {
+        try { validate_exterior_segment_arc_result(source, result, *command.exterior_segment_arc); }
         catch(const std::exception& error){document_error(DocumentErrorCode::invalid_entity,error.what());}
     }
     return result;
@@ -2900,7 +2929,7 @@ nlohmann::json command_to_json(const Command& command) {
                     !typed.supplemental_entity_changes.empty() || !typed.supplemental_asset_changes.empty() ||
                     typed.exterior_source_completion || typed.supplemental_source_completion || typed.exterior_corner_move ||
                     typed.supplemental_asset_reference_completion || typed.rigid_wall_transform_completion ||
-                    !typed.measured_stroke_edits.empty() || typed.measured_source_completion || typed.exterior_segment_resize)
+                    !typed.measured_stroke_edits.empty() || typed.measured_source_completion || typed.exterior_segment_resize || typed.exterior_segment_arc)
                     document_error(DocumentErrorCode::invalid_entity,"Wall split intent cannot borrow another command lane");
                 return nlohmann::json{{"version",12},{"kind","apply_boundary_constraint_changes"},
                     {"expected_revision",typed.expected_revision},{"message",typed.message},{"wall_split",encode_wall_split(*typed.wall_split)}};
@@ -3001,7 +3030,7 @@ nlohmann::json command_to_json(const Command& command) {
                 // accompany a source resize without replacing its authority.
                 if (typed.exterior_segment_resize) {
                     validate_exterior_resize_related_edits(typed);
-                    if (typed.exterior_corner_move || has_rigid_wall_transform(typed) ||
+                    if (typed.exterior_corner_move || typed.exterior_segment_arc || has_rigid_wall_transform(typed) ||
                         has_supplemental_source_completion(typed) || typed.supplemental_asset_reference_completion ||
                         !typed.physical_entity_changes.empty())
                         throw std::invalid_argument("Exterior segment resize cannot borrow another physical or supplemental intent");
@@ -3017,6 +3046,26 @@ nlohmann::json command_to_json(const Command& command) {
                     encoded.erase("exterior_corner_move");
                     encoded["exterior_segment_resize"] = encode_exterior_segment_resize(*typed.exterior_segment_resize);
                     if(encoded.dump().size()>1024*1024)throw std::invalid_argument("Exterior segment resize proof exceeds the persisted proof budget");
+                }
+                // Curvature authority must survive late measured source completion.
+                if (typed.exterior_segment_arc) {
+                    validate_exterior_resize_related_edits(typed);
+                    if (typed.exterior_corner_move || typed.exterior_segment_resize || has_rigid_wall_transform(typed) ||
+                        has_supplemental_source_completion(typed) || typed.supplemental_asset_reference_completion ||
+                        !typed.physical_entity_changes.empty())
+                        throw std::invalid_argument("Exterior segment arc cannot borrow another physical or supplemental intent");
+                    encoded["version"] = 14;
+                    encoded["source_completion"] = true;
+                    encoded["supplemental_source_completion"] = false;
+                    encoded["supplemental_asset_reference_completion"] = false;
+                    encoded["rigid_wall_transform_completion"] = false;
+                    encoded["measured_source_completion"] = has_measured_source_completion(typed);
+                    if (!encoded.contains("measured_stroke_edits")) encoded["measured_stroke_edits"] = nlohmann::json::array();
+                    encoded["supplemental_entity_changes"] = nlohmann::json::array();
+                    encoded["supplemental_asset_changes"] = nlohmann::json::array();
+                    encoded.erase("exterior_corner_move");
+                    encoded["exterior_segment_arc"] = encode_exterior_segment_arc(*typed.exterior_segment_arc);
+                    if(encoded.dump().size()>1024*1024)throw std::invalid_argument("Exterior segment arc proof exceeds the persisted proof budget");
                 }
             } catch (const std::exception& error) {
                 document_error(DocumentErrorCode::invalid_entity, error.what());
@@ -3060,7 +3109,7 @@ Command command_from_json(const nlohmann::json& value,
     try {
         if (!value.is_object() || !value.contains("version") || !value.contains("kind") ||
             !value.at("version").is_number_integer() ||
-            (value.at("version") != 1 && value.at("version") != 2 && value.at("version") != 3 && value.at("version") != 4 && value.at("version") != 5 && value.at("version") != 6 && value.at("version") != 7 && value.at("version") != 8 && value.at("version") != 9 && value.at("version") != 10 && value.at("version") != 11 && value.at("version") != 12 && value.at("version") != 13) ||
+            (value.at("version") != 1 && value.at("version") != 2 && value.at("version") != 3 && value.at("version") != 4 && value.at("version") != 5 && value.at("version") != 6 && value.at("version") != 7 && value.at("version") != 8 && value.at("version") != 9 && value.at("version") != 10 && value.at("version") != 11 && value.at("version") != 12 && value.at("version") != 13 && value.at("version") != 14) ||
             !value.at("kind").is_string()) {
             document_error(DocumentErrorCode::invalid_entity, "serialized command envelope is invalid");
         }
@@ -3116,6 +3165,36 @@ Command command_from_json(const nlohmann::json& value,
             return result;
         }
         if (kind == "apply_boundary_constraint_changes") {
+            if (value.at("version") == 14) {
+                command_exact_fields(value,{"version","kind","expected_revision","message","entity_changes","boundary_edits","wall_edits",
+                    "physical_entity_changes","exterior_source_edits","supplemental_entity_changes","supplemental_asset_changes",
+                    "source_completion","supplemental_source_completion","supplemental_asset_reference_completion",
+                    "rigid_wall_transform_completion","measured_source_completion","measured_stroke_edits","exterior_segment_arc"},
+                    DocumentErrorCode::invalid_entity,"serialized exterior segment arc command");
+                for (const auto* flag : {"source_completion","supplemental_source_completion","supplemental_asset_reference_completion",
+                                        "rigid_wall_transform_completion","measured_source_completion"})
+                    if (!value.at(flag).is_boolean()) throw std::invalid_argument("Exterior arc completion modes must be booleans");
+                if (!value.at("source_completion").get<bool>() || value.at("supplemental_source_completion").get<bool>() ||
+                    value.at("supplemental_asset_reference_completion").get<bool>() || value.at("rigid_wall_transform_completion").get<bool>())
+                    throw std::invalid_argument("Exterior arc has incompatible completion modes");
+                for (const auto* lane : {"physical_entity_changes","supplemental_entity_changes","supplemental_asset_changes"})
+                    if (!value.at(lane).is_array() || !value.at(lane).empty())
+                        throw std::invalid_argument("Exterior arc cannot carry raw physical or supplemental changes");
+                const bool measured = value.at("measured_source_completion").get<bool>();
+                if (!value.at("measured_stroke_edits").is_array() || (!measured && !value.at("measured_stroke_edits").empty()))
+                    throw std::invalid_argument("Exterior arc measured mode disagrees with its typed lane");
+                // Existing strict decoders continue to own their unchanged lanes.
+                auto lanes = value;
+                lanes["version"] = 11;
+                lanes["measured_source_completion"] = true;
+                lanes.erase("exterior_segment_arc");
+                lanes["exterior_corner_move"] = nullptr;
+                auto result = std::get<ApplyBoundaryConstraintChanges>(command_from_json(lanes, asset_resolver));
+                result.measured_source_completion = measured;
+                result.exterior_segment_arc = decode_exterior_segment_arc(value.at("exterior_segment_arc"));
+                (void)command_to_json(Command{result});
+                return result;
+            }
             if (value.at("version") == 13) {
                 command_exact_fields(value,{"version","kind","expected_revision","message","entity_changes","boundary_edits","wall_edits",
                     "physical_entity_changes","exterior_source_edits","supplemental_entity_changes","supplemental_asset_changes",
