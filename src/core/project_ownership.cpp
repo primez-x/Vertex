@@ -1,4 +1,5 @@
 #include "sketch/project_ownership.hpp"
+#include "sketch/windows_project_path.hpp"
 
 #include <algorithm>
 #include <limits>
@@ -45,6 +46,25 @@ std::string path_key_text(const std::filesystem::path& path) {
     return path_utf8(std::filesystem::path(folded));
 #else
     return path_utf8(path);
+#endif
+}
+
+std::string identity_key_text(const std::filesystem::path& path) {
+#ifdef _WIN32
+    auto native = windows_project_path(path).native();
+    // Collapse only the extended forms of conventional DOS/UNC paths. Keep
+    // ordinary lease keys stable and leave other Windows namespaces distinct.
+    if (native.starts_with(L"\\\\?\\UNC\\")) {
+        native = L"\\\\" + native.substr(8);
+    } else if (native.size() >= 7 && native.starts_with(L"\\\\?\\") &&
+               ((native[4] >= L'A' && native[4] <= L'Z') ||
+                (native[4] >= L'a' && native[4] <= L'z')) &&
+               native[5] == L':' && native[6] == L'\\') {
+        native.erase(0, 4);
+    }
+    return path_key_text(std::filesystem::path(native));
+#else
+    return path_key_text(path);
 #endif
 }
 
@@ -99,11 +119,12 @@ std::uint64_t filetime_ticks(const FILETIME& value) noexcept {
 ProjectFileIdentity inspect_identity(const std::filesystem::path& path) {
     ProjectFileIdentity identity;
     identity.path = normalize_path(path);
-    const auto text = path_key_text(identity.path);
+    const auto text = identity_key_text(identity.path);
     identity.path_digest = digest_text(text);
 
 #ifdef _WIN32
-    const auto handle = CreateFileW(identity.path.c_str(), FILE_READ_ATTRIBUTES,
+    const auto native_path = windows_project_path(identity.path);
+    const auto handle = CreateFileW(native_path.c_str(), FILE_READ_ATTRIBUTES,
                                     FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
                                     nullptr, OPEN_EXISTING,
                                     FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT |
@@ -323,7 +344,7 @@ bool ProjectOwnershipSession::path_matches(const std::filesystem::path& path) co
     if (!active()) return false;
     try {
         const auto normalized = normalize_path(path);
-        return digest_text(path_key_text(normalized)) == identity_.path_digest;
+        return digest_text(identity_key_text(normalized)) == identity_.path_digest;
     } catch (...) {
         return false;
     }

@@ -115,7 +115,14 @@ struct TempDirectory {
     TempDirectory() { std::filesystem::create_directory(path); }
     ~TempDirectory() {
         std::error_code ignored;
+#ifdef _WIN32
+        // Test-owned deep fixtures need cleanup without the process longPathAware opt-in.
+        const auto cleanup_path = path.native().starts_with(L"\\\\?\\")
+            ? path : std::filesystem::path(L"\\\\?\\" + path.wstring());
+        std::filesystem::remove_all(cleanup_path, ignored);
+#else
         std::filesystem::remove_all(path, ignored);
+#endif
     }
 };
 
@@ -2484,6 +2491,156 @@ void test_rigid_group_storage_and_history_floors() {
     }
 }
 
+#ifdef _WIN32
+std::filesystem::path extended_test_path(const std::filesystem::path& path) {
+    return std::filesystem::path(L"\\\\?\\" + std::filesystem::absolute(path).wstring());
+}
+
+std::filesystem::path deep_project_directory(const TempDirectory& temp, bool unicode) {
+    auto directory = temp.path / (unicode ? std::filesystem::path(L"\u6e2c\u91cf-\u00e9-\u03a9")
+                                          : std::filesystem::path("ascii"));
+    const std::size_t minimum_length = unicode ? 480 : 320;
+    while (directory.wstring().size() < minimum_length) {
+        directory /= unicode ? std::filesystem::path(std::wstring(48, L'\u4f4f'))
+                             : std::filesystem::path(std::string(48, 'd'));
+    }
+    std::filesystem::create_directories(extended_test_path(directory));
+    require(directory.wstring().size() > MAX_PATH,
+            "deep project fixture must exceed the legacy Windows path limit");
+    require(!unicode || directory.u8string().size() > 1040,
+            "Unicode fixture must exceed SQLite's default Windows VFS pathname byte limit");
+    return directory;
+}
+
+void require_deep_directory_contents(const std::filesystem::path& directory,
+                                     const std::vector<std::filesystem::path>& expected) {
+    std::size_t count = 0;
+    for (const auto& entry : std::filesystem::directory_iterator(extended_test_path(directory))) {
+        const auto name = entry.path().filename();
+        require(std::any_of(expected.begin(), expected.end(), [&](const auto& path) {
+                    return path.filename() == name;
+                }), "deep save must clean only its exact unpublished staging and sidecars");
+        ++count;
+    }
+    require(count == expected.size(), "deep save must preserve every expected directory entry");
+}
+#endif
+
+void test_deep_windows_project_paths_preserve_publication_contracts() {
+#ifdef _WIN32
+    for (const bool unicode : {false, true}) {
+        TempDirectory temp;
+        const auto directory = deep_project_directory(temp, unicode);
+        const auto destination = directory / std::filesystem::path(L"\u4f4f\u5b85-project.bldproj");
+        auto document = populated_document();
+        const auto original = document.snapshot();
+        const auto first = ProjectStore::save(destination, original);
+        require(ProjectStore::file_sha256(destination) == first.file_sha256,
+                "deep destination hash must match the exact newly published bytes");
+        const auto loaded = ProjectStore::load(destination);
+        require(loaded.file_sha256 == first.file_sha256 &&
+                    loaded.document.snapshot().entities() == original.entities() &&
+                    loaded.document.snapshot().assets() == original.assets() &&
+                    loaded.document.snapshot().history().size() == original.history().size(),
+                "deep ASCII and Unicode destinations must restore entities, assets and history");
+        const auto relative = destination.lexically_relative(std::filesystem::current_path());
+        const auto dot_alias = directory.parent_path() / directory.filename() / ".." /
+                               directory.filename() / "." / destination.filename();
+        require(!relative.empty(), "deep destination must admit a relative caller path");
+        for (const auto& alias : {relative, dot_alias, extended_test_path(destination)}) {
+            require(ProjectStore::file_sha256(alias) == first.file_sha256 &&
+                        ProjectStore::load(alias).file_sha256 == first.file_sha256,
+                    "deep relative, dot-segment and qualified aliases must read the same exact file");
+            require_error([&] { (void)ProjectStore::save(alias, original); },
+                          StorageErrorCode::destination_exists,
+                          "deep save aliases must still recognize an existing destination");
+        }
+        document.apply(ApplyEntityChanges{document.revision(),
+            {EntityChange::upsert(entity("deep-label", "label", {{"text", "replacement"}}))}});
+        const auto replacement = document.snapshot();
+        require_error([&] { (void)ProjectStore::save(destination, replacement); },
+                      StorageErrorCode::destination_exists, "deep replacement requires a fingerprint");
+        require_error([&] { (void)ProjectStore::save(destination, replacement,
+                          SaveOptions{.expected_destination_sha256 = std::string(64, '0')}); },
+                      StorageErrorCode::external_change, "deep replacement rejects stale fingerprints");
+        const auto unrelated = directory / "user-data-journal";
+        { std::ofstream marker(extended_test_path(unrelated), std::ios::binary); marker << "preserve"; }
+        for (const auto stage : {SaveFaultStage::after_journal_creation,
+                                 SaveFaultStage::after_database_write,
+                                 SaveFaultStage::after_validation, SaveFaultStage::before_publish}) {
+            require_error([&] { (void)ProjectStore::save(destination, replacement,
+                SaveOptions{.expected_destination_sha256 = first.file_sha256, .fault_stage = stage}); },
+                StorageErrorCode::injected_failure, "deep failure injection must reach its intended save stage");
+            require(ProjectStore::file_sha256(destination) == first.file_sha256,
+                    "deep failed replacement must preserve original project bytes");
+            require_deep_directory_contents(directory, {destination, unrelated});
+            const auto missing = directory / "unpublished-project.bldproj";
+            require_error([&] { (void)ProjectStore::save(missing, replacement,
+                            SaveOptions{.fault_stage = stage}); },
+                          StorageErrorCode::injected_failure,
+                          "deep new-save failure must reach its intended stage without publication");
+            require(!std::filesystem::exists(extended_test_path(missing)),
+                    "deep failed new save must leave no published destination");
+            require_deep_directory_contents(directory, {destination, unrelated});
+        }
+        const auto second = ProjectStore::save(destination, replacement,
+            SaveOptions{.expected_destination_sha256 = first.file_sha256,
+                .after_validation_barrier = [&](const auto& staged, const auto&) {
+                    const auto writer = CreateFileW(extended_test_path(staged).c_str(), GENERIC_WRITE,
+                        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+                        OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+                    const auto error = GetLastError();
+                    if (writer != INVALID_HANDLE_VALUE) { CloseHandle(writer); }
+                    require(writer == INVALID_HANDLE_VALUE && error == ERROR_SHARING_VIOLATION,
+                            "deep validated staging identity must remain locked against writes");
+                }});
+        require(second.backup_path && second.backup_path->parent_path() == directory &&
+                    ProjectStore::file_sha256(*second.backup_path) == first.file_sha256 &&
+                    ProjectStore::load(*second.backup_path).document.snapshot().entities() == original.entities(),
+                "deep replacement must preserve a verified loadable original backup beside destination");
+        require(ProjectStore::load(destination).document.snapshot().entities() == replacement.entities() &&
+                    ProjectStore::file_sha256(destination) == second.file_sha256,
+                "deep replacement must publish the exact replacement snapshot");
+        require_deep_directory_contents(directory, {destination, unrelated, *second.backup_path});
+
+        const auto archive_path = directory / std::filesystem::path(L"\u56de\u5fa9-archive.bldproj");
+        sketch::ProjectWorkspace workspace(replacement);
+        const auto capture = workspace.capture();
+        const auto history = sketch::capture_workspace_history_record(capture);
+        const sketch::RecoveryLedger ledger{{"deep-history", "workspace_history",
+            sketch::encode_workspace_history_record(capture.document(), history, std::nullopt)}};
+        const sketch::ProjectArchiveSnapshot archive{capture.document(), ledger, sketch::ArchiveRole::ordinary};
+        const auto archive_first = ProjectStore::save_archive(archive_path, archive);
+        const auto recovered = ProjectStore::load_archive(archive_path, sketch::ArchiveRole::ordinary);
+        require(recovered.supported() && recovered.file_sha256 == archive_first.file_sha256 &&
+                    recovered.archive->document().entities() == replacement.entities() &&
+                    recovered.archive->recovery().front().envelope == ledger.front().envelope,
+                "deep recovery archive must preserve the document and exact recovery envelope");
+        require_error([&] { (void)ProjectStore::save(archive_path, replacement,
+                          SaveOptions{.expected_destination_sha256 = archive_first.file_sha256}); },
+                      StorageErrorCode::unsupported_format,
+                      "deep document-only replacement must preserve recovery archive ledger");
+        require_error([&] { (void)ProjectStore::save_archive(archive_path, archive,
+            SaveOptions{.expected_destination_sha256 = archive_first.file_sha256,
+                        .fault_stage = SaveFaultStage::before_publish}); },
+            StorageErrorCode::injected_failure,
+            "deep archive failure must preserve the original recovery-bearing destination");
+        require(ProjectStore::file_sha256(archive_path) == archive_first.file_sha256,
+                "deep failed archive replacement must preserve exact original bytes");
+        require_deep_directory_contents(directory,
+            {destination, unrelated, *second.backup_path, archive_path});
+        const auto archive_second = ProjectStore::save_archive(archive_path, archive,
+            SaveOptions{.expected_destination_sha256 = archive_first.file_sha256});
+        require(archive_second.backup_path &&
+                    ProjectStore::load_archive(*archive_second.backup_path, sketch::ArchiveRole::ordinary).supported() &&
+                    ProjectStore::file_sha256(*archive_second.backup_path) == archive_first.file_sha256,
+                "deep archive replacement must retain its exact recovery-aware backup");
+        require_deep_directory_contents(directory,
+            {destination, unrelated, *second.backup_path, archive_path, *archive_second.backup_path});
+    }
+#endif
+}
+
 void test_selected_rigid_curve_storage_v27(bool compact = false) {
     TempDirectory temp;
     auto source = curved_constraint_wall();
@@ -3152,6 +3309,7 @@ void test_native_room_topology_is_validated_on_restore() {
 int main() {
     sketch::testing::noninteractive_errors();
     try {
+        test_deep_windows_project_paths_preserve_publication_contracts();
         test_view_appearance_reader_floor_and_source_integrity();
         test_svg_palette_reader_floor();
         test_ansi_appraisal_reader_floor_retains_history();

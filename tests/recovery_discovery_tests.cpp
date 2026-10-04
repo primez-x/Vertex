@@ -133,10 +133,56 @@ void discovery() {
     const auto over_budget = discover_recovery_copies({}, bounded);
     require(over_budget.candidates.empty() && !over_budget.directory_diagnostic.empty(), "entry budget did not fail closed");
 }
+#ifdef _WIN32
+void deep_unicode_discovery() {
+    TemporaryDirectory temporary;
+    auto directory = temporary.path;
+    for (unsigned i = 0; i < 7; ++i)
+        directory /= L"\u9879\u76ee-recovery-long-directory-component";
+    const auto native = [](const fs::path& path) {
+        auto preferred = path;
+        preferred.make_preferred();
+        return fs::path(L"\\\\?\\" + preferred.wstring());
+    };
+    struct DeepCleanup {
+        fs::path root;
+        ~DeepCleanup() { std::error_code ignored; fs::remove_all(root, ignored); }
+    } cleanup{native(temporary.path)};
+    fs::create_directories(native(directory));
+    const auto source = directory / L"\u6765\u6e90.bldproj";
+    auto document = Document::create();
+    const auto receipt = ProjectStore::save(source, document.snapshot());
+    document.mark_saved(receipt.revision);
+    const auto candidate = directory / L"recovery-\u6062\u590d.bldproj";
+    (void)ProjectStore::save_archive(candidate,
+        archive(document.snapshot(), "deep-unicode", utf8(source), receipt.file_sha256));
+    { std::ofstream unrelated(native(directory / L"\u65e0\u5173-\u6587\u4ef6.txt")); unrelated << "ignored"; }
+    fs::create_directory(native(directory / L"recovery-\u76ee\u5f55.bldproj"));
+    std::error_code link_error;
+    const auto link = directory / L"recovery-link.bldproj";
+    fs::create_symlink(native(candidate), native(link), link_error);
+    const auto found = discover_recovery_copies(source, directory);
+    require(found.source_diagnostic.empty() && found.directory_diagnostic.empty(),
+            "deep Unicode discovery should not abort on an unrelated Unicode name");
+    require(found.source_sha256 == receipt.file_sha256 && found.candidates.size() == 1 &&
+            found.candidates[0].path == candidate && found.candidates[0].loadable &&
+            found.candidates[0].source_match == RecoverySourceMatch::matched &&
+            found.candidates[0].metadata->source_path == utf8(source),
+            "deep Unicode recovery must preserve candidate filtering and source provenance");
+    if (!link_error)
+        require(!discover_recovery_copies(link, directory).source_diagnostic.empty(),
+                "deep linked source must remain rejected");
+}
+#endif
 }  // namespace
 int main() {
     sketch::testing::noninteractive_errors();
-    try { discovery(); }
+    try {
+        discovery();
+#ifdef _WIN32
+        deep_unicode_discovery();
+#endif
+    }
     catch (const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }
     return 0;
 }

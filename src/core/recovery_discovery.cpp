@@ -1,5 +1,6 @@
 #include "sketch/recovery_discovery.hpp"
 #include "sketch/project_store.hpp"
+#include "sketch/windows_project_path.hpp"
 
 #include <algorithm>
 #include <map>
@@ -15,6 +16,14 @@ namespace sketch {
 namespace {
 namespace fs = std::filesystem;
 
+fs::path io_path(const fs::path& path) {
+#ifdef _WIN32
+    return windows_project_path(path);
+#else
+    return path;
+#endif
+}
+
 bool traversal(const fs::path& path) {
     return std::any_of(path.begin(), path.end(), [](const auto& part) { return part == ".."; });
 }
@@ -26,10 +35,11 @@ fs::path checked_path(const fs::path& path) {
         prefix /= part;
         // Root-name alone (C:) is not a complete Windows path.
         if (prefix == absolute.root_name()) continue;
-        const auto status = fs::symlink_status(prefix);
+        const auto native_prefix = io_path(prefix);
+        const auto status = fs::symlink_status(native_prefix);
         if (fs::is_symlink(status)) throw std::runtime_error("symbolic link path rejected");
 #ifdef _WIN32
-        const auto attributes = GetFileAttributesW(prefix.c_str());
+        const auto attributes = GetFileAttributesW(native_prefix.c_str());
         if (attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_REPARSE_POINT))
             throw std::runtime_error("reparse point path rejected");
 #endif
@@ -46,8 +56,13 @@ bool same_path(const fs::path& a, const fs::path& b) {
 #endif
 }
 bool candidate_name(const fs::path& path) {
+#ifdef _WIN32
+    const auto name = path.filename().native();
+    return name.starts_with(L"recovery-") && name.ends_with(L".bldproj");
+#else
     const auto name = path.filename().generic_string();
     return name.starts_with("recovery-") && name.ends_with(".bldproj");
+#endif
 }
 RecoverySourceMatch match(const RecoveryCopyRecord& record, const fs::path& source,
                           const std::string& hash) {
@@ -74,22 +89,23 @@ RecoveryDiscoveryResult discover_recovery_copies(const std::optional<fs::path>& 
     if (source_project) {
         try {
             source = checked_path(*source_project);
-            if (!fs::is_regular_file(fs::symlink_status(*source))) throw std::runtime_error("source is not a regular file");
+            if (!fs::is_regular_file(fs::symlink_status(io_path(*source)))) throw std::runtime_error("source is not a regular file");
             result.source_sha256 = ProjectStore::file_sha256(*source);
         } catch (const std::exception& error) { result.source_diagnostic = error.what(); source.reset(); }
     }
     std::vector<fs::path> paths;
     try {
         const auto directory = checked_path(recovery_directory);
-        if (!fs::exists(directory)) return result;
-        if (!fs::is_directory(fs::symlink_status(directory))) throw std::runtime_error("recovery directory is not a directory");
+        const auto native_directory = io_path(directory);
+        if (!fs::exists(native_directory)) return result;
+        if (!fs::is_directory(fs::symlink_status(native_directory))) throw std::runtime_error("recovery directory is not a directory");
         std::size_t entries = 0;
-        for (const auto& entry : fs::directory_iterator(directory)) {
+        for (const auto& entry : fs::directory_iterator(native_directory)) {
             if (++entries > 4096) throw std::runtime_error("recovery directory exceeds 4096 entry limit");
             if (!candidate_name(entry.path())) continue;
             // Nonfiles are excluded without following them, even if named like an archive.
             if (!fs::is_regular_file(entry.symlink_status())) continue;
-            try { paths.push_back(checked_path(entry.path())); }
+            try { paths.push_back(checked_path(directory / entry.path().filename())); }
             catch (const std::exception&) { continue; }
         }
     } catch (const std::exception& error) { result.directory_diagnostic = error.what(); return result; }
@@ -103,7 +119,7 @@ RecoveryDiscoveryResult discover_recovery_copies(const std::optional<fs::path>& 
             // Recheck immediately before the storage read; discovery is not a
             // retained handle or a promise about subsequent file identity.
             (void)checked_path(path);
-            if (!fs::is_regular_file(fs::symlink_status(path))) throw std::runtime_error("candidate is not a regular file");
+            if (!fs::is_regular_file(fs::symlink_status(io_path(path)))) throw std::runtime_error("candidate is not a regular file");
             const auto loaded = ProjectStore::load_archive(path, ArchiveRole::recovery_copy);
             candidate.file_sha256 = loaded.file_sha256;
             if (!loaded.supported()) candidate.reason = loaded.recovery.diagnostic;

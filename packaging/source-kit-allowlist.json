@@ -2483,6 +2483,10 @@
     },
     {
       "category": "docs",
+      "path": "docs/verification/deep-windows-project-paths-2026-10-03.md"
+    },
+    {
+      "category": "docs",
       "path": "docs/verification/define-first-dimension-presentation-2026-10-03.md"
     },
     {
@@ -3220,6 +3224,10 @@
     {
       "category": "source",
       "path": "include/sketch/windows_import_worker.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/windows_project_path.hpp"
     },
     {
       "category": "source",

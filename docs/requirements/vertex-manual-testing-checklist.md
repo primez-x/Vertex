@@ -1,6 +1,6 @@
 # Vertex user testing checklist
 
-392 practical tasks, grouped by how you use the app (including U100a). This replaces the earlier engineering-oriented checklist. The old 130-item list is preserved separately as engineering-requirements-checklist.md.
+393 practical tasks, grouped by how you use the app (including U100a). This replaces the earlier engineering-oriented checklist. The old 130-item list is preserved separately as engineering-requirements-checklist.md.
 
 This is a user acceptance list for the intended app, not a claim that every listed action is implemented or working in the current preview. If you cannot find a control, or a feature is absent, mark **Blocked / missing** and describe it. Specialized sections can be skipped if you do not use them or lack the device or sample files.
 
@@ -2364,6 +2364,14 @@ drawing; switching modes does not change existing geometry.
 - [ ] **U391 — Export a 3D image into a long or accented folder path**
   - Steps: Open a residential or light-commercial model, select an object, and export a native 3D PNG into nested folders with a long name and an accented character. Reopen the PNG. Repeat export into your normal folder and try a destination you cannot write to.
   - Expected: Valid destinations produce the same model view with the normal output footer. Selection controls stay available in Vertex and do not appear in the export. A failed export reports the problem and preserves any existing destination file.
+  - Result: Not tested
+  - Notes: ______________________________
+
+## Project folders
+
+- [ ] **U392 — Save and reopen a project in deeply nested folders**
+  - Steps: Choose an existing nested folder on your local Windows drive, including accented characters in a folder or project name. Save a drawing there, close and reopen it, edit a wall, and Save again. Reopen once more. Repeat with an unfinished drawing saved in the project.
+  - Expected: Vertex saves and opens the chosen file without requiring you to shorten its folder path. The wall edit and unfinished drawing persist. Saving an existing file keeps the normal replacement/conflict safeguards and previous-file backup behavior.
   - Result: Not tested
   - Notes: ______________________________
 

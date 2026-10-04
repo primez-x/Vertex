@@ -1236,6 +1236,13 @@ every write. Save fails closed unless Windows identifies the destination as a lo
 using NTFS or ReFS; UNC paths, mapped network drives, removable media, and other filesystems are
 outside the durability boundary and are rejected before staging.
 
+Deep local Windows folders and Unicode filenames use qualified absolute paths
+at native file-operation boundaries and SQLite's locking `win32-longpath` VFS.
+Public project paths, source provenance, receipt paths and backup names retain
+their ordinary spelling. The same destination identity, expected fingerprint,
+reparse-point, staging, backup and publication checks apply. This path handling
+does not change the project format or expand the durable-filesystem boundary.
+
 ## Survey source corrections
 
 Survey measurement boundaries carry `extensions.survey_source.version = 1`.

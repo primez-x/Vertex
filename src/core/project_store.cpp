@@ -1,4 +1,5 @@
 #include "sketch/project_store.hpp"
+#include "sketch/windows_project_path.hpp"
 #include "sketch/boundary_entity.hpp"
 #include "sketch/boundary_translation.hpp"
 #include "sketch/boundary_transform.hpp"
@@ -354,6 +355,14 @@ std::string path_utf8(const std::filesystem::path& path) {
     return {reinterpret_cast<const char*>(encoded.data()), encoded.size()};
 }
 
+std::filesystem::path filesystem_path(const std::filesystem::path& path) {
+#ifdef _WIN32
+    return windows_project_path(path);
+#else
+    return path;
+#endif
+}
+
 #ifdef _WIN32
 std::wstring final_path_from_handle(HANDLE handle, std::string_view description) {
     const auto required = GetFinalPathNameByHandleW(
@@ -446,7 +455,7 @@ bool ambiguous_missing_filename(std::wstring_view filename) {
 class LockedReadFile final {
 public:
     explicit LockedReadFile(const std::filesystem::path& path) {
-        handle_ = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+        handle_ = CreateFileW(filesystem_path(path).c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
                               FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN |
                                   FILE_FLAG_OPEN_REPARSE_POINT,
                               nullptr);
@@ -494,7 +503,7 @@ private:
 class ReservedStagingFile final {
 public:
     explicit ReservedStagingFile(const std::filesystem::path& path) {
-        identity_ = CreateFileW(path.c_str(), GENERIC_READ,
+        identity_ = CreateFileW(filesystem_path(path).c_str(), GENERIC_READ,
                                 FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, CREATE_NEW,
                                 FILE_ATTRIBUTE_NORMAL, nullptr);
         if (identity_ == INVALID_HANDLE_VALUE) {
@@ -668,7 +677,7 @@ public:
 
 private:
     static HANDLE open_read_guard(const std::filesystem::path& path) {
-        const auto handle = CreateFileW(path.c_str(), GENERIC_READ,
+        const auto handle = CreateFileW(filesystem_path(path).c_str(), GENERIC_READ,
                                         FILE_SHARE_READ | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
                                         FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN |
                                             FILE_FLAG_OPEN_REPARSE_POINT,
@@ -702,7 +711,7 @@ public:
         const auto parent = destination.has_parent_path() ? destination.parent_path()
                                                           : std::filesystem::current_path();
         const auto parent_handle = CreateFileW(
-            parent.c_str(), FILE_READ_ATTRIBUTES,
+            filesystem_path(parent).c_str(), FILE_READ_ATTRIBUTES,
             FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
             FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
         if (parent_handle == INVALID_HANDLE_VALUE) {
@@ -729,7 +738,7 @@ public:
 
         std::wstring canonical;
         const auto destination_handle = CreateFileW(
-            destination.c_str(), FILE_READ_ATTRIBUTES,
+            filesystem_path(destination).c_str(), FILE_READ_ATTRIBUTES,
             FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
             FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
         if (destination_handle != INVALID_HANDLE_VALUE) {
@@ -843,8 +852,14 @@ private:
 
 Database open_database(const std::filesystem::path& path, int flags) {
     sqlite3* raw = nullptr;
-    const auto encoded = path_utf8(path);
-    const auto result = sqlite3_open_v2(encoded.c_str(), &raw, flags | SQLITE_OPEN_EXRESCODE, nullptr);
+    const auto encoded = path_utf8(filesystem_path(path));
+#ifdef _WIN32
+    // SQLite's long-path VFS retains the normal Windows locking implementation.
+    constexpr auto* vfs = "win32-longpath";
+#else
+    constexpr const char* vfs = nullptr;
+#endif
+    const auto result = sqlite3_open_v2(encoded.c_str(), &raw, flags | SQLITE_OPEN_EXRESCODE, vfs);
     if (result != SQLITE_OK) {
         const std::string message = raw == nullptr ? sqlite3_errstr(result) : sqlite3_errmsg(raw);
         if (raw != nullptr) {
@@ -2174,7 +2189,7 @@ void validate_project_path(const std::filesystem::path& path, bool require_exist
         storage_error(StorageErrorCode::io_error, "project path does not name a file");
     }
     std::error_code error;
-    const auto status = std::filesystem::symlink_status(path, error);
+    const auto status = std::filesystem::symlink_status(filesystem_path(path), error);
     if (error && error != std::errc::no_such_file_or_directory) {
         storage_error(StorageErrorCode::io_error, "cannot inspect project path: " + error.message());
     }
@@ -2185,7 +2200,7 @@ void validate_project_path(const std::filesystem::path& path, bool require_exist
         storage_error(StorageErrorCode::io_error, "project file does not exist");
     }
     const auto parent = path.has_parent_path() ? path.parent_path() : std::filesystem::current_path();
-    if (!std::filesystem::is_directory(parent, error) || error) {
+    if (!std::filesystem::is_directory(filesystem_path(parent), error) || error) {
         storage_error(StorageErrorCode::io_error, "project parent directory does not exist");
     }
 #ifdef _WIN32
@@ -2193,7 +2208,7 @@ void validate_project_path(const std::filesystem::path& path, bool require_exist
         storage_error(StorageErrorCode::io_error,
                       "project path must name a standalone Windows file, not a device or stream");
     }
-    const auto attributes = GetFileAttributesW(parent.c_str());
+    const auto attributes = GetFileAttributesW(filesystem_path(parent).c_str());
     if (attributes == INVALID_FILE_ATTRIBUTES || (attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0) {
         storage_error(StorageErrorCode::io_error,
                       "project parent directory cannot be a Windows reparse point");
@@ -2213,7 +2228,7 @@ void validate_durable_destination(const std::filesystem::path& destination) {
                       "cannot resolve project destination volume");
     }
     std::vector<wchar_t> volume_root(32768, L'\0');
-    if (!GetVolumePathNameW(parent.c_str(), volume_root.data(),
+    if (!GetVolumePathNameW(filesystem_path(parent).c_str(), volume_root.data(),
                             static_cast<DWORD>(volume_root.size()))) {
         storage_error(StorageErrorCode::io_error,
                       "cannot resolve project destination volume, Windows error " +
@@ -2249,7 +2264,7 @@ std::filesystem::path sqlite_sidecar(const std::filesystem::path& path,
 
 #ifdef _WIN32
 void copy_handle_to_new_file(HANDLE source, const std::filesystem::path& destination) {
-    const auto target = CreateFileW(destination.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr,
+    const auto target = CreateFileW(filesystem_path(destination).c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr,
                                     CREATE_NEW,
                                     FILE_ATTRIBUTE_NORMAL | FILE_FLAG_WRITE_THROUGH, nullptr);
     if (target == INVALID_HANDLE_VALUE) {
@@ -2307,7 +2322,7 @@ void publish_handle(HANDLE staging, const std::filesystem::path& destination,
         storage_error(StorageErrorCode::io_error,
                       "cannot resolve project publication path: " + absolute_error.message());
     }
-    const auto name = absolute.wstring();
+    const auto name = filesystem_path(absolute).wstring();
     const auto name_bytes = name.size() * sizeof(wchar_t);
     if (name_bytes > static_cast<std::size_t>(std::numeric_limits<DWORD>::max()) -
                          offsetof(FILE_RENAME_INFO, FileName)) {
@@ -2350,36 +2365,38 @@ std::filesystem::path sibling_path(const std::filesystem::path& destination,
 class TemporaryFile final {
 public:
     explicit TemporaryFile(std::filesystem::path path, bool include_sqlite_sidecars = true)
-        : path_(std::move(path)), include_sqlite_sidecars_(include_sqlite_sidecars) {}
+        : path_(std::move(path)), filesystem_path_(filesystem_path(path_)),
+          include_sqlite_sidecars_(include_sqlite_sidecars) {}
     ~TemporaryFile() {
         if (active_) {
             if (include_sqlite_sidecars_) {
                 for (const auto* suffix : {"-journal", "-wal", "-shm"}) {
                     std::error_code ignored;
-                    std::filesystem::remove(sqlite_sidecar(path_, suffix), ignored);
+                    std::filesystem::remove(sqlite_sidecar(filesystem_path_, suffix), ignored);
                 }
             }
             std::error_code ignored;
-            std::filesystem::remove(path_, ignored);
+            std::filesystem::remove(filesystem_path_, ignored);
         }
     }
     [[nodiscard]] std::vector<std::filesystem::path> cleanup_checked() {
         std::vector<std::filesystem::path> residuals;
-        auto remove_one = [&](const std::filesystem::path& candidate) {
+        auto remove_one = [&](const std::filesystem::path& candidate,
+                              const std::filesystem::path& native_candidate) {
             std::error_code remove_error;
-            const bool removed = std::filesystem::remove(candidate, remove_error);
+            const bool removed = std::filesystem::remove(native_candidate, remove_error);
             std::error_code exists_error;
-            const bool remains = std::filesystem::exists(candidate, exists_error);
+            const bool remains = std::filesystem::exists(native_candidate, exists_error);
             if (remove_error || exists_error || (!removed && remains)) {
                 residuals.push_back(candidate);
             }
         };
         if (include_sqlite_sidecars_) {
             for (const auto* suffix : {"-journal", "-wal", "-shm"}) {
-                remove_one(sqlite_sidecar(path_, suffix));
+                remove_one(sqlite_sidecar(path_, suffix), sqlite_sidecar(filesystem_path_, suffix));
             }
         }
-        remove_one(path_);
+        remove_one(path_, filesystem_path_);
         // A reported residue is deliberately left identified for the caller. Do not let the
         // noexcept destructor make a later, silent attempt with different observable results.
         active_ = false;
@@ -2389,6 +2406,7 @@ public:
 
 private:
     std::filesystem::path path_;
+    std::filesystem::path filesystem_path_;
     bool include_sqlite_sidecars_ = true;
     bool active_ = true;
 };
@@ -2596,7 +2614,7 @@ LoadResult ProjectStore::load(const std::filesystem::path& source) {
         for (const auto* suffix : {"-journal", "-wal", "-shm"}) {
             const auto sidecar = sqlite_sidecar(source, suffix);
             std::error_code sidecar_error;
-            if (std::filesystem::exists(sidecar, sidecar_error) || sidecar_error) {
+            if (std::filesystem::exists(filesystem_path(sidecar), sidecar_error) || sidecar_error) {
                 storage_error(StorageErrorCode::integrity_failure,
                               "standalone project has an unexpected SQLite sidecar file");
             }
@@ -2657,7 +2675,7 @@ SaveReceipt save_project(const std::filesystem::path& destination,
         enforce_snapshot_budget(snapshot);
 
         std::error_code path_error;
-        const bool destination_exists = std::filesystem::exists(destination, path_error);
+        const bool destination_exists = std::filesystem::exists(filesystem_path(destination), path_error);
         if (path_error) {
             storage_error(StorageErrorCode::io_error,
                           "cannot inspect save destination: " + path_error.message());
@@ -2685,7 +2703,7 @@ SaveReceipt save_project(const std::filesystem::path& destination,
         std::unique_ptr<LockedReadFile> backup_guard;
 #endif
         try {
-            if (std::filesystem::exists(temporary)) {
+            if (std::filesystem::exists(filesystem_path(temporary))) {
                 storage_error(StorageErrorCode::io_error,
                               "temporary project path unexpectedly exists");
             }
@@ -2702,7 +2720,7 @@ SaveReceipt save_project(const std::filesystem::path& destination,
             for (const auto* suffix : {"-journal", "-wal", "-shm"}) {
                 const auto sidecar = sqlite_sidecar(temporary, suffix);
                 std::error_code sidecar_error;
-                if (std::filesystem::exists(sidecar, sidecar_error) || sidecar_error) {
+                if (std::filesystem::exists(filesystem_path(sidecar), sidecar_error) || sidecar_error) {
                     storage_error(StorageErrorCode::integrity_failure,
                                   "validated staging project has an unexpected SQLite sidecar");
                 }
@@ -2792,7 +2810,7 @@ SaveReceipt save_project(const std::filesystem::path& destination,
                                   "project destination changed immediately before publication");
                 }
             } else {
-                const bool still_exists = std::filesystem::exists(destination, path_error);
+                const bool still_exists = std::filesystem::exists(filesystem_path(destination), path_error);
                 if (path_error || still_exists) {
                     storage_error(StorageErrorCode::external_change,
                                   "project destination appeared during save validation");
@@ -2887,7 +2905,7 @@ ArchiveLoadResult ProjectStore::load_archive(const std::filesystem::path& source
         validate_project_path(source, true);
         for (const auto* suffix : {"-journal", "-wal", "-shm"}) {
             std::error_code error;
-            if (std::filesystem::exists(sqlite_sidecar(source, suffix), error) || error)
+            if (std::filesystem::exists(filesystem_path(sqlite_sidecar(source, suffix)), error) || error)
                 storage_error(StorageErrorCode::integrity_failure,
                               "standalone archive has an unexpected SQLite sidecar file");
         }

@@ -118,6 +118,76 @@ void test_path_validation_is_fail_closed() {
     std::filesystem::remove(directory, error);
 }
 
+#ifdef _WIN32
+void test_deep_unicode_project_ownership() {
+    const auto root = temporary_path("-deep");
+    auto directory = root;
+    for (unsigned i = 0; i < 7; ++i)
+        directory /= L"\u9879\u76ee-ownership-long-directory-component";
+    const auto native = [](const std::filesystem::path& path) {
+        auto preferred = path;
+        preferred.make_preferred();
+        return std::filesystem::path(L"\\\\?\\" + preferred.wstring());
+    };
+    std::filesystem::create_directories(native(directory));
+    try {
+        const auto existing = directory / L"\u73b0\u6709.bldproj";
+        write_text(native(existing), "deep-version-one");
+        ProjectOwnershipSession first;
+        require(first.acquire(existing).status == ProjectOwnershipStatus::acquired,
+                "deep Unicode existing project should acquire");
+        require(first.identity() && first.identity()->exists && first.identity()->path == existing,
+                "deep project should retain conventional existing path identity");
+        ProjectOwnershipSession conflicting;
+        require(conflicting.acquire(existing).status == ProjectOwnershipStatus::conflict,
+                "deep existing project must retain conflicting lease protection");
+        require(first.verify_current().status == ProjectOwnershipStatus::acquired,
+                "deep existing fingerprint should verify");
+        write_text(native(existing), "deep-version-two");
+        require(first.verify_current().status == ProjectOwnershipStatus::external_change,
+                "deep external edit should invalidate fingerprint");
+        require(first.note_published(sketch::ProjectStore::file_sha256(existing)).status == ProjectOwnershipStatus::acquired,
+                "deep published fingerprint should refresh");
+        require(first.verify_current().status == ProjectOwnershipStatus::acquired,
+                "deep published fingerprint should verify");
+        const auto destination = directory / L"\u65b0\u5efa.bldproj";
+        ProjectOwnershipSession created;
+        require(created.acquire(destination).status == ProjectOwnershipStatus::acquired &&
+                created.identity() && !created.identity()->exists,
+                "deep new destination should reserve absent identity");
+        ProjectOwnershipSession new_conflict;
+        require(new_conflict.acquire(destination).status == ProjectOwnershipStatus::conflict,
+                "deep new destination must retain conflicting lease protection");
+        ProjectOwnershipSession qualified_conflict;
+        require(qualified_conflict.acquire(native(destination)).status == ProjectOwnershipStatus::conflict,
+                "qualified spelling of deep missing destination must share the ordinary lease");
+        require(created.path_matches(native(destination)),
+                "deep ordinary lease should match its qualified spelling");
+        const auto qualified_destination = directory / L"\u522b\u540d.bldproj";
+        ProjectOwnershipSession qualified_owner;
+        require(qualified_owner.acquire(native(qualified_destination)).status == ProjectOwnershipStatus::acquired,
+                "qualified deep missing destination should acquire");
+        require(qualified_owner.path_matches(qualified_destination),
+                "deep qualified lease should match its ordinary spelling");
+        ProjectOwnershipSession ordinary_conflict;
+        require(ordinary_conflict.acquire(qualified_destination).status == ProjectOwnershipStatus::conflict,
+                "ordinary spelling of deep qualified missing destination must share its lease");
+        write_text(native(destination), "deep-created");
+        require(created.verify_current().status == ProjectOwnershipStatus::external_change,
+                "deep new file creation should invalidate absent fingerprint");
+        require(created.note_published(sketch::ProjectStore::file_sha256(destination)).status == ProjectOwnershipStatus::acquired &&
+                created.verify_current().status == ProjectOwnershipStatus::acquired,
+                "deep newly published file should refresh and verify");
+    } catch (...) {
+        std::error_code ignored;
+        std::filesystem::remove_all(native(root), ignored);
+        throw;
+    }
+    std::error_code ignored;
+    std::filesystem::remove_all(native(root), ignored);
+}
+#endif
+
 }  // namespace
 
 int main() {
@@ -125,6 +195,9 @@ int main() {
         test_content_and_identity_changes_are_detected();
         test_missing_path_is_reserved_and_creation_is_detected();
         test_path_validation_is_fail_closed();
+#ifdef _WIN32
+        test_deep_unicode_project_ownership();
+#endif
         return 0;
     } catch (const std::exception& error) {
         std::cerr << "project_ownership_tests: " << error.what() << '\n';
