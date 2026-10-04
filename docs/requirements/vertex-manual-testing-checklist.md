@@ -1,6 +1,6 @@
 # Vertex user testing checklist
 
-380 practical tasks, grouped by how you use the app (including U100a). This replaces the earlier engineering-oriented checklist. The old 130-item list is preserved separately as engineering-requirements-checklist.md.
+384 practical tasks, grouped by how you use the app (including U100a). This replaces the earlier engineering-oriented checklist. The old 130-item list is preserved separately as engineering-requirements-checklist.md.
 
 This is a user acceptance list for the intended app, not a claim that every listed action is implemented or working in the current preview. If you cannot find a control, or a feature is absent, mark **Blocked / missing** and describe it. Specialized sections can be skipped if you do not use them or lack the device or sample files.
 
@@ -65,6 +65,7 @@ Start with the workspace, draw a room, close it with the mouse, drag-select it, 
 - Measured-line drawing history (1 tasks)
 - Precise measured-line input (7 tasks)
 - Entering a measured chord directly (4 tasks)
+- Defining nested measured areas (4 tasks)
 
 ## Start a project and arrange the workspace
 
@@ -2283,6 +2284,32 @@ drawing; switching modes does not change existing geometry.
 - [ ] **U379 — Edit and reopen a curve made from a measured chord**
   - Steps: Draw a chord-defined curve and finish it. Move and rotate it. Open its geometry editor and change its physical arc length with the start fixed. Undo and Redo, save/reopen, then export a PDF. Also close a semicircle with a straight side and use Detect closed areas.
   - Expected: Movement and rotation preserve the physical curve length. The length edit uses the requested measurement and history restores each state. Saved and printed curves match the canvas. Detect closed areas measures the curved region rather than the triangle or rectangle around it.
+  - Result: Not tested
+  - Notes: ______________________________
+
+## Defining nested measured areas
+
+- [ ] **U380 — Keep an inner measured outline as a reference**
+  - Steps: Choose Measured lines and draw a closed 10 m by 10 m outline. Draw a closed 4 m by 4 m outline entirely inside it. Select either stroke and use Detect closed areas. Define the outer outline as living; leave the inner outline as Reference only. Apply.
+  - Expected: The review shows both outlines and their parent relationship. Only the outer outline becomes an area: gross and net are 100 m². The inner measured lines remain available, with no guessed deduction or room classification.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **U381 — Subtract an explicitly classified inner area**
+  - Steps: In a measurement project, repeat the 10 m square and inner 4 m square on a new layer. In Detect closed areas, define the outer as living, choose Deduct from parent for the inner, and classify the inner as garage. Inspect the preview, then Apply. To check appraisal totals, switch the calculation workflow to appraisal and record the actual floor and area facts in Details.
+  - Expected: The outer shows gross 100 m², deducted 16 m² and net 84 m². The garage remains a separately editable identified area. Qualified appraisal totals count 84 m² of living area and 16 m² of garage once; missing facts leave GLA unavailable rather than guessed.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **U382 — Cancel, repeat and undo a nested-area definition**
+  - Steps: Open the nested-area review, change choices, then Cancel. Reopen and apply an explicit deduction. Undo and Redo once. Select the source stroke and repeat Detect closed areas; inspect the existing definitions without changing them. Save/reopen and export a PDF.
+  - Expected: Cancel changes nothing. One Undo removes the new area definitions and deduction link together while preserving the measured strokes; Redo restores them. Repeat detection creates no duplicates and preserves existing names, styles and facts. Reopened and exported geometry matches the accepted definition.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **U383 — Correct an invalid nested-area choice**
+  - Steps: In the nested review, try subtracting an inner outline while its parent is Reference only. Try giving parent and child the same classification. Correct the choices. After definition, move the inner source stroke and open Details and Review measured sources.
+  - Expected: Invalid choices explain the issue and cannot be applied. Correct choices restore a valid preview. Moving the inner source marks its derived area stale and withholds dependent GLA until the source review is accepted; unchanged outer gross geometry is retained.
   - Result: Not tested
   - Notes: ______________________________
 

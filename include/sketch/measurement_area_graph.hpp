@@ -2,6 +2,7 @@
 
 #include "sketch/geometry.hpp"
 
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -37,6 +38,10 @@ struct DerivedMeasurementFace {
     Boundary boundary;
     std::vector<MeasurementFaceEdgeUse> edge_uses;
     double area_square_metres{};
+    // Immediate strict containing outline, indexed in the final faces vector.
+    // Roots have no parent. This relationship does not subtract area or turn
+    // the exact gross boundary into an outline with holes.
+    std::optional<std::size_t> parent_face_index;
 };
 
 struct MeasurementAreaGraph {
@@ -51,8 +56,10 @@ struct MeasurementAreaGraph {
 // contacts, or pieces too small for reliable face extraction. O(n^2) contacts;
 // At most 2048 sources, 16384 represented stations/derived edges and 65536
 // processed contacts are supported; budgets reject before unbounded noding.
-// Nested cycles
-// requiring holes and ill-conditioned shallow arcs fail explicitly. The metre
+// Disconnected nested outlines retain their exact gross boundaries and receive
+// immediate containment parents. Shared-edge faces remain separate graph
+// regions; touching or ambiguous separate outlines and ill-conditioned arcs
+// fail explicitly. The metre
 // tolerance bounds minimum usable edge length; it never merges near geometry.
 [[nodiscard]] MeasurementAreaGraph build_measurement_area_graph(
     const std::vector<MeasurementGraphSource>& sources,

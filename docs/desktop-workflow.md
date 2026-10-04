@@ -1070,3 +1070,29 @@ stroke unchanged. Each accepted edge uses ordinary per-side Undo/Redo. The last
 successfully accepted method and fields are remembered during the live stroke;
 changing units resets them. A changed document, pen, units, layer or phase cannot
 admit a result from an obsolete dialog.
+
+## Nested measured outlines
+
+Select a saved measured stroke and use **Tools → Detect closed areas**. The
+native review shows each analytical outline's immediate parent, gross area,
+existing definition, classification, deducted area and net area. New inner
+outlines start as **Reference only**: no void, room, or appraisal category is
+inferred. Choose **Define area** to retain a separate measured area, or
+**Deduct from parent** to add an explicit subtraction link. Classify each new
+defined outline. Appraisal properties also offer explicit void roles; actual
+eligibility facts still belong in Details.
+
+A 10 m square containing a 4 m square remains 100 m² with the inner outline as a
+reference, or becomes 84 m² net with an explicit 16 m² deduction. A separately
+classified garage may fill that deducted footprint without being counted twice.
+Independent positive overlaps and missing appraisal declarations withhold valid
+totals. Detection filters the active semantic design phase; view-only eye masks
+do not change the measurement sources.
+
+Existing definitions retain their IDs, names, styles, classification and facts.
+Reference-only for an existing definition means keep it unchanged, not delete
+it. Repeating the review creates no duplicates. Stale existing source geometry
+requires **Review measured sources** before defining another copy. Changes to
+boundaries, deduction links and phase membership commit as one undoable command
+after the complete preview. Cancel commits nothing. New nested deduction chains
+are rejected; keep a deeper outline as a reference or a separately defined area.

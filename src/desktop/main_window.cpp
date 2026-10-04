@@ -35,6 +35,7 @@
 #include "sketch/boundary_receipt.hpp"
 #include "sketch/measurement_linework.hpp"
 #include "sketch/measurement_area_graph.hpp"
+#include "sketch/measurement_area_definition.hpp"
 #include "sketch/measurement_linework_source.hpp"
 #include "sketch/boundary_transform.hpp"
 #include "sketch/document_digest.hpp"
@@ -8594,11 +8595,8 @@ public:
         const auto context = captureModalContext();
         QString classification;
         if (selected->type == "measurement_linework") {
-            const auto placement = organize_project(m_document->snapshot()).drawing_context(selected->id);
-            if (!placement) { setError(QStringLiteral("The measured stroke has no resolved layer.")); return; }
-            const auto chosen = chooseBoundaryClassification(*placement);
-            if (!chosen) return;
-            classification = *chosen;
+            showMeasuredAreaReview(id_from(selected->id));
+            return;
         } else {
             bool accepted = false;
             classification = QInputDialog::getText(
@@ -14479,6 +14477,171 @@ public:
         } catch (const std::exception& failure) {setError(QStringLiteral("Review measured sources: %1").arg(QString::fromUtf8(failure.what())));}
     }
 
+    void showMeasuredAreaReview(const QString& stroke_id) {
+        try {
+            if (m_linework_drawing || m_boundary_session || m_pending_wall_start)
+                throw std::invalid_argument("Finish the active drawing before defining measured areas.");
+            if (!m_document->is_editable()) throw std::invalid_argument("This project is read-only.");
+            const auto context = captureModalContext();
+            const auto source = authoringSnapshot();
+            const auto detected = detect_measurement_areas(source, stroke_id.toStdString());
+            if (detected.graph.faces.empty()) throw std::invalid_argument("No closed area was found in this layer's measured lines.");
+            QDialog dialog(owner); dialog.setObjectName(QStringLiteral("measuredAreaReviewDialog"));
+            dialog.setWindowTitle(QStringLiteral("Define measured areas")); styleDialog(dialog);
+            dialog.resize(1080, std::clamp(200 + static_cast<int>(detected.graph.faces.size()) * 32, 280, 650));
+            auto* layout = new QVBoxLayout(&dialog);
+            auto* explanation = new QLabel(QStringLiteral(
+                "Review each measured outline. New reference outlines create no area; existing definitions are always kept. A deduction reduces its parent; choose its classification explicitly. "
+                "Define a contained outline independently only if the parent excludes it or remains a reference. Overlapping areas withhold valid totals."), &dialog);
+            explanation->setWordWrap(true); layout->addWidget(explanation);
+            auto* rows = new QTableWidget(static_cast<int>(detected.graph.faces.size()), 8, &dialog);
+            rows->setObjectName(QStringLiteral("measuredAreaReviewRows"));
+            rows->setHorizontalHeaderLabels({QStringLiteral("Area"), QStringLiteral("Parent"), QStringLiteral("Gross"),
+                QStringLiteral("Existing area"), QStringLiteral("Use outline"), QStringLiteral("Classification"), QStringLiteral("Net"), QStringLiteral("Deducted")});
+            rows->setEditTriggers(QAbstractItemView::NoEditTriggers); rows->setSelectionBehavior(QAbstractItemView::SelectRows);
+            rows->verticalHeader()->hide(); rows->horizontalHeader()->setSectionResizeMode(QHeaderView::ResizeToContents);
+            rows->horizontalHeader()->setSectionResizeMode(3, QHeaderView::Stretch);
+            rows->horizontalHeader()->setSectionResizeMode(5, QHeaderView::Stretch);
+            layout->addWidget(rows, 1);
+            std::vector<QComboBox*> dispositions, classifications;
+            const auto retained_classification = [&](const Entity& entity) {
+                try { return QString::fromStdString(area_subtraction_type(source, entity)); }
+                catch (const std::exception&) { /* Incomplete declarations remain explicit below. */ }
+                if (entity.properties.contains("appraisal_facts") && entity.properties.at("appraisal_facts").contains("boundary_role")) {
+                    const auto role = entity.properties.at("appraisal_facts").at("boundary_role").get<std::string>();
+                    if (role != "measured_area") return QStringLiteral("role:") + QString::fromStdString(role);
+                }
+                for (const auto* key : {"appraisal_category", "measurement_classification", "classification"})
+                    if (const auto value = read_string(entity.properties, key); value && !value->empty()) return QString::fromStdString(*value);
+                return QString{};
+            };
+            for (std::size_t i = 0; i < detected.graph.faces.size(); ++i) {
+                const auto& face = detected.graph.faces[i]; const auto index = static_cast<int>(i);
+                rows->setItem(index, 0, new QTableWidgetItem(QStringLiteral("Area %1").arg(index + 1)));
+                rows->setItem(index, 1, new QTableWidgetItem(face.parent_face_index
+                    ? QStringLiteral("Area %1").arg(static_cast<int>(*face.parent_face_index) + 1) : QStringLiteral("—")));
+                auto* gross = new QTableWidgetItem(format_boundary_area(std::abs(signed_area(face.boundary)), m_metric_units, false));
+                gross->setData(Qt::UserRole, std::abs(signed_area(face.boundary))); rows->setItem(index, 2, gross);
+                const auto& existing = detected.existing_area_ids.at(i);
+                rows->setItem(index, 3, new QTableWidgetItem(existing ? id_from(*existing) : QStringLiteral("New")));
+                auto* disposition = new QComboBox(rows); disposition->setObjectName(QStringLiteral("measuredAreaDisposition%1").arg(index));
+                disposition->addItem(existing ? QStringLiteral("Keep existing") : QStringLiteral("Reference only"), static_cast<int>(MeasurementAreaDisposition::reference_only));
+                disposition->addItem(existing ? QStringLiteral("Use existing area") : QStringLiteral("Define area"), static_cast<int>(MeasurementAreaDisposition::define_area));
+                if (face.parent_face_index) disposition->addItem(QStringLiteral("Deduct from parent"), static_cast<int>(MeasurementAreaDisposition::deduct_from_parent));
+                disposition->setCurrentIndex(face.parent_face_index && !existing ? 0 : 1);
+                if (existing && face.parent_face_index && detected.existing_area_ids.at(*face.parent_face_index)) {
+                    const auto deductions = read_deduction_ids(source.entities().at(*detected.existing_area_ids.at(*face.parent_face_index)).properties);
+                    if (std::find(deductions.begin(), deductions.end(), *existing) != deductions.end())
+                        disposition->setCurrentIndex(disposition->findData(static_cast<int>(MeasurementAreaDisposition::deduct_from_parent)));
+                }
+                rows->setCellWidget(index, 4, disposition); dispositions.push_back(disposition);
+                auto* classification = new QComboBox(rows); classification->setObjectName(QStringLiteral("measuredAreaClassification%1").arg(index));
+                classification->setEditable(true); classification->setMinimumWidth(160);
+                for (const auto& item : std::vector<std::pair<QString,QString>>{
+                        {QStringLiteral("Measurement"),QStringLiteral("measurement")},
+                        {QStringLiteral("Living"),QStringLiteral("living")},
+                        {QStringLiteral("Above grade finished"),QStringLiteral("above_grade_finished")},
+                        {QStringLiteral("Below grade finished"),QStringLiteral("below_grade_finished")},
+                        {QStringLiteral("Garage"),QStringLiteral("garage")},
+                        {QStringLiteral("Open to below"),QStringLiteral("role:open_to_below")},
+                        {QStringLiteral("Stair footprint"),QStringLiteral("role:stair_footprint")},
+                        {QStringLiteral("Other void"),QStringLiteral("role:other_void")}})
+                    classification->addItem(item.first, item.second);
+                const auto initial = existing ? retained_classification(source.entities().at(*existing))
+                    : face.parent_face_index ? QString{} : QStringLiteral("measurement");
+                const auto known = classification->findData(initial);
+                if (known >= 0) classification->setCurrentIndex(known); else classification->setEditText(initial);
+                classification->setEnabled(!existing && disposition->currentData().toInt() != static_cast<int>(MeasurementAreaDisposition::reference_only));
+                if (existing) classification->setToolTip(QStringLiteral("Existing classifications and appraisal facts are retained. Edit them in Details."));
+                rows->setCellWidget(index, 5, classification); classifications.push_back(classification);
+                rows->setItem(index, 6, new QTableWidgetItem(QStringLiteral("—")));
+                rows->setItem(index, 7, new QTableWidgetItem(QStringLiteral("—")));
+            }
+            auto* status = new QLabel(&dialog); status->setObjectName(QStringLiteral("measuredAreaReviewStatus")); status->setWordWrap(true); layout->addWidget(status);
+            auto* buttons = new QDialogButtonBox(QDialogButtonBox::Apply | QDialogButtonBox::Cancel, &dialog);
+            buttons->setObjectName(QStringLiteral("measuredAreaReviewButtons")); layout->addWidget(buttons);
+            std::optional<MeasurementAreaDefinition> candidate;
+            const auto unchanged = [&] {
+                return m_document == context.document && m_document->is_editable() && m_document->revision() == context.revision &&
+                    m_selected_id == context.selected_id && m_active_layer_id == context.layer_id && m_metric_units == context.metric_units &&
+                    m_workspace == Workspace::measurement && !m_linework_drawing && !m_boundary_session && !m_pending_wall_start &&
+                    m_document->snapshot().entities() == source.entities() && m_document->snapshot().assets() == source.assets();
+            };
+            const auto update = [&] {
+                candidate.reset(); buttons->button(QDialogButtonBox::Apply)->setEnabled(false);
+                for (int row = 0; row < rows->rowCount(); ++row) {
+                    for (const int column : {6, 7}) {
+                        rows->item(row, column)->setText(QStringLiteral("—"));
+                        rows->item(row, column)->setData(Qt::UserRole, QVariant{});
+                    }
+                }
+                if (!unchanged()) { status->setText(QStringLiteral("The project or drawing context changed. Cancel and reopen this review.")); return; }
+                try {
+                    std::vector<MeasurementAreaChoice> choices;
+                    bool overlapping = false;
+                    for (std::size_t i = 0; i < dispositions.size(); ++i) {
+                        const auto disposition = static_cast<MeasurementAreaDisposition>(dispositions[i]->currentData().toInt());
+                        classifications[i]->setEnabled(!detected.existing_area_ids[i] && disposition != MeasurementAreaDisposition::reference_only);
+                        auto classification = classifications[i]->currentText().trimmed();
+                        const auto current = classifications[i]->currentIndex();
+                        if (current >= 0 && classification == classifications[i]->itemText(current)) classification = classifications[i]->itemData(current).toString();
+                        choices.push_back({disposition, classification.toStdString()});
+                        overlapping = overlapping || (detected.graph.faces[i].parent_face_index && disposition == MeasurementAreaDisposition::define_area);
+                    }
+                    auto prepared = prepare_measurement_area_definition(source, stroke_id.toStdString(), choices);
+                    if (!prepared.command.entity_changes.empty() || !prepared.command.asset_changes.empty())
+                        prepared.command = std::get<ApplyEntityChanges>(augmentAuthoredCommand(prepared.command));
+                    const auto preview = prepared.command.entity_changes.empty() && prepared.command.asset_changes.empty()
+                        ? source : Document::preview_command(source, prepared.command);
+                    const CalculationProfile physical{"measured-area-review", 1, AreaUnit::square_metre, 2, {{"physical", {false,false}}}};
+                    std::size_t active_index = 0;
+                    for (std::size_t i = 0; i < choices.size(); ++i) {
+                        auto* net = rows->item(static_cast<int>(i), 6); net->setText(QStringLiteral("—")); net->setData(Qt::UserRole, QVariant{});
+                        auto* deducted = rows->item(static_cast<int>(i), 7); deducted->setText(QStringLiteral("—")); deducted->setData(Qt::UserRole, QVariant{});
+                        const bool reference = choices[i].disposition == MeasurementAreaDisposition::reference_only;
+                        if (reference && !detected.existing_area_ids[i]) continue;
+                        const auto area_id = reference ? *detected.existing_area_ids[i] : prepared.area_ids.at(active_index++);
+                        const auto found = preview.entities().find(area_id);
+                        if (found == preview.entities().end()) throw std::invalid_argument("A prepared area is missing from its preview.");
+                        const auto* area = &found->second;
+                        std::vector<AreaDeduction> deductions;
+                        for (const auto& id : read_deduction_ids(area->properties))
+                            deductions.push_back({id, boundary_geometry(decode_identified_boundary_entity(preview.entities().at(id)))});
+                        const auto calculation = calculate_area({area->id, detected.context.building_id, detected.context.floor_id,
+                            "physical", boundary_geometry(decode_identified_boundary_entity(*area)), std::move(deductions), {1,1}}, physical);
+                        net->setText(format_boundary_area(calculation.net_square_metres, m_metric_units, false)); net->setData(Qt::UserRole, calculation.net_square_metres);
+                        deducted->setText(format_boundary_area(calculation.deducted_square_metres, m_metric_units, false)); deducted->setData(Qt::UserRole, calculation.deducted_square_metres);
+                    }
+                    const bool empty = prepared.command.entity_changes.empty() && prepared.command.asset_changes.empty();
+                    status->setText(empty ? QStringLiteral("No document changes. Reference outlines and existing definitions are preserved.")
+                        : overlapping ? QStringLiteral("A contained outline is defined independently. Its parent must exclude it or remain a reference; overlapping areas withhold valid totals. Choose Deduct from parent for a partition.")
+                        : QStringLiteral("Preview ready. Gross and net values are geometric measurements; appraisal eligibility still requires explicit recorded facts in Details."));
+                    candidate = std::move(prepared); buttons->button(QDialogButtonBox::Apply)->setEnabled(true);
+                } catch (const std::exception& error) { status->setText(QString::fromUtf8(error.what())); }
+            };
+            for (std::size_t i = 0; i < dispositions.size(); ++i) {
+                QObject::connect(dispositions[i], &QComboBox::currentIndexChanged, &dialog, [&](int) { update(); });
+                QObject::connect(classifications[i], &QComboBox::currentTextChanged, &dialog, [&](const QString&) { update(); });
+            }
+            QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+            QObject::connect(buttons->button(QDialogButtonBox::Apply), &QPushButton::clicked, &dialog, [&] {
+                if (!unchanged()) { candidate.reset(); buttons->button(QDialogButtonBox::Apply)->setEnabled(false); status->setText(QStringLiteral("The project or drawing context changed. Cancel and reopen this review.")); return; }
+                if (!candidate) return;
+                try {
+                    const auto prepared = *candidate;
+                    if (!prepared.command.entity_changes.empty() || !prepared.command.asset_changes.empty()) applyAuthoredCommand(prepared.command);
+                    if (!prepared.area_ids.empty()) m_selected_id = id_from(prepared.area_ids.front());
+                    clearError(); refresh(); dialog.accept();
+                } catch (const std::exception& error) { status->setText(QString::fromUtf8(error.what())); buttons->button(QDialogButtonBox::Apply)->setEnabled(false); candidate.reset(); }
+            });
+            QTimer source_guard(&dialog); source_guard.setInterval(100);
+            QObject::connect(&source_guard, &QTimer::timeout, &dialog, [&] {
+                if (!unchanged()) { candidate.reset(); buttons->button(QDialogButtonBox::Apply)->setEnabled(false); status->setText(QStringLiteral("The project or drawing context changed. Cancel and reopen this review.")); }
+            });
+            update(); source_guard.start(); (void)dialog.exec();
+        } catch (const std::exception& error) { setError(QStringLiteral("Review measured areas: %1").arg(QString::fromUtf8(error.what()))); }
+    }
+
     QStringList defineMeasuredAreasFromLinework(const QString& classification, Revision revision) {
         try {
             if (!m_document->is_editable() || m_document->revision() != revision)
@@ -14489,69 +14652,22 @@ public:
             const auto selected = selectedEntity();
             if (!selected || selected->type != "measurement_linework")
                 throw std::invalid_argument("Select a measured stroke first.");
-            const auto organization = organize_project(source);
-            const auto context = organization.drawing_context(selected->id);
-            if (!context) throw std::invalid_argument("The measured stroke has no resolved drawing context.");
             const auto name = classification.trimmed();
             if (name.isEmpty()) throw std::invalid_argument("Choose a nonempty area classification.");
-            std::vector<MeasurementGraphSource> segments;
-            for (const auto& [id, entity] : source.entities()) {
-                if (entity.type != "measurement_linework" || organization.drawing_context(id) != context) continue;
-                const auto decoded = decode_measurement_linework_model(entity.properties.at("model"));
-                if (!decoded.supported()) throw std::invalid_argument("The layer contains an unsupported measured stroke.");
-                for (const auto& edge : replay_measurement_linework(*decoded.model).edges)
-                    segments.push_back({id, edge.segment_id, edge.segment});
-            }
-            const auto graph = build_measurement_area_graph(segments);
-            if (graph.faces.empty()) throw std::invalid_argument("No closed area was found in this layer's measured lines.");
+            const auto detected = detect_measurement_areas(source, selected->id);
+            if (detected.graph.faces.empty()) throw std::invalid_argument("No closed area was found in this layer's measured lines.");
+            if (std::any_of(detected.graph.faces.begin(), detected.graph.faces.end(), [](const auto& face) { return face.parent_face_index.has_value(); }))
+                throw std::invalid_argument("Nested measured outlines require review. Use Detect closed areas to choose each outline's classification and deduction relationship.");
+            std::vector<MeasurementAreaChoice> choices(detected.graph.faces.size(), {MeasurementAreaDisposition::define_area, name.toStdString()});
+            auto definition = prepare_measurement_area_definition(source, selected->id, choices);
+            if (definition.command.entity_changes.empty() && definition.command.asset_changes.empty())
+                throw std::invalid_argument("These measured areas have already been defined. Select an existing area to edit its classification.");
+            definition.command = std::get<ApplyEntityChanges>(augmentAuthoredCommand(definition.command));
+            (void)Document::preview_command(source, definition.command);
+            applyAuthoredCommand(definition.command);
             QStringList created_ids;
-            std::vector<EntityChange> changes;
-            const auto& property = source.entities().at(context->property_id);
-            const bool appraisal = calculation_workflow_name(property.properties) == "appraisal";
-            for (const auto& face : graph.faces) {
-                json lineage = json::array();
-                for (const auto& traversal : face.edge_uses) {
-                    json inputs = json::array();
-                    for (const auto& use : graph.edges.at(traversal.edge_index).source_uses)
-                        inputs.push_back({{"owner_id", use.owner_id}, {"segment_id", use.segment_id},
-                            {"parameter_start", use.parameter_start}, {"parameter_end", use.parameter_end},
-                            {"reversed", use.reversed != traversal.reversed}});
-                    lineage.push_back(std::move(inputs));
-                }
-                bool already_defined = false;
-                const auto geometry = boundary_json(face.boundary);
-                for (const auto& [id, existing] : source.entities()) {
-                    if (existing.type != "measurement_boundary" || organization.drawing_context(id) != context) continue;
-                    if (boundary_json(boundary_geometry(decode_identified_boundary_entity(existing))) == geometry) {
-                        already_defined = true; break;
-                    }
-                    if (existing.extensions.contains("measurement_linework_sources") &&
-                        existing.extensions.at("measurement_linework_sources") == lineage)
-                        throw std::invalid_argument("An area from these source edges already exists with different geometry. Review or redefine it before creating another.");
-                }
-                if (already_defined) continue;
-                const auto id = new_id("measured-area");
-                Entity area{id, "measurement_boundary", {
-                    {"property_id", context->property_id}, {"building_id", context->building_id},
-                    {"floor_id", context->floor_id}, {"layer_id", context->layer_id},
-                    {"segments", geometry}, {"classification", name.toStdString()},
-                    {"measurement_classification", name.toStdString()},
-                    {"factor", 1.0}, {"factor_expression", "1"}, {"factor_numerator", 1}, {"factor_denominator", 1}},
-                    false, {{"measurement_linework_sources", lineage}}};
-                if (appraisal && parse_appraisal_category(name.toStdString())) {
-                    area.properties["appraisal_category"] = name.toStdString();
-                    area.properties["classification"] = "measurement";
-                    area.properties["measurement_classification"] = "measurement";
-                }
-                area = upgrade_legacy_boundary_entity(area);
-                changes.push_back(EntityChange::upsert(std::move(area)));
-                created_ids.push_back(id_from(id));
-            }
-            if (changes.empty()) throw std::invalid_argument("These measured areas have already been defined. Select an existing area to edit its classification.");
-            const ApplyEntityChanges command{revision, std::move(changes), {}, "Define measured areas from linework"};
-            (void)Document::preview_command(source, command);
-            applyDocumentCommand(command);
-            m_selected_id = created_ids.front();
+            for (const auto& id : definition.area_ids) created_ids.push_back(id_from(id));
+            if (!created_ids.empty()) m_selected_id = created_ids.front();
             clearError(); refresh();
             return created_ids;
         } catch (const std::exception& error) {

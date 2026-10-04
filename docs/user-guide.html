@@ -68,6 +68,19 @@
   Reopening a project does not resume drawing. To assign a closed region an
   area classification, select the saved linework and use
   <strong>Tools &gt; Detect closed areas</strong>.</p>
+  <p>The measured-area review lists each closed outline, its containing parent,
+  gross area, classification, deductions and net area. Inner outlines default
+  to Reference only. Choose Define area for a separate area or Deduct from
+  parent for an explicit subtraction, and classify each new area. A 100 m² outer
+  outline with a 16 m² inner deduction has 84 m² net. Independent overlapping
+  areas withhold valid totals; no appraisal eligibility is guessed.</p>
+  <p>Existing definitions keep their identities, names, styles and facts.
+  Reference only keeps an existing definition unchanged. Repeat detection
+  creates no duplicates. Only the active design phase supplies source outlines;
+  layer eye controls do not change calculations. Apply commits the full preview,
+  deduction links and phase membership in one undoable operation. Cancel changes
+  nothing. Review stale measured sources before defining another area, and
+  record actual appraisal facts in Details before using GLA totals.</p>
   <p>In Measured lines, <kbd>D</kbd> opens precise input for the starting point
   or next side. Choose length/heading, rise/run, a turn relative to the previous
   side, a world-coordinate endpoint, or one of the four analytical arc methods.

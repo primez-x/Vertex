@@ -267,6 +267,8 @@ public:
     // linework and creates classified measurement boundaries with source
     // lineage. All new faces commit atomically; existing identical measured
     // faces are retained rather than duplicated. Invalid graphs fail unchanged.
+    // Nested measured outlines require the native Detect closed areas review,
+    // where each outline's classification and deduction use are explicit.
     [[nodiscard]] QStringList detectRoomBoundariesFromExistingWalls(
         QString classification = QStringLiteral("room"),
         std::optional<Revision> expected_revision = std::nullopt);

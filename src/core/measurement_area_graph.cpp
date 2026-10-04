@@ -237,6 +237,73 @@ Topology topology(const std::vector<DerivedMeasurementEdge>& edges) {
     result.bounded_faces=edges.size()+components-result.nodes.size();
     return result;
 }
+
+bool bounds_contain(const Bounds2& outer, const Bounds2& inner) {
+    return outer.minimum.x<=inner.minimum.x && outer.minimum.y<=inner.minimum.y &&
+        outer.maximum.x>=inner.maximum.x && outer.maximum.y>=inner.maximum.y;
+}
+
+// The hole validator owns the analytical contact, clearance and winding
+// predicates. A temporary enclosing rectangle lets it also prove that two
+// otherwise unrelated outlines are disjoint, without duplicating those maths.
+// This proof geometry is never returned or attributed to a measured source.
+Boundary containment_enclosure(const Bounds2& first, const Bounds2& second, double tolerance) {
+    const Vec2 minimum{std::min(first.minimum.x,second.minimum.x),std::min(first.minimum.y,second.minimum.y)};
+    const Vec2 maximum{std::max(first.maximum.x,second.maximum.x),std::max(first.maximum.y,second.maximum.y)};
+    const double margin=std::max({1.0,maximum.x-minimum.x,maximum.y-minimum.y,8*tolerance});
+    const Vec2 low{minimum.x-margin,minimum.y-margin}, high{maximum.x+margin,maximum.y+margin};
+    if (!std::isfinite(margin) || !std::isfinite(low.x) || !std::isfinite(low.y) ||
+        !std::isfinite(high.x) || !std::isfinite(high.y) || low.x>=minimum.x || low.y>=minimum.y ||
+        high.x<=maximum.x || high.y<=maximum.y)
+        fail("separate outline containment exceeds reliable coordinate range");
+    return {{low,{high.x,low.y},0},{{high.x,low.y},high,0},{high,{low.x,high.y},0},{{low.x,high.y},low,0}};
+}
+
+void assign_containment_parents(MeasurementAreaGraph& graph,double tolerance) {
+    // Faces connected through shared edges belong to one ordinary planar
+    // subdivision. Grid diagonals can meet at a vertex without becoming two
+    // ambiguous touching outlines, so use the complete shared-edge component.
+    std::vector<std::size_t> groups(graph.faces.size());
+    std::iota(groups.begin(),groups.end(),0);
+    const auto group=[&](std::size_t index) {
+        auto root=index;
+        while (groups[root]!=root) root=groups[root];
+        while (groups[index]!=index) { const auto next=groups[index]; groups[index]=root; index=next; }
+        return root;
+    };
+    std::vector<std::optional<std::size_t>> edge_face(graph.edges.size());
+    std::vector<Bounds2> bounds;
+    bounds.reserve(graph.faces.size());
+    for (std::size_t index=0;index<graph.faces.size();++index) {
+        bounds.push_back(boundary_bounds(graph.faces[index].boundary));
+        for (const auto& use:graph.faces[index].edge_uses) {
+            auto& previous=edge_face[use.edge_index];
+            if (previous) groups[group(index)]=group(*previous);
+            else previous=index;
+        }
+    }
+    const auto set_parent=[&](std::size_t child,std::size_t parent) {
+        auto& face=graph.faces[child]; const auto area=graph.faces[parent].area_square_metres;
+        if (!(area>face.area_square_metres)) fail("strict outline containment has indistinguishable analytical areas");
+        if (!face.parent_face_index || area<graph.faces[*face.parent_face_index].area_square_metres)
+            face.parent_face_index=parent;
+        else if (area==graph.faces[*face.parent_face_index].area_square_metres && parent!=*face.parent_face_index)
+            fail("immediate containing outline is numerically ambiguous");
+    };
+    for (std::size_t i=0;i<graph.faces.size();++i) for (std::size_t j=i+1;j<graph.faces.size();++j) {
+        if (group(i)==group(j)) continue;
+        const auto& a=bounds[i]; const auto& b=bounds[j];
+        // A gap larger than the metre tolerance proves both separation and
+        // lack of containment. Near gaps still require the analytical proof.
+        if (b.minimum.x-a.maximum.x>tolerance || a.minimum.x-b.maximum.x>tolerance ||
+            b.minimum.y-a.maximum.y>tolerance || a.minimum.y-b.maximum.y>tolerance) continue;
+        const auto& first=graph.faces[i].boundary; const auto& second=graph.faces[j].boundary;
+        if (bounds_contain(a,b) && !validate_boundary_holes(first,{second},tolerance)) { set_parent(j,i); continue; }
+        if (bounds_contain(b,a) && !validate_boundary_holes(second,{first},tolerance)) { set_parent(i,j); continue; }
+        if (validate_boundary_holes(containment_enclosure(a,b,tolerance),{first,second},tolerance))
+            fail("separate measured outlines touch or have ambiguous analytical containment");
+    }
+}
 } // namespace
 
 MeasurementAreaGraph build_measurement_area_graph(
@@ -351,10 +418,6 @@ MeasurementAreaGraph build_measurement_area_graph(
     auto boundaries=detect_closed_boundaries(face_segments);
     if(boundaries.size()!=indexed.bounded_faces)
         fail("bounded faces cannot be reliably extracted; tiny, tangent or ambiguous topology requires correction");
-    for(std::size_t i=0;i<boundaries.size();++i) for(std::size_t j=i+1;j<boundaries.size();++j)
-        if(!validate_boundary_holes(boundaries[i],{boundaries[j]}).has_value()||
-           !validate_boundary_holes(boundaries[j],{boundaries[i]}).has_value())
-            fail("nested disconnected cycles require hole topology, which this graph does not support");
     for(auto& boundary:boundaries) {
         DerivedMeasurementFace face;
         face.area_square_metres=signed_area(boundary);
@@ -368,6 +431,7 @@ MeasurementAreaGraph build_measurement_area_graph(
         }
         face.boundary=std::move(boundary); graph.faces.push_back(std::move(face));
     }
+    assign_containment_parents(graph,minimum_length);
     return graph;
 }
 } // namespace sketch
