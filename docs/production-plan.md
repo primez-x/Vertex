@@ -177,6 +177,14 @@ verification evidence to the one final gate.
 
 ## Single production acceptance gate
 
+The supplied PincSketch 4.3 comparison is an additional required workflow
+baseline. All 134 inventoried operations and the missing/better workflows in
+[the adoption comparison](requirements/pincsketch-4.3-vertex-comparison.md)
+must be accounted for with actual implementation and observable evidence.
+PINC-001 through PINC-013 remain required release work. Source inspection or
+writing an inventory does not close them. Preserve Vertex's agreed unified
+canvas and compact layout while adopting useful behavior.
+
 Production completion means every required gate passes and every requirement row
 is supported by current evidence. All Apex 7 baseline capabilities,
 compatibility certification, modern improvements, both workspaces, full

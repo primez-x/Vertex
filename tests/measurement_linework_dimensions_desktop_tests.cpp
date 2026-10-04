@@ -317,6 +317,90 @@ void saved_dimension_canvas_drag(int kind,bool mixed=false) {
         reopened.redoCommand() && reopened.document().snapshot().entities()==after.entities(),"Callout drag reopens editable with exact source and placement history");
 }
 
+void mixed_complete_partial_canvas_drag(bool reverse,bool select_whole_callout=true) {
+    QTemporaryDir temporary;require(temporary.isValid(),"Mixed exterior evidence directory exists");
+    MainWindow window(fixture());prepare(window);
+    const auto shell=[&](double x) {
+        QStringList walls{window.createStraightWall({x,0},{x+4,0},"exterior"),
+            window.createStraightWall({x+4,0},{x+4,3},"exterior"),
+            window.createStraightWall({x+4,3},{x,3},"exterior"),
+            window.createStraightWall({x,3},{x,0},"exterior")};
+        for(qsizetype i=0;i<walls.size();++i)require(!walls[i].isEmpty() && window.selectEntity(walls[i],i!=0),
+            "Select new complete exterior source");
+        const auto owner=window.createMeasurementBoundaryFromSelectedWalls();
+        require(!owner.isEmpty(),"Create both independent measured exteriors");
+        return std::pair{owner,walls};
+    };
+    const auto [whole,whole_walls]=shell(20);const auto [partial,partial_walls]=shell(28);
+    const auto whole_dimensions=dimensions(window.document().snapshot(),whole.toStdString());
+    const auto partial_dimensions=dimensions(window.document().snapshot(),partial.toStdString());
+    require(whole_dimensions.size()==4 && partial_dimensions.size()==4,"Both exteriors have automatic callouts");
+    const auto whole_callout=QString::fromStdString(whole_dimensions.front().id);
+    const auto partial_callout=window.createAreaDimension(partial,{30,1.5});
+    const auto manual=window.createAreaDimension(whole,{22,1.5});
+    require(!partial_callout.isEmpty() && !manual.isEmpty(),"Create selected partial and unselected whole-area callouts");
+    QStringList selection{partial_callout};if(select_whole_callout)selection.prepend(whole_callout);
+    selection.append(whole_walls);selection.append(partial_walls.front());
+    if(reverse)std::reverse(selection.begin(),selection.end());
+    const auto select=[&] {for(qsizetype i=0;i<selection.size();++i)require(window.selectEntity(selection[i],i!=0),
+        "Restore mixed whole and partial perimeter selection");};select();
+    control<QToolButton>(window,"snapTool").setChecked(false);
+    auto& surface=canvas(window);surface.setSnapEnabled(false);surface.setOverviewMapEnabled(false);
+    surface.setViewTransform({26,1.5},60);QApplication::processEvents();
+    const auto before=window.document().snapshot();const Vec2 delta{.8,.4};
+    const auto bounds=surface.selectionBounds();require(bounds.has_value(),"Mixed group has visible selection boundary");
+    const auto start=bounds->center(),end=start+QPointF(48,-24);
+    const auto send=[&](QEvent::Type type,QPointF point,Qt::MouseButton button,Qt::MouseButtons buttons) {
+        QMouseEvent event(type,point,surface.mapToGlobal(point.toPoint()),button,buttons,Qt::NoModifier);QApplication::sendEvent(&surface,&event);
+    };
+    const auto settle=[&] {QElapsedTimer timer;timer.start();
+        while(surface.entitiesMovePreviewPending() && timer.elapsed()<5000)QApplication::processEvents(QEventLoop::AllEvents,30);
+        QApplication::processEvents();require(!surface.entitiesMovePreviewPending(),"Mixed move preview completes");};
+    send(QEvent::MouseButtonPress,start,Qt::LeftButton,Qt::LeftButton);send(QEvent::MouseMove,end,Qt::NoButton,Qt::LeftButton);settle();
+    QKeyEvent escape(QEvent::KeyPress,Qt::Key_Escape,Qt::NoModifier);QApplication::sendEvent(&surface,&escape);
+    send(QEvent::MouseButtonRelease,end,Qt::LeftButton,Qt::NoButton);settle();
+    require(window.document().snapshot().entities()==before.entities() && window.document().revision()==before.revision(),
+        "Cancel preserves the entire mixed group and history");select();surface.setViewTransform({26,1.5},60);QApplication::processEvents();
+    send(QEvent::MouseButtonPress,start,Qt::LeftButton,Qt::LeftButton);send(QEvent::MouseMove,end,Qt::NoButton,Qt::LeftButton);settle();
+    require(window.document().snapshot().entities()==before.entities(),"Mixed preview cannot commit early");
+    const auto proposal=surface.entitiesMovePreview();
+    capture(window,QStringLiteral("mixed-complete-partial-%1-%2-preview.png").arg(reverse).arg(select_whole_callout));
+    send(QEvent::MouseButtonRelease,end,Qt::LeftButton,Qt::NoButton);settle();
+    const auto after=window.document().snapshot();
+    if(after.revision()!=before.revision()+1)throw std::runtime_error("Mixed complete and partial exterior drag refused: "+window.lastError().toStdString());
+    require(!proposal.empty(),"Mixed move has an admitted geometry preview");
+    require(after.history().back().boundary_constraint_changes &&
+        command_to_json(*after.history().back().boundary_constraint_changes).at("version")==16,
+        "Mixed drag retains its typed atomic composition proof");
+    require(wall_measurement_source_current(after,after.entities().at(whole.toStdString())) &&
+        wall_measurement_source_current(after,after.entities().at(partial.toStdString())),"Both exteriors stay current after mixed movement");
+    for(const auto& old:dimensions(before,whole.toStdString())) {
+        const auto now=dimension(after,old.id);require_near(now.text_position.x,old.text_position.x+delta.x);
+        require_near(now.text_position.y,old.text_position.y+delta.y);
+        require(now.placement==old.placement && now.automatic_placement_version==old.automatic_placement_version && now.presentation==old.presentation,
+            "Every selected or unselected whole-owner callout follows once with original provenance and styling");
+    }
+    const auto old=dimension(before,partial_callout.toStdString()),now=dimension(after,partial_callout.toStdString());
+    require_near(now.text_position.x,old.text_position.x+delta.x);require_near(now.text_position.y,old.text_position.y+delta.y);
+    require(now.placement==BoundaryDimensionPlacement::manual && !now.automatic_placement_version,
+        "Explicit partial-owner callout move retains manual placement");
+    require(after.entities().at(partial_walls[2].toStdString())==before.entities().at(partial_walls[2].toStdString()),
+        "Unconnected far wall remains unchanged");
+    for(const auto& proposed:proposal) {
+        const auto committed=std::find_if(surface.entities().begin(),surface.entities().end(),[&](const auto& value){return value.id==proposed.id;});
+        require(committed!=surface.entities().end() && committed->segments.size()==proposed.segments.size(),"Mixed committed geometry matches admitted preview");
+        for(std::size_t i=0;i<proposed.segments.size();++i) {
+            require_near(committed->segments[i].start.x,proposed.segments[i].start.x);require_near(committed->segments[i].start.y,proposed.segments[i].start.y);
+            require_near(committed->segments[i].end.x,proposed.segments[i].end.x);require_near(committed->segments[i].end.y,proposed.segments[i].end.y);
+        }
+    }
+    exact_history(window,before,after);capture(window,QStringLiteral("mixed-complete-partial-%1-%2-applied.png").arg(reverse).arg(select_whole_callout));
+    const auto path=temporary.filePath("mixed-exteriors.bldproj");require(window.saveProjectAs(path) && window.createNewProject(),"Save mixed proof and release writer lease");
+    MainWindow reopened;prepare(reopened);require(reopened.openProject(path) && reopened.document().is_editable() &&
+        reopened.document().snapshot().entities()==after.entities() && reopened.undoCommand() && reopened.document().snapshot().entities()==before.entities() &&
+        reopened.redoCommand() && reopened.document().snapshot().entities()==after.entities(),"Mixed proof reopens editable with exact one-step history");
+}
+
 void actual_creator_terminal_arc_and_revisits() {
     MainWindow window(fixture());prepare(window);require(window.selectEntity("open"),"select real measured source");
     creator(window,[&](QDialog& dialog){auto& owner=control<QComboBox>(dialog,"dimensionSourceBoundary");require(owner.currentData().toString()=="open","creator must default to selected measured stroke");
@@ -559,6 +643,8 @@ int main(int argc,char** argv){sketch::testing::noninteractive_errors();QStandar
         saved_dimension_canvas_drag(9,true);saved_dimension_canvas_drag(10,true);saved_dimension_canvas_drag(11,true);
         saved_dimension_canvas_drag(12,true);
         saved_dimension_canvas_drag(13,true);
+        mixed_complete_partial_canvas_drag(false);mixed_complete_partial_canvas_drag(true);
+        mixed_complete_partial_canvas_drag(false,false);mixed_complete_partial_canvas_drag(true,false);
         actual_creator_terminal_arc_and_revisits();connected_edit_updates_saved_values();transformed_clone_is_independent();actual_transform_preview_cancel_and_apply();mixed_canvas_move_retains_placed_dimensions();mixed_wall_anchor_move_keeps_whole_transaction_admission();automatic_placement_uses_active_workspace_scale();transform_clipboard_output_delete_and_reopen();}
     catch(const std::exception& error){std::cerr<<"measurement_linework_dimensions_desktop_tests: "<<error.what()<<'\n';return 1;}
     std::cout<<"Measured dimension desktop tests passed\n";return 0;}

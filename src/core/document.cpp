@@ -1644,6 +1644,22 @@ static bool has_dimension_placement_completion(const ApplyBoundaryConstraintChan
     return command.dimension_placement_completion || !command.dimension_placement_moves.empty();
 }
 
+static bool has_rigid_group_completion(const ApplyBoundaryConstraintChanges& command) {
+    return command.rigid_group_completion || command.rigid_group_transform.has_value();
+}
+
+static void validate_rigid_group_intent(const ApplyBoundaryConstraintChanges& command, bool admission) {
+    if (!has_rigid_group_completion(command)) return;
+    if (!command.rigid_group_completion)
+        throw std::invalid_argument("Rigid group lane requires its explicit completion mode");
+    if (command.wall_split || command.exterior_corner_move || command.exterior_segment_resize || command.exterior_segment_arc)
+        throw std::invalid_argument("Rigid group composition cannot borrow split, corner, resize or arc authority");
+    if (command.rigid_group_transform && command.rigid_group_transform->expected_revision != command.expected_revision)
+        throw std::invalid_argument("Rigid group child must use the parent's expected revision");
+    if (admission && (!command.rigid_group_transform || command.wall_edits.empty()))
+        throw std::invalid_argument("Rigid group composition requires a rigid child and connected wall proof");
+}
+
 bool has_exterior_source_completion(const ApplyBoundaryConstraintChanges& command) {
     return command.exterior_source_completion || !command.physical_entity_changes.empty() ||
         !command.exterior_source_edits.empty() || (!has_rigid_wall_transform(command) &&
@@ -1826,6 +1842,10 @@ std::map<std::string, Entity, std::less<>> replay_retained_wall_split(
 void validate_completed_constraint_change(const std::map<std::string, Entity, std::less<>>& before,
     const std::map<std::string, Entity, std::less<>>& after,
     const ApplyBoundaryConstraintChanges& command, bool retained_replay = false) {
+    // Mixed transactions validate both original-source replays and the final
+    // merged state in completed_boundary_constraint_entities. The legacy
+    // validator must never apply partial authority to the rigid lane.
+    if (has_rigid_group_completion(command)) return;
     try { validate_exterior_resize_related_edits(command); }
     catch (const std::exception& error) { document_error(DocumentErrorCode::constraint_violation,error.what()); }
     if(command.wall_split) {
@@ -2647,6 +2667,162 @@ std::map<std::string, Entity, std::less<>> boundary_transform_entities(
     return result;
 }
 
+std::map<std::string, Entity, std::less<>> completed_boundary_constraint_entities(
+    const BoundaryIdentityHistory& history,
+    const std::map<std::string, Entity, std::less<>>& source,
+    const ApplyBoundaryConstraintChanges& command, bool retained_replay = false) {
+    if (!has_rigid_group_completion(command))
+        return boundary_constraint_entities(source, command, retained_replay);
+    try {
+        validate_rigid_group_intent(command, true);
+        (void)command_to_json(Command{command});
+        auto partial = command;
+        partial.rigid_group_transform.reset(); partial.rigid_group_completion = false;
+        const auto& rigid = *command.rigid_group_transform;
+
+        // Dependency closure is ownership, even when its payload is unchanged.
+        // This includes source archives, deductions, analytical callouts and
+        // all hard-connected owners; no lane may borrow the other's authority.
+        using Ids = std::set<std::string, std::less<>>;
+        std::map<std::string, Ids, std::less<>> links;
+        const auto link = [&](const std::string& first, const std::string& second) {
+            links[first].insert(second); links[second].insert(first);
+        };
+        const auto reserve_dependencies = [&](const Entity& entity) {
+            const auto& id = entity.id;
+            if (entity.type == "constraint") {
+                const auto decoded = decode_constraint_entity(entity);
+                if (!decoded.supported()) throw std::invalid_argument(decoded.unsupported_reason);
+                for (const auto& binding : decoded.constraint->bindings) link(id, binding.owner_id);
+            }
+            if (can_recognize_boundary_dimension_entity_type(entity.type)) {
+                const auto target = entity.properties.find("target");
+                if (target != entity.properties.end() && target->is_object() && target->contains("entity_id") &&
+                    target->at("entity_id").is_string()) link(id, target->at("entity_id").get<std::string>());
+            }
+            if (can_recognize_boundary_entity_type(entity.type)) {
+                if (entity.properties.contains("wall_measurement_source"))
+                    for (const auto& wall : exterior_wall_measurement_source_ids(entity)) link(id, wall);
+                if (const auto deductions = entity.properties.find("deduction_ids"); deductions != entity.properties.end()) {
+                    if (!deductions->is_array()) throw std::invalid_argument("Measured deductions must be an array");
+                    for (const auto& child : *deductions) {
+                        if (!child.is_string()) throw std::invalid_argument("Measured deduction identifiers are invalid");
+                        link(id, child.get<std::string>());
+                    }
+                }
+                const auto source_uses = [&](const auto& self, const nlohmann::json& value) -> void {
+                    if (value.is_object()) {
+                        if (value.contains("owner_id") && value.at("owner_id").is_string())
+                            link(id, value.at("owner_id").get<std::string>());
+                        for (const auto& item : value.items()) self(self, item.value());
+                    } else if (value.is_array()) for (const auto& item : value) self(self, item);
+                };
+                for (const auto* key : {"measurement_linework_sources", "measurement_linework_group"})
+                    if (entity.extensions.contains(key)) source_uses(source_uses, entity.extensions.at(key));
+            }
+            if (entity.type == "opening" && entity.properties.contains("wall_id") && entity.properties.at("wall_id").is_string())
+                link(id, entity.properties.at("wall_id").get<std::string>());
+        };
+        for (const auto& [id, entity] : source) { (void)id; reserve_dependencies(entity); }
+        for (const auto* lane : std::initializer_list<const std::vector<EntityChange>*>{
+                &rigid.entity_changes, &partial.entity_changes, &partial.physical_entity_changes,
+                &partial.supplemental_entity_changes})
+            for (const auto& change : *lane)
+                if (change.kind == EntityChangeKind::upsert) reserve_dependencies(change.entity);
+        const auto closure = [&](Ids ids) {
+            std::vector<std::string> pending(ids.begin(), ids.end());
+            for (std::size_t index = 0; index < pending.size(); ++index)
+                if (const auto found = links.find(pending[index]); found != links.end())
+                    for (const auto& id : found->second)
+                        if (ids.insert(id).second) pending.push_back(id);
+            return ids;
+        };
+        const auto change_id = [](const EntityChange& change) -> const std::string& {
+            return change.kind == EntityChangeKind::upsert ? change.entity.id : change.entity_id;
+        };
+        Ids rigid_seeds, partial_seeds;
+        for (const auto& transform : rigid.transformations) rigid_seeds.insert(transform.boundary_id);
+        for (const auto& change : rigid.entity_changes) rigid_seeds.insert(change_id(change));
+        for (const auto& edit : partial.boundary_edits) partial_seeds.insert(edit.boundary_id);
+        for (const auto& edit : partial.wall_edits) partial_seeds.insert(edit.wall_id);
+        for (const auto& edit : partial.exterior_source_edits) partial_seeds.insert(edit.boundary_id);
+        for (const auto& edit : partial.measured_stroke_edits) partial_seeds.insert(edit.stroke_id);
+        for (const auto& move : partial.dimension_placement_moves) partial_seeds.insert(move.dimension_id);
+        const auto rigid_scope = closure(std::move(rigid_seeds));
+        const auto partial_scope = closure(std::move(partial_seeds));
+        for (const auto& id : partial_scope)
+            if (rigid_scope.contains(id))
+                throw std::invalid_argument("Rigid and connected lanes share an ownership component: " + id);
+        for (const auto* lane : {&partial.entity_changes, &partial.physical_entity_changes, &partial.supplemental_entity_changes})
+            for (const auto& change : *lane)
+                if (rigid_scope.contains(change_id(change)))
+                    throw std::invalid_argument("Connected supplement overlaps rigid ownership: " + change_id(change));
+
+        auto rigid_result = boundary_transform_entities(history, source, rigid);
+        // The new composition dialect preserves rigid callout placement even
+        // when canonical exterior reconciliation reflows an automatic label.
+        // Older standalone transform replay keeps its historical semantics.
+        std::set<std::string,std::less<>> rigid_owners;
+        for(const auto& transform:rigid.transformations)rigid_owners.insert(transform.boundary_id);
+        const auto moved_callouts=transformed_boundary_entities_batch(source,rigid.transformations);
+        for(const auto& [id,entity]:moved_callouts) {
+            if(!can_recognize_boundary_dimension_entity_type(entity.type))continue;
+            const auto decoded=decode_boundary_dimension_entity(entity);
+            if(!decoded.supported() || !rigid_owners.contains(decoded.dimension->boundary_id))continue;
+            if(!rigid_result.contains(id))throw std::invalid_argument("Rigid source reconciliation retired an attached callout");
+            const auto current=decode_boundary_dimension_entity(rigid_result.at(id));
+            if(!current.supported() || current.dimension->boundary_id!=decoded.dimension->boundary_id ||
+                current.dimension->kind!=decoded.dimension->kind || current.dimension->segment_id!=decoded.dimension->segment_id ||
+                current.dimension->vertex_id!=decoded.dimension->vertex_id || current.dimension->secondary_segment_id!=decoded.dimension->secondary_segment_id ||
+                current.dimension->segment_chain_ids!=decoded.dimension->segment_chain_ids)
+                throw std::invalid_argument("Rigid source reconciliation changed a saved analytical target");
+            (void)decoded.dimension->resolve(rigid_result.at(decoded.dimension->boundary_id));
+            rigid_result.at(id)=entity;
+        }
+        const auto partial_result = boundary_constraint_entities(source, partial, retained_replay);
+        // Mixed selection never makes an existing fixed anchor movable.
+        for (const auto& [id, entity] : source) {
+            if (entity.type != "constraint") continue;
+            const auto decoded = decode_constraint_entity(entity);
+            if (decoded.supported() && decoded.constraint->relation == ConstraintRelationKind::fixed_anchor &&
+                (rigid_result.at(id) != entity || !partial_result.contains(id) || partial_result.at(id) != entity))
+                throw std::invalid_argument("Mixed geometry cannot rewrite an existing fixed anchor");
+        }
+        validate_constraint_change(source, rigid_result, false, true, true);
+        validate_completed_constraint_change(source, partial_result, partial, retained_replay);
+
+        auto result = source;
+        Ids touched;
+        const auto merge = [&](const auto& replay, const Ids& forbidden) {
+            for (const auto& [id, entity] : source) {
+                const auto after = replay.find(id);
+                if (after != replay.end() && exact_entity_payload(entity, after->second)) continue;
+                if (forbidden.contains(id) || !touched.insert(id).second)
+                    throw std::invalid_argument("Mixed replay delta overlaps reserved ownership: " + id);
+                if (after == replay.end()) result.erase(id);
+                else result.at(id) = after->second;
+            }
+            for (const auto& [id, entity] : replay) {
+                if (source.contains(id)) continue;
+                if (forbidden.contains(id) || !touched.insert(id).second)
+                    throw std::invalid_argument("Mixed replay creation overlaps reserved ownership: " + id);
+                result.emplace(id, entity);
+            }
+        };
+        merge(rigid_result, partial_scope); merge(partial_result, rigid_scope);
+        Ids rigid_wall_ids;
+        for (const auto& id : rigid_scope)
+            if (source.contains(id) && source.at(id).type == "wall") rigid_wall_ids.insert(id);
+        for (const auto& edit : partial.wall_edits) if (edit.version == 4) rigid_wall_ids.insert(edit.wall_id);
+        (void)validate_constraint_integrity(result);
+        validate_constraint_transition(source, result, false, rigid_wall_ids);
+        validate_constraint_edit_topology(source, result, rigid_wall_ids);
+        validate_boundary_identity_transition(history, source, result);
+        return result;
+    } catch (const DocumentError&) { throw; }
+    catch (const std::exception& error) { document_error(DocumentErrorCode::invalid_entity, error.what()); }
+}
+
 void command_exact_fields(const nlohmann::json& value,
                           std::initializer_list<const char*> fields,
                           DocumentErrorCode code, std::string_view context) {
@@ -2985,7 +3161,7 @@ nlohmann::json command_to_json(const Command& command) {
             }
             return encoded;
         } else if constexpr (std::is_same_v<T, ApplyBoundaryConstraintChanges>) {
-            try { validate_dimension_placement_intent(typed, false); }
+            try { validate_dimension_placement_intent(typed, false); validate_rigid_group_intent(typed, false); }
             catch (const std::exception& error) { document_error(DocumentErrorCode::invalid_entity, error.what()); }
             if(typed.wall_split) {
                 if(!typed.boundary_edits.empty() || !typed.entity_changes.empty() || !typed.wall_edits.empty() ||
@@ -3157,6 +3333,33 @@ nlohmann::json command_to_json(const Command& command) {
                     if (encoded.dump().size() > 1024*1024)
                         throw std::invalid_argument("Dimension placement proof exceeds the persisted proof budget");
                 }
+                // Compose only these two typed dialects; select sixteen last
+                // so stripped child/placement lanes cannot erase its marker.
+                if (has_rigid_group_completion(typed)) {
+                    encoded["version"] = 16;
+                    encoded["source_completion"] = has_exterior_source_completion(typed);
+                    encoded["supplemental_source_completion"] = has_supplemental_source_completion(typed);
+                    encoded["supplemental_asset_reference_completion"] = typed.supplemental_asset_reference_completion;
+                    encoded["rigid_wall_transform_completion"] = has_rigid_wall_transform(typed);
+                    encoded["measured_source_completion"] = has_measured_source_completion(typed);
+                    for (const auto* key : {"wall_edits", "measured_stroke_edits", "exterior_source_edits"})
+                        if (!encoded.contains(key)) encoded[key] = nlohmann::json::array();
+                    encoded["physical_entity_changes"] = command_to_json(ApplyEntityChanges{
+                        typed.expected_revision, typed.physical_entity_changes, {}, typed.message}).at("entity_changes");
+                    const auto supplements = command_to_json(ApplyEntityChanges{typed.expected_revision, typed.supplemental_entity_changes,
+                        typed.supplemental_asset_reference_completion ? std::vector<AssetChange>{} : typed.supplemental_asset_changes, typed.message});
+                    encoded["supplemental_entity_changes"] = supplements.at("entity_changes");
+                    encoded["supplemental_asset_changes"] = typed.supplemental_asset_reference_completion ?
+                        command_asset_references_to_json(typed.supplemental_asset_changes) : supplements.at("asset_changes");
+                    encoded["exterior_corner_move"] = nullptr;
+                    encoded["dimension_placement_completion"] = has_dimension_placement_completion(typed);
+                    if (!encoded.contains("dimension_placement_moves")) encoded["dimension_placement_moves"] = nlohmann::json::array();
+                    encoded["rigid_group_completion"] = true;
+                    encoded["rigid_group_transform"] = typed.rigid_group_transform ?
+                        command_to_json(Command{*typed.rigid_group_transform}) : nlohmann::json(nullptr);
+                    if (encoded.dump().size() > 1024*1024)
+                        throw std::invalid_argument("Mixed rigid group proof exceeds the persisted proof budget");
+                }
             } catch (const std::exception& error) {
                 document_error(DocumentErrorCode::invalid_entity, error.what());
             }
@@ -3199,7 +3402,7 @@ Command command_from_json(const nlohmann::json& value,
     try {
         if (!value.is_object() || !value.contains("version") || !value.contains("kind") ||
             !value.at("version").is_number_integer() ||
-            (value.at("version") != 1 && value.at("version") != 2 && value.at("version") != 3 && value.at("version") != 4 && value.at("version") != 5 && value.at("version") != 6 && value.at("version") != 7 && value.at("version") != 8 && value.at("version") != 9 && value.at("version") != 10 && value.at("version") != 11 && value.at("version") != 12 && value.at("version") != 13 && value.at("version") != 14 && value.at("version") != 15) ||
+            (value.at("version") != 1 && value.at("version") != 2 && value.at("version") != 3 && value.at("version") != 4 && value.at("version") != 5 && value.at("version") != 6 && value.at("version") != 7 && value.at("version") != 8 && value.at("version") != 9 && value.at("version") != 10 && value.at("version") != 11 && value.at("version") != 12 && value.at("version") != 13 && value.at("version") != 14 && value.at("version") != 15 && value.at("version") != 16) ||
             !value.at("kind").is_string()) {
             document_error(DocumentErrorCode::invalid_entity, "serialized command envelope is invalid");
         }
@@ -3255,6 +3458,37 @@ Command command_from_json(const nlohmann::json& value,
             return result;
         }
         if (kind == "apply_boundary_constraint_changes") {
+            if (value.at("version") == 16) {
+                command_exact_fields(value,{"version","kind","expected_revision","message","entity_changes","boundary_edits","wall_edits",
+                    "physical_entity_changes","exterior_source_edits","supplemental_entity_changes","supplemental_asset_changes",
+                    "source_completion","supplemental_source_completion","supplemental_asset_reference_completion",
+                    "rigid_wall_transform_completion","measured_source_completion","measured_stroke_edits","exterior_corner_move",
+                    "dimension_placement_completion","dimension_placement_moves","rigid_group_completion","rigid_group_transform"},
+                    DocumentErrorCode::invalid_entity,"serialized mixed rigid group command");
+                if (value.dump().size() > 1024*1024 || !value.at("rigid_group_completion").is_boolean() ||
+                    !value.at("rigid_group_completion").get<bool>() || !value.at("dimension_placement_completion").is_boolean() ||
+                    !value.at("dimension_placement_moves").is_array())
+                    throw std::invalid_argument("Mixed rigid group mode or proof budget is invalid");
+                const bool placement = value.at("dimension_placement_completion").get<bool>();
+                if (!placement && !value.at("dimension_placement_moves").empty())
+                    throw std::invalid_argument("Mixed placement mode disagrees with its typed lane");
+                auto lanes = value; lanes["version"] = 15; lanes["dimension_placement_completion"] = true;
+                lanes.erase("rigid_group_completion"); lanes.erase("rigid_group_transform");
+                auto result = std::get<ApplyBoundaryConstraintChanges>(command_from_json(lanes, asset_resolver));
+                result.dimension_placement_completion = placement;
+                result.rigid_group_completion = true;
+                const auto& child = value.at("rigid_group_transform");
+                if (!child.is_null()) {
+                    // Inspect identity before recursive decoding: no arbitrary
+                    // commands, nested mixed envelopes or alternate dialects.
+                    if (!child.is_object() || !child.contains("kind") || child.at("kind") != "transform_boundaries" ||
+                        !child.contains("version") || child.at("version") != 1)
+                        throw std::invalid_argument("Mixed rigid child must be a TransformBoundaries proof");
+                    result.rigid_group_transform = std::get<TransformBoundaries>(command_from_json(child, asset_resolver));
+                }
+                (void)command_to_json(Command{result});
+                return result;
+            }
             if (value.at("version") == 15) {
                 command_exact_fields(value,{"version","kind","expected_revision","message","entity_changes","boundary_edits","wall_edits",
                     "physical_entity_changes","exterior_source_edits","supplemental_entity_changes","supplemental_asset_changes",
@@ -3837,7 +4071,7 @@ Revision Document::apply(const Command& command) {
                 validate_action(next.action);
                 if(typed_command.wall_split)validate_wall_split_lifetime(*typed_command.wall_split,history_,history_.size());
                 next.boundary_constraint_changes = typed_command;
-                next.entities = boundary_constraint_entities(current.entities, typed_command);
+                next.entities = completed_boundary_constraint_entities(boundary_identity_history_, current.entities, typed_command);
                 next.assets = boundary_constraint_assets(current.assets, typed_command);
                 next_unsupported_constraints = validate_state(next.entities, next.assets);
                 validate_completed_constraint_change(current.entities, next.entities, typed_command);
@@ -4082,7 +4316,7 @@ Document Document::restore(DocumentSnapshot snapshot) {
         // source-state and stack checks below validate navigation; mutation
         // rules must not reject restoration of a shorter derivation prefix.
         if (record.boundary_constraint_changes && (record.boundary_constraint_changes->wall_split || has_exterior_source_completion(*record.boundary_constraint_changes) ||
-            has_rigid_wall_transform(*record.boundary_constraint_changes)))
+            has_rigid_wall_transform(*record.boundary_constraint_changes) || has_rigid_group_completion(*record.boundary_constraint_changes)))
             validate_completed_constraint_change(previous.entities, record.entities, *record.boundary_constraint_changes, true);
         else validate_constraint_change(previous.entities, record.entities,
                 record.boundary_constraint_changes.has_value(), !record.source_revision.has_value(),
@@ -4242,7 +4476,7 @@ Document Document::restore(DocumentSnapshot snapshot) {
                 auto expected = previous;
                 try {
                     if(proof.wall_split)validate_wall_split_lifetime(*proof.wall_split,snapshot.history_,index);
-                    expected.entities = boundary_constraint_entities(previous.entities, proof, true);
+                    expected.entities = completed_boundary_constraint_entities(identity_history, previous.entities, proof, true);
                     expected.assets = boundary_constraint_assets(previous.assets, proof);
                     validate_boundary_identity_transition(identity_history, proof.wall_split ?
                         wall_split_validation_source(previous.entities,expected.entities,*proof.wall_split) : previous.entities, record.entities);

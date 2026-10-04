@@ -16,8 +16,8 @@ spec.loader.exec_module(restyle)
 class ArchitecturalStyleTests(unittest.TestCase):
     def test_palette_and_identity(self):
         index = json.loads((ASSETS / "index.json").read_text())
-        self.assertEqual(index["count"], 322)
-        self.assertEqual(len({(r["category"], r["id"]) for r in index["symbols"]}), 322)
+        self.assertEqual(index["count"], 342)
+        self.assertEqual(len({(r["category"], r["id"]) for r in index["symbols"]}), 342)
         for row in index["symbols"]:
             with self.subTest(symbol=row["id"]):
                 root = ET.parse(ASSETS / row["file"]).getroot()

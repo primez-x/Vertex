@@ -67,6 +67,10 @@
     },
     {
       "category": "fixtures",
+      "path": "assets/symbols/architectural_v2/symbols/01_bathroom/shower-glass.svg"
+    },
+    {
+      "category": "fixtures",
       "path": "assets/symbols/architectural_v2/symbols/01_bathroom/shower-quadrant.svg"
     },
     {
@@ -108,6 +112,10 @@
     {
       "category": "fixtures",
       "path": "assets/symbols/architectural_v2/symbols/01_bathroom/towel-warmer.svg"
+    },
+    {
+      "category": "fixtures",
+      "path": "assets/symbols/architectural_v2/symbols/01_bathroom/tub-alcove-5ft.svg"
     },
     {
       "category": "fixtures",
@@ -159,6 +167,10 @@
     },
     {
       "category": "fixtures",
+      "path": "assets/symbols/architectural_v2/symbols/02_kitchen/cabinet-run.svg"
+    },
+    {
+      "category": "fixtures",
       "path": "assets/symbols/architectural_v2/symbols/02_kitchen/cooktop-domino.svg"
     },
     {
@@ -172,6 +184,10 @@
     {
       "category": "fixtures",
       "path": "assets/symbols/architectural_v2/symbols/02_kitchen/cooktop-induction.svg"
+    },
+    {
+      "category": "fixtures",
+      "path": "assets/symbols/architectural_v2/symbols/02_kitchen/corner-cabinet.svg"
     },
     {
       "category": "fixtures",
@@ -211,11 +227,19 @@
     },
     {
       "category": "fixtures",
+      "path": "assets/symbols/architectural_v2/symbols/02_kitchen/kitchen-peninsula.svg"
+    },
+    {
+      "category": "fixtures",
       "path": "assets/symbols/architectural_v2/symbols/02_kitchen/microwave.svg"
     },
     {
       "category": "fixtures",
       "path": "assets/symbols/architectural_v2/symbols/02_kitchen/oven-built-in.svg"
+    },
+    {
+      "category": "fixtures",
+      "path": "assets/symbols/architectural_v2/symbols/02_kitchen/pantry-cabinet.svg"
     },
     {
       "category": "fixtures",
@@ -228,6 +252,10 @@
     {
       "category": "fixtures",
       "path": "assets/symbols/architectural_v2/symbols/02_kitchen/range-wide.svg"
+    },
+    {
+      "category": "fixtures",
+      "path": "assets/symbols/architectural_v2/symbols/02_kitchen/sink-base.svg"
     },
     {
       "category": "fixtures",
@@ -292,6 +320,10 @@
     {
       "category": "fixtures",
       "path": "assets/symbols/architectural_v2/symbols/03_laundry_utility/radiator.svg"
+    },
+    {
+      "category": "fixtures",
+      "path": "assets/symbols/architectural_v2/symbols/03_laundry_utility/washer-dryer-stack.svg"
     },
     {
       "category": "fixtures",
@@ -567,11 +599,23 @@
     },
     {
       "category": "fixtures",
+      "path": "assets/symbols/architectural_v2/symbols/08_storage/closet-rod-shelf.svg"
+    },
+    {
+      "category": "fixtures",
+      "path": "assets/symbols/architectural_v2/symbols/08_storage/closet-walk-in.svg"
+    },
+    {
+      "category": "fixtures",
       "path": "assets/symbols/architectural_v2/symbols/08_storage/coat-rack.svg"
     },
     {
       "category": "fixtures",
       "path": "assets/symbols/architectural_v2/symbols/08_storage/filing-cabinet.svg"
+    },
+    {
+      "category": "fixtures",
+      "path": "assets/symbols/architectural_v2/symbols/08_storage/linen-cabinet.svg"
     },
     {
       "category": "fixtures",
@@ -700,6 +744,14 @@
     {
       "category": "fixtures",
       "path": "assets/symbols/architectural_v2/symbols/11_circulation/stairs-spiral.svg"
+    },
+    {
+      "category": "fixtures",
+      "path": "assets/symbols/architectural_v2/symbols/11_circulation/stairs-straight-down.svg"
+    },
+    {
+      "category": "fixtures",
+      "path": "assets/symbols/architectural_v2/symbols/11_circulation/stairs-straight-up.svg"
     },
     {
       "category": "fixtures",
@@ -911,6 +963,10 @@
     },
     {
       "category": "fixtures",
+      "path": "assets/symbols/architectural_v2/symbols/16_walls_openings/open-below.svg"
+    },
+    {
+      "category": "fixtures",
       "path": "assets/symbols/architectural_v2/symbols/16_walls_openings/opening.svg"
     },
     {
@@ -1043,6 +1099,10 @@
     },
     {
       "category": "fixtures",
+      "path": "assets/symbols/architectural_v2/symbols/20_hvac_plumbing/baseboard-heater.svg"
+    },
+    {
+      "category": "fixtures",
       "path": "assets/symbols/architectural_v2/symbols/20_hvac_plumbing/boiler.svg"
     },
     {
@@ -1055,6 +1115,10 @@
     },
     {
       "category": "fixtures",
+      "path": "assets/symbols/architectural_v2/symbols/20_hvac_plumbing/furnace.svg"
+    },
+    {
+      "category": "fixtures",
       "path": "assets/symbols/architectural_v2/symbols/20_hvac_plumbing/gas-line.svg"
     },
     {
@@ -1064,6 +1128,10 @@
     {
       "category": "fixtures",
       "path": "assets/symbols/architectural_v2/symbols/20_hvac_plumbing/hose-bib.svg"
+    },
+    {
+      "category": "fixtures",
+      "path": "assets/symbols/architectural_v2/symbols/20_hvac_plumbing/hvac-system.svg"
     },
     {
       "category": "fixtures",
@@ -1116,6 +1184,10 @@
     {
       "category": "fixtures",
       "path": "assets/symbols/architectural_v2/symbols/21_swimming_pools/pool-infinity-edge.svg"
+    },
+    {
+      "category": "fixtures",
+      "path": "assets/symbols/architectural_v2/symbols/21_swimming_pools/pool-kidney.svg"
     },
     {
       "category": "fixtures",
@@ -1303,6 +1375,10 @@
     },
     {
       "category": "fixtures",
+      "path": "assets/symbols/architectural_v2/symbols/25_drafting_symbols/arrow-plain.svg"
+    },
+    {
+      "category": "fixtures",
       "path": "assets/symbols/architectural_v2/symbols/25_drafting_symbols/detail-marker.svg"
     },
     {
@@ -1332,6 +1408,10 @@
     {
       "category": "fixtures",
       "path": "assets/symbols/architectural_v2/symbols/25_drafting_symbols/spot-elevation.svg"
+    },
+    {
+      "category": "fixtures",
+      "path": "assets/symbols/architectural_v2/symbols/25_drafting_symbols/structural-issue.svg"
     },
     {
       "category": "build",
@@ -1664,6 +1744,10 @@
     {
       "category": "docs",
       "path": "docs/plans/2026-10-04-measured-line-dimensions.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/plans/2026-10-04-mixed-selection-and-pincsketch-adoption.md"
     },
     {
       "category": "docs",
@@ -2231,6 +2315,22 @@
     },
     {
       "category": "docs",
+      "path": "docs/requirements/pincsketch-4.3-feature-inventory.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/requirements/pincsketch-4.3-vertex-comparison.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/requirements/pincsketch-symbol-coverage.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/requirements/pincsketch-vertex-user-checklist.md"
+    },
+    {
+      "category": "docs",
       "path": "docs/requirements/production-gates.json"
     },
     {
@@ -2679,6 +2779,10 @@
     },
     {
       "category": "docs",
+      "path": "docs/verification/mixed-selection-and-pinc-adoption-2026-10-04.md"
+    },
+    {
+      "category": "docs",
       "path": "docs/verification/named-plan-vertex-editing-2026-09-30.md"
     },
     {
@@ -2891,6 +2995,10 @@
     },
     {
       "category": "source",
+      "path": "include/sketch/area_arithmetic.hpp"
+    },
+    {
+      "category": "source",
       "path": "include/sketch/area_subtraction.hpp"
     },
     {
@@ -3020,6 +3128,10 @@
     {
       "category": "source",
       "path": "include/sketch/desktop/appraisal_report_dialog.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/desktop/area_class_palette.hpp"
     },
     {
       "category": "source",
@@ -3771,6 +3883,10 @@
     },
     {
       "category": "source",
+      "path": "src/core/area_arithmetic.cpp"
+    },
+    {
+      "category": "source",
       "path": "src/core/area_subtraction.cpp"
     },
     {
@@ -4199,6 +4315,14 @@
     },
     {
       "category": "source",
+      "path": "src/desktop/area_class_drag.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/desktop/area_class_palette.cpp"
+    },
+    {
+      "category": "source",
       "path": "src/desktop/boundary_input_dialog.cpp"
     },
     {
@@ -4344,6 +4468,14 @@
     {
       "category": "source",
       "path": "tests/architecture_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/area_arithmetic_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/area_class_palette_desktop_tests.cpp"
     },
     {
       "category": "source",
@@ -4820,6 +4952,10 @@
     {
       "category": "source",
       "path": "tests/measurement_linework_transform_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/mixed_translation_completion_tests.cpp"
     },
     {
       "category": "source",

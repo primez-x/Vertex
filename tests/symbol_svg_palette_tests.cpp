@@ -222,7 +222,7 @@ int main(int argc, char** argv) {
             structuralContract(file.readAll());
             ++count;
         }
-        require(count == 322, "full supplied SVG catalog was not exercised");
+        require(count == 342, "complete supplied and Pinc-adoption SVG catalog was not exercised");
         for (const auto& path : {"04_living/sofa-three-seat.svg", "01_bathroom/basin-round.svg",
                                  "02_kitchen/cooktop-gas-four.svg", "25_drafting_symbols/north-arrow.svg"})
             structuralContract(asset(QString::fromLatin1(path)));
@@ -251,7 +251,7 @@ int main(int argc, char** argv) {
         unknown = simple;
         unknown.replace("http://www.w3.org/2000/svg", "https://example.com/custom"); rejects(unknown);
         renderingContract();
-        std::cout << "symbol SVG palette checks passed (322 catalog assets)\n";
+        std::cout << "symbol SVG palette checks passed (342 catalog assets)\n";
         return 0;
     } catch (const std::exception& error) {
         std::cerr << "symbol_svg_palette_tests: " << error.what() << '\n';

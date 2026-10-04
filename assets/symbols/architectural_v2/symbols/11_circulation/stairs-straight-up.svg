@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="3300" viewBox="-120 -120 1240 3540" role="img" aria-labelledby="svg-v2-11_circulation-stairs-straight-up--title svg-v2-11_circulation-stairs-straight-up--desc" data-vertex-style="white-outline-2">
+<title id="svg-v2-11_circulation-stairs-straight-up--title">Stairs Straight Up</title>
+<desc id="svg-v2-11_circulation-stairs-straight-up--desc">Orthographic top view of a straight stair flight with twelve treads and an up-direction arrow. Nominal footprint 1000 by 3300 millimetres. Transparent background.</desc>
+<defs><linearGradient id="svg-v2-11_circulation-stairs-straight-up--tread" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ffffff"/><stop offset="1" stop-color="#f2f2f2"/></linearGradient></defs>
+<g id="svg-v2-11_circulation-stairs-straight-up--artwork"><rect x="0" y="0" width="1000" height="3300" fill="url(#svg-v2-11_circulation-stairs-straight-up--tread)" stroke="#111111" stroke-width="20"/><path d="M0 275 H1000 M0 550 H1000 M0 825 H1000 M0 1100 H1000 M0 1375 H1000 M0 1650 H1000 M0 1925 H1000 M0 2200 H1000 M0 2475 H1000 M0 2750 H1000 M0 3025 H1000" fill="none" stroke="#111111" stroke-width="12"/><path d="M500 2810 V620 M500 620 L390 780 M500 620 L610 780" fill="none" stroke="#111111" stroke-width="22" stroke-linecap="round" stroke-linejoin="round"/></g>
+</svg>

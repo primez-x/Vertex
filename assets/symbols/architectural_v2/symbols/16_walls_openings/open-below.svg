@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="1200" viewBox="-120 -120 1440 1440" role="img" aria-labelledby="svg-v2-16_walls_openings-open-below--title svg-v2-16_walls_openings-open-below--desc" data-vertex-style="white-outline-2">
+<title id="svg-v2-16_walls_openings-open-below--title">Open Below</title>
+<desc id="svg-v2-16_walls_openings-open-below--desc">Drawing annotation only; marks a floor void extending to a lower level and does not author a physical fixture. Nominal footprint 1200 by 1200 millimetres. Transparent background.</desc>
+<defs><linearGradient id="svg-v2-16_walls_openings-open-below--rim" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ffffff"/><stop offset="1" stop-color="#f2f2f2"/></linearGradient></defs>
+<g id="svg-v2-16_walls_openings-open-below--artwork"><rect x="70" y="70" width="1060" height="1060" fill="#f2f2f2" stroke="#111111" stroke-width="20" stroke-dasharray="48 28"/><path d="M210 210 L990 990 M990 210 L210 990" fill="none" stroke="#111111" stroke-width="16" stroke-dasharray="40 24"/><path d="M600 390 V775 M600 775 L500 675 M600 775 L700 675" fill="none" stroke="#111111" stroke-width="22" stroke-linecap="round" stroke-linejoin="round"/></g>
+</svg>

@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="900" viewBox="-120 -120 1140 1140" role="img" aria-labelledby="svg-v2-25_drafting_symbols-structural-issue--title svg-v2-25_drafting_symbols-structural-issue--desc" data-vertex-style="white-outline-2">
+<title id="svg-v2-25_drafting_symbols-structural-issue--title">Structural Issue</title>
+<desc id="svg-v2-25_drafting_symbols-structural-issue--desc">Drawing annotation only; flags a structural drawing issue and does not author a physical structural component. Nominal footprint 900 by 900 millimetres. Transparent background.</desc>
+<defs><linearGradient id="svg-v2-25_drafting_symbols-structural-issue--ceramic" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ffffff"/><stop offset="1" stop-color="#f2f2f2"/></linearGradient></defs>
+<g id="svg-v2-25_drafting_symbols-structural-issue--artwork"><path d="M450 35 L865 450 L450 865 L35 450 Z" fill="url(#svg-v2-25_drafting_symbols-structural-issue--ceramic)" stroke="#111111" stroke-width="22" stroke-linejoin="round"/><circle cx="450" cy="450" r="215" fill="#ffffff" stroke="#111111" stroke-width="16"/><path d="M525 250 L415 410 L505 460 L370 650" fill="none" stroke="#111111" stroke-width="30" stroke-linecap="round" stroke-linejoin="round"/><circle cx="450" cy="450" r="35" fill="#f2f2f2" stroke="#111111" stroke-width="12"/></g>
+</svg>

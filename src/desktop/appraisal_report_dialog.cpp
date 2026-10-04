@@ -1,6 +1,7 @@
 #include "sketch/desktop/appraisal_report_dialog.hpp"
 #include "sketch/model_phases.hpp"
 #include "sketch/document_digest.hpp"
+#include "sketch/area_arithmetic.hpp"
 
 #include <QAbstractTextDocumentLayout>
 #include <QComboBox>
@@ -66,6 +67,13 @@ CalculationProfile profile(const AppraisalDocumentReport& report,bool metric) {
 }
 QString area(double square_metres,const AppraisalDocumentReport& report,bool metric) {
     return text(display_area(square_metres,profile(report,metric)).text)+(metric && !ansi(report) ? QStringLiteral(" m²") : QStringLiteral(" sq ft"));
+}
+QString signed_area_contribution(double square_metres,const AppraisalDocumentReport& report,bool metric) {
+    auto intermediate=profile(report,metric);
+    intermediate.decimal_places=std::max(intermediate.decimal_places,2U);
+    return (square_metres<0 ? QStringLiteral("-") : QString{})+
+        text(display_area(std::abs(square_metres),intermediate).text)+
+        (metric && !ansi(report) ? QStringLiteral(" m²") : QStringLiteral(" sq ft"));
 }
 QString length(double metres,const AppraisalDocumentReport& report,bool metric) {
     return QString::number(metric && !ansi(report)?metres:metres/0.3048,'f',ansi(report)?1:report.display_decimal_places)+
@@ -257,6 +265,7 @@ QString boundary_details(const DocumentSnapshot& source,const AppraisalDocumentR
             html+=QStringLiteral("<p>Diagnostic geometry only; qualified totals are withheld.</p>");
         html+=QStringLiteral("<table width='100%' border='1' cellspacing='0'>");
         html+=row(QStringLiteral("Gross boundary area"),area(value.base_square_metres,report,metric));
+        if(entity!=source.entities().end())html+=appraisal_area_arithmetic_rows(entity->second,value.base_square_metres,report,metric);
         html+=row(QStringLiteral("Applied deductions (union)"),area(value.deducted_square_metres,report,metric));
         html+=row(QStringLiteral("Physical net: gross − deductions"),area(value.net_square_metres,report,metric));
         if(ansi(report))html+=appraisal_sloped_ceiling_rows(status,report);
@@ -309,6 +318,49 @@ QString boundary_details(const DocumentSnapshot& source,const AppraisalDocumentR
     return html;
 }
 } // namespace
+
+QString appraisal_area_arithmetic_rows(const Entity& owner,double gross_square_metres,
+    const AppraisalDocumentReport& report,bool metric,bool compact) {
+    auto geometry=owner.properties.find("segments");
+    if(geometry==owner.properties.end())geometry=owner.properties.find("boundary");
+    if(geometry==owner.properties.end() || !geometry->is_array())return {};
+    try {
+        Boundary boundary;
+        for(const auto& edge:*geometry) {
+            const auto& start=edge.at("start");const auto& end=edge.at("end");
+            boundary.push_back({{start.at(0).get<double>(),start.at(1).get<double>()},
+                {end.at(0).get<double>(),end.at(1).get<double>()},edge.at("sweep_radians").get<double>()});
+        }
+        const auto derivation=derive_area_arithmetic(boundary);
+        if(std::abs(derivation.gross_square_metres-gross_square_metres)>std::max(1e-10,std::abs(gross_square_metres)*1e-10))
+            return row(QStringLiteral("Gross area arithmetic"),QStringLiteral("Unavailable: source and current gross measurement differ."));
+        QString result;const bool metres=metric && !ansi(report);
+        const auto dimension=[&](double value){return QString::number(value/(metres?1.0:0.3048),'g',10);};
+        if(derivation.method==AreaArithmeticMethod::rectangular_components) {
+            QStringList terms;
+            // More digits than the ordinary dimension display keep the
+            // multiplication useful; rounding never changes its source values.
+            for(const auto& component:derivation.rectangles)
+                terms.push_back(QStringLiteral("%1 × %2 %3 = %4")
+                    .arg(QString::number(component.width_metres/(metres?1.0:0.3048),'g',10),
+                         QString::number(component.depth_metres/(metres?1.0:0.3048),'g',10),
+                         metres?QStringLiteral("m"):QStringLiteral("ft"),signed_area_contribution(component.area_square_metres,report,metric)));
+            if(terms.size()<=6 || !compact)result+=row(QStringLiteral("Rectangle components"),terms.join(QStringLiteral("; ")));
+            else result+=row(QStringLiteral("Strip components"),QStringLiteral("%1 rectangles; total %2").arg(terms.size()).arg(area(gross_square_metres,report,metric)));
+        } else if(derivation.method==AreaArithmeticMethod::triangle) {
+            const auto size=*derivation.triangle_base_and_height_metres;
+            result+=row(QStringLiteral("Triangle base × height ÷ 2"),QStringLiteral("%1 × %2 %3 ÷ 2 = %4")
+                .arg(dimension(size.x),dimension(size.y),metres?QStringLiteral("m"):QStringLiteral("ft"),area(gross_square_metres,report,metric)));
+        } else {
+            result+=row(derivation.method==AreaArithmeticMethod::chord_and_arcs ? QStringLiteral("Signed chord contribution") : QStringLiteral("Polygon coordinate integral"),
+                signed_area_contribution(derivation.chord_contribution_square_metres,report,metric));
+            if(derivation.method==AreaArithmeticMethod::chord_and_arcs)
+                result+=row(QStringLiteral("Analytical curve adjustment"),signed_area_contribution(derivation.curve_adjustment_square_metres,report,metric));
+        }
+        return result+row(QStringLiteral("Geometric gross result"),area(derivation.gross_square_metres,report,metric))+
+            row(QStringLiteral("Arithmetic precision"),QStringLiteral("Stored unrounded geometry; intermediate values keep extra precision; final totals follow the selected policy."));
+    }catch(const std::exception&) {return row(QStringLiteral("Gross area arithmetic"),QStringLiteral("Unavailable for this source geometry."));}
+}
 
 QString appraisal_rounded_ceiling_height_text(double observed_metres, AcquisitionIncrement increment) {
     const auto rounded=rounded_ansi_ceiling_height_metres(observed_metres,increment);

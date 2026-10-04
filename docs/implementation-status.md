@@ -1,5 +1,33 @@
 # Implementation status
 
+## PincSketch comparison and drawing/appraisal adoption (2026-10-04)
+
+The supplied package was inventoried from its embedded HTML: 134 practical
+operations, 80 distinct named symbols, 22 area entries and 30 reusable labels.
+The [inventory](requirements/pincsketch-4.3-feature-inventory.md),
+[comparison](requirements/pincsketch-4.3-vertex-comparison.md) and
+[user checklist](requirements/pincsketch-vertex-user-checklist.md) distinguish
+source findings from runtime qualification. Its original installer and HTML
+remain local; they are not redistributed with Vertex.
+
+Vertex adds a live GLA shortcut to Details, a searchable area-class palette with
+canvas/list drop and repeat-click assignment, and shared geometric arithmetic
+in Details and printed audits. Stale projections refuse edits; facts-derived
+categories remain authoritative. The library has 342 SVG entries, including
+20 new white/black drawings with editable nominal sizes. Native resources and
+the real palette drag loop have passing focused checks.
+
+Complete and partial source movement now composes disjoint qualified operations
+atomically, preserving saved callout placement. Retained command envelope 16
+uses native format 42 and extraction 40. A hard-connected component spanning
+both operation lanes is still refused and remains required work.
+
+[Verification and remaining limits](verification/mixed-selection-and-pinc-adoption-2026-10-04.md)
+are explicit. Previous-page references, report composition/crop, Pinc import,
+keyboard conveniences, batch/exterior styling and all preset/variant mappings
+remain open. This is an internal build, not full Pinc or Apex parity or
+production acceptance. Earlier dated entries below describe their own builds.
+
 ## Library contrast and direct wall authoring (2026-09-29)
 
 The visible library contains 322 SVG components: the 320 supplied drawings and

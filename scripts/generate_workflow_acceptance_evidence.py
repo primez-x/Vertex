@@ -1440,7 +1440,7 @@ WORKFLOW_RULES.update({
     },
     "APX-SYM-001": {
         "acceptance": (
-            "The visible local library contains 322 SVG components, including all 320 supplied symbols, in 25 "
+            "The visible local library contains 342 SVG components, including all 320 supplied symbols and 20 Pinc-comparison additions, in 25 "
             "categories. Hidden legacy definitions remain reopen-only compatibility data. Pointer drag "
             "and click placement, resizing, rotation, exact artwork pinning, explicit migration, "
             "save/reopen, and representative PDF/SVG/PNG output use the same retained artwork."
@@ -1466,8 +1466,8 @@ WORKFLOW_RULES.update({
             "docs/annotation-catalog.md",
         ),
         "anchors": (
-            "1,131",
-            "322",
+            "1,151",
+            "342",
             "svg",
             "scale",
             "plumbing",

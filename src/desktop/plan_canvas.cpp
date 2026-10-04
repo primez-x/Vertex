@@ -1,6 +1,7 @@
 #include "plan_canvas.hpp"
 #include "sketch/hosted_opening_geometry.hpp"
 #include "sketch/desktop/symbol_svg_palette.hpp"
+#include "sketch/desktop/area_class_palette.hpp"
 
 #include <QApplication>
 #include <QDataStream>
@@ -1526,6 +1527,35 @@ bool PlanCanvas::applyEntitiesMovePreview(std::uint64_t serial,
     return true;
 }
 
+void PlanCanvas::setAreaClassDropped(std::function<bool(QString, Vec2)> callback,
+    std::function<void()> malformed_drop_rejected) {
+    m_area_class_dropped=std::move(callback);
+    m_area_class_drop_rejected=std::move(malformed_drop_rejected);
+}
+
+bool PlanCanvas::containsAreaPoint(const Boundary& boundary, Vec2 point) {
+    QPainterPath path;
+    if(!append_closed_boundary(path,boundary))return false;
+    QPainterPathStroker border;border.setWidth(default_geometry_tolerance_metres*2);
+    if(border.createStroke(path).contains(QPointF(point.x,point.y)))return false;
+    return path.contains(QPointF(point.x,point.y));
+}
+
+QStringList PlanCanvas::areaIdsAt(Vec2 point) const {
+    QStringList ids;
+    for(const auto& entity:m_entities) {
+        if(entity.type!=QStringLiteral("boundary") && entity.type!=QStringLiteral("measurement_boundary") &&
+            entity.type!=QStringLiteral("room_boundary"))continue;
+        if(const auto path=closed_entity_path(entity);path && path->contains(QPointF(point.x,point.y))) {
+            QPainterPathStroker border;border.setWidth(default_geometry_tolerance_metres*2);
+            if(!border.createStroke(*path).contains(QPointF(point.x,point.y)))ids.push_back(entity.id);
+        }
+    }
+    return ids;
+}
+
+void PlanCanvas::setAreaClassCaption(QString caption) {m_area_class_caption=std::move(caption);update();}
+
 void PlanCanvas::setSymbolDropped(std::function<void(QString, double, Vec2)> callback,
                                  std::function<bool(const QString&)> uses_raw_point) {
     m_symbol_dropped = std::move(callback);
@@ -1534,6 +1564,10 @@ void PlanCanvas::setSymbolDropped(std::function<void(QString, double, Vec2)> cal
 
 void PlanCanvas::dragEnterEvent(QDragEnterEvent* event) {
     m_pending_dimension_space_tap.reset();
+    if(event->mimeData()->hasFormat(area_class_mime_type)) {
+        if(m_area_class_dropped && decode_area_class_drag(event->mimeData()))event->acceptProposedAction();else event->ignore();
+        return;
+    }
     if (m_symbol_dropped && event->mimeData()->hasFormat("application/x-vertex-symbol") &&
         event->mimeData()->data("application/x-vertex-symbol").size() <= 4096)
         event->acceptProposedAction();
@@ -1541,6 +1575,10 @@ void PlanCanvas::dragEnterEvent(QDragEnterEvent* event) {
 
 void PlanCanvas::dragMoveEvent(QDragMoveEvent* event) {
     m_pending_dimension_space_tap.reset();
+    if(event->mimeData()->hasFormat(area_class_mime_type)) {
+        if(m_area_class_dropped && decode_area_class_drag(event->mimeData()))event->acceptProposedAction();else event->ignore();
+        return;
+    }
     if (m_symbol_dropped && event->mimeData()->hasFormat("application/x-vertex-symbol")) {
         updateCursor(event->position());
         event->acceptProposedAction();
@@ -1549,6 +1587,13 @@ void PlanCanvas::dragMoveEvent(QDragMoveEvent* event) {
 
 void PlanCanvas::dropEvent(QDropEvent* event) {
     m_pending_dimension_space_tap.reset();
+    if(event->mimeData()->hasFormat(area_class_mime_type)) {
+        const auto classification=decode_area_class_drag(event->mimeData());
+        if(!classification && m_area_class_drop_rejected)m_area_class_drop_rejected();
+        if(classification && m_area_class_dropped && m_area_class_dropped(*classification,toModel(event->position(),rect())))event->acceptProposedAction();
+        else event->ignore();
+        return;
+    }
     if (!m_symbol_dropped) return;
     const auto payload = event->mimeData()->data("application/x-vertex-symbol");
     if (payload.size() > 4096) return;
@@ -2141,7 +2186,8 @@ void PlanCanvas::pointerRelease(QPointF position, Qt::MouseButton button,
     updateCursor(position);
     if (button == Qt::LeftButton && m_point_placement_requested &&
         m_left_gesture != LeftGesture::space_pan) {
-        if ((position-m_left_start).manhattanLength()>=QApplication::startDragDistance()) {
+        if (m_left_dragging || m_panning ||
+            (position-m_left_start).manhattanLength()>=QApplication::startDragDistance()) {
             pointerMove(position,modifiers);
             resetGesture();
             update();
@@ -3725,7 +3771,8 @@ void PlanCanvas::drawSelectionDimensions(QPainter& painter, const QRectF& viewpo
 
 void PlanCanvas::drawSelectionCaption(QPainter& painter, const QRectF& viewport,
                                       QColor background) const {
-    if (m_selection_caption.isEmpty() || viewport.width() < 100.0 || viewport.height() < 60.0)
+    const auto caption=m_area_class_caption.isEmpty()?m_selection_caption:m_area_class_caption;
+    if (caption.isEmpty() || viewport.width() < 100.0 || viewport.height() < 60.0)
         return;
     painter.save();
     painter.setRenderHint(QPainter::Antialiasing, true);
@@ -3735,7 +3782,7 @@ void PlanCanvas::drawSelectionCaption(QPainter& painter, const QRectF& viewport,
     painter.setFont(caption_font);
     const QFontMetricsF metrics(caption_font);
     const auto maximum_width = std::max<qreal>(72.0, viewport.width() * 0.42);
-    const auto text = metrics.elidedText(m_selection_caption, Qt::ElideRight,
+    const auto text = metrics.elidedText(caption, Qt::ElideRight,
                                          qFloor(maximum_width - 20.0));
     auto badge = metrics.boundingRect(text).adjusted(-10.0, -5.0, 10.0, 5.0);
     badge.moveTopRight(viewport.topRight() + QPointF(-12.0, 12.0));

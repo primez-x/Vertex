@@ -1,4 +1,5 @@
 #include "sketch/desktop/appraisal_details_panel.hpp"
+#include "sketch/desktop/appraisal_report_dialog.hpp"
 #include "sketch/desktop/main_window.hpp"
 #include "sketch/wall_measurement.hpp"
 #include "sketch/boundary_entity.hpp"
@@ -14,6 +15,8 @@
 #include <QStandardPaths>
 #include <QUuid>
 #include <QSpinBox>
+#include <QScrollArea>
+#include <QScrollBar>
 #include <QTabWidget>
 #include <QTemporaryDir>
 #include <QTimer>
@@ -430,6 +433,134 @@ void native_main_window_details() {
     window.setWorkspaceTheme(sketch::WorkspaceTheme::dark);capture(window,"appraisal-details-main-window-dark.png");
 }
 
+void live_gla_shortcut_matches_authoritative_details() {
+    QTemporaryDir directory;require(directory.isValid(),"Live GLA fixture has an isolated save directory");
+    auto document=std::make_shared<sketch::Document>(sketch::Document::create(fixture()));
+    MainWindow window(document);window.setAttribute(Qt::WA_DontShowOnScreen);window.resize(1280,900);window.show();QApplication::processEvents();
+    auto& panel=child<AppraisalDetailsPanel>(window,"appraisalDetailsPanel");
+    auto& shortcut=child<QToolButton>(window,"appraisalGlaShortcut");
+    auto& tabs=child<QTabWidget>(window,"sidebarTabs");tabs.setCurrentIndex(0);
+    require(!shortcut.isHidden() && shortcut.text()==QStringLiteral("GLA %1").arg(label(panel,"appraisalDetailsGla")),
+        "Qualified GLA remains visible while drawing on Layers");
+    capture(window,"live-gla-layers.png");
+    const auto before=window.document().snapshot();shortcut.click();
+    require(tabs.currentWidget()==&panel && window.document().revision()==before.revision() && window.selectedEntityId().isEmpty(),
+        "Live GLA opens its Details breakdown without editing or selecting geometry");
+    window.setMetricUnits(true);
+    require(shortcut.text()==QStringLiteral("GLA %1").arg(label(panel,"appraisalDetailsGla")) && shortcut.text().contains("m²"),
+        "Live declared-policy GLA follows Details units and precision");
+    require(window.selectEntity("a"),"Select source for facts change");
+    auto invalid=window.document().snapshot().entities().at("a");invalid.properties["appraisal_facts"].erase("finish");
+    window.document().apply(sketch::ApplyEntityChanges{window.document().revision(),{sketch::EntityChange::upsert(invalid)},{},"Clear observed finish"});
+    require(window.selectEntity({}),"Refresh unqualified source without a canvas selection");
+    require(shortcut.text()=="GLA · review required" && shortcut.toolTip().contains("withheld",Qt::CaseInsensitive),
+        "Missing evidence withholds live GLA instead of displaying stale or invented zero");
+    QApplication::processEvents();
+    require(shortcut.width()>=shortcut.sizeHint().width(),"Live GLA status has room for its full readable label");
+    capture(window,"live-gla-withheld.png");
+    require(window.undoCommand() && shortcut.text()==QStringLiteral("GLA %1").arg(label(panel,"appraisalDetailsGla")),
+        "Undo refreshes the live GLA from the same current report");
+    require(window.saveProjectAs(directory.filePath("live-gla.bldproj")) && window.createNewProject() && shortcut.isHidden(),
+        "Saved configured project can be replaced without a misleading GLA placeholder");
+}
+
+void area_arithmetic_is_shared_with_printed_report() {
+    auto document=sketch::Document::create(fixture());const auto source=document.snapshot();
+    AppraisalDetailsPanel panel;panel.setDocument(source,"p",false);panel.setSelectedBoundary("a");
+    require(panel.report() && panel.report()->qualified,"Arithmetic fixture is qualified under its explicitly declared policy");
+    const auto trace=label(panel,"appraisalDetailsTrace");
+    require(trace.contains("Rectangle components") && trace.contains("10 × 10 ft = 100.00 sq ft") && trace.contains("Geometric gross result"),
+        "Details exposes the rectangle multiplication rather than only a final area");
+    const auto html=sketch::desktop::appraisal_report_html(source,*panel.report(),false);
+    require(html.contains("10 × 10 ft = 100.00 sq ft") && html.contains("Arithmetic precision"),
+        "Printed appraisal report uses the same stored-geometry derivation and rounding explanation");
+    auto mismatch=sketch::desktop::appraisal_area_arithmetic_rows(source.entities().at("a"),9,*panel.report(),false);
+    require(mismatch.contains("Unavailable") && !mismatch.contains("Rectangle components"),
+        "An explanation cannot contradict the current gross measurement");
+    panel.setDocument(source,"p",true);panel.setSelectedBoundary("a");
+    require(label(panel,"appraisalDetailsTrace").contains("3.048 × 3.048 m = 9.29 m²"),"Metric arithmetic uses physical metre dimensions");
+    require(document.snapshot().entities()==source.entities() && document.revision()==source.revision(),"Viewing arithmetic does not edit source geometry or declarations");
+}
+
+void signed_curve_arithmetic_is_shared_with_printed_report() {
+    const double pi=std::acos(-1.0);
+    auto inward=square(0,0,4);inward[2]["sweep_radians"]=-pi/2;
+    const auto major=json::array({{{"start",{1,0}},{"end",{0,1}},{"sweep_radians",-3*pi/2}},
+        {{"start",{0,1}},{"end",{0,0}},{"sweep_radians",0}},
+        {{"start",{0,0}},{"end",{1,0}},{"sweep_radians",0}}});
+    for(const auto& boundary:{inward,major})for(const bool reversed:{false,true}) {
+        auto geometry=json::array();
+        if(reversed)for(auto edge=boundary.rbegin();edge!=boundary.rend();++edge) {
+            auto value=*edge;value["start"]=edge->at("end");value["end"]=edge->at("start");
+            value["sweep_radians"]=-edge->at("sweep_radians").get<double>();geometry.push_back(value);
+        } else geometry=boundary;
+        auto entities=fixture();entities.back().properties["boundary"]=geometry;
+        auto document=sketch::Document::create(entities);const auto source=document.snapshot();
+        AppraisalDetailsPanel panel;panel.setDocument(source,"p",true);panel.setSelectedBoundary("a");
+        require(panel.report() && panel.report()->qualified,"Signed curve fixture has qualified analytical geometry");
+        const auto trace=label(panel,"appraisalDetailsTrace");
+        const auto html=sketch::desktop::appraisal_report_html(source,*panel.report(),true);
+        const bool concave=boundary.size()==4;
+        const QString chord=concave?"16.00 m²":"-0.50 m²";
+        const QString adjustment=concave?"-2.28 m²":"2.86 m²";
+        const QString gross=concave?"13.72 m²":"2.36 m²";
+        for(const auto& content:{trace,html}) {
+            require(content.contains("Signed chord contribution") && content.contains(chord) &&
+                content.contains("Analytical curve adjustment") && content.contains(adjustment) &&
+                content.contains("Geometric gross result") && content.contains(gross) && !content.contains("Unavailable for this source geometry"),
+                "Details and printed report retain signed contributions and positive gross for either winding");
+        }
+        require(document.snapshot().entities()==source.entities() && document.revision()==source.revision(),
+            "Viewing signed curve arithmetic preserves the source geometry");
+    }
+}
+
+void ansi_fractional_components_preserve_unrounded_gross() {
+    auto entities=fixture();auto& policy=entities.front().properties["appraisal_policy"];
+    policy["policy_kind"]="ansi_z765_2021";
+    policy["ansi"]={{"interior_inspected",true},{"direct_measurement",true},
+        {"acquisition_increment","tenth_foot"},{"limitations_statement","Interior inspected."}};
+    entities[2].properties["appraisal_facts"]["ansi"]={{"any_part_below_grade",false}};
+    entities.back().properties["appraisal_facts"]["ansi"]={{"year_round_suitable",true},
+        {"finish_matches_dwelling",true},{"dwelling_identity","primary"},
+        {"ceiling",{{"kind","flat"},{"minimum_height_m",2.4384}}}};
+    // Intermediate strips retain 0.4 square feet each while their unrounded
+    // 0.8-square-foot sum displays as one under ANSI whole-square-foot output.
+    const std::vector<sketch::Vec2> points{{0,0},{2,0},{2,.2},{1,.2},{1,.6},{0,.6}};
+    auto boundary=json::array();
+    for(std::size_t i=0;i<points.size();++i) {
+        const auto start=points[i],end=points[(i+1)%points.size()];
+        boundary.push_back({{"start",{start.x*.3048,start.y*.3048}},
+            {"end",{end.x*.3048,end.y*.3048}},{"sweep_radians",0}});
+    }
+    entities.back().properties["boundary"]=boundary;
+    auto document=sketch::Document::create(entities);const auto source=document.snapshot();
+    AppraisalDetailsPanel panel;panel.setDocument(source,"p",true);panel.setSelectedBoundary("a");
+    require(panel.report() && panel.report()->qualified && label(panel,"appraisalDetailsGla")=="1 sq ft",
+        "ANSI total rounds the unrounded fractional gross instead of summing rounded components");
+    require(panel.report()->boundaries.size()==1 && panel.report()->boundaries.front().measurement &&
+        std::abs(panel.report()->boundaries.front().measurement->base_square_metres-.8*.3048*.3048)<1e-12,
+        "Authoritative gross retains the exact fractional component sum in square metres");
+    const auto trace=label(panel,"appraisalDetailsTrace");
+    const auto html=sketch::desktop::appraisal_report_html(source,*panel.report(),true);
+    for(const auto& content:{trace,html})require(content.contains("2 × 0.2 ft = 0.40 sq ft") &&
+        content.contains("1 × 0.4 ft = 0.40 sq ft") && content.contains("Geometric gross result") &&
+        content.contains("1 sq ft") && content.contains("Stored unrounded geometry; intermediate values keep extra precision; final totals follow the selected policy."),
+        "Details and report preserve fractional components while the final gross follows ANSI rounding");
+    const auto directory=qEnvironmentVariable("VERTEX_TEST_CAPTURE_DIR");
+    if(!directory.isEmpty()) {
+        panel.resize(620,950);panel.show();QApplication::processEvents();
+        auto* scrollbar=child<QScrollArea>(panel,"appraisalDetailsScroll").verticalScrollBar();
+        scrollbar->setValue(scrollbar->maximum());QApplication::processEvents();
+        require(QDir().mkpath(directory) && panel.grab().save(QDir(directory).filePath("appraisal-details-fractional-arithmetic.png")),
+            "Capture actual Details fractional arithmetic and its precision explanation");
+        auto& trace_widget=child<QLabel>(panel,"appraisalDetailsTrace");
+        require(trace_widget.grab(QRect(0,0,trace_widget.width(),std::min(650,trace_widget.height())))
+            .save(QDir(directory).filePath("appraisal-details-fractional-arithmetic-trace.png")),
+            "Capture visible arithmetic rows directly from the actual Details label");
+    }
+}
+
 void native_stale_context_withholds_actions_and_totals() {
     QTemporaryDir directory;require(directory.isValid(),"isolated stale-context fixture directory");
     auto document=std::make_shared<sketch::Document>(sketch::Document::create(fixture()));
@@ -462,7 +593,7 @@ int main(int argc,char** argv) {
         require(QFontDatabase::addApplicationFont(QStringLiteral(":/fonts/Inter.ttf"))>=0,"bundled Inter font loads for native Details capture");
         app.setFont(QFont(QStringLiteral("Inter"),10));
         narrow_details_keeps_dimensions_and_full_sources_readable();ansi_ceiling_height_uses_declared_acquisition_precision();ansi_canonical_units_declarations_and_curve_dimensions();qualified_units_refresh_and_callbacks();undeclared_and_invalid_measurements();
-        categories_floors_deductions_and_phase();stale_wall_sources();native_main_window_details();native_stale_context_withholds_actions_and_totals();
+        categories_floors_deductions_and_phase();stale_wall_sources();native_main_window_details();live_gla_shortcut_matches_authoritative_details();area_arithmetic_is_shared_with_printed_report();signed_curve_arithmetic_is_shared_with_printed_report();ansi_fractional_components_preserve_unrounded_gross();native_stale_context_withholds_actions_and_totals();
         std::cout<<"appraisal_details_panel_tests passed\n";return 0;
     } catch(const std::exception& failure) {std::cerr<<"appraisal_details_panel_tests: "<<failure.what()<<'\n';return 1;}
 }

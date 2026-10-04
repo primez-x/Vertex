@@ -21,6 +21,11 @@ namespace sketch::desktop {
 // Unrounded candidate-area basis shared by Details and the printed audit trace.
 [[nodiscard]] QString appraisal_sloped_ceiling_rows(
     const AppraisalBoundaryStatus& boundary, const AppraisalDocumentReport& report);
+// Shared geometric derivation for Details and printed audit output. Reconciles
+// against the current measured gross boundary, separately from qualification.
+[[nodiscard]] QString appraisal_area_arithmetic_rows(
+    const Entity& owner, double gross_square_metres,
+    const AppraisalDocumentReport& report, bool metric, bool compact = false);
 
 // Readable bounded summary placement; overflow points to the complete report.
 void render_appraisal_summary_schedule(QPainter& painter,const QRectF& bounds,

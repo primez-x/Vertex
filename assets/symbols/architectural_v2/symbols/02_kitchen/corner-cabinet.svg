@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="900" viewBox="-120 -120 1140 1140" role="img" aria-labelledby="svg-v2-02_kitchen-corner-cabinet--title svg-v2-02_kitchen-corner-cabinet--desc" data-vertex-style="white-outline-2">
+<title id="svg-v2-02_kitchen-corner-cabinet--title">Corner Cabinet</title>
+<desc id="svg-v2-02_kitchen-corner-cabinet--desc">Orthographic top view of a chamfered L-shaped kitchen base cabinet. Nominal footprint 900 by 900 millimetres. Front is +Y. Transparent background.</desc>
+<defs><linearGradient id="svg-v2-02_kitchen-corner-cabinet--counter" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ffffff"/><stop offset="1" stop-color="#f2f2f2"/></linearGradient></defs>
+<g id="svg-v2-02_kitchen-corner-cabinet--artwork"><path d="M0 0 H900 V300 H400 L300 400 V900 H0 Z" fill="url(#svg-v2-02_kitchen-corner-cabinet--counter)" stroke="#111111" stroke-width="18" stroke-linejoin="round"/><path d="M45 55 H850 V120 H45 Z M55 455 V850 H120 V455 Z" fill="#ffffff" stroke="#111111" stroke-width="12" stroke-linejoin="round"/><path d="M720 145 V245 M145 720 H245" fill="none" stroke="#111111" stroke-width="18" stroke-linecap="round"/><path d="M320 320 L395 245 M395 245 L450 300" fill="none" stroke="#111111" stroke-width="12" stroke-linecap="round" stroke-linejoin="round"/></g>
+</svg>

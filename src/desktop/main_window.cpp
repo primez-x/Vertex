@@ -27,6 +27,7 @@
 #include "sketch/desktop/text_library_dialog.hpp"
 #include "sketch/desktop/appraisal_report_dialog.hpp"
 #include "sketch/desktop/appraisal_details_panel.hpp"
+#include "sketch/desktop/area_class_palette.hpp"
 #include "sketch/desktop/symbol_svg_palette.hpp"
 #include "sketch/boundary_commit.hpp"
 #include "sketch/area_subtraction.hpp"
@@ -5616,6 +5617,82 @@ public:
             if (found->second.type=="measurement_linework") selected_roots.push_back(found->second);
             else for (const auto& entity : clipboard_entities_for_selection(source,found->first)) selected_roots.push_back(entity);
         }
+        // Partition a complete measured source before clipboard dependency
+        // validation. A partial neighboring perimeter deliberately omits some
+        // joined walls; it belongs to the connected solve, not the copy graph.
+        std::vector<Entity> rigid_roots;
+        std::set<std::string,std::less<>> rigid_owners;
+        for(const auto& id:model_ids) {
+            const auto& entity=source.entities().at(id.toStdString());
+            if(is_closed_boundary_entity(entity.type) && rigid_owners.insert(entity.id).second)
+                rigid_roots.push_back(entity);
+        }
+        for(const auto& [id,owner]:source.entities()) {
+            if(!is_closed_boundary_entity(owner.type) || !owner.properties.contains("wall_measurement_source"))continue;
+            const auto walls=exterior_wall_measurement_source_ids(owner);
+            if(!walls.empty() && std::all_of(walls.begin(),walls.end(),[&](const auto& wall){return model_ids.contains(id_from(wall));}) &&
+                rigid_owners.insert(id).second)rigid_roots.push_back(owner);
+        }
+        for(const auto& change:changes) {
+            if(change.kind!=EntityChangeKind::upsert || !can_recognize_boundary_dimension_entity_type(change.entity.type))continue;
+            const auto decoded=decode_boundary_dimension_entity(change.entity);
+            if(!decoded.supported())throw std::invalid_argument(decoded.unsupported_reason);
+            const auto& owner=source.entities().at(decoded.dimension->boundary_id);
+            if(!owner.properties.contains("wall_measurement_source"))continue;
+            const auto walls=exterior_wall_measurement_source_ids(owner);
+            if(!walls.empty() && std::all_of(walls.begin(),walls.end(),[&](const auto& id){return model_ids.contains(id_from(id));}) &&
+                rigid_owners.insert(owner.id).second)rigid_roots.push_back(owner);
+        }
+        if(!rigid_roots.empty() && std::all_of(model_ids.begin(),model_ids.end(),[&](const auto& id) {
+            const auto& type=source.entities().at(id.toStdString()).type;
+            return is_closed_boundary_entity(type) || type=="wall" || type=="measurement_linework";
+        })) {
+            std::vector<Entity> rigid_seed;
+            for(const auto& root:rigid_roots)
+                for(const auto& entity:clipboard_entities_for_selection(source,root.id))rigid_seed.push_back(entity);
+            for(const auto& id:model_ids)if(source.entities().at(id.toStdString()).type=="measurement_linework")
+                rigid_seed.push_back(source.entities().at(id.toStdString()));
+            auto rigid_graph=independentAreaCopyGraph(source,std::move(rigid_seed));includeMeasuredAreaSources(source,rigid_graph);
+            if(std::any_of(rigid_graph.begin(),rigid_graph.end(),[&](const auto& entity) {
+                return is_closed_boundary_entity(entity.type) && !rigid_owners.contains(entity.id) && !model_ids.contains(id_from(entity.id));
+            }))throw std::invalid_argument("Select the measured area's deductions together before moving its perimeter in a mixed group.");
+            std::set<std::string,std::less<>> rigid_geometry;
+            QStringList rigid_ids,partial_ids;
+            for(const auto& entity:rigid_graph)
+                if(is_closed_boundary_entity(entity.type) || entity.type=="wall" || entity.type=="measurement_linework") {
+                    if(rigid_geometry.insert(entity.id).second)rigid_ids.push_back(id_from(entity.id));
+                }
+            for(const auto& id:model_ids)if(source.entities().at(id.toStdString()).type=="wall" && !rigid_geometry.contains(id.toStdString()))
+                partial_ids.push_back(id);
+            if(!partial_ids.isEmpty()) {
+                auto rigid=makeSelectionGeometryTransformCommand(source,rigid_ids,PlanarTransform{{},0,false,false,offset});
+                const auto* whole=std::get_if<TransformBoundaries>(&rigid);
+                if(!whole)throw std::invalid_argument("The complete measured source needs an identified rigid movement proof.");
+                auto movement=wallGeometryCommand(source,wallTranslationIntent(source,partial_ids,offset).targets,"Move mixed measured sources");
+                auto* connected=std::get_if<ApplyBoundaryConstraintChanges>(&movement);
+                if(!connected)throw std::invalid_argument("The partial perimeter did not produce connected geometry authority.");
+                connected->rigid_group_transform=*whole;connected->rigid_group_completion=true;
+                for(const auto& change:changes) {
+                    if(change.kind!=EntityChangeKind::upsert || !can_recognize_boundary_dimension_entity_type(change.entity.type)) {
+                        connected->supplemental_entity_changes.push_back(change);continue;
+                    }
+                    const auto& original=source.entities().at(change.entity.id);
+                    const auto decoded=decode_boundary_dimension_entity(original);
+                    if(!decoded.supported())throw std::invalid_argument(decoded.unsupported_reason);
+                    if(rigid_geometry.contains(decoded.dimension->boundary_id))continue;
+                    auto expected=*decoded.dimension;
+                    expected.text_position={expected.text_position.x+offset.x,expected.text_position.y+offset.y};
+                    expected.placement=BoundaryDimensionPlacement::manual;expected.automatic_placement_version.reset();
+                    if(encode_boundary_dimension_entity(expected,&original)!=change.entity)
+                        throw std::invalid_argument("A mixed callout move cannot change its analytical target, styling or metadata.");
+                    connected->dimension_placement_moves.push_back({change.entity.id,offset});
+                }
+                connected->dimension_placement_completion=!connected->dimension_placement_moves.empty();
+                if(!connected->supplemental_entity_changes.empty())connected->supplemental_source_completion=true;
+                (void)Document::preview_command(source,movement);
+                return movement;
+            }
+        }
         auto graph = independentAreaCopyGraph(source,std::move(selected_roots));
         includeMeasuredAreaSources(source,graph);
         // A complete selected physical perimeter also translates its measured
@@ -7024,6 +7101,7 @@ public:
     [[nodiscard]] Workspace workspace() const noexcept { return m_workspace; }
 
     bool setDrawingMode(DrawingMode mode) {
+        cancelAreaClass();
         if (m_linework_drawing || m_boundary_session || m_pending_wall_start || !m_pending_opening_kind.isEmpty() ||
             !m_pending_symbol_id.isEmpty()) {
             setError(QStringLiteral("Finish or cancel the active drawing before changing modes."));
@@ -7047,6 +7125,7 @@ public:
     }
 
     void setWorkspace(Workspace workspace) {
+        if(workspace!=m_workspace)cancelAreaClass();
         if (workspace!=m_workspace && m_plan_label_context) cancelPlanLabelPlacement();
         if (workspace != m_workspace &&
             (m_linework_drawing || m_boundary_session || m_pending_wall_start || !m_pending_opening_kind.isEmpty() ||
@@ -13553,6 +13632,7 @@ public:
     }
 
     bool beginMeasurementLinework() {
+        cancelAreaClass();
         try {
             if (m_linework_drawing || m_boundary_session || m_pending_wall_start ||
                 !m_pending_opening_kind.isEmpty() || !m_pending_symbol_id.isEmpty())
@@ -13902,6 +13982,7 @@ public:
 
     bool beginBoundaryDrawing(BoundaryAuthoringMode mode, QString classification,
                               QString subtract_target = {}) {
+        cancelAreaClass();
         if (m_linework_drawing) {
             setError(QStringLiteral("Finish the measured stroke before starting an area.")); return false;
         }
@@ -26417,6 +26498,7 @@ public:
     }
 
     bool beginTextPlacement(const TextLibraryEntry& entry) {
+        cancelAreaClass();
         try {
             if (!m_document->is_editable()) throw std::invalid_argument("This document is read-only.");
             if (m_boundary_session || m_pending_wall_start || !m_pending_symbol_id.isEmpty() || !m_pending_opening_kind.isEmpty())
@@ -26534,6 +26616,7 @@ public:
     }
 
     void armSymbolPlacement(QListWidgetItem* item) {
+        cancelAreaClass();
         if (!item) return;
         const auto id = item->data(Qt::UserRole).toString();
         if (id.isEmpty()) return;
@@ -29388,7 +29471,22 @@ private:
         layers_layout->setSpacing(6);
         auto* symbols_page = new QWidget(sidebar_tabs);
         symbols_page->setObjectName(QStringLiteral("symbolsPanel"));
-        auto* symbols_layout = new QVBoxLayout(symbols_page);
+        auto* library_layout = new QVBoxLayout(symbols_page);
+        library_layout->setContentsMargins(0, 0, 0, 0);
+        auto* library_pages = new QTabWidget(symbols_page);
+        library_pages->setObjectName(QStringLiteral("libraryPages"));
+        library_pages->setDocumentMode(true);
+        library_layout->addWidget(library_pages);
+        auto* components_page = new QWidget(library_pages);
+        library_pages->addTab(components_page, QStringLiteral("Components"));
+        m_area_class_palette = new AreaClassPalette(library_pages);
+        library_pages->addTab(m_area_class_palette, QStringLiteral("Area classes"));
+        m_area_class_palette->setArmRequested([this](QString classification) { armAreaClass(classification); });
+        m_area_class_palette->setCancelRequested([this] { cancelAreaClass(); });
+        m_area_class_palette->setDropRequested([this](QString classification,QString target) {
+            return applyAreaClass(classification,target);
+        });
+        auto* symbols_layout = new QVBoxLayout(components_page);
         symbols_layout->setContentsMargins(0, 8, 0, 0);
         symbols_layout->setSpacing(6);
         sidebar_tabs->addTab(layers_page, QStringLiteral("Layers"));
@@ -29837,6 +29935,22 @@ private:
         auto* status_controls_layout = new QHBoxLayout(canvas_status_controls);
         status_controls_layout->setContentsMargins(0, 0, 0, 0);
         status_controls_layout->setSpacing(1);
+        m_appraisal_gla_shortcut = new QToolButton(canvas_status_controls);
+        m_appraisal_gla_shortcut->setObjectName(QStringLiteral("appraisalGlaShortcut"));
+        m_appraisal_gla_shortcut->setAccessibleName(QStringLiteral("Gross living area; open appraisal details"));
+        m_appraisal_gla_shortcut->setToolButtonStyle(Qt::ToolButtonTextOnly);
+        m_appraisal_gla_shortcut->setAutoRaise(true);
+        m_appraisal_gla_shortcut->setFixedHeight(24);
+        m_appraisal_gla_shortcut->hide();
+        status_controls_layout->addWidget(m_appraisal_gla_shortcut);
+        QObject::connect(m_appraisal_gla_shortcut,&QToolButton::clicked,owner,[this] {
+            if(auto* tabs=owner->findChild<QTabWidget*>(QStringLiteral("sidebarTabs"))) {
+                tabs->setCurrentWidget(m_appraisal_details);
+                if(m_workspace_splitter && m_workspace_splitter->sizes().front()==0) {
+                    auto sizes=m_workspace_splitter->sizes();sizes.front()=340;m_workspace_splitter->setSizes(sizes);
+                }
+            }
+        });
         m_selection_filter_combo = new QComboBox(canvas_status_controls);
         m_selection_filter_combo->setObjectName(QStringLiteral("selectionFilter"));
         m_selection_filter_combo->setAccessibleName(QStringLiteral("Selection filter"));
@@ -31003,6 +31117,15 @@ private:
     }
 
     void connectCanvas(PlanCanvas* canvas) {
+        canvas->setAreaClassDropped([this,canvas](QString classification,Vec2 point) {
+            if(canvas!=m_measurementCanvas || m_workspace!=Workspace::measurement) {
+                setError(QStringLiteral("Apply area classes on the measurement plan or an area row."));return false;
+            }
+            return applyAreaClassAt(classification,point);
+        },[this] {
+            const auto message=QStringLiteral("The dropped area class is malformed or unsupported. Drag a class from the current Library.");
+            setError(message);if(m_area_class_palette)m_area_class_palette->setStatus(message);
+        });
         if (canvas == m_measurementCanvas) {
             m_drawing_input = new DrawingInputPanel(canvas);
             m_drawing_input->hide();
@@ -31058,7 +31181,7 @@ private:
             selectEntity(id, toggle);
         });
         canvas->setEntityDoubleClicked([this](QString id) {
-            if (!m_pending_symbol_id.isEmpty() || m_boundary_session || m_pending_wall_start)
+            if (m_armed_area_class || !m_pending_symbol_id.isEmpty() || m_boundary_session || m_pending_wall_start)
                 return;
             // Preserve a retained group when the double-clicked item already
             // belongs to it. A target outside the group becomes the sole
@@ -33462,6 +33585,10 @@ private:
             }
         }
         m_measurementCanvas->setEntities(geometry);
+        m_area_canvas_source.emplace(snapshot);
+        m_area_canvas_document = m_document;
+        m_area_canvas_layer = m_active_layer_id;
+        m_area_canvas_visibility = m_view_filter;
         m_drawing_alignment_scene_source = snapshot;
         m_drawing_alignment_scene_document = m_document;
         m_architectural_view_entities = std::move(visible_view_geometry);
@@ -34613,9 +34740,24 @@ private:
             if (auto* status = m_appraisal_details->findChild<QLabel*>(QStringLiteral("appraisalDetailsStatus")))
                 status->setText(QStringLiteral("Details unavailable. Design phase visibility could not be resolved: %1").arg(QString::fromUtf8(error.what())));
         }
+        if(m_appraisal_gla_shortcut) {
+            const auto& report=m_appraisal_details->report();
+            m_appraisal_gla_shortcut->setVisible(report && report->configured);
+            if(report && report->configured) {
+                const auto* total=m_appraisal_details->findChild<QLabel*>(QStringLiteral("appraisalDetailsGla"));
+                const bool available=report->qualified && report->calculation && total;
+                m_appraisal_gla_shortcut->setText(available ? QStringLiteral("GLA %1").arg(total->text()) : QStringLiteral("GLA · review required"));
+                m_appraisal_gla_shortcut->setMinimumWidth(m_appraisal_gla_shortcut->sizeHint().width());
+                const auto* status=m_appraisal_details->findChild<QLabel*>(QStringLiteral("appraisalDetailsStatus"));
+                m_appraisal_gla_shortcut->setToolTip((available ? QStringLiteral("Open the current property GLA, dimensions and deductions.") :
+                    QStringLiteral("Totals withheld. Open Details to resolve the measurement and declaration issues."))+
+                    (status ? QLatin1Char('\n')+status->text() : QString{}));
+            }
+        }
     }
 
     void refreshInspector() {
+        refreshAreaClassPalette();
         refreshAppraisalDetails();
         const auto entity = selectedEntity();
         const auto editable = m_document->is_editable();
@@ -35671,6 +35813,215 @@ private:
         return true;
     }
 
+    struct AreaClassSource {
+        explicit AreaClassSource(const DocumentSnapshot& source)
+            : document_id(source.document_id()),revision(source.revision()),entities(source.entities()),assets(source.assets()) {}
+        std::string document_id;
+        Revision revision{};
+        std::map<std::string,Entity,std::less<>> entities;
+        std::map<std::string,Asset,std::less<>> assets;
+    };
+
+    CalculationProfile areaPaletteProfile(const DocumentSnapshot& source,const DrawingContext& context) const {
+        const auto& property=source.entities().at(context.property_id);
+        return calculation_workflow_name(property.properties)=="appraisal"?
+            appraisal_display_profile(property.properties):read_calculation_profile(property.properties);
+    }
+
+    static QString areaPaletteClassLabel(const QString& key) {
+        if(const auto category=parse_appraisal_category(key.toStdString()))
+            return QString::fromStdString(appraisal_category_label(*category));
+        auto label=key;label.replace(QLatin1Char('_'),QLatin1Char(' '));
+        if(!label.isEmpty())label[0]=label[0].toUpper();
+        return label;
+    }
+
+    void cancelAreaClass() {
+        if(!m_armed_area_class)return;
+        m_armed_area_class.reset();m_area_class_document.reset();m_area_class_layer.clear();
+        m_measurementCanvas->setPointPlacementRequested({});m_measurementCanvas->setAreaClassCaption({});m_measurementCanvas->unsetCursor();
+        if(m_area_class_palette)m_area_class_palette->setArmedClass({});
+    }
+
+    void armAreaClass(const QString& classification) {
+        if(!m_document->is_editable() || m_workspace!=Workspace::measurement || m_boundary_session ||
+            m_linework_drawing || m_pending_wall_start || !m_pending_opening_kind.isEmpty() ||
+            !m_active_named_view.isEmpty()) {
+            const auto message=QStringLiteral("Finish or cancel drawing, then apply classes on the measurement plan.");
+            setError(message);m_area_class_palette->setStatus(message);return;
+        }
+        cancelTextPlacement();cancelPlanLabelPlacement();cancelSymbolPlacement();
+        m_armed_area_class=classification;m_area_class_document=m_document;m_area_class_layer=m_active_layer_id;
+        m_area_class_palette->setArmedClass(classification);
+        m_measurementCanvas->setAreaClassCaption(classification.isEmpty()?QStringLiteral("Clear class · Esc cancels"):
+            QStringLiteral("%1 · click areas · Esc cancels").arg(areaPaletteClassLabel(classification)));
+        m_measurementCanvas->setCursor(Qt::CrossCursor);
+        m_measurementCanvas->setPointPlacementRequested([this](Vec2 point) {
+            if(!m_armed_area_class)return;
+            if(m_area_class_document.lock()!=m_document || m_area_class_layer!=m_active_layer_id || m_workspace!=Workspace::measurement) {
+                cancelAreaClass();setError(QStringLiteral("The drawing context changed. Choose an area class again."));return;
+            }
+            const auto classification=*m_armed_area_class;
+            (void)applyAreaClassAt(classification,point);
+        });
+        m_measurementCanvas->setFocus(Qt::ShortcutFocusReason);
+    }
+
+    void refreshAreaClassPalette() {
+        if(!m_area_class_palette)return;
+        if(m_armed_area_class && (m_area_class_document.lock()!=m_document || m_area_class_layer!=m_active_layer_id ||
+            m_workspace!=Workspace::measurement || !m_active_named_view.isEmpty() || !m_document->is_editable()))cancelAreaClass();
+        const auto source=authoringSnapshot();
+        if(areaPaletteSourceMatches(source))return;
+        m_area_palette_source.emplace(source);m_area_palette_document=m_document;
+        m_area_palette_layer=m_active_layer_id;m_area_palette_visibility=m_view_filter;
+        m_area_palette_metric=m_metric_units;m_area_palette_workspace=m_workspace;m_area_palette_named_view=m_active_named_view;
+        m_area_detected_targets.clear();
+        std::vector<AreaClassEntry> classes;std::vector<AreaClassTarget> targets;
+        try {
+            const auto organization=organize_project(source);const auto context=organization.drawing_context(m_active_layer_id.toStdString());
+            if(!context || !context->complete())throw std::invalid_argument("Choose a drawing layer for area classes.");
+            const auto profile=areaPaletteProfile(source,*context);
+            for(const auto& [key,rule]:profile.classifications) {
+                if(key=="unqualified")continue;
+                classes.push_back({id_from(key),areaPaletteClassLabel(id_from(key)),rule.living_total?QStringLiteral("living"):
+                    rule.building_total?QStringLiteral("building"):QStringLiteral("other")});
+            }
+            classes.push_back({{},QStringLiteral("Clear class"),QStringLiteral("other")});
+            const auto visible=visible_project_entities_with_phase(source,m_view_filter);
+            const auto appraisal_projection=appraisal_plan_area_projection(source,m_metric_units);
+            QString stroke;unsigned area_number=0;
+            for(const auto& [id,entity]:source.entities()) {
+                if(!visible.contains(id) || organization.drawing_context(id)!=context)continue;
+                if(entity.type=="measurement_linework" && stroke.isEmpty())stroke=id_from(id);
+                if(!is_closed_boundary_entity(entity.type))continue;
+                ++area_number;
+                QString class_label;
+                if(const auto declared=appraisal_projection.categories.find(id);declared!=appraisal_projection.categories.end()) {
+                    class_label=declared->second.qualified_exclusion?QStringLiteral("Excluded"):
+                        declared->second.category?areaPaletteClassLabel(id_from(*declared->second.category)):QStringLiteral("Unqualified");
+                    class_label+=QStringLiteral(" · facts · edit in Details");
+                } else {
+                    const auto classification=area_classification_for_workflow(entity.properties,
+                        calculation_workflow_name(source.entities().at(context->property_id).properties));
+                    class_label=classification?areaPaletteClassLabel(id_from(*classification)):QStringLiteral("Unclassified");
+                }
+                const auto name=read_string(entity.properties,"name");
+                const auto area_name=name&&!name->empty()?id_from(*name):QStringLiteral("Area %1").arg(area_number);
+                targets.push_back({id_from(id),QStringLiteral("%1\n%2").arg(area_name,class_label)});
+            }
+            if(!stroke.isEmpty()) {
+                const auto detection=detect_measurement_areas(source,stroke.toStdString());
+                for(std::size_t i=0;i<detection.graph.faces.size();++i) {
+                    if(detection.existing_area_ids[i] || detection.existing_group_ids[i])continue;
+                    auto token=QStringLiteral("detected-area:%1").arg(i);
+                    while(source.entities().contains(token.toStdString()))token.prepend(QLatin1Char(':'));
+                    m_area_detected_targets.emplace(token,PaletteDetectedTarget{stroke,i,detection.graph.faces[i].boundary});
+                    targets.push_back({token,QStringLiteral("Detected space %1 · %2").arg(i+1)
+                        .arg(format_dimension_area(detection.graph.faces[i].area_square_metres,m_metric_units))});
+                }
+            }
+            if(m_armed_area_class && !m_armed_area_class->isEmpty() && !profile.classifications.contains(m_armed_area_class->toStdString()))cancelAreaClass();
+        } catch(const std::exception& error) {m_area_class_palette->setStatus(QString::fromUtf8(error.what()));}
+        m_area_class_palette->setClasses(std::move(classes));m_area_class_palette->setTargets(targets);
+    }
+
+    static bool sameAreaClassSource(const AreaClassSource& expected,const DocumentSnapshot& current) {
+        return expected.document_id==current.document_id() && expected.revision==current.revision() &&
+            expected.entities==current.entities() && expected.assets==current.assets();
+    }
+
+    bool areaPaletteSourceMatches(const DocumentSnapshot& source) const {
+        return m_area_palette_source && m_area_palette_document.lock()==m_document &&
+            sameAreaClassSource(*m_area_palette_source,source) && m_area_palette_layer==m_active_layer_id &&
+            m_area_palette_visibility==m_view_filter && m_area_palette_metric==m_metric_units &&
+            m_area_palette_workspace==m_workspace && m_area_palette_named_view==m_active_named_view;
+    }
+
+    bool applyAreaClass(const QString& classification,const QString& target) {
+        try {
+            if(!m_document->is_editable())throw std::invalid_argument("This document is read-only.");
+            if(m_boundary_session || m_linework_drawing || m_pending_wall_start || !m_pending_opening_kind.isEmpty())
+                throw std::invalid_argument("Finish or cancel drawing before applying an area class.");
+            const auto source=authoringSnapshot();
+            if(!areaPaletteSourceMatches(source))throw std::invalid_argument("The area list changed. Choose the current area row again.");
+            const auto organization=organize_project(source);const auto context=organization.drawing_context(m_active_layer_id.toStdString());
+            if(!context || !context->complete())throw std::invalid_argument("Choose a resolved drawing layer.");
+            const auto profile=areaPaletteProfile(source,*context);
+            if(!classification.isEmpty() && (!profile.classifications.contains(classification.toStdString()) || classification==QStringLiteral("unqualified")))
+                throw std::invalid_argument("This class is not available in the current calculation profile.");
+            ApplyEntityChanges command{source.revision(),{}, {},"Apply area class"};
+            if(const auto detected=m_area_detected_targets.find(target);detected!=m_area_detected_targets.end()) {
+                if(classification.isEmpty())throw std::invalid_argument("This detected space has no class to clear.");
+                const auto captured=detected->second;
+                const auto detection=detect_measurement_areas(source,captured.stroke.toStdString());
+                if(captured.index>=detection.graph.faces.size() || detection.existing_area_ids[captured.index] || detection.existing_group_ids[captured.index])
+                    throw std::invalid_argument("This space now has an owner. Refresh and use its area row.");
+                std::vector<MeasurementAreaChoice> choices(detection.graph.faces.size());
+                choices[captured.index]={MeasurementAreaDisposition::define_area,classification.toStdString()};
+                command=prepare_measurement_area_definition(source,captured.stroke.toStdString(),choices).command;
+            } else {
+                const auto found=source.entities().find(target.toStdString());
+                if(found==source.entities().end() || !is_closed_boundary_entity(found->second.type) ||
+                    organization.drawing_context(found->first)!=context ||
+                    !visible_project_entities_with_phase(source,m_view_filter).contains(found->first))
+                    throw std::invalid_argument("Choose a visible closed area in the current drawing layer.");
+                auto updated=found->second;const auto& property=source.entities().at(context->property_id);
+                const bool appraisal=calculation_workflow_name(property.properties)=="appraisal";
+                if(appraisal) {
+                    if(appraisal_area_has_derived_category_authority(source,property,updated))
+                        throw std::invalid_argument("This appraisal category is derived from facts. Edit its appraisal facts in Details.");
+                    if(!classification.isEmpty()) {
+                        const auto parsed=parse_appraisal_category(classification.toStdString());
+                        if(!parsed || *parsed==AppraisalAreaCategory::none)throw std::invalid_argument("Choose a defined appraisal category.");
+                    }
+                    if(!read_string(updated.properties,"measurement_classification")) {
+                        const auto previous=read_string(updated.properties,"classification");
+                        updated.properties["measurement_classification"]=previous && !parse_appraisal_category(*previous)?*previous:"measurement";
+                    }
+                    updated.properties["classification"]=read_string(updated.properties,"measurement_classification").value_or("measurement");
+                    if(classification.isEmpty())updated.properties.erase("appraisal_category");
+                    else updated.properties["appraisal_category"]=classification.toStdString();
+                } else if(classification.isEmpty()) {
+                    updated.properties.erase("classification");updated.properties.erase("measurement_classification");
+                } else {
+                    updated.properties["classification"]=classification.toStdString();updated.properties["measurement_classification"]=classification.toStdString();
+                }
+                if(updated!=found->second)command.entity_changes.push_back(EntityChange::upsert(std::move(updated)));
+            }
+            if(!command.entity_changes.empty()) {
+                command=std::get<ApplyEntityChanges>(augmentAuthoredCommand(command));
+                (void)Document::preview_command(source,command);applyAuthoredCommand(command);refresh();
+            }
+            clearError();if(m_area_class_palette)m_area_class_palette->setArmedClass(m_armed_area_class);return true;
+        } catch(const std::exception& error) {
+            const auto message=QStringLiteral("Area class: %1").arg(QString::fromUtf8(error.what()));
+            setError(message);if(m_area_class_palette)m_area_class_palette->setStatus(message);return false;
+        }
+    }
+
+    bool applyAreaClassAt(const QString& classification,Vec2 point) {
+        if(!m_active_named_view.isEmpty()) {setError(QStringLiteral("Apply area classes in the measurement plan or an area row."));return false;}
+        const auto source=authoringSnapshot();
+        if(!m_area_canvas_source || m_area_canvas_document.lock()!=m_document ||
+            !sameAreaClassSource(*m_area_canvas_source,source) || m_area_canvas_layer!=m_active_layer_id ||
+            m_area_canvas_visibility!=m_view_filter) {
+            const auto message=QStringLiteral("The drawing changed. Refresh before applying an area class.");
+            setError(message);if(m_area_class_palette)m_area_class_palette->setStatus(message);return false;
+        }
+        refreshAreaClassPalette();
+        const auto ids=m_measurementCanvas->areaIdsAt(point);
+        if(ids.size()==1)return applyAreaClass(classification,ids.front());
+        if(ids.size()>1) {setError(QStringLiteral("Several areas contain this point. Drop onto the intended area row."));return false;}
+        QStringList targets;
+        for(const auto& [token,target]:m_area_detected_targets)
+            if(PlanCanvas::containsAreaPoint(target.boundary,point))targets.push_back(token);
+        if(targets.size()==1)return applyAreaClass(classification,targets.front());
+        const auto message=targets.isEmpty()?QStringLiteral("Drop onto a closed area or a detected space in the current layer."):
+            QStringLiteral("Several detected outlines contain this point. Drop onto the intended area row.");
+        setError(message);if(m_area_class_palette)m_area_class_palette->setStatus(message);return false;
+    }
+
     std::optional<QString> chooseBoundaryClassification(const DrawingContext& context, bool allow_exclusions=false) {
         const auto snapshot = m_document->snapshot();
         const auto property = snapshot.entities().find(context.property_id);
@@ -36444,6 +36795,7 @@ private:
     }
 
     void cancelTool() {
+        if(m_armed_area_class) {cancelAreaClass();return;}
         if (m_linework_drawing) { finishMeasurementLinework(); return; }
         clearDrawingAlignment();
         if (m_text_placement_context) {
@@ -36839,6 +37191,7 @@ private:
     }
 
     void setTool(CanvasTool tool) {
+        cancelAreaClass();
         if (m_linework_drawing) {
             if (tool == m_tool) return;
             setError(QStringLiteral("Finish the measured stroke before changing tools.")); syncToolControls(); return;
@@ -39003,6 +39356,23 @@ private:
     bool m_restored_boundary_navigation{};
     AssistanceSession m_assistance_session;
     QString m_last_boundary_classification{QStringLiteral("measurement")};
+    AreaClassPalette* m_area_class_palette{};
+    std::optional<QString> m_armed_area_class;
+    std::weak_ptr<Document> m_area_class_document;
+    QString m_area_class_layer;
+    std::optional<AreaClassSource> m_area_palette_source;
+    std::weak_ptr<Document> m_area_palette_document;
+    QString m_area_palette_layer;
+    ProjectViewFilter m_area_palette_visibility;
+    bool m_area_palette_metric{};
+    Workspace m_area_palette_workspace{Workspace::measurement};
+    QString m_area_palette_named_view;
+    std::optional<AreaClassSource> m_area_canvas_source;
+    std::weak_ptr<Document> m_area_canvas_document;
+    QString m_area_canvas_layer;
+    ProjectViewFilter m_area_canvas_visibility;
+    struct PaletteDetectedTarget {QString stroke;std::size_t index{};Boundary boundary;};
+    std::map<QString,PaletteDetectedTarget> m_area_detected_targets;
     std::optional<Vec2> m_pending_wall_start;
     std::optional<DrawingAlignmentProposal> m_drawing_alignment;
     std::optional<DocumentSnapshot> m_drawing_alignment_scene_source;
@@ -39055,6 +39425,7 @@ private:
     QString m_active_named_view_owner;
 
     AppraisalDetailsPanel* m_appraisal_details{};
+    QToolButton* m_appraisal_gla_shortcut{};
     std::weak_ptr<Document> m_appraisal_details_document;
     std::optional<Revision> m_appraisal_details_revision;
     std::string m_appraisal_details_digest;

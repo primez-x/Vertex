@@ -1,4 +1,19 @@
-# Vertex project formats v1 through v41
+# Vertex project formats v1 through v42
+
+## Mixed rigid group and connected geometry completion (v42)
+
+Constraint-command envelope 16 retains an optional `rigid_group_transform`
+typed transform group and the `rigid_group_completion` discriminator. This
+authority composes a rigid group move with connected geometry consequences in
+one revision. The child transform keeps its existing typed representation;
+earlier command envelopes 1 through 15 keep their historical rules.
+
+Retained mixed completion intent requires native format 42 / extraction 40,
+including undone commands and deleted states. Either the completion marker or
+the optional transform child sets this reader floor. Clearing the child cannot
+downgrade a retained completion marker. Readers reject a downgraded native or
+extraction format instead of dropping the proof. Compact supplemental asset
+references remain supported in envelope 16 through their existing discriminator.
 
 ## Connected geometry with explicit dimension placement (v41)
 

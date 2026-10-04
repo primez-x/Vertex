@@ -1,7 +1,7 @@
 {
   "library": "Vertex Architectural SVG Library",
   "version": "2.0",
-  "count": 322,
+  "count": 342,
   "symbols": [
     {
       "id": "basin-oval",
@@ -32,6 +32,12 @@
       "name": "Bidet",
       "category": "01_bathroom",
       "file": "symbols/01_bathroom/bidet.svg"
+    },
+    {
+      "id": "shower-glass",
+      "name": "Shower with Glass Screen",
+      "category": "01_bathroom",
+      "file": "symbols/01_bathroom/shower-glass.svg"
     },
     {
       "id": "shower-quadrant",
@@ -106,6 +112,12 @@
       "file": "symbols/01_bathroom/tub-alcove.svg"
     },
     {
+      "id": "tub-alcove-5ft",
+      "name": "Tub Alcove 5 ft",
+      "category": "01_bathroom",
+      "file": "symbols/01_bathroom/tub-alcove-5ft.svg"
+    },
+    {
       "id": "tub-compact",
       "name": "Tub Compact",
       "category": "01_bathroom",
@@ -172,6 +184,12 @@
       "file": "symbols/02_kitchen/base-cabinet-900.svg"
     },
     {
+      "id": "cabinet-run",
+      "name": "Cabinet Run",
+      "category": "02_kitchen",
+      "file": "symbols/02_kitchen/cabinet-run.svg"
+    },
+    {
       "id": "cooktop-domino",
       "name": "Cooktop Domino",
       "category": "02_kitchen",
@@ -194,6 +212,12 @@
       "name": "Cooktop Induction",
       "category": "02_kitchen",
       "file": "symbols/02_kitchen/cooktop-induction.svg"
+    },
+    {
+      "id": "corner-cabinet",
+      "name": "Corner Cabinet",
+      "category": "02_kitchen",
+      "file": "symbols/02_kitchen/corner-cabinet.svg"
     },
     {
       "id": "counter-corner-left",
@@ -250,6 +274,12 @@
       "file": "symbols/02_kitchen/kitchen-island-sink.svg"
     },
     {
+      "id": "kitchen-peninsula",
+      "name": "Kitchen Peninsula",
+      "category": "02_kitchen",
+      "file": "symbols/02_kitchen/kitchen-peninsula.svg"
+    },
+    {
       "id": "microwave",
       "name": "Microwave",
       "category": "02_kitchen",
@@ -260,6 +290,12 @@
       "name": "Oven Built In",
       "category": "02_kitchen",
       "file": "symbols/02_kitchen/oven-built-in.svg"
+    },
+    {
+      "id": "pantry-cabinet",
+      "name": "Pantry Cabinet",
+      "category": "02_kitchen",
+      "file": "symbols/02_kitchen/pantry-cabinet.svg"
     },
     {
       "id": "range-hood",
@@ -278,6 +314,12 @@
       "name": "Range Wide",
       "category": "02_kitchen",
       "file": "symbols/02_kitchen/range-wide.svg"
+    },
+    {
+      "id": "sink-base",
+      "name": "Sink Base",
+      "category": "02_kitchen",
+      "file": "symbols/02_kitchen/sink-base.svg"
     },
     {
       "id": "sink-farmhouse",
@@ -374,6 +416,12 @@
       "name": "Radiator",
       "category": "03_laundry_utility",
       "file": "symbols/03_laundry_utility/radiator.svg"
+    },
+    {
+      "id": "washer-dryer-stack",
+      "name": "Washer-Dryer Stack",
+      "category": "03_laundry_utility",
+      "file": "symbols/03_laundry_utility/washer-dryer-stack.svg"
     },
     {
       "id": "washer-front-load",
@@ -784,6 +832,18 @@
       "file": "symbols/08_storage/bookcase-wide.svg"
     },
     {
+      "id": "closet-rod-shelf",
+      "name": "Closet Rod and Shelf",
+      "category": "08_storage",
+      "file": "symbols/08_storage/closet-rod-shelf.svg"
+    },
+    {
+      "id": "closet-walk-in",
+      "name": "Walk-In Closet",
+      "category": "08_storage",
+      "file": "symbols/08_storage/closet-walk-in.svg"
+    },
+    {
       "id": "coat-rack",
       "name": "Coat Rack",
       "category": "08_storage",
@@ -794,6 +854,12 @@
       "name": "Filing Cabinet",
       "category": "08_storage",
       "file": "symbols/08_storage/filing-cabinet.svg"
+    },
+    {
+      "id": "linen-cabinet",
+      "name": "Linen Cabinet",
+      "category": "08_storage",
+      "file": "symbols/08_storage/linen-cabinet.svg"
     },
     {
       "id": "locker-bank",
@@ -992,6 +1058,18 @@
       "name": "Stairs Straight",
       "category": "11_circulation",
       "file": "symbols/11_circulation/stairs-straight.svg"
+    },
+    {
+      "id": "stairs-straight-down",
+      "name": "Stairs Straight Down",
+      "category": "11_circulation",
+      "file": "symbols/11_circulation/stairs-straight-down.svg"
+    },
+    {
+      "id": "stairs-straight-up",
+      "name": "Stairs Straight Up",
+      "category": "11_circulation",
+      "file": "symbols/11_circulation/stairs-straight-up.svg"
     },
     {
       "id": "stairs-u",
@@ -1300,6 +1378,12 @@
       "file": "symbols/16_walls_openings/interior-wall.svg"
     },
     {
+      "id": "open-below",
+      "name": "Open Below",
+      "category": "16_walls_openings",
+      "file": "symbols/16_walls_openings/open-below.svg"
+    },
+    {
       "id": "opening",
       "name": "Opening",
       "category": "16_walls_openings",
@@ -1498,6 +1582,12 @@
       "file": "symbols/20_hvac_plumbing/ac-condenser.svg"
     },
     {
+      "id": "baseboard-heater",
+      "name": "Baseboard Heater",
+      "category": "20_hvac_plumbing",
+      "file": "symbols/20_hvac_plumbing/baseboard-heater.svg"
+    },
+    {
       "id": "boiler",
       "name": "Boiler",
       "category": "20_hvac_plumbing",
@@ -1516,6 +1606,12 @@
       "file": "symbols/20_hvac_plumbing/floor-drain.svg"
     },
     {
+      "id": "furnace",
+      "name": "Furnace",
+      "category": "20_hvac_plumbing",
+      "file": "symbols/20_hvac_plumbing/furnace.svg"
+    },
+    {
       "id": "gas-line",
       "name": "Gas Line",
       "category": "20_hvac_plumbing",
@@ -1532,6 +1628,12 @@
       "name": "Hose Bib",
       "category": "20_hvac_plumbing",
       "file": "symbols/20_hvac_plumbing/hose-bib.svg"
+    },
+    {
+      "id": "hvac-system",
+      "name": "HVAC System",
+      "category": "20_hvac_plumbing",
+      "file": "symbols/20_hvac_plumbing/hvac-system.svg"
     },
     {
       "id": "radiator",
@@ -1610,6 +1712,12 @@
       "name": "Pool Infinity Edge",
       "category": "21_swimming_pools",
       "file": "symbols/21_swimming_pools/pool-infinity-edge.svg"
+    },
+    {
+      "id": "pool-kidney",
+      "name": "Kidney-Shaped Pool",
+      "category": "21_swimming_pools",
+      "file": "symbols/21_swimming_pools/pool-kidney.svg"
     },
     {
       "id": "pool-l-shaped",
@@ -1888,6 +1996,12 @@
       "file": "symbols/24_roof_site/weather-vane.svg"
     },
     {
+      "id": "arrow-plain",
+      "name": "Plain Arrow",
+      "category": "25_drafting_symbols",
+      "file": "symbols/25_drafting_symbols/arrow-plain.svg"
+    },
+    {
       "id": "detail-marker",
       "name": "Detail Marker",
       "category": "25_drafting_symbols",
@@ -1934,6 +2048,12 @@
       "name": "Spot Elevation",
       "category": "25_drafting_symbols",
       "file": "symbols/25_drafting_symbols/spot-elevation.svg"
+    },
+    {
+      "id": "structural-issue",
+      "name": "Structural Issue",
+      "category": "25_drafting_symbols",
+      "file": "symbols/25_drafting_symbols/structural-issue.svg"
     }
   ]
 }

@@ -266,7 +266,46 @@ void requireAllBundledSvgsRenderable() {
         }
         require(visible, "bundled SVG rendered no visible pixels");
     }
-    require(count == 322, "desktop bundle must contain every supplied SVG symbol");
+    require(count == 342, "desktop bundle must contain every supplied and Pinc-adoption SVG symbol");
+}
+
+void requirePincAdditionArtwork() {
+    const std::array<const char*,20> additions{
+        "25_drafting_symbols-arrow-plain","08_storage-linen-cabinet","08_storage-closet-rod-shelf","08_storage-closet-walk-in",
+        "02_kitchen-corner-cabinet","02_kitchen-pantry-cabinet","02_kitchen-kitchen-peninsula","02_kitchen-sink-base","02_kitchen-cabinet-run",
+        "03_laundry_utility-washer-dryer-stack","20_hvac_plumbing-furnace","20_hvac_plumbing-hvac-system","20_hvac_plumbing-baseboard-heater",
+        "25_drafting_symbols-structural-issue","16_walls_openings-open-below","21_swimming_pools-pool-kidney",
+        "01_bathroom-tub-alcove-5ft","01_bathroom-shower-glass","11_circulation-stairs-straight-up","11_circulation-stairs-straight-down"};
+    QImage sheet(1200,800,QImage::Format_ARGB32_Premultiplied);sheet.fill(Qt::white);
+    QPainter painter(&sheet);painter.setRenderHint(QPainter::Antialiasing);painter.setPen(QColor("#111111"));
+    std::set<std::string> digests;
+    for(std::size_t i=0;i<additions.size();++i) {
+        const auto id="svg-v2-"+std::string(additions[i]);const auto& catalog=sketch::default_symbol_catalog();
+        const auto found=std::find_if(catalog.begin(),catalog.end(),[&](const auto& item){return item.id==id;});
+        require(found!=catalog.end() && found->svg_asset && found->width_metres>0 && found->depth_metres>0,
+            "Every required Pinc addition has a real indexed SVG and positive nominal dimensions");
+        require(digests.insert(found->svg_asset->sha256).second,"Pinc additions must not reuse identical artwork under different labels");
+        auto relative=QString::fromStdString(found->svg_asset->relative_path);
+        const auto prefix=QStringLiteral("symbols/architectural_v2/");
+        require(relative.startsWith(prefix),"Pinc addition path stays inside the bundled library");
+        QFile file(QStringLiteral(":/symbols/architectural_v2/")+relative.mid(prefix.size()));
+        require(file.open(QIODevice::ReadOnly),"Pinc addition is actually bundled");const auto bytes=file.readAll();
+        require(QCryptographicHash::hash(bytes,QCryptographicHash::Sha256).toHex().toStdString()==found->svg_asset->sha256,
+            "Pinc addition bundled bytes match their pinned catalog digest");
+        QSvgRenderer renderer(bytes);require(renderer.isValid(),"Pinc addition is renderable in the installed Qt renderer");
+        const double x=(i%5)*240.0,y=(i/5)*200.0;const QRectF tile(x,y,240,200);
+        painter.fillRect(tile.adjusted(3,3,-3,-3),QColor("#f8fafc"));
+        renderer.render(&painter,QRectF(x+16,y+12,208,132));
+        painter.drawText(QRectF(x+10,y+148,220,24),Qt::AlignCenter,QString::fromStdString(found->name));
+        painter.drawText(QRectF(x+10,y+173,220,20),Qt::AlignCenter,
+            QStringLiteral("%1 × %2 mm").arg(found->width_metres*1000,0,'f',0).arg(found->depth_metres*1000,0,'f',0));
+    }
+    painter.end();
+    const auto destination=qEnvironmentVariable("VERTEX_TEST_CAPTURE_DIR");
+    if(!destination.isEmpty()) {
+        require(QDir().mkpath(destination),"Create Pinc artwork capture directory");
+        require(sheet.save(QDir(destination).filePath("pinc-symbol-additions.png")),"Save actual Qt Pinc artwork contact sheet");
+    }
 }
 
 void requireSvgDropAccepted(const QString& symbol_id) {
@@ -391,7 +430,7 @@ int main(int argc, char** argv) {
         window.resize(1500, 1000);
         window.show();
         QApplication::processEvents();
-        requireAllBundledSvgsRenderable();
+        requireAllBundledSvgsRenderable();requirePincAdditionArtwork();
         auto* categories = window.findChild<QComboBox*>(QStringLiteral("annotationSymbolCategory"));
         auto* search = window.findChild<QLineEdit*>(QStringLiteral("annotationSymbolSearch"));
         auto* library = window.findChild<QListWidget*>(QStringLiteral("symbolLibraryItems"));
@@ -402,14 +441,14 @@ int main(int argc, char** argv) {
         categories->setCurrentIndex(0);
         search->clear();
         QApplication::processEvents();
-        require(library->count() == 322,
+        require(library->count() == 342,
                 "visible library must contain the complete supplied SVG set only");
         for (int index = 0; index < library->count(); ++index) {
             require(library->item(index)->data(Qt::UserRole).toString().startsWith(
                         QStringLiteral("svg-v2-")),
                     "legacy procedural compatibility symbol leaked into the visible library");
         }
-        require(status->text().contains(QStringLiteral("322 components")) &&
+        require(status->text().contains(QStringLiteral("342 components")) &&
                     !status->text().contains(QStringLiteral("detailed SVG")),
                 "library status must report the supplied component count without redundant tiers");
         require(library->dragEnabled() &&

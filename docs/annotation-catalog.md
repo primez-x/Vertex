@@ -26,8 +26,8 @@ later instance edits do not alter the library. Empty content is allowed. Styles
 support font family, physical text height/stroke width, RGB colors, bold/italic,
 and none/solid/hatch fills. Font availability and hatch rendering are not checked.
 
-The visible desktop placement library contains **322 SVG symbols**: the 320
-supplied symbols and two overhead wall cabinets, across 25 source categories.
+The visible desktop placement library contains **342 SVG symbols**: the 320
+supplied symbols, two overhead wall cabinets and 20 independently authored Pinc-comparison additions, across 25 source categories.
 White surfaces, dark outlines and restrained light-gray gradients preserve
 detail without the previous gray, shaded appearance. The compatibility catalog retains
 **809 legacy parametric footprint entries across 393 named families** so existing
@@ -49,7 +49,7 @@ records the repeatable presentation change. The two overhead cabinets have
 the project owner's direction to include these first-party assets under Vertex's
 GPL-3.0-or-later license. No unidentified third-party rights are inferred. Run
 `python scripts/generate_architectural_svg_catalog.py --check` to validate all
-322 indexed paths and the checked-in deterministic C++ metadata. Run without
+342 indexed paths and the checked-in deterministic C++ metadata. Run without
 `--check` to regenerate after an intentional source update. The core catalog
 does not parse files or depend on a working directory at runtime.
 
@@ -59,11 +59,11 @@ source IDs (radiator, skylight, pergola, column-round, column-square). All legac
 IDs, dimensions, previews and order remain intact in the compatibility catalog;
 the SVG entries append in category/ID order. This retains catalog revision 1 and
 existing saved-project compatibility. New-placement browsing exposes only the
-supplied SVG set. Names are searchable case-insensitively along with IDs, families
+supplied and independently authored SVG set. Names are searchable case-insensitively along with IDs, families
 and categories.
 
 `SymbolDefinition::svg_asset` supplies an asset-root-relative path, native
-`view_box`, `footprint_view_box`, and `dimensions_are_nominal`. In 210 assets the
+`view_box`, `footprint_view_box`, and `dimensions_are_nominal`. In 230 assets the
 SVG description supplies nominal millimetres, converted to metres. Their
 footprint bounds exclude the surrounding artwork padding. The remaining 112
 assets have no physical-size claim: their editable default footprint has a
@@ -71,7 +71,7 @@ one-metre longest side and follows the viewBox aspect ratio. The flag is false
 for those defaults; it must not be presented as a measured or certified size.
 
 The Windows desktop embeds every SVG in its Qt resource bundle and presents the
-322 SVG entries as the complete new-placement library, with source names and
+342 SVG entries as the complete new-placement library, with source names and
 cleaned category labels. Library
 thumbnails and placed components use the detailed SVG document. The canvas maps
 the declared footprint bounds—not the padded viewBox—to the physical
@@ -225,3 +225,5 @@ deterministic IDs, physical-footprint bounds, independent resize behavior, and
 malformed-data rejection. `symbol_svg_desktop` additionally verifies the supplied
 three-seat sofa's searchable name, detailed thumbnail, retained SVG payload,
 interior canvas detail, exact physical footprint and identical save/reopen render.
+
+The [PincSketch crosswalk](requirements/pincsketch-symbol-coverage.md) tracks each of its 80 named kinds. New cabinet, appliance, mechanical, pool, stair and annotation artwork closes specific graphic gaps. Floor-void and structural-issue markers are drawing annotations, not model voids or engineering findings. Bow/corner hosted windows and several door variants still need semantic integration and qualification; the higher asset count does not close those gaps.

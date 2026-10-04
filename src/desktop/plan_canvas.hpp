@@ -503,6 +503,12 @@ public:
         std::function<bool(QString, QString, Vec2, std::uint64_t)> callback);
     void setSymbolDropped(std::function<void(QString, double, Vec2)> callback,
                           std::function<bool(const QString&)> uses_raw_point = {});
+    void setAreaClassDropped(std::function<bool(QString, Vec2)> callback,
+        std::function<void()> malformed_drop_rejected = {});
+    // Interaction projection only; authoritative geometry is never changed.
+    [[nodiscard]] static bool containsAreaPoint(const Boundary& boundary, Vec2 point);
+    [[nodiscard]] QStringList areaIdsAt(Vec2 point) const;
+    void setAreaClassCaption(QString caption);
     void setCursorMoved(std::function<void(Vec2)> callback);
     // Emitted only on a stationary right-button release. The target is the
     // painted entity under the pointer, or an empty string for canvas space.
@@ -820,6 +826,9 @@ private:
     std::function<bool(QString, QString, Vec2, std::uint64_t)>
         m_boundary_vertex_move_requested;
     std::function<void(QString, double, Vec2)> m_symbol_dropped;
+    std::function<bool(QString, Vec2)> m_area_class_dropped;
+    std::function<void()> m_area_class_drop_rejected;
+    QString m_area_class_caption;
     std::function<bool(const QString&)> m_symbol_drop_uses_raw_point;
     std::function<void(Vec2)> m_cursor_moved;
     std::function<void(Vec2, QString)> m_right_clicked;

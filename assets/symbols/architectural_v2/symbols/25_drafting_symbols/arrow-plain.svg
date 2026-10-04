@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="500" height="1200" viewBox="-120 -120 740 1440" role="img" aria-labelledby="svg-v2-25_drafting_symbols-arrow-plain--title svg-v2-25_drafting_symbols-arrow-plain--desc" data-vertex-style="white-outline-2">
+<title id="svg-v2-25_drafting_symbols-arrow-plain--title">Plain Arrow</title>
+<desc id="svg-v2-25_drafting_symbols-arrow-plain--desc">Orthographic drafting symbol with transparent background. Nominal footprint 500 by 1200 millimetres.</desc>
+<defs><linearGradient id="svg-v2-25_drafting_symbols-arrow-plain--ceramic" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ffffff"/><stop offset="1" stop-color="#f2f2f2"/></linearGradient></defs>
+<g id="svg-v2-25_drafting_symbols-arrow-plain--artwork"><path d="M250 40 L35 405 H165 V1160 H335 V405 H465 Z" fill="url(#svg-v2-25_drafting_symbols-arrow-plain--ceramic)" stroke="#111111" stroke-width="24" stroke-linejoin="round"/></g>
+</svg>

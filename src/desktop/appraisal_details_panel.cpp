@@ -210,6 +210,7 @@ struct AppraisalDetailsPanel::Impl {
                 row(QStringLiteral("Exact factor"),QStringLiteral("%1/%2").arg(value.factor.numerator).arg(value.factor.denominator))+
                 row(QStringLiteral("Adjusted area"),area(value.factored_square_metres))+
                 row(QStringLiteral("Boundary perimeter"),length(value.perimeter_metres)));
+            if(owner)html+=table(appraisal_area_arithmetic_rows(*owner,value.base_square_metres,*report,metric,true));
             if(ansi())html+=table(appraisal_sloped_ceiling_rows(*boundary,*report));
             // A current validated trace authorizes showing these analytical edge
             // lengths; stale/invalid sources never expose this branch.

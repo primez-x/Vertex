@@ -260,6 +260,11 @@ struct ApplyBoundaryConstraintChanges {
     std::vector<DimensionPlacementMove> dimension_placement_moves;
     // Retain the dialect even if a caller strips the placement lane.
     bool dimension_placement_completion{};
+    // Envelope sixteen composes a disjoint rigid group with connected edits.
+    // Both typed lanes replay against the same original source before merging.
+    std::optional<TransformBoundaries> rigid_group_transform;
+    // Retain the dialect even if a caller strips its rigid proof.
+    bool rigid_group_completion{};
 };
 
 using Command = std::variant<ApplyEntityChanges, NameRevision, TranslateBoundary,

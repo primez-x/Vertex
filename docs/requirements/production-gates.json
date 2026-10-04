@@ -87,7 +87,7 @@
     "G5_APEX_PARITY": {
       "name": "Apex workflow, library, tracing, field, and specialist parity",
       "required": true,
-      "pass_condition": "All documented Apex 7 workflows and capability categories, including both drawing modes, libraries, tracing, multipage documents, workspace controls, field input, survey, georeferencing, and output behavior, pass parity fixtures.",
+      "pass_condition": "All documented Apex 7 workflows and capability categories, including both drawing modes, libraries, tracing, multipage documents, workspace controls, field input, survey, georeferencing, and output behavior, pass parity fixtures. The additional supplied PincSketch 4.3 workflow baseline must also be accounted for: all 134 inventoried operations and PINC-001 through PINC-013 in docs/requirements/pincsketch-4.3-vertex-comparison.md require implementation and observable evidence. An inventory, source match, catalog count, or partial adoption is not a pass.",
       "requirement_ids": [
         "APX-WF-001",
         "APX-WF-002",

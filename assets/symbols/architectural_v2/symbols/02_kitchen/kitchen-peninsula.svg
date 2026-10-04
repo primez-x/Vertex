@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="2100" height="2400" viewBox="-120 -120 2340 2640" role="img" aria-labelledby="svg-v2-02_kitchen-kitchen-peninsula--title svg-v2-02_kitchen-kitchen-peninsula--desc" data-vertex-style="white-outline-2">
+<title id="svg-v2-02_kitchen-kitchen-peninsula--title">Kitchen Peninsula</title>
+<desc id="svg-v2-02_kitchen-kitchen-peninsula--desc">Orthographic top view of an L-shaped kitchen counter run with a projecting peninsula. Nominal footprint 2100 by 2400 millimetres. Transparent background.</desc>
+<defs><linearGradient id="svg-v2-02_kitchen-kitchen-peninsula--counter" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ffffff"/><stop offset="1" stop-color="#f2f2f2"/></linearGradient></defs>
+<g id="svg-v2-02_kitchen-kitchen-peninsula--artwork"><path d="M0 0 H2100 V2400 H1500 V600 H0 Z" fill="url(#svg-v2-02_kitchen-kitchen-peninsula--counter)" stroke="#111111" stroke-width="18" stroke-linejoin="round"/><path d="M55 55 H2045 V545 H55 Z M1555 655 H2045 V2345 H1555 Z" fill="#ffffff" stroke="#111111" stroke-width="12"/><path d="M650 65 V535 M1250 65 V535 M1565 1150 H2035 M1565 1750 H2035" fill="none" stroke="#111111" stroke-width="12"/><path d="M1520 780 V2260" fill="none" stroke="#111111" stroke-width="12"/><path d="M1810 830 H2050" fill="none" stroke="#111111" stroke-width="12" stroke-linecap="round"/></g>
+</svg>

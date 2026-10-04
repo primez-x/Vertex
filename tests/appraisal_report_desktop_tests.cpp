@@ -178,7 +178,10 @@ void ansi_report_html_pdf_canonical_units_and_evidence() {
     const auto report=sketch::build_appraisal_document_report(source,"p",sketch::AreaUnit::square_metre);
     require(report.qualified,"ANSI report fixture qualifies under declared rule checks");
     const auto html=sketch::desktop::appraisal_report_html(source,report,true,true);
-    require(html.contains("MEASUREMENT SUMMARY") && html.contains("100 sq ft") && !html.contains("100.00 sq ft") &&
+    require(html.contains("MEASUREMENT SUMMARY") &&
+        html.contains("Gross boundary area</td><td align='right'>100 sq ft") &&
+        !html.contains("Gross boundary area</td><td align='right'>100.00 sq ft") &&
+        html.contains("Rectangle components") && html.contains("100.00 sq ft") &&
         html.contains("40.0 ft") && html.contains("10.0 ft") && html.contains("Supplemental metric diagnostic"),
         "ANSI HTML uses canonical areas and tenth-foot dimensions with clearly supplemental metric display");
     require(html.contains("Interior inspected") && html.contains("Direct measurement") && html.contains("Inch") &&

@@ -260,7 +260,7 @@ def _inspect_project(
             _require(metadata["format_version"].isdecimal(),
                      "project metadata format_version must be decimal")
             format_version = int(metadata["format_version"])
-            _require(1 <= format_version <= 41,
+            _require(1 <= format_version <= 42,
                      f"unsupported project format_version: {format_version}")
             document_id = _require_string(metadata["document_id"], "project metadata document_id")
             _require(metadata["head_revision"].isdecimal(),
