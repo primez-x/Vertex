@@ -1,6 +1,6 @@
 # Vertex user testing checklist
 
-384 practical tasks, grouped by how you use the app (including U100a). This replaces the earlier engineering-oriented checklist. The old 130-item list is preserved separately as engineering-requirements-checklist.md.
+385 practical tasks, grouped by how you use the app (including U100a). This replaces the earlier engineering-oriented checklist. The old 130-item list is preserved separately as engineering-requirements-checklist.md.
 
 This is a user acceptance list for the intended app, not a claim that every listed action is implemented or working in the current preview. If you cannot find a control, or a feature is absent, mark **Blocked / missing** and describe it. Specialized sections can be skipped if you do not use them or lack the device or sample files.
 
@@ -2310,6 +2310,14 @@ drawing; switching modes does not change existing geometry.
 - [ ] **U383 — Correct an invalid nested-area choice**
   - Steps: In the nested review, try subtracting an inner outline while its parent is Reference only. Try giving parent and child the same classification. Correct the choices. After definition, move the inner source stroke and open Details and Review measured sources.
   - Expected: Invalid choices explain the issue and cannot be applied. Correct choices restore a valid preview. Moving the inner source marks its derived area stale and withholds dependent GLA until the source review is accepted; unchanged outer gross geometry is retained.
+  - Result: Not tested
+  - Notes: ______________________________
+
+## Define First keyboard start
+
+- [ ] **U384 — Start an area at the cursor with Enter**
+  - Steps: Press Ctrl+Shift+D and choose a classification. Move the cursor to an empty starting point and press Enter. Type `12 ft` and Right; move the pointer outside the side and press Enter to place its dimension. Repeat with `8 ft` and Up, then `12 ft` and Left. Press Enter to close, position the last dimension and press Enter again. Undo, Redo and save/reopen. Repeat the starting step with Snap off.
+  - Expected: The first Enter fixes the starting point without creating a side. Snap on uses the snapped cursor; Snap off uses the exact cursor. Enter still places each side's dimension separately. The completed rectangle measures 96 square feet and commits as one undoable operation. Holding Enter or panning cannot accidentally accept a starting point. Saved geometry and dimensions reopen unchanged.
   - Result: Not tested
   - Notes: ______________________________
 

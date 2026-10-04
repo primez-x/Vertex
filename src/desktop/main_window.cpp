@@ -13082,6 +13082,15 @@ public:
         }
     }
 
+    void selectBoundaryDrawingMode() {
+        m_creation_mode = DrawingMode::measurement;
+        if (m_drawing_mode_combo) {
+            const QSignalBlocker blocker(m_drawing_mode_combo);
+            m_drawing_mode_combo->setCurrentIndex(static_cast<int>(m_creation_mode));
+        }
+        refreshCursorLabel(m_last_cursor);
+    }
+
     bool beginBoundaryDrawing(BoundaryAuthoringMode mode, QString classification,
                               QString subtract_target = {}) {
         if (m_linework_drawing) {
@@ -13151,7 +13160,9 @@ public:
             m_tool = CanvasTool::boundary;
             syncToolControls();
             clearError();
-            return boundaryDraftChanged();
+            if (!boundaryDraftChanged()) return false;
+            selectBoundaryDrawingMode();
+            return true;
         } catch (const std::exception& error) {
             setError(QStringLiteral("Start boundary: %1").arg(QString::fromUtf8(error.what())));
             return false;
@@ -21534,6 +21545,7 @@ public:
                     m_boundary_subtract_target=QString::fromStdString(*candidate_active->auto_subtract_target_id);
                 m_tool = CanvasTool::boundary;
                 refreshBoundaryPreview();
+                selectBoundaryDrawingMode();
             }
             syncToolControls();
             clearError();
@@ -30025,29 +30037,39 @@ private:
             QObject::connect(fit, &QAction::triggered, owner, [this] { fitView(); });
             menu.exec(QCursor::pos());
         });
-        canvas->setFinishRequested([this] {
+        canvas->setFinishRequested([this, canvas] {
             if (m_drawing_alignment || m_drawing_alignment_invalidated) {
                 acceptDrawingAlignment();
                 return;
             }
             if (m_linework_drawing) { finishMeasurementLinework(); return; }
+            const bool place_anchor = m_tool == CanvasTool::boundary && m_boundary_session &&
+                m_boundary_session->mode() == BoundaryAuthoringMode::define_first &&
+                m_boundary_session->phase() == BoundaryAuthoringPhase::awaiting_anchor;
             if (m_tool == CanvasTool::boundary && m_boundary_session &&
-                m_boundary_session->phase() == BoundaryAuthoringPhase::awaiting_dimension) {
+                (place_anchor || m_boundary_session->phase() == BoundaryAuthoringPhase::awaiting_dimension)) {
                 try {
                     const auto snapshot = m_document->snapshot();
                     if (!m_document->is_editable() || m_workspace != Workspace::measurement ||
+                        (place_anchor && canvas != m_measurementCanvas) ||
                         m_boundary_document != m_document || !m_boundary_source || !m_boundary_context ||
                         m_boundary_context->layer_id != m_active_layer_id.toStdString() ||
                         inspect_boundary_recovery_source(snapshot,
                             capture_boundary_recovery_source(*m_boundary_source, *m_boundary_context)) !=
                             BoundaryRecoverySourceStatus::current)
-                        throw std::invalid_argument("The pending dimension's drawing context changed or is read-only.");
+                        throw std::invalid_argument(place_anchor
+                            ? "The start point's drawing context changed or is read-only."
+                            : "The pending dimension's drawing context changed or is read-only.");
                     const auto pointer = m_boundary_session->view().pointer;
                     if (!pointer)
-                        throw std::invalid_argument("Move the pointer to position the dimension, then press Enter or click.");
+                        throw std::invalid_argument(place_anchor
+                            ? "Move the pointer to position the start point, then press Enter or click."
+                            : "Move the pointer to position the dimension, then press Enter or click.");
                     onCanvasPoint(*pointer, snapshot.revision());
                 } catch (const std::exception& error) {
-                    setError(QStringLiteral("Place dimension: %1").arg(QString::fromUtf8(error.what())));
+                    setError((place_anchor ? QStringLiteral("Place start point: %1")
+                                           : QStringLiteral("Place dimension: %1"))
+                        .arg(QString::fromUtf8(error.what())));
                 }
                 return;
             }
@@ -34547,6 +34569,7 @@ private:
             m_restored_boundary_navigation = true;
             m_tool = CanvasTool::boundary;
             refreshBoundaryPreview();
+            selectBoundaryDrawingMode();
         }
         syncToolControls();
     }

@@ -160,10 +160,18 @@ create an unexplained second coordinate authority.
 The two workspace tabs share one authoring session; switching tabs with the
 same drawing context preserves unfinished work. Workspace and drawing method
 are independent choices. Define First obtains the area classification
-before anchoring. Draw First accepts measured linework before its later
+before anchoring. Move the pointer to the start and press Enter, click the
+start, or use D for exact start coordinates. Pointer Enter uses the same
+effective snapped point as a click, with no edge or document-history command.
+Draw First accepts measured linework before its later
 classification. Neither method substitutes a hard-coded classification for
 that workflow. Enter follows the current phase, including placement of the
 closing edge's dimension, rather than bypassing an unresolved dimension.
+
+The pending-dimension H/V orientation and Space suppression described in the
+official Define First tutorial are still missing. Space currently arms canvas
+panning. Those are explicit parity gaps; the existing Enter dimension-placement
+and F4 preset paths do not establish their completion.
 
 Both canvases receive copied analytical draft geometry, dimension labels,
 anchor/pen markers and phase instructions from the session. They do not own a

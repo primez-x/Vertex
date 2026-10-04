@@ -1064,7 +1064,7 @@
         "apex_define_first"
       ],
       "evidence_status": "documented",
-      "implementation_status": "verified",
+      "implementation_status": "in_progress",
       "acceptance": "A Define First fixture defines an area, enters its geometry, edits it, calculates it, and preserves the expected boundary semantics through save/reopen.",
       "package": 4,
       "blocker": null,
@@ -1076,7 +1076,7 @@
         "scripts/generate_workflow_acceptance_evidence.py",
         "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "Define First phase, classification, manual dimensions, closure, and atomic document commit are implemented; integrated edit/calculation/save-reopen acceptance remains open. Deterministic Debug/Release workflow evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
+      "implementation_note": "Define First phase, classification, manual dimensions, closure, and atomic document commit are implemented. Cursor Enter anchoring in src/desktop/main_window.cpp uses the existing guarded point-input path; native regression covers exact snap-on/off starts, typed lengths, manual dimension Enter, closure, atomic Undo/Redo and save/reopen. F4 works in the Apex-compatible shortcut subset. Pending-dimension H/V orientation and Space suppression remain unimplemented; Space currently arms navigation. Complete tutorial/physical keyboard qualification and original acceptance remain open. Historical Debug/Release evidence does not certify this current source."
     },
     {
       "id": "APX-WF-003",

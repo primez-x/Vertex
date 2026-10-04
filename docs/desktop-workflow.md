@@ -211,21 +211,31 @@ PDF geometry remain future work.
 
 ## Interaction and persistence
 
-The left navigator expands project, building, floor, and layer nodes. The compact
-canvas bar provides Object, Grid, Snap, Fit, and overview controls. Selection,
+The left navigator expands project, building, floor, and layer nodes. The status
+bar contains Grid, Snap, Fit, and overview controls. Selection,
 drawing, and navigation share one pointer surface: click an object to select it,
 drag inside a selected object to move it, click empty canvas to start or continue
-drawing, and drag anywhere outside the selected object to pan. In the Measurement
-workspace each empty click places a measured-boundary node and clicking the first
-node closes the area. In the Architectural workspace two empty clicks create a
-straight wall. Ctrl-drag creates a selection marquee, while middle-drag and
+drawing, and drag anywhere outside the selected object to pan. On the 2D canvas,
+the Draw choice controls the created geometry: Wall connects successive clicks
+with physical wall segments, Measurement places boundary nodes and closes the
+area when its first node is clicked, and Measured lines creates source linework
+for later area definition. Wall is the initial default. Ctrl-drag creates a
+selection marquee, while middle-drag and
 Space-left-drag also pan. Enter closes an active boundary. During measured
 boundary drawing, `D` opens the input needed for the current step: starting X/Y
 coordinates, an analytical edge, or a pending Define First dimension's X/Y
 position. Coordinates accept explicit imperial or metric units. To start without
 a pointer, use Ctrl+K and **Start measured boundary with point input**, or
-Ctrl+Shift+D for Define First, then press `D` to place the start point. Accepted
-edge methods and expressions repeat within that drawing session; absolute
+Ctrl+Shift+D for Define First, then press `D` to place the start point.
+Alternatively, after choosing the Define First classification, move the cursor
+to the starting point and press **Enter**. This anchors the effective snapped
+cursor, just like clicking; with Snap off it uses the unsnapped position. It
+creates no side or saved document command. Enter still places each pending
+dimension separately and closes the completed outline through the ordinary
+workflow. Held Enter and active canvas navigation do not accept drawing input.
+Starting or resuming an accepted measured-boundary workflow selects Measurement
+in Draw; a cancelled classification or refused start preserves the prior choice.
+Accepted edge methods and expressions repeat within that drawing session; absolute
 coordinates use the current drawing context. Cancelled or invalid entries do not
 change the draft or accepted defaults. Changing the default unit system resets
 effective edge defaults so an implicit feet expression cannot become metres.

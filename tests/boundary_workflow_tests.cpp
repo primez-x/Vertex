@@ -790,6 +790,10 @@ void test_keyboard_only_boundary_authoring() {
                 classification->setTextValue("living"); classification->accept();
             },"Ctrl+Shift+D must start Define First through actual keyboard UI",Qt::ControlModifier|Qt::ShiftModifier);
         }
+        auto* drawing_mode = window.findChild<QComboBox*>(QStringLiteral("drawingMode"));
+        require(drawing_mode && drawing_mode->currentData() == QStringLiteral("measurement") &&
+                    drawing_mode->currentText() == QStringLiteral("Measurement"),
+                "successful explicit Draw First or Define First must select Measurement drawing mode");
         drive_boundary_modal(window,*drawing,Qt::Key_D,[&](QDialog* modal) {
             auto* input=dynamic_cast<sketch::desktop::BoundaryInputDialog*>(modal);
             require(input!=nullptr,"D must open native keyboard anchor form");
@@ -1009,6 +1013,34 @@ void test_saved_boundary_draft_resumes_without_unsaved_warning() {
     const bool created = window.createNewProject();
     modal_responder.stop();
     require(created && !prompted, "saved draft must allow New without a discard prompt");
+    {
+        MainWindow resumed;
+        prepare_window(resumed);
+        auto* mode = resumed.findChild<QComboBox*>(QStringLiteral("drawingMode"));
+        require(mode && mode->currentData() == QStringLiteral("wall"),
+                "a fresh window must retain its Wall startup default");
+        require(resumed.openProject(path), "saved draft must resume in a fresh independent window");
+        auto* resumed_canvas = canvas(resumed, QStringLiteral("measurementPlanCanvas"));
+        const auto& resumed_preview = resumed_canvas->boundaryDraftPreview();
+        require(mode->currentData() == QStringLiteral("measurement") &&
+                    mode->currentText() == QStringLiteral("Measurement") &&
+                    resumed_preview && same_boundary(resumed_preview->segments, original.segments),
+                QStringLiteral("resuming a boundary must present Measurement mode and retain its saved geometry; "
+                               "data='%1' text='%2' index=%3 preview=%4 actualEdges=%5 expectedEdges=%6 "
+                               "error='%7' status='%8'")
+                    .arg(mode->currentData().toString(), mode->currentText()).arg(mode->currentIndex())
+                    .arg(resumed_preview.has_value())
+                    .arg(resumed_preview ? static_cast<qulonglong>(resumed_preview->segments.size()) : 0)
+                    .arg(original.segments.size()).arg(resumed.lastError(), resumed.statusBar()->currentMessage())
+                    .toStdString());
+        const auto before_motion = resumed.document().snapshot();
+        send_move_at_screen(*resumed_canvas, model_to_canvas(*resumed_canvas, {1, 1}));
+        require(resumed.statusBar()->currentMessage().contains(QStringLiteral("Measurement mode")),
+                "resumed boundary pointer status must present the active Measurement mode");
+        require_same_document(before_motion, resumed.document().snapshot(),
+                              "resuming boundary presentation must create no document command");
+        require(resumed.createNewProject(), "fresh-window resume fixture must release its saved project");
+    }
     require(window.openProject(path), "ordinary saved draft must reopen writable after New");
     require(!window.windowTitle().endsWith(" *") &&
                 same_boundary(preview(*drawing).segments, original.segments) &&
@@ -1899,6 +1931,203 @@ void test_inline_measurement_receipts_local_history_and_define_first() {
         }
         require(receipts.record->edges.back().receipt.kind == sketch::BoundaryConstructionKind::line_closure,
                 "canvas Enter must retain the existing receipt-bearing closure command");
+    }
+}
+
+void start_define_first_with_keyboard(MainWindow& window, PlanCanvas& drawing) {
+    QApplication::setActiveWindow(&window);
+    process_events();
+    drive_boundary_modal(window, drawing, Qt::Key_D, [](QDialog* modal) {
+        auto* classification = qobject_cast<QInputDialog*>(modal);
+        require(classification, "Define First shortcut must open its classification picker");
+        classification->setTextValue(QStringLiteral("living"));
+        classification->accept();
+    }, "Ctrl+Shift+D must start the real Define First workflow",
+       Qt::ControlModifier | Qt::ShiftModifier);
+    auto* mode = window.findChild<QComboBox*>(QStringLiteral("drawingMode"));
+    require(mode && mode->currentData() == QStringLiteral("measurement") &&
+                mode->currentIndex() == mode->findData(QStringLiteral("measurement")) &&
+                mode->currentText() == QStringLiteral("Measurement"),
+            "successful Define First shortcut must present Measurement in the Draw selector");
+}
+
+void test_define_first_enter_anchors_cursor_and_continues() {
+    for (const bool snap : {true, false}) {
+        MainWindow window;
+        prepare_window(window);
+        window.setMetricUnits(true);
+        auto* drawing = canvas(window, QStringLiteral("measurementPlanCanvas"));
+        drawing->setSnapEnabled(snap);
+        QApplication::setActiveWindow(&window);
+        process_events();
+        auto* mode = window.findChild<QComboBox*>(QStringLiteral("drawingMode"));
+        require(mode && mode->currentData() == QStringLiteral("wall"),
+                "explicit boundary startup must preserve the initial Wall default until accepted");
+        const auto before_cancel = window.document().snapshot();
+        drive_boundary_modal(window, *drawing, Qt::Key_D, [](QDialog* modal) {
+            require(qobject_cast<QInputDialog*>(modal), "cancelled Define First must reach classification");
+            modal->reject();
+        }, "cancelled Ctrl+Shift+D must reach the real picker", Qt::ControlModifier | Qt::ShiftModifier);
+        require(mode->currentData() == QStringLiteral("wall") && !drawing->boundaryDraftPreview(),
+                "cancelling classification must preserve the prior Draw mode and create no draft");
+        require_same_document(before_cancel, window.document().snapshot(),
+                              "cancelled explicit boundary startup must create no document command");
+        start_define_first_with_keyboard(window, *drawing);
+        const auto original = window.document().snapshot();
+        const auto could_undo = window.document().can_undo();
+        const auto could_redo = window.document().can_redo();
+        const auto point = model_to_canvas(*drawing, {0, 0}) + QPoint(37, -29);
+        require(drawing->viewScale() == 80.0, "Enter anchor fixture needs its known metric grid");
+        const auto raw = canvas_to_model(*drawing, point);
+        const auto expected = snap ? snap_to_known_grid(raw, 0.2) : raw;
+        require(!same_point(raw, snap_to_known_grid(raw, 0.2)),
+                "Enter anchor fixture must move to an off-grid screen point");
+        send_move_at_screen(*drawing, point);
+        require(window.statusBar()->currentMessage().contains(QStringLiteral("Measurement mode")),
+                "Define First pointer status must present the active Measurement mode");
+        send_key(*drawing, Qt::Key_Return);
+        const auto anchored = preview(*drawing);
+        require(anchored.anchor && same_point(*anchored.anchor, expected) &&
+                    anchored.pen_position && same_point(*anchored.pen_position, expected),
+                "Define First Enter must anchor at the ordinary effective canvas cursor");
+        require(anchored.segments.empty() && anchored.labels.empty(),
+                "Enter anchoring must create neither an edge nor a dimension");
+        require_same_document(original, window.document().snapshot(),
+                              "Enter anchoring must not change document history or entities");
+        require(window.document().can_undo() == could_undo && window.document().can_redo() == could_redo,
+                "Enter anchoring must not create a document undo or redo command");
+        auto* panel = drawing->findChild<QWidget*>(QStringLiteral("drawingInputPanel"));
+        auto* length = panel ? panel->findChild<QLineEdit*>(QStringLiteral("drawingLengthInput")) : nullptr;
+        require(panel && panel->isVisible() && length,
+                "Enter anchoring must expose the existing typed measurement controls");
+        if (snap) capture_inline_widget(window, QStringLiteral("define-first-enter-anchor.png"));
+        QKeyEvent repeated(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier, {}, true);
+        QApplication::sendEvent(drawing, &repeated);
+        require(preview(*drawing).segments.empty(), "a held Enter must not finish the newly anchored draft");
+        const std::array<QString, 3> lengths{QStringLiteral("2.125 m"), QStringLiteral("1.375 m"),
+                                             QStringLiteral("2.125 m")};
+        const std::array<int, 3> directions{Qt::Key_Right, Qt::Key_Up, Qt::Key_Left};
+        const std::array<Vec2, 3> offsets{{{2.125, 0}, {2.125, 1.375}, {0, 1.375}}};
+        for (std::size_t index = 0; index < lengths.size(); ++index) {
+            type_inline_length(*drawing, lengths[index]);
+            send_inline_key(*length, directions[index]);
+            const auto draft = preview(*drawing);
+            const Vec2 endpoint{expected.x + offsets[index].x, expected.y + offsets[index].y};
+            const auto actual = draft.segments.empty() ? QStringLiteral("no edge")
+                : QStringLiteral("(%1,%2)").arg(QString::number(draft.segments.back().end.x, 'g', 17),
+                    QString::number(draft.segments.back().end.y, 'g', 17));
+            // A non-binary anchor accumulates sub-femtometre roundoff when
+            // exact typed lengths are added and then subtracted in a chain.
+            require(draft.segments.size() == index + 1 &&
+                        std::hypot(draft.segments.back().end.x - endpoint.x,
+                                   draft.segments.back().end.y - endpoint.y) < 1e-12,
+                    QStringLiteral("typed lengths must continue exactly from the Enter anchor; side=%1 snap=%2 "
+                                   "edges=%3 expected=(%4,%5) actual=%6 input='%7' instruction='%8'")
+                        .arg(index).arg(snap).arg(draft.segments.size())
+                        .arg(QString::number(endpoint.x, 'g', 17), QString::number(endpoint.y, 'g', 17),
+                             actual, length->text(), draft.instruction).toStdString());
+            send_move_at_screen(*drawing, model_to_canvas(*drawing, {expected.x + 1, expected.y - 1}));
+            send_key(*drawing, Qt::Key_Return);
+            require(preview(*drawing).segments.size() == index + 1 &&
+                        preview(*drawing).labels.size() == index + 1,
+                    "Enter must continue placing each pending Define First dimension");
+            require_same_document(original, window.document().snapshot(),
+                                  "typed edges and dimensions must remain draft-local");
+        }
+        send_key(*drawing, Qt::Key_Return);
+        require(preview(*drawing).segments.size() == 4,
+                "Enter after the typed chain must retain ordinary receipt-bearing closure");
+        send_move_at_screen(*drawing, model_to_canvas(*drawing, {expected.x - 1, expected.y + 0.6}));
+        send_key(*drawing, Qt::Key_Return);
+        require(!drawing->boundaryDraftPreview(), "final dimension Enter must complete Define First");
+        const auto committed = window.document().snapshot();
+        const auto entity = committed_boundary(committed);
+        const auto boundary = sketch::decode_identified_boundary_entity(entity);
+        const auto receipt = sketch::decode_boundary_receipt_envelope(entity.properties.at("boundary_authoring"));
+        require(receipt.supported() && receipt.record && same_point(receipt.record->anchor, expected) &&
+                    boundary.segments.size() == 4 && receipt.record->edges.size() == 4 &&
+                    committed_dimensions(committed).size() == 4 &&
+                    receipt.record->edges.back().receipt.kind == sketch::BoundaryConstructionKind::line_closure,
+                "Enter-anchored boundary must retain anchor, typed receipts, closure and four dimensions");
+        require(std::abs(std::abs(sketch::signed_area(sketch::boundary_geometry(boundary))) - 2.921875) < 1e-12,
+                "Enter-anchored typed rectangle must retain its exact 2.921875 square metre area");
+        const std::array<double, 3> signed_lengths{2.125, 1.375, -2.125};
+        for (std::size_t index = 0; index < lengths.size(); ++index) {
+            const auto& input = receipt.record->edges[index].receipt;
+            require(input.kind == sketch::BoundaryConstructionKind::line_rise_run && input.rise && input.run,
+                    "continued typed measurements must retain their cardinal construction receipts");
+            const auto& entered = index == 1 ? *input.rise : *input.run;
+            require(entered.metres == signed_lengths[index] &&
+                        entered.original_expression.find(lengths[index].toStdString()) != std::string::npos,
+                    "Enter-anchored measurements must preserve the exact quantity and original typed expression");
+        }
+        if (snap) capture_inline_widget(window, QStringLiteral("define-first-enter-completed.png"));
+        require(committed.revision() == original.revision() + 1 && window.undoCommand() &&
+                    window.document().snapshot().entities() == original.entities() && window.redoCommand() &&
+                    window.document().snapshot().entities() == committed.entities(),
+                "Enter-anchored boundary must commit, undo and redo as one document command");
+        QTemporaryDir directory;
+        require(directory.isValid(), "Enter anchor persistence fixture needs a temporary directory");
+        const auto path = directory.filePath(QStringLiteral("enter-anchored-boundary.bldproj"));
+        require(window.saveProjectAs(path) && window.openProject(path) &&
+                    window.document().snapshot().entities() == committed.entities(),
+                "Enter-anchored boundary and original measurements must survive save and reopen");
+    }
+}
+
+void test_define_first_enter_anchor_guards() {
+    {
+        MainWindow window;
+        prepare_window(window);
+        window.document().mark_read_only("boundary startup refusal fixture");
+        const auto before = window.document().snapshot();
+        auto* mode = window.findChild<QComboBox*>(QStringLiteral("drawingMode"));
+        require(mode && mode->currentData() == QStringLiteral("wall"),
+                "read-only startup fixture must retain the initial Wall mode");
+        for (const auto authoring : {BoundaryAuthoringMode::draw_first, BoundaryAuthoringMode::define_first}) {
+            require(!window.beginBoundaryDrawing(authoring, QStringLiteral("living")) &&
+                        mode->currentData() == QStringLiteral("wall"),
+                    "refused explicit boundary startup must preserve the prior Draw mode");
+            require_same_document(before, window.document().snapshot(),
+                                  "refused explicit boundary startup must create no document command");
+        }
+    }
+    for (const int guard : {0, 1, 2, 3, 4}) {
+        MainWindow window;
+        prepare_window(window);
+        window.setMetricUnits(true);
+        auto* drawing = canvas(window, QStringLiteral("measurementPlanCanvas"));
+        start_define_first_with_keyboard(window, *drawing);
+        if (guard != 0) send_move_at_screen(*drawing, model_to_canvas(*drawing, {0.4, 0.4}));
+        if (guard == 1) {
+            auto layer = window.document().snapshot().entities().at(window.activeLayerId().toStdString());
+            layer.properties["name"] = "Intervening valid layer edit";
+            window.document().apply(sketch::ApplyEntityChanges{window.document().revision(),
+                {sketch::EntityChange::upsert(layer)}, {}, "Enter anchor stale context fixture"});
+        } else if (guard == 2) {
+            window.document().mark_read_only("Enter anchor read-only fixture");
+        } else if (guard == 3) {
+            // Keep Space held while Enter arrives: send_key also releases it,
+            // which correctly ends navigation before the drawing command.
+            QKeyEvent press(QEvent::KeyPress, Qt::Key_Space, Qt::NoModifier);
+            QApplication::sendEvent(drawing, &press);
+        }
+        const auto before = window.document().snapshot();
+        auto* invoking = guard == 4 ? canvas(window, QStringLiteral("architecturalPlanCanvas")) : drawing;
+        send_key(*invoking, Qt::Key_Return);
+        const auto& refused = drawing->boundaryDraftPreview();
+        require(refused && !refused->anchor && refused->segments.empty(),
+                QStringLiteral("missing pointer, stale context, read-only, navigation or inactive canvas must not anchor; "
+                               "guard=%1 preview=%2 anchor=%3 edges=%4 error='%5' status='%6'")
+                    .arg(guard).arg(refused.has_value()).arg(refused && refused->anchor.has_value())
+                    .arg(refused ? static_cast<qulonglong>(refused->segments.size()) : 0)
+                    .arg(window.lastError(), window.statusBar()->currentMessage()).toStdString());
+        require_same_document(before, window.document().snapshot(),
+                              "refused Enter anchoring must preserve the current document");
+        if (guard == 3) {
+            QKeyEvent release(QEvent::KeyRelease, Qt::Key_Space, Qt::NoModifier);
+            QApplication::sendEvent(drawing, &release);
+        }
     }
 }
 
@@ -2854,6 +3083,12 @@ int main(int argc, char** argv) {
     QApplication application(argc, argv);
     try {
         install_test_font();
+        if (application.arguments().contains(QStringLiteral("--define-first-enter-anchor-only"))) {
+            test_define_first_enter_anchors_cursor_and_continues();
+            test_define_first_enter_anchor_guards();
+            std::cout << "Define First Enter anchor workflows passed\n";
+            return 0;
+        }
         if (application.arguments().contains(QStringLiteral("--wall-curve-properties-only"))) {
             test_precision_curve_editor_preserves_unedited_geometry();
             test_wall_curve_properties_classification();
@@ -2940,6 +3175,8 @@ int main(int argc, char** argv) {
         run_test("context_change_discards_draft_without_mutating_document", test_context_change_discards_draft_without_mutating_document);
         run_test("precision_and_draw_first_classification_modals", test_precision_and_draw_first_classification_modals);
         run_test("keyboard_only_boundary_authoring", test_keyboard_only_boundary_authoring);
+        run_test("define_first_enter_anchors_cursor_and_continues", test_define_first_enter_anchors_cursor_and_continues);
+        run_test("define_first_enter_anchor_guards", test_define_first_enter_anchor_guards);
         run_test("saved_boundary_draft_resumes_without_unsaved_warning", test_saved_boundary_draft_resumes_without_unsaved_warning);
         run_test("off_grid_snap_cursor_rubberband_and_point_receipt_in_both_canvases", test_off_grid_snap_cursor_rubberband_and_point_receipt_in_both_canvases);
         run_test("off_grid_define_first_pending_dimension_preview_and_placement", test_off_grid_define_first_pending_dimension_preview_and_placement);
