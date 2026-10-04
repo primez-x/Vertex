@@ -240,6 +240,12 @@ public:
             bindings[index]->setMinimumContentsLength(12);
             form->addRow(QStringLiteral("Endpoint %1").arg(index + 1), bindings[index]);
         }
+        arc_chain_info = new QLabel(body);
+        arc_chain_info->setObjectName(QStringLiteral("constraintArcChain"));
+        arc_chain_info->setAccessibleName(QStringLiteral("Saved curve chain membership"));
+        arc_chain_info->setTextFormat(Qt::PlainText);
+        arc_chain_info->setWordWrap(true);
+        form->addRow(QStringLiteral("Curve chain"), arc_chain_info);
         length = new QLineEdit(body);
         length->setObjectName(QStringLiteral("constraintLength"));
         length->setPlaceholderText(metric ? QStringLiteral("e.g. 4.2 m") : QStringLiteral("e.g. 14 ft"));
@@ -303,7 +309,7 @@ public:
             QObject::connect(field, &QLineEdit::textChanged, owner, [this] { invalidate(); });
         for (std::size_t index = 0; index < bindings.size(); ++index)
             QObject::connect(bindings[index], &QComboBox::currentIndexChanged, owner, [this, index] {
-                if (!loading && index == 0 && relation->currentData().toInt() == static_cast<int>(ConstraintRelationKind::fixed_arc_length)) {
+                if (!loading && !editingArcChain() && index == 0 && relation->currentData().toInt() == static_cast<int>(ConstraintRelationKind::fixed_arc_length)) {
                     loading = true;
                     prefillCurveTarget();
                     loading = false;
@@ -484,6 +490,15 @@ public:
                                                    positions[1].y - positions[0].y), metric));
     }
 
+    bool selectedArcChain() const {
+        return selected_constraint && selected_constraint->relation == ConstraintRelationKind::fixed_arc_length &&
+            selected_constraint->bindings.size() > 2;
+    }
+
+    bool editingArcChain() const {
+        return mode->currentData().toInt() == 2 && selectedArcChain();
+    }
+
     void configure(bool load_values) {
         loading = true;
         const auto operation = mode->currentData().toInt();
@@ -506,7 +521,11 @@ public:
                 selected_constraint = *decode_constraint_entity(snapshot.entities().at(existing->currentData().toString().toStdString())).constraint;
                 const auto& c = *selected_constraint;
                 relation->setCurrentIndex(relation->findData(static_cast<int>(c.relation)));
-                for (std::size_t i = 0; i < c.bindings.size(); ++i) selectBinding(i, c.bindings[i]);
+                // The pair controls cannot represent a saved chain. Its full
+                // ordered bindings remain in selected_constraint instead.
+                if (!selectedArcChain())
+                    for (std::size_t i = 0; i < std::min(c.bindings.size(), bindings.size()); ++i)
+                        selectBinding(i, c.bindings[i]);
                 if (c.length) length->setText(text(c.length->original_expression));
                 if (c.anchor) {
                     anchor_x->setText(editable_dimension(c.anchor->x, true));
@@ -533,6 +552,22 @@ public:
                 } catch (const std::exception&) { length->clear(); }
             }
         }
+        const bool arc_chain = operation >= 2 && selectedArcChain();
+        if (arc_chain) {
+            relation->setCurrentIndex(relation->findData(static_cast<int>(ConstraintRelationKind::fixed_arc_length)));
+            const auto endpoint_label = [&](const WallEndpointBinding& binding) {
+                const auto found = std::find(endpoints.begin(), endpoints.end(), binding);
+                return found != endpoints.end() ? endpoint_labels[static_cast<int>(found - endpoints.begin())]
+                    : owner_label(binding.owner_id) + QStringLiteral(" · ") + text(wall_endpoint_role_name(binding.role));
+            };
+            QStringList members;
+            const auto& chain = selected_constraint->bindings;
+            for (std::size_t i = 0; i < chain.size(); i += 2)
+                members.push_back(QStringLiteral("%1. %2 → %3").arg(static_cast<qulonglong>(i / 2 + 1))
+                    .arg(endpoint_label(chain[i]), endpoint_label(chain[i + 1])));
+            arc_chain_info->setText(QStringLiteral("Total length of %1 curved segments. Chain membership stays fixed during this edit.\n%2")
+                .arg(static_cast<qulonglong>(chain.size() / 2)).arg(members.join('\n')));
+        }
         const auto kind = static_cast<ConstraintRelationKind>(relation->currentData().toInt());
         const bool editing_relation = operation == 1 || operation == 2;
         if (editing_relation && kind == ConstraintRelationKind::fixed_arc_length &&
@@ -545,13 +580,18 @@ public:
             configured_relation == ConstraintRelationKind::fixed_arc_length) prefillEndpointDistance();
         if (auto* label = qobject_cast<QLabel*>(form->labelForField(length)))
             label->setText(wall_resize ? (measured_mode ? QStringLiteral("Segment length") : curved_wall ? QStringLiteral("Curve length") : QStringLiteral("Wall length")) : kind == ConstraintRelationKind::fixed_arc_length
-                ? QStringLiteral("Curve length") : QStringLiteral("Endpoint distance"));
+                ? (arc_chain ? QStringLiteral("Total curve length") : QStringLiteral("Curve length")) : QStringLiteral("Endpoint distance"));
         const auto count = kind == ConstraintRelationKind::fixed_anchor ? 1U :
             (kind == ConstraintRelationKind::parallel || kind == ConstraintRelationKind::perpendicular ? 4U : 2U);
         form->setRowVisible(stroke_segment,measured_mode && operation==0);
         form->setRowVisible(existing, operation >= 2);
         form->setRowVisible(relation, editing_relation);
-        for (std::size_t i = 0; i < bindings.size(); ++i) form->setRowVisible(bindings[i], editing_relation && i < count);
+        relation->setEnabled(!arc_chain);
+        form->setRowVisible(arc_chain_info, arc_chain);
+        for (std::size_t i = 0; i < bindings.size(); ++i) {
+            bindings[i]->setEnabled(!arc_chain);
+            form->setRowVisible(bindings[i], editing_relation && !arc_chain && i < count);
+        }
         form->setRowVisible(length, operation == 0 || (editing_relation &&
             (kind == ConstraintRelationKind::fixed_length || kind == ConstraintRelationKind::fixed_arc_length)));
         form->setRowVisible(anchor, operation != 3);
@@ -594,6 +634,16 @@ public:
                 return result;
             }
             if (operation == 2 && !selected_constraint) throw std::invalid_argument("Select an existing constraint to edit");
+            if (editingArcChain()) {
+                // A chain edit changes its one exact physical total, never its
+                // saved topology through the ordinary pair-only controls.
+                auto value = *selected_constraint;
+                value.length = parse_quantity(length->text().toStdString(), unit);
+                (void)resolve_constraint_arc_segments(value, snapshot.entities());
+                result.relation_mutations.push_back(ConstraintRelationMutation::upsert(std::move(value)));
+                result.message = "edit total curve chain length";
+                return result;
+            }
             PersistentConstraint value;
             value.id = operation == 2 ? selected_constraint->id : new_constraint_id;
             value.relation = static_cast<ConstraintRelationKind>(relation->currentData().toInt());
@@ -781,7 +831,7 @@ public:
     ConstraintPreviewCanvas* canvas{};
     QTableWidget* changes{};
     QPlainTextEdit* status{};
-    QLabel* persistent_freedom{};
+    QLabel *persistent_freedom{}, *arc_chain_info{};
     QPushButton *apply_button{}, *preview_button{};
 };
 

@@ -14,6 +14,11 @@ hosted openings by physical station; refuse a seam crossing an opening with an
 object-specific explanation. Preserve outer endpoint constraints. A fixed
 physical arc length becomes one ordered chain-total relationship, allowing the
 pieces to trade length without adding radius, tangent or per-piece length locks.
+Editing that existing relationship must retain the entire ordered chain and its
+opaque metadata. The dialog shows chain membership and the editable total;
+pair-only endpoint controls cannot truncate the chain. Verify two and three
+wall pieces and a reversed multi-edge boundary through Preview, Cancel, Apply
+and atomic history before delivering the checkpoint.
 
 Update source-current exterior measurement outlines in the same transaction.
 Derive the offset seam from the full physical wall loop, retain stable outer

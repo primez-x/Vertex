@@ -2576,8 +2576,8 @@ drawing; switching modes does not change existing geometry.
   - Notes: ______________________________
 
 - [ ] **U422 — Split a curved wall with a physical-length lock**
-  - Steps: Draw a curved wall and add Fixed physical arc length through Dimensions and constraints. Insert an interior point, then inspect the curve and retained relationship. Try a compatible connected edit, Undo and save/reopen.
-  - Expected: Both pieces reconstruct the original curve. The saved relationship retains the original total physical arc length as one total; it does not replace it with separate fixed lengths. Conflicts explain the problem and cannot apply.
+  - Steps: Draw a curved wall and add Fixed physical arc length through Dimensions and constraints. Insert an interior point, then inspect the curve and retained relationship. Split again to make three pieces. Reopen the existing relationship, change its total length, Preview and Cancel once, then Preview and Apply. Try a compatible connected edit, Undo and save/reopen.
+  - Expected: Splitting reconstructs the original curve. The saved relationship retains one total physical arc length across all pieces; it does not replace it with separate fixed lengths. Editing that total identifies the complete chain and retains every member. Cancel changes nothing; Apply and Undo change the total and connected geometry together. Conflicts explain the problem and cannot apply.
   - Result: Not tested
   - Notes: ______________________________
 

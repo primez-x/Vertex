@@ -46,3 +46,29 @@ and multiple selection in the real dialog. Root added regression fixtures and
 retained all failed records. Historical acceptance is unchanged. U419–U422
 remain unchecked user tests. Full Apex compatibility, architectural/assisted
 scope, ANSI normative validation and production acceptance remain open.
+
+## Existing chain editor correction
+
+Final desktop integration review found a separate pre-existing dialog gap: its
+four endpoint controls could overrun when loading more than two curved pieces,
+and editing a chain could reduce the saved total to the first piece. A focused
+dialog regression reproduced truncation before the fix. The editor now retains
+the complete ordered relationship, shows its members and editable total, and
+disables pair-only endpoint/type controls. Switching back to Add restores them.
+New quantity receipts follow the existing core contract: changing a quantity
+replaces its old quantity-specific opaque provenance; envelope, binding and
+unrelated metadata remain, and Undo restores the entire original entity.
+
+The first packaged wall-insertion checkpoint was withheld after this discovery.
+Separate correction and final-delivery evidence is retained under
+`artifacts/wall-vertex-insertion-complete-20261004`; it does not overwrite the
+initial failed or successful records.
+The final shipping build and four affected suites passed after the correction:
+constraint dialog, physical arc-chain solver, wall insertion desktop and split
+storage. Fixtures exercise two/three wall pieces and reversed boundary traversal,
+complete bindings, exact target receipts, retained unrelated metadata, operation
+switching, invalid/no-op input, Cancel, Apply, removal and Undo/Redo. Root
+inspected the actual three-piece, reversed-boundary and wall-insertion previews.
+Initial fixture failures corrected an intentionally replaced old receipt and an
+obsolete snapshot after Undo/Redo; production receipt and stale-preview guards
+were preserved.

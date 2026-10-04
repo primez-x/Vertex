@@ -892,6 +892,150 @@ void physical_curve_length_wall_workflow() {
     }
 }
 
+void physical_curve_chain_total_editing() {
+    for (const int fixture : {0, 1, 2}) {
+        const std::size_t pieces = fixture == 0 ? 2 : 3;
+        PersistentConstraint chain{"arc-chain-total", ConstraintRelationKind::fixed_arc_length, {},
+            parse_quantity(pieces == 2 ? "2.0858296429334882 m" : "3.1287444644002323 m")};
+        std::vector<Entity> entities;
+        std::string selected;
+        if (fixture == 2) {
+            auto shape = encode_identified_boundary_entity(IdentifiedBoundary{"chain-boundary", "measurement_boundary", {
+                {"ab", "a", "b", {{0, 0}, {1, 0}, 1}},
+                {"bc", "b", "c", {{1, 0}, {2, 0}, 1}},
+                {"cd", "c", "d", {{2, 0}, {3, 0}, 1}},
+                {"de", "d", "e", {{3, 0}, {3, 2}, 0}},
+                {"ef", "e", "f", {{3, 2}, {0, 2}, 0}},
+                {"fa", "f", "a", {{0, 2}, {0, 0}, 0}}}});
+            shape.properties["name"] = "Chain boundary";
+            selected = shape.id;
+            entities.push_back(shape);
+            // Reverse traversal must retain its ordered stable segment and vertex identities.
+            chain.bindings = {{selected, WallEndpointRole::end, "cd", "d"},
+                {selected, WallEndpointRole::start, "cd", "c"},
+                {selected, WallEndpointRole::end, "bc", "c"},
+                {selected, WallEndpointRole::start, "bc", "b"},
+                {selected, WallEndpointRole::end, "ab", "b"},
+                {selected, WallEndpointRole::start, "ab", "a"}};
+        } else {
+            for (std::size_t i = 0; i < pieces; ++i) {
+                auto piece = wall(); piece.id = "chain-wall-" + std::to_string(i);
+                piece.properties["name"] = "Chain curve " + std::to_string(i + 1);
+                piece.properties["baseline"] = {{"start", {static_cast<double>(i), 0}},
+                    {"end", {static_cast<double>(i + 1), 0}}, {"sweep_radians", 1.0}};
+                piece.properties["thickness_m"] = 0.1;
+                if (i == 0) selected = piece.id;
+                entities.push_back(piece);
+                chain.bindings.push_back({piece.id, WallEndpointRole::start});
+                chain.bindings.push_back({piece.id, WallEndpointRole::end});
+                if (i > 0) {
+                    const PersistentConstraint seam{"seam-" + std::to_string(i), ConstraintRelationKind::coincident,
+                        {{"chain-wall-" + std::to_string(i - 1), WallEndpointRole::end},
+                            {piece.id, WallEndpointRole::start}}};
+                    entities.push_back(encode_constraint_entity(seam));
+                }
+            }
+        }
+        auto encoded = encode_constraint_entity(chain);
+        encoded.properties["vendor_property"] = "retain envelope";
+        encoded.properties["bindings"].back()["vendor_binding"] = "retain last member";
+        encoded.properties["quantity_entries"]["/length_m"]["vendor_receipt"] = "retain receipt";
+        encoded.properties["quantity_entries"]["/future_dimension"] = {{"version", 99}, {"opaque", "retain unrelated quantity"}};
+        encoded.extensions["vendor_extension"] = "retain extension";
+        entities.push_back(encoded);
+        auto document = Document::create(entities);
+        const auto original = document.snapshot();
+        ConstraintDialog edit(original, QString::fromStdString(selected), true);
+        auto& operation = combo(edit, "constraintOperation");
+        operation.setCurrentIndex(operation.findData(2));
+        auto& existing = combo(edit, "existingConstraint");
+        existing.setCurrentIndex(existing.findData(QString::fromStdString(chain.id)));
+        auto* length = edit.findChild<QLineEdit*>("constraintLength");
+        require(length && length->text().toStdString() == chain.length->original_expression,
+            "chain editor must load the original exact total expression");
+        // Disabled controls must not be able to reinterpret a chain through
+        // programmatic selection changes or their ordinary prefill callbacks.
+        auto& relation = combo(edit, "constraintRelation");
+        relation.setCurrentIndex(relation.findData(static_cast<int>(ConstraintRelationKind::fixed_length)));
+        auto& first_binding = combo(edit, "constraintBinding0");
+        first_binding.setCurrentIndex((first_binding.currentIndex() + 1) % first_binding.count());
+        require(relation.currentData().toInt() == static_cast<int>(ConstraintRelationKind::fixed_arc_length) &&
+                length->text().toStdString() == chain.length->original_expression,
+            "pair-only controls must not change saved chain type or prefill only its first curve");
+        edit.setLengthExpression("12 ft");
+        if (!edit.previewEdit()) throw std::runtime_error(edit.lastError().toStdString());
+        require(edit.submit() && edit.acceptedPreview(), "chain total edit must Preview and Apply");
+        const auto preview = *edit.acceptedPreview();
+        const auto& candidate = preview.candidate_entities();
+        const auto& saved_entity = candidate.at(chain.id);
+        const auto saved = *decode_constraint_entity(saved_entity).constraint;
+        require(saved.bindings == chain.bindings && saved.relation == ConstraintRelationKind::fixed_arc_length &&
+                saved_entity.properties.at("version") == 4,
+            "editing the total must preserve the complete ordered arc chain instead of its first curve");
+        require(saved.length && encode_constraint_quantity_receipt(*saved.length) ==
+                encode_constraint_quantity_receipt(parse_quantity("12 ft")),
+            "chain total edit must persist the entered exact quantity");
+        require(saved_entity.properties.at("bindings") == encoded.properties.at("bindings") &&
+                saved_entity.properties.at("vendor_property") == encoded.properties.at("vendor_property") &&
+                saved_entity.extensions == encoded.extensions &&
+                saved_entity.properties.at("quantity_entries").at("/future_dimension") ==
+                    encoded.properties.at("quantity_entries").at("/future_dimension"),
+            "chain total edit must preserve opaque envelope, binding and unrelated quantity metadata");
+        // Receipt metadata belongs to the previous quantity. The codec
+        // intentionally replaces it when the exact physical total changes.
+        require(saved_entity.properties.at("quantity_entries").at("/length_m") ==
+                encode_constraint_quantity_receipt(parse_quantity("12 ft")),
+            "changed chain total must replace stale receipt metadata with the fresh exact quantity");
+        require_near(resolve_constraint_arc_length(saved, candidate), 3.6576);
+        for (const auto& [id, entity] : original.entities()) if (entity.type == "constraint" && id != chain.id)
+            require(candidate.at(id) == entity, "chain total edit must preserve every relation in the existing graph");
+        require(document.snapshot().entities() == original.entities(), "chain Preview and submission mutated the source");
+        auto* membership = edit.findChild<QLabel*>("constraintArcChain");
+        require(membership && !membership->isHidden() && membership->text().contains(QString::number(pieces)) &&
+                membership->text().contains("total", Qt::CaseInsensitive),
+            "chain editor must explain segment membership and total-length semantics");
+        require(!combo(edit, "constraintRelation").isEnabled(), "chain editing must lock its relationship type");
+        for (const auto* field : {"constraintBinding0", "constraintBinding1", "constraintBinding2", "constraintBinding3"})
+            require(combo(edit, field).isHidden() && !combo(edit, field).isEnabled(),
+                "chain editor must hide and disable pair-only endpoint controls");
+        capture(edit, fixture == 0 ? "physical-curve-chain-total" : fixture == 1
+            ? "physical-three-curve-chain-total" : "physical-boundary-chain-total");
+        apply_constraint_authoring(document, *edit.acceptedPreview());
+        const auto applied = document.snapshot();
+        require(applied.entities().at(chain.id) == saved_entity, "Apply must persist the complete chain preview");
+        operation.setCurrentIndex(operation.findData(1));
+        require(combo(edit, "constraintRelation").isEnabled() && !combo(edit, "constraintBinding0").isHidden() &&
+                combo(edit, "constraintBinding0").isEnabled() && membership->isHidden(),
+            "leaving chain editing must restore ordinary relationship authoring controls");
+        document.undo(document.revision());
+        require(document.snapshot().entities() == original.entities(), "chain total edit must undo atomically");
+        document.redo(document.revision());
+        require(document.snapshot().entities() == applied.entities(), "chain total edit must redo atomically");
+        const auto restored = document.snapshot();
+        ConstraintDialog cancel(restored, QString::fromStdString(selected), true);
+        auto& cancel_operation = combo(cancel, "constraintOperation");
+        cancel_operation.setCurrentIndex(cancel_operation.findData(2));
+        combo(cancel, "existingConstraint").setCurrentIndex(combo(cancel, "existingConstraint").findData(QString::fromStdString(chain.id)));
+        require(!cancel.previewEdit() && cancel.lastError().contains("makes no document change"),
+            "unchanged chain total must retain the no-op rejection contract");
+        cancel.setLengthExpression("bad total");
+        require(!cancel.previewEdit() && !cancel.submit(), "invalid chain total must reject Preview and Apply");
+        cancel.setLengthExpression("4 m");
+        require(cancel.previewEdit(), "chain target must preview before Cancel");
+        cancel.findChild<QDialogButtonBox*>()->button(QDialogButtonBox::Cancel)->click();
+        require(!cancel.acceptedPreview() && document.snapshot().entities() == applied.entities(),
+            "Cancel must discard the complete chain edit");
+        ConstraintDialog remove(restored, QString::fromStdString(selected), true);
+        auto& remove_operation = combo(remove, "constraintOperation");
+        remove_operation.setCurrentIndex(remove_operation.findData(3));
+        combo(remove, "existingConstraint").setCurrentIndex(combo(remove, "existingConstraint").findData(QString::fromStdString(chain.id)));
+        require(remove.previewEdit() && remove.submit(), "chain removal must remain an explicit operation");
+        apply_constraint_authoring(document, *remove.acceptedPreview());
+        auto without_chain = applied.entities(); without_chain.erase(chain.id);
+        require(document.snapshot().entities() == without_chain, "chain removal must preserve geometry and other graph relations");
+    }
+}
+
 void physical_curve_length_boundary_workflow_and_invalid_bindings() {
     auto shape = decode_identified_boundary_entity(boundary("region", 0, 0));
     const auto physical = arc_from_chord_arc_length({4, 0}, {4, 4}, 5, false);
@@ -1236,6 +1380,11 @@ int main(int argc, char** argv) {
             std::cout << "Connected curve rigid workflows passed\n";
             return 0;
         }
+        if (app.arguments().contains(QStringLiteral("--arc-chain-edit-only"))) {
+            physical_curve_chain_total_editing();
+            std::cout << "Physical curve chain editing passed\n";
+            return 0;
+        }
         fresh_measured_curve_transform_preserves_source();
         connected_curve_rigid_transforms_preserve_supported_motion();
         generic_curve_transform_and_connected_refusal();
@@ -1243,6 +1392,7 @@ int main(int argc, char** argv) {
         direct_curve_length_connected_boundary_and_host();
         direct_curve_length_workspace_entrypoints();
         physical_curve_length_wall_workflow();
+        physical_curve_chain_total_editing();
         physical_curve_length_boundary_workflow_and_invalid_bindings();
         resize_preview_anchor_and_invalidation();
         relationship_create_edit_conflict_remove();
