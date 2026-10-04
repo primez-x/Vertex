@@ -20340,11 +20340,12 @@ public:
     }
 
     static Command boundaryGeometryCommand(const DocumentSnapshot& source,
-        const BoundaryGeometryEdit& edit, bool move_related_objects) {
+        const BoundaryGeometryEdit& edit, bool move_related_objects,
+        std::optional<Quantity> exact_length = std::nullopt) {
         ConstraintAuthoringIntent intent;
         if (edit.kind==BoundaryGeometryEditKind::move_vertex)
             intent.boundary_vertex_move=BoundaryVertexMoveIntent{edit,move_related_objects};
-        else intent.boundary_resize=BoundaryResizeIntent{edit,move_related_objects};
+        else intent.boundary_resize=BoundaryResizeIntent{edit,move_related_objects,std::move(exact_length)};
         intent.message=edit.kind==BoundaryGeometryEditKind::move_vertex
             ? "move boundary vertex and related objects" : "resize boundary edge and related objects";
         const auto preview=preview_constraint_authoring(source,intent);
@@ -20363,7 +20364,8 @@ public:
     }
 
     bool applySelectedBoundaryGeometryEdit(
-        BoundaryGeometryEdit edit, std::optional<Revision> expected_revision = std::nullopt) {
+        BoundaryGeometryEdit edit, std::optional<Revision> expected_revision = std::nullopt,
+        std::optional<Quantity> exact_length = std::nullopt) {
         if (!m_document->is_editable()) {
             setError(QStringLiteral("This document is read-only."));
             return false;
@@ -20383,7 +20385,7 @@ public:
                 throw std::invalid_argument("The boundary changed before the edit was committed.");
             const Command command=(edit.kind==BoundaryGeometryEditKind::resize_segment ||
                                    edit.kind==BoundaryGeometryEditKind::move_vertex)
-                ? boundaryGeometryCommand(source,edit,true)
+                ? boundaryGeometryCommand(source,edit,true,std::move(exact_length))
                 : Command{EditBoundaryGeometry{revision,std::move(edit)}};
             (void)Document::preview_command(source, command);
             applyDocumentCommand(command);
@@ -20432,7 +20434,7 @@ public:
             const auto selected=selectedEntity();
             if (selected && selected->type=="measurement_linework")
                 return applySelectedMeasuredStrokeGeometryEdit(edit,quantity,expected_revision);
-            return applySelectedBoundaryGeometryEdit(std::move(edit), expected_revision);
+            return applySelectedBoundaryGeometryEdit(std::move(edit), expected_revision, quantity);
         } catch (const std::exception& error) {
             setError(QStringLiteral("Boundary edge length: %1")
                          .arg(QString::fromUtf8(error.what())));
@@ -34456,6 +34458,7 @@ private:
         const auto source = m_document->snapshot();
         const bool changed_document = m_appraisal_details_document.lock() != m_document;
         const bool changed_selection = changed_document || m_appraisal_details_selection != m_selected_ids;
+        const bool was_configured = m_appraisal_details->report() && m_appraisal_details->report()->configured;
         m_appraisal_details_document = m_document;
         m_appraisal_details_revision = source.revision();
         m_appraisal_details_document_id = source.document_id();
@@ -34468,7 +34471,11 @@ private:
             m_appraisal_details->setDocument(source, property ? property->id : std::string{},m_metric_units,&semantic_visibility);
             // An independently chosen row survives units, visibility and document refreshes.
             // Follow the canvas only when its actual selection changes.
-            if (changed_selection) {
+            // Setup can populate the area rows while the canvas selection stays
+            // unchanged. Follow that existing selection when appraisal is enabled.
+            const bool newly_configured = !was_configured && m_appraisal_details->report() &&
+                m_appraisal_details->report()->configured;
+            if (changed_selection || newly_configured) {
                 const auto selected = source.entities().find(m_selected_id.toStdString());
                 m_appraisal_details->setSelectedBoundary(m_selected_ids.size() == 1 && selected != source.entities().end() &&
                     is_closed_boundary_entity(selected->second.type) ? m_selected_id : QString{});
@@ -37406,7 +37413,8 @@ public:
             auto* help = new QLabel(QStringLiteral(
                 "Length and vertex edits preserve curve sweeps. Curvature reconstruction keeps both endpoints fixed. "
                 "Vertex X/Y are absolute plan coordinates; bare values use the current length units. "
-                "For a wall-derived exterior, moving a corner also updates its physical source walls and attached geometry."), &dialog);
+                "For a wall-derived exterior, changing a length or moving a corner also updates its physical source walls. "
+                "Use Move related objects to control attached geometry."), &dialog);
             help->setWordWrap(true);
             layout->addWidget(help);
             auto* form = new QFormLayout;
@@ -37577,6 +37585,7 @@ public:
                         throw std::invalid_argument("Choose a boundary corner.");
                     BoundaryGeometryEdit edit;
                     edit.boundary_id = selected->id;
+                    std::optional<Quantity> exact_length;
                     edit.target_id = original_edge.segment_id;
                     edit.kind = curve ? BoundaryGeometryEditKind::reconstruct_arc : BoundaryGeometryEditKind::resize_segment;
                     if (vertex) {
@@ -37614,15 +37623,16 @@ public:
                         }
                         edit.arc_construction = std::move(receipt);
                     } else {
-                        edit.target_length_metres = parse_quantity(length->text().toStdString(),
-                            context.metric_units ? Unit::metre : Unit::foot).metres;
+                        exact_length = parse_quantity(length->text().toStdString(),
+                            context.metric_units ? Unit::metre : Unit::foot);
+                        edit.target_length_metres = exact_length->metres;
                         edit.fixed_endpoint = fixed->currentData().toString() == QStringLiteral("end")
                             ? BoundaryFixedEndpoint::end : BoundaryFixedEndpoint::start;
                         edit.move_connected = connected->isChecked();
                     }
                     const auto anchor_endpoint=edit.fixed_endpoint;
                     Command command = curve ? Command{EditBoundaryGeometry{source.revision(), edit}}
-                        : boundaryGeometryCommand(source,edit,related->isChecked());
+                        : boundaryGeometryCommand(source,edit,related->isChecked(),exact_length);
                     const auto proposed = Document::preview_command(source, command);
                     const auto& proposed_entity = proposed.entities().at(selected->id);
                     if (vertex) {

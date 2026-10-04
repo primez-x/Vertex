@@ -1,4 +1,27 @@
-# Vertex project formats v1 through v38
+# Vertex project formats v1 through v39
+
+## Physical-source measured edge resizing (v39)
+
+Constraint-command envelope 13 retains an `exterior_segment_resize` intent:
+the current measured boundary and stable segment IDs, exact entered length
+receipt, fixed start/end endpoint, local boundary-chain movement and movement
+of other connected objects. The two movement choices are independent.
+Reconstruction of the measured boundary's physical perimeter is mandatory.
+
+Replay reconstructs the requested analytical outline, inverts its wall offsets,
+validates physical contacts and constraints, and regenerates current measured
+consumers. The final selected edge must retain its requested analytical length,
+anchor and signed sweep. Physical wall arc sweeps can change when their offset
+joins are trimmed. Derived boundary coordinates remain the actual forward result;
+the requested outline cannot substitute for source-derived geometry.
+
+The new intent cannot borrow ordinary physical, asset, split, corner or rigid
+mutation authority. Dependent measured-stroke completion retains envelope 13.
+All retained commands with this intent require native 39 / extraction 37,
+including undone and deleted histories. Entity-only materialized imports with
+no retained resize intent keep their existing entity/archive reader floors;
+they do not claim to preserve the absent entered-length receipt. Earlier command
+dialects retain their existing representation and replay semantics.
 
 ## Whole-wall relationship membership (v38)
 

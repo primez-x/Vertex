@@ -31,6 +31,18 @@ struct WallMeasurementResult {
     const ExteriorCornerMoveIntent& intent);
 [[nodiscard]] nlohmann::json encode_exterior_corner_move(const ExteriorCornerMoveIntent& intent);
 [[nodiscard]] ExteriorCornerMoveIntent decode_exterior_corner_move(const nlohmann::json& value);
+// Resizes the measured outline analytically, reconstructs physical sources,
+// then checks the final source-derived selected length, anchor and sweep after
+// solving and source completion. The two movement flags remain independent.
+[[nodiscard]] std::map<std::string, Entity, std::less<>> exterior_segment_resize_physical_entities(
+    const std::map<std::string, Entity, std::less<>>& original,
+    const ExteriorSegmentResizeIntent& intent);
+[[nodiscard]] nlohmann::json encode_exterior_segment_resize(const ExteriorSegmentResizeIntent& intent);
+[[nodiscard]] ExteriorSegmentResizeIntent decode_exterior_segment_resize(const nlohmann::json& value);
+void validate_exterior_segment_resize_result(
+    const std::map<std::string, Entity, std::less<>>& original,
+    const std::map<std::string, Entity, std::less<>>& final,
+    const ExteriorSegmentResizeIntent& intent);
 void validate_exterior_corner_physical_contacts(
     const std::map<std::string, Entity, std::less<>>& original,
     const std::map<std::string, Entity, std::less<>>& proposed);

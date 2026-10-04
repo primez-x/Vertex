@@ -3,6 +3,7 @@
 #include "sketch/boundary_entity.hpp"
 #include "sketch/boundary_integrity.hpp"
 #include "sketch/constraint_integrity.hpp"
+#include "sketch/constraint_entity.hpp"
 #include "sketch/constraint_wall_edit.hpp"
 #include "sketch/geometry_operations.hpp"
 #include "sketch/project_organization.hpp"
@@ -1322,11 +1323,11 @@ std::vector<std::string> exterior_corner_perimeter_ids(
     catch (const std::invalid_argument&) { return derive_legacy_exterior_wall_measurement(original,ids).ordered_wall_ids; }
 }
 
-std::map<std::string, Entity, std::less<>> exterior_corner_physical_entities(
+static std::map<std::string, Entity, std::less<>> inverse_exterior_outline(
     const std::map<std::string, Entity, std::less<>>& original,
-    const ExteriorCornerMoveIntent& intent) {
-    (void)encode_exterior_corner_move(intent);
-    const auto found = original.find(intent.boundary_id);
+    const std::string& boundary_id, const Boundary& requested, bool move_connected_objects,
+    bool restore_shared_vertices = false) {
+    const auto found = original.find(boundary_id);
     if (found == original.end()) reject("Exterior corner measured owner does not exist");
     const auto& owner = found->second;
     const auto ids = exterior_wall_measurement_source_ids(owner);
@@ -1359,15 +1360,7 @@ std::map<std::string, Entity, std::less<>> exterior_corner_physical_entities(
         if (matches) { old = std::move(derived); break; }
     }
     if (!old || matches != 1) reject("Exterior corner requires a current unambiguous physical wall source");
-    auto requested = actual;
-    bool vertex_found = false;
-    for (std::size_t i = 0; i < identified.segments.size(); ++i)
-        if (identified.segments[i].start_vertex_id == intent.vertex_id) {
-            requested[i].start = intent.target_position;
-            requested[(i + requested.size() - 1) % requested.size()].end = intent.target_position;
-            vertex_found = true;
-        }
-    if (!vertex_found) reject("Exterior corner stable vertex does not exist");
+    if (requested.size() != actual.size()) reject("Exterior inverse requested topology differs from its source");
     if (const auto errors = validate_boundary(requested); !errors.empty())
         reject("Exterior corner requested outline is invalid: " + errors.front().message);
     const auto walls = read_source_walls(original, ids);
@@ -1379,7 +1372,32 @@ std::map<std::string, Entity, std::less<>> exterior_corner_physical_entities(
         wall.thickness = -wall.thickness; // Exact analytical inverse, including unequal thicknesses.
         ordered.push_back(std::move(wall));
     }
-    const auto inverse = offset_loop(requested, ordered, OffsetKernel::stable);
+    auto inverse = offset_loop(requested, ordered, OffsetKernel::stable);
+    if (restore_shared_vertices) {
+        // A corner is one physical vertex shared by both adjacent walls. Restore
+        // a nearly unchanged corner once, before restoring any unchanged whole
+        // baseline; independent wall restoration can otherwise leave an exact
+        // cycle gap between an old coordinate and its rounded inverse result.
+        // Historical corner proofs keep their original restoration arithmetic.
+        for (std::size_t i = 0; i < inverse.size(); ++i) {
+            const auto previous = (i + inverse.size() - 1) % inverse.size();
+            const auto& old_baseline = ordered[i].baseline;
+            const auto& old_previous = ordered[previous].baseline;
+            const auto old_start = dot(subtract(actual[i].end, actual[i].start),
+                                       subtract(old_baseline.end, old_baseline.start)) < 0 ?
+                old_baseline.end : old_baseline.start;
+            const auto old_end = dot(subtract(actual[previous].end, actual[previous].start),
+                                     subtract(old_previous.end, old_previous.start)) < 0 ?
+                old_previous.start : old_previous.end;
+            if (old_start.x == old_end.x && old_start.y == old_end.y &&
+                inverse[i].start.x == inverse[previous].end.x &&
+                inverse[i].start.y == inverse[previous].end.y &&
+                distance(inverse[i].start, old_start) <= 1e-12) {
+                inverse[i].start = old_start;
+                inverse[previous].end = old_start;
+            }
+        }
+    }
     auto candidate = original;
     std::map<std::string, Segment, std::less<>> targets;
     for (std::size_t i = 0; i < inverse.size(); ++i) {
@@ -1390,7 +1408,10 @@ std::map<std::string, Entity, std::less<>> exterior_corner_physical_entities(
         }
         if (distance(next.start, old_baseline.start) <= 1e-12 &&
             distance(next.end, old_baseline.end) <= 1e-12 &&
-            std::abs(next.sweep_radians - old_baseline.sweep_radians) <= 1e-12)
+            std::abs(next.sweep_radians - old_baseline.sweep_radians) <= 1e-12 &&
+            (!restore_shared_vertices || (next.start.x == old_baseline.start.x &&
+                next.start.y == old_baseline.start.y && next.end.x == old_baseline.end.x &&
+                next.end.y == old_baseline.end.y)))
             next = old_baseline;
         targets.emplace(ordered[i].id, next);
     }
@@ -1422,7 +1443,7 @@ std::map<std::string, Entity, std::less<>> exterior_corner_physical_entities(
                 } else destination = proposed;
             }
             if (destination && distance(endpoint, *destination) > 1e-12) {
-                if (!intent.move_connected_objects) reject("Exterior corner would detach a frozen connected wall");
+                if (!move_connected_objects) reject("Exterior corner would detach a frozen connected wall");
                 (start ? next.start : next.end) = *destination;
             }
         }
@@ -1474,6 +1495,125 @@ std::map<std::string, Entity, std::less<>> exterior_corner_physical_entities(
             reject("Exterior corner cannot reproduce the requested analytical outline within roundoff tolerance");
     }
     return candidate;
+}
+
+std::map<std::string, Entity, std::less<>> exterior_corner_physical_entities(
+    const std::map<std::string, Entity, std::less<>>& original,
+    const ExteriorCornerMoveIntent& intent) {
+    (void)encode_exterior_corner_move(intent);
+    const auto found = original.find(intent.boundary_id);
+    if (found == original.end()) reject("Exterior corner measured owner does not exist");
+    const auto identified = decode_identified_boundary_entity(found->second);
+    auto requested = boundary_geometry(identified);
+    bool vertex_found = false;
+    for (std::size_t i = 0; i < identified.segments.size(); ++i)
+        if (identified.segments[i].start_vertex_id == intent.vertex_id) {
+            requested[i].start = intent.target_position;
+            requested[(i + requested.size() - 1) % requested.size()].end = intent.target_position;
+            vertex_found = true;
+        }
+    if (!vertex_found) reject("Exterior corner stable vertex does not exist");
+    return inverse_exterior_outline(original, intent.boundary_id, requested, intent.move_connected_objects);
+}
+
+nlohmann::json encode_exterior_segment_resize(const ExteriorSegmentResizeIntent& intent) {
+    if (intent.fixed_endpoint != BoundaryFixedEndpoint::start && intent.fixed_endpoint != BoundaryFixedEndpoint::end)
+        reject("Exterior segment resize fixed endpoint is unsupported");
+    BoundaryGeometryEdit edit;
+    edit.kind = BoundaryGeometryEditKind::resize_segment;
+    edit.boundary_id = intent.boundary_id;
+    edit.target_id = intent.segment_id;
+    edit.target_length_metres = intent.exact_length.metres;
+    edit.fixed_endpoint = intent.fixed_endpoint;
+    edit.move_connected = intent.move_boundary_chain;
+    validate_boundary_geometry_edit(edit);
+    const auto receipt = encode_constraint_quantity_receipt(intent.exact_length);
+    // The shared receipt encoder reparses exact input; positive finite geometry
+    // validation above also excludes unusable target magnitudes and anchors.
+    return {{"version", 1}, {"boundary_id", intent.boundary_id}, {"segment_id", intent.segment_id},
+        {"exact_length", receipt}, {"fixed_endpoint", intent.fixed_endpoint == BoundaryFixedEndpoint::start ? "start" : "end"},
+        {"move_boundary_chain", intent.move_boundary_chain}, {"move_connected_objects", intent.move_connected_objects}};
+}
+
+ExteriorSegmentResizeIntent decode_exterior_segment_resize(const nlohmann::json& value) {
+    if (!value.is_object() || value.size() != 7 || !value.contains("version") ||
+        !value.at("version").is_number_integer() || value.at("version") != 1 ||
+        !value.contains("boundary_id") || !value.at("boundary_id").is_string() ||
+        !value.contains("segment_id") || !value.at("segment_id").is_string() ||
+        !value.contains("exact_length") || !value.contains("fixed_endpoint") ||
+        !value.at("fixed_endpoint").is_string() ||
+        (value.at("fixed_endpoint") != "start" && value.at("fixed_endpoint") != "end") ||
+        !value.contains("move_boundary_chain") || !value.at("move_boundary_chain").is_boolean() ||
+        !value.contains("move_connected_objects") || !value.at("move_connected_objects").is_boolean())
+        reject("Exterior segment resize proof contains unsupported fields");
+    ExteriorSegmentResizeIntent result{value.at("boundary_id").get<std::string>(), value.at("segment_id").get<std::string>(),
+        decode_constraint_quantity_receipt(value.at("exact_length")),
+        value.at("fixed_endpoint") == "start" ? BoundaryFixedEndpoint::start : BoundaryFixedEndpoint::end,
+        value.at("move_boundary_chain").get<bool>(), value.at("move_connected_objects").get<bool>()};
+    if (value.at("exact_length") != encode_constraint_quantity_receipt(result.exact_length))
+        reject("Exterior segment resize exact quantity receipt contains unsupported fields");
+    (void)encode_exterior_segment_resize(result);
+    return result;
+}
+
+std::map<std::string, Entity, std::less<>> exterior_segment_resize_physical_entities(
+    const std::map<std::string, Entity, std::less<>>& original,
+    const ExteriorSegmentResizeIntent& intent) {
+    (void)encode_exterior_segment_resize(intent);
+    const auto found = original.find(intent.boundary_id);
+    if (found == original.end()) reject("Exterior resize measured owner does not exist");
+    const auto identified = decode_identified_boundary_entity(found->second);
+    const auto requested = set_boundary_segment_length(identified, intent.segment_id, intent.exact_length.metres,
+                                                       intent.fixed_endpoint, intent.move_boundary_chain);
+    return inverse_exterior_outline(original, intent.boundary_id, boundary_geometry(requested), intent.move_connected_objects, true);
+}
+
+void validate_exterior_segment_resize_result(
+    const std::map<std::string, Entity, std::less<>>& original,
+    const std::map<std::string, Entity, std::less<>>& final,
+    const ExteriorSegmentResizeIntent& intent) {
+    (void)encode_exterior_segment_resize(intent);
+    const auto old_owner = original.find(intent.boundary_id);
+    const auto final_owner = final.find(intent.boundary_id);
+    if (old_owner == original.end() || final_owner == final.end() ||
+        !old_owner->second.properties.contains("wall_measurement_source") ||
+        !final_owner->second.properties.contains("wall_measurement_source") ||
+        !wall_measurement_source_current(original, old_owner->second) ||
+        !wall_measurement_source_current(final, final_owner->second))
+        reject("Exterior resize result requires current original and final physical wall sources");
+    const auto before = decode_identified_boundary_entity(old_owner->second);
+    const auto after = decode_identified_boundary_entity(final_owner->second);
+    auto old_sources = exterior_wall_measurement_source_ids(old_owner->second);
+    auto final_sources = exterior_wall_measurement_source_ids(final_owner->second);
+    std::sort(old_sources.begin(), old_sources.end());
+    std::sort(final_sources.begin(), final_sources.end());
+    if (old_sources != final_sources)
+        reject("Exterior resize result changed its original physical source identities");
+    const auto selected = [&](const IdentifiedBoundary& owner) -> const Segment& {
+        const auto edge = std::find_if(owner.segments.begin(), owner.segments.end(),
+            [&](const auto& value) { return value.segment_id == intent.segment_id; });
+        if (edge == owner.segments.end()) reject("Exterior resize selected stable edge does not exist");
+        return edge->segment;
+    };
+    const auto& old_edge = selected(before);
+    const auto& edge = selected(after);
+    const auto expected = set_boundary_segment_length(before, intent.segment_id, intent.exact_length.metres,
+                                                       intent.fixed_endpoint, intent.move_boundary_chain);
+    const auto& target = selected(expected);
+    const auto anchor = intent.fixed_endpoint == BoundaryFixedEndpoint::start ? old_edge.start : old_edge.end;
+    const auto actual_anchor = intent.fixed_endpoint == BoundaryFixedEndpoint::start ? edge.start : edge.end;
+    if (std::abs(segment_length(edge) - intent.exact_length.metres) > default_geometry_tolerance_metres ||
+        distance(anchor, actual_anchor) > default_geometry_tolerance_metres ||
+        (edge.sweep_radians == 0) != (old_edge.sweep_radians == 0) ||
+        (edge.sweep_radians != 0 && (std::signbit(edge.sweep_radians) != std::signbit(old_edge.sweep_radians) ||
+            std::max(arc_support(edge).radius, arc_support(target).radius) *
+                std::abs(edge.sweep_radians - old_edge.sweep_radians) > default_geometry_tolerance_metres)) ||
+        distance(edge.start, target.start) > default_geometry_tolerance_metres ||
+        distance(edge.end, target.end) > default_geometry_tolerance_metres ||
+        distance(point_at_fraction(edge, 0.25), point_at_fraction(target, 0.25)) > default_geometry_tolerance_metres ||
+        distance(point_at_fraction(edge, 0.5), point_at_fraction(target, 0.5)) > default_geometry_tolerance_metres ||
+        distance(point_at_fraction(edge, 0.75), point_at_fraction(target, 0.75)) > default_geometry_tolerance_metres)
+        reject("Exterior resize final forward geometry differs from its requested length, anchor or circular sweep");
 }
 
 std::vector<BoundaryGeometryEdit> exterior_wall_measurement_source_updates(

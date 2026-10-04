@@ -236,6 +236,7 @@ ConstraintAuthoringIntent normalize_intent(const ConstraintAuthoringIntent& inpu
         static_cast<unsigned>(result.boundary_resize.has_value()) +
         static_cast<unsigned>(result.boundary_vertex_move.has_value()) +
         static_cast<unsigned>(result.exterior_corner_move.has_value()) +
+        static_cast<unsigned>(result.exterior_segment_resize.has_value()) +
         static_cast<unsigned>(result.measured_stroke_resize.has_value()) +
         static_cast<unsigned>(result.measured_stroke_vertex_move.has_value()) +
         static_cast<unsigned>(result.measured_stroke_transform.has_value());
@@ -272,6 +273,12 @@ ConstraintAuthoringIntent normalize_intent(const ConstraintAuthoringIntent& inpu
         if (edit.fixed_endpoint != BoundaryFixedEndpoint::start &&
             edit.fixed_endpoint != BoundaryFixedEndpoint::end)
             invalid("Boundary resize anchor is invalid");
+        if (result.boundary_resize->exact_length) {
+            auto& quantity=*result.boundary_resize->exact_length;
+            quantity=normalize_positive_quantity(quantity);
+            if (quantity.metres!=edit.target_length_metres)
+                invalid("Boundary resize differs from its exact entered quantity");
+        }
     }
     if (result.boundary_vertex_move.has_value()) {
         const auto& edit = result.boundary_vertex_move->edit;
@@ -280,6 +287,10 @@ ConstraintAuthoringIntent normalize_intent(const ConstraintAuthoringIntent& inpu
         validate_boundary_geometry_edit(edit);
     }
     if (result.exterior_corner_move) (void)encode_exterior_corner_move(*result.exterior_corner_move);
+    if (result.exterior_segment_resize) {
+        result.exterior_segment_resize->exact_length=normalize_positive_quantity(result.exterior_segment_resize->exact_length);
+        (void)encode_exterior_segment_resize(*result.exterior_segment_resize);
+    }
     if (result.wall_resize.has_value()) {
         if (result.wall_resize->wall_id.empty()) {
             invalid("Wall resize id cannot be empty");
@@ -342,6 +353,7 @@ ConstraintAuthoringIntent normalize_intent(const ConstraintAuthoringIntent& inpu
         !result.boundary_resize.has_value() &&
         !result.boundary_vertex_move.has_value() &&
         !result.exterior_corner_move.has_value() &&
+        !result.exterior_segment_resize.has_value() &&
         !result.measured_stroke_resize && !result.measured_stroke_vertex_move && !result.measured_stroke_transform &&
         result.relation_mutations.empty()) {
         invalid("Constraint authoring intent has no changes");
@@ -641,6 +653,19 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(
                                                         : snapshot.read_only_reason());
         }
         result.normalized_intent_ = normalize_intent(raw_intent);
+        if (result.normalized_intent_.boundary_resize) {
+            const auto resize=*result.normalized_intent_.boundary_resize;
+            const auto owner=snapshot.entities().find(resize.edit.boundary_id);
+            if (owner!=snapshot.entities().end() && owner->second.properties.contains("wall_measurement_source")) {
+                if (!resize.exact_length)
+                    invalid("Source-derived exterior resize requires the exact entered length quantity");
+                result.normalized_intent_.exterior_segment_resize=ExteriorSegmentResizeIntent{
+                    resize.edit.boundary_id,resize.edit.target_id,*resize.exact_length,resize.edit.fixed_endpoint,
+                    resize.edit.move_connected,resize.move_related_objects};
+                (void)encode_exterior_segment_resize(*result.normalized_intent_.exterior_segment_resize);
+                result.normalized_intent_.boundary_resize.reset();
+            }
+        }
         if (result.normalized_intent_.boundary_vertex_move) {
             const auto move = *result.normalized_intent_.boundary_vertex_move;
             const auto owner = snapshot.entities().find(move.edit.boundary_id);
@@ -651,6 +676,11 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(
             }
         }
         const auto& intent = result.normalized_intent_;
+        const bool exterior_edit=intent.exterior_corner_move.has_value() || intent.exterior_segment_resize.has_value();
+        const auto exterior_boundary_id=intent.exterior_corner_move ? intent.exterior_corner_move->boundary_id :
+            intent.exterior_segment_resize ? intent.exterior_segment_resize->boundary_id : std::string{};
+        const bool move_exterior_related=intent.exterior_corner_move ? intent.exterior_corner_move->move_connected_objects :
+            intent.exterior_segment_resize && intent.exterior_segment_resize->move_connected_objects;
         const BoundaryGeometryEdit* boundary_edit = intent.boundary_resize
             ? &intent.boundary_resize->edit
             : intent.boundary_vertex_move ? &intent.boundary_vertex_move->edit : nullptr;
@@ -665,13 +695,15 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(
         std::set<std::string, std::less<>> exterior_ring_ids;
         std::vector<ExteriorCornerPhysicalContact> exterior_contacts;
         std::vector<ExteriorCornerPhysicalContact> exterior_t_contacts;
-        if (intent.exterior_corner_move) {
-            const auto ring_ids = exterior_corner_perimeter_ids(snapshot.entities(),snapshot.entities().at(intent.exterior_corner_move->boundary_id));
+        if (exterior_edit) {
+            const auto ring_ids = exterior_corner_perimeter_ids(snapshot.entities(),snapshot.entities().at(exterior_boundary_id));
             exterior_ring_ids.insert(ring_ids.begin(),ring_ids.end());
             exterior_contacts = exterior_corner_physical_contact_graph(snapshot.entities());
             for (const auto& contact : exterior_contacts)
                 if (contact.station != 0 && contact.station != 1) exterior_t_contacts.push_back(contact);
-            exterior_physical = exterior_corner_physical_entities(snapshot.entities(), *intent.exterior_corner_move);
+            exterior_physical = intent.exterior_corner_move ?
+                exterior_corner_physical_entities(snapshot.entities(),*intent.exterior_corner_move) :
+                exterior_segment_resize_physical_entities(snapshot.entities(),*intent.exterior_segment_resize);
             for (const auto& [id, entity] : *exterior_physical)
                 if (entity != snapshot.entities().at(id)) exterior_physical_ids.insert(id);
             candidate = *exterior_physical;
@@ -682,8 +714,8 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(
         std::set<std::string, std::less<>> seeds;
         seeds.insert(exterior_physical_ids.begin(), exterior_physical_ids.end());
         seeds.insert(exterior_owner_ids.begin(), exterior_owner_ids.end());
-        if (intent.exterior_corner_move) {
-            const auto ids = exterior_wall_measurement_source_ids(snapshot.entities().at(intent.exterior_corner_move->boundary_id));
+        if (exterior_edit) {
+            const auto ids = exterior_wall_measurement_source_ids(snapshot.entities().at(exterior_boundary_id));
             seeds.insert(ids.begin(), ids.end());
         }
         bool has_upsert = false;
@@ -874,7 +906,7 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(
                     point_bindings.emplace(id, binding);
                     positions.emplace(id, edge.segment.start);
                     auto initial = edge.segment.start;
-                    if (intent.exterior_corner_move) {
+                    if (exterior_edit) {
                         const auto initial_edge = std::find_if(initial_boundary.segments.begin(),initial_boundary.segments.end(),
                             [&](const auto& value) { return value.start_vertex_id == edge.start_vertex_id; });
                         if (initial_edge == initial_boundary.segments.end()) invalid("Derived exterior corner lineage is missing");
@@ -898,7 +930,7 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(
                 const auto position = endpoint_position(baseline, role);
                 point_bindings.emplace(id, binding);
                 positions.emplace(id, position);
-                const auto initial = intent.exterior_corner_move
+                const auto initial = exterior_edit
                     ? endpoint_position(read_baseline(owner->second),role) : position;
                 request.points.push_back({id, initial.x, initial.y});
             }
@@ -973,7 +1005,7 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(
             fixed_points[id] = position;
         };
 
-        if (intent.exterior_corner_move) {
+        if (exterior_edit) {
             for (const auto& [id, position] : positions) {
                 const auto& binding = point_bindings.at(id);
                 if (exterior_ring_ids.contains(binding.owner_id))
@@ -984,7 +1016,7 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(
                         [&](const auto& value) { return value.start_vertex_id == binding.vertex_id; });
                     if (edge == boundary.segments.end()) invalid("Derived exterior corner lineage is missing");
                     add_fixed(binding, edge->segment.start);
-                } else if (!intent.exterior_corner_move->move_connected_objects)
+                } else if (!move_exterior_related)
                     add_fixed(binding, position);
             }
         } else if (intent.wall_geometry_move.has_value()) {
@@ -1201,7 +1233,7 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(
                 proposed.end.x == old.end.x && proposed.end.y == old.end.y && proposed.sweep_radians == old.sweep_radians) {
                 // A saved constraint can solve an attachment back to its
                 // original geometry. Discard its provisional contact redraw.
-                if (intent.exterior_corner_move && !exterior_ring_ids.contains(wall_id))
+                if (exterior_edit && !exterior_ring_ids.contains(wall_id))
                     candidate.at(wall_id) = snapshot.entities().at(wall_id);
                 continue;
             }
@@ -1288,9 +1320,11 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(
             const auto after = decode_identified_boundary_entity(candidate.at(id));
             if (after != before) result.changed_boundaries_.push_back({before, after});
         }
-        if (intent.exterior_corner_move) validate_exterior_corner_edit_topology(snapshot.entities(),candidate);
+        if (exterior_edit) validate_exterior_corner_edit_topology(snapshot.entities(),candidate);
         else validate_constraint_edit_topology(snapshot.entities(),candidate,selected_rigid_ids);
-        if (intent.exterior_corner_move) validate_exterior_corner_physical_contacts(snapshot.entities(), candidate);
+        if (exterior_edit) validate_exterior_corner_physical_contacts(snapshot.entities(), candidate);
+        if (intent.exterior_segment_resize)
+            validate_exterior_segment_resize_result(snapshot.entities(),candidate,*intent.exterior_segment_resize);
         (void)validate_boundary_integrity(candidate);
         (void)validate_constraint_integrity(candidate);
 
@@ -1640,11 +1674,13 @@ Command ConstraintAuthoringBuilder::command_for(const DocumentSnapshot& current,
         command.exterior_source_edits = recomputed.exterior_source_edits_;
         command.exterior_source_completion = !recomputed.exterior_source_edits_.empty();
         command.exterior_corner_move = recomputed.normalized_intent_.exterior_corner_move;
+        command.exterior_segment_resize = recomputed.normalized_intent_.exterior_segment_resize;
         command.measured_stroke_edits = recomputed.measured_stroke_edits_;
         command.measured_source_completion = recomputed.measured_source_completion_;
         for (const auto& wall : recomputed.changed_walls_) {
-            if (command.exterior_corner_move) {
-                const auto ids = exterior_corner_perimeter_ids(current.entities(),current.entities().at(command.exterior_corner_move->boundary_id));
+            if (command.exterior_corner_move || command.exterior_segment_resize) {
+                const auto& owner_id=command.exterior_corner_move ? command.exterior_corner_move->boundary_id : command.exterior_segment_resize->boundary_id;
+                const auto ids = exterior_corner_perimeter_ids(current.entities(),current.entities().at(owner_id));
                 if (std::find(ids.begin(),ids.end(),wall.wall_id) != ids.end()) continue;
             }
             const auto& resize = recomputed.normalized_intent_.wall_resize;

@@ -157,6 +157,17 @@ struct ExteriorCornerMoveIntent {
     bool move_connected_objects{true};
 };
 
+// Resize a selected measured exterior edge through its physical source walls.
+// The exact entry and both movement choices form independently replayed authority.
+struct ExteriorSegmentResizeIntent {
+    std::string boundary_id;
+    std::string segment_id;
+    Quantity exact_length;
+    BoundaryFixedEndpoint fixed_endpoint{BoundaryFixedEndpoint::start};
+    bool move_boundary_chain{};
+    bool move_connected_objects{true};
+};
+
 struct WallSplitMeasuredOwnerIds {
     std::string boundary_id;
     std::string vertex_id;
@@ -227,6 +238,8 @@ struct ApplyBoundaryConstraintChanges {
     bool measured_source_completion{};
     // Envelope twelve admits only this source-reconstructed split intent.
     std::optional<WallSplitIntent> wall_split;
+    // Envelope thirteen retains source-reconstructed measured-edge resize authority.
+    std::optional<ExteriorSegmentResizeIntent> exterior_segment_resize;
 };
 
 using Command = std::variant<ApplyEntityChanges, NameRevision, TranslateBoundary,

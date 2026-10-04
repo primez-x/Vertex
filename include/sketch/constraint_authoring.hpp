@@ -77,6 +77,9 @@ struct WallGeometryMoveIntent {
 struct BoundaryResizeIntent {
     BoundaryGeometryEdit edit;
     bool move_related_objects{true};
+    // Source-derived exterior edits need the entered receipt, rather than an
+    // invented expression reconstructed from the geometry's double target.
+    std::optional<Quantity> exact_length{};
 };
 
 // Move the requested stable vertex while preserving every other selected
@@ -136,6 +139,7 @@ struct ConstraintAuthoringIntent {
     std::optional<MeasuredStrokeResizeIntent> measured_stroke_resize;
     std::optional<MeasuredStrokeVertexMoveIntent> measured_stroke_vertex_move;
     std::optional<MeasuredStrokeTransformIntent> measured_stroke_transform;
+    std::optional<ExteriorSegmentResizeIntent> exterior_segment_resize;
 };
 
 struct ConstraintWallChange {

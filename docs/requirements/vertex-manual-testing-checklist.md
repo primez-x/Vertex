@@ -2609,6 +2609,12 @@ drawing; switching modes does not change existing geometry.
   - Result: Not tested
   - Notes: ______________________________
 
+- [ ] **U427 — Resize a measured exterior edge and keep its walls and GLA synchronized**
+  - Steps: Draw a closed exterior wall loop with one curved wall. Define its measured area and record appraisal facts until Details shows GLA. Select the measured area and open Edit boundary geometry. Choose the curved edge, enter an explicit length, choose which endpoint stays fixed, and preview. Try the connected boundary-chain option on and off. Cancel once, reopen and Apply. Inspect the physical walls, edge dimensions and Details; Undo/Redo, save and reopen. Repeat with a straight edge and with a physical partition attached to a moved source wall; try disabling movement of related objects.
+  - Expected: Preview shows the wall and measured-area changes together. Apply produces the entered measured-edge length while retaining the chosen endpoint and curve direction. Current dependent measured areas and GLA recalculate in one reversible edit; Cancel changes nothing. Source walls must follow their measured exterior even when movement of other related objects is disabled. An impossible locked measurement or frozen attached partition explains the conflict and cannot apply. Reopening retains the entered measurement and exact Undo history.
+  - Result: Not tested
+  - Notes: ______________________________
+
 ## Issue report template
 
 - Task ID(s):

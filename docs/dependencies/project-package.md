@@ -7,6 +7,11 @@ package adds a copy of every stored revision asset under a content-addressed
 document identity, format version, revision range, asset references, and
 integrity hashes.
 
+The packager accepts native formats 1 through 39, including whole-wall
+relationships and retained physical-source measured edge resize commands.
+Future formats are rejected. Packaging preserves the database byte-for-byte;
+the application's reader remains responsible for semantic admission.
+
 The command copies the project byte-for-byte, then reads that staged copy
 through an absolute, percent-encoded SQLite read-only URI and checks the
 database integrity, required metadata, revision head, asset metadata, and

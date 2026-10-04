@@ -1,6 +1,7 @@
 #include "sketch/desktop/appraisal_details_panel.hpp"
 #include "sketch/desktop/main_window.hpp"
 #include "sketch/wall_measurement.hpp"
+#include "sketch/boundary_entity.hpp"
 #include "support/noninteractive_errors.hpp"
 #include <QApplication>
 #include <QCheckBox>
@@ -116,6 +117,16 @@ void ansi_canonical_units_declarations_and_curve_dimensions() {
     require(trace.contains("40.0 ft") && trace.contains("10.0 ft") && trace.contains("8.0 ft") &&
         trace.contains("Year-round suitable") && trace.contains("Finish matches dwelling") && trace.contains("Primary"),
         "ANSI tenth-foot dimensions and retained source facts are visible");
+    auto identified_entities=entities;
+    identified_entities[4]=sketch::upgrade_legacy_boundary_entity(identified_entities[4]);
+    const auto identified_document=sketch::Document::create(identified_entities);
+    AppraisalDetailsPanel identified_panel;
+    identified_panel.setDocument(identified_document.snapshot(),"p",true);
+    identified_panel.setSelectedBoundary("a");
+    require(identified_panel.report() && identified_panel.report()->qualified &&
+        label(identified_panel,"appraisalDetailsTrace").contains("Boundary dimensions") &&
+        label(identified_panel,"appraisalDetailsTrace").contains("Edge 1: 10.0 ft"),
+        "ANSI boundary dimensions must remain visible for identified editable areas, not only legacy arrays");
     entities[4].properties["boundary"]=json::array({{{"start",{-.3048,0}},{"end",{.3048,0}},{"sweep_radians",std::acos(-1.0)}},
         {{"start",{.3048,0}},{"end",{-.3048,0}},{"sweep_radians",std::acos(-1.0)}}});
     document=sketch::Document::create(entities);panel.setDocument(document.snapshot(),"p",true);

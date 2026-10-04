@@ -214,7 +214,10 @@ struct AppraisalDetailsPanel::Impl {
             // A current validated trace authorizes showing these analytical edge
             // lengths; stale/invalid sources never expose this branch.
             if(owner) {
-                const auto geometry=owner->properties.find("boundary");
+                // Current editable areas store their authoritative analytical
+                // edges in segments; anonymous legacy areas may use boundary.
+                auto geometry=owner->properties.find("segments");
+                if(geometry==owner->properties.end())geometry=owner->properties.find("boundary");
                 if(geometry!=owner->properties.end() && geometry->is_array()) {
                     QStringList edges;std::size_t index=0;
                     try {
