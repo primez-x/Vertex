@@ -2480,8 +2480,15 @@ drawing; switching modes does not change existing geometry.
   - Result: Not tested
   - Notes: ______________________________
 
-## Issue report template
+## Copy appraisal rooms and exclusions
 
+- [ ] **U408 — Copy a floor with its room and internal void**
+  - Steps: Complete U407 in a test project. Select the outer measured area and Clone it with a 20 m horizontal offset. Inspect Details, then Undo and Redo. Undo again, Copy the original and Paste it. Move the pasted copy, edit one of its source lines, Undo, save/reopen and export the appraisal PDF. Try Paste into a separate project using an ANSI appraisal profile. For a sloped room, inspect the copied room's facts, then confirm its actual observations through Details > Edit facts.
+  - Expected: Clone and Paste include the room, void, measurement sources, dimensions and appearance. The original remains unchanged. The test's flat-ceiling copy adds another 96 m² of GLA: together 192 m², displayed as 2067 sq ft. Each copy's deductions refer to its own areas. One Undo removes the entire copy and Redo restores it. Editing the copy leaves original source lines unchanged. A copied sloped room withholds GLA until its observations are explicitly confirmed; raw measurements are retained. Nested Paste into an ordinary measurement project explains the unsupported destination without changing it. Reopening and PDF agree with Details.
+  - Result: Not tested
+  - Notes: ______________________________
+
+## Issue report template
 
 - Task ID(s):
 - What I did:

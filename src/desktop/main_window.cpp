@@ -404,6 +404,13 @@ void remap_entity_references(Entity& entity,
             for (auto& member : group.at("members")) lineage(member);
         }
         reference(properties,"deduction_ids");
+        // Only these schema-owned identities are references. Observed values,
+        // hashes and opaque vendor fields are not rewritten as identities.
+        if (const auto facts = properties.find("appraisal_facts"); facts != properties.end() && facts->is_object())
+            if (const auto ansi = facts->find("ansi"); ansi != facts->end() && ansi->is_object())
+                if (const auto ceiling = ansi->find("ceiling"); ceiling != ansi->end() && ceiling->is_object())
+                    if (const auto ids = ceiling->find("below_5ft_deduction_ids"); ids != ceiling->end() && ids->is_array())
+                        for (auto& id : *ids) if (id.is_string()) remap_clipboard_json(id,remap);
         if (properties.contains("segments")) {
             for (auto& segment : properties.at("segments")) {
                 for (const auto* key : {"segment_id", "start_vertex_id", "end_vertex_id"})
@@ -5497,6 +5504,55 @@ public:
         throw std::invalid_argument("The copied exterior correspondence is unavailable.");
     }
 
+    bool ansiPartitionCopyContext(const DocumentSnapshot& source, const Entity& entity) const {
+        if (entity.type != "boundary" && entity.type != "measurement_boundary") return false;
+        if (area_scope_name(entity.properties) != "building") return false;
+        const auto organization = organize_project(source);
+        const auto floor = organization.nodes.find(read_string(entity.properties,"floor_id").value_or(""));
+        const auto property_id = floor != organization.nodes.end() && floor->second.type == "floor"
+            ? floor->second.context.property_id : read_string(entity.properties,"property_id").value_or("");
+        const auto property = source.entities().find(property_id);
+        if (property == source.entities().end() || property->second.type != "property" ||
+            read_string(property->second.properties,"calculation_workflow") != "appraisal") return false;
+        const auto policy = property->second.properties.find("appraisal_policy");
+        if (policy == property->second.properties.end() || !policy->is_object() ||
+            read_string(*policy,"policy_kind") != "ansi_z765_2021") return false;
+        // The shared predicate validates supported policy versions and physical
+        // ownership, including saved boundaries without a drawing layer.
+        return ansi_appraisal_partition_context(source,entity.id);
+    }
+
+    static void revokeCopiedAppraisalObservation(const Entity& original, Entity& copy) {
+        if (!is_closed_boundary_entity(copy.type)) return;
+        auto facts = copy.properties.find("appraisal_facts");
+        if (facts == copy.properties.end() || !facts->is_object()) return;
+        auto ansi = facts->find("ansi");
+        if (ansi == facts->end() || !ansi->is_object()) return;
+        auto ceiling = ansi->find("ceiling");
+        if (ceiling == ansi->end() || !ceiling->is_object()) return;
+        const auto kind = read_string(*ceiling,"kind");
+        if (kind == "sloped") {
+            // Even an identity-only copy can have the same geometry digest.
+            // Preserve raw observations but do not claim this new room was
+            // observed. V1's absent V2 flag must remain absent in saved history.
+            const auto anchor = ceiling->find("room_boundary_id");
+            if (anchor != ceiling->end() && anchor->is_string()) *anchor = "";
+            const auto confirmed = ceiling->find("complete_room_observed");
+            if (confirmed != ceiling->end() && confirmed->is_boolean()) *confirmed = false;
+        } else if (kind == "stairs") {
+            const auto binding = ceiling->find("stair_from_floor_id");
+            if (binding == ceiling->end() || !binding->is_string()) return;
+            // Source ownership is the boundary's floor, not its observation.
+            // The clipboard contains geometry, not a destination floor registry.
+            const auto old_floor = read_string(original.properties,"floor_id");
+            const auto new_floor = read_string(copy.properties,"floor_id");
+            if (old_floor && !old_floor->empty() && binding->get<std::string>() == *old_floor && new_floor)
+                *binding = *new_floor;
+            else if (new_floor && binding->get<std::string>() == *new_floor)
+                *binding = ""; // An invalid old binding must not qualify by ID coincidence.
+        }
+    }
+
     ApplyEntityChanges validateIndependentAreaCopy(const DocumentSnapshot& source, ApplyEntityChanges command) const {
         std::set<std::string,std::less<>> copied_ids;
         std::set<std::string,std::less<>> copied_geometry_ids;
@@ -5601,15 +5657,22 @@ public:
                 throw std::invalid_argument("A copied exterior measurement is not current with its copied walls.");
         }
         const auto organization=organize_project(candidate);
+        std::vector<AppraisalPartitionAssignment> ansi_partitions;
         for (const auto& change : command.entity_changes) {
             if (change.kind != EntityChangeKind::upsert || !is_closed_boundary_entity(change.entity.type)) continue;
             const auto& copied_owner = candidate.entities().at(change.entity.id);
+            if (ansiPartitionCopyContext(candidate,copied_owner)) {
+                ansi_partitions.push_back({copied_owner.id,read_deduction_ids(copied_owner.properties)});
+                continue;
+            }
             const auto owner_context=organization.drawing_context(copied_owner.id);
             std::vector<AreaDeduction> deductions;
             for (const auto& id : read_deduction_ids(copied_owner.properties)) {
                 const auto found = candidate.entities().find(id);
                 if (found == candidate.entities().end() || !is_closed_boundary_entity(found->second.type))
                     throw std::invalid_argument("A copied deduction is unavailable.");
+                if (!read_deduction_ids(found->second.properties).empty())
+                    throw std::invalid_argument("Nested copied deductions require an explicit supported ANSI appraisal policy at the destination.");
                 const auto deduction_context=organization.drawing_context(id);
                 if (owner_context || deduction_context) {
                     if (!owner_context || !deduction_context ||
@@ -5632,6 +5695,9 @@ public:
                 owner_context ? owner_context->floor_id : read_string(copied_owner.properties,"floor_id").value_or("copy-preview"),"physical",read_boundary(copied_owner.properties),
                 deductions,read_stored_factor(copied_owner.properties).rational},profile);
         }
+        // Destination admission uses the actual destination policy. Never infer
+        // source policy from coincident hierarchy IDs in a clipboard payload.
+        (void)prepare_ansi_appraisal_partition_targets(candidate,ansi_partitions);
         return command;
     }
 
@@ -5710,6 +5776,9 @@ public:
             }
         }
         ApplyEntityChanges command{source.revision(),{}, {},"Clone area with independent deductions and source walls"};
+        for (const auto& entity : graph)
+            if (const auto found = copied.find(identities.at(entity.id)); found != copied.end())
+                revokeCopiedAppraisalObservation(entity,found->second);
         for (auto& [id,entity] : copied) command.entity_changes.push_back(EntityChange::upsert(std::move(entity)));
         return {validateIndependentAreaCopy(source,std::move(command)),identities.at(original.id)};
     }
@@ -17907,14 +17976,17 @@ public:
             if (dependency.empty()) throw std::invalid_argument("A required area copy dependency is unsupported: " + id);
             for (const auto& entity : dependency) add(entity);
         };
+        std::vector<AppraisalPartitionAssignment> ansi_partitions;
         for (std::size_t cursor = 0; cursor < graph.size(); ++cursor) {
             const auto entity = graph[cursor];
             if (!is_closed_boundary_entity(entity.type)) continue;
+            const bool ansi_partition = ansiPartitionCopyContext(snapshot,entity);
+            if (ansi_partition) ansi_partitions.push_back({entity.id,read_deduction_ids(entity.properties)});
             for (const auto& id : read_deduction_ids(entity.properties)) {
                 const auto found = snapshot.entities().find(id);
                 if (found == snapshot.entities().end() || !is_closed_boundary_entity(found->second.type))
                     throw std::invalid_argument("A copied deduction is missing or is not a closed area: " + id);
-                if (!read_deduction_ids(found->second.properties).empty())
+                if (!ansi_partition && !read_deduction_ids(found->second.properties).empty())
                     throw std::invalid_argument("A copied deduction cannot contain another deduction.");
                 add_geometry(id);
             }
@@ -17924,6 +17996,7 @@ public:
             for (const auto& wall : entity.properties.at("wall_measurement_source").at("walls"))
                 add_geometry(wall.at("id").get<std::string>());
         }
+        (void)prepare_ansi_appraisal_partition_targets(snapshot,ansi_partitions);
         includeMeasuredAreaSources(snapshot, graph);
         if (graph.size() > kMaximumClipboardEntities)
             throw std::invalid_argument("The complete measured area copy exceeds the clipboard entity limit.");
@@ -19553,6 +19626,7 @@ public:
                         }
                     }
                 }
+                revokeCopiedAppraisalObservation(original,entity);
                 changes.push_back(EntityChange::upsert(std::move(entity)));
             }
             const bool measured_placement=placeMeasuredClipboardGraph(source,changes);
@@ -21270,22 +21344,45 @@ public:
                 floor.properties["appraisal_facts"] = std::move(floor_facts);
             }
             boundary.properties["appraisal_facts"] = declarations.at("appraisal_facts");
+            const auto declared = read_appraisal_declarations(updated_property.properties, floor.properties, boundary.properties);
             if (declarations.contains("deduction_ids")) {
                 boundary.properties["deduction_ids"] = declarations.at("deduction_ids");
-                std::vector<AreaDeduction> deductions;
-                for (const auto& id : read_deduction_ids(boundary.properties)) {
+                const auto candidate = Document::preview_command(snapshot,ApplyEntityChanges{
+                    snapshot.revision(),{EntityChange::upsert(updated_property),EntityChange::upsert(floor),EntityChange::upsert(boundary)}, {},
+                    "Preview appraisal facts and retained deductions"});
+                if (ansiPartitionCopyContext(candidate,boundary)) {
+                    const auto prepared = prepare_ansi_appraisal_partition_targets(candidate,
+                        {{boundary.id,read_deduction_ids(boundary.properties)}});
+                    boundary = prepared.at(0);
+                } else {
+                    std::vector<AreaDeduction> deductions;
+                    for (const auto& id : read_deduction_ids(boundary.properties)) {
+                        const auto found = snapshot.entities().find(id);
+                        if (id == boundary.id || found == snapshot.entities().end() || !is_closed_boundary_entity(found->second.type) ||
+                            read_string(found->second.properties, "floor_id") != floor_id ||
+                            !read_deduction_ids(found->second.properties).empty())
+                            throw std::invalid_argument("Deductions must be distinct, unnested boundaries on this floor");
+                        deductions.push_back({id, read_boundary(found->second.properties)});
+                    }
+                    const CalculationProfile physical{"physical", 1, AreaUnit::square_metre, 2, {{"physical", {false, false}}}};
+                    (void)calculate_area(MeasurementArea{boundary.id, read_string(floor.properties, "building_id").value_or(""), *floor_id,
+                        "physical", read_boundary(boundary.properties), deductions, {1, 1}, AreaScope::building}, physical);
+                }
+            }
+            // A retained general exclusion may have children. Actual below-five-
+            // foot observations still require distinct leaf boundaries linked
+            // directly to this room; reconfirmation must not flatten its graph.
+            if (declared.facts.ansi) {
+                const auto links = read_deduction_ids(boundary.properties);
+                for (const auto& id : declared.facts.ansi->ceiling.below_5ft_deduction_ids) {
                     const auto found = snapshot.entities().find(id);
                     if (id == boundary.id || found == snapshot.entities().end() || !is_closed_boundary_entity(found->second.type) ||
-                        read_string(found->second.properties, "floor_id") != floor_id ||
-                        !read_deduction_ids(found->second.properties).empty())
-                        throw std::invalid_argument("Low-height deductions must be distinct, unnested boundaries on this floor");
-                    deductions.push_back({id, read_boundary(found->second.properties)});
+                        read_string(found->second.properties,"floor_id") != floor_id ||
+                        !read_deduction_ids(found->second.properties).empty() ||
+                        std::find(links.begin(),links.end(),id) == links.end())
+                        throw std::invalid_argument("Low-height deductions must be distinct leaf boundaries linked to this room on this floor");
                 }
-                const CalculationProfile physical{"physical", 1, AreaUnit::square_metre, 2, {{"physical", {false, false}}}};
-                (void)calculate_area(MeasurementArea{boundary.id, read_string(floor.properties, "building_id").value_or(""), *floor_id,
-                    "physical", read_boundary(boundary.properties), deductions, {1, 1}, AreaScope::building}, physical);
             }
-            (void)read_appraisal_declarations(updated_property.properties, floor.properties, boundary.properties);
             const auto& next_policy = updated_property.properties.at("appraisal_policy");
             if (next_policy.value("policy_kind", std::string{}) == "ansi_z765_2021" &&
                 !ansi_property_kind_supported(QString::fromStdString(next_policy.value("property_kind", std::string{}))))

@@ -939,11 +939,19 @@ if(SKETCH_BUILD_DESKTOP)
     qt_add_resources(nested_measured_area_desktop_tests nested_measured_area_fonts
       PREFIX "/fonts" BASE assets/fonts FILES assets/fonts/Inter.ttf)
     add_test(NAME nested_measured_area_desktop COMMAND nested_measured_area_desktop_tests)
+    add_executable(nested_appraisal_copy_desktop_tests tests/nested_appraisal_copy_desktop_tests.cpp)
+    target_link_libraries(nested_appraisal_copy_desktop_tests PRIVATE sketch_desktop sketch_measurement_area_definition)
+    qt_add_resources(nested_appraisal_copy_desktop_tests nested_appraisal_copy_fonts
+      PREFIX "/fonts" BASE assets/fonts FILES assets/fonts/Inter.ttf)
+    add_test(NAME nested_appraisal_copy_desktop COMMAND nested_appraisal_copy_desktop_tests)
+    if(MSVC)
+      target_compile_options(nested_appraisal_copy_desktop_tests PRIVATE /W4 /permissive- /utf-8)
+    endif()
     target_link_libraries(measurement_area_source_desktop_tests PRIVATE sketch_desktop sketch_sqlite sketch_exchange)
     qt_add_resources(measurement_area_source_desktop_tests measurement_area_source_test_fonts
       PREFIX "/fonts" BASE assets/fonts FILES assets/fonts/Inter.ttf)
     add_test(NAME measurement_area_source_desktop COMMAND measurement_area_source_desktop_tests)
-    set_tests_properties(measurement_linework_desktop measurement_linework_history_desktop measurement_linework_precision_desktop typed_chord_desktop measurement_linework_area_desktop measurement_area_source_desktop nested_measured_area_desktop PROPERTIES
+    set_tests_properties(measurement_linework_desktop measurement_linework_history_desktop measurement_linework_precision_desktop typed_chord_desktop measurement_linework_area_desktop measurement_area_source_desktop nested_measured_area_desktop nested_appraisal_copy_desktop PROPERTIES
       ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_PLUGIN_PATH=${SKETCH_QT_PREFIX}/plugins"
       ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${SKETCH_QT_BIN};PATH=path_list_prepend:${CMAKE_SOURCE_DIR}/.deps/native/x64-windows/$<IF:$<CONFIG:Debug>,debug/bin,bin>")
     target_link_libraries(drawing_measurement_desktop_tests PRIVATE sketch_desktop)
@@ -1802,5 +1810,9 @@ if(BUILD_TESTING)
     # Its measured Debug runtime on the Windows reference host is about 63
     # seconds while the Release runtime is about 12 seconds.
     set_tests_properties(boundary_workflow PROPERTIES TIMEOUT 120)
+    # This full native suite includes 64 appraisal transform combinations,
+    # wall/source repair dialogs, copy and output. Observed Release execution
+    # takes about 174 seconds; the ordinary focused-test guard truncates it.
+    set_tests_properties(wall_measurement_desktop PROPERTIES TIMEOUT 300)
   endif()
 endif()

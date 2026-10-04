@@ -5332,6 +5332,18 @@
     {
       "category": "build",
       "path": "vcpkg.json"
+    },
+    {
+      "category": "docs",
+      "path": "docs/plans/2026-10-04-nested-appraisal-copy.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/verification/nested-appraisal-copy-2026-10-04.md"
+    },
+    {
+      "category": "source",
+      "path": "tests/nested_appraisal_copy_desktop_tests.cpp"
     }
   ]
 }
