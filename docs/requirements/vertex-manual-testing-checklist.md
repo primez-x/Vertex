@@ -2621,6 +2621,18 @@ drawing; switching modes does not change existing geometry.
   - Result: Not tested
   - Notes: ______________________________
 
+- [ ] **U429 — Drag a saved measurement label**
+  - Steps: Add a length, angle or area dimension. Select its label and drag it to a clearer position. Try dragging and pressing Escape, then Undo/Redo the completed move. Save and reopen.
+  - Expected: The selected label and its guide update during dragging. Only the annotation moves; the measured shape, wall length, angle and area value stay unchanged. Escape discards the move. Undo/Redo and reopening preserve the placement and styling.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **U430 — Move a measured shape with its saved label**
+  - Steps: Select a measured shape and Ctrl-select its saved dimension. Drag the selection. Repeat by selecting every physical wall of a closed exterior and its saved dimension, without selecting the measured area itself.
+  - Expected: The shape, supporting walls and attached label move together. The label shifts once, retains its automatic/manual placement setting and keeps the same measurement. Undo restores the entire move together.
+  - Result: Not tested
+  - Notes: ______________________________
+
 ## Issue report template
 
 - Task ID(s):

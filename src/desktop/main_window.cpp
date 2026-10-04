@@ -5593,6 +5593,19 @@ public:
 
     Command makeSelectionGeometryTranslationCommand(const DocumentSnapshot& source,
         QStringList model_ids, Vec2 offset, std::vector<EntityChange> changes = {}) {
+        const auto discard_source_owned_dimension_moves = [&] {
+            // Source translation already moves attached callouts, retaining
+            // their placement provenance. An explicit selection must not add
+            // another offset or overlap that authoritative movement.
+            std::erase_if(changes,[&](const auto& change) {
+                if (change.kind != EntityChangeKind::upsert ||
+                    !can_recognize_boundary_dimension_entity_type(change.entity.type)) return false;
+                const auto decoded=decode_boundary_dimension_entity(change.entity);
+                if (!decoded.supported()) throw std::invalid_argument(decoded.unsupported_reason);
+                return model_ids.contains(id_from(decoded.dimension->boundary_id));
+            });
+        };
+        discard_source_owned_dimension_moves();
         if(changes.empty() && !model_ids.isEmpty() &&
            std::all_of(model_ids.begin(),model_ids.end(),[&](const auto& id){return source.entities().at(id.toStdString()).type=="measurement_linework";}))
             return measuredStrokeTransformCommand(source,model_ids,PlanarTransform{{},0.0,false,false,offset});
@@ -5605,6 +5618,36 @@ public:
         }
         auto graph = independentAreaCopyGraph(source,std::move(selected_roots));
         includeMeasuredAreaSources(source,graph);
+        // A complete selected physical perimeter also translates its measured
+        // owner. Admit that owner through the typed boundary lane, so attached
+        // callouts follow once without raw dimension supplements. Never expand
+        // this promotion into an unselected wall, deduction or other geometry.
+        std::set<std::string,std::less<>> moving_geometry;
+        for(const auto& entity:graph)
+            if(is_closed_boundary_entity(entity.type) || entity.type=="wall" || entity.type=="measurement_linework")
+                moving_geometry.insert(entity.id);
+        auto promotion_roots=graph;
+        std::set<std::string,std::less<>> promoted_owners;
+        for(const auto& change:changes) {
+            if(change.kind!=EntityChangeKind::upsert || !can_recognize_boundary_dimension_entity_type(change.entity.type))continue;
+            const auto decoded=decode_boundary_dimension_entity(change.entity);
+            if(!decoded.supported())throw std::invalid_argument(decoded.unsupported_reason);
+            const auto& owner=source.entities().at(decoded.dimension->boundary_id);
+            if(!owner.properties.contains("wall_measurement_source") || moving_geometry.contains(owner.id))continue;
+            const auto walls=exterior_wall_measurement_source_ids(owner);
+            if(walls.empty() || !std::all_of(walls.begin(),walls.end(),[&](const auto& id){return moving_geometry.contains(id);}))continue;
+            if(promoted_owners.insert(owner.id).second)promotion_roots.push_back(owner);
+        }
+        if(!promoted_owners.empty()) {
+            auto dependencies=independentAreaCopyGraph(source,std::move(promotion_roots));
+            includeMeasuredAreaSources(source,dependencies);
+            if(std::any_of(dependencies.begin(),dependencies.end(),[&](const auto& entity) {
+                return !promoted_owners.contains(entity.id) && !moving_geometry.contains(entity.id) &&
+                    (is_closed_boundary_entity(entity.type) || entity.type=="wall" || entity.type=="measurement_linework");
+            }))throw std::invalid_argument("Select the measured area's deductions and supporting geometry together before moving its perimeter and callout.");
+            for(const auto& entity:dependencies)
+                if(std::none_of(graph.begin(),graph.end(),[&](const auto& present){return present.id==entity.id;}))graph.push_back(entity);
+        }
         std::vector<BoundaryTranslation> translations;
         std::vector<std::string> walls;
         std::vector<ArchitecturalOperation> operations;
@@ -5621,6 +5664,9 @@ public:
                 changes.push_back(EntityChange::upsert(encode_constraint_entity(constraint,&entity)));
             }
         }
+        // Dependencies can include a selected callout's source even when the
+        // source itself was not explicitly selected (for example a deduction).
+        discard_source_owned_dimension_moves();
         for (const auto& id : model_ids) {
             const auto& entity = source.entities().at(id.toStdString());
             if (is_closed_boundary_entity(entity.type)) {
@@ -5658,9 +5704,21 @@ public:
             changes.insert(changes.end(),std::make_move_iterator(wall_changes.entity_changes.begin()),
                 std::make_move_iterator(wall_changes.entity_changes.end()));
         }
-        const Command command = completeMeasuredAreaConsequences(source, augmentAuthoredCommand(completeOrdinaryMeasuredDimensionMovement(source,translations.empty()
-            ? Command{ApplyEntityChanges{source.revision(),std::move(changes),{},"Move selected objects"}}
-            : Command{TranslateBoundaries{source.revision(),std::move(translations),std::move(changes),"Move selected objects"}},PlanarTransform{{},0,false,false,offset}), source));
+        Command movement;
+        if(translations.empty())movement=ApplyEntityChanges{source.revision(),std::move(changes),{},"Move selected objects"};
+        else if(std::any_of(translations.begin(),translations.end(),[&](const auto& translation) {
+            return source.entities().at(translation.boundary_id).properties.contains("wall_measurement_source");
+        })) {
+            // The rigid group lane verifies and canonically reconciles each
+            // moved exterior with its physical walls. Legacy translation replay
+            // preserves its historical arithmetic and cannot provide that proof.
+            std::vector<BoundaryTransformation> transformations;
+            for(const auto& translation:translations)
+                transformations.push_back({translation.boundary_id,PlanarTransform{{},0,false,false,translation.offset}});
+            movement=TransformBoundaries{source.revision(),std::move(transformations),std::move(changes),"Move selected objects"};
+        } else movement=TranslateBoundaries{source.revision(),std::move(translations),std::move(changes),"Move selected objects"};
+        const Command command = completeMeasuredAreaConsequences(source, augmentAuthoredCommand(completeOrdinaryMeasuredDimensionMovement(source,
+            std::move(movement),PlanarTransform{{},0,false,false,offset}), source));
         const auto candidate = Document::preview_command(source,command);
         for (const auto& id : model_ids) {
             const auto& entity = source.entities().at(id.toStdString());
@@ -16956,6 +17014,11 @@ public:
         auto model_ids = ids;
         std::vector<EntityChange> presentation_changes;
         const auto annotation_owners = annotation_selection_owners(source, ids);
+        auto model_delta=delta;
+        if (const auto frame=canvasTransformPlanFrame(source)) {
+            const auto right=plan_view_right(*frame),up=plan_view_up(*frame);
+            model_delta={delta.x*right.x+delta.y*up.x,delta.x*right.y+delta.y*up.y};
+        }
 
         for (const auto& [owner_id, annotation_owner] : source.entities()) {
             if (annotation_owner.type != kAnnotationEntityType) continue;
@@ -17006,6 +17069,25 @@ public:
         // until the complete candidate passes document admission.
         for (const auto& id : model_ids) {
             const auto found = source.entities().find(id.toStdString());
+            if (found != source.entities().end() &&
+                can_recognize_boundary_dimension_entity_type(found->second.type)) {
+                const auto decoded=decode_boundary_dimension_entity(found->second);
+                if (!decoded.supported()) throw std::invalid_argument(decoded.unsupported_reason);
+                auto dimension=*decoded.dimension;
+                const auto boundary=source.entities().find(dimension.boundary_id);
+                if (boundary==source.entities().end()) throw std::invalid_argument("The source boundary is missing.");
+                (void)dimension.resolve(boundary->second);
+                const Vec2 position{dimension.text_position.x+model_delta.x,
+                                    dimension.text_position.y+model_delta.y};
+                if (position.x != dimension.text_position.x || position.y != dimension.text_position.y) {
+                    dimension.text_position=position;
+                    dimension.placement=BoundaryDimensionPlacement::manual;
+                    dimension.automatic_placement_version.reset();
+                    presentation_changes.push_back(EntityChange::upsert(
+                        encode_boundary_dimension_entity(dimension,&found->second)));
+                }
+                continue;
+            }
             if (found == source.entities().end() || found->second.type != "reference_asset") continue;
             auto candidate = found->second;
             const auto position = read_point(candidate.properties.value("position_m",json::array()));
@@ -17015,13 +17097,9 @@ public:
         }
         model_ids.erase(std::remove_if(model_ids.begin(),model_ids.end(),[&](const auto& id) {
             const auto found = source.entities().find(id.toStdString());
-            return found != source.entities().end() && found->second.type == "reference_asset";
+            return found != source.entities().end() && (found->second.type == "reference_asset" ||
+                can_recognize_boundary_dimension_entity_type(found->second.type));
         }),model_ids.end());
-        auto model_delta=delta;
-        if (const auto frame=canvasTransformPlanFrame(source)) {
-            const auto right=plan_view_right(*frame),up=plan_view_up(*frame);
-            model_delta={delta.x*right.x+delta.y*up.x,delta.x*right.y+delta.y*up.y};
-        }
         return {std::move(model_ids),std::move(presentation_changes),model_delta};
     }
 
@@ -17048,6 +17126,10 @@ public:
             auto parts=prepareSelectionTranslation(source,ids,delta,canvas);
             auto model_ids=std::move(parts.model_ids);
             auto presentation_changes=std::move(parts.presentation_changes);
+            if (canvas && (!m_wall_move_source || m_wall_move_document!=m_document ||
+                m_wall_move_canvas!=canvas || m_wall_move_source->revision()!=source.revision() ||
+                m_wall_move_source->entities()!=source.entities()))
+                throw std::invalid_argument("The project changed during this drag. Try the move again.");
             if (model_ids.isEmpty()) {
                 const Command command = ApplyEntityChanges{source.revision(),std::move(presentation_changes),{},
                     ids.size()==1 ? "Move presentation object" : "Move presentation objects"};
@@ -17059,10 +17141,6 @@ public:
             }
 
             const auto model_delta=parts.model_delta;
-            if (canvas && (!m_wall_move_source || m_wall_move_document!=m_document ||
-                m_wall_move_canvas!=canvas || m_wall_move_source->revision()!=source.revision() ||
-                m_wall_move_source->entities()!=source.entities()))
-                throw std::invalid_argument("The project changed during this drag. Try the move again.");
             const bool only_walls = presentation_changes.empty() &&
                 std::all_of(model_ids.begin(), model_ids.end(), [&](const auto& id) {
                     const auto found = source.entities().find(id.toStdString());
@@ -17381,7 +17459,8 @@ public:
                     const auto decoded=decode_boundary_dimension_entity(entity);
                     if (!decoded.supported()) return std::nullopt;
                     const auto& dimension=*decoded.dimension;
-                    if (candidate.at(dimension.boundary_id)==source.entities().at(dimension.boundary_id)) continue;
+                    if (entity==source.entities().at(entity.id) &&
+                        candidate.at(dimension.boundary_id)==source.entities().at(dimension.boundary_id)) continue;
                     const auto projection=project_boundary_dimension(dimension,
                         candidate.at(dimension.boundary_id),metric_units,item.selected,
                         ansi_boundary_dimensions(source, candidate.at(dimension.boundary_id)));
@@ -17618,7 +17697,8 @@ public:
                     const auto decoded=decode_boundary_dimension_entity(entity);
                     if (!decoded.supported()) return std::nullopt;
                     const auto& dimension=*decoded.dimension;
-                    if (candidate.at(dimension.boundary_id)==source.entities().at(dimension.boundary_id)) continue;
+                    if (entity==source.entities().at(entity.id) &&
+                        candidate.at(dimension.boundary_id)==source.entities().at(dimension.boundary_id)) continue;
                     auto projected=project_boundary_dimension(dimension,
                         candidate.at(dimension.boundary_id),metric_units,label.selected,
                         ansi_boundary_dimensions(source, candidate.at(dimension.boundary_id))).label;

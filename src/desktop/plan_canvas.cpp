@@ -584,7 +584,7 @@ void PlanCanvas::setSelectionAxisResizeEnabled(bool enabled) {
 void PlanCanvas::setLabels(std::vector<CanvasLabel> labels) {
     // A captured projection depends on the source annotations as well as the
     // geometry, even when a replacement retains every annotation identity.
-    if (m_touch_active || m_gesture_button != Qt::NoButton || m_vertex_move_handle ||
+    if (m_touch_active || m_gesture_button != Qt::NoButton || m_vertex_move_handle || m_move_release_pending ||
         m_transform_frame_start) resetGesture();
     resetTouchInput();
     // Derived plan labels share their owner's ID for output filtering; they
@@ -602,7 +602,7 @@ void PlanCanvas::setReference(std::optional<CanvasReference> reference) {
 }
 
 void PlanCanvas::setReferences(std::vector<CanvasReference> references) {
-    if (m_touch_active || m_gesture_button != Qt::NoButton || m_transform_frame_start) resetGesture();
+    if (m_touch_active || m_gesture_button != Qt::NoButton || m_move_release_pending || m_transform_frame_start) resetGesture();
     resetTouchInput();
     m_references = std::move(references);
     if (m_last_mouse_position) updatePointerCursor(*m_last_mouse_position);
@@ -903,7 +903,7 @@ void PlanCanvas::renderSceneWithTransform(QPainter& painter, const QRectF& viewp
     for (const auto& reference : m_references) {
         if (!reference.visible) continue;
         if (!output && m_move_preview_delta &&
-            (!m_move_preview_exact || !m_move_entities_preview.empty()) && m_move_ids.contains(reference.id)) {
+            (!m_move_preview_exact || m_move_preview_valid) && m_move_ids.contains(reference.id)) {
             painter.save();
             painter.translate(m_move_preview_delta->x, m_move_preview_delta->y);
             drawReference(painter, reference);
@@ -912,7 +912,10 @@ void PlanCanvas::renderSceneWithTransform(QPainter& painter, const QRectF& viewp
                    (m_left_gesture == LeftGesture::selection_resize ||
                     m_left_gesture == LeftGesture::selection_rotate)) {
             auto preview = reference;
-            preview.rotation_degrees += m_transform_rotation_preview * 180/pi;
+            // Compose in model radians before converting once, so snapped
+            // quarter turns use the same exact angle as committed painting.
+            preview.rotation_degrees = (reference.rotation_degrees*pi/180 +
+                m_transform_rotation_preview) * 180/pi;
             preview.scale *= m_transform_scale_preview;
             drawReference(painter, preview);
         } else {
@@ -928,7 +931,7 @@ void PlanCanvas::renderSceneWithTransform(QPainter& painter, const QRectF& viewp
     painted_entities.reserve(m_entities.size());
     for (const auto& entity : m_entities) painted_entities.push_back(&entity);
     if (!output && ((m_vertex_move_handle && m_boundary_vertex_preview_valid) ||
-                    (m_move_preview_exact && !m_move_entities_preview.empty()) ||
+                    m_move_preview_valid ||
                     m_transform_preview_valid)) {
         // Candidate model owners can enter a crop/depth slice while another
         // owner's corner is dragged. They are interactive projections only;
@@ -1472,19 +1475,30 @@ bool PlanCanvas::markEntitiesMovePreviewPending(std::uint64_t serial) {
     if (serial != m_move_preview_serial || !m_move_preview_request_in_progress ||
         m_left_gesture != LeftGesture::object_move || !m_move_preview_delta) return false;
     m_move_preview_exact = true;
+    m_move_preview_valid = false;
     m_move_preview_pending = true;
+    m_move_entities_preview.clear();
+    m_move_labels_preview.clear();
     return true;
 }
 
 bool PlanCanvas::completeEntitiesMovePreview(std::uint64_t serial,
     std::optional<std::vector<CanvasEntity>> result, std::vector<CanvasLabel> labels) {
+    if (!m_move_preview_pending) return false;
+    return applyEntitiesMovePreview(serial, std::move(result), std::move(labels));
+}
+
+bool PlanCanvas::applyEntitiesMovePreview(std::uint64_t serial,
+    std::optional<std::vector<CanvasEntity>> result, std::vector<CanvasLabel> labels) {
     if (serial != m_move_preview_serial || m_left_gesture != LeftGesture::object_move ||
-        !m_move_preview_delta || !m_move_preview_pending) return false;
+        !m_move_preview_delta) return false;
+    // Completion inside a synchronous callback owns admission over its return.
+    m_move_preview_request_in_progress = false;
     m_move_preview_pending = false;
     m_move_preview_exact = true;
     m_move_entities_preview = result.value_or(std::vector<CanvasEntity>{});
     m_move_labels_preview = std::move(labels);
-    const bool accepted=result && std::all_of(m_move_ids.begin(),m_move_ids.end(),[&](const auto& id) {
+    m_move_preview_valid=result && std::all_of(m_move_ids.begin(),m_move_ids.end(),[&](const auto& id) {
         return std::any_of(m_move_entities_preview.begin(),m_move_entities_preview.end(),
             [&](const auto& entity) { return entity.id==id; }) ||
             std::any_of(m_move_labels_preview.begin(),m_move_labels_preview.end(),
@@ -1492,17 +1506,18 @@ bool PlanCanvas::completeEntitiesMovePreview(std::uint64_t serial,
             std::any_of(m_references.begin(),m_references.end(),
                 [&](const auto& reference) { return reference.id==id && reference.selected; });
     });
-    if (!accepted) { m_move_entities_preview.clear(); m_move_labels_preview.clear(); }
+    if (!m_move_preview_valid) { m_move_entities_preview.clear(); m_move_labels_preview.clear(); }
     for (auto& proposed : m_move_entities_preview)
         for (const auto& retained : m_entities)
             if (retained.id == proposed.id) proposed.selected = retained.selected;
-    setCursor(m_move_entities_preview.empty() ? Qt::ForbiddenCursor : Qt::ClosedHandCursor);
+    setCursor(m_move_preview_valid ? Qt::ClosedHandCursor : Qt::ForbiddenCursor);
     update();
     if (m_move_release_pending) {
-        QTimer::singleShot(0,this,[this,serial,accepted] {
+        QTimer::singleShot(0,this,[this,serial] {
             if (serial != m_move_preview_serial || !m_move_release_pending || !m_move_preview_delta) return;
             const auto ids=m_move_ids;
             const auto delta=*m_move_preview_delta;
+            const auto accepted=m_move_preview_valid;
             resetGesture();
             if (accepted && m_entities_move_requested) (void)m_entities_move_requested(ids,delta);
             else if (m_entities_move_rejected) m_entities_move_rejected(ids,delta);
@@ -1937,8 +1952,11 @@ void PlanCanvas::pointerPress(QPointF position, Qt::MouseButton button,
     m_pressed_occupied = !m_pressed_entity.isEmpty() || !hitTest(position, false).isEmpty();
     const auto retained_selection = selectedIds();
     const auto frame = selectionFrame(QRectF(rect()));
-    if (selectionInteractionEnabled() && !retained_selection.isEmpty() && frame &&
-        frame->contains(position)) {
+    // A selected annotation can paint away from its same-ID guide geometry.
+    // Its painted hit still owns movement of the retained selection.
+    const bool selected_hit = !m_pressed_entity.isEmpty() && retained_selection.contains(m_pressed_entity);
+    if (selectionInteractionEnabled() && !retained_selection.isEmpty() &&
+        (selected_hit || (frame && frame->contains(position)))) {
         m_left_gesture = LeftGesture::object_move;
         m_move_ids = retained_selection;
         if (m_entities_move_started) m_entities_move_started(m_move_ids);
@@ -1995,6 +2013,7 @@ void PlanCanvas::pointerMove(QPointF position, Qt::KeyboardModifiers modifiers) 
             m_move_labels_preview.clear();
             m_move_preview_pending = false;
             m_move_preview_exact = false;
+            m_move_preview_valid = false;
             if (m_entities_move_preview_requested) {
                 // A configured exact provider owns admission, including an
                 // unavailable result. Only the providerless path may use the
@@ -2007,11 +2026,11 @@ void PlanCanvas::pointerMove(QPointF position, Qt::KeyboardModifiers modifiers) 
                 } catch (const std::exception&) { proposed = std::vector<CanvasEntity>{}; }
                 if (serial != m_move_preview_serial || !m_move_preview_request_in_progress) return;
                 m_move_preview_request_in_progress = false;
-                if (proposed && !m_move_preview_pending) {
-                    m_move_entities_preview = std::move(*proposed);
-                }
+                // A marked pending request owns its later completion.
+                // Otherwise validate the callback return through the same
+                // path, including an unavailable proposal.
                 if (!m_move_preview_pending)
-                    setCursor(m_move_entities_preview.empty() ? Qt::ForbiddenCursor : Qt::ClosedHandCursor);
+                    (void)applyEntitiesMovePreview(serial, std::move(proposed));
             }
             update();
         }
@@ -2172,7 +2191,7 @@ void PlanCanvas::pointerRelease(QPointF position, Qt::MouseButton button,
             m_gesture_button=Qt::NoButton;
             return;
         }
-        if (gesture==LeftGesture::object_move && dragging && m_move_preview_exact && m_move_entities_preview.empty()) {
+        if (gesture==LeftGesture::object_move && dragging && m_move_preview_exact && !m_move_preview_valid) {
             resetGesture();
             if (m_entities_move_rejected) m_entities_move_rejected(move_ids,delta);
             return;
@@ -2317,6 +2336,7 @@ void PlanCanvas::resetGesture() {
     m_move_entities_preview.clear();
     m_move_labels_preview.clear();
     m_move_preview_exact = false;
+    m_move_preview_valid = false;
     m_move_preview_pending = false;
     m_move_preview_request_in_progress = false;
     m_move_release_pending = false;
@@ -2446,7 +2466,7 @@ std::optional<QRectF> PlanCanvas::selectionBounds(const QRectF& viewport) const 
         transform.translate(viewport.center().x(), viewport.center().y());
         transform.scale(m_scale, -m_scale);
         auto position = reference.position;
-        if (m_move_preview_delta && (!m_move_preview_exact || !m_move_entities_preview.empty()) &&
+        if (m_move_preview_delta && (!m_move_preview_exact || m_move_preview_valid) &&
             m_move_ids.contains(reference.id)) {
             position.x += m_move_preview_delta->x;
             position.y += m_move_preview_delta->y;
@@ -2518,7 +2538,9 @@ std::optional<CanvasSelectionFrame> PlanCanvas::selectionAxes() const {
         const auto unit = reference.metres_per_source_unit*reference.scale;
         if (!(unit > 0) || !std::isfinite(unit) || !std::isfinite(reference.rotation_degrees) ||
             !std::isfinite(reference.position.x) || !std::isfinite(reference.position.y)) continue;
-        return CanvasSelectionFrame{reference.position, reference.rotation_degrees*pi/180,
+        const auto position = m_move_preview_delta && m_move_preview_valid && m_move_ids.contains(reference.id)
+            ? reference.position + *m_move_preview_delta : reference.position;
+        return CanvasSelectionFrame{position, reference.rotation_degrees*pi/180,
             reference.image.width()*unit, reference.image.height()*unit};
     }
     for (const auto& label : positionedLabels(font(), this, m_scale, logicalDpiY(), false)) {
@@ -2536,7 +2558,7 @@ CanvasLabel PlanCanvas::presentedLabel(const CanvasLabel& label, bool output) co
         for (const auto& proposed : m_transform_labels_preview)
             if (proposed.id == label.id) { presented = proposed; break; }
     }
-    if (!output && m_move_preview_exact) {
+    if (!output && m_move_preview_valid) {
         for (const auto& proposed : m_move_labels_preview)
             if (proposed.id == label.id) { presented = proposed; break; }
     }
@@ -2561,6 +2583,12 @@ const std::vector<CanvasLabel>& PlanCanvas::positionedLabels(
     auto retained_labels=m_labels;
     if (!output && m_transform_preview_valid) {
         for (const auto& proposed : m_transform_labels_preview)
+            if (std::none_of(retained_labels.begin(), retained_labels.end(),
+                [&](const auto& label) { return label.id == proposed.id; }))
+                retained_labels.push_back(proposed);
+    }
+    if (!output && m_move_preview_valid) {
+        for (const auto& proposed : m_move_labels_preview)
             if (std::none_of(retained_labels.begin(), retained_labels.end(),
                 [&](const auto& label) { return label.id == proposed.id; }))
                 retained_labels.push_back(proposed);
@@ -3017,7 +3045,7 @@ const CanvasEntity& PlanCanvas::interactiveEntity(const CanvasEntity& entity) co
         for (const auto& preview : m_transform_entities_preview)
             if (preview.id == entity.id) return preview;
     }
-    if (m_move_preview_exact) {
+    if (m_move_preview_valid) {
         for (const auto& preview : m_move_entities_preview)
             if (preview.id == entity.id) return preview;
     }
@@ -3666,7 +3694,9 @@ void PlanCanvas::drawSelectionDimensions(QPainter& painter, const QRectF& viewpo
         painter.drawText(panel,Qt::AlignCenter,text);
     };
     for (const auto& entity : m_entities) {
-        if (entity.selected) {
+        // A dimension guide is presentation geometry. Its selection extent is
+        // not another building measurement and must not masquerade as one.
+        if (entity.selected && entity.type != QStringLiteral("dimension_line")) {
             if (const auto axes = entitySelectionAxes(interactiveEntity(entity)))
                 draw(*axes,entity.id,false,entity.opening_width_controls);
         }
@@ -3675,11 +3705,13 @@ void PlanCanvas::drawSelectionDimensions(QPainter& painter, const QRectF& viewpo
         if (!reference.selected || !reference.visible || reference.image.isNull()) continue;
         const auto unit = reference.metres_per_source_unit*reference.scale;
         if (!std::isfinite(unit) || unit <= 0) continue;
-        draw({reference.position, reference.rotation_degrees*pi/180,
+        const auto position = m_move_preview_delta && m_move_preview_valid && m_move_ids.contains(reference.id)
+            ? reference.position + *m_move_preview_delta : reference.position;
+        draw({position, reference.rotation_degrees*pi/180,
               reference.image.width()*unit, reference.image.height()*unit},reference.id);
     }
     for (const auto& label : positionedLabels(font(), this, m_scale, logicalDpiY(), false)) {
-        if (!label.selected || !drawable_label(label)) continue;
+        if (!label.selected || !drawable_label(label) || label.selection_type==QStringLiteral("dimension")) continue;
         const auto layout = label_layout(label,font(),this,m_scale,logicalDpiY());
         draw({label.position,label.rotation_radians,layout.bounds.width()/m_scale,
               layout.bounds.height()/m_scale},label.id,true);

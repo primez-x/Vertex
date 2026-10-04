@@ -242,21 +242,22 @@ void label_and_reference_rotation_preview() {
         PlanCanvas canvas;setup(canvas);canvas.setEntities({});canvas.setSelectionAxisResizeEnabled(false);
         CanvasReference reference;
         CanvasLabel label;
-        double half_height=0;
         if (text) {
             label.id="text";label.text="Rotated label";label.text_height_metres=.5;
             label.rotation_radians=initial_angle;label.selected=true;
             canvas.setLabels({label});
-            auto f=canvas.font();f.setPixelSize(40);
-            half_height=(QFontMetricsF(f,&canvas).boundingRect(label.text).height()+6)/2;
         } else {
             reference.id="image";reference.image=QImage(200,100,QImage::Format_RGB32);
             reference.image.fill(QColor(240,20,20));
             {QPainter p(&reference.image);p.fillRect(0,0,50,100,QColor(20,20,240));}
             reference.rotation_degrees=30;reference.selected=true;reference.metres_per_source_unit=.01;
-            canvas.setReferences({reference});half_height=40;
+            canvas.setReferences({reference});
         }
-        const auto radius=(half_height+7.5+24)/80;
+        const auto turn_screen=[](QPointF point,double angle) {
+            const auto x=point.x()-320,y=point.y()-240;
+            return QPointF(320+x*std::cos(angle)+y*std::sin(angle),
+                240-x*std::sin(angle)+y*std::cos(angle));
+        };
         const auto initial=render(canvas);const auto output=render(canvas,true);
         int rotations=0;
         canvas.setEntityTransformRequested([&](QString id,double scale,double delta) {
@@ -267,8 +268,10 @@ void label_and_reference_rotation_preview() {
             else{reference.rotation_degrees=90;canvas.setReferences({reference});}
             return true;
         });
-        const auto pin30=screen(oriented(0,radius,initial_angle));
-        const auto pin90=screen(oriented(0,radius,std::numbers::pi/2));
+        const auto actual_pin=canvas.selectionRotationHandlePosition();
+        require(actual_pin.has_value(),"selected label/reference exposes its painted rotation handle");
+        const auto pin30=*actual_pin;
+        const auto pin90=turn_screen(pin30,std::numbers::pi/3);
         mouse(canvas,QEvent::MouseButtonPress,pin30);
         mouse(canvas,QEvent::MouseMove,pin90);
         const auto preview=render(canvas);
@@ -279,14 +282,78 @@ void label_and_reference_rotation_preview() {
         }
         mouse(canvas,QEvent::MouseButtonRelease,pin90);
         const auto committed=render(canvas);
+        const auto directory=qEnvironmentVariable("VERTEX_TEST_CAPTURE_DIR");
+        if(!directory.isEmpty()) {
+            require(QDir().mkpath(directory),"rotation capture directory must be writable");
+            const auto stem=text?QStringLiteral("label-rotation"):QStringLiteral("reference-rotation");
+            require(preview.save(QDir(directory).filePath(stem+"-preview.png")) &&
+                committed.save(QDir(directory).filePath(stem+"-committed.png")),"actual rotation comparison captures must save");
+        }
         require(rotations==1 && preview.copy(300,220,40,40)==committed.copy(300,220,40,40),
-                "label/reference actual content preview must match committed painting");
+                text?"label actual content preview must match committed painting":"reference actual content preview must match committed painting");
         canvas.setEntityTransformRequested([&](QString,double,double delta) {
             ++rotations;require(close_enough(delta,std::numbers::pi/2),"label/reference pin must retain 90 degree orientation");return true;
         });
-        mouse(canvas,QEvent::MouseButtonPress,pin90);
-        mouse(canvas,QEvent::MouseButtonRelease,screen(oriented(0,radius,std::numbers::pi)));
+        const auto committed_pin=canvas.selectionRotationHandlePosition();
+        require(committed_pin.has_value(),"committed label/reference retains a rotation handle");
+        mouse(canvas,QEvent::MouseButtonPress,*committed_pin);
+        mouse(canvas,QEvent::MouseButtonRelease,turn_screen(*committed_pin,std::numbers::pi/2));
         require(rotations==2,"label/reference persistent pin must start a second gesture");
+    }
+}
+
+void exact_presentation_move_admission() {
+    for(const bool text:{false,true})for(int timing=0;timing<4;++timing) {
+        PlanCanvas canvas;setup(canvas);canvas.setEntities({});
+        canvas.setSelectionTransformEnabled(false,false);canvas.setSelectionAxisResizeEnabled(false);
+        CanvasLabel label;label.id="callout";label.text="Measured area";label.text_height_metres=.5;label.selected=true;
+        CanvasReference reference;reference.id="image";reference.image=QImage(200,100,QImage::Format_RGB32);
+        reference.image.fill(QColor(240,20,20));reference.metres_per_source_unit=.01;reference.selected=true;
+        if(text)canvas.setLabels({label});else canvas.setReferences({reference});
+        std::uint64_t serial=0;Vec2 delta;int commits=0,rejections=0;bool completed_before_release=false;
+        const auto proposed_labels=[&] {
+            auto moved=label;moved.position={label.position.x+delta.x,label.position.y+delta.y};
+            return text?std::vector<CanvasLabel>{moved}:std::vector<CanvasLabel>{};
+        };
+        canvas.setEntitiesMoveRequested([&](QStringList ids,Vec2 offset) {
+            require(ids==QStringList{text?"callout":"image"} && close_enough(offset.x,1) && close_enough(offset.y,.5),
+                "exact presentation movement must commit its selected identity and final offset");
+            ++commits;
+            if(text){label.position={1,.5};canvas.setLabels({label});}
+            else{reference.position={1,.5};canvas.setReferences({reference});}
+            return true;
+        });
+        canvas.setEntitiesMoveRejected([&](QStringList,Vec2){++rejections;});
+        canvas.setEntitiesMovePreviewRequested([&](QStringList,Vec2 offset,std::uint64_t value)
+            ->std::optional<std::vector<CanvasEntity>> {
+            serial=value;delta=offset;
+            require(canvas.markEntitiesMovePreviewPending(serial),"presentation move preview can be marked pending");
+            if(timing==3 || (timing==0 && completed_before_release))require(canvas.completeEntitiesMovePreview(serial,std::vector<CanvasEntity>{},proposed_labels()),
+                "in-callback presentation completion accepted");
+            return std::nullopt;
+        });
+        const auto bounds=canvas.selectionBounds();require(bounds.has_value(),"presentation selection frame exists");
+        const auto start=bounds->center(),end=start+QPointF(80,-40);
+        const auto original=render(canvas),output=render(canvas,true);
+        mouse(canvas,QEvent::MouseButtonPress,start);mouse(canvas,QEvent::MouseMove,end);
+        if(timing==0) {
+            require(canvas.completeEntitiesMovePreview(serial,std::vector<CanvasEntity>{},proposed_labels()),
+                "label-only/reference-only exact result accepted before release");
+            completed_before_release=true;
+        }
+        if(timing==0 || timing==3)require(render(canvas)!=original && render(canvas,true)==output,
+            "accepted presentation-only live move is visible and excluded from output");
+        mouse(canvas,QEvent::MouseButtonRelease,end);
+        if(timing==1 || timing==2) {
+            require(commits==0 && canvas.entitiesMovePreviewPending(),"released presentation edit awaits actual admission");
+            require(canvas.completeEntitiesMovePreview(serial,timing==1?std::optional<std::vector<CanvasEntity>>(std::vector<CanvasEntity>{}):std::nullopt,
+                timing==1?proposed_labels():std::vector<CanvasLabel>{}),"late presentation proposal completes");
+        }
+        QApplication::processEvents();
+        require(commits==(timing==2?0:1) && rejections==(timing==2?1:0) && !canvas.entitiesMovePreviewPending(),
+            "presentation move admission must distinguish accepted empty geometry from rejected proposal");
+        require(!canvas.completeEntitiesMovePreview(serial,std::vector<CanvasEntity>{},proposed_labels()),
+            "completed presentation edit cannot be committed twice");
     }
 }
 }
@@ -300,7 +367,7 @@ int main(int argc,char**argv) {
         app.setFont(QFont(families.front(),10));
         axis_gestures();rotated_symbol_and_rotation();vector_frame_survives_projection_refresh();
         common_angle_snapping_and_cancelled_rotation();
-        dimensions_are_physical_and_screen_only();label_and_reference_rotation_preview();
+        dimensions_are_physical_and_screen_only();label_and_reference_rotation_preview();exact_presentation_move_admission();
         std::cout<<"Axis canvas controls tests passed\n";return 0;
     } catch(const std::exception&e){std::cerr<<e.what()<<'\n';return 1;}
 }

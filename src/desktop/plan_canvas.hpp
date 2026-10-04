@@ -618,6 +618,8 @@ private:
     [[nodiscard]] std::optional<OpeningWidthHandleHit> openingWidthHandleAt(
         QPointF point, const QRectF& viewport) const;
     [[nodiscard]] const CanvasEntity& interactiveEntity(const CanvasEntity& entity) const;
+    bool applyEntitiesMovePreview(std::uint64_t serial,
+        std::optional<std::vector<CanvasEntity>> result, std::vector<CanvasLabel> labels = {});
     void updateEntityTransformPreview();
     bool applyEntityTransformPreview(std::uint64_t serial,
         std::optional<std::vector<CanvasEntity>> result, std::vector<CanvasLabel> labels = {});
@@ -718,6 +720,7 @@ private:
     std::vector<CanvasLabel> m_move_labels_preview;
     std::uint64_t m_move_preview_serial{};
     bool m_move_preview_exact{};
+    bool m_move_preview_valid{};
     bool m_move_preview_pending{};
     bool m_move_preview_request_in_progress{};
     bool m_move_release_pending{};
