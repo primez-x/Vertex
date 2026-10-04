@@ -222,6 +222,22 @@ static void initialize_vertex_symbol_resources() {
 namespace sketch::desktop {
 namespace {
 
+// Review canvases fit after layout and whenever the dialog is resized.
+// Fitting only at construction uses the widget's provisional size.
+class BoundaryPreviewFit final : public QObject {
+public:
+    explicit BoundaryPreviewFit(PlanCanvas* canvas) : QObject(canvas), m_canvas(canvas) {
+        canvas->installEventFilter(this);
+    }
+protected:
+    bool eventFilter(QObject*, QEvent* event) override {
+        if(event->type()==QEvent::Resize || event->type()==QEvent::Show) m_canvas->fitView();
+        return false;
+    }
+private:
+    PlanCanvas* m_canvas;
+};
+
 using json = nlohmann::json;
 
 constexpr std::size_t kMaximumClipboardBytes = 4ULL * 1024ULL * 1024ULL;
@@ -8838,6 +8854,97 @@ public:
             } catch(const std::exception& error) {status->setText(QString::fromUtf8(error.what()));}
         });
         update();dialog.exec();
+    }
+
+    void showBoundaryVertexRemoval() {
+        try {
+            const auto selected=selectedEntity();
+            if(!selected || !is_closed_boundary_entity(selected->type) || m_selected_ids.size()!=1)
+                throw std::invalid_argument("Select one identified closed boundary first.");
+            const auto source=authoringSnapshot();
+            const auto original=decode_identified_boundary_entity(*selected);
+            const auto context=captureModalContext();
+            const auto workspace=m_workspace;
+            QDialog dialog(owner);styleDialog(dialog);
+            dialog.setObjectName(QStringLiteral("boundaryVertexRemovalDialog"));
+            dialog.setWindowTitle(QStringLiteral("Remove boundary point"));dialog.resize(640,560);
+            auto* layout=new QVBoxLayout(&dialog);
+            auto* form=new QFormLayout;
+            auto* point=new QComboBox(&dialog);point->setObjectName(QStringLiteral("boundaryRemovalPoint"));
+            point->setAccessibleName(QStringLiteral("Boundary point to remove"));
+            for(std::size_t i=0;i<original.segments.size();++i) {
+                const auto& edge=original.segments[i];
+                point->addItem(QStringLiteral("Point %1 · X %2 · Y %3").arg(i+1)
+                    .arg(format_length(edge.segment.start.x,context.metric_units),
+                         format_length(edge.segment.start.y,context.metric_units)),id_from(edge.start_vertex_id));
+            }
+            form->addRow(QStringLiteral("Remove point"),point);layout->addLayout(form);
+            auto* preview=new PlanCanvas(&dialog);preview->setObjectName(QStringLiteral("boundaryRemovalPreview"));
+            new BoundaryPreviewFit(preview);
+            preview->setGridEnabled(false);preview->setOverviewMapEnabled(false);
+            preview->setSelectionTransformEnabled(false,false);preview->setSelectionAxisResizeEnabled(false);
+            preview->setMinimumHeight(280);layout->addWidget(preview,1);
+            auto* legend=new QLabel(QStringLiteral("Gray: original · Blue: replacement"),&dialog);layout->addWidget(legend);
+            auto* summary=new QLabel(&dialog);summary->setObjectName(QStringLiteral("boundaryRemovalSummary"));
+            summary->setWordWrap(true);summary->setTextFormat(Qt::PlainText);layout->addWidget(summary);
+            auto* status=new QLabel(&dialog);status->setObjectName(QStringLiteral("boundaryRemovalStatus"));
+            status->setWordWrap(true);status->setTextFormat(Qt::PlainText);layout->addWidget(status);
+            auto* buttons=new QDialogButtonBox(QDialogButtonBox::Apply|QDialogButtonBox::Cancel,&dialog);
+            buttons->setObjectName(QStringLiteral("boundaryRemovalButtons"));layout->addWidget(buttons);
+            std::optional<EditBoundaryGeometry> command;
+            json retained_child_mapping;
+            const auto unchanged=[&] {
+                return modalContextUnchanged(context) && m_workspace==workspace && m_selected_ids.size()==1 &&
+                    m_document->is_editable() && !m_boundary_session && !m_pending_wall_start && !m_linework_drawing;
+            };
+            const auto item=[](const IdentifiedBoundary& boundary,const QString& suffix,const QColor& color) {
+                CanvasEntity result;result.id=id_from(boundary.id)+suffix;result.type=QStringLiteral("boundary");
+                result.segments=boundary_geometry(boundary);result.stroke_color=color;return result;
+            };
+            const auto update=[&] {
+                command.reset();buttons->button(QDialogButtonBox::Apply)->setEnabled(false);
+                preview->setEntities({item(original,QStringLiteral(":original"),QColor(150,160,176))});
+                preview->setLabels({});status->clear();summary->clear();
+                try {
+                    if(!unchanged()) throw std::invalid_argument("The editing context changed. Reopen Remove point.");
+                    command=boundaryVertexRemovalCommand(source,point->currentData().toString().toStdString(),retained_child_mapping);
+                    auto entity=*selected;entity.properties["segments"]=command->edit.replacement_segments;
+                    const auto replacement=decode_identified_boundary_entity(entity);
+                    preview->setEntities({item(original,QStringLiteral(":original"),QColor(150,160,176)),
+                        item(replacement,QStringLiteral(":replacement"),QColor(36,107,206))});
+                    const auto position=original.segments.at(static_cast<std::size_t>(point->currentIndex())).segment.start;
+                    preview->setLabels({{QStringLiteral("removed-point"),position,QStringLiteral("Removed point")}});
+                    const auto before=boundary_geometry(original),after=boundary_geometry(replacement);
+                    summary->setText(QStringLiteral("Area: %1 → %2\nPerimeter: %3 → %4")
+                        .arg(format_boundary_area(std::abs(signed_area(before)),context.metric_units,false),
+                             format_boundary_area(std::abs(signed_area(after)),context.metric_units,false),
+                             format_length(perimeter(before),context.metric_units),format_length(perimeter(after),context.metric_units)));
+                    const auto index=static_cast<std::size_t>(point->currentIndex());
+                    const auto& incoming=original.segments[(index+original.segments.size()-1)%original.segments.size()];
+                    const auto merged=std::find_if(replacement.segments.begin(),replacement.segments.end(),
+                        [&](const auto& value){return value.segment_id==retained_child_mapping.at("segments").at(incoming.segment_id).get<std::string>();});
+                    const bool curved=merged!=replacement.segments.end() && merged->segment.sweep_radians!=0;
+                    status->setText(curved ? QStringLiteral("The two adjacent arcs become one continuous arc. Attached references are reviewed before Apply.") :
+                        QStringLiteral("The two adjacent edges become one straight edge. Attached references are reviewed before Apply."));
+                    buttons->button(QDialogButtonBox::Apply)->setEnabled(true);
+                } catch(const std::exception& error) {command.reset();status->setText(QString::fromUtf8(error.what()));}
+                preview->fitView();
+            };
+            QObject::connect(point,&QComboBox::currentIndexChanged,&dialog,[&]{update();});
+            QObject::connect(buttons,&QDialogButtonBox::rejected,&dialog,&QDialog::reject);
+            QObject::connect(buttons->button(QDialogButtonBox::Apply),&QPushButton::clicked,&dialog,[&] {
+                try {
+                    if(!command || !unchanged()) {update();return;}
+                    const auto reviewed=reviewBoundaryRedefinition(source,*command,retained_child_mapping);
+                    if(!reviewed || !unchanged()) return;
+                    (void)Document::preview_command(source,*reviewed);
+                    applyDocumentCommand(*reviewed);clearError();dialog.accept();refresh();
+                } catch(const std::exception& error) {status->setText(QString::fromUtf8(error.what()));}
+            });
+            QTimer stale_timer(&dialog);stale_timer.setInterval(100);
+            QObject::connect(&stale_timer,&QTimer::timeout,&dialog,[&]{if(command && !unchanged()) update();});
+            update();stale_timer.start();dialog.exec();
+        } catch(const std::exception& error) {setError(QStringLiteral("Remove point: %1").arg(QString::fromUtf8(error.what())));}
     }
 
     void showBoundaryVertexInsertion() {
@@ -20892,8 +20999,44 @@ public:
         return {source.revision(), std::move(edit)};
     }
 
+    EditBoundaryGeometry boundaryVertexRemovalCommand(const DocumentSnapshot& source,const std::string& vertex_id,json& retained_mapping) {
+        if(!m_document->is_editable() || m_selected_ids.size()!=1 || m_boundary_session || m_pending_wall_start || m_linework_drawing)
+            throw std::invalid_argument("Finish drawing and select one editable boundary first.");
+        const auto& entity=source.entities().at(m_selected_id.toStdString());
+        if(entity.properties.contains("wall_measurement_source"))
+            throw std::invalid_argument("This point belongs to a physical-wall-derived outline. Edit its source walls to retain the exterior measurement.");
+        const auto replacement=remove_boundary_vertex(decode_identified_boundary_entity(entity),vertex_id);
+        auto command=boundaryRedefinitionCommand(source,boundary_geometry(replacement),{});
+        // The existing redraw contract requires fresh child identities after a
+        // topology change. Map only surviving analytical children into that
+        // topology; reference review selects the mappings actually required.
+        retained_mapping={{"segments",json::object()},{"vertices",json::object()}};
+        for(std::size_t i=0;i<replacement.segments.size();++i) {
+            const auto& child=replacement.segments[i];
+            const auto& fresh=command.edit.replacement_segments.at(i);
+            retained_mapping["segments"][child.segment_id]=fresh.at("segment_id");
+            retained_mapping["vertices"][child.start_vertex_id]=fresh.at("start_vertex_id");
+        }
+        return command;
+    }
+
+    bool removeSelectedBoundaryVertex(const QString& vertex_id) {
+        try {
+            const auto source=authoringSnapshot();
+            const auto context=captureModalContext();
+            const auto workspace=m_workspace;
+            json retained_mapping;
+            const auto proposal=boundaryVertexRemovalCommand(source,vertex_id.toStdString(),retained_mapping);
+            const auto command=reviewBoundaryRedefinition(source,proposal,retained_mapping);
+            if(!command || !modalContextUnchanged(context) || m_workspace!=workspace || m_selected_ids.size()!=1 ||
+                !m_document->is_editable() || m_boundary_session || m_pending_wall_start || m_linework_drawing) return false;
+            (void)Document::preview_command(source,*command);
+            applyDocumentCommand(*command);clearError();refresh();return true;
+        } catch(const std::exception& error) {setError(QStringLiteral("Remove point: %1").arg(QString::fromUtf8(error.what())));return false;}
+    }
+
     std::optional<EditBoundaryGeometry> reviewBoundaryRedefinition(
-        const DocumentSnapshot& source, EditBoundaryGeometry command) {
+        const DocumentSnapshot& source, EditBoundaryGeometry command,const json& default_child_mapping=json::object()) {
         const auto& target_entity = source.entities().at(command.edit.boundary_id);
         const auto original = decode_identified_boundary_entity(target_entity);
         if (!command.edit.fresh_topology && original.segments.size() == command.edit.replacement_segments.size()) return command;
@@ -20971,6 +21114,7 @@ public:
             auto* column = new QVBoxLayout;
             column->addWidget(new QLabel(title, &dialog));
             auto* canvas = new PlanCanvas(&dialog);
+            new BoundaryPreviewFit(canvas);
             canvas->setMinimumHeight(220);
             canvas->setCanvasBackground(QColor(248,250,253));
             canvas->setGridEnabled(false);
@@ -20986,7 +21130,7 @@ public:
                 const auto& edge = model.segments[i].segment;
                 labels.push_back({{}, edge.start, QStringLiteral("V%1").arg(i+1)});
                 labels.push_back({{}, {(edge.start.x+edge.end.x)/2, (edge.start.y+edge.end.y)/2},
-                    QStringLiteral("E%1 · %2").arg(i+1).arg(format_length(segment_length(edge), context.metric_units))});
+                    QStringLiteral("E%1").arg(i+1)});
             }
             canvas->setLabels(std::move(labels));
             canvas->fitView();
@@ -21057,6 +21201,18 @@ public:
             targets.emplace(child, target);
             child_rows.emplace(child, row);
         }
+        // Point removal can prove the surviving children in its fresh topology.
+        // Retired children still require an explicit replacement or removal.
+        for(const auto& [child,target]:targets) {
+            const auto* group=child.first?"vertices":"segments";
+            const auto mapped=default_child_mapping.contains(group) && default_child_mapping.at(group).contains(child.second)
+                ? default_child_mapping.at(group).at(child.second).get<std::string>() : child.second;
+            const auto same=target->findData(id_from(mapped));
+            if(same>0) target->setCurrentIndex(same);
+        }
+        for(std::size_t i=0;i<references.size();++i)
+            if(std::all_of(references[i].children.begin(),references[i].children.end(),
+                [&](const auto& child){return targets.at(child)->currentIndex()>0;})) decisions[i]->setCurrentIndex(1);
         auto* status = new QLabel(&dialog);
         status->setObjectName(QStringLiteral("boundaryReferenceStatus"));
         status->setWordWrap(true);
@@ -27111,6 +27267,7 @@ public:
             {QStringLiteral("Delete selection"), [this] { deleteSelection(); }},
             {QStringLiteral("Upgrade boundary identities"), [this] { (void)upgradeSelectedBoundaryIdentities(); }},
             {QStringLiteral("Insert point"), [this] { showBoundaryVertexInsertion(); }},
+            {QStringLiteral("Remove point"), [this] { showBoundaryVertexRemoval(); }},
             {QStringLiteral("Jump to boundary vertex"), [this] { showBoundaryVertexJump(); }},
             {QStringLiteral("Align side to original start X (X)"), [this] { (void)proposeDrawingAlignment(true); }},
             {QStringLiteral("Align side to original start Y (Y)"), [this] { (void)proposeDrawingAlignment(false); }},
@@ -28585,6 +28742,9 @@ private:
         m_delete_action->setShortcutContext(Qt::WindowShortcut);
         m_insert_vertex_action = new QAction(QStringLiteral("Insert point…"), owner);
         m_insert_vertex_action->setObjectName(QStringLiteral("insertBoundaryVertex"));
+        auto* remove_point_action=new QAction(QStringLiteral("Remove point…"),owner);
+        remove_point_action->setObjectName(QStringLiteral("removeBoundaryVertex"));
+        QObject::connect(remove_point_action,&QAction::triggered,owner,[this]{showBoundaryVertexRemoval();});
         m_upgrade_boundary_identities_action = new QAction(QStringLiteral("Upgrade boundary identities"), owner);
         m_upgrade_boundary_identities_action->setObjectName(QStringLiteral("upgradeBoundaryIdentities"));
         m_upgrade_boundary_identities_action->setToolTip(QStringLiteral(
@@ -28618,6 +28778,7 @@ private:
         more_menu->addAction(m_delete_action);
         more_menu->addAction(m_upgrade_boundary_identities_action);
         more_menu->addAction(m_insert_vertex_action);
+        more_menu->addAction(remove_point_action);
         more_menu->addAction(jump_vertex_action);
         more_menu->addAction(lift_pen_action);
         more_menu->addAction(align_x_action);
@@ -30876,6 +31037,7 @@ private:
                     auto* geometry = menu.addAction(QStringLiteral("Edit boundary geometry…"));
                     QObject::connect(geometry, &QAction::triggered, owner,
                                      [this] { showBoundaryGeometryEditor(); });
+                    menu.addAction(owner->findChild<QAction*>(QStringLiteral("removeBoundaryVertex")));
                     for (const auto* id : {"createRoom", "createSlab", "createFloor"})
                         menu.addAction(owner->findChild<QAction*>(QString::fromLatin1(id)));
                 }
@@ -39298,6 +39460,10 @@ bool MainWindow::insertSelectedBoundaryVertex(const QString& segment_id,
 
 bool MainWindow::upgradeSelectedBoundaryIdentities(std::optional<Revision> expected_revision) {
     return m_impl->upgradeSelectedBoundaryIdentities(expected_revision);
+}
+
+bool MainWindow::removeSelectedBoundaryVertex(const QString& vertex_id) {
+    return m_impl->removeSelectedBoundaryVertex(vertex_id);
 }
 
 bool MainWindow::moveSelectedBoundaryVertex(

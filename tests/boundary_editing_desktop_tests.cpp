@@ -6,6 +6,7 @@
 #include "sketch/appraisal_document.hpp"
 #include "sketch/desktop/main_window.hpp"
 #include "sketch/wall_measurement.hpp"
+#include "sketch/geometry_operations.hpp"
 #include "support/noninteractive_errors.hpp"
 #include "../src/desktop/plan_canvas.hpp"
 
@@ -218,6 +219,175 @@ void length_dimension_delete_recreate_and_restore() {
         std::cerr << "Dimension reopen failed: " << reopened.lastError().toStdString() << '\n';
     require(opened && reopened.document().snapshot().entities() == restored.entities(),
             "saved length dimension project must reopen with its original entities");
+}
+
+void boundary_point_removal_workflow() {
+    QTemporaryDir directory;
+    MainWindow window({},nullptr,directory.filePath(QStringLiteral("library.json")));
+    window.setAttribute(Qt::WA_DontShowOnScreen);window.setMetricUnits(true);
+    const auto id=window.createBoundary(tall_rectangle());
+    require(!id.isEmpty(),"point removal needs a real identified boundary");
+    window.resize(1100,780);window.show();QApplication::processEvents();
+    require(window.selectEntity(id),"select removal source");
+    auto& workflow=child<QComboBox>(window,"calculationWorkflow");
+    choose_data(workflow,QStringLiteral("appraisal"));
+    require(window.editSelectedAppraisalFacts(QStringLiteral(R"({"appraisal_policy":{"policy_kind":"residential_declared","version":1,"property_kind":"detached_single_family","measurement_basis":"exterior"},"grade":"above","appraisal_facts":{"finish":"finished","access":"direct_interior","ceiling_eligibility":"standard","area_use":"dwelling","boundary_role":"measured_area"}})")),
+        "declare source appraisal facts");
+    const auto original=window.document().snapshot();
+    const auto original_report=sketch::build_appraisal_document_report(original,"property-1",sketch::AreaUnit::square_metre);
+    require(original_report.qualified && original_report.calculation &&
+        std::abs(original_report.calculation->property.gla().total.square_metres-48)<1e-7,
+        "source appraisal must calculate 48 square metres");
+    const auto boundary=sketch::decode_identified_boundary_entity(original.entities().at(id.toStdString()));
+    auto& action=child<QAction>(window,"removeBoundaryVertex");
+    modal_interaction(window,"boundaryVertexRemovalDialog",[&]{action.trigger();},[&](QDialog& dialog){
+        auto& points=child<QComboBox>(dialog,"boundaryRemovalPoint");
+        choose_data(points,QString::fromStdString(boundary.segments[1].start_vertex_id));
+        require(child<QDialogButtonBox>(dialog,"boundaryRemovalButtons").button(QDialogButtonBox::Apply)->isEnabled(),
+            "valid removal preview must enable Apply before Cancel");
+    });
+    require(window.document().snapshot().entities()==original.entities(),"Cancel must preserve source entities");
+    modal_interaction(window,"boundaryVertexRemovalDialog",[&]{action.trigger();},[&](QDialog& dialog){
+        choose_data(child<QComboBox>(dialog,"boundaryRemovalPoint"),QString::fromStdString(boundary.segments[1].start_vertex_id));
+        auto& buttons=child<QDialogButtonBox>(dialog,"boundaryRemovalButtons");
+        require(buttons.button(QDialogButtonBox::Apply)->isEnabled(),"valid removed point preview must enable Apply");
+        const auto* scene=dynamic_cast<sketch::desktop::PlanCanvas*>(&child<QWidget>(dialog,"boundaryRemovalPreview"));
+        require(scene && scene->entities().size()==2 && scene->entities().back().segments.size()==3,
+            "actual removal preview must show original and triangle replacement");
+        capture(dialog,QStringLiteral("boundary-point-removal-preview.png"));
+        buttons.button(QDialogButtonBox::Apply)->click();
+    });
+    const auto changed=window.document().snapshot();
+    require(changed.revision()==original.revision()+1,"removal must commit once");
+    const auto result=sketch::decode_identified_boundary_entity(changed.entities().at(id.toStdString()));
+    require(result.id==boundary.id && result.segments.size()==3 &&
+        std::abs(sketch::signed_area(sketch::boundary_geometry(result))-24)<1e-7,
+        "removal must retain boundary with expected triangle area");
+    const auto changed_report=sketch::build_appraisal_document_report(changed,"property-1",sketch::AreaUnit::square_metre);
+    require(changed_report.qualified && changed_report.calculation &&
+        std::abs(changed_report.calculation->property.gla().total.square_metres-24)<1e-7 &&
+        changed.entities().at(id.toStdString()).properties.at("appraisal_facts")==original.entities().at(id.toStdString()).properties.at("appraisal_facts"),
+        "removal must update declared GLA and preserve facts");
+    require(window.undoCommand() && window.document().snapshot().entities()==original.entities(),"removal Undo must be exact");
+    require(window.redoCommand() && window.document().snapshot().entities()==changed.entities(),"removal Redo must be exact");
+    const auto path=directory.filePath(QStringLiteral("point-removal.bldproj"));
+    require(window.saveProjectAs(path),"removed point project must save");
+    {
+        MainWindow read_only({},nullptr,directory.filePath(QStringLiteral("readonly-library.json")));
+        require(read_only.openProject(path) && !read_only.document().is_editable() && read_only.selectEntity(id),
+            "second open must retain the writer's ownership and be read-only");
+        const auto owned=read_only.document().snapshot();
+        const auto current=sketch::decode_identified_boundary_entity(owned.entities().at(id.toStdString()));
+        require(!read_only.removeSelectedBoundaryVertex(QString::fromStdString(current.segments.front().start_vertex_id)) &&
+            !read_only.undoCommand() && read_only.document().snapshot().entities()==owned.entities(),
+            "read-only point editing and history must refuse unchanged");
+    }
+    require(window.createNewProject(),"release writer ownership before editable reopening");
+    MainWindow reopened({},nullptr,directory.filePath(QStringLiteral("other-library.json")));
+    require(reopened.openProject(path) && reopened.document().is_editable() && reopened.document().snapshot().entities()==changed.entities(),
+        "point removal must reopen with exact entities");
+    require(reopened.undoCommand() && reopened.document().snapshot().entities()==original.entities(),
+        "reopened history must restore removed point");
+    require(reopened.selectEntity(id),"reselect restored boundary");
+    const auto restored=reopened.document().snapshot();
+    require(!reopened.removeSelectedBoundaryVertex(QStringLiteral("missing")) &&
+        reopened.document().snapshot().entities()==restored.entities(),"unknown point must refuse unchanged");
+
+    require(reopened.redoCommand() && reopened.selectEntity(id),"restore triangle for invalid removal");
+    const auto triangle=reopened.document().snapshot();
+    auto& reopened_action=child<QAction>(reopened,"removeBoundaryVertex");
+    modal_interaction(reopened,"boundaryVertexRemovalDialog",[&]{reopened_action.trigger();},[&](QDialog& dialog){
+        require(!child<QDialogButtonBox>(dialog,"boundaryRemovalButtons").button(QDialogButtonBox::Apply)->isEnabled(),
+            "triangle cannot lose a corner into a line");
+        require(!child<QLabel>(dialog,"boundaryRemovalStatus").text().isEmpty(),"invalid removal must explain refusal");
+    });
+    require(reopened.document().snapshot().entities()==triangle.entities(),"invalid removal must preserve source");
+}
+
+void boundary_point_removal_reference_review() {
+    MainWindow window;
+    window.setAttribute(Qt::WA_DontShowOnScreen);
+    const auto id=window.createBoundary(tall_rectangle());
+    const auto boundary=sketch::decode_identified_boundary_entity(window.document().snapshot().entities().at(id.toStdString()));
+    const auto kept=window.createLengthDimension(id,QString::fromStdString(boundary.segments[0].segment_id),{2,-1});
+    const auto retired=window.createLengthDimension(id,QString::fromStdString(boundary.segments[1].segment_id),{5,6});
+    require(!kept.isEmpty() && !retired.isEmpty() && window.selectEntity(id),"removal needs retained and retired manual references");
+    const auto before=window.document().snapshot();
+    bool removed=false;
+    modal_interaction(window,"boundaryReferenceReview",[&]{
+        removed=window.removeSelectedBoundaryVertex(QString::fromStdString(boundary.segments[1].start_vertex_id));
+    },[&](QDialog& dialog){
+        auto& choices=child<QTableWidget>(dialog,"boundaryReferenceChoices");
+        auto& buttons=child<QDialogButtonBox>(dialog,"boundaryReferenceButtons");
+        require(!buttons.button(QDialogButtonBox::Apply)->isEnabled(),"retired reference must require explicit review");
+        bool found_kept=false,found_retired=false;
+        for(int row=0;row<choices.rowCount();++row) {
+            const auto ref=choices.item(row,0)->data(Qt::UserRole).toString();
+            auto* decision=qobject_cast<QComboBox*>(choices.cellWidget(row,1));
+            require(decision!=nullptr,"reference must have a decision");
+            if(ref==kept) {found_kept=true;require(decision->currentIndex()==1,"surviving stable edge must default to Keep");}
+            if(ref==retired) {found_retired=true;require(decision->currentIndex()==0,"retired edge must await explicit decision");decision->setCurrentIndex(2);}
+        }
+        require(found_kept && found_retired && buttons.button(QDialogButtonBox::Apply)->isEnabled(),
+            "explicit removal with surviving identity must preview successfully");
+        for(const auto* name:{"boundaryReferenceOriginal","boundaryReferenceProposed"}) {
+            const auto* scene=dynamic_cast<sketch::desktop::PlanCanvas*>(&child<QWidget>(dialog,name));
+            require(scene!=nullptr,"reference review needs a plan canvas");
+            const auto center=scene->viewCenter();
+            for(const auto& entity:scene->entities()) for(const auto& segment:entity.segments) {
+                const QPointF position(scene->rect().center().x()+(segment.start.x-center.x)*scene->viewScale(),
+                    scene->rect().center().y()-(segment.start.y-center.y)*scene->viewScale());
+                require(QRectF(scene->rect()).adjusted(10,10,-10,-10).contains(position),
+                    "every source and replacement corner must fit inside the laid-out review canvas");
+            }
+        }
+        capture(dialog,QStringLiteral("boundary-point-removal-references.png"));
+        buttons.button(QDialogButtonBox::Apply)->click();
+    });
+    const auto after=window.document().snapshot();
+    require(removed && after.revision()==before.revision()+1 && after.entities().contains(kept.toStdString()) &&
+        !after.entities().contains(retired.toStdString()),"reference review and geometry must commit together");
+    const auto retained=*sketch::decode_boundary_dimension_entity(after.entities().at(kept.toStdString())).dimension;
+    const auto replacement=sketch::decode_identified_boundary_entity(after.entities().at(id.toStdString()));
+    require(retained.segment_id==replacement.segments[0].segment_id &&
+        std::abs(retained.resolve(after.entities().at(id.toStdString())).segment_length()-std::sqrt(160.0))<1e-7,
+        "kept manual dimension must resolve the merged diagonal");
+    require(window.undoCommand() && window.document().snapshot().entities()==before.entities(),"Undo must restore retired reference exactly");
+
+    const auto other=window.createBoundary({{{20,0},{22,0},0},{{22,0},{22,2},0},{{22,2},{20,2},0},{{20,2},{20,0},0}});
+    require(window.selectEntity(id) && window.selectEntity(other,true),"select two boundaries");
+    const auto multi=window.document().snapshot();
+    require(!window.removeSelectedBoundaryVertex(QString::fromStdString(boundary.segments[1].start_vertex_id)) &&
+        window.document().snapshot().entities()==multi.entities(),"multiple selection must refuse point removal");
+    require(window.selectEntity(id),"select stale-preview source");
+    auto& action=child<QAction>(window,"removeBoundaryVertex");
+    modal_interaction(window,"boundaryVertexRemovalDialog",[&]{action.trigger();},[&](QDialog& dialog){
+        require(window.selectEntity(other),"change selection while point preview is open");
+        auto& buttons=child<QDialogButtonBox>(dialog,"boundaryRemovalButtons");
+        buttons.button(QDialogButtonBox::Apply)->click();
+        require(!buttons.button(QDialogButtonBox::Apply)->isEnabled(),"stale selection must disable Apply");
+    });
+    require(window.document().snapshot().entities()==multi.entities(),"stale preview must preserve both objects");
+}
+
+void boundary_point_removal_restores_split_arc() {
+    MainWindow window;
+    window.setAttribute(Qt::WA_DontShowOnScreen);
+    const auto id=window.createBoundary({{{0,0},{4,0},std::numbers::pi},{{4,0},{0,0},std::numbers::pi}});
+    require(!id.isEmpty(),"split arc fixture must create a circle");
+    const auto original=sketch::decode_identified_boundary_entity(window.document().snapshot().entities().at(id.toStdString()));
+    require(window.selectEntity(id) && window.insertSelectedBoundaryVertex(
+        QString::fromStdString(original.segments.front().segment_id),QStringLiteral("0.4")),"insert an arc point through desktop command");
+    const auto split=window.document().snapshot();
+    const auto split_boundary=sketch::decode_identified_boundary_entity(split.entities().at(id.toStdString()));
+    require(window.removeSelectedBoundaryVertex(QString::fromStdString(split_boundary.segments[1].start_vertex_id)),
+        "remove inserted arc point through desktop command");
+    const auto restored=sketch::decode_identified_boundary_entity(window.document().snapshot().entities().at(id.toStdString()));
+    require(restored.id==original.id && restored.segments.size()==2 &&
+        std::abs(restored.segments[0].segment.sweep_radians-std::numbers::pi)<1e-9 &&
+        std::abs(sketch::perimeter(sketch::boundary_geometry(restored))-4*std::numbers::pi)<1e-9,
+        "removal must merge the split semicircle analytically without a chord shortcut");
+    require(window.undoCommand() && window.document().snapshot().entities()==split.entities(),"arc removal must undo exactly");
 }
 
 void default_length_operation_remains_available() {
@@ -1020,6 +1190,13 @@ int main(int argc, char** argv) {
             std::cout << "curved related-object editor passed\n";
             return 0;
         }
+        if (app.arguments().contains(QStringLiteral("--remove-point-only"))) {
+            boundary_point_removal_workflow();
+            boundary_point_removal_reference_review();
+            boundary_point_removal_restores_split_arc();
+            std::cout << "boundary point removal passed\n";
+            return 0;
+        }
         curve_angle_requires_explicit_units();
         explicit_curve_angle_constructions();
         const bool curve_units_only = std::any_of(argv + 1, argv + argc, [](const char* arg) {
@@ -1029,6 +1206,9 @@ int main(int argc, char** argv) {
             std::cout << "boundary_editing_desktop_tests curve angle units passed\n";
             return 0;
         }
+        boundary_point_removal_workflow();
+        boundary_point_removal_reference_review();
+        boundary_point_removal_restores_split_arc();
         length_dimension_delete_recreate_and_restore();
         default_length_operation_remains_available();
         exact_vertex_editor(false);

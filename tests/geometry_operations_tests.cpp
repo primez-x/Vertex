@@ -281,6 +281,149 @@ void test_rotated_boundary_transform_sequence() {
             "transformed rectangle must remain admissible as an identified boundary");
 }
 
+void test_remove_boundary_vertex_straight() {
+    using namespace sketch;
+    const auto source = square();
+    const auto result = remove_boundary_vertex(source, "v1");
+    const IdentifiedBoundary expected{"b", "boundary", {
+        {"e0", "v0", "v2", {{0, 0}, {4, 3}, 0}},
+        {"e2", "v2", "v3", {{4, 3}, {0, 3}, 0}},
+        {"e3", "v3", "v0", {{0, 3}, {0, 0}, 0}}}};
+    require(result == expected,
+        "point removal must retain the incoming edge and all unaffected identities and geometry");
+    require(near(signed_area(boundary_geometry(result)), 6) &&
+                near(perimeter(boundary_geometry(result)), 12),
+        "removing a rectangle corner must produce the hand-derived 3-4-5 triangle");
+    require(source == square(), "successful point removal must leave the source unchanged");
+
+    const auto wrap = remove_boundary_vertex(source, "v0");
+    const IdentifiedBoundary expected_wrap{"b", "boundary", {
+        {"e1", "v1", "v2", {{4, 0}, {4, 3}, 0}},
+        {"e2", "v2", "v3", {{4, 3}, {0, 3}, 0}},
+        {"e3", "v3", "v1", {{0, 3}, {4, 0}, 0}}}};
+    require(wrap == expected_wrap,
+        "removing the first vertex must retain the closing edge ID and retire the first edge");
+
+    const IdentifiedBoundary collinear{"b", "room_boundary", {
+        {"e0", "v0", "vx", {{0, 0}, {1, 0}, 0}},
+        {"ex", "vx", "v1", {{1, 0}, {4, 0}, 0}},
+        {"e1", "v1", "v2", {{4, 0}, {4, 3}, 0}},
+        {"e2", "v2", "v3", {{4, 3}, {0, 3}, 0}},
+        {"e3", "v3", "v0", {{0, 3}, {0, 0}, 0}}}};
+    auto expected_collinear = square();
+    expected_collinear.type = "room_boundary";
+    require(remove_boundary_vertex(collinear, "vx") == expected_collinear,
+        "removing an extra collinear point must restore the edge and retain boundary type");
+}
+
+void test_remove_boundary_vertex_arcs() {
+    using namespace sketch;
+    // Removing a split point must recover both minor and major signed arcs.
+    // Literal sweep expectations prevent a chord-only implementation passing.
+    for (const double sweep : {std::numbers::pi / 2, -std::numbers::pi / 2,
+                               3 * std::numbers::pi / 2, -3 * std::numbers::pi / 2}) {
+        auto original = std::abs(sweep) > std::numbers::pi
+            ? arc_triangle(sweep > 0 ? 1.0 : -1.0) : tall_rectangle();
+        original.segments[0].segment.sweep_radians = sweep;
+        const auto split = insert_boundary_vertex(original, "e0", 0.3, "vx", "ex");
+        const auto result = remove_boundary_vertex(split, "vx");
+        require(result.segments.size() == original.segments.size() &&
+                    near(result.segments[0].segment.sweep_radians, sweep) &&
+                    result.segments[0].segment_id == "e0" &&
+                    result.segments[0].start_vertex_id == "v0" &&
+                    result.segments[0].end_vertex_id == "v1" &&
+                    same_point(result.segments[0].segment.start, {0, 0}) &&
+                    same_point(result.segments[0].segment.end, {4, 0}),
+            "removing a same-circle split point must combine the signed sweep and retain its chord and ID");
+        require(std::equal(result.segments.begin() + 1, result.segments.end(),
+                           original.segments.begin() + 1),
+            "arc point removal must preserve every unaffected child exactly");
+        require(near(signed_area(boundary_geometry(result)),
+                     signed_area(boundary_geometry(original))) &&
+                    near(perimeter(boundary_geometry(result)),
+                         perimeter(boundary_geometry(original))),
+            "arc split removal must preserve analytical area and perimeter");
+        require(split.segments.size() == original.segments.size() + 1 &&
+                    split.segments[1].segment_id == "ex",
+            "arc point removal must not mutate the split source");
+    }
+
+    const IdentifiedBoundary circle{"circle", "measurement_boundary", {
+        {"e0", "v0", "v1", {{0, 0}, {4, 0}, std::numbers::pi}},
+        {"e1", "v1", "v0", {{4, 0}, {0, 0}, std::numbers::pi}}}};
+    auto split_circle = insert_boundary_vertex(circle, "e0", 0.5, "vx", "ex");
+    const auto restored_circle = remove_boundary_vertex(split_circle, "vx");
+    require(restored_circle == circle &&
+                near(signed_area(boundary_geometry(restored_circle)), 4 * std::numbers::pi) &&
+                near(perimeter(boundary_geometry(restored_circle)), 4 * std::numbers::pi),
+        "point removal must admit a valid two-arc region rather than require three remaining edges");
+    std::rotate(split_circle.segments.begin(), split_circle.segments.begin() + 1,
+                split_circle.segments.end());
+    const auto wrapped_arc = remove_boundary_vertex(split_circle, "vx");
+    require(wrapped_arc.segments.size() == 2 && wrapped_arc.segments[0] == circle.segments[1] &&
+                wrapped_arc.segments[1] == circle.segments[0],
+        "same-circle arc merging must also work across the final and first edges");
+
+    auto incompatible = square();
+    incompatible.segments[0].segment.sweep_radians = std::numbers::pi / 2;
+    incompatible.segments[1].segment.sweep_radians = std::numbers::pi / 2;
+    const auto chord = remove_boundary_vertex(incompatible, "v1");
+    require(chord.segments[0].segment.sweep_radians == 0 &&
+                same_point(chord.segments[0].segment.start, {0, 0}) &&
+                same_point(chord.segments[0].segment.end, {4, 3}) &&
+                near(signed_area(boundary_geometry(chord)), 6),
+        "curves on different circles must become an explicit straight replacement chord");
+    incompatible.segments[1].segment.sweep_radians = 0;
+    require(remove_boundary_vertex(incompatible, "v1").segments[0].segment.sweep_radians == 0,
+        "a curve and line must become an explicit straight replacement chord");
+}
+
+void test_remove_boundary_vertex_rejections() {
+    using namespace sketch;
+    const auto source = square();
+    for (const auto id : {"", "missing", "e0"}) {
+        rejects([&] { (void)remove_boundary_vertex(source, id); },
+            "point removal must reject a missing vertex ID");
+    }
+    auto invalid = source;
+    invalid.segments[0].end_vertex_id = "v3";
+    rejects([&] { (void)remove_boundary_vertex(invalid, "v1"); },
+        "point removal must validate the original identities before editing");
+    invalid = source;
+    invalid.segments[1].segment.start.x += 1e-12;
+    rejects([&] { (void)remove_boundary_vertex(invalid, "v1"); },
+        "point removal must not repair an inexactly joined source");
+
+    const auto triangle = arc_triangle(2);
+    rejects([&] { (void)remove_boundary_vertex(triangle, "v1"); },
+        "point removal must reject a degenerate two-line result");
+    const IdentifiedBoundary circle{"circle", "boundary", {
+        {"e0", "v0", "v1", {{0, 0}, {4, 0}, std::numbers::pi}},
+        {"e1", "v1", "v0", {{4, 0}, {0, 0}, std::numbers::pi}}}};
+    rejects([&] { (void)remove_boundary_vertex(circle, "v0"); },
+        "point removal must reject a one-edge closed full-turn or degenerate result");
+    rejects([&] { (void)remove_boundary_vertex(circle, "v1"); },
+        "point removal must reject collapse at either vertex of a two-arc region");
+
+    // A valid concave outline has a remote inward finger in the shortcut's path.
+    // Removing v4 joins (4,6) to (2,1), crossing the edge at y=4.
+    const Vec2 points[]{{0, 0}, {6, 0}, {6, 6}, {4, 6}, {4, 1},
+                        {2, 1}, {2, 4}, {3.5, 4}, {3.5, 6}, {0, 6}};
+    IdentifiedBoundary concave{"concave", "boundary", {}};
+    for (std::size_t i = 0; i < std::size(points); ++i) {
+        const auto next = (i + 1) % std::size(points);
+        concave.segments.push_back({"e" + std::to_string(i), "v" + std::to_string(i),
+            "v" + std::to_string(next), {points[i], points[next], 0}});
+    }
+    require(validate_boundary(boundary_geometry(concave)).empty(),
+        "self-intersection regression source must be a valid analytical region");
+    const auto concave_before = concave;
+    rejects([&] { (void)remove_boundary_vertex(concave, "v4"); },
+        "point removal must reject a replacement chord that crosses a remote edge");
+    require(concave == concave_before && source == square(),
+        "rejected point removal must preserve all source geometry and identities");
+}
+
 void test_direct_boundary_edits() {
     using namespace sketch;
     const auto source = square();
@@ -391,6 +534,9 @@ int main() {
         test_complete_bay_window_return();
         test_complete_bay_window_return_rejections();
         test_reconstruct_boundary_arc();
+        test_remove_boundary_vertex_straight();
+        test_remove_boundary_vertex_arcs();
+        test_remove_boundary_vertex_rejections();
         test_direct_boundary_edits();
         test_direct_boundary_edit_rejections();
         test_rotated_boundary_transform_sequence();

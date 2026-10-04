@@ -21,6 +21,12 @@ enum class BoundaryFlipAxis { horizontal, vertical };
 // Retains original segment ID for the first piece; caller supplies the second.
 [[nodiscard]] IdentifiedBoundary insert_boundary_vertex(const IdentifiedBoundary&, std::string_view segment_id,
     double fraction, std::string vertex_id, std::string second_segment_id);
+// Retires the target vertex and its outgoing segment, retaining the incoming
+// segment ID and all unaffected children. Contiguous same-circle arcs combine
+// their signed sweeps when representable; other incident geometry becomes a
+// straight chord. Returns a validated copy; invalid sources/results throw.
+[[nodiscard]] IdentifiedBoundary remove_boundary_vertex(
+    const IdentifiedBoundary&, std::string_view vertex_id);
 [[nodiscard]] IdentifiedBoundary clone_boundary(const IdentifiedBoundary&, std::string new_id,
     const LegacyBoundaryIdentityOptions& new_ids, Vec2 translation);
 

@@ -2,6 +2,10 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
+#include <numbers>
+#include <numeric>
+#include <optional>
 #include <stdexcept>
 
 namespace sketch {
@@ -15,6 +19,71 @@ void validate_finite(Vec2 point) {
     if (!std::isfinite(point.x) || !std::isfinite(point.y)) {
         throw std::invalid_argument("Point must be finite");
     }
+}
+
+struct RemovalArcGeometry {
+    Vec2 center;
+    double radius;
+};
+
+std::optional<RemovalArcGeometry> removal_arc_geometry(const Segment& segment) {
+    const auto dx = segment.end.x - segment.start.x;
+    const auto dy = segment.end.y - segment.start.y;
+    const auto chord = std::hypot(dx, dy);
+    const auto half_sweep = segment.sweep_radians / 2;
+    const bool semicircle = std::abs(segment.sweep_radians) == std::numbers::pi;
+    const auto sine = semicircle ? 1.0 : std::sin(std::abs(half_sweep));
+    const auto tangent = semicircle ? 1.0 : std::tan(half_sweep);
+    if (!(chord > 0) || !std::isfinite(chord) || !(sine > 0) ||
+        tangent == 0 || !std::isfinite(tangent)) return std::nullopt;
+    const Vec2 midpoint{std::midpoint(segment.start.x, segment.end.x),
+                        std::midpoint(segment.start.y, segment.end.y)};
+    const auto offset = semicircle ? 0.0 : chord / (2 * tangent);
+    const Vec2 center{midpoint.x - dy / chord * offset,
+                      midpoint.y + dx / chord * offset};
+    const auto radius = chord / (2 * sine);
+    if (!std::isfinite(center.x) || !std::isfinite(center.y) ||
+        !std::isfinite(radius)) return std::nullopt;
+    return RemovalArcGeometry{center, radius};
+}
+
+double removal_arc_sweep(const Segment& incoming, const Segment& outgoing) {
+    if (incoming.sweep_radians == 0 || outgoing.sweep_radians == 0 ||
+        (incoming.sweep_radians > 0) != (outgoing.sweep_radians > 0)) return 0;
+    const auto sweep = incoming.sweep_radians + outgoing.sweep_radians;
+    if (!std::isfinite(sweep) || !(std::abs(sweep) < 2 * std::numbers::pi)) return 0;
+    const auto first = removal_arc_geometry(incoming);
+    const auto second = removal_arc_geometry(outgoing);
+    const auto merged = removal_arc_geometry({incoming.start, outgoing.end, sweep});
+    if (!first || !second || !merged) return 0;
+
+    // Allow split/reconstruction roundoff, not the ordinary edit tolerance:
+    // curves that differ by a small but meaningful distance still become chords.
+    // Cap the allowance so large coordinates cannot hide a geometric change.
+    const auto scale = std::max({1.0, first->radius, second->radius, merged->radius,
+        std::abs(first->center.x), std::abs(first->center.y),
+        std::abs(second->center.x), std::abs(second->center.y),
+        std::abs(merged->center.x), std::abs(merged->center.y)});
+    const auto tolerance = std::min(default_geometry_tolerance_metres,
+        128 * std::numeric_limits<double>::epsilon() * scale);
+    const auto same_circle = [&](const RemovalArcGeometry& arc) {
+        return std::hypot(arc.center.x - merged->center.x,
+                          arc.center.y - merged->center.y) <= tolerance &&
+            std::abs(arc.radius - merged->radius) <= tolerance;
+    };
+    if (!same_circle(*first) || !same_circle(*second)) return 0;
+
+    // Circle equality alone does not establish the directed arc traversal.
+    // Replaying the incoming sweep on the replacement must reach the old joint.
+    const auto x = incoming.start.x - merged->center.x;
+    const auto y = incoming.start.y - merged->center.y;
+    const auto cosine = std::cos(incoming.sweep_radians);
+    const auto sine = std::sin(incoming.sweep_radians);
+    const Vec2 joint{merged->center.x + x * cosine - y * sine,
+                     merged->center.y + x * sine + y * cosine};
+    if (!std::isfinite(joint.x) || !std::isfinite(joint.y) ||
+        std::hypot(joint.x - incoming.end.x, joint.y - incoming.end.y) > tolerance) return 0;
+    return sweep;
 }
 
 } // namespace
@@ -52,6 +121,31 @@ IdentifiedBoundary insert_boundary_vertex(const IdentifiedBoundary& source, std:
     result.segments.insert(found + 1, {std::move(second_id), std::move(vertex_id), original.end_vertex_id,
         {point, segment.end, segment.sweep_radians * (1 - fraction)}});
     validate_editable_boundary(result);
+    return result;
+}
+
+IdentifiedBoundary remove_boundary_vertex(const IdentifiedBoundary& source, std::string_view id) {
+    validate_editable_boundary(source);
+    const auto outgoing = std::find_if(source.segments.begin(), source.segments.end(),
+        [&](const auto& edge) { return edge.start_vertex_id == id; });
+    if (outgoing == source.segments.end()) throw std::invalid_argument("Unknown vertex ID");
+    if (source.segments.size() <= 2)
+        throw std::invalid_argument("Point removal must retain a closed region with at least two edges");
+    const auto outgoing_index = static_cast<std::size_t>(outgoing - source.segments.begin());
+    const auto incoming_index = (outgoing_index + source.segments.size() - 1) % source.segments.size();
+    const auto& incoming = source.segments[incoming_index];
+    auto replacement = incoming;
+    replacement.end_vertex_id = outgoing->end_vertex_id;
+    replacement.segment.end = outgoing->segment.end;
+    replacement.segment.sweep_radians = removal_arc_sweep(incoming.segment, outgoing->segment);
+
+    auto result = source;
+    result.segments[incoming_index] = std::move(replacement);
+    result.segments.erase(result.segments.begin() + outgoing_index);
+    const auto geometry = boundary_geometry(result);
+    const auto area = signed_area(geometry);
+    if (!std::isfinite(area) || area == 0)
+        throw std::invalid_argument("Point removal must retain a nonzero finite enclosed area");
     return result;
 }
 

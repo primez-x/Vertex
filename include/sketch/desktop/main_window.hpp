@@ -439,6 +439,9 @@ public:
     // connected wall pieces with hosted/source dependencies completed atomically.
     [[nodiscard]] bool insertSelectedBoundaryVertex(const QString& segment_id,
                                                      const QString& fraction);
+    // Removes one stable boundary point through the ordinary redraw/reference
+    // review and one reversible document command.
+    [[nodiscard]] bool removeSelectedBoundaryVertex(const QString& vertex_id);
     // Direct stable-ID coordinate editing used by canvas vertex handles.
     [[nodiscard]] bool moveSelectedBoundaryVertex(
         const QString& vertex_id, Vec2 position,

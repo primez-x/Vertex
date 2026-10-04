@@ -1639,6 +1639,10 @@
     },
     {
       "category": "docs",
+      "path": "docs/plans/2026-10-04-boundary-point-removal.md"
+    },
+    {
+      "category": "docs",
       "path": "docs/plans/2026-10-04-curved-survey-calls.md"
     },
     {
@@ -2492,6 +2496,10 @@
     {
       "category": "docs",
       "path": "docs/verification/boundary-curvature-and-diagnostics-2026-10-01.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/verification/boundary-point-removal-2026-10-04.md"
     },
     {
       "category": "docs",

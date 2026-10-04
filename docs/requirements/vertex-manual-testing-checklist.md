@@ -2581,6 +2581,14 @@ drawing; switching modes does not change existing geometry.
   - Result: Not tested
   - Notes: ______________________________
 
+## Remove boundary points
+
+- [ ] **U423 — Remove a corner or an inserted point**
+  - Steps: Draw and select a measured rectangle. Right-click > Remove point, choose a corner, inspect the replacement and Cancel. Reopen and Apply. Undo, Redo, save and reopen, then Undo again. Repeat with a point inserted on a curved edge. Add manual dimensions before removing a point and review their Keep/Remove choices.
+  - Expected: Preview changes nothing. A rectangle becomes the previewed triangle with updated area and perimeter. Removing a split point on the same circle restores one analytical arc. Dimensions on retained edges stay attached; references to retired edges or corners need your explicit decision. Apply is one reversible edit. Invalid or stale edits explain the conflict and change nothing. Physical-wall-derived outlines direct you to edit their source walls.
+  - Result: Not tested
+  - Notes: ______________________________
+
 ## Issue report template
 
 - Task ID(s):

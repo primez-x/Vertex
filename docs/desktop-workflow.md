@@ -728,6 +728,18 @@ room through normal document history.
 
 ## Direct boundary editing
 
+Select an ordinary measured area and choose **Remove point** from its right-click
+menu or **Tools**. Pick the corner in the preview, compare the area and perimeter,
+then Apply. The two adjacent edges become one straight edge, or one analytical
+arc when they are contiguous parts of the same circle. Cancel leaves the drawing
+unchanged. Invalid replacements explain the problem and cannot apply.
+
+Attached manual dimensions and constraints receive a reference review. Surviving
+children are mapped into the replacement and default to Keep; a retired edge or corner requires an explicit
+replacement or Remove choice. Geometry and those choices form one Undo step and
+remain reversible after save/reopen. Physical-wall-derived outlines require edits
+to their source walls; this point-removal command does not detach that source.
+
 On a touch screen, one finger follows the normal select/draw/edit pointer path.
 Two fingers pan the plan and pinch to zoom around their moving midpoint. Adding
 the second finger cancels any pending object or corner edit. After either finger
@@ -739,7 +751,7 @@ not geometry or output scale. Real device qualification remains required.
 Selecting a supported closed boundary displays blue vertex handles sized in
 screen pixels, so they remain usable at different zoom levels and do not appear
 in print or export output. Dragging a handle previews both incident edges and,
-for straight boundaries, walls and other areas joined by saved endpoint
+walls and other areas joined by saved endpoint
 relationships. Exact related geometry is calculated off the UI thread; a pending
 or invalid position is marked on the canvas. Preview strokes respect the active
 view's crop and visible objects. Release recomputes the final pointer position
@@ -751,9 +763,10 @@ angle and area dimensions preview their candidate values and positions in the
 current units. The corner readout includes analytical area and perimeter from the
 whole candidate boundary, even when the view is cropped. Room/area names use the
 same interior placement and furniture avoidance as committed rendering. These
-preview totals do not represent qualified appraisal deductions or GLA. Curved boundary handles retain
-their analytical local editing behavior; joined-object solving for curves remains
-unavailable.
+geometric totals are separate from appraisal GLA. Qualified appraisal plans also
+project candidate deductions and net labels through the appraisal report; an
+unqualified candidate withholds numerical GLA. Curved boundary handles retain
+their signed sweeps while the solver checks saved endpoint relationships.
 
 Double-clicking the boundary, choosing **Edit boundary geometry** from its
 context menu, or using the inspector action opens the edge-length editor. It
@@ -764,14 +777,15 @@ vertex moves. With it on, the remaining boundary chain translates together.
 This option does not infer connections to another object from overlapping
 coordinates.
 
-For entirely straight boundaries, **Move related objects** separately controls
+For boundary length and vertex edits, **Move related objects** separately controls
 walls and other areas joined by saved endpoint constraints. With it enabled,
 the selected boundary keeps the requested resize shape and the solver moves
 its explicitly related objects. With it disabled, those objects stay fixed;
 an incompatible joined edit reports a conflict and cannot apply. The preview
 overlays their original and proposed geometry and lists moved wall endpoints
-and area vertices. Curved boundary resizing keeps its analytical curve behavior;
-related-object solving for curves remains unavailable.
+and area vertices. Curved boundary resizing keeps its analytical curve behavior
+and fixed signed sweeps. Arc reconstruction keeps both chord endpoints fixed
+and does not offer this related-object move option.
 
 Before Apply, the editor overlays the original and proposed outlines, marks
 the fixed point, and lists changed vertices and attached dimensions. The length,
