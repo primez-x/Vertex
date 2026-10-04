@@ -34,7 +34,13 @@ wall/room preview, then reviewed the integrated diff and interfaces. Initial
 fixture compilation failures (Windows near macro, Qt child lookup and namespace)
 and the invalid concurrent-wall fixture were corrected; failed records remain.
 One check after a failed capture-only build ran the previous executable and is
-not final evidence. Final evidence is green6-build and green6-check.
+not final evidence. Final evidence is green9-build and green9-check. Final source
+review also moved the ordinary exterior-source completion into the preview
+builder; publication uses that sealed complete command without augmenting it
+after confirmation.
+An additional actual desktop fixture moves a wall-derived exterior driver, all
+four supporting physical walls and its dependent room together, verifies the
+exterior source remains current, and restores their exact state with one Undo.
 
 Known production gaps remain: constrained geometry beyond the existing detached
 transform graph can refuse instead of solving a connected edit; splitting a

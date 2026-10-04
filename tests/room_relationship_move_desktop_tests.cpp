@@ -4,6 +4,7 @@
 #include "sketch/boundary_integrity.hpp"
 #include "sketch/boundary_receipt.hpp"
 #include "sketch/room_relationships.hpp"
+#include "sketch/wall_measurement.hpp"
 #include "support/noninteractive_errors.hpp"
 #include "../src/desktop/plan_canvas.hpp"
 
@@ -426,6 +427,42 @@ void test_independent_and_cross_record_moves() {
     });
     require(joined.document().snapshot().entities() == cycle_before.entities(), "cross-record contradiction must not mutate geometry");
 }
+
+void test_exterior_measurement_driver() {
+    QTemporaryDir directory;
+    MainWindow window({}, nullptr, directory.filePath("exterior-library.json"));
+    prepare_window(window);
+    const QStringList walls{window.createStraightWall({0,0},{4,0},"exterior"),
+        window.createStraightWall({4,0},{4,3},"exterior"), window.createStraightWall({4,3},{0,3},"exterior"),
+        window.createStraightWall({0,3},{0,0},"exterior")};
+    for (qsizetype index = 0; index < walls.size(); ++index)
+        require(!walls[index].isEmpty() && window.selectEntity(walls[index], index != 0), "select the source shell walls");
+    const auto area = window.createMeasurementBoundaryFromSelectedWalls();
+    require(!area.isEmpty(), "create a real exterior measurement from its physical sources");
+    const auto room = receipt_rectangle("exterior-dependent", "room_boundary", 8);
+    window.document().apply(ApplyEntityChanges{window.document().revision(), {EntityChange::upsert(room),
+        EntityChange::upsert(relation_entity({{area.toStdString(), K::appraisal_measurement_boundary}, {room.id, K::room_boundary}},
+            {{room.id, area.toStdString(), R::follows}}))}, {}, "Exterior relationship"});
+    const auto before = window.document().snapshot();
+    propagation_dialog(window, [&](QDialog& dialog) {
+        set_move(dialog, area.toStdString());
+        require(apply_button(dialog).isEnabled(), "source-backed area and dependent must preview together");
+        capture(dialog, "room-relationship-exterior-sources.png");
+        apply_button(dialog).click();
+        require(!dialog.isVisible(), "complete source-backed move must commit");
+    });
+    const auto after = window.document().snapshot();
+    require(wall_measurement_source_current(after, after.entities().at(area.toStdString())), "moved exterior remains current with its physical walls");
+    for (const auto& id : walls) {
+        const auto& old = before.entities().at(id.toStdString()).properties.at("baseline");
+        const auto& moved = after.entities().at(id.toStdString()).properties.at("baseline");
+        require(near(moved.at("start")[0].get<double>(), old.at("start")[0].get<double>() + 2.5) &&
+            near(moved.at("start")[1].get<double>(), old.at("start")[1].get<double>() + 1.25), "supporting walls move with the exterior driver");
+    }
+    require_translation(before.entities().at(room.id), after.entities().at(room.id), 2.5, 1.25);
+    require(after.revision() == before.revision() + 1 && window.undoCommand() &&
+        window.document().snapshot().entities() == before.entities(), "physical sources, exterior and dependent share one exact undo");
+}
 } // namespace
 
 int main(int argc, char** argv) {
@@ -446,6 +483,7 @@ int main(int argc, char** argv) {
         if (!area_only && !wall_only) test_invalid_conflicting_and_stale_moves();
         if (!area_only && !refusal_only) test_wall_driver_with_hosted_opening();
         if (!area_only && !refusal_only && !wall_only) test_independent_and_cross_record_moves();
+        if (!area_only && !refusal_only && !wall_only) test_exterior_measurement_driver();
         std::cout << "room_relationship_move_desktop_tests passed\n";
         return 0;
     } catch (const std::exception& error) {

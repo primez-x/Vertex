@@ -10068,7 +10068,8 @@ public:
                 // Rebuild the complete command after every dependency expansion,
                 // rather than append unverified upserts to a sealed wall proof.
                 for (std::size_t pass = 0; pass <= source.entities().size(); ++pass) {
-                    const auto command = makeSelectionGeometryTransformCommand(source, roots, transform);
+                    const auto command = augmentAuthoredCommand(
+                        makeSelectionGeometryTransformCommand(source, roots, transform), source);
                     const auto candidate = Document::preview_command(source, command);
                     QStringList additions;
                     {
@@ -10201,7 +10202,7 @@ public:
                     const auto rebuilt = build_move(candidate_reference, *candidate_transform);
                     if (document_snapshot_digest(rebuilt.candidate) != document_snapshot_digest(candidate_preview->candidate))
                         throw std::invalid_argument("The relationship preview changed. Review it again before applying.");
-                    applyDocumentCommand(rebuilt.command);
+                    applyAuthoredCommand(rebuilt.command);
                     clearError();
                     refresh();
                     dialog.accept();
