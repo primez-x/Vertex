@@ -61,7 +61,10 @@ callouts, one/two physical walls, a translated/rotated plan and ordinary text,
 exact preview/commit projection, cancellation, one revision and editable reopen.
 Fourteen transfer-packager Python checks also passed. A real native41 project
 with retained envelope15 was packaged, verified and restored with identical
-bytes. Root reviewed final native captures for the area callout, rotated plan
+bytes. A separate Release CLI rebuild independently opened and validated the
+restored history, extracted version39 and preserved the source fingerprint.
+The initial packaging candidate is retained; the r2 delivery aligns both native
+entry points with the new reader floor. Root reviewed final native captures for the area callout, rotated plan
 and plain-wall/text group. U431 and U432 remain Not tested by the user.
 
 Final source/bundle/installation and sampled installed-runtime evidence are
