@@ -1,4 +1,35 @@
-# Vertex project formats v1 through v32
+# Vertex project formats v1 through v33
+
+## Grouped measured regions (v33)
+
+A `measurement_boundary` can retain the union of at least two adjacent detected
+measured faces. Its `extensions.measurement_linework_sources` remains the exact
+outer boundary lineage. The additional `extensions.measurement_linework_group`
+record has exactly `version: 1` and `members`, an array of at least two original
+face lineage arrays. Each member uses the existing outer-style representation:
+an ordered array of edges, each containing source uses with `owner_id`,
+`segment_id`, `parameter_start`, `parameter_end` and `reversed`.
+
+Member evidence retains internal seams cancelled from the combined outer
+outline. A missing, hidden or changed seam source can therefore invalidate the
+group even when its outer outline appears unchanged. The group does not
+tessellate arcs, infer classifications or automatically deduct holes. The
+single-loop combination primitive rejects disjoint selections, point branches,
+nested overlapping outlines and selections that leave holes or multiple loops.
+
+Any appearance of this reserved marker on a `measurement_boundary` requires
+native format 33 and extraction version 31, including malformed, future or
+missing-outer payloads and Undo/Redo or deleted-owner history. Qualification
+does not depend on the current boundary model version or member validity.
+Recomputing a digest cannot lower the reader floor. No SQLite columns, raw asset
+encoding or existing command dialects change.
+
+Unsupported top-level group schemas preserve their complete JSON and make the
+document read-only. An understood version-one group with invalid or stale
+member evidence retains its bytes while source checks withhold dependent
+operations. A vendor key collision on an unrelated entity type retains the
+previous format floor and does not acquire group semantics. Existing projects
+without grouped measured regions keep their earlier native/extraction floors.
 
 ## Finished-room ceiling rule (v32)
 
@@ -38,7 +69,7 @@ checkpoint schema 3 / replay 1. The checkpoint scans the entire retained action
 timeline, including Redo-only placements, and canonically replays presentation.
 See [dimension presentation checkpoints](boundary-recovery.md#dimension-presentation-checkpoints).
 
-The native container supports v1–32. Recovery-bearing files retain the existing
+The native container supports v1–33. Recovery-bearing files retain the existing
 container floor; older readers encounter an unknown nested checkpoint and
 preserve the whole ledger opaquely without granting editable state. Completed
 dimension presentation and JSON/assets recovery extraction already have their

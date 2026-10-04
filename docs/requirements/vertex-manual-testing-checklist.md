@@ -1,6 +1,6 @@
 # Vertex user testing checklist
 
-395 practical tasks, grouped by how you use the app (including U100a). This replaces the earlier engineering-oriented checklist. The old 130-item list is preserved separately as engineering-requirements-checklist.md.
+400 practical tasks, grouped by how you use the app (including U100a). This replaces the earlier engineering-oriented checklist. The old 130-item list is preserved separately as engineering-requirements-checklist.md.
 
 This is a user acceptance list for the intended app, not a claim that every listed action is implemented or working in the current preview. If you cannot find a control, or a feature is absent, mark **Blocked / missing** and describe it. Specialized sections can be skipped if you do not use them or lack the device or sample files.
 
@@ -66,6 +66,9 @@ Start with the workspace, draw a room, close it with the mouse, drag-select it, 
 - Precise measured-line input (7 tasks)
 - Entering a measured chord directly (4 tasks)
 - Defining nested measured areas (4 tasks)
+- Sloped-room appraisal calculations (2 tasks)
+- Appraisal detail readability and unfinished reports (2 tasks)
+- Combine measured regions (3 tasks)
 
 ## Start a project and arrange the workspace
 
@@ -2400,6 +2403,26 @@ drawing; switching modes does not change existing geometry.
 - [ ] **U396 — Try exporting a report during a measured-line drawing**
   - Steps: Export an appraisal PDF. Start Measured lines, place only the first point and try exporting over that PDF. Cancel and export again. Repeat with one accepted side, try export, continue with another side, then Finish and export.
   - Expected: Active drawings refuse export with a Finish-or-cancel message. The existing PDF and active drawing stay intact. Drawing continues from the same point after refusal; Cancel or Finish restores export.
+  - Result: Not tested
+  - Notes: ______________________________
+
+## Combine measured regions
+
+- [ ] **U397 — Combine adjoining regions into one area**
+  - Steps: Choose Measured lines. Draw a closed rectangle and two crossing dividers so it contains four regions. Open Detect closed areas, select the four rows, click Combine selected and choose Living. Check the preview, cancel once, then repeat and Apply.
+  - Expected: Cancel preserves the lines and creates no areas. Apply creates one Living area with the rectangle's exterior; the internal dividers remain drawing lines but are excluded from the area's perimeter. The preview shows one combined net result rather than four copies of the total.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **U398 — Reopen and review a combined area**
+  - Steps: After combining regions, Undo and Redo, save and reopen, then run Detect closed areas again. Open Details, select the combined area and inspect its dimensions and deductions. If using appraisal, record the required property, floor and area facts.
+  - Expected: Undo removes and Redo restores the whole definition. Save/reopen preserves it. Re-detection keeps the same combined area and does not create duplicate totals. Appraisal GLA includes its eligible contribution once and withholds totals when required facts are missing.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **U399 — Check invalid combinations and source changes**
+  - Steps: Try combining separated regions and regions touching at only one corner. Try combining two already-defined individual areas. For a valid combined area, edit an original divider and inspect its area source status; then copy, paste and move the combined area. Edit one of the pasted copy's source lines and Undo the edit.
+  - Expected: Invalid combinations explain the issue without changing the project. Existing definitions are not consumed silently. Changed sources either refresh the complete group together or require explicit repair; stale totals are withheld. The pasted measured copy appears beside the existing drawing and remains selected. Copying and movement preserve all sources, including internal dividers. Editing the copy's source refreshes the copy without changing the original, and Undo restores the whole edit.
   - Result: Not tested
   - Notes: ______________________________
 

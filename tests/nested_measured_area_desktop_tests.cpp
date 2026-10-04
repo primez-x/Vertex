@@ -4,6 +4,7 @@
 #include "sketch/boundary_entity.hpp"
 #include "sketch/appraisal_document.hpp"
 #include "sketch/model_phases.hpp"
+#include "sketch/measurement_linework_source.hpp"
 #include "../src/desktop/plan_canvas.hpp"
 #include "support/noninteractive_errors.hpp"
 #include <QAction>
@@ -28,11 +29,16 @@
 #include <cmath>
 #include <functional>
 #include <iostream>
+#include <set>
 #include <stdexcept>
 namespace {
 using namespace sketch; using namespace sketch::desktop;
 void require(bool value,const char* message) { if(!value) throw std::runtime_error(message); }
 void events() { QCoreApplication::processEvents(QEventLoop::AllEvents,50); }
+double luminance(QColor color) {
+    const auto linear=[](double value){return value<=0.04045?value/12.92:std::pow((value+0.055)/1.055,2.4);};
+    return 0.2126*linear(color.redF())+0.7152*linear(color.greenF())+0.0722*linear(color.blueF());
+}
 Entity stroke(std::string id,double x,double y,double size) {
     const std::vector<Vec2> points{{x,y},{x+size,y},{x+size,y+size},{x,y+size},{x,y}};
     MeasurementLinework model; model.stroke_id=id; model.anchor=points.front(); model.closed=true;
@@ -173,6 +179,200 @@ void test_stale_preview_and_same_type_rejection() {
         buttons.button(QDialogButtonBox::Apply)->click(); require(areas(document->snapshot()).empty(),"stale Apply cannot commit retained preview"); dialog.reject();
     }); require(areas(document->snapshot()).empty() && document->revision()==before.revision()+1,"stale review leaves only unrelated authorized source edit");
 }
+std::shared_ptr<Document> adjacent_fixture(bool four,bool extend_horizontal=true) {
+    auto document=fixture();
+    auto seam=[](const char* id,Vec2 start,Vec2 end) {
+        MeasurementLinework model;model.stroke_id=id;model.anchor=start;
+        ConstructionReceipt receipt;receipt.segment_id=std::string(id)+":edge";receipt.kind=BoundaryConstructionKind::line_to_point;
+        receipt.start=start;receipt.chord_end=end;
+        model.edges.push_back({receipt.segment_id,std::string(id)+":start",std::string(id)+":end",receipt});
+        return Entity{id,"measurement_linework",{{"property_id","p"},{"building_id","b"},{"floor_id","f"},{"layer_id","l"},{"model",encode_measurement_linework_model(model)}},true};
+    };
+    std::vector<EntityChange> changes{EntityChange::erase("inner"),EntityChange::upsert(seam("seam-v",{5,0},{5,10}))};
+    // Continue beyond the editable outline so positive coordinate edits retain
+    // all four bounded faces. The original endpoint fixture tests topology loss.
+    if(four) changes.push_back(EntityChange::upsert(seam("seam-h",{0,5},{extend_horizontal?15.0:10.0,5})));
+    document->apply(ApplyEntityChanges{document->revision(),std::move(changes),{},"Adjacent measured regions"});return document;
+}
+void combine_all(QDialog& dialog,QTableWidget& rows) {
+    auto* combine=dialog.findChild<QPushButton*>("combineMeasuredAreaRows");
+    auto* separate=dialog.findChild<QPushButton*>("separateMeasuredAreaRows");
+    require(combine && separate,"native review exposes visible Combine selected and Separate selected actions");
+    for(int i=0;i<rows.rowCount();++i) choice(rows,i,MeasurementAreaDisposition::define_area,"living");
+    rows.selectAll();combine->click();
+    require(rows.columnCount()>8 && rows.item(0,8)->text().contains("Combined"),"combined membership has a visible group indicator");
+    require(rows.item(0,6)->text().contains("100") && rows.item(0,6)->text().contains("Combined"),"combined whole-owner net is explicitly labeled");
+    for(int i=1;i<rows.rowCount();++i)require(rows.item(i,6)->text().contains("Included"),"member rows do not repeat the whole group net as individual net");
+}
+void test_combined_adjacent_regions_review_history_and_sources() {
+    for(bool four:{false,true}) {
+        MainWindow window(adjacent_fixture(four));prepare(window);const auto before=window.document().snapshot();
+        for(auto theme:{WorkspaceTheme::light,WorkspaceTheme::dark}) {
+            window.setWorkspaceTheme(theme);
+            review(window,[&](QDialog& dialog,QTableWidget& rows,QDialogButtonBox& buttons) {
+                require(rows.rowCount()==(four?4:2),"adjacent fixture exposes every bounded measured region");combine_all(dialog,rows);
+                auto* type=qobject_cast<QComboBox*>(rows.cellWidget(0,5));type->setEditText("above_grade_finished");
+                require(type->currentText()=="Above grade finished" && type->currentData().toString()=="above_grade_finished","known group classifications display readable labels while retaining their data IDs");
+                for(int i=1;i<rows.rowCount();++i)require(qobject_cast<QComboBox*>(rows.cellWidget(i,5))->currentText()==type->currentText(),"editing one group classification synchronizes every member");
+                events();const auto background=dialog.grab().toImage().pixelColor(dialog.width()/2,4);
+                for(const auto* name:{"measuredAreaReviewExplanation","measuredAreaReviewGroupHelp","measuredAreaReviewStatus"}) {
+                    auto* label=dialog.findChild<QLabel*>(name);
+                    require(label,"review guidance labels exist");
+                    const auto style=label->styleSheet();const auto color_at=style.indexOf('#');
+                    const QColor foreground(style.mid(color_at,7));
+                    const auto fg=luminance(foreground),bg=luminance(background);
+                    require(color_at>=0 && foreground.isValid() && (std::max(fg,bg)+0.05)/(std::min(fg,bg)+0.05)>=4.5,"all review guidance has readable contrast against the rendered light/dark dialog background");
+                }
+                if(const auto capture=qEnvironmentVariable("VERTEX_TEST_CAPTURE_DIR");!capture.isEmpty()) {
+                    events();QDir().mkpath(capture);require(dialog.grab().save(QDir(capture).filePath(QStringLiteral("combined-%1-regions-%2.png").arg(four?4:2).arg(theme==WorkspaceTheme::light?"light":"dark"))),"actual combined-region review capture saves");
+                }
+                buttons.button(QDialogButtonBox::Cancel)->click();
+            });require(window.document().snapshot().entities()==before.entities() && window.document().revision()==before.revision(),"combination and classification remain transient on Cancel");
+        }
+        review(window,[&](QDialog& dialog,QTableWidget& rows,QDialogButtonBox& buttons) {
+            combine_all(dialog,rows);dialog.findChild<QPushButton*>("separateMeasuredAreaRows")->click();
+            for(int i=0;i<rows.rowCount();++i)require(rows.item(i,8)->text().contains("Separate"),"Separate selected restores individual review membership");
+            dialog.findChild<QPushButton*>("combineMeasuredAreaRows")->click();
+            require(buttons.button(QDialogButtonBox::Apply)->isEnabled(),"edge-connected combination has an admitted exact preview");buttons.button(QDialogButtonBox::Apply)->click();
+        });
+        const auto combined=window.document().snapshot();const auto result=areas(combined);
+        require(result.size()==1 && combined.revision()==before.revision()+1,"two/four adjacent regions create one owner in one revision");
+        const auto& area=result.front();require(area.extensions.contains("measurement_linework_group") && area.extensions.at("measurement_linework_group").at("members").size()==(four?4:2),"combined owner retains complete member lineage");
+        require(std::abs(std::abs(signed_area(boundary_geometry(decode_identified_boundary_entity(area))))-100)<1e-8 && !area.properties.contains("deduction_ids"),"combined boundary has exact hundred-square-metre gross/net without invented deductions");
+        auto checks=measurement_linework_source_checks(combined.entities());require(checks.at(area.id).current,"combined owner validates against every current measured source");
+        require(window.undoCommand() && window.document().snapshot().entities()==before.entities() && window.redoCommand() && window.document().snapshot().entities()==combined.entities(),"combined definition undoes/redoes atomically");
+        const auto retained=window.document().snapshot();
+        review(window,[&](QDialog&,QTableWidget& rows,QDialogButtonBox& buttons) {
+            for(int i=0;i<rows.rowCount();++i)require(!qobject_cast<QComboBox*>(rows.cellWidget(i,4))->isEnabled() && !qobject_cast<QComboBox*>(rows.cellWidget(i,5))->isEnabled() && rows.item(i,8)->text().contains("existing"),"redetection keeps existing whole-group membership and classification readonly");
+            buttons.button(QDialogButtonBox::Apply)->click();
+        });require(window.document().snapshot().entities()==retained.entities() && window.document().revision()==retained.revision() && window.document().snapshot().history().size()==retained.history().size(),"redetection Apply creates no duplicate group or history");
+        require(window.selectEntity(QString::fromStdString(area.id)),"select combined owner for explicit appraisal facts");
+        auto* workflow=window.findChild<QComboBox*>("calculationWorkflow");workflow->setCurrentIndex(workflow->findData("appraisal"));
+        require(window.editSelectedAppraisalFacts(QStringLiteral(R"({"appraisal_policy":{"policy_kind":"residential_declared","version":1,"property_kind":"detached_single_family","measurement_basis":"exterior"},"grade":"above","appraisal_facts":{"finish":"finished","access":"direct_interior","ceiling_eligibility":"standard","area_use":"dwelling","boundary_role":"measured_area"}})")),"combined geometric owner requires explicit appraisal declarations");events();
+        auto* gla=window.findChild<QLabel*>("appraisalGlaTotal");require(gla && gla->text().contains("100.00"),"Details calculates combined owner once as hundred-square-metre qualified GLA");
+        QTemporaryDir directory;require(window.saveProjectAs(directory.filePath("combined.bldproj")) && window.openProject(directory.filePath("combined.bldproj")),"combined metadata saves/reopens");
+        const auto reopened=window.document().snapshot();require(areas(reopened).size()==1 && measurement_linework_source_checks(reopened.entities()).at(area.id).current,"reopened combined owner remains current without duplicates");
+        require(window.selectEntity("outer") && window.moveSelectedBoundaryVertex("outer:vertex1",{12,0},reopened.revision()),"native measured source vertex edit refreshes the whole combined owner");
+        const auto copy_source=window.document().snapshot();
+        require(copy_source.revision()==reopened.revision()+1 && copy_source.entities().at(area.id)!=reopened.entities().at(area.id) && measurement_linework_source_checks(copy_source.entities()).at(area.id).current,"source geometry exterior lineage and complete group metadata refresh atomically");
+        const auto check_copy=[&](const DocumentSnapshot& copied) {
+            const auto copy_areas=areas(copied);require(copy_areas.size()==2,"group copy creates exactly one independent owner");
+            const auto copied_checks=measurement_linework_source_checks(copied.entities());
+            require(copied_checks.at(area.id).current,"original group remains current after an independent copy");
+            for(const auto& copy:copy_areas) if(copy.id!=area.id) {
+                require(copied_checks.at(copy.id).current,"copied group validates against its complete copied source graph");
+                const auto old_bounds=boundary_bounds(boundary_geometry(decode_identified_boundary_entity(copy_source.entities().at(area.id))));
+                const auto new_bounds=boundary_bounds(boundary_geometry(decode_identified_boundary_entity(copy)));
+                require(new_bounds.minimum.x>old_bounds.maximum.x,"copied measured geometry is placed outside the original bounds");
+                std::set<std::string> owners;
+                for(const auto& member:copy.extensions.at("measurement_linework_group").at("members"))
+                    for(const auto& edge:member) for(const auto& use:edge) owners.insert(use.at("owner_id").get<std::string>());
+                require(owners.size()==(four?3:2) && !owners.contains("outer") && !owners.contains("seam-v") && !owners.contains("seam-h"),"group copy independently remaps exterior and canceled internal seam owners");
+                for(const auto& id:owners)require(copied.entities().at(id).type=="measurement_linework" && copied.entities().at(id).required,"every copied group source is real required typed measured geometry");
+                require(copied.entities().at(area.id)==copy_source.entities().at(area.id),"group copy preserves the original owner exactly");
+            }
+        };
+        require(window.selectEntity(QString::fromStdString(area.id)) && window.transformSelectedBoundary("0",false,false,"20 m","0 m",true),"native group clone includes complete measured source graph");
+        const auto cloned=window.document().snapshot();check_copy(cloned);
+        auto cloned_area=areas(cloned);const auto clone=cloned_area.front().id==area.id?cloned_area.back():cloned_area.front();
+        require(window.selectEntity(QString::fromStdString(clone.id)) && window.transformSelectedBoundary("0",false,false,"5 m","0 m",false),"native combined-owner move includes canceled internal seams atomically");
+        check_copy(window.document().snapshot());
+        require(window.undoCommand() && window.document().snapshot().entities()==cloned.entities() && window.undoCommand() && window.document().snapshot().entities()==copy_source.entities(),"group movement and clone each undo as one exact transaction");
+        require(window.selectEntity(QString::fromStdString(area.id)),"select native group clipboard source");
+        if(!window.copySelection())throw std::runtime_error("Native group clipboard copy: "+window.lastError().toStdString());
+        if(!window.pasteSelection())throw std::runtime_error("Native group clipboard paste: "+window.lastError().toStdString());
+        const auto pasted=window.document().snapshot();check_copy(pasted);
+        const auto old_report=build_appraisal_document_report(copy_source,"p",AreaUnit::square_metre);
+        const auto pasted_report=build_appraisal_document_report(pasted,"p",AreaUnit::square_metre);
+        require(old_report.qualified && pasted_report.qualified && std::abs(pasted_report.calculation->property.gla().total.square_metres-2*old_report.calculation->property.gla().total.square_metres)<1e-8,"separated pasted group contributes its explicit GLA exactly once alongside the original");
+        Entity pasted_owner;for(const auto& value:areas(pasted))if(value.id!=area.id)pasted_owner=value;
+        require(!pasted_owner.extensions.contains("boundary_geometry_derivation"),"new plain source-derived pasted owner does not acquire an unrelated rigid origin proof");
+        std::string copied_outer;
+        for(const auto& member:pasted_owner.extensions.at("measurement_linework_group").at("members"))
+            for(const auto& edge:member) for(const auto& use:edge) {
+                const auto id=use.at("owner_id").get<std::string>();
+                const auto decoded=decode_measurement_linework_model(pasted.entities().at(id).properties.at("model"));
+                if(decoded.model->closed)copied_outer=id;
+            }
+        require(!copied_outer.empty(),"pasted group retains its independent closed outer stroke");
+        const auto outer_model=decode_measurement_linework_model(pasted.entities().at(copied_outer).properties.at("model"));
+        auto position=replay_measurement_linework(*outer_model.model).edges.front().segment.end;position.x+=1;
+        require(window.selectEntity(QString::fromStdString(copied_outer)),"select pasted measured source for subsequent authored edit");
+        if(!window.moveSelectedBoundaryVertex(QString::fromStdString(outer_model.model->edges.front().end_vertex_id),position,pasted.revision()))
+            throw std::runtime_error("Edit pasted group source: "+window.lastError().toStdString());
+        const auto edited_copy=window.document().snapshot();const auto edited_checks=measurement_linework_source_checks(edited_copy.entities());
+        require(edited_copy.revision()==pasted.revision()+1 && edited_copy.entities().at(pasted_owner.id)!=pasted_owner && edited_checks.at(pasted_owner.id).current && edited_checks.at(area.id).current,"post-paste source edit refreshes the complete copied group in one revision");
+        for(const auto& [id,original]:copy_source.entities())require(edited_copy.entities().at(id)==original,"post-paste source edit preserves every original entity");
+        const auto edited_report=build_appraisal_document_report(edited_copy,"p",AreaUnit::square_metre);
+        require(edited_report.qualified && std::abs(edited_report.calculation->property.gla().total.square_metres-pasted_report.calculation->property.gla().total.square_metres-5)<1e-8,"post-paste source edit recalculates qualified GLA from copied geometry");
+        require(window.undoCommand() && window.document().snapshot().entities()==pasted.entities() && window.redoCommand() && window.document().snapshot().entities()==edited_copy.entities() && window.undoCommand() && window.document().snapshot().entities()==pasted.entities(),"post-paste source edit undoes/redoes as one exact transaction");
+        require(window.undoCommand() && window.document().snapshot().entities()==copy_source.entities() && window.undoCommand() && window.document().snapshot().entities()==reopened.entities(),"group clipboard paste and source refresh each undo exactly once");
+    }
+}
+void test_combined_stale_review() {
+    auto document=adjacent_fixture(false);MainWindow window(document);prepare(window);
+    const auto before=document->snapshot();
+    review(window,[&](QDialog& dialog,QTableWidget& rows,QDialogButtonBox& buttons) {
+        combine_all(dialog,rows);require(buttons.button(QDialogButtonBox::Apply)->isEnabled(),"combined preview is initially admitted");
+        auto property=document->snapshot().entities().at("p");property.properties["name"]="Changed during combined review";
+        document->apply(ApplyEntityChanges{document->revision(),{EntityChange::upsert(property)},{},"External fixture change"});
+        buttons.button(QDialogButtonBox::Apply)->click();
+        require(areas(document->snapshot()).empty() && !buttons.button(QDialogButtonBox::Apply)->isEnabled(),"stale combined preview is refused and disabled");dialog.reject();
+    });
+    require(document->revision()==before.revision()+1 && areas(document->snapshot()).empty(),"stale combination leaves only the unrelated authorized change");
+}
+void test_combined_member_topology_loss_stays_stale() {
+    MainWindow window(adjacent_fixture(true,false));prepare(window);
+    review(window,[&](QDialog& dialog,QTableWidget& rows,QDialogButtonBox& buttons) {
+        require(rows.rowCount()==4,"original-endpoint fixture starts with four bounded regions");combine_all(dialog,rows);
+        buttons.button(QDialogButtonBox::Apply)->click();
+    });
+    const auto owner=areas(window.document().snapshot()).front();
+    auto* workflow=window.findChild<QComboBox*>("calculationWorkflow");require(workflow,"topology-loss fixture has the native workflow selector");
+    workflow->setCurrentIndex(workflow->findData("appraisal"));
+    require(window.selectEntity(QString::fromStdString(owner.id)) && window.editSelectedAppraisalFacts(QStringLiteral(R"({"appraisal_policy":{"policy_kind":"residential_declared","version":1,"property_kind":"detached_single_family","measurement_basis":"exterior"},"grade":"above","appraisal_facts":{"finish":"finished","access":"direct_interior","ceiling_eligibility":"standard","area_use":"dwelling","boundary_role":"measured_area"}})")),"topology-loss fixture has explicit qualified appraisal facts");
+    const auto before=window.document().snapshot();
+    const auto report=build_appraisal_document_report(before,"p",AreaUnit::square_metre);
+    const auto source_check=measurement_linework_source_checks(before.entities()).at(owner.id);
+    if (!report.qualified || !source_check.current) {
+        std::string diagnostic="Four-member baseline is not qualified/current: "+source_check.diagnostic;
+        for (const auto& issue:report.issues) diagnostic+="; "+issue;
+        throw std::runtime_error(diagnostic);
+    }
+    require(window.selectEntity("outer") && window.moveSelectedBoundaryVertex("outer:vertex1",{12,0},before.revision()),"authored source edit can leave an explicitly stale measured group");
+    const auto after=window.document().snapshot();const auto checks=measurement_linework_source_checks(after.entities());
+    require(after.revision()==before.revision()+1 && after.entities().at("outer")!=before.entities().at("outer"),"topology-loss edit changes only its authored source transaction");
+    require(after.entities().at(owner.id)==before.entities().at(owner.id) && !checks.at(owner.id).current,"dangling member seam leaves the saved whole group unchanged and explicitly stale");
+    require(!build_appraisal_document_report(after,"p",AreaUnit::square_metre).qualified,"lost member topology withholds qualified GLA instead of guessing a new membership");
+    require(window.undoCommand() && window.document().snapshot().entities()==before.entities(),"Undo restores the exact current group and its original member topology");
+}
+void test_vendor_group_marker_on_other_boundary_owners() {
+    for(const auto* owner_type:{"boundary","room_boundary"}) {
+        IdentifiedBoundary model{"vendor-area",owner_type,{}};
+        const Vec2 points[]{{0,0},{10,0},{10,10},{0,10}};
+        for(std::size_t i=0;i<4;++i)model.segments.push_back({"edge"+std::to_string(i),"vertex"+std::to_string(i),"vertex"+std::to_string((i+1)%4),{points[i],points[(i+1)%4],0}});
+        auto entity=encode_identified_boundary_entity(model);
+        entity.properties.update({{"floor_id","f"},{"layer_id","l"},{"classification","living"},{"factor",1.0},{"factor_expression","1"},{"factor_numerator",1},{"factor_denominator",1}});
+        const nlohmann::json marker={{"version",99},{"members",nlohmann::json::array({{{"vendor","opaque metadata"},{"owner_id","vendor-area"}}})}};
+        entity.extensions["measurement_linework_group"]=marker;const auto marker_bytes=marker.dump();
+        auto document=std::make_shared<Document>(Document::create({{"p","property",{{"name","Vendor boundary"}},false},{"b","building",{{"property_id","p"}},false},{"f","floor",{{"building_id","b"}},false},{"l","layer",{{"floor_id","f"}},false},entity}));
+        MainWindow window(document);window.setAttribute(Qt::WA_DontShowOnScreen,true);window.show();window.setMetricUnits(true);require(window.selectEntity("vendor-area"),"select ordinary owner with opaque vendor group marker");events();
+        auto* total=window.findChild<QLabel*>("calculationBuildingTotal");require(total && total->text().contains("100.00"),"vendor group marker on other owners does not withhold calculable area totals");
+        auto* review_action=window.findChild<QAction*>("reviewMeasuredAreaSources");require(review_action && !review_action->isEnabled(),"ordinary owner vendor marker offers no measured-group source repair");
+        const auto original=document->snapshot();
+        const auto verify=[&] {
+            std::size_t count=0;
+            const auto copied_snapshot=document->snapshot();
+            for(const auto& [id,copied]:copied_snapshot.entities())if(copied.type==owner_type) {
+                ++count;require(copied.extensions.at("measurement_linework_group").dump()==marker_bytes,"ordinary boundary clone/paste preserves opaque vendor marker bytes");
+            }
+            require(count==2,"ordinary boundary copy produces exactly one copied owner");
+        };
+        require(window.transformSelectedBoundary("0",false,false,"20 m","0 m",true),"ordinary boundary with vendor marker clones normally");verify();
+        require(window.undoCommand() && document->snapshot().entities()==original.entities(),"ordinary vendor-marker clone undoes exactly");
+        require(window.selectEntity("vendor-area") && window.copySelection() && window.pasteSelection(),"ordinary boundary with vendor marker copies and pastes normally");verify();
+    }
+}
 }
 int main(int argc,char** argv) {
     sketch::testing::noninteractive_errors(); QStandardPaths::setTestModeEnabled(true); QApplication application(argc,argv);
@@ -181,6 +381,10 @@ int main(int argc,char** argv) {
         require(QFontDatabase::addApplicationFont(QStringLiteral(":/fonts/Inter.ttf"))>=0,"bundled font loads for native review and PDF");
         application.setFont(QFont(QStringLiteral("Inter"),10));
         test_cancel_defaults_and_reference();test_explicit_deduction_history_details_and_pdf();test_stale_preview_and_same_type_rejection();test_phase_review_and_exact_augmented_apply();
+        test_combined_adjacent_regions_review_history_and_sources();
+        test_combined_stale_review();
+        test_combined_member_topology_loss_stays_stale();
+        test_vendor_group_marker_on_other_boundary_owners();
     }
     catch(const std::exception& error) {std::cerr << "nested_measured_area_desktop_tests: " << error.what() << '\n'; return 1;}
     std::cout << "Nested measured-area desktop tests passed\n"; return 0;

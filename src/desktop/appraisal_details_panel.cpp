@@ -165,7 +165,8 @@ struct AppraisalDetailsPanel::Impl {
         locate->setEnabled(boundary!=nullptr);facts->setEnabled(boundary!=nullptr);
         const auto* selected_owner=boundary?entity(boundary->boundary_id):nullptr;
         const bool has_linework_sources=selected_owner && selected_owner->type=="measurement_boundary" &&
-            selected_owner->extensions.contains("measurement_linework_sources");
+            (selected_owner->extensions.contains("measurement_linework_sources") ||
+             selected_owner->extensions.contains("measurement_linework_group"));
         review_sources->setVisible(has_linework_sources);
         review_sources->setEnabled(has_linework_sources);
         if(!boundary || !source) {

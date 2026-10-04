@@ -434,4 +434,124 @@ MeasurementAreaGraph build_measurement_area_graph(
     assign_containment_parents(graph,minimum_length);
     return graph;
 }
+
+DerivedMeasurementFace combine_measurement_faces(
+    const MeasurementAreaGraph& graph,const std::vector<std::size_t>& indices) {
+    if (graph.edges.size()>maximum_edges || graph.faces.size()>maximum_edges ||
+        indices.size()>maximum_edges) fail("face combination exceeds the graph resource limits");
+    if (indices.size()<2) fail("face combination requires at least two selected faces");
+    auto selected=indices; std::sort(selected.begin(),selected.end());
+    for (std::size_t i=0;i<selected.size();++i) {
+        if (selected[i]>=graph.faces.size()) fail("selected face index is outside the graph");
+        if (i && selected[i]==selected[i-1]) fail("selected face indices must be unique");
+    }
+    // Every processed contact can split two sources; lens subdivision can
+    // then double those represented intervals once more.
+    constexpr auto maximum_lineage_uses=maximum_contacts*4+maximum_sources*2;
+    std::size_t source_use_count=0;
+    for (const auto& edge:graph.edges) {
+        (void)segment_bounds(edge.geometry);
+        if (!(segment_length(edge.geometry)>default_geometry_tolerance_metres))
+            fail("combination graph has an unresolvable derived edge");
+        if (edge.source_uses.empty()) fail("combination graph edge has no source lineage");
+        if (edge.source_uses.size()>maximum_lineage_uses-source_use_count)
+            fail("combination source lineage exceeds the noding resource limit");
+        source_use_count+=edge.source_uses.size();
+        for (const auto& use:edge.source_uses)
+            if (use.owner_id.empty() || use.segment_id.empty() || !std::isfinite(use.parameter_start) ||
+                !std::isfinite(use.parameter_end) || use.parameter_start<0 || use.parameter_end>1 ||
+                !(use.parameter_start<use.parameter_end)) fail("combination graph source interval is malformed");
+    }
+    struct Incidence { std::size_t count{}; bool reversed{}; };
+    std::vector<Incidence> incidence(graph.edges.size());
+    std::size_t face_use_count=0;
+    for (const auto& face:graph.faces) {
+        if (face.boundary.empty() || face.boundary.size()!=face.edge_uses.size() ||
+            face.edge_uses.size()>maximum_edges*2-face_use_count)
+            fail("combination face geometry and edge references have incompatible sizes");
+        face_use_count+=face.edge_uses.size();
+        std::set<std::size_t> unique;
+        for (std::size_t i=0;i<face.boundary.size();++i) {
+            const auto use=face.edge_uses[i];
+            if (use.edge_index>=graph.edges.size() || !unique.insert(use.edge_index).second)
+                fail("combination face has an invalid or repeated graph edge reference");
+            const auto geometry=use.reversed ? reverse(graph.edges[use.edge_index].geometry) : graph.edges[use.edge_index].geometry;
+            if (!same(geometry,face.boundary[i]) || !same(face.boundary[i].end,face.boundary[(i+1)%face.boundary.size()].start))
+                fail("combination face traversal disagrees with its exact graph geometry");
+            auto& edge=incidence[use.edge_index];
+            if (edge.count && (edge.count!=1 || edge.reversed==use.reversed))
+                fail("graph faces do not traverse their shared edge exactly twice in opposite directions");
+            edge.reversed=use.reversed; ++edge.count;
+        }
+        if (!validate_boundary(face.boundary).empty()) fail("combination graph face is not a valid simple boundary");
+        const auto area=signed_area(face.boundary);
+        if (!(area>0) || !std::isfinite(face.area_square_metres) || area!=face.area_square_metres)
+            fail("combination graph face has inconsistent analytical area or winding");
+    }
+    std::vector<bool> chosen(graph.faces.size(),false);
+    for (const auto index:selected) chosen[index]=true;
+    for (std::size_t index=0;index<graph.faces.size();++index) {
+        const auto parent=graph.faces[index].parent_face_index;
+        if (parent && (*parent>=graph.faces.size() || *parent==index ||
+            !(graph.faces[*parent].area_square_metres>graph.faces[index].area_square_metres) ||
+            validate_boundary_holes(graph.faces[*parent].boundary,{graph.faces[index].boundary})))
+            fail("combination graph has malformed containment evidence");
+        if (!chosen[index]) continue;
+        auto ancestor=parent;
+        while (ancestor) {
+            if (chosen[*ancestor]) fail("nested overlapping gross outlines cannot be combined as adjacent faces");
+            // Strictly increasing parent areas bound the walk and prevent cycles.
+            const auto next=graph.faces[*ancestor].parent_face_index;
+            if (next && (*next>=graph.faces.size() ||
+                !(graph.faces[*next].area_square_metres>graph.faces[*ancestor].area_square_metres)))
+                fail("combination graph containment chain is invalid");
+            ancestor=next;
+        }
+    }
+    struct SelectedEdge { std::optional<MeasurementFaceEdgeUse> use; std::size_t face{}; bool cancelled{}; };
+    std::vector<SelectedEdge> selected_edges(graph.edges.size());
+    std::vector<std::size_t> groups(graph.faces.size()); std::iota(groups.begin(),groups.end(),0);
+    const auto group=[&](std::size_t index) {
+        auto root=index; while (groups[root]!=root) root=groups[root];
+        while (groups[index]!=index) { const auto next=groups[index]; groups[index]=root; index=next; }
+        return root;
+    };
+    for (const auto index:selected) for (const auto use:graph.faces[index].edge_uses) {
+        auto& edge=selected_edges[use.edge_index];
+        if (!edge.use) { edge.use=use; edge.face=index; }
+        else {
+            if (edge.cancelled || edge.use->reversed==use.reversed)
+                fail("selected faces have an ambiguous shared edge");
+            edge.cancelled=true; groups[group(index)]=group(edge.face);
+        }
+    }
+    for (const auto index:selected) if (group(index)!=group(selected.front()))
+        fail("selected faces must be connected through shared edges; disjoint and point-only contacts cannot combine");
+    using GeometryKey=std::tuple<double,double,double,double,double>;
+    const auto key=[](const Segment& segment) -> GeometryKey {
+        return {segment.start.x,segment.start.y,segment.end.x,segment.end.y,segment.sweep_radians};
+    };
+    std::vector<Segment> retained;
+    std::map<GeometryKey,MeasurementFaceEdgeUse> uses;
+    std::size_t seed=0;
+    for (const auto& edge:selected_edges) if (edge.use && !edge.cancelled) {
+        const auto use=*edge.use;
+        const auto geometry=use.reversed ? reverse(graph.edges[use.edge_index].geometry) : graph.edges[use.edge_index].geometry;
+        if (!uses.emplace(key(geometry),use).second) fail("distinct retained graph edges have duplicate directed geometry");
+        if (!retained.empty() && geometry_less(geometry,retained[seed])) seed=retained.size();
+        retained.push_back(geometry);
+    }
+    if (retained.size()<3) fail("selected faces have no representable outer loop");
+    DerivedMeasurementFace result;
+    try { result.boundary=assemble_boundary_from_segments(retained,seed); }
+    catch (const std::invalid_argument& error) { fail(std::string("selected faces must form one simple outer loop without holes or branches: ")+error.what()); }
+    result.area_square_metres=signed_area(result.boundary);
+    if (!(result.area_square_metres>0)) fail("combined outer loop must retain counter-clockwise face winding");
+    for (const auto& segment:result.boundary) {
+        const auto found=uses.find(key(segment));
+        if (found==uses.end()) fail("combined traversal changed a retained analytical edge direction");
+        result.edge_uses.push_back(found->second);
+    }
+    return result;
+}
 } // namespace sketch

@@ -2,6 +2,7 @@
 #include "sketch/measurement_linework.hpp"
 #include "sketch/measurement_linework_source.hpp"
 #include "sketch/boundary_entity.hpp"
+#include "sketch/boundary_integrity.hpp"
 #include "sketch/calculations.hpp"
 #include "sketch/appraisal_document.hpp"
 #include "sketch/model_phases.hpp"
@@ -58,6 +59,89 @@ std::vector<MeasurementAreaChoice> decisions(const DetectedMeasurementAreas& res
     if(deduct)for(std::size_t i=0;i<choices.size();++i)if(result.graph.faces[i].parent_face_index)
         choices[i]={MeasurementAreaDisposition::deduct_from_parent,inner};
     return choices;
+}
+template<class Choice> Choice combined_choice(std::size_t group,const std::string& classification) {
+    Choice choice{MeasurementAreaDisposition::define_area,classification};
+    if constexpr(requires { choice.combine_group=group; })choice.combine_group=group;
+    else throw std::runtime_error("detected regions must support a single classified combined area");
+    return choice;
+}
+void combine_adjacent_detected_areas() {
+    auto document=fixture(false);auto divider=stroke("divider",0,10);
+    MeasurementLinework model;model.stroke_id="divider";model.anchor={5,0};
+    ConstructionReceipt input;input.segment_id="divider:side";input.kind=BoundaryConstructionKind::line_to_point;
+    input.start={5,0};input.chord_end={5,10};model.edges.push_back({input.segment_id,"divider:a","divider:b",input});
+    divider.properties["model"]=encode_measurement_linework_model(model);
+    document.apply(ApplyEntityChanges{document.revision(),{EntityChange::upsert(divider)},{},"Measured separator"});
+    const auto source=document.snapshot();const auto detected=detect_measurement_areas(source,"outer");
+    require(detected.graph.faces.size()==2,"separator creates two real adjacent detected regions");
+    std::vector<MeasurementAreaChoice> choices;
+    for(std::size_t i=0;i<detected.graph.faces.size();++i)choices.push_back(combined_choice<MeasurementAreaChoice>(7,"living"));
+    const auto definition=prepare_measurement_area_definition(source,"outer",choices);
+    require(definition.area_ids.size()==1 && definition.command.entity_changes.size()==1,"combined regions publish one classified area in one command");
+    const auto preview=Document::preview_command(source,definition.command);
+    const auto& area=preview.entities().at(definition.area_ids.front());
+    const auto boundary=boundary_geometry(decode_identified_boundary_entity(area));
+    require(std::abs(signed_area(boundary)-100)<1e-10 && std::abs(perimeter(boundary)-40)<1e-10,
+        "combination preserves analytical area and removes the shared separator from its perimeter");
+    require(area.extensions.contains("measurement_linework_group") &&
+        area.extensions.at("measurement_linework_group").at("members").size()==2,"all member source lineages persist including the cancelled separator");
+    require(measurement_linework_source_current(measurement_linework_source_checks(preview.entities()),area),
+        "combined region is current against the complete measured graph");
+    require(definition.face_area_ids.size()==2 && definition.face_area_ids[0]==definition.area_ids.front() &&
+        definition.face_area_ids[1]==definition.area_ids.front(),"combined preview rows resolve the same retained owner");
+    BoundaryGeometryEdit replacement;replacement.kind=BoundaryGeometryEditKind::redefine_boundary;
+    replacement.boundary_id=area.id;replacement.target_id=area.id;replacement.fresh_topology=true;
+    auto new_topology=decode_identified_boundary_entity(area);
+    for(std::size_t i=0;i<new_topology.segments.size();++i) {
+        auto& edge=new_topology.segments[i];edge.segment_id=area.id+":replacement:e"+std::to_string(i);
+        edge.start_vertex_id=area.id+":replacement:v"+std::to_string(i);
+        edge.end_vertex_id=area.id+":replacement:v"+std::to_string((i+1)%new_topology.segments.size());
+    }
+    replacement.replacement_segments=encode_identified_boundary_entity(new_topology).properties.at("segments");
+    replacement.replacement_linework_sources=area.extensions.at("measurement_linework_sources");
+    bool complete_group_refused=false;
+    try{(void)Document::preview_command(preview,EditBoundaryGeometry{preview.revision(),replacement});}
+    catch(const std::exception& error){complete_group_refused=std::string(error.what()).find("complete group refresh")!=std::string::npos;}
+    require(complete_group_refused,"a single-face replacement cannot silently discard combined membership provenance");
+    require(document.snapshot().entities()==source.entities(),"combination preview preserves the source document");
+    document.apply(definition.command);const auto committed=document.snapshot();
+    require(ProjectStore::required_format_version(committed)==33,"combined semantics require a reader that understands all member sources");
+    document.undo(document.revision());require(document.snapshot().entities()==source.entities(),"one Undo removes the complete combined definition");
+    require(ProjectStore::required_format_version(document.snapshot())==33,"retained combined-area history keeps its reader floor after Undo");
+    document.redo(document.revision());require(document.snapshot().entities()==committed.entities(),"Redo restores exact combined identities and source metadata");
+    const auto repeated=prepare_measurement_area_definition(document.snapshot(),"outer",choices);
+    require(repeated.command.entity_changes.empty() && repeated.area_ids==definition.area_ids,"re-detection preserves the existing combined identity without duplicating area totals");
+    std::vector<MeasurementAreaChoice> keep(choices.size());
+    const auto kept=prepare_measurement_area_definition(document.snapshot(),"outer",keep);
+    require(kept.command.entity_changes.empty() && kept.area_ids.empty() && kept.face_area_ids==definition.face_area_ids,
+        "reference-only re-detection retains the whole combined definition and its preview rows");
+    auto partial=choices;partial.back()={};
+    rejects([&]{(void)prepare_measurement_area_definition(document.snapshot(),"outer",partial);},
+        "partial member choices cannot break a retained combined area");
+    auto single_definitions=choices;for(auto& choice:single_definitions)choice.combine_group.reset();
+    auto individually_defined=Document::fork(source);individually_defined.apply(prepare_measurement_area_definition(source,"outer",single_definitions).command);
+    rejects([&]{(void)prepare_measurement_area_definition(individually_defined.snapshot(),"outer",choices);},
+        "existing individual definitions must not be implicitly consumed by a new combined owner");
+    auto inconsistent=choices;inconsistent.back().classification="garage";
+    rejects([&]{(void)prepare_measurement_area_definition(source,"outer",inconsistent);},"a new combined group cannot silently mix classifications");
+    // An orthogonal separator forms four real cells, not four duplicate
+    // outlines. Combining all of them removes both interior separators.
+    auto crossing=divider;crossing.id="horizontal";model.stroke_id=crossing.id;model.anchor={0,5};model.edges.clear();
+    input.segment_id="horizontal:side";input.start={0,5};input.chord_end={10,5};
+    model.edges.push_back({input.segment_id,"horizontal:a","horizontal:b",input});
+    crossing.properties["model"]=encode_measurement_linework_model(model);
+    document=Document::fork(source);document.apply(ApplyEntityChanges{document.revision(),{EntityChange::upsert(crossing)},{},"Crossing separator"});
+    const auto four=detect_measurement_areas(document.snapshot(),"outer");
+    require(four.graph.faces.size()==4,"two separators create four detected regions");
+    choices.clear();for(std::size_t i=0;i<4;++i)choices.push_back(combined_choice<MeasurementAreaChoice>(11,"living"));
+    const auto combined_four=prepare_measurement_area_definition(document.snapshot(),"outer",choices);
+    const auto four_preview=Document::preview_command(document.snapshot(),combined_four.command);
+    const auto& four_area=four_preview.entities().at(combined_four.area_ids.front());
+    require(combined_four.area_ids.size()==1 && four_area.extensions.at("measurement_linework_group").at("members").size()==4 &&
+        std::abs(perimeter(boundary_geometry(decode_identified_boundary_entity(four_area)))-40)<1e-10 &&
+        measurement_linework_source_current(measurement_linework_source_checks(four_preview.entities()),four_area),
+        "four cells produce one current analytical exterior with all original member sources");
 }
 void reference_and_deduction() {
     auto document=fixture();const auto before=document.snapshot();
@@ -222,7 +306,7 @@ void active_phase_sources() {
 }
 int main() {
     sketch::testing::noninteractive_errors();
-    try {reference_and_deduction();previous_outer_remains_current();invalid_and_appraisal();deeper_and_sibling_decisions();active_phase_sources();
+    try {combine_adjacent_detected_areas();reference_and_deduction();previous_outer_remains_current();invalid_and_appraisal();deeper_and_sibling_decisions();active_phase_sources();
         std::cout<<"Nested measurement area definition checks passed\n";return 0;
     } catch(const std::exception& error) {std::cerr<<error.what()<<'\n';return 1;}
 }

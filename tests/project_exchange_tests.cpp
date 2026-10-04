@@ -142,6 +142,48 @@ void test_translation_export(const std::filesystem::path& root) {
         !batch_json.at("revisions").back().contains("boundary_translations"),
         "exchange must retain exact mixed proofs only on their command rows");
 }
+
+void test_grouped_measured_region_exchange(const std::filesystem::path& root) {
+  using Json=nlohmann::json;
+  sketch::IdentifiedBoundary geometry{"grouped-area","measurement_boundary",{
+      {"e0","v0","v1",{{0,0},{4,0},0}},{"e1","v1","v2",{{4,0},{4,4},0}},
+      {"e2","v2","v3",{{4,4},{0,4},0}},{"e3","v3","v0",{{0,4},{0,0},0}}}};
+  auto area=sketch::encode_identified_boundary_entity(geometry);
+  // An understood top-level group with stale member evidence remains
+  // editable; extraction must preserve that evidence without qualifying it.
+  area.extensions["measurement_linework_group"]={{"version",1},{"members",Json::array({"stale first member","stale second member"})}};
+  auto document=sketch::Document::create({area}); const auto head=document.snapshot();
+  document.apply(sketch::ApplyEntityChanges{.expected_revision=document.revision(),
+      .entity_changes={sketch::EntityChange::erase(area.id)},.message="Delete grouped exchange area"});
+  const auto deleted=document.snapshot(); document.undo(document.revision());
+  unsigned sequence=0;
+  for (const auto& snapshot:{head,deleted,document.snapshot()}) {
+    const auto destination=root/("grouped-region-history-"+std::to_string(sequence++));
+    sketch::extract_project(snapshot,destination); std::ifstream input(destination/"project.json"); const auto encoded=Json::parse(input);
+    check(encoded.at("exchange_version")==31 && encoded.at("revisions").size()==snapshot.history().size(),
+        "group marker in current, deleted and undone history requires extraction31");
+    const auto& first=encoded.at("revisions")[0].at("entities")[0];
+    check(first.at("extensions").dump()==area.extensions.dump(),"exchange preserves retained grouped member JSON exactly");
+  }
+  for (unsigned fault=0;fault<3;++fault) {
+    auto opaque=area;
+    if (fault==0) opaque.extensions["measurement_linework_group"]["version"]=999;
+    if (fault==1) opaque.extensions["measurement_linework_group"]="opaque malformed marker";
+    if (fault==2) opaque.extensions["measurement_linework_group"]=nullptr;
+    auto future=sketch::Document::create({opaque});
+    const auto destination=root/("opaque-grouped-region-"+std::to_string(fault)); sketch::extract_project(future.snapshot(),destination);
+    std::ifstream input(destination/"project.json"); const auto encoded=Json::parse(input);
+    check(encoded.at("exchange_version")==31 && !encoded.at("document").at("editable").get<bool>() &&
+        encoded.at("revisions")[0].at("entities")[0].at("extensions").dump()==opaque.extensions.dump(),
+        "unsupported group without outer lineage keeps extraction31, read-only policy and exact opaque JSON");
+  }
+  auto vendor=sketch::Entity{"vendor-group","property",Json::object(),false,area.extensions};
+  const auto collision=sketch::Document::create({vendor}); const auto destination=root/"vendor-group-collision";
+  sketch::extract_project(collision.snapshot(),destination); std::ifstream input(destination/"project.json"); const auto encoded=Json::parse(input);
+  check(encoded.at("exchange_version")==1 && encoded.at("document").at("editable").get<bool>() &&
+      encoded.at("revisions")[0].at("entities")[0].at("extensions").dump()==vendor.extensions.dump(),
+      "vendor group collision retains historical extraction floor and exact editable payload");
+}
 void test_svg_palette_export_floor(const std::filesystem::path& root) {
   const auto catalog=sketch::default_symbol_catalog();
   const auto definition=std::find_if(catalog.begin(),catalog.end(),[](const auto& value){return value.svg_asset.has_value();});
@@ -994,6 +1036,7 @@ int main() {
               ("property-exchange-" + sketch::make_stable_id());
   std::filesystem::create_directory(root);
   try {
+    test_grouped_measured_region_exchange(root);
     test_physical_curve_length_exchange_v9(root);
     test_direct_curve_length_exchange_v10(root);
     test_rigid_curve_archive_exchange_v11(root);

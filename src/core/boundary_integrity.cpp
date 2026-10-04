@@ -664,6 +664,8 @@ static void validate_retained_replacement_deductions(
 static void validate_replacement_linework_face(
     const std::map<std::string, Entity, std::less<>>& source, const Entity& original,
     const IdentifiedBoundary& replacement, const BoundaryGeometryEdit& edit) {
+    if(original.type=="measurement_boundary" && original.extensions.contains("measurement_linework_group"))
+        throw std::invalid_argument("Combined measured areas require a complete group refresh; single-face source replacement cannot change their membership.");
     if (original.type != "measurement_boundary" ||
         !original.extensions.contains("measurement_linework_sources") ||
         original.properties.contains("wall_measurement_source"))

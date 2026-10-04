@@ -1,5 +1,6 @@
 #include "sketch/measurement_linework_source.hpp"
 #include "sketch/measurement_linework.hpp"
+#include "sketch/measurement_area_graph.hpp"
 #include "sketch/boundary_entity.hpp"
 #include "sketch/appraisal_document.hpp"
 #include "support/noninteractive_errors.hpp"
@@ -83,6 +84,124 @@ void stale_inputs_and_visibility() {
     require(measurement_linework_source_checks(values).empty() && measurement_linework_sources_visible(plain,&visible),
         "ordinary independent areas retain their existing calculation behavior");
 }
+Json lineage(const MeasurementAreaGraph& graph,const DerivedMeasurementFace& face) {
+    Json result=Json::array();
+    for(const auto& traversal:face.edge_uses) {
+        Json edge=Json::array();
+        for(const auto& source:graph.edges.at(traversal.edge_index).source_uses)
+            edge.push_back({{"owner_id",source.owner_id},{"segment_id",source.segment_id},
+                {"parameter_start",source.parameter_start},{"parameter_end",source.parameter_end},
+                {"reversed",source.reversed!=traversal.reversed}});
+        result.push_back(std::move(edge));
+    }
+    return result;
+}
+std::map<std::string,Entity,std::less<>> group_fixture(unsigned subdivisions=1) {
+    auto values=fixture();
+    if(subdivisions>1) {
+        std::vector<Vec2> points{{0,0}};
+        for(unsigned side=0;side<4;++side)for(unsigned step=1;step<=subdivisions;++step) {
+            const double value=4.0*step/subdivisions;
+            points.push_back(side==0 ? Vec2{value,0} : side==1 ? Vec2{4,value} :
+                side==2 ? Vec2{4-value,4} : Vec2{0,4-value});
+        }
+        values["outline"]=stroke("outline",points,true);
+    }
+    std::vector<MeasurementGraphSource> sources;
+    for(const auto id:{"outline","separator"})
+        for(const auto& edge:replay_measurement_linework(*decode_measurement_linework_model(values.at(id).properties.at("model")).model).edges)
+            sources.push_back({id,edge.segment_id,edge.segment});
+    const auto graph=build_measurement_area_graph(sources);
+    require(graph.faces.size()==2,"group fixture has two adjacent source faces");
+    const auto combined=combine_measurement_faces(graph,{0,1});
+    auto entity=values.at("area");
+    entity.properties.erase("boundary_model_version");entity.properties.erase("boundary");
+    Json segments=Json::array();
+    for(const auto& edge:combined.boundary)segments.push_back({{"start",{edge.start.x,edge.start.y}},
+        {"end",{edge.end.x,edge.end.y}},{"sweep_radians",edge.sweep_radians}});
+    entity.properties["segments"]=segments;
+    entity.extensions["measurement_linework_sources"]=lineage(graph,combined);
+    entity.extensions["measurement_linework_group"]={{"version",1},{"members",Json::array({lineage(graph,graph.faces[0]),lineage(graph,graph.faces[1])})}};
+    values["area"]=upgrade_legacy_boundary_entity(entity);
+    return values;
+}
+void grouped_sources() {
+    const auto original=group_fixture();auto values=original;
+    auto checks=measurement_linework_source_checks(values);
+    require(checks.at("area").current && checks.at("area").group_face_indices.size()==2,
+        "combined area retains current provenance for both member faces and cancelled seam");
+    const auto canonical_group=checks.at("area").proposed_group;
+    require(values==original,"group checks do not mutate retained source evidence");
+    std::set<std::string,std::less<>> visible{"p","b","f","l","outline","area"};
+    require(!measurement_linework_sources_visible(values.at("area"),&visible) &&
+        !measurement_linework_source_checks(values,&visible).at("area").current,
+        "hidden cancelled seam source invalidates grouped area");
+    values.erase("separator");
+    require(!measurement_linework_source_checks(values).at("area").current,"deleted cancelled seam invalidates grouped area");
+    values=original;values.at("separator")=stroke("separator",{{3,-1},{3,5}},false);
+    checks=measurement_linework_source_checks(values);
+    const auto& proposal=checks.at("area");
+    require(!proposal.current && proposal.proposed_boundary && proposal.proposed_group.is_object(),
+        "moving cancelled seam proposes atomic outer and member provenance refresh");
+    require(std::abs(signed_area(*proposal.proposed_boundary)-16)<1e-10,"group refresh retains actual outer area16");
+    auto updated=decode_identified_boundary_entity(values.at("area"));
+    require(updated.segments.size()==proposal.proposed_boundary->size(),"same-topology group retains edge count");
+    for(std::size_t i=0;i<updated.segments.size();++i)updated.segments[i].segment=proposal.proposed_boundary->at(i);
+    values["area"]=encode_identified_boundary_entity(updated,&values.at("area"));
+    values.at("area").extensions["measurement_linework_sources"]=proposal.proposed_lineage;
+    values.at("area").extensions["measurement_linework_group"]=proposal.proposed_group;
+    require(measurement_linework_source_checks(values).at("area").current,"atomic group refresh restores source qualification");
+    values=original;
+    auto& members=values.at("area").extensions["measurement_linework_group"]["members"];
+    std::reverse(members.begin(),members.end());
+    require(measurement_linework_source_checks(values).at("area").current &&
+        measurement_linework_source_checks(values).at("area").proposed_group==canonical_group,
+        "member input order retains current state and canonical proposal order");
+    for(int fault=0;fault<7;++fault) {
+        values=original;auto& group=values.at("area").extensions["measurement_linework_group"];
+        if(fault==0)group["version"]=999;
+        if(fault==1)group["extra"]=true;
+        if(fault==2)group["members"]=Json::array({group["members"][0]});
+        if(fault==3)group["members"][1]=group["members"][0];
+        if(fault==4)group["members"][0][0][0]["parameter_end"]=2;
+        if(fault==5)values.at("area").extensions.erase("measurement_linework_sources");
+        if(fault==6)values.at("separator").properties["layer_id"]="another-layer";
+        const auto failed=measurement_linework_source_checks(values);
+        require(failed.contains("area") && !failed.at("area").current && !failed.at("area").proposed_boundary,
+            "malformed unsupported duplicate missing-outer or wrong-context group fails closed");
+        require(!measurement_linework_source_current(failed,values.at("area")),"group cannot bypass current-dependency recognition");
+    }
+    values=original;
+    auto& duplicate=values.at("area").extensions["measurement_linework_group"]["members"];
+    duplicate[1]=duplicate[0];std::rotate(duplicate[1].begin(),duplicate[1].begin()+1,duplicate[1].end());
+    const auto injective=measurement_linework_source_checks(values).at("area");
+    require(!injective.current && !injective.proposed_boundary,
+        "rotated duplicate member cannot map two saved members to one current graph face");
+    for(int budget=0;budget<3;++budget) {
+        values=original;auto& group=values.at("area").extensions["measurement_linework_group"];
+        if(budget==0)group["members"]=Json(std::vector<Json>(2049,group["members"][0]));
+        if(budget==1)group["members"][0]=Json(std::vector<Json>(16385,group["members"][0][0]));
+        if(budget==2)group["members"][0][0]=Json(std::vector<Json>(65537,group["members"][0][0][0]));
+        const auto oversized=measurement_linework_source_checks(values).at("area");
+        require(!oversized.current && !oversized.proposed_boundary &&
+            !measurement_linework_sources_visible(values.at("area"),nullptr),
+            "group member edge and source-use resource budgets fail before unbounded matching");
+    }
+    for(int budget=0;budget<2;++budget) {
+        values=original;auto& outer=values.at("area").extensions["measurement_linework_sources"];
+        if(budget==0)outer=Json(std::vector<Json>(16385,outer[0]));
+        if(budget==1)outer[0]=Json(std::vector<Json>(65537,outer[0][0]));
+        const auto oversized=measurement_linework_source_checks(values).at("area");
+        require(!oversized.current && !oversized.proposed_boundary &&
+            !measurement_linework_sources_visible(values.at("area"),nullptr),
+            "outer lineage is independently bounded before source decoding or matching");
+    }
+    const auto many_edges=group_fixture(300);
+    const auto exhausted=measurement_linework_source_checks(many_edges).at("area");
+    require(!exhausted.current && !exhausted.proposed_boundary && exhausted.proposed_group.is_null() &&
+        exhausted.diagnostic.find("matching work budget exhausted")!=std::string::npos,
+        "symmetric many-edge valid group stops at explicit work limit without a partial refresh proposal");
+}
 void appraisal_never_uses_stale_sources() {
     auto values=fixture();
     values.at("p").properties={{"calculation_workflow","appraisal"},{"appraisal_policy",{
@@ -136,9 +255,66 @@ void appraisal_never_uses_stale_sources() {
             "stale derived deductions withhold their parent measurement and GLA under declared and ANSI policies");
     }
 }
+void ordinary_opaque_group_marker() {
+    for(const auto type:{"boundary","room_boundary"}) {
+        auto values=fixture();auto& ordinary=values.at("area");
+        ordinary.type=type;ordinary.extensions.erase("measurement_linework_sources");
+        const Json marker={{"version",999},{"members","vendor-opaque"},{"unrelated",{{"retain",true}}}};
+        ordinary.extensions["measurement_linework_group"]=marker;
+        values.at("p").properties={{"calculation_workflow","appraisal"},{"appraisal_policy",{
+            {"policy_kind","residential_declared"},{"version",1},{"property_kind","detached_single_family"},{"measurement_basis","exterior"}}}};
+        values.at("f").properties["appraisal_facts"]={{"grade","above"}};
+        ordinary.properties["appraisal_facts"]={{"finish","finished"},{"access","direct_interior"},
+            {"ceiling_eligibility","standard"},{"area_use","dwelling"},{"boundary_role","measured_area"}};
+        std::set<std::string,std::less<>> visible{"p","b","f","l","area"};
+        if(ordinary.type=="room_boundary") {
+            // Architectural rooms do not implicitly become appraisal areas.
+            // Keep a real independent measurement in the report to prove the
+            // opaque room marker cannot withhold its qualified contribution.
+            auto measured=area();measured.id="baseline-measurement";measured.type="boundary";
+            measured.extensions.erase("measurement_linework_sources");
+            measured.properties["appraisal_facts"]=ordinary.properties.at("appraisal_facts");
+            values.emplace(measured.id,std::move(measured));visible.insert("baseline-measurement");
+        }
+        const auto checks=measurement_linework_source_checks(values,&visible);
+        require(!checks.contains("area") && measurement_linework_source_current(checks,ordinary) &&
+            measurement_linework_sources_visible(ordinary,&visible),
+            "ordinary boundary and room vendor group markers have no measured source semantics");
+        std::vector<Entity> entities;for(const auto& [id,value]:values)entities.push_back(value);
+        const auto document=Document::create(entities);
+        const auto report=build_appraisal_document_report(document.snapshot(),"p",AreaUnit::square_metre,&visible);
+        require(report.qualified && report.calculation &&
+            std::abs(report.calculation->property.gla().total.square_metres-8)<1e-10,
+            "opaque vendor group marker cannot withhold an actual ordinary appraisal contribution");
+        if(ordinary.type=="room_boundary")
+            require(report.boundaries.size()==1 && report.boundaries.front().boundary_id=="baseline-measurement",
+                "opaque vendor room metadata must not infer a new appraisal contribution");
+        auto plain=ordinary;plain.extensions.erase("measurement_linework_group");
+        auto without_marker=values;without_marker["area"]=plain;
+        std::vector<Entity> plain_entities;for(const auto& [id,value]:without_marker)plain_entities.push_back(value);
+        const auto plain_report=build_appraisal_document_report(Document::create(plain_entities).snapshot(),"p",AreaUnit::square_metre,&visible);
+        require(plain_report.qualified && plain_report.calculation->property.gla().total.square_metres==
+            report.calculation->property.gla().total.square_metres,
+            "vendor group marker preserves the exact baseline total");
+        const CalculationProfile physical{"ordinary-physical",1,AreaUnit::square_metre,2,{{"physical",{false,false}}}};
+        const auto measure=[&](const Entity& entity) {
+            return calculate_area({entity.id,"b","f","physical",boundary_geometry(decode_identified_boundary_entity(entity)),{}, {1,1}},physical);
+        };
+        const auto marked_measurement=measure(ordinary),plain_measurement=measure(plain);
+        require(std::abs(marked_measurement.net_square_metres-8)<1e-10 &&
+            marked_measurement.net_square_metres==plain_measurement.net_square_metres,
+            "ordinary boundary and architectural room physical calculations preserve exact marker-free area");
+        require(document.snapshot().entities().at("area").extensions.at("measurement_linework_group").dump()==marker.dump(),
+            "ordinary vendor group bytes survive document admission unchanged");
+        const auto wire=command_to_json(ApplyEntityChanges{0,{EntityChange::upsert(ordinary)}, {},"Opaque vendor group"});
+        require(wire.dump().find(marker.dump())!=std::string::npos &&
+            command_to_json(command_from_json(wire))==wire,
+            "ordinary boundary and room vendor group markers survive command serialization exactly");
+    }
+}
 }
 int main() {
     sketch::testing::noninteractive_errors();
-    try{current_and_refresh();stale_inputs_and_visibility();appraisal_never_uses_stale_sources();std::cout<<"measured linework source checks passed\n";return 0;}
+    try{current_and_refresh();stale_inputs_and_visibility();grouped_sources();appraisal_never_uses_stale_sources();ordinary_opaque_group_marker();std::cout<<"measured linework source checks passed\n";return 0;}
     catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}
 }

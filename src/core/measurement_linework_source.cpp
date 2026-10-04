@@ -75,6 +75,74 @@ bool same_uses(const std::vector<MeasurementSourceUse>& a,const std::vector<Meas
     }
     return true;
 }
+std::vector<Uses> read_group(const Json& value) {
+    if(!value.is_object() || value.size()!=2 || !value.contains("version") ||
+       !value.at("version").is_number_integer() || value.at("version")!=1 || !value.contains("members") ||
+       !value.at("members").is_array() || value.at("members").size()<2 || value.at("members").size()>2048)
+        throw std::invalid_argument("Measured area group schema or version is unsupported.");
+    std::size_t edges=0,uses=0;
+    for(const auto& member:value.at("members")) {
+        if(!member.is_array() || member.empty() || member.size()>16384-edges)
+            throw std::invalid_argument("Measured area group exceeds its member edge budget.");
+        edges+=member.size();
+        for(const auto& edge:member) {
+            if(!edge.is_array() || edge.size()>65536-uses)
+                throw std::invalid_argument("Measured area group exceeds its source use budget.");
+            uses+=edge.size();
+        }
+    }
+    std::vector<Uses> result;
+    std::set<std::string> member_keys;
+    for(const auto& member:value.at("members")) {
+        auto parsed=read_uses(member,member.size());
+        for(const auto& edge:parsed)for(std::size_t i=1;i<edge.size();++i)
+            if(same_uses({edge[i-1]},{edge[i]},true))
+                throw std::invalid_argument("Measured area group contains duplicate source uses.");
+        if(!member_keys.insert(encode_uses(parsed).dump()).second)
+            throw std::invalid_argument("Measured area group contains duplicate members.");
+        result.push_back(std::move(parsed));
+    }
+    return result;
+}
+Uses read_group_outer(const Json& value,std::size_t count) {
+    if(count>16384 || !value.is_array() || value.size()>16384)
+        throw std::invalid_argument("Measured area group outer lineage exceeds its edge budget.");
+    std::size_t uses=0;
+    for(const auto& edge:value) {
+        if(!edge.is_array() || edge.size()>65536-uses)
+            throw std::invalid_argument("Measured area group outer lineage exceeds its source use budget.");
+        uses+=edge.size();
+    }
+    return read_uses(value,count);
+}
+struct GroupMatchWork {
+    std::size_t remaining=2'000'000;
+    void charge(std::size_t amount) {
+        if(amount>remaining)throw std::invalid_argument("Measured area group matching work budget exhausted; review and redefine a smaller group.");
+        remaining-=amount;
+    }
+    std::size_t face_weight(const MeasurementAreaGraph& graph,const DerivedMeasurementFace& face) {
+        std::size_t result=face.edge_uses.size();
+        for(const auto& edge:face.edge_uses) {
+            const auto size=graph.edges.at(edge.edge_index).source_uses.size();
+            if(size>remaining || result>remaining-size) {
+                charge(remaining+1);
+            }
+            result+=size;
+        }
+        return result;
+    }
+};
+Json encode_group(const std::vector<Uses>& members) {
+    std::vector<Json> ordered;
+    for(const auto& member:members)ordered.push_back(encode_uses(member));
+    std::sort(ordered.begin(),ordered.end(),[](const auto& a,const auto& b){return a.dump()<b.dump();});
+    return {{"version",1},{"members",ordered}};
+}
+bool has_source(const Entity& area) {
+    return area.extensions.contains("measurement_linework_sources") ||
+        (area.type=="measurement_boundary" && area.extensions.contains("measurement_linework_group"));
+}
 struct GraphState {std::optional<MeasurementAreaGraph> graph;std::string diagnostic;};
 struct AlignedFace {Boundary boundary;Uses uses;};
 AlignedFace align(const DerivedMeasurementFace& face,const Uses& uses,std::size_t start,bool reverse) {
@@ -92,12 +160,12 @@ std::map<std::string,MeasurementLineworkSourceCheck,std::less<>>
 measurement_linework_source_checks(const std::map<std::string,Entity,std::less<>>& entities,
     const std::set<std::string,std::less<>>* semantic_visible) {
     std::map<std::string,MeasurementLineworkSourceCheck,std::less<>> result;
-    if(std::none_of(entities.begin(),entities.end(),[](const auto& item){return item.second.extensions.contains("measurement_linework_sources");}))return result;
+    if(std::none_of(entities.begin(),entities.end(),[](const auto& item){return has_source(item.second);}))return result;
     std::optional<ProjectOrganization> organization;
     std::string organization_error;
     try{organization=organize_project(entities);}catch(const std::exception& error){organization_error=error.what();}
     std::map<std::string,GraphState,std::less<>> graphs;
-    for(const auto& [id,area]:entities) if(area.extensions.contains("measurement_linework_sources")) {
+    for(const auto& [id,area]:entities) if(has_source(area)) {
         auto& check=result[id];
         try {
             if(!organization)throw std::invalid_argument(organization_error);
@@ -105,8 +173,23 @@ measurement_linework_source_checks(const std::map<std::string,Entity,std::less<>
             const auto context=organization->drawing_context(id);
             if(!context)throw std::invalid_argument("Measured area has no resolved drawing context.");
             const auto saved=boundary_geometry(decode_identified_boundary_entity(area));
-            const auto expected=read_uses(area.extensions.at("measurement_linework_sources"),saved.size());
-            for(const auto& edge:expected)for(const auto& use:edge) {
+            const bool grouped=area.type=="measurement_boundary" && area.extensions.contains("measurement_linework_group");
+            const auto members=grouped ? read_group(area.extensions.at("measurement_linework_group")) : std::vector<Uses>{};
+            if(!area.extensions.contains("measurement_linework_sources"))
+                throw std::invalid_argument("Measured area group requires retained outer source lineage.");
+            const auto expected=grouped ? read_group_outer(area.extensions.at("measurement_linework_sources"),saved.size()) :
+                read_uses(area.extensions.at("measurement_linework_sources"),saved.size());
+            std::map<std::string,std::set<std::string>,std::less<>> validated_group_sources;
+            const auto validate_sources=[&](const Uses& inputs) {
+            for(const auto& edge:inputs)for(const auto& use:edge) {
+                if(grouped) {
+                    const auto validated=validated_group_sources.find(use.owner_id);
+                    if(validated!=validated_group_sources.end()) {
+                        if(!validated->second.contains(use.segment_id))
+                            throw std::invalid_argument("A measured area source segment no longer exists.");
+                        continue;
+                    }
+                }
                 const auto owner=entities.find(use.owner_id);
                 if(owner==entities.end() || owner->second.type!="measurement_linework")throw std::invalid_argument("A measured area source was deleted or replaced: "+use.owner_id);
                 if(organization->drawing_context(use.owner_id)!=context)throw std::invalid_argument("A measured area source moved to a different drawing context.");
@@ -115,7 +198,14 @@ measurement_linework_source_checks(const std::map<std::string,Entity,std::less<>
                 if(!decoded.supported())throw std::invalid_argument("A measured area source has an unsupported model.");
                 if(std::none_of(decoded.model->edges.begin(),decoded.model->edges.end(),[&](const auto& value){return value.segment_id==use.segment_id;}))
                     throw std::invalid_argument("A measured area source segment no longer exists.");
+                if(grouped) {
+                    auto& ids=validated_group_sources[use.owner_id];
+                    for(const auto& segment:decoded.model->edges)ids.insert(segment.segment_id);
+                }
             }
+            };
+            validate_sources(expected);
+            for(const auto& member:members)validate_sources(member);
             auto found=graphs.find(context->layer_id);
             if(found==graphs.end()) {
                 GraphState state;
@@ -133,6 +223,68 @@ measurement_linework_source_checks(const std::map<std::string,Entity,std::less<>
                 found=graphs.emplace(context->layer_id,std::move(state)).first;
             }
             if(!found->second.graph)throw std::invalid_argument("Measured source graph could not be resolved: "+found->second.diagnostic);
+            if(grouped) {
+                const auto& graph=*found->second.graph;
+                GroupMatchWork work;
+                std::set<std::size_t> assigned;
+                std::vector<Uses> proposed_members;
+                bool members_exact=true;
+                for(const auto& member:members) {
+                    struct MemberMatch {std::size_t face;Uses uses;};
+                    std::vector<MemberMatch> matches;
+                    for(std::size_t face_index=0;face_index<graph.faces.size();++face_index) {
+                        work.charge(1);
+                        const auto& face=graph.faces[face_index];
+                        if(face.boundary.size()!=member.size())continue;
+                        const auto weight=work.face_weight(graph,face);
+                        work.charge(weight);
+                        const auto uses=face_uses(graph,face);
+                        for(std::size_t start=0;start<member.size();++start)for(const bool reverse:{false,true}) {
+                            work.charge(weight);
+                            auto candidate=align(face,uses,start,reverse);
+                            bool signature=true;
+                            for(std::size_t i=0;i<member.size();++i)signature=signature && same_uses(member[i],candidate.uses[i],false);
+                            if(signature)matches.push_back({face_index,std::move(candidate.uses)});
+                        }
+                    }
+                    if(matches.size()!=1 || !assigned.insert(matches.front().face).second)
+                        throw std::invalid_argument("Measured group member assignment is missing, duplicate or ambiguous.");
+                    for(std::size_t i=0;i<member.size();++i)
+                        members_exact=members_exact && same_uses(member[i],matches.front().uses[i],true);
+                    proposed_members.push_back(std::move(matches.front().uses));
+                }
+                const std::vector<std::size_t> indices(assigned.begin(),assigned.end());
+                const auto combined=combine_measurement_faces(graph,indices);
+                if(combined.boundary.size()!=saved.size())
+                    throw std::invalid_argument("Measured group outer topology changed; review and redefine the area.");
+                const auto outer_weight=work.face_weight(graph,combined);
+                work.charge(outer_weight);
+                const auto outer_uses=face_uses(graph,combined);
+                std::vector<AlignedFace> proposals;
+                for(std::size_t start=0;start<saved.size();++start)for(const bool reverse:{false,true}) {
+                    work.charge(outer_weight);
+                    auto candidate=align(combined,outer_uses,start,reverse);
+                    bool signature=true;
+                    for(std::size_t i=0;i<saved.size();++i)signature=signature && same_uses(expected[i],candidate.uses[i],false);
+                    if(signature)proposals.push_back(std::move(candidate));
+                }
+                if(proposals.size()!=1)
+                    throw std::invalid_argument("Measured group outer lineage does not uniquely match its member union.");
+                auto& candidate=proposals.front();
+                bool exact=members_exact;
+                for(std::size_t i=0;i<saved.size();++i)
+                    exact=exact && same_uses(expected[i],candidate.uses[i],true) && same_segment(saved[i],candidate.boundary[i]);
+                const auto proposed_lineage=encode_uses(candidate.uses);
+                (void)read_group_outer(proposed_lineage,candidate.boundary.size());
+                const auto proposed_group=encode_group(proposed_members);
+                check.current=exact;
+                check.proposed_boundary=std::move(candidate.boundary);
+                check.proposed_lineage=proposed_lineage;
+                check.proposed_group=proposed_group;
+                check.group_face_indices=indices;
+                if(!exact)check.diagnostic="Measured group is stale; refresh its outer boundary and member provenance together.";
+                continue;
+            }
             std::vector<AlignedFace> proposals;
             for(const auto& face:found->second.graph->faces) {
                 if(face.boundary.size()!=saved.size())continue;
@@ -162,10 +314,19 @@ measurement_linework_source_checks(const std::map<std::string,Entity,std::less<>
     return result;
 }
 bool measurement_linework_sources_visible(const Entity& area,const std::set<std::string,std::less<>>* semantic_visible) {
-    if(!area.extensions.contains("measurement_linework_sources"))return true;
+    if(!has_source(area))return true;
     try {
-        const auto uses=read_uses(area.extensions.at("measurement_linework_sources"),decode_identified_boundary_entity(area).segments.size());
+        const bool grouped=area.type=="measurement_boundary" && area.extensions.contains("measurement_linework_group");
+        const auto members=grouped ?
+            read_group(area.extensions.at("measurement_linework_group")) : std::vector<Uses>{};
+        if(!area.extensions.contains("measurement_linework_sources"))return false;
+        const auto count=decode_identified_boundary_entity(area).segments.size();
+        const auto uses=grouped ?
+            read_group_outer(area.extensions.at("measurement_linework_sources"),count) :
+            read_uses(area.extensions.at("measurement_linework_sources"),count);
         if(semantic_visible)for(const auto& edge:uses)for(const auto& use:edge)if(!semantic_visible->contains(use.owner_id))return false;
+        if(semantic_visible)for(const auto& member:members)for(const auto& edge:member)for(const auto& use:edge)
+            if(!semantic_visible->contains(use.owner_id))return false;
         return true;
     }catch(const std::exception&){return false;}
 }

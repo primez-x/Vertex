@@ -182,6 +182,11 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
         if (revision.boundary_translations) required = std::max(required, 9U);
         for (const auto& [id, entity] : revision.entities) {
             (void)id;
+            // The marker itself owns the reader floor, even if this reader
+            // cannot qualify its members or its outer lineage is absent.
+            // Unrelated owners retain arbitrary vendor metadata unchanged.
+            if (entity.type=="measurement_boundary" && entity.extensions.contains("measurement_linework_group"))
+                required=std::max(required,33U);
             if (entity.type == "model_phases") {
                 const auto model = entity.properties.find("model");
                 if (model != entity.properties.end() && model->is_object() &&
@@ -1689,6 +1694,7 @@ bool verify_sqlite_schema(sqlite3* database, bool allow_recovery = false) {
          sqlite3_column_int(user_version.get(), 0) != 29 &&
          sqlite3_column_int(user_version.get(), 0) != 30 &&
          sqlite3_column_int(user_version.get(), 0) != 32 &&
+         sqlite3_column_int(user_version.get(), 0) != 33 &&
          sqlite3_column_int(user_version.get(), 0) != 31 &&
          !(allow_recovery && sqlite3_column_int(user_version.get(), 0) == 4))) {
         storage_error(StorageErrorCode::unsupported_format,
@@ -1901,11 +1907,11 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
                                std::string* verified_digest = nullptr) {
     const auto format = required_metadata(database, "format_version");
     if (format != "1" && format != "2" && format != "3" && format != "5" &&
-        format != "6" && format != "7" && format != "8" && format != "9" && format != "10" && format != "11" && format != "12" && format != "13" && format != "14" && format != "15" && format != "16" && format != "17" && format != "18" && format != "19" && format != "20" && format != "21" && format != "22" && format != "23" && format != "24" && format != "25" && format != "26" && format != "27" && format != "28" && format != "29" && format != "30" && format != "31" && format != "32" && !(recovery && format == "4")) {
+        format != "6" && format != "7" && format != "8" && format != "9" && format != "10" && format != "11" && format != "12" && format != "13" && format != "14" && format != "15" && format != "16" && format != "17" && format != "18" && format != "19" && format != "20" && format != "21" && format != "22" && format != "23" && format != "24" && format != "25" && format != "26" && format != "27" && format != "28" && format != "29" && format != "30" && format != "31" && format != "32" && format != "33" && !(recovery && format == "4")) {
         storage_error(StorageErrorCode::unsupported_format,
                       "unsupported project format version: " + format);
     }
-    const auto format_number = format == "32" ? 32U : format == "31" ? 31U : format == "30" ? 30U : format == "29" ? 29U : format == "28" ? 28U : format == "27" ? 27U : format == "26" ? 26U : format == "25" ? 25U : format == "24" ? 24U : format == "23" ? 23U : format == "22" ? 22U : format == "21" ? 21U : format == "20" ? 20U : format == "19" ? 19U : format == "18" ? 18U : format == "17" ? 17U : format == "16" ? 16U : format == "15" ? 15U : format == "14" ? 14U : format == "13" ? 13U : format == "12" ? 12U : format == "11" ? 11U : format == "10" ? 10U : format == "9" ? 9U : format == "8" ? 8U : format == "7" ? 7U : (format == "6" ? 6U :
+    const auto format_number = format == "33" ? 33U : format == "32" ? 32U : format == "31" ? 31U : format == "30" ? 30U : format == "29" ? 29U : format == "28" ? 28U : format == "27" ? 27U : format == "26" ? 26U : format == "25" ? 25U : format == "24" ? 24U : format == "23" ? 23U : format == "22" ? 22U : format == "21" ? 21U : format == "20" ? 20U : format == "19" ? 19U : format == "18" ? 18U : format == "17" ? 17U : format == "16" ? 16U : format == "15" ? 15U : format == "14" ? 14U : format == "13" ? 13U : format == "12" ? 12U : format == "11" ? 11U : format == "10" ? 10U : format == "9" ? 9U : format == "8" ? 8U : format == "7" ? 7U : (format == "6" ? 6U :
         (format == "5" ? 5U : (format == "4" ? 4U : (format == "3" ? 3U :
         (format == "2" ? 2U : 1U)))));
     Statement format_marker(database, "PRAGMA user_version");
@@ -2169,7 +2175,7 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
 
     const auto required_format = required_format_version_internal(snapshot, format_number < 28);
     if (required_format > format_number) {
-        const auto reason = required_format >= 32 ? "finished-room appraisal rule v2" : required_format >= 31 ? "typed chord construction input" : required_format >= 30 ? "reviewed measured-area source replacement" : required_format >= 29 ? "measured stroke geometry edit derivations" : required_format >= 28 ? "measurement linework rigid transform or source lineage" : required_format >= 27 ? "verified connected wall rigid transform" : required_format >= 26 ? "compact mixed asset references" : required_format >= 25 ? "SVG symbol palette" : required_format >= 24 ? "saved-view drawing appearance" : required_format >= 23 ? "explicit automatic-angle removal during redraw" : required_format >= 22 ? "coordinated exterior corner edit" : required_format >= 21 ? "ANSI-oriented appraisal policy or measurement evidence" : required_format >= 20 ? "mixed live exterior wall-source completion" : required_format >= 19 ? "live exterior wall-source completion" : required_format >= 18 ? "boundary rigid transform group" : required_format >= 17 ? "explicit fresh-topology redefinition" : required_format >= 16 ? "reviewed exterior wall-source replacement" : required_format >= 15 ? "boundary curvature reconstruction proof" : required_format >= 14 ? "rigid curve-transform construction archive" : required_format >= 13 ? "physical curve-length input or edit proof" : required_format >= 12 ? "physical arc-length constraint" : required_format >= 11 ? "straight wall-only endpoint proof" : required_format >= 10 ? "curved endpoint constraint or wall proof" : required_format >= 9 ? "boundary translation group" : required_format >= 8 ? "boundary constraint changes" : required_format >= 7 ? "boundary geometry edit" :
+        const auto reason = required_format >= 33 ? "grouped measured-region source evidence" : required_format >= 32 ? "finished-room appraisal rule v2" : required_format >= 31 ? "typed chord construction input" : required_format >= 30 ? "reviewed measured-area source replacement" : required_format >= 29 ? "measured stroke geometry edit derivations" : required_format >= 28 ? "measurement linework rigid transform or source lineage" : required_format >= 27 ? "verified connected wall rigid transform" : required_format >= 26 ? "compact mixed asset references" : required_format >= 25 ? "SVG symbol palette" : required_format >= 24 ? "saved-view drawing appearance" : required_format >= 23 ? "explicit automatic-angle removal during redraw" : required_format >= 22 ? "coordinated exterior corner edit" : required_format >= 21 ? "ANSI-oriented appraisal policy or measurement evidence" : required_format >= 20 ? "mixed live exterior wall-source completion" : required_format >= 19 ? "live exterior wall-source completion" : required_format >= 18 ? "boundary rigid transform group" : required_format >= 17 ? "explicit fresh-topology redefinition" : required_format >= 16 ? "reviewed exterior wall-source replacement" : required_format >= 15 ? "boundary curvature reconstruction proof" : required_format >= 14 ? "rigid curve-transform construction archive" : required_format >= 13 ? "physical curve-length input or edit proof" : required_format >= 12 ? "physical arc-length constraint" : required_format >= 11 ? "straight wall-only endpoint proof" : required_format >= 10 ? "curved endpoint constraint or wall proof" : required_format >= 9 ? "boundary translation group" : required_format >= 8 ? "boundary constraint changes" : required_format >= 7 ? "boundary geometry edit" :
             required_format >= 6 ? "boundary transform" : required_format >= 5 ? "boundary translation" : required_format >= 3 ? "boundary_authoring" :
                             "identified boundary, dimension or boundary draft";
         storage_error(StorageErrorCode::unsupported_format,

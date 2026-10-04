@@ -8,6 +8,9 @@
 #include "sketch/constraint_entity.hpp"
 #include "sketch/constraint_wall_edit.hpp"
 #include "sketch/wall_measurement.hpp"
+#include "sketch/measurement_area_graph.hpp"
+#include "sketch/measurement_linework.hpp"
+#include "sketch/measurement_linework_source.hpp"
 #include "sketch/sheet_view_entity_codec.hpp"
 #include "sketch/annotation_entity_codec.hpp"
 #include "support/noninteractive_errors.hpp"
@@ -820,6 +823,106 @@ void test_typed_chord_nested_proofs_reject_recomputed_downgrade() {
         rewrite_logical_digest(file);
         require_error([&] { (void)ProjectStore::load(file); },StorageErrorCode::unsupported_format,"recomputed digest cannot downgrade direct or nested typed chord proofs");
     }
+}
+
+std::vector<Entity> grouped_measured_storage_fixture() {
+    using Json=nlohmann::json;
+    std::vector<Entity> values{entity("p","property"),entity("b","building",{{"property_id","p"}}),
+        entity("f","floor",{{"building_id","b"}}),entity("l","layer",{{"floor_id","f"}})};
+    std::vector<sketch::MeasurementGraphSource> sources;
+    const auto append_stroke=[&](const std::string& id,const std::vector<sketch::Vec2>& points,bool closed) {
+        sketch::MeasurementLinework model; model.stroke_id=id; model.anchor=points.front(); model.closed=closed;
+        for (std::size_t i=1;i<points.size();++i) {
+            sketch::ConstructionReceipt receipt; receipt.segment_id=id+":e"+std::to_string(i);
+            receipt.kind=sketch::BoundaryConstructionKind::line_to_point; receipt.start=points[i-1]; receipt.chord_end=points[i];
+            model.edges.push_back({receipt.segment_id,id+":v"+std::to_string(i-1),closed && i+1==points.size() ? id+":v0" : id+":v"+std::to_string(i),receipt});
+            sources.push_back({id,receipt.segment_id,{points[i-1],points[i],0}});
+        }
+        values.push_back(entity(id,"measurement_linework",{{"property_id","p"},{"building_id","b"},{"floor_id","f"},{"layer_id","l"},
+            {"model",sketch::encode_measurement_linework_model(model)}},true));
+    };
+    append_stroke("outline",{{0,0},{4,0},{4,4},{0,4},{0,0}},true);
+    append_stroke("separator",{{2,-1},{2,5}},false);
+    const auto graph=sketch::build_measurement_area_graph(sources);
+    require(graph.faces.size()==2,"grouped storage fixture contains two actual detected source faces");
+    const auto combined=sketch::combine_measurement_faces(graph,{0,1});
+    const auto lineage=[&](const sketch::DerivedMeasurementFace& face) {
+        Json result=Json::array();
+        for (const auto& traversal:face.edge_uses) {
+            Json edge=Json::array();
+            for (const auto& use:graph.edges.at(traversal.edge_index).source_uses)
+                edge.push_back({{"owner_id",use.owner_id},{"segment_id",use.segment_id},{"parameter_start",use.parameter_start},
+                    {"parameter_end",use.parameter_end},{"reversed",use.reversed!=traversal.reversed}});
+            result.push_back(std::move(edge));
+        }
+        return result;
+    };
+    Json segments=Json::array();
+    for (const auto& segment:combined.boundary) segments.push_back({{"start",{segment.start.x,segment.start.y}},
+        {"end",{segment.end.x,segment.end.y}},{"sweep_radians",segment.sweep_radians}});
+    auto area=entity("area","measurement_boundary",{{"property_id","p"},{"building_id","b"},{"floor_id","f"},{"layer_id","l"},
+        {"classification","living"},{"segments",segments}},false,
+        {{"measurement_linework_sources",lineage(combined)},
+         {"measurement_linework_group",{{"version",1},{"members",Json::array({lineage(graph.faces[0]),lineage(graph.faces[1])})}}}});
+    values.push_back(sketch::upgrade_legacy_boundary_entity(area)); return values;
+}
+
+void test_grouped_measured_region_reader_floor() {
+    TempDirectory temp;
+    const auto values=grouped_measured_storage_fixture();
+    auto document=Document::create(values);
+    require(sketch::measurement_linework_source_checks(document.snapshot().entities()).at("area").current,
+        "stored grouped fixture must retain a current exact combined source definition");
+    const auto head=document.snapshot();
+    document.apply(ApplyEntityChanges{.expected_revision=document.revision(),.entity_changes={EntityChange::erase("area")},.message="Delete grouped area"});
+    const auto deleted=document.snapshot(); document.undo(document.revision());
+    unsigned sequence=0;
+    for (const auto& snapshot:{head,deleted,document.snapshot()}) {
+        require(ProjectStore::required_format_version(snapshot)==33,"current, deleted and undone grouped region history requires native33");
+        const auto file=temp.path/("grouped-"+std::to_string(sequence++)+".bldproj");
+        (void)ProjectStore::save(file,snapshot); auto loaded=ProjectStore::load(file);
+        require(loaded.document.snapshot().entities()==snapshot.entities() && loaded.document.snapshot().history().size()==snapshot.history().size() &&
+            sketch::document_authoring_source_digest_v1(loaded.document.snapshot())==sketch::document_authoring_source_digest_v1(snapshot),
+            "native33 reopens exact grouped outer lineage, internal seams, history and navigation");
+        if (!snapshot.entities().contains("area")) {
+            loaded.document.undo(loaded.document.revision());
+            require(loaded.document.snapshot().entities().at("area")==head.entities().at("area"),"reopened deletion can undo exact grouped area evidence");
+        }
+        execute_sql(file,"PRAGMA user_version=32; UPDATE metadata SET value='32' WHERE key='format_version'");
+        rewrite_logical_digest(file); const auto original=ProjectStore::file_sha256(file);
+        require_error([&] { (void)ProjectStore::load(file); },StorageErrorCode::unsupported_format,
+            "recomputed digest cannot admit grouped retained history below native33");
+        require(ProjectStore::file_sha256(file)==original,"grouped downgrade refusal preserves exact file bytes");
+    }
+    for (unsigned fault=0;fault<7;++fault) {
+        auto opaque_values=values; auto& area=opaque_values.back();
+        if (fault==0) area.extensions["measurement_linework_group"]["version"]=999;
+        if (fault==1) area.extensions["measurement_linework_group"]="malformed retained group";
+        if (fault==2) area.extensions.erase("measurement_linework_sources");
+        if (fault==3) area.properties["boundary_model_version"]=999;
+        if (fault==4) area.extensions["measurement_linework_group"]=nullptr;
+        if (fault==5) area.extensions["measurement_linework_group"]["extra"]="retain future field";
+        if (fault==6) area.extensions["measurement_linework_group"]["version"]="1";
+        auto opaque=Document::create(opaque_values);
+        require(ProjectStore::required_format_version(opaque.snapshot())==33,"any group marker on a measured boundary keeps native33 floor");
+        if (fault!=2) require(!opaque.is_editable(),"unsupported group schema or owner dialect preserves a read-only document");
+        const auto file=temp.path/("opaque-group-"+std::to_string(fault)+".bldproj"); (void)ProjectStore::save(file,opaque.snapshot());
+        const auto loaded=ProjectStore::load(file);
+        require(loaded.document.snapshot().entities()==opaque.snapshot().entities(),"future, malformed and missing-outer group evidence stays exact on reopen");
+        require(loaded.document.snapshot().entities().at("area").extensions.dump()==area.extensions.dump() &&
+            loaded.document.is_editable()==opaque.is_editable(),"group reopening preserves exact opaque JSON and editable/read-only policy");
+        execute_sql(file,"PRAGMA user_version=32; UPDATE metadata SET value='32' WHERE key='format_version'");
+        rewrite_logical_digest(file); const auto original=ProjectStore::file_sha256(file);
+        require_error([&] { (void)ProjectStore::load(file); },StorageErrorCode::unsupported_format,
+            "opaque group marker cannot be downgraded even with a recomputed digest");
+        require(ProjectStore::file_sha256(file)==original,"opaque group downgrade refusal preserves exact file bytes");
+    }
+    auto collision=Document::create({entity("vendor","property",nlohmann::json::object(),false,
+        {{"measurement_linework_group",values.back().extensions.at("measurement_linework_group")}})});
+    require(ProjectStore::required_format_version(collision.snapshot())==1,"unrelated owner group collision cannot promote native format");
+    require(collision.is_editable(),"generic vendor group collision does not force read-only state");
+    const auto file=temp.path/"vendor-group.bldproj"; (void)ProjectStore::save(file,collision.snapshot());
+    require(ProjectStore::load(file).document.snapshot().entities()==collision.snapshot().entities(),"unrelated vendor group payload remains opaque exactly");
 }
 
 void test_translation_group_storage_and_forgery_rejection() {
@@ -3339,6 +3442,7 @@ int main() {
         test_impossible_history_is_rejected_after_digest_recomputation();
         test_translation_proof_storage_and_forgery_rejection();
         test_typed_chord_nested_proofs_reject_recomputed_downgrade();
+        test_grouped_measured_region_reader_floor();
         test_translation_group_storage_and_forgery_rejection();
         test_transform_proof_storage_and_forgery_rejection();
         test_boundary_geometry_edit_proof_storage_and_forgery_rejection();

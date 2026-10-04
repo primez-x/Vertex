@@ -38,6 +38,7 @@
 #include "sketch/measurement_area_definition.hpp"
 #include "sketch/measurement_linework_source.hpp"
 #include "sketch/boundary_transform.hpp"
+#include "sketch/boundary_integrity.hpp"
 #include "sketch/document_digest.hpp"
 #include "sketch/dxf_project_exchange.hpp"
 #include "sketch/ifc_project_exchange.hpp"
@@ -286,10 +287,16 @@ Entity clipboard_entity_from_json(const json& value) {
     if (!is_known_entity_type(type)) {
         throw std::invalid_argument("clipboard contains an unsupported entity type");
     }
-    if (value.at("required").get<bool>()) {
+    const bool required = value.at("required").get<bool>();
+    // Measured strokes are required geometry by their schema. Independent
+    // area copies allocate new stroke identities and retain that contract.
+    if (type == "measurement_linework" && !required) {
+        throw std::invalid_argument("pasted measurement linework must be required geometry");
+    }
+    if (required && type != "measurement_linework") {
         throw std::invalid_argument("required project entities cannot be pasted");
     }
-    return Entity{value.at("id").get<std::string>(), type, value.at("properties"), false,
+    return Entity{value.at("id").get<std::string>(), type, value.at("properties"), required,
                   value.at("extensions")};
 }
 
@@ -321,6 +328,26 @@ void remap_entity_references(Entity& entity,
         if (found != object.end()) remap_clipboard_json(*found, remap);
     };
     auto& properties = entity.properties;
+    if (entity.type == "measurement_linework") {
+        const auto decoded = decode_measurement_linework_model(properties.at("model"));
+        if (!decoded.supported()) throw std::invalid_argument(decoded.diagnostic);
+        auto model = *decoded.model;
+        const auto identity = [&](std::string& id) {
+            const auto found = remap.find(id);
+            if (found == remap.end()) throw std::invalid_argument("A measured stroke copy is missing an independent source identity.");
+            id = found->second;
+        };
+        identity(model.stroke_id);
+        for (auto& edge : model.edges) {
+            identity(edge.segment_id); identity(edge.start_vertex_id); identity(edge.end_vertex_id);
+            identity(edge.receipt.segment_id);
+        }
+        for (auto& operation : model.operations)
+            if (auto* edit = std::get_if<MeasurementLineworkEdit>(&operation)) {
+                identity(edit->intent.boundary_id); identity(edit->intent.target_id);
+            }
+        properties["model"] = encode_measurement_linework_model(model);
+    }
     // Document's top-level entity-reference vocabulary. Asset and catalog-local
     // identities belong to separate namespaces.
     for (const auto* key : {"property_id", "building_id", "floor_id", "layer_id",
@@ -353,6 +380,27 @@ void remap_entity_references(Entity& entity,
         reference(properties.at("material_assignment"), "catalog_id");
     if (entity.type == "boundary" || entity.type == "measurement_boundary" ||
         entity.type == "room_boundary") {
+        const auto lineage = [&](json& edges) {
+            if (!edges.is_array()) throw std::invalid_argument("Measured area source lineage is invalid.");
+            for (auto& edge : edges) for (auto& use : edge) {
+                for (const auto* key : {"owner_id", "segment_id"}) {
+                    const auto id = use.at(key).get<std::string>();
+                    if (!remap.contains(id))
+                        throw std::invalid_argument("Copy the measured area's complete member sources together before cloning it.");
+                    use[key] = remap.at(id);
+                }
+            }
+        };
+        if (entity.extensions.contains("measurement_linework_sources")) lineage(entity.extensions.at("measurement_linework_sources"));
+        if (entity.type == "measurement_boundary" && entity.extensions.contains("measurement_linework_group")) {
+            auto& group = entity.extensions.at("measurement_linework_group");
+            if (!group.is_object() || group.size() != 2 || !group.contains("version") ||
+                !group.at("version").is_number_integer() || group.at("version") != 1 ||
+                !group.contains("members") || !group.at("members").is_array() ||
+                group.at("members").size() < 2 || group.at("members").size() > 2048)
+                throw std::invalid_argument("This combined measured area has unsupported group metadata. Its saved sources must remain unchanged.");
+            for (auto& member : group.at("members")) lineage(member);
+        }
         reference(properties,"deduction_ids");
         if (properties.contains("segments")) {
             for (auto& segment : properties.at("segments")) {
@@ -5195,6 +5243,11 @@ public:
                 boundary.segments[i].segment = check.proposed_boundary->at(i);
             auto refreshed = encode_identified_boundary_entity(boundary, &area);
             refreshed.extensions["measurement_linework_sources"] = check.proposed_lineage;
+            if (area.type == "measurement_boundary" && area.extensions.contains("measurement_linework_group")) {
+                if (!check.proposed_group.is_object())
+                    throw std::invalid_argument("The combined measured area's complete member sources are unavailable. Review the group before changing its sources.");
+                refreshed.extensions["measurement_linework_group"] = check.proposed_group;
+            }
             refreshed_ids.insert(id);
             refreshes.push_back(EntityChange::upsert(std::move(refreshed)));
         }
@@ -5233,16 +5286,25 @@ public:
     }
 
     static void includeMeasuredAreaSources(const DocumentSnapshot& source,std::vector<Entity>& graph) {
-        if (std::none_of(graph.begin(),graph.end(),[](const auto& entity){return entity.extensions.contains("measurement_linework_sources");})) return;
+        if (std::none_of(graph.begin(),graph.end(),[](const auto& entity){return entity.extensions.contains("measurement_linework_sources") || (entity.type == "measurement_boundary" && entity.extensions.contains("measurement_linework_group"));})) return;
         const auto visibility=visible_project_entities_with_phase(source,ProjectViewFilter{});
         const auto checks=measurement_linework_source_checks(source.entities(),&visibility);
         std::set<std::string,std::less<>> sources;
         for (const auto& area : graph) {
-            if (!area.extensions.contains("measurement_linework_sources")) continue;
-            if (!measurement_linework_source_current(checks,area))
-                throw std::invalid_argument("Refresh or redefine this measured area before moving its source geometry: "+checks.at(area.id).diagnostic);
+            if (!area.extensions.contains("measurement_linework_sources") &&
+                !(area.type == "measurement_boundary" && area.extensions.contains("measurement_linework_group"))) continue;
+            const auto check = checks.find(area.id);
+            if (check == checks.end() || !check->second.current)
+                throw std::invalid_argument("Refresh or redefine this measured area before moving its complete source geometry: "+
+                    (check == checks.end() ? std::string("Source proof is unavailable.") : check->second.diagnostic));
+            if (!area.extensions.contains("measurement_linework_sources"))
+                throw std::invalid_argument("The combined measured area is missing its outer source proof. Review its complete sources first.");
             for (const auto& edge : area.extensions.at("measurement_linework_sources"))
                 for (const auto& use : edge) sources.insert(use.at("owner_id").get<std::string>());
+            if (area.type == "measurement_boundary" && area.extensions.contains("measurement_linework_group"))
+                for (const auto& member : area.extensions.at("measurement_linework_group").at("members"))
+                    for (const auto& edge : member)
+                        for (const auto& use : edge) sources.insert(use.at("owner_id").get<std::string>());
         }
         for (const auto& id : sources)
             if (std::none_of(graph.begin(),graph.end(),[&](const auto& entity){return entity.id==id;})) graph.push_back(source.entities().at(id));
@@ -5482,8 +5544,28 @@ public:
                 for (const auto& record : change.entity.properties.at("wall_measurement_source").at("walls"))
                     if (!copied_ids.contains(record.at("id").get<std::string>()))
                         throw std::invalid_argument("A copied exterior measurement must contain its independently copied source walls.");
+            if (change.entity.extensions.contains("measurement_linework_sources") ||
+                (change.entity.type == "measurement_boundary" && change.entity.extensions.contains("measurement_linework_group"))) {
+                if (!change.entity.extensions.contains("measurement_linework_sources"))
+                    throw std::invalid_argument("A copied measured group is missing its saved exterior sources.");
+                const auto require_sources = [&](const json& lineage) {
+                    for (const auto& edge : lineage) for (const auto& use : edge)
+                        if (!copied_ids.contains(use.at("owner_id").get<std::string>()))
+                            throw std::invalid_argument("A copied measured area must include every independently copied member source, including internal seams.");
+                };
+                require_sources(change.entity.extensions.at("measurement_linework_sources"));
+                if (change.entity.type == "measurement_boundary" && change.entity.extensions.contains("measurement_linework_group"))
+                    for (const auto& member : change.entity.extensions.at("measurement_linework_group").at("members")) require_sources(member);
+            }
         }
         auto candidate = Document::preview_command(source,command);
+        const auto measured_checks = measurement_linework_source_checks(candidate.entities());
+        for (const auto& change : command.entity_changes)
+            if (change.kind == EntityChangeKind::upsert &&
+                (change.entity.extensions.contains("measurement_linework_sources") ||
+                 (change.entity.type == "measurement_boundary" && change.entity.extensions.contains("measurement_linework_group"))) &&
+                !measurement_linework_source_current(measured_checks, change.entity))
+                throw std::invalid_argument("The copied measured area's complete group sources do not reproduce its saved geometry.");
         for (auto& change : command.entity_changes) {
             if (change.kind != EntityChangeKind::upsert || !is_closed_boundary_entity(change.entity.type) ||
                 !change.entity.properties.contains("wall_measurement_source")) continue;
@@ -5556,7 +5638,24 @@ public:
         const auto graph = independentAreaCopyGraph(source,clipboard_entities_for_selection(source,original.id));
         std::map<std::string,std::string,std::less<>> identities;
         for (const auto& entity : graph) identities.emplace(entity.id,new_id(entity.type));
+        for (const auto& entity : graph) if (entity.type == "measurement_linework") {
+            const auto decoded = decode_measurement_linework_model(entity.properties.at("model"));
+            if (!decoded.supported()) throw std::invalid_argument(decoded.diagnostic);
+            for (const auto& edge : decoded.model->edges) {
+                identities.try_emplace(edge.segment_id,new_id("measured-segment"));
+                identities.try_emplace(edge.start_vertex_id,new_id("measured-vertex"));
+                identities.try_emplace(edge.end_vertex_id,new_id("measured-vertex"));
+            }
+        }
         std::map<std::string,Entity,std::less<>> copied;
+        for (const auto& entity : graph) if (entity.type == "measurement_linework") {
+            auto clone = entity;
+            clone.id = identities.at(entity.id);
+            const auto decoded = decode_measurement_linework_model(entity.properties.at("model"));
+            clone.properties["model"] = encode_measurement_linework_model(transformed_measurement_linework(*decoded.model,transform));
+            remap_entity_references(clone,identities);
+            copied.insert_or_assign(clone.id,std::move(clone));
+        }
         for (const auto& entity : graph) {
             if (!is_closed_boundary_entity(entity.type) && entity.type != "wall") continue;
             const auto built = entity.type == "wall"
@@ -14359,8 +14458,10 @@ public:
                 throw std::invalid_argument("Finish the active drawing before reviewing measured sources.");
             const auto selected=selectedEntity();
             if (!selected || m_selected_ids.size()!=1 || selected->type!="measurement_boundary" ||
-                !selected->extensions.contains("measurement_linework_sources"))
+                (!selected->extensions.contains("measurement_linework_sources") && !selected->extensions.contains("measurement_linework_group")))
                 throw std::invalid_argument("Select one area derived from measured strokes.");
+            if (selected->extensions.contains("measurement_linework_group"))
+                throw std::invalid_argument("This area combines multiple measured regions. Keep its complete group together; a single-face source replacement cannot redefine it.");
             const auto context=captureModalContext();
             const auto selection=m_selected_ids;
             const auto workspace=m_workspace;
@@ -14502,21 +14603,43 @@ public:
             if (detected.graph.faces.empty()) throw std::invalid_argument("No closed area was found in this layer's measured lines.");
             QDialog dialog(owner); dialog.setObjectName(QStringLiteral("measuredAreaReviewDialog"));
             dialog.setWindowTitle(QStringLiteral("Define measured areas")); styleDialog(dialog);
-            dialog.resize(1080, std::clamp(200 + static_cast<int>(detected.graph.faces.size()) * 32, 280, 650));
+            dialog.resize(1320, std::clamp(200 + static_cast<int>(detected.graph.faces.size()) * 32, 280, 650));
             auto* layout = new QVBoxLayout(&dialog);
             auto* explanation = new QLabel(QStringLiteral(
                 "Review each measured outline. New reference outlines create no area; existing definitions are always kept. A deduction reduces its parent; choose its classification explicitly. "
                 "Define a contained outline independently only if the parent excludes it or remains a reference. Overlapping areas withhold valid totals."), &dialog);
             explanation->setWordWrap(true); layout->addWidget(explanation);
-            auto* rows = new QTableWidget(static_cast<int>(detected.graph.faces.size()), 8, &dialog);
+            explanation->setObjectName(QStringLiteral("measuredAreaReviewExplanation"));
+            const auto dialog_foreground = m_theme == WorkspaceTheme::high_contrast ? QStringLiteral("#ffffff")
+                : m_theme == WorkspaceTheme::dark ? QStringLiteral("#edf2fb") : QStringLiteral("#182536");
+            const auto dialog_text_style = QStringLiteral("color: %1;").arg(dialog_foreground);
+            explanation->setStyleSheet(dialog_text_style);
+            auto* rows = new QTableWidget(static_cast<int>(detected.graph.faces.size()), 9, &dialog);
             rows->setObjectName(QStringLiteral("measuredAreaReviewRows"));
             rows->setHorizontalHeaderLabels({QStringLiteral("Area"), QStringLiteral("Parent"), QStringLiteral("Gross"),
-                QStringLiteral("Existing area"), QStringLiteral("Use outline"), QStringLiteral("Classification"), QStringLiteral("Net"), QStringLiteral("Deducted")});
+                QStringLiteral("Existing area"), QStringLiteral("Use outline"), QStringLiteral("Classification"), QStringLiteral("Net"), QStringLiteral("Deducted"), QStringLiteral("Group")});
             rows->setEditTriggers(QAbstractItemView::NoEditTriggers); rows->setSelectionBehavior(QAbstractItemView::SelectRows);
+            rows->setSelectionMode(QAbstractItemView::ExtendedSelection);
             rows->verticalHeader()->hide(); rows->horizontalHeader()->setSectionResizeMode(QHeaderView::ResizeToContents);
             rows->horizontalHeader()->setSectionResizeMode(3, QHeaderView::Stretch);
-            rows->horizontalHeader()->setSectionResizeMode(5, QHeaderView::Stretch);
+            rows->horizontalHeader()->setSectionResizeMode(5, QHeaderView::ResizeToContents);
             layout->addWidget(rows, 1);
+            auto* group_controls = new QHBoxLayout;
+            auto* combine = new QPushButton(QStringLiteral("Combine selected"), &dialog);
+            combine->setObjectName(QStringLiteral("combineMeasuredAreaRows"));
+            auto* separate = new QPushButton(QStringLiteral("Separate selected"), &dialog);
+            separate->setObjectName(QStringLiteral("separateMeasuredAreaRows"));
+            group_controls->addWidget(combine); group_controls->addWidget(separate); group_controls->addStretch();
+            layout->addLayout(group_controls);
+            auto* group_help = new QLabel(QStringLiteral("Select two or more adjacent new regions to combine them into one area. Edit any member's classification to update the whole group. Existing groups are kept together."), &dialog);
+            group_help->setWordWrap(true); layout->addWidget(group_help);
+            group_help->setObjectName(QStringLiteral("measuredAreaReviewGroupHelp"));
+            group_help->setStyleSheet(dialog_text_style);
+            auto existing_ids = detected.existing_area_ids;
+            for (std::size_t i = 0; i < existing_ids.size(); ++i)
+                if (detected.existing_group_ids.at(i)) existing_ids[i] = detected.existing_group_ids.at(i);
+            std::vector<std::optional<std::size_t>> groups(detected.graph.faces.size());
+            std::size_t next_group = 1;
             std::vector<QComboBox*> dispositions, classifications;
             const auto retained_classification = [&](const Entity& entity) {
                 try { return QString::fromStdString(area_subtraction_type(source, entity)); }
@@ -14536,13 +14659,17 @@ public:
                     ? QStringLiteral("Area %1").arg(static_cast<int>(*face.parent_face_index) + 1) : QStringLiteral("—")));
                 auto* gross = new QTableWidgetItem(format_boundary_area(std::abs(signed_area(face.boundary)), m_metric_units, false));
                 gross->setData(Qt::UserRole, std::abs(signed_area(face.boundary))); rows->setItem(index, 2, gross);
-                const auto& existing = detected.existing_area_ids.at(i);
+                const auto& existing = existing_ids.at(i);
+                const bool existing_group = detected.existing_group_ids.at(i).has_value();
                 rows->setItem(index, 3, new QTableWidgetItem(existing ? id_from(*existing) : QStringLiteral("New")));
                 auto* disposition = new QComboBox(rows); disposition->setObjectName(QStringLiteral("measuredAreaDisposition%1").arg(index));
-                disposition->addItem(existing ? QStringLiteral("Keep existing") : QStringLiteral("Reference only"), static_cast<int>(MeasurementAreaDisposition::reference_only));
-                disposition->addItem(existing ? QStringLiteral("Use existing area") : QStringLiteral("Define area"), static_cast<int>(MeasurementAreaDisposition::define_area));
-                if (face.parent_face_index) disposition->addItem(QStringLiteral("Deduct from parent"), static_cast<int>(MeasurementAreaDisposition::deduct_from_parent));
-                disposition->setCurrentIndex(face.parent_face_index && !existing ? 0 : 1);
+                disposition->addItem(existing_group ? QStringLiteral("Keep existing group") : existing ? QStringLiteral("Keep existing") : QStringLiteral("Reference only"), static_cast<int>(MeasurementAreaDisposition::reference_only));
+                if (!existing_group) {
+                    disposition->addItem(existing ? QStringLiteral("Use existing area") : QStringLiteral("Define area"), static_cast<int>(MeasurementAreaDisposition::define_area));
+                    if (face.parent_face_index) disposition->addItem(QStringLiteral("Deduct from parent"), static_cast<int>(MeasurementAreaDisposition::deduct_from_parent));
+                }
+                disposition->setCurrentIndex(existing_group || (face.parent_face_index && !existing) ? 0 : 1);
+                disposition->setEnabled(!existing_group);
                 if (existing && face.parent_face_index && detected.existing_area_ids.at(*face.parent_face_index)) {
                     const auto deductions = read_deduction_ids(source.entities().at(*detected.existing_area_ids.at(*face.parent_face_index)).properties);
                     if (std::find(deductions.begin(), deductions.end(), *existing) != deductions.end())
@@ -14550,7 +14677,7 @@ public:
                 }
                 rows->setCellWidget(index, 4, disposition); dispositions.push_back(disposition);
                 auto* classification = new QComboBox(rows); classification->setObjectName(QStringLiteral("measuredAreaClassification%1").arg(index));
-                classification->setEditable(true); classification->setMinimumWidth(160);
+                classification->setEditable(true); classification->setMinimumWidth(240);
                 for (const auto& item : std::vector<std::pair<QString,QString>>{
                         {QStringLiteral("Measurement"),QStringLiteral("measurement")},
                         {QStringLiteral("Living"),QStringLiteral("living")},
@@ -14570,8 +14697,10 @@ public:
                 rows->setCellWidget(index, 5, classification); classifications.push_back(classification);
                 rows->setItem(index, 6, new QTableWidgetItem(QStringLiteral("—")));
                 rows->setItem(index, 7, new QTableWidgetItem(QStringLiteral("—")));
+                rows->setItem(index, 8, new QTableWidgetItem(existing_group ? QStringLiteral("Keep existing group") : QStringLiteral("Separate")));
             }
             auto* status = new QLabel(&dialog); status->setObjectName(QStringLiteral("measuredAreaReviewStatus")); status->setWordWrap(true); layout->addWidget(status);
+            status->setStyleSheet(dialog_text_style);
             auto* buttons = new QDialogButtonBox(QDialogButtonBox::Apply | QDialogButtonBox::Cancel, &dialog);
             buttons->setObjectName(QStringLiteral("measuredAreaReviewButtons")); layout->addWidget(buttons);
             std::optional<MeasurementAreaDefinition> candidate;
@@ -14595,11 +14724,13 @@ public:
                     bool overlapping = false;
                     for (std::size_t i = 0; i < dispositions.size(); ++i) {
                         const auto disposition = static_cast<MeasurementAreaDisposition>(dispositions[i]->currentData().toInt());
-                        classifications[i]->setEnabled(!detected.existing_area_ids[i] && disposition != MeasurementAreaDisposition::reference_only);
+                        classifications[i]->setEnabled(!existing_ids[i] && disposition != MeasurementAreaDisposition::reference_only);
                         auto classification = classifications[i]->currentText().trimmed();
                         const auto current = classifications[i]->currentIndex();
                         if (current >= 0 && classification == classifications[i]->itemText(current)) classification = classifications[i]->itemData(current).toString();
-                        choices.push_back({disposition, classification.toStdString()});
+                        choices.push_back({disposition, classification.toStdString(), groups[i]});
+                        rows->item(static_cast<int>(i), 8)->setText(detected.existing_group_ids[i] ? QStringLiteral("Keep existing group")
+                            : groups[i] ? QStringLiteral("Combined %1").arg(*groups[i]) : QStringLiteral("Separate"));
                         overlapping = overlapping || (detected.graph.faces[i].parent_face_index && disposition == MeasurementAreaDisposition::define_area);
                     }
                     auto prepared = prepare_measurement_area_definition(source, stroke_id.toStdString(), choices);
@@ -14608,22 +14739,28 @@ public:
                     const auto preview = prepared.command.entity_changes.empty() && prepared.command.asset_changes.empty()
                         ? source : Document::preview_command(source, prepared.command);
                     const CalculationProfile physical{"measured-area-review", 1, AreaUnit::square_metre, 2, {{"physical", {false,false}}}};
-                    std::size_t active_index = 0;
+                    std::set<std::string, std::less<>> presented_groups;
                     for (std::size_t i = 0; i < choices.size(); ++i) {
                         auto* net = rows->item(static_cast<int>(i), 6); net->setText(QStringLiteral("—")); net->setData(Qt::UserRole, QVariant{});
                         auto* deducted = rows->item(static_cast<int>(i), 7); deducted->setText(QStringLiteral("—")); deducted->setData(Qt::UserRole, QVariant{});
-                        const bool reference = choices[i].disposition == MeasurementAreaDisposition::reference_only;
-                        if (reference && !detected.existing_area_ids[i]) continue;
-                        const auto area_id = reference ? *detected.existing_area_ids[i] : prepared.area_ids.at(active_index++);
+                        if (!prepared.face_area_ids.at(i)) continue;
+                        const auto area_id = *prepared.face_area_ids.at(i);
                         const auto found = preview.entities().find(area_id);
                         if (found == preview.entities().end()) throw std::invalid_argument("A prepared area is missing from its preview.");
                         const auto* area = &found->second;
+                        const bool combined = area->type == "measurement_boundary" && area->extensions.contains("measurement_linework_group");
+                        if (combined && !presented_groups.insert(area_id).second) {
+                            net->setText(QStringLiteral("Included in combined area"));
+                            deducted->setText(QStringLiteral("—"));
+                            continue;
+                        }
                         std::vector<AreaDeduction> deductions;
                         for (const auto& id : read_deduction_ids(area->properties))
                             deductions.push_back({id, boundary_geometry(decode_identified_boundary_entity(preview.entities().at(id)))});
                         const auto calculation = calculate_area({area->id, detected.context.building_id, detected.context.floor_id,
                             "physical", boundary_geometry(decode_identified_boundary_entity(*area)), std::move(deductions), {1,1}}, physical);
                         net->setText(format_boundary_area(calculation.net_square_metres, m_metric_units, false)); net->setData(Qt::UserRole, calculation.net_square_metres);
+                        if (combined) net->setText(QStringLiteral("Combined %1").arg(net->text()));
                         deducted->setText(format_boundary_area(calculation.deducted_square_metres, m_metric_units, false)); deducted->setData(Qt::UserRole, calculation.deducted_square_metres);
                     }
                     const bool empty = prepared.command.entity_changes.empty() && prepared.command.asset_changes.empty();
@@ -14635,8 +14772,62 @@ public:
             };
             for (std::size_t i = 0; i < dispositions.size(); ++i) {
                 QObject::connect(dispositions[i], &QComboBox::currentIndexChanged, &dialog, [&](int) { update(); });
-                QObject::connect(classifications[i], &QComboBox::currentTextChanged, &dialog, [&](const QString&) { update(); });
+                QObject::connect(classifications[i], &QComboBox::currentTextChanged, &dialog, [&, i](const QString& text) {
+                    auto display_text=text;
+                    const auto data_index=classifications[i]->findData(text);
+                    if (data_index>=0) {
+                        const QSignalBlocker blocker(classifications[i]);
+                        classifications[i]->setCurrentIndex(data_index);
+                        display_text=classifications[i]->itemText(data_index);
+                        classifications[i]->setEditText(display_text);
+                    }
+                    if (groups[i]) for (std::size_t j = 0; j < groups.size(); ++j) {
+                        if (j == i || groups[j] != groups[i]) continue;
+                        const QSignalBlocker blocker(classifications[j]);
+                        const auto known = classifications[j]->findText(display_text);
+                        if (known >= 0) classifications[j]->setCurrentIndex(known); else classifications[j]->setEditText(display_text);
+                    }
+                    update();
+                });
             }
+            const auto selected_rows = [&] {
+                std::vector<std::size_t> selected;
+                for (const auto& index : rows->selectionModel()->selectedRows()) selected.push_back(static_cast<std::size_t>(index.row()));
+                std::sort(selected.begin(), selected.end()); return selected;
+            };
+            QObject::connect(combine, &QPushButton::clicked, &dialog, [&] {
+                const auto selected = selected_rows();
+                if (selected.size() < 2) { status->setText(QStringLiteral("Select at least two adjacent new regions to combine.")); return; }
+                if (std::any_of(selected.begin(), selected.end(), [&](auto i) { return existing_ids[i].has_value(); })) {
+                    status->setText(QStringLiteral("Existing definitions are kept together. Combine only new regions.")); return;
+                }
+                // Validate adjacency and the single outer loop before changing
+                // review membership; the definition adapter revalidates Apply.
+                try { (void)combine_measurement_faces(detected.graph, selected); }
+                catch (const std::exception& error) { status->setText(QString::fromUtf8(error.what())); return; }
+                const auto token = next_group++;
+                const auto text = classifications[selected.front()]->currentText();
+                for (const auto i : selected) {
+                    groups[i] = token;
+                    const QSignalBlocker use_blocker(dispositions[i]), type_blocker(classifications[i]);
+                    dispositions[i]->setCurrentIndex(dispositions[i]->findData(static_cast<int>(MeasurementAreaDisposition::define_area)));
+                    const auto known = classifications[i]->findText(text);
+                    if (known >= 0) classifications[i]->setCurrentIndex(known); else classifications[i]->setEditText(text);
+                }
+                for (std::size_t i = 0; i < groups.size(); ++i)
+                    if (groups[i] && std::count(groups.begin(), groups.end(), groups[i]) < 2) groups[i].reset();
+                update();
+            });
+            QObject::connect(separate, &QPushButton::clicked, &dialog, [&] {
+                const auto selected = selected_rows();
+                if (std::any_of(selected.begin(), selected.end(), [&](auto i) { return detected.existing_group_ids[i].has_value(); })) {
+                    status->setText(QStringLiteral("Existing groups keep their saved membership. Select only new regions to separate.")); return;
+                }
+                for (const auto i : selected) groups[i].reset();
+                for (std::size_t i = 0; i < groups.size(); ++i)
+                    if (groups[i] && std::count(groups.begin(), groups.end(), groups[i]) < 2) groups[i].reset();
+                update();
+            });
             QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
             QObject::connect(buttons->button(QDialogButtonBox::Apply), &QPushButton::clicked, &dialog, [&] {
                 if (!unchanged()) { candidate.reset(); buttons->button(QDialogButtonBox::Apply)->setEnabled(false); status->setText(QStringLiteral("The project or drawing context changed. Cancel and reopen this review.")); return; }
@@ -17730,6 +17921,10 @@ public:
             for (const auto& wall : entity.properties.at("wall_measurement_source").at("walls"))
                 add_geometry(wall.at("id").get<std::string>());
         }
+        includeMeasuredAreaSources(snapshot, graph);
+        if (graph.size() > kMaximumClipboardEntities)
+            throw std::invalid_argument("The complete measured area copy exceeds the clipboard entity limit.");
+        for (const auto& entity : graph) ids.insert(entity.id);
         for (const auto& [id, entity] : snapshot.entities()) {
             if (entity.type != "constraint") continue;
             const auto decoded = decode_constraint_entity(entity);
@@ -19003,7 +19198,7 @@ public:
             }
             const auto independent = independentAreaCopyGraph(source,entities);
             for (const auto& dependency : independent)
-                if ((is_closed_boundary_entity(dependency.type) || dependency.type == "wall") &&
+                if ((is_closed_boundary_entity(dependency.type) || dependency.type == "wall" || dependency.type == "measurement_linework") &&
                     std::none_of(entities.begin(),entities.end(),[&](const auto& entity) { return entity.id == dependency.id; }))
                     throw std::invalid_argument("Select the area's deductions and supporting walls to cut them together, or use Copy to preserve the originals.");
             const ApplyEntityChanges command{
@@ -19025,6 +19220,134 @@ public:
             setError(QStringLiteral("Cut: %1").arg(QString::fromUtf8(error.what())));
             return false;
         }
+    }
+
+    bool placeMeasuredClipboardGraph(const DocumentSnapshot& source, std::vector<EntityChange>& changes) {
+        if (std::none_of(changes.begin(), changes.end(), [](const auto& change) {
+                return change.entity.type == "measurement_linework";
+            })) return false;
+        std::map<std::string,Entity,std::less<>> copied;
+        for (const auto& change : changes) copied.emplace(change.entity.id,change.entity);
+        const auto candidate = Document::preview_command(source,ApplyEntityChanges{
+            source.revision(),changes,{},"Inspect detached clipboard geometry"});
+        double existing_right=-std::numeric_limits<double>::infinity();
+        double copied_left=std::numeric_limits<double>::infinity();
+        const auto geometry_bounds = [](const auto& entities, const auto& accept) {
+            const auto wall_plans=document_wall_plan_geometry(entities);
+            for (const auto& [id,entity] : entities) {
+                Boundary geometry;
+                if (is_closed_boundary_entity(entity.type)) geometry=read_boundary(entity.properties);
+                else if (entity.type=="measurement_linework") {
+                    const auto decoded=decode_measurement_linework_model(entity.properties.at("model"));
+                    if (!decoded.supported()) throw std::invalid_argument(decoded.diagnostic);
+                    for (const auto& edge : replay_measurement_linework(*decoded.model).edges) geometry.push_back(edge.segment);
+                } else if (entity.type=="wall") {
+                    if (!wall_plans.contains(id)) throw std::invalid_argument("A measured-copy wall has no usable plan footprint.");
+                    geometry=wall_plans.at(id).footprint;
+                } else if (can_recognize_building_entity_type(entity.type)) geometry=project_building_plan(decode_building_entity(entity));
+                else if (entity.type=="slab" || entity.type=="room") geometry=read_boundary(entity.properties);
+                else if (entity.type==kAnnotationEntityType) {
+                    const auto state=decode_annotation_entity(entity);
+                    for (const auto& label : state.labels) accept(Bounds2{label.placement.position,label.placement.position});
+                    for (const auto& symbol : state.symbols) accept(Bounds2{symbol.placement.position,symbol.placement.position});
+                } else if (entity.type=="dimension") {
+                    const auto decoded=decode_boundary_dimension_entity(entity);
+                    if (!decoded.supported()) throw std::invalid_argument(decoded.unsupported_reason);
+                    accept(Bounds2{decoded.dimension->text_position,decoded.dimension->text_position});
+                }
+                if (!geometry.empty()) accept(boundary_bounds(geometry));
+            }
+        };
+        geometry_bounds(source.entities(),[&](const auto& bounds){existing_right=std::max(existing_right,bounds.maximum.x);});
+        geometry_bounds(copied,[&](const auto& bounds){copied_left=std::min(copied_left,bounds.minimum.x);});
+        if (!std::isfinite(existing_right) || !std::isfinite(copied_left))
+            throw std::invalid_argument("The complete measured clipboard graph has no usable placement bounds. Nothing was pasted.");
+        const double gap=m_measurementCanvas->gridSpacingMetres();
+        if (!std::isfinite(gap) || gap<=0)
+            throw std::invalid_argument("The drawing grid cannot provide a safe measured-copy placement. Nothing was pasted.");
+        const Vec2 offset{std::ceil(existing_right/gap)*gap+gap-copied_left,0};
+        const PlanarTransform transform{{},0,false,false,offset};
+        std::vector<BoundaryTransformation> boundaries;
+        std::set<std::string,std::less<>> boundary_ids;
+        std::set<std::string,std::less<>> plain_source_owners;
+        std::vector<std::string> physical_ids;
+        std::vector<ArchitecturalOperation> physical_operations;
+        for (const auto& [id,entity] : copied) {
+            if (is_closed_boundary_entity(entity.type)) {
+                if (entity.type=="measurement_boundary" && entity.extensions.contains("measurement_linework_sources") &&
+                    !entity.properties.contains("boundary_authoring") && !entity.extensions.contains("boundary_geometry_derivation"))
+                    plain_source_owners.insert(id);
+                else { boundaries.push_back({id,transform});boundary_ids.insert(id); }
+            } else if (can_transform_architectural_entity_type(entity.type)) {
+                physical_ids.push_back(id);
+                ArchitecturalOperation operation{ArchitecturalAction::transform,id};
+                operation.transform=ArchitecturalTransform{offset.x,offset.y,0,0,1};
+                physical_operations.push_back(std::move(operation));
+            } else if (entity.type!="measurement_linework" && entity.type!="dimension" &&
+                       entity.type!="constraint" && entity.type!=kAnnotationEntityType && entity.type!="opening" &&
+                       !(entity.type=="assembly_model" && entity.properties.at("model").at("types").empty() &&
+                         entity.properties.at("model").at("instances").empty())) {
+                throw std::invalid_argument("The measured clipboard graph contains geometry that cannot be placed together: "+entity.type+". Nothing was pasted.");
+            }
+        }
+        // The pure typed kernel retains boundary receipts/derivations and moves
+        // bound dimensions from one detached source state before admission.
+        auto placed=boundaries.empty()?copied:transformed_boundary_entities_batch(copied,boundaries);
+        // A new plain source-derived owner is created at its destination. Its
+        // measured sources remain the proof; adding a rigid origin derivation
+        // here would incorrectly prevent later source-driven refreshes.
+        for (const auto& id : plain_source_owners) {
+            const auto& original=copied.at(id);
+            auto boundary=decode_identified_boundary_entity(original);
+            for (auto& edge : boundary.segments) edge.segment=transform_segment(edge.segment,transform);
+            placed.at(id)=encode_identified_boundary_entity(boundary,&original);
+        }
+        if (!physical_operations.empty()) {
+            const auto transaction=ArchitecturalTransaction::create(new_id("architectural-tx"),
+                std::to_string(candidate.revision()),std::move(physical_ids),std::move(physical_operations),"Place copied physical geometry");
+            const auto physical=architectural_transaction_command(candidate,transaction,candidate.revision());
+            for (const auto& change : physical.entity_changes) {
+                if (change.kind!=EntityChangeKind::upsert || !copied.contains(change.entity.id))
+                    throw std::invalid_argument("Placing the measured clipboard graph would change an existing object. Nothing was pasted.");
+                placed.insert_or_assign(change.entity.id,change.entity);
+            }
+        }
+        for (auto& [id,entity] : placed) {
+            if (entity.type=="measurement_linework") {
+                const auto decoded=decode_measurement_linework_model(entity.properties.at("model"));
+                if (!decoded.supported()) throw std::invalid_argument(decoded.diagnostic);
+                entity.properties["model"]=encode_measurement_linework_model(transformed_measurement_linework(*decoded.model,transform));
+            } else if (entity.type=="constraint") {
+                const auto decoded=decode_constraint_entity(entity);
+                if (!decoded.supported()) throw std::invalid_argument(decoded.unsupported_reason);
+                auto constraint=*decoded.constraint;
+                if (constraint.anchor) constraint.anchor=transform_point(*constraint.anchor,transform);
+                entity=encode_constraint_entity(constraint,&entity);
+            } else if (entity.type=="dimension") {
+                const auto decoded=decode_boundary_dimension_entity(entity);
+                if (!decoded.supported()) throw std::invalid_argument(decoded.unsupported_reason);
+                if (!boundary_ids.contains(decoded.dimension->boundary_id) && entity==copied.at(id)) {
+                    auto dimension=*decoded.dimension;
+                    dimension.text_position=transform_point(dimension.text_position,transform);
+                    entity=encode_boundary_dimension_entity(dimension,&entity);
+                }
+            } else if (entity.type==kAnnotationEntityType) {
+                (void)decode_annotation_entity(entity);
+                for (const auto* collection : {"labels","symbols"})
+                    for (auto& child : entity.properties.at("state").at(collection)) {
+                        auto& placement=child.at("placement");
+                        placement["x"]=placement.at("x").get<double>()+offset.x;
+                        placement["y"]=placement.at("y").get<double>()+offset.y;
+                    }
+                validate_annotation_entity(entity);
+            } else if (entity.type=="opening") {
+                const auto host=read_string(entity.properties,"wall_id").value_or("");
+                if (!copied.contains(host) || copied.at(host).type!="wall" || placed.at(host)==copied.at(host))
+                    throw std::invalid_argument("A measured clipboard graph's opening must move with its copied host wall. Nothing was pasted.");
+            }
+        }
+        for (auto& change : changes) change.entity=placed.at(change.entity.id);
+        return true;
     }
 
     bool pasteSelection() {
@@ -19085,6 +19408,15 @@ public:
                     }
                 }
                 remap.emplace(entity.id, allocate(entity.type));
+                if (entity.type == "measurement_linework") {
+                    const auto decoded = decode_measurement_linework_model(entity.properties.at("model"));
+                    if (!decoded.supported()) throw std::invalid_argument(decoded.diagnostic);
+                    for (const auto& edge : decoded.model->edges) {
+                        remap.try_emplace(edge.segment_id,allocate("measured-segment"));
+                        remap.try_emplace(edge.start_vertex_id,allocate("measured-vertex"));
+                        remap.try_emplace(edge.end_vertex_id,allocate("measured-vertex"));
+                    }
+                }
                 if (can_recognize_boundary_entity_type(entity.type) &&
                     entity.properties.contains("boundary_model_version")) {
                     const auto identified = decode_identified_boundary_entity(entity);
@@ -19196,6 +19528,7 @@ public:
                             child.at("placement")["layer_id"] = context->layer_id;
                 }
                 const auto placeable = entity.type == "boundary" ||
+                    entity.type == "measurement_linework" ||
                     entity.type == "measurement_boundary" || entity.type == "room_boundary" ||
                     entity.type == "wall" || entity.type == "room" || entity.type == "slab" ||
                     entity.type == "roof" || entity.type == "stair" || entity.type == "railing" || entity.type == "column" ||
@@ -19204,6 +19537,14 @@ public:
                     for (const auto* key : {"property_id", "building_id", "floor_id", "layer_id"})
                         entity.properties.erase(key);
                     if (!assignDrawingContext(entity.properties)) return false;
+                    if (entity.type=="measurement_linework") {
+                        const auto context=requireDrawingContext();
+                        if (!context) return false;
+                        entity.properties["property_id"]=context->property_id;
+                        entity.properties["building_id"]=context->building_id;
+                        entity.properties["floor_id"]=context->floor_id;
+                        entity.properties["layer_id"]=context->layer_id;
+                    }
                     if (entity.type == "wall" || entity.type == "slab" ||
                         can_recognize_building_entity_type(entity.type)) {
                         const auto layer_id = read_string(entity.properties, "layer_id");
@@ -19215,6 +19556,7 @@ public:
                 }
                 changes.push_back(EntityChange::upsert(std::move(entity)));
             }
+            const bool measured_placement=placeMeasuredClipboardGraph(source,changes);
             const auto command = validateIndependentAreaCopy(source,ApplyEntityChanges{
                 source.revision(), std::move(changes), {}, "Paste selection"});
             (void)Document::preview_command(source, command);
@@ -19223,6 +19565,10 @@ public:
             m_selected_id = m_selected_ids.isEmpty() ? QString{} : m_selected_ids.back();
             clearError();
             refresh();
+            if (measured_placement) {
+                m_measurementCanvas->fitView();
+                owner->statusBar()->showMessage(QStringLiteral("Measured copy placed to the right of existing geometry. The copy is selected; drag it to position."),8000);
+            }
             return true;
         } catch (const std::exception& error) {
             setError(QStringLiteral("Paste: %1").arg(QString::fromUtf8(error.what())));
@@ -29998,7 +30344,7 @@ private:
                 if (selected && selected->type == "wall")
                     menu.addAction(owner->findChild<QAction*>(QStringLiteral("measureExteriorFromWalls")));
                 if (m_selected_ids.size()==1 && selected && selected->type=="measurement_boundary" &&
-                    selected->extensions.contains("measurement_linework_sources"))
+                    (selected->extensions.contains("measurement_linework_sources") || selected->extensions.contains("measurement_linework_group")))
                     menu.addAction(owner->findChild<QAction*>(QStringLiteral("reviewMeasuredAreaSources")));
                 if (m_selected_ids.size() == 1 && selected && selected->type == "measurement_boundary" &&
                     selected->properties.contains("wall_measurement_source")) {
@@ -34115,7 +34461,7 @@ private:
         if (auto* review=owner->findChild<QAction*>(QStringLiteral("reviewMeasuredAreaSources")))
             review->setEnabled(m_document->is_editable() && !m_linework_drawing && !m_boundary_session &&
                 !m_pending_wall_start && m_selected_ids.size()==1 && selected && selected->type=="measurement_boundary" &&
-                selected->extensions.contains("measurement_linework_sources"));
+                (selected->extensions.contains("measurement_linework_sources") || selected->extensions.contains("measurement_linework_group")));
         if (auto* repair = owner->findChild<QAction*>(QStringLiteral("replaceExteriorMeasurementSources")))
             repair->setEnabled(m_document->is_editable() && !m_boundary_session && !m_pending_wall_start &&
                 m_selected_ids.size() == 1 && selected && supportedExteriorWallMeasurement(*selected));

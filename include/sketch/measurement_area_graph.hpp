@@ -65,4 +65,15 @@ struct MeasurementAreaGraph {
     const std::vector<MeasurementGraphSource>& sources,
     double tolerance_metres = default_geometry_tolerance_metres);
 
+// Combine at least two edge-adjacent faces into one simple CCW outer outline.
+// Only opposite traversals of the same derived graph edge cancel. All other
+// analytical edge pieces and source references remain exact; no collinear
+// simplification, snapping, tessellation or hole deduction is performed.
+// The result has no containment parent and is deterministic under selection
+// permutation. Invalid/duplicate indices, malformed graph evidence, nested or
+// disconnected selections, point branches and holes/multiple loops throw
+// invalid_argument without modifying the graph.
+[[nodiscard]] DerivedMeasurementFace combine_measurement_faces(
+    const MeasurementAreaGraph& graph, const std::vector<std::size_t>& indices);
+
 } // namespace sketch

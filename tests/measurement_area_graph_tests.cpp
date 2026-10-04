@@ -64,6 +64,100 @@ std::size_t face_with_area(const MeasurementAreaGraph& graph,double area) {
     require(found!=graph.faces.end(),"missing exact gross measured outline");
     return static_cast<std::size_t>(found-graph.faces.begin());
 }
+template<class Graph> DerivedMeasurementFace combine_for_test(const Graph& graph,const std::vector<std::size_t>& indices) {
+    if constexpr (requires { combine_measurement_faces(graph,indices); }) return combine_measurement_faces(graph,indices);
+    else throw std::runtime_error("adjacent detected measured faces must support exact analytical combination");
+}
+void check_combined(const MeasurementAreaGraph& graph,const DerivedMeasurementFace& face,double area) {
+    require(!face.parent_face_index,"combined face must not inherit a source containment parent");
+    check_faces(MeasurementAreaGraph{graph.edges,{face}},1,area);
+    require(face.area_square_metres>0,"combined loop must be counter-clockwise");
+}
+std::size_t face_at(const MeasurementAreaGraph& graph,Vec2 minimum) {
+    const auto found=std::find_if(graph.faces.begin(),graph.faces.end(),[&](const auto& face) {
+        return same(boundary_bounds(face.boundary).minimum,minimum);
+    });
+    require(found!=graph.faces.end(),"missing fixture graph cell"); return static_cast<std::size_t>(found-graph.faces.begin());
+}
+void combine_adjacent_faces() {
+    std::vector<MeasurementGraphSource> input; append_rectangle(input,"left",{0,0},{2,2}); append_rectangle(input,"right",{2,0},{4,2});
+    const auto graph=build_measurement_area_graph(input); check_faces(graph,2,8);
+    const auto combined=combine_for_test(graph,{0,1}); check_combined(graph,combined,8);
+    require(combined.boundary.size()==6,"combine must cancel exactly the shared edge without merging measured collinear edges");
+    const auto permuted=combine_for_test(graph,{1,0});
+    require(permuted.boundary.size()==combined.boundary.size(),"selection order changes combined outline size");
+    for (std::size_t i=0;i<combined.boundary.size();++i)
+        require(same(combined.boundary[i],permuted.boundary[i]) && combined.edge_uses[i].edge_index==permuted.edge_uses[i].edge_index &&
+            combined.edge_uses[i].reversed==permuted.edge_uses[i].reversed,"selection order changes exact combined geometry or lineage");
+    std::reverse(input.begin(),input.end());
+    const auto reordered_graph=build_measurement_area_graph(input);
+    const auto reordered=combine_for_test(reordered_graph,{1,0});
+    require(reordered.boundary.size()==combined.boundary.size(),"source order changes combined outline size");
+    for (std::size_t i=0;i<combined.boundary.size();++i)
+        require(same(reordered.boundary[i],combined.boundary[i]) && reordered.edge_uses[i].edge_index==combined.edge_uses[i].edge_index &&
+            reordered.edge_uses[i].reversed==combined.edge_uses[i].reversed,"source permutation changes combined analytical lineage");
+    input=square(); input.push_back(source("vertical",{{2,0},{2,4},0})); input.push_back(source("horizontal",{{0,2},{4,2},0}));
+    const auto quarters=build_measurement_area_graph(input); check_faces(quarters,4,16);
+    const auto whole=combine_for_test(quarters,{0,1,2,3}); check_combined(quarters,whole,16);
+    require(whole.boundary.size()==8,"four regions retain all measured outer pieces after internal cancellation");
+    const auto concave=combine_for_test(quarters,{face_at(quarters,{0,0}),face_at(quarters,{2,0}),face_at(quarters,{0,2})});
+    check_combined(quarters,concave,12); require(concave.boundary.size()==8,"L combine retains its exact concave outer traversal");
+}
+void combine_analytical_curves() {
+    const double pi=std::numbers::pi;
+    const auto graph=build_measurement_area_graph({source("lower",{{-2,0},{2,0},pi}),
+        source("upper",{{2,0},{-2,0},pi}),source("divider",{{-2,0},{2,0},pi/2})});
+    check_faces(graph,2,4*pi);
+    const auto combined=combine_for_test(graph,{1,0}); check_combined(graph,combined,4*pi);
+    double sweep=0;
+    for (std::size_t i=0;i<combined.boundary.size();++i) {
+        require(combined.boundary[i].sweep_radians!=0,"combined curved outline must remain analytical arcs");
+        sweep+=combined.boundary[i].sweep_radians;
+        const auto& edge=graph.edges[combined.edge_uses[i].edge_index];
+        require(std::none_of(edge.source_uses.begin(),edge.source_uses.end(),[](const auto& use){return use.segment_id=="divider";}),
+            "oppositely traversed curved divider must be cancelled by graph edge identity");
+    }
+    require_near(sweep,2*pi,"combined circle must preserve its exact outer sweep");
+}
+void combine_rejections() {
+    auto input=square(); input.push_back(source("vertical",{{2,0},{2,4},0})); input.push_back(source("horizontal",{{0,2},{4,2},0}));
+    const auto graph=build_measurement_area_graph(input);
+    rejects([&] { (void)combine_for_test(graph,{}); }); rejects([&] { (void)combine_for_test(graph,{0}); });
+    rejects([&] { (void)combine_for_test(graph,{0,0}); }); rejects([&] { (void)combine_for_test(graph,{0,graph.faces.size()}); });
+    rejects([&] { (void)combine_for_test(graph,{face_at(graph,{0,0}),face_at(graph,{2,2})}); });
+    input.clear(); append_rectangle(input,"first",{0,0},{2,2}); append_rectangle(input,"second",{4,0},{6,2});
+    const auto disjoint=build_measurement_area_graph(input); rejects([&] { (void)combine_for_test(disjoint,{0,1}); });
+    input.clear(); append_rectangle(input,"outer",{0,0},{10,10}); append_rectangle(input,"inner",{2,2},{6,6});
+    const auto nested=build_measurement_area_graph(input); rejects([&] { (void)combine_for_test(nested,{0,1}); });
+    input.clear(); append_rectangle(input,"frame",{0,0},{3,3});
+    for (int station=1;station<3;++station) {
+        input.push_back({"vertical","edge-"+std::to_string(station),{{double(station),0},{double(station),3},0}});
+        input.push_back({"horizontal","edge-"+std::to_string(station),{{0,double(station)},{3,double(station)},0}});
+    }
+    const auto grid=build_measurement_area_graph(input); check_faces(grid,9,9);
+    std::vector<std::size_t> ring; const auto center=face_at(grid,{1,1});
+    for (std::size_t i=0;i<grid.faces.size();++i) if (i!=center) ring.push_back(i);
+    rejects([&] { (void)combine_for_test(grid,ring); });
+    auto malformed=graph; malformed.faces[0].boundary[0].start.x+=.25;
+    rejects([&] { (void)combine_for_test(malformed,{0,1}); });
+    malformed=graph; malformed.faces[0].edge_uses[0].edge_index=graph.edges.size();
+    rejects([&] { (void)combine_for_test(malformed,{0,1}); });
+    malformed=graph; malformed.faces[0].area_square_metres+=1;
+    rejects([&] { (void)combine_for_test(malformed,{0,1}); });
+    malformed=graph; malformed.faces[0].edge_uses.pop_back();
+    rejects([&] { (void)combine_for_test(malformed,{0,1}); });
+    malformed=graph; malformed.edges[0].source_uses.clear();
+    rejects([&] { (void)combine_for_test(malformed,{0,1}); });
+    malformed=graph; malformed.edges[0].source_uses[0].parameter_end=std::numeric_limits<double>::quiet_NaN();
+    rejects([&] { (void)combine_for_test(malformed,{0,1}); });
+    malformed=graph; malformed.faces[0].parent_face_index=graph.faces.size();
+    rejects([&] { (void)combine_for_test(malformed,{0,1}); });
+    // Malformed unselected evidence is still rejected at the graph boundary.
+    malformed=graph; malformed.faces[3].boundary[0].end.x+=.25;
+    rejects([&] { (void)combine_for_test(malformed,{0,1}); });
+    malformed=graph; malformed.edges.resize(16385);
+    rejects([&] { (void)combine_for_test(malformed,{0,1}); });
+}
 void nested_outlines() {
     std::vector<MeasurementGraphSource> input;
     append_rectangle(input,"outer",{0,0},{10,10});
@@ -276,6 +370,7 @@ void strict_inputs() {
 int main() {
     sketch::runtime::configure_noninteractive_errors();
     try {
+        combine_adjacent_faces(); combine_analytical_curves(); combine_rejections();
         nested_outlines(); nested_curves_and_separate_bounds(); touching_and_ambiguous_outlines();
         crossing_and_stubs(); overlap_and_provenance(); analytical_curves(); strict_inputs();
         std::cout << "measurement area graph tests passed\n";

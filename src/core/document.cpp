@@ -1230,7 +1230,22 @@ std::optional<std::string> validate_state(const std::map<std::string, Entity, st
         }
     }
     std::optional<std::string> unsupported_boundary;
-    try { unsupported_boundary = validate_boundary_integrity(entities); }
+    // Group provenance has its own reader contract. Retain unknown payloads
+    // verbatim, including historical records, without authorizing mutations.
+    for(const auto& [id,entity]:entities) {
+        if(entity.type!="measurement_boundary" || !entity.extensions.contains("measurement_linework_group"))continue;
+        const auto& group=entity.extensions.at("measurement_linework_group");
+        if(!group.is_object() || group.size()!=2 || !group.contains("version") ||
+            !group.at("version").is_number_integer() || group.at("version")!=1 ||
+            !group.contains("members") || !group.at("members").is_array()) {
+            unsupported_boundary="Unsupported combined measured-area provenance: "+id;
+            break;
+        }
+    }
+    try {
+        const auto unsupported_geometry=validate_boundary_integrity(entities);
+        if(!unsupported_boundary)unsupported_boundary=unsupported_geometry;
+    }
     catch (const std::exception& error) {
         document_error(DocumentErrorCode::invalid_entity, error.what());
     }

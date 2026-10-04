@@ -1587,6 +1587,10 @@
     },
     {
       "category": "docs",
+      "path": "docs/plans/2026-10-03-combined-measured-areas.md"
+    },
+    {
+      "category": "docs",
       "path": "docs/plans/2026-10-03-measured-area-source-review.md"
     },
     {
@@ -2384,6 +2388,10 @@
     {
       "category": "docs",
       "path": "docs/user-guide.html"
+    },
+    {
+      "category": "docs",
+      "path": "docs/verification/2026-10-03-combined-measured-areas.md"
     },
     {
       "category": "docs",
