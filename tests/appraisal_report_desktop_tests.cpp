@@ -1,6 +1,8 @@
 #include "sketch/desktop/main_window.hpp"
 #include "sketch/desktop/appraisal_report_dialog.hpp"
 #include "sketch/model_phases.hpp"
+#include "sketch/measurement_linework.hpp"
+#include "../src/desktop/plan_canvas.hpp"
 #include "support/noninteractive_errors.hpp"
 
 #include <QAction>
@@ -12,6 +14,7 @@
 #include <QFontDatabase>
 #include <QImage>
 #include <QLabel>
+#include <QKeyEvent>
 #include <QPainter>
 #include <QPdfDocument>
 #include <QPdfSelection>
@@ -344,6 +347,75 @@ void undeclared_policy_and_malformed_area_remain_inspectable() {
     });
 }
 
+void unfinished_measured_lines_refuse_pdf_without_changing_destination_or_drawing() {
+    QTemporaryDir directory;require(directory.isValid(),"unfinished drawing needs local PDF directory");
+    MainWindow window({},nullptr,directory.filePath("text-library.json"));(void)fixture(window);
+    auto* canvas=dynamic_cast<sketch::desktop::PlanCanvas*>(window.findChild<QWidget*>(QStringLiteral("measurementPlanCanvas")));
+    require(canvas,"unfinished drawing needs actual measurement canvas");
+    const auto path=directory.filePath("retained-drawing-report.pdf");
+    require(window.exportAppraisalReportPdf(path),"finished appraisal source must initially export");
+    const auto retained=bytes(path);
+    const auto unchanged=[&](const sketch::DocumentSnapshot& before) {
+        const auto after=window.document().snapshot();
+        return after.document_id()==before.document_id() && after.revision()==before.revision() &&
+            after.entities()==before.entities() && after.assets()==before.assets() &&
+            after.history().size()==before.history().size() &&
+            after.saved_revision_optional()==before.saved_revision_optional();
+    };
+
+    require(window.beginMeasurementLinework() && window.appendMeasurementLineworkPoint({20,20}),
+        "anchor-only export fixture must start real measured-line drawing");
+    const auto anchored=window.document().snapshot();
+    require(canvas->boundaryDraftPreview() && canvas->boundaryDraftPreview()->anchor &&
+        canvas->boundaryDraftPreview()->segments.empty(),"anchor-only fixture must have no committed side");
+    require(!window.exportAppraisalReportPdf(path,{},anchored.revision()),
+        "anchor-only Measured lines must refuse appraisal PDF export");
+    require(window.lastError().contains(QStringLiteral("Finish or cancel")),
+        "refused anchor-only PDF must explain how to end the unfinished drawing");
+    require(bytes(path)==retained && unchanged(anchored) && canvas->boundaryDraftPreview() &&
+        canvas->boundaryDraftPreview()->anchor &&
+        canvas->boundaryDraftPreview()->anchor->x==20 && canvas->boundaryDraftPreview()->anchor->y==20 &&
+        canvas->boundaryDraftPreview()->segments.empty(),
+        "refused anchor-only PDF must preserve destination bytes, drawing anchor and document history");
+    QKeyEvent cancel(QEvent::KeyPress,Qt::Key_Escape,Qt::NoModifier);QApplication::sendEvent(canvas,&cancel);
+    require(!canvas->boundaryDraftPreview() && unchanged(anchored) && window.exportAppraisalReportPdf(path),
+        "explicit Cancel must end anchor-only drawing and allow PDF export without document edits");
+
+    require(window.beginMeasurementLinework() && window.appendMeasurementLineworkPoint({20,20}) &&
+        window.appendMeasurementLineworkHeading(QStringLiteral("2 m"),QStringLiteral("0 deg")),
+        "active-stroke export fixture must accept a real measured side");
+    const auto accepted=window.document().snapshot();const auto accepted_bytes=bytes(path);
+    const auto accepted_stroke=std::find_if(accepted.entities().begin(),accepted.entities().end(),
+        [](const auto& item){return item.second.type=="measurement_linework";});
+    require(accepted_stroke!=accepted.entities().end(),"active-stroke fixture must retain its committed measured entity");
+    const auto accepted_model=sketch::decode_measurement_linework_model(accepted_stroke->second.properties.at("model"));
+    require(accepted_model.supported() && accepted_model.model->edges.size()==1 &&
+        canvas->boundaryDraftPreview() &&
+        canvas->boundaryDraftPreview()->pen_position,"active stroke must retain its accepted side and next pen");
+    require(!window.exportAppraisalReportPdf(path,{},accepted.revision()),
+        "accepted-side Measured lines must refuse appraisal PDF export while stroke remains active");
+    require(window.lastError().contains(QStringLiteral("Finish or cancel")),
+        "refused active-stroke PDF must explain how to end the unfinished drawing");
+    require(bytes(path)==accepted_bytes && unchanged(accepted) && canvas->boundaryDraftPreview() &&
+        canvas->boundaryDraftPreview()->pen_position &&
+        canvas->boundaryDraftPreview()->pen_position->x==22 && canvas->boundaryDraftPreview()->pen_position->y==20,
+        "refused active-stroke PDF must preserve destination bytes, accepted geometry, pen and history");
+    require(window.appendMeasurementLineworkHeading(QStringLiteral("1 m"),QStringLiteral("90 deg")),
+        "refused PDF must leave the accepted stroke able to append its next receipt");
+    const auto continued=window.document().snapshot();
+    require(continued.history().size()==accepted.history().size()+1,"only the subsequent authored side may add history");
+    const auto stroke=std::find_if(continued.entities().begin(),continued.entities().end(),
+        [](const auto& item){return item.second.type=="measurement_linework";});
+    require(stroke!=continued.entities().end(),"accepted drawing must retain its measured-stroke entity");
+    const auto decoded=sketch::decode_measurement_linework_model(stroke->second.properties.at("model"));
+    require(decoded.supported() && decoded.model->edges.size()==2 &&
+        decoded.model->edges.back().receipt.start.x==22 && decoded.model->edges.back().receipt.start.y==20,
+        "next accepted receipt must continue the exact pen retained through refused output");
+    window.finishMeasurementLinework();
+    require(!canvas->boundaryDraftPreview() && unchanged(continued) && window.exportAppraisalReportPdf(path),
+        "explicit Finish must retain accepted sides/history and allow PDF export again");
+}
+
 void paginated_pdf_escaping_and_atomic_destination_failures() {
     QTemporaryDir directory;require(directory.isValid(),"pagination fixture needs local directory");MainWindow window({},nullptr,directory.filePath("text-library.json"));const auto ids=fixture(window);
     std::vector<QString> source_ids{ids.parent,ids.garage,ids.void_id};
@@ -395,6 +467,7 @@ int main(int argc,char** argv) {
         require(QFontDatabase::addApplicationFont(QStringLiteral(":/fonts/Inter.ttf"))>=0,"bundled font must load for actual report rendering");app.setFont(QFont(QStringLiteral("Inter"),10));
         sheet_summary_preserves_per_row_policy_and_status();ansi_report_html_pdf_canonical_units_and_evidence();actual_report_summary_audit_navigation_and_refresh();display_precision_unqualified_diagnostics_and_invalid_trace();
         active_design_phase_report_scope();undeclared_policy_and_malformed_area_remain_inspectable();
+        unfinished_measured_lines_refuse_pdf_without_changing_destination_or_drawing();
         paginated_pdf_escaping_and_atomic_destination_failures();
         std::cout<<"appraisal_report_desktop_tests passed\n";return 0;
     } catch(const std::exception& failure){std::cerr<<"appraisal_report_desktop_tests: "<<failure.what()<<'\n';return 1;}

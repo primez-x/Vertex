@@ -2389,6 +2389,20 @@ drawing; switching modes does not change existing geometry.
   - Result: Not tested
   - Notes: ______________________________
 
+## Appraisal detail readability and unfinished reports
+
+- [ ] **U395 — Read and copy an area's calculation sources**
+  - Steps: Select an appraisal area in Details, scroll to Area dimensions and trace, and read its dimensions, perimeter, deductions and calculation values. Expand Source IDs and fingerprint, select and copy an ID, then collapse the section. Repeat with a sloped room and a narrow left panel.
+  - Expected: Values stay within the panel and dimensions appear before declarations. Full source IDs and the fingerprint remain readable and copy without added characters. Collapsing the section frees the technical detail space without changing calculations.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **U396 — Try exporting a report during a measured-line drawing**
+  - Steps: Export an appraisal PDF. Start Measured lines, place only the first point and try exporting over that PDF. Cancel and export again. Repeat with one accepted side, try export, continue with another side, then Finish and export.
+  - Expected: Active drawings refuse export with a Finish-or-cancel message. The existing PDF and active drawing stay intact. Drawing continues from the same point after refusal; Cancel or Finish restores export.
+  - Result: Not tested
+  - Notes: ______________________________
+
 ## Issue report template
 
 - Task ID(s):

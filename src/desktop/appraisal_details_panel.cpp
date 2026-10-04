@@ -6,11 +6,16 @@
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QPushButton>
+#include <QPlainTextEdit>
+#include <QRegularExpression>
 #include <QScrollArea>
 #include <QSignalBlocker>
 #include <QTreeWidget>
 #include <QTreeWidgetItemIterator>
 #include <QVBoxLayout>
+#include <QToolButton>
+#include <QTextDocument>
+#include <QTextOption>
 #include <algorithm>
 #include <map>
 #include <utility>
@@ -59,7 +64,18 @@ QString row(const QString& label,const QString& value) {
         .arg(label.toHtmlEscaped(),value.toHtmlEscaped());
 }
 QString table(const QString& content) {
-    return QStringLiteral("<table width='100%' cellspacing='0'>%1</table>").arg(content);
+    // Details has a narrow canvas-side viewport. Keep the shared report rows,
+    // but place each escaped value below its label instead of forcing columns
+    // to the minimum width of a long classification or observed quantity.
+    static const QRegularExpression cells(QStringLiteral("<tr><td[^>]*>(.*?)</td><td[^>]*>(.*?)</td></tr>"),
+        QRegularExpression::DotMatchesEverythingOption);
+    QString result;auto matches=cells.globalMatch(content);
+    while(matches.hasNext()) {
+        const auto match=matches.next();
+        result+=QStringLiteral("<p style='margin-top:0; margin-bottom:6px'><b>%1</b><br>%2</p>")
+            .arg(match.captured(1),match.captured(2));
+    }
+    return result;
 }
 QString boolean(const std::optional<bool>& value) {
     return value?(*value?QStringLiteral("Yes"):QStringLiteral("No")):QStringLiteral("Undeclared");
@@ -95,6 +111,8 @@ struct AppraisalDetailsPanel::Impl {
     bool metric{};
     QLabel *property_name{},*gla{},*status{},*standards{},*policy{},*totals{},*issues{},*trace{};
     QTreeWidget* areas{};
+    QToolButton* provenance_toggle{};
+    QPlainTextEdit* provenance{};
     QPushButton *setup{},*facts{},*full_report{},*locate{},*review_sources{};
     std::function<void(const QString&,Revision)> locate_requested,facts_requested,source_review_requested;
     std::function<void(const QString&)> setup_requested,report_requested;
@@ -128,12 +146,11 @@ struct AppraisalDetailsPanel::Impl {
         if(ceiling.at_least_7ft_area_m2)rows+=row(QStringLiteral("Ceiling area at least 7 ft"),area(*ceiling.at_least_7ft_area_m2));
         if(ceiling.room_floor_area_m2)rows+=row(QStringLiteral("Room floor area"),area(*ceiling.room_floor_area_m2));
         if(ceiling.kind==CeilingKind::sloped) {
-            QStringList ids;for(const auto& id:ceiling.below_5ft_deduction_ids)ids.push_back(text(id));
+            QStringList ids;for(const auto& id:ceiling.below_5ft_deduction_ids)ids.push_back(name(*source,id));
             rows+=row(QStringLiteral("Actual below-5-ft deduction sources"),ids.isEmpty()?QStringLiteral("None declared"):ids.join(QStringLiteral(", ")))+
-                row(QStringLiteral("Room boundary source"),text(ceiling.room_boundary_id))+
-                row(QStringLiteral("Ceiling geometry SHA-256"),text(ceiling.source_geometry_sha256));
+                row(QStringLiteral("Room boundary source"),name(*source,ceiling.room_boundary_id));
         }
-        if(ceiling.kind==CeilingKind::stairs)rows+=row(QStringLiteral("Stair from floor source"),text(ceiling.stair_from_floor_id));
+        if(ceiling.kind==CeilingKind::stairs)rows+=row(QStringLiteral("Stair from floor source"),name(*source,ceiling.stair_from_floor_id));
         return QStringLiteral("<p><b>ANSI source facts</b></p>")+table(rows);
     }
     QString selected() const {
@@ -152,20 +169,35 @@ struct AppraisalDetailsPanel::Impl {
         review_sources->setVisible(has_linework_sources);
         review_sources->setEnabled(has_linework_sources);
         if(!boundary || !source) {
+            provenance->clear();provenance_toggle->setEnabled(false);
+            provenance_toggle->setChecked(false);
             trace->setText(report && report->boundaries.empty() ?
                 QStringLiteral("Draw a measured area, then use Edit facts to declare its finish, access, ceiling eligibility and use.") :
                 QStringLiteral("Select an area above to inspect its dimensions, declarations and deductions."));return;
         }
         const auto* owner=entity(boundary->boundary_id);
         const auto floor_id=owner?field(*owner,"floor_id"):std::string{};
+        QStringList raw_sources{QStringLiteral("Boundary ID: %1").arg(text(boundary->boundary_id)),
+            QStringLiteral("Floor ID: %1").arg(text(floor_id)),
+            QStringLiteral("Document revision: %1").arg(report->revision)};
+        if(boundary->facts && boundary->facts->ansi) {
+            const auto& ceiling=boundary->facts->ansi->ceiling;
+            if(!ceiling.room_boundary_id.empty())raw_sources.push_back(QStringLiteral("Room boundary ID: %1").arg(text(ceiling.room_boundary_id)));
+            if(!ceiling.source_geometry_sha256.empty())raw_sources.push_back(QStringLiteral("Ceiling geometry SHA-256: %1").arg(text(ceiling.source_geometry_sha256)));
+            if(!ceiling.stair_from_floor_id.empty())raw_sources.push_back(QStringLiteral("Stair from floor ID: %1").arg(text(ceiling.stair_from_floor_id)));
+            for(const auto& deduction_id:ceiling.below_5ft_deduction_ids)raw_sources.push_back(QStringLiteral("Below-5-ft deduction ID: %1").arg(text(deduction_id)));
+        }
+        if(boundary->measurement)for(const auto& deduction:boundary->measurement->deductions)
+            raw_sources.push_back(QStringLiteral("Deduction ID: %1").arg(text(deduction.id)));
+        provenance->setPlainText(raw_sources.join(QLatin1Char('\n')));provenance_toggle->setEnabled(true);
         auto html=QStringLiteral("<p><b>%1</b><br>%2</p>").arg(name(*source,boundary->boundary_id).toHtmlEscaped(),category(*boundary).toHtmlEscaped());
-        html+=table(row(QStringLiteral("Floor grade"),declaration(entity(floor_id),"appraisal_facts","grade"))+
+        auto facts_html=table(row(QStringLiteral("Floor grade"),declaration(entity(floor_id),"appraisal_facts","grade"))+
             row(QStringLiteral("Finish"),declaration(owner,"appraisal_facts","finish"))+
             row(QStringLiteral("Access"),declaration(owner,"appraisal_facts","access"))+
             row(QStringLiteral("Ceiling eligibility"),declaration(owner,"appraisal_facts","ceiling_eligibility"))+
             row(QStringLiteral("Use"),declaration(owner,"appraisal_facts","area_use"))+
             row(QStringLiteral("Boundary role"),declaration(owner,"appraisal_facts","boundary_role")));
-        if(ansi() && boundary->facts)html+=ansi_facts(*boundary->facts);
+        if(ansi() && boundary->facts)facts_html+=ansi_facts(*boundary->facts);
         if(boundary->measurement) {
             const auto& value=*boundary->measurement;
             if(boundary->exclusion)html+=QStringLiteral("<p>Deduction source only; no standalone contribution to totals.</p>");
@@ -199,9 +231,9 @@ struct AppraisalDetailsPanel::Impl {
             if(!value.deductions.empty()) {
                 html+=QStringLiteral("<p><b>Deduction reasons and sources</b></p>");
                 for(const auto& deduction:value.deductions) {
-                    html+=QStringLiteral("<p>%1 · %2<br>Requested: %3<br>Applied: %4<br>Source: %5</p>")
+                    html+=QStringLiteral("<p>%1 · %2<br>Requested: %3<br>Applied: %4</p>")
                         .arg(name(*source,deduction.id).toHtmlEscaped(),declaration(entity(deduction.id),"appraisal_facts","boundary_role").toHtmlEscaped(),
-                            area(deduction.requested_square_metres).toHtmlEscaped(),area(deduction.applied_square_metres).toHtmlEscaped(),text(deduction.id).toHtmlEscaped());
+                            area(deduction.requested_square_metres).toHtmlEscaped(),area(deduction.applied_square_metres).toHtmlEscaped());
                 }
                 html+=QStringLiteral("<p>Overlapping deductions remove shared area once. Applied amounts are marginal contributions in source-ID order.</p>");
             }
@@ -212,6 +244,7 @@ struct AppraisalDetailsPanel::Impl {
                 row(QStringLiteral("Unrounded adjusted area"),QString::number(display.unrounded,'g',17)+(metric && !ansi()?QStringLiteral(" m²"):QStringLiteral(" sq ft")))+
                 row(QStringLiteral("Rounding change"),QString::number(display.rounding_delta,'g',12)+(metric && !ansi()?QStringLiteral(" m²"):QStringLiteral(" sq ft"))));
         } else html+=QStringLiteral("<p><b>Current measurement unavailable.</b> Resolve the source geometry or dependency issues before using numeric dimensions.</p>");
+        html+=QStringLiteral("<p><b>Area declarations</b></p>")+facts_html;
         if(!boundary->qualification.issues.empty()) {
             html+=QStringLiteral("<p><b>Issues to resolve with Setup or Edit facts</b></p><ul>");
             for(const auto& issue:boundary->qualification.issues)html+=QStringLiteral("<li>%1</li>").arg(text(issue.message).toHtmlEscaped());
@@ -226,7 +259,7 @@ struct AppraisalDetailsPanel::Impl {
         for(const auto& candidate:report->boundaries)if(candidate.measurement)
             for(const auto& deduction:candidate.measurement->deductions)if(deduction.id==boundary->boundary_id)parents.push_back(name(*source,candidate.boundary_id));
         if(!parents.isEmpty())html+=QStringLiteral("<p>Deducted from: %1</p>").arg(parents.join(QStringLiteral(", ")).toHtmlEscaped());
-        html+=QStringLiteral("<p>Source: %1<br>Document revision: %2</p>").arg(text(boundary->boundary_id).toHtmlEscaped()).arg(report->revision);
+        html+=QStringLiteral("<p>Document revision: %1</p>").arg(report->revision);
         trace->setText(html);
     }
     void show_report(const QString& previous) {
@@ -366,6 +399,17 @@ AppraisalDetailsPanel::AppraisalDetailsPanel(QWidget* parent):QWidget(parent),im
     p.review_sources=new QPushButton(QStringLiteral("Review measured sources…"),content);
     p.review_sources->setObjectName(QStringLiteral("appraisalDetailsReviewSources"));layout->addWidget(p.review_sources);
     heading(layout,QStringLiteral("Area dimensions and trace"));p.trace=label(content,"appraisalDetailsTrace");layout->addWidget(p.trace);
+    p.provenance_toggle=new QToolButton(content);p.provenance_toggle->setObjectName(QStringLiteral("appraisalDetailsProvenanceToggle"));
+    p.provenance_toggle->setText(QStringLiteral("Source IDs and fingerprint"));p.provenance_toggle->setCheckable(true);
+    p.provenance_toggle->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);p.provenance_toggle->setArrowType(Qt::RightArrow);
+    layout->addWidget(p.provenance_toggle);
+    p.provenance=new QPlainTextEdit(content);p.provenance->setObjectName(QStringLiteral("appraisalDetailsProvenance"));
+    p.provenance->setReadOnly(true);p.provenance->setMinimumWidth(0);p.provenance->setMinimumHeight(140);p.provenance->setMaximumHeight(220);
+    auto wrap=p.provenance->document()->defaultTextOption();wrap.setWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
+    p.provenance->document()->setDefaultTextOption(wrap);p.provenance->setVisible(false);layout->addWidget(p.provenance);
+    connect(p.provenance_toggle,&QToolButton::toggled,this,[this](bool expanded){
+        impl_->provenance->setVisible(expanded);impl_->provenance_toggle->setArrowType(expanded?Qt::DownArrow:Qt::RightArrow);
+    });
     layout->addStretch();scroll->setWidget(content);outer->addWidget(scroll);
     connect(p.areas,&QTreeWidget::currentItemChanged,this,[this]{impl_->show_trace();});
     connect(p.areas,&QTreeWidget::itemActivated,this,[this]{impl_->locate_current();});

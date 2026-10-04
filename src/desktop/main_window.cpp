@@ -3955,7 +3955,7 @@ public:
             const auto source=m_document->snapshot();
             if(expected_revision && source.revision()!=*expected_revision)
                 throw std::invalid_argument("The project changed after this report was opened. Refresh the report before exporting.");
-            if(m_boundary_session || m_pending_wall_start)
+            if(m_boundary_session || m_pending_wall_start || m_linework_drawing)
                 throw std::invalid_argument("Finish or cancel the current drawing before exporting its appraisal report.");
             if(QFileInfo(path).suffix().compare(QStringLiteral("pdf"),Qt::CaseInsensitive)!=0)
                 throw std::invalid_argument("Choose a PDF destination ending in .pdf.");

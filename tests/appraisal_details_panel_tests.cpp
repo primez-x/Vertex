@@ -19,6 +19,9 @@
 #include <QLabel>
 #include <QPushButton>
 #include <QTreeWidget>
+#include <QTextDocument>
+#include <QPlainTextEdit>
+#include <QToolButton>
 #include <cmath>
 #include <exception>
 #include <functional>
@@ -151,6 +154,56 @@ void ansi_ceiling_height_uses_declared_acquisition_precision() {
     policy["ansi"].erase("acquisition_increment");trace=show();
     require(!panel.report()->qualified && label(panel,"appraisalDetailsGla")=="Totals unavailable" &&
         trace.contains("Acquisition precision undeclared"),"missing precision cannot silently select a height rule");
+}
+void narrow_details_keeps_dimensions_and_full_sources_readable() {
+    auto entities=fixture();
+    const auto long_id=std::string("measurement-boundary-")+std::string(100,'x');
+    entities.back().id=long_id;
+    entities.back().properties["name"]="Living room with a long retained source identifier";
+    auto& policy=entities.front().properties["appraisal_policy"];
+    policy["policy_kind"]="ansi_z765_2021";policy["version"]=2;
+    policy["ansi"]={{"interior_inspected",true},{"direct_measurement",true},{"acquisition_increment","tenth_foot"}};
+    entities[2].properties["appraisal_facts"]["ansi"]={{"any_part_below_grade",false}};
+    const sketch::Boundary geometry{{{0,0},{3.048,0},0},{{3.048,0},{3.048,3.048},0},
+        {{3.048,3.048},{0,3.048},0},{{0,3.048},{0,0},0}};
+    entities.back().properties["appraisal_facts"]["ansi"]={{"year_round_suitable",true},
+        {"finish_matches_dwelling",true},{"dwelling_identity","primary"},
+        {"ceiling",{{"kind","sloped"},{"room_boundary_id",long_id},{"room_floor_area_m2",9.290304},
+            {"at_least_7ft_area_m2",7.0},{"below_5ft_deduction_ids",json::array()},
+            {"complete_room_observed",true},{"source_geometry_sha256",sketch::appraisal_ceiling_geometry_digest(geometry,{})}}}};
+    AppraisalDetailsPanel panel;panel.resize(320,800);panel.show();
+    const auto document=sketch::Document::create(entities);
+    panel.setDocument(document.snapshot(),"p",false);panel.setSelectedBoundary(QString::fromStdString(long_id));
+    QApplication::processEvents();
+    auto* trace=panel.findChild<QLabel*>("appraisalDetailsTrace");
+    auto* provenance=panel.findChild<QPlainTextEdit*>("appraisalDetailsProvenance");
+    auto* disclosure=panel.findChild<QToolButton*>("appraisalDetailsProvenanceToggle");
+    require(trace && provenance && disclosure,"technical source provenance has an independent expandable, copyable view");
+    require(!trace->text().contains(QString::fromStdString(long_id)) &&
+        provenance->toPlainText().contains(QString::fromStdString(long_id)),"numeric trace omits raw IDs while full source identity remains available without truncation");
+    require(provenance->isReadOnly() && !provenance->isVisible(),"technical provenance starts collapsed and cannot edit authoritative data");
+    disclosure->click();QApplication::processEvents();
+    require(provenance->isVisible(),"source disclosure opens the copyable provenance view");
+    auto cursor=provenance->textCursor();cursor.select(QTextCursor::Document);
+    require(cursor.selectedText().contains(QString::fromStdString(long_id)),"selected provenance preserves exact source ID for copying");
+    const auto directory=qEnvironmentVariable("VERTEX_TEST_CAPTURE_DIR");
+    if(!directory.isEmpty())require(QDir().mkpath(directory) && provenance->grab().save(QDir(directory).filePath("appraisal-details-provenance.png")),
+        "save actual wrapped source provenance view");
+    disclosure->click();require(!provenance->isVisible(),"source disclosure collapses without discarding identity");
+    for(const int width:{260,320,460}) {
+        QTextDocument rendered;rendered.setDefaultFont(trace->font());rendered.setHtml(trace->text());
+        rendered.setTextWidth(width);
+        require(rendered.size().width()<=width+1 && rendered.idealWidth()<=width+1,
+            "Details trace must wrap inside a narrow panel without clipping measurements or full source identities");
+        require(rendered.toPlainText().contains("10.0 ft"),"wrapped dimensions retain their displayed value");
+    }
+    if(!directory.isEmpty()) {
+        require(QDir().mkpath(directory) && trace->grab().save(QDir(directory).filePath("appraisal-details-long-source.png")),
+            "save native narrow source trace capture");
+    }
+    panel.setDocument(document.snapshot(),"missing",false);
+    require(provenance->toPlainText().isEmpty() && !disclosure->isEnabled() && !provenance->isVisible(),
+        "missing property context clears and closes prior technical source identities");
 }
 void qualified_units_refresh_and_callbacks() {
     AppraisalDetailsPanel panel;
@@ -378,7 +431,7 @@ int main(int argc,char** argv) {
     try {
         require(QFontDatabase::addApplicationFont(QStringLiteral(":/fonts/Inter.ttf"))>=0,"bundled Inter font loads for native Details capture");
         app.setFont(QFont(QStringLiteral("Inter"),10));
-        ansi_ceiling_height_uses_declared_acquisition_precision();ansi_canonical_units_declarations_and_curve_dimensions();qualified_units_refresh_and_callbacks();undeclared_and_invalid_measurements();
+        narrow_details_keeps_dimensions_and_full_sources_readable();ansi_ceiling_height_uses_declared_acquisition_precision();ansi_canonical_units_declarations_and_curve_dimensions();qualified_units_refresh_and_callbacks();undeclared_and_invalid_measurements();
         categories_floors_deductions_and_phase();stale_wall_sources();native_main_window_details();native_stale_context_withholds_actions_and_totals();
         std::cout<<"appraisal_details_panel_tests passed\n";return 0;
     } catch(const std::exception& failure) {std::cerr<<"appraisal_details_panel_tests: "<<failure.what()<<'\n';return 1;}
