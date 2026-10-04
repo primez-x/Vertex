@@ -81,6 +81,17 @@
   deduction links and phase membership in one undoable operation. Cancel changes
   nothing. Review stale measured sources before defining another area, and
   record actual appraisal facts in Details before using GLA totals.</p>
+  <p>With an explicit ANSI appraisal profile, the same review can define a
+  floor, a contained room and an exclusion inside that room together. Select
+  Deduct from parent for each contained area, including a room with the same
+  classification as its parent. Each parent deducts the immediate child's
+  gross footprint; an eligible child contributes its own net area. For example,
+  outer 100 m², room 36 m² and internal void 4 m² produce outer net 64 m² and
+  room net 32 m²: qualified GLA is 96 m², with the void excluded once. Record
+  actual eligibility observations with Edit facts. The area labels alone do
+  not qualify GLA. Select a measured area to edit its deduction links later;
+  removing and restoring a link is undoable. Ordinary measurement and declared
+  appraisal Auto-Subtract retain their existing TYPE and nesting rules.</p>
   <p>In Measured lines, <kbd>D</kbd> opens precise input for the starting point
   or next side. Choose length/heading, rise/run, a turn relative to the previous
   side, a world-coordinate endpoint, or one of the four analytical arc methods.
@@ -327,7 +338,7 @@
   them. Equal TYPEs and incomplete declarations cannot create a deduction.
   Applying a deduction retains both boundaries and updates the parent's net.
   Reopen the action to remove it; Undo and Redo retain the complete relationship.</p>
-  <p>Cloning or copying an appraised area includes its required related areas,
+  <p>Cloning or copying a supported appraised area includes its required related areas,
   deduction links, hosted openings, associated dimensions, appearance and fully
   contained constraints as one editable group. The original objects remain
   unchanged. Copy/paste to another project carries the required group too.
@@ -335,7 +346,8 @@
   required source is missing or stale, repair it before copying. The app refuses
   the copy rather than silently detaching that source. Move a copy clear of other
   building measurements before relying on qualified totals; overlapping areas
-  withhold those totals.</p>
+  withhold those totals. Independent copying of a parent with nested appraisal
+  descendants is not yet supported; keep those original links intact.</p>
   <p>Open <strong>Tools &gt; Appraisal area report…</strong> to review the
   property's summary, individual areas and deductions, and qualification issues.
   Select an area to see gross area, requested and applied deductions, physical net,

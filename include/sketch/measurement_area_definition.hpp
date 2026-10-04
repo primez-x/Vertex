@@ -42,7 +42,9 @@ struct MeasurementAreaDefinition {
 // the captured source, never trusted from a UI proposal. Creates boundaries and
 // explicit deduction links in one command. Existing facts/style/IDs are kept.
 // An empty command is a reference-only/no-change review, not a history entry.
-// Subtraction uses the owning workflow's existing TYPE and containment rules.
+// ANSI appraisal links validate the complete nested partition using immediate
+// child gross boundaries, including same-category measured floor/room areas.
+// Other workflows retain their existing TYPE and one-level subtraction rules.
 [[nodiscard]] MeasurementAreaDefinition prepare_measurement_area_definition(
     const DocumentSnapshot& source, std::string_view stroke_id,
     const std::vector<MeasurementAreaChoice>& choices);

@@ -17,6 +17,7 @@
 #include <QFont>
 #include <QFontDatabase>
 #include <QLabel>
+#include <QListWidget>
 #include <QPdfDocument>
 #include <QPdfSelection>
 #include <QPushButton>
@@ -166,6 +167,203 @@ void test_phase_review_and_exact_augmented_apply() {
     require(window.undoCommand() && document->snapshot().entities()==before.entities() &&
         window.redoCommand() && document->snapshot().entities()==after.entities(),"phase registry and geometry undo/redo together exactly");
 }
+void test_ansi_nested_partition_detection() {
+    const nlohmann::json policy={{"policy_kind","ansi_z765_2021"},{"version",1},
+        {"property_kind","detached_single_family"},{"measurement_basis","exterior"},
+        {"ansi",{{"interior_inspected",true},{"direct_measurement",true},{"acquisition_increment","inch"}}}};
+    auto document=std::make_shared<Document>(Document::create({
+        {"p","property",{{"name","ANSI nested measured partition"},{"calculation_workflow","appraisal"},{"appraisal_policy",policy}},false},
+        {"b","building",{{"property_id","p"}},false},
+        {"f","floor",{{"building_id","b"},{"appraisal_facts",{{"grade","above"},{"ansi",{{"any_part_below_grade",false}}}}}},false},
+        {"l","layer",{{"floor_id","f"},{"name","Measured"}},false},
+        stroke("outer",0,0,10),stroke("child",1,1,6),stroke("void",2,2,2)}));
+    MainWindow window(document);prepare(window);const auto before=document->snapshot();
+    review(window,[&](QDialog& dialog,QTableWidget& rows,QDialogButtonBox& buttons) {
+        require(rows.rowCount()==3,"ANSI detection reviews floor room and void separately");
+        require(rows.visualRect(rows.model()->index(2,0)).bottom()<rows.viewport()->height(),
+            "small nested review shows the complete void row without vertical scrolling");
+        choice(rows,row(rows,100),MeasurementAreaDisposition::define_area,"above_grade_finished");
+        choice(rows,row(rows,36),MeasurementAreaDisposition::deduct_from_parent,"above_grade_finished");
+        choice(rows,row(rows,4),MeasurementAreaDisposition::deduct_from_parent,"role:other_void");
+        require(buttons.button(QDialogButtonBox::Apply)->isEnabled(),"ANSI nested partition review admits explicit same-class floor room and void chain");
+        require(rows.item(row(rows,100),6)->text().contains("64") && rows.item(row(rows,36),6)->text().contains("32"),
+            "ANSI review removes child gross footprints once for parent net64 and child net32");
+        require(std::abs(rows.item(row(rows,100),7)->data(Qt::UserRole).toDouble()-36)<1e-8 &&
+            std::abs(rows.item(row(rows,36),7)->data(Qt::UserRole).toDouble()-4)<1e-8,
+            "ANSI review displays immediate gross deductions rather than recursive net deductions");
+        if(const auto capture=qEnvironmentVariable("VERTEX_TEST_CAPTURE_DIR");!capture.isEmpty()) {
+            QDir().mkpath(capture);require(dialog.grab().save(QDir(capture).filePath("ansi-nested-area-review.png")),"capture actual three-level ANSI detection review");
+        }
+        buttons.button(QDialogButtonBox::Apply)->click();
+    });
+    const auto defined=document->snapshot();const auto created=areas(defined);
+    require(created.size()==3 && defined.revision()==before.revision()+1 && defined.history().size()==before.history().size()+1,
+        "ANSI nested detection commits three identities and both links as one command");
+    Entity outer,child,void_area;
+    for(const auto& area:created) {
+        const auto gross=std::abs(signed_area(boundary_geometry(decode_identified_boundary_entity(area))));
+        if(std::abs(gross-100)<1e-8)outer=area;else if(std::abs(gross-36)<1e-8)child=area;else if(std::abs(gross-4)<1e-8)void_area=area;
+    }
+    require(!outer.id.empty() && !child.id.empty() && !void_area.id.empty() &&
+        outer.properties.at("deduction_ids")==std::vector<std::string>{child.id} &&
+        child.properties.at("deduction_ids")==std::vector<std::string>{void_area.id},"ANSI detected links retain exact immediate nested identities");
+    for(const auto& [id,entity]:before.entities())require(defined.entities().at(id)==entity,"ANSI definition preserves every original source and declared fact");
+    require(void_area.properties.at("appraisal_facts").at("boundary_role")=="other_void",
+        "explicit void role is retained without fictional finish or access facts");
+    require(!build_appraisal_document_report(defined,"p",AreaUnit::square_metre).qualified,
+        "above-grade-finished labels do not infer ANSI eligibility declarations");
+    const auto sources=measurement_linework_source_checks(defined.entities());
+    for(const auto& area:created)require(sources.at(area.id).current,"every nested area retains current measured source lineage");
+    require(window.undoCommand() && document->snapshot().entities()==before.entities() &&
+        window.redoCommand() && document->snapshot().entities()==defined.entities(),"one Undo and Redo restore exact nested IDs links sources and facts");
+    const nlohmann::json facts={{"finish","finished"},{"access","direct_interior"},{"area_use","dwelling"},{"boundary_role","measured_area"},
+        {"ansi",{{"year_round_suitable",true},{"finish_matches_dwelling",true},{"dwelling_identity","primary"},
+            {"ceiling",{{"kind","flat"},{"minimum_height_m",2.4384}}}}}};
+    const auto declaration=QString::fromStdString(nlohmann::json{{"appraisal_policy",policy},
+        {"floor_appraisal_facts",before.entities().at("f").properties.at("appraisal_facts")},{"appraisal_facts",facts}}.dump());
+    for(const auto& area:{outer,child}) {
+        require(window.selectEntity(QString::fromStdString(area.id)) &&
+            window.editSelectedAppraisalFacts(declaration),"ANSI counted regions receive explicit observed eligibility facts");
+        const auto declared=document->snapshot();
+        require(declared.entities().at(outer.id).properties.at("deduction_ids")==std::vector<std::string>{child.id} &&
+            declared.entities().at(child.id).properties.at("deduction_ids")==std::vector<std::string>{void_area.id} &&
+            declared.entities().at(void_area.id)==defined.entities().at(void_area.id),
+            "fact-only ANSI declaration preserves complete floor room void chain and exact exclusion facts");
+        const auto current=measurement_linework_source_checks(declared.entities());
+        for(const auto& created_area:created)require(current.at(created_area.id).current &&
+            declared.entities().at(created_area.id).extensions==defined.entities().at(created_area.id).extensions,
+            "fact-only declaration preserves exact current measured source lineage for every nested owner");
+    }
+    events();const auto qualified=document->snapshot();const auto report=build_appraisal_document_report(qualified,"p",AreaUnit::square_metre);
+    require(report.qualified && report.calculation && std::abs(report.calculation->property.gla().total.square_metres-96)<1e-8,
+        "ANSI qualified GLA counts disjoint outer64 and child32 exactly once");
+    for(const auto& status:report.boundaries)if(status.boundary_id==outer.id || status.boundary_id==child.id)
+        require(status.measurement && std::abs(status.measurement->net_square_metres-(status.boundary_id==outer.id?64:32))<1e-8,
+            "core ANSI net measurements agree with detection preview");
+    auto* details=window.findChild<QLabel*>("appraisalDetailsGla");
+    require(details && details->text()=="1033 sq ft","actual ANSI Details reports canonical whole-square-foot GLA");
+    const auto edit_void_deduction=[&](bool remove) {
+        require(window.selectEntity(QString::fromStdString(child.id)),"select actual ANSI child for native deductions editor");
+        auto* edit=window.findChild<QPushButton*>("editDeductions");require(edit && edit->isEnabled(),"native deductions editor is available");
+        std::exception_ptr failure;bool opened=false;
+        QTimer::singleShot(0,[&] {
+            auto* dialog=window.findChild<QDialog*>("calculationDeductionDialog");
+            if(!dialog) {failure=std::make_exception_ptr(std::runtime_error("native ANSI deductions dialog opens"));if(auto* modal=QApplication::activeModalWidget())modal->close();return;}
+            opened=true;
+            try {
+                auto* list=dialog->findChild<QListWidget*>("calculationDeductionList");
+                auto* source=dialog->findChild<QComboBox*>("calculationDeductionSource");
+                auto* buttons=dialog->findChild<QDialogButtonBox*>("calculationDeductionButtons");
+                require(list && source && buttons,"actual ANSI deduction staging controls exist");
+                if(remove) {
+                    require(list->count()==1 && list->item(0)->data(Qt::UserRole).toString()==QString::fromStdString(void_area.id),"child editor shows exact void deduction identity");
+                    list->setCurrentRow(0);auto* button=dialog->findChild<QPushButton*>("removeCalculationDeduction");require(button && button->isEnabled(),"native deduction removal is enabled");button->click();
+                } else {
+                    require(list->count()==0,"removed void leaves no staged child deductions");
+                    const auto index=source->findData(QString::fromStdString(void_area.id));require(index>=0,"exact void boundary remains available for restoration");source->setCurrentIndex(index);
+                    auto* button=dialog->findChild<QPushButton*>("addCalculationDeduction");require(button && button->isEnabled(),"native deduction addition is enabled");button->click();
+                }
+                buttons->button(QDialogButtonBox::Apply)->click();
+                require(dialog->result()==QDialog::Accepted,"helper-backed native ANSI deduction edit is admitted atomically");
+            } catch(...) {failure=std::current_exception();dialog->reject();}
+        });
+        edit->click();if(failure)std::rethrow_exception(failure);require(opened,"native ANSI deduction callback ran");events();
+    };
+    edit_void_deduction(true);const auto removed=document->snapshot();
+    require(removed.revision()==qualified.revision()+1 && removed.history().size()==qualified.history().size()+1 &&
+        (!removed.entities().at(child.id).properties.contains("deduction_ids") || removed.entities().at(child.id).properties.at("deduction_ids").empty()),
+        "actual ANSI deduction removal commits one history entry");
+    for(const auto& [id,entity]:qualified.entities())if(id!=child.id)require(removed.entities().at(id)==entity,"child deduction removal preserves all other sources owners links and facts");
+    require(removed.entities().at(child.id).properties.at("appraisal_facts")==qualified.entities().at(child.id).properties.at("appraisal_facts") &&
+        measurement_linework_source_checks(removed.entities()).at(child.id).current,"native deduction edit retains child eligibility and current source lineage");
+    require(window.undoCommand() && document->snapshot().entities()==qualified.entities() && window.redoCommand() &&
+        document->snapshot().entities()==removed.entities(),"native child deduction removal undoes and redoes as one exact command");
+    const auto before_restore=document->snapshot();
+    edit_void_deduction(false);const auto restored=document->snapshot();
+    require(restored.revision()==before_restore.revision()+1 && restored.history().size()==before_restore.history().size()+1 &&
+        restored.entities()==qualified.entities(),"native void restoration commits one command and restores exact qualified graph");
+    const auto restored_report=build_appraisal_document_report(restored,"p",AreaUnit::square_metre);
+    require(restored_report.qualified && restored_report.calculation && std::abs(restored_report.calculation->property.gla().total.square_metres-96)<1e-8,
+        "restored actual deductions dialog chain retains qualified GLA96");
+    require(window.undoCommand() && document->snapshot().entities()==removed.entities() && window.redoCommand() &&
+        document->snapshot().entities()==restored.entities(),"native void restoration undoes and redoes atomically");
+    QTemporaryDir directory;require(directory.isValid() && window.saveProjectAs(directory.filePath("ansi-nested.bldproj")) &&
+        window.openProject(directory.filePath("ansi-nested.bldproj")) && window.document().snapshot().entities()==qualified.entities(),
+        "ANSI nested sources identities links and actual facts survive save/reopen exactly");
+    require(window.exportDraftPdf(directory.filePath("ansi-nested-plan.pdf")),"actual ANSI nested plan PDF exports");QPdfDocument plan_pdf;
+    require(plan_pdf.load(directory.filePath("ansi-nested-plan.pdf"))==QPdfDocument::Error::None && plan_pdf.pageCount()>0 &&
+        !plan_pdf.render(0,QSize(1000,800)).isNull(),"actual ANSI nested drawing sheet PDF renders");
+    require(window.exportAppraisalReportPdf(directory.filePath("ansi-nested.pdf"),"p",window.document().revision()),"actual ANSI nested appraisal report PDF exports");QPdfDocument pdf;
+    require(pdf.load(directory.filePath("ansi-nested.pdf"))==QPdfDocument::Error::None && pdf.pageCount()>0 &&
+        !pdf.render(0,QSize(1000,800)).isNull(),"actual ANSI nested PDF renders");
+    QString text;for(int page=0;page<pdf.pageCount();++page)text+=pdf.getAllText(page).text();
+    if(!text.contains("1033"))std::cerr<<"ANSI nested appraisal report PDF text diagnostic:\n"<<text.toStdString()<<'\n';
+    require(text.contains("1033") && text.contains("Primary dwelling GLA"),"actual ANSI nested PDF agrees with canonical GLA96 square metres as1033 square feet");
+    if(const auto capture=qEnvironmentVariable("VERTEX_TEST_CAPTURE_DIR");!capture.isEmpty()) {
+        require(window.selectEntity(QString::fromStdString(child.id)),"select nested child for actual final Details capture");window.fitView();
+        auto* tabs=window.findChild<QTabWidget*>("sidebarTabs");require(tabs,"native sidebar Details tab exists");
+        for(int index=0;index<tabs->count();++index)if(tabs->tabText(index)=="Details")tabs->setCurrentIndex(index);
+        events();QDir().mkpath(capture);
+        require(window.grab().save(QDir(capture).filePath("ansi-nested-defined-details.png")),"capture actual final nested ANSI Details and canvas");
+        require(pdf.render(0,QSize(1200,900)).save(QDir(capture).filePath("ansi-nested-defined-pdf.png")),"capture rendered actual nested ANSI PDF");
+        window.setWorkspaceTheme(WorkspaceTheme::dark);events();
+        review(window,[&](QDialog& dialog,QTableWidget& rows,QDialogButtonBox& buttons) {
+            require(rows.rowCount()==3 && rows.visualRect(rows.model()->index(2,0)).bottom()<rows.viewport()->height(),
+                "dark nested review shows all three complete rows");
+            require(dialog.grab().save(QDir(capture).filePath("ansi-nested-area-review-dark.png")),"capture actual dark nested review");
+            buttons.button(QDialogButtonBox::Cancel)->click();
+        });
+        require(window.selectEntity(QString::fromStdString(child.id)),"restore Details selection after dark review");events();
+        require(window.grab().save(QDir(capture).filePath("ansi-nested-defined-details-dark.png")),"capture actual dark nested Details");
+        window.setWorkspaceTheme(WorkspaceTheme::light);events();
+    }
+    // Bind the sloped-room observation to the actual authored room and void,
+    // after reopening, when MainWindow owns the newly loaded document.
+    const auto v2_source=window.document().snapshot();auto v2_policy=policy;v2_policy["version"]=2;
+    auto sloped_facts=facts;
+    const auto room_shape=boundary_geometry(decode_identified_boundary_entity(v2_source.entities().at(child.id)));
+    const auto void_shape=boundary_geometry(decode_identified_boundary_entity(v2_source.entities().at(void_area.id)));
+    sloped_facts["ansi"]["ceiling"]={{"kind","sloped"},{"complete_room_observed",true},
+        {"at_least_7ft_area_m2",20},{"room_floor_area_m2",36},{"room_boundary_id",child.id},
+        {"below_5ft_deduction_ids",{void_area.id}},
+        {"source_geometry_sha256",appraisal_ceiling_geometry_digest(room_shape,{{void_area.id,void_shape}})}};
+    const nlohmann::json sloped_declaration={{"appraisal_policy",v2_policy},
+        {"floor_appraisal_facts",v2_source.entities().at("f").properties.at("appraisal_facts")},
+        {"appraisal_facts",sloped_facts},{"deduction_ids",{void_area.id}}};
+    require(window.selectEntity(QString::fromStdString(child.id)) &&
+        window.editSelectedAppraisalFacts(QString::fromStdString(sloped_declaration.dump())),
+        "native facts author explicit V2 complete sloped-room and bound low-height evidence");
+    events();const auto sloped=window.document().snapshot();
+    require(sloped.revision()==v2_source.revision()+1 && sloped.history().size()==v2_source.history().size()+1 &&
+        sloped.entities().at(outer.id)==v2_source.entities().at(outer.id) && sloped.entities().at(void_area.id)==v2_source.entities().at(void_area.id) &&
+        sloped.entities().at(child.id).properties.at("deduction_ids")==std::vector<std::string>{void_area.id} &&
+        sloped.entities().at(child.id).properties.at("appraisal_facts")==sloped_facts,
+        "V2 observation retains exact flat floor room void graph and actual declarations atomically");
+    const auto sloped_sources=measurement_linework_source_checks(sloped.entities());
+    for(const auto& area:created)require(sloped_sources.at(area.id).current &&
+        sloped.entities().at(area.id).extensions==v2_source.entities().at(area.id).extensions,
+        "V2 sloped facts preserve exact current authored source lineage");
+    const auto sloped_report=build_appraisal_document_report(sloped,"p",AreaUnit::square_metre);
+    require(sloped_report.qualified && sloped_report.calculation && sloped_report.policy && sloped_report.policy->version==2 &&
+        std::abs(sloped_report.calculation->property.gla().total.square_metres-96)<1e-8,
+        "actual V2 sloped room excludes real low-height leaf once for qualified GLA96");
+    require(window.findChild<QLabel*>("appraisalDetailsGla")->text()=="1033 sq ft","V2 sloped room actual Details retains1033 square feet");
+    require(window.undoCommand() && window.document().snapshot().entities()==v2_source.entities() &&
+        window.redoCommand() && window.document().snapshot().entities()==sloped.entities(),"V2 complete sloped observation undoes and redoes exactly");
+    require(window.saveProjectAs(directory.filePath("ansi-nested-v2.bldproj")) && window.openProject(directory.filePath("ansi-nested-v2.bldproj")) &&
+        window.document().snapshot().entities()==sloped.entities(),"actual V2 nested observations save and reopen exactly");
+    require(window.exportAppraisalReportPdf(directory.filePath("ansi-nested-v2.pdf"),"p",window.document().revision()),"actual V2 nested sloped appraisal report PDF exports");QPdfDocument v2_pdf;
+    require(v2_pdf.load(directory.filePath("ansi-nested-v2.pdf"))==QPdfDocument::Error::None && v2_pdf.pageCount()>0 &&
+        !v2_pdf.render(0,QSize(1000,800)).isNull(),"actual V2 nested sloped PDF renders");
+    QString v2_text;for(int page=0;page<v2_pdf.pageCount();++page)v2_text+=v2_pdf.getAllText(page).text();
+    if(!v2_text.contains("1033"))std::cerr<<"ANSI V2 nested appraisal report PDF text diagnostic:\n"<<v2_text.toStdString()<<'\n';
+    require(v2_text.contains("1033") && v2_text.contains("Primary dwelling GLA"),"actual V2 nested sloped PDF retains canonical1033 square feet");
+    if(const auto capture=qEnvironmentVariable("VERTEX_TEST_CAPTURE_DIR");!capture.isEmpty()) {
+        require(window.selectEntity(QString::fromStdString(child.id)),"select V2 child for final Details capture");events();
+        require(window.grab().save(QDir(capture).filePath("ansi-nested-v2-details.png")),"capture actual V2 nested Details");
+        require(v2_pdf.render(0,QSize(1200,900)).save(QDir(capture).filePath("ansi-nested-v2-pdf.png")),"capture actual V2 nested PDF");
+    }
+}
 void test_stale_preview_and_same_type_rejection() {
     auto document=fixture(); MainWindow window(document); prepare(window); const auto before=document->snapshot();
     review(window,[&](QDialog& dialog,QTableWidget& rows,QDialogButtonBox& buttons) {
@@ -178,6 +376,55 @@ void test_stale_preview_and_same_type_rejection() {
         document->apply(ApplyEntityChanges{.expected_revision=document->revision(),.entity_changes={EntityChange::upsert(changed)},.message="external fixture change"});
         buttons.button(QDialogButtonBox::Apply)->click(); require(areas(document->snapshot()).empty(),"stale Apply cannot commit retained preview"); dialog.reject();
     }); require(areas(document->snapshot()).empty() && document->revision()==before.revision()+1,"stale review leaves only unrelated authorized source edit");
+}
+void test_native_deductions_without_layer_assignment() {
+    for(const bool ansi:{true,false}) {
+        const auto boundary=[](const char* id,double x,double y,double size,const char* classification) {
+            IdentifiedBoundary model{id,"measurement_boundary",{}};
+            const Vec2 points[]{{x,y},{x+size,y},{x+size,y+size},{x,y+size}};
+            for(std::size_t index=0;index<4;++index)model.segments.push_back({std::string(id)+":edge"+std::to_string(index),
+                std::string(id)+":vertex"+std::to_string(index),std::string(id)+":vertex"+std::to_string((index+1)%4),{points[index],points[(index+1)%4],0}});
+            auto entity=encode_identified_boundary_entity(model);
+            entity.properties.update({{"property_id","p"},{"building_id","b"},{"floor_id","f"},{"classification",classification},
+                {"factor",1.0},{"factor_expression","1"},{"factor_numerator",1},{"factor_denominator",1},{"calculation_scope","building"}});
+            return entity;
+        };
+        auto outer=boundary("outer-area",0,0,10,"living");auto child=boundary("child-area",1,1,6,ansi?"living":"garage");
+        auto leaf=boundary("void-area",2,2,2,"role:other_void");outer.properties["deduction_ids"]={child.id};
+        if(ansi) {child.properties["deduction_ids"]={leaf.id};leaf.properties["appraisal_facts"]={{"boundary_role","other_void"}};}
+        nlohmann::json policy={{"policy_kind",ansi?"ansi_z765_2021":"residential_declared"},{"version",1},
+            {"property_kind","detached_single_family"},{"measurement_basis","exterior"}};
+        if(ansi)policy["ansi"]={{"interior_inspected",true},{"direct_measurement",true},{"acquisition_increment","inch"}};
+        std::vector<Entity> entities{{"p","property",{{"calculation_workflow","appraisal"},{"appraisal_policy",policy}},false},
+            {"b","building",{{"property_id","p"}},false},{"f","floor",{{"building_id","b"}},false},outer,child};
+        if(ansi)entities.push_back(leaf);
+        MainWindow window(std::make_shared<Document>(Document::create(entities)));window.setAttribute(Qt::WA_DontShowOnScreen,true);window.show();events();
+        const auto edit_link=[&](bool remove) {
+            require(window.selectEntity("outer-area"),"select saved source-free area without layer assignment");
+            auto* edit=window.findChild<QPushButton*>("editDeductions");require(edit && edit->isEnabled(),"layerless saved area exposes real deductions editor");
+            std::exception_ptr failure;bool opened=false;
+            QTimer::singleShot(0,[&] {
+                auto* dialog=window.findChild<QDialog*>("calculationDeductionDialog");
+                if(!dialog){failure=std::make_exception_ptr(std::runtime_error("layerless saved area deduction dialog opens"));if(auto* modal=QApplication::activeModalWidget())modal->close();return;}
+                opened=true;
+                try {
+                    auto* list=dialog->findChild<QListWidget*>("calculationDeductionList");auto* source=dialog->findChild<QComboBox*>("calculationDeductionSource");
+                    auto* buttons=dialog->findChild<QDialogButtonBox*>("calculationDeductionButtons");require(list && source && buttons,"layerless editor has actual staging controls");
+                    if(remove){require(list->count()==1,"layerless owner retains existing deduction");list->setCurrentRow(0);dialog->findChild<QPushButton*>("removeCalculationDeduction")->click();}
+                    else {const auto index=source->findData(QString::fromStdString(child.id));require(index>=0,"layerless child offered by native deductions editor");source->setCurrentIndex(index);dialog->findChild<QPushButton*>("addCalculationDeduction")->click();}
+                    buttons->button(QDialogButtonBox::Apply)->click();require(dialog->result()==QDialog::Accepted,"ANSI and declared policies preserve layerless native deduction editing");
+                }catch(...){failure=std::current_exception();dialog->reject();}
+            });
+            edit->click();if(failure)std::rethrow_exception(failure);require(opened,"layerless deduction callback ran");events();
+        };
+        const auto before=window.document().snapshot();edit_link(true);const auto removed=window.document().snapshot();
+        require(removed.revision()==before.revision()+1,"layerless deduction removal is atomic");
+        edit_link(false);const auto restored=window.document().snapshot();
+        require(restored.revision()==removed.revision()+1 && restored.entities()==before.entities(),"layerless native restoration keeps exact source-free graph without inventing layers");
+        for(const auto& area:areas(restored))require(!area.properties.contains("layer_id") && area.extensions.empty(),"fresh layerless regression owners remain source-free and unassigned");
+        require(window.undoCommand() && window.document().snapshot().entities()==removed.entities() && window.redoCommand() &&
+            window.document().snapshot().entities()==restored.entities(),"layerless native deduction restoration undo redo retains exact graph");
+    }
 }
 std::shared_ptr<Document> adjacent_fixture(bool four,bool extend_horizontal=true) {
     auto document=fixture();
@@ -381,6 +628,8 @@ int main(int argc,char** argv) {
         require(QFontDatabase::addApplicationFont(QStringLiteral(":/fonts/Inter.ttf"))>=0,"bundled font loads for native review and PDF");
         application.setFont(QFont(QStringLiteral("Inter"),10));
         test_cancel_defaults_and_reference();test_explicit_deduction_history_details_and_pdf();test_stale_preview_and_same_type_rejection();test_phase_review_and_exact_augmented_apply();
+        test_ansi_nested_partition_detection();
+        test_native_deductions_without_layer_assignment();
         test_combined_adjacent_regions_review_history_and_sources();
         test_combined_stale_review();
         test_combined_member_topology_loss_stays_stale();

@@ -3,6 +3,7 @@
 #include "sketch/measurement_linework_source.hpp"
 #include "sketch/boundary_entity.hpp"
 #include "sketch/area_subtraction.hpp"
+#include "sketch/appraisal_area_partition.hpp"
 #include "sketch/calculations.hpp"
 #include "sketch/model_phases.hpp"
 
@@ -258,10 +259,20 @@ MeasurementAreaDefinition prepare_measurement_area_definition(const DocumentSnap
     const auto additions=command_for();
     if(!additions.entity_changes.empty())initial=Document::preview_command(source,additions);
     std::vector<std::pair<std::string,std::string>> links;
+    std::optional<bool> ansi_partition;
+    std::map<std::string,std::vector<std::string>> partition_deductions;
     for(std::size_t i=0;i<choices.size();++i) {
         if(choices[i].disposition!=MeasurementAreaDisposition::deduct_from_parent)continue;
         const auto parent=detection.graph.faces[i].parent_face_index;
         if(!parent || *parent>=choices.size() || !ids[*parent])invalid("A deduction requires its containing outline to be defined.");
+        if(!ansi_partition)ansi_partition=ansi_appraisal_partition_context(initial,*ids[*parent]);
+        if(*ansi_partition) {
+            auto [target,inserted]=partition_deductions.try_emplace(*ids[*parent]);
+            if(inserted)target->second=deductions(initial.entities().at(*ids[*parent]));
+            if(std::find(target->second.begin(),target->second.end(),*ids[i])==target->second.end())
+                target->second.push_back(*ids[i]);
+            continue;
+        }
         if(choices[*parent].disposition==MeasurementAreaDisposition::deduct_from_parent)
             invalid("Nested deduction chains are not supported. Keep the deeper outline as a reference or define it independently.");
         const auto& subtractor=initial.entities().at(*ids[i]);
@@ -277,6 +288,14 @@ MeasurementAreaDefinition prepare_measurement_area_definition(const DocumentSnap
         }
         links.emplace_back(*ids[i],*ids[*parent]);
     }
+    if(!partition_deductions.empty()) {
+        std::vector<AppraisalPartitionAssignment> assignments;
+        for(auto& [parent,deduction_ids]:partition_deductions)assignments.push_back({parent,std::move(deduction_ids)});
+        for(auto& target:prepare_ansi_appraisal_partition_targets(initial,assignments)) {
+            const auto target_id=target.id;
+            changed.insert_or_assign(target_id,std::move(target));
+        }
+    }
     result.command=command_for();
     if(!result.command.entity_changes.empty()) {
         const auto final=Document::preview_command(source,result.command);
@@ -288,7 +307,7 @@ MeasurementAreaDefinition prepare_measurement_area_definition(const DocumentSnap
                 invalid("The combined area does not have valid complete source provenance: "+
                     (checks.contains(id)?checks.at(id).diagnostic:std::string("Missing group source proof.")));
         }
-        // Validate the complete combined set, including pre-existing deductions,
+        // Legacy validation of the complete combined set, including pre-existing deductions,
         // union area, and any target that is already a deduction elsewhere.
         for(const auto& [child,parent]:links)
             (void)prepare_area_subtraction_target(final,final.entities().at(child),parent);

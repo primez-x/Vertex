@@ -36,6 +36,7 @@
 #include "sketch/measurement_linework.hpp"
 #include "sketch/measurement_area_graph.hpp"
 #include "sketch/measurement_area_definition.hpp"
+#include "sketch/appraisal_area_partition.hpp"
 #include "sketch/measurement_linework_source.hpp"
 #include "sketch/boundary_transform.hpp"
 #include "sketch/boundary_integrity.hpp"
@@ -14605,7 +14606,7 @@ public:
             if (detected.graph.faces.empty()) throw std::invalid_argument("No closed area was found in this layer's measured lines.");
             QDialog dialog(owner); dialog.setObjectName(QStringLiteral("measuredAreaReviewDialog"));
             dialog.setWindowTitle(QStringLiteral("Define measured areas")); styleDialog(dialog);
-            dialog.resize(1320, std::clamp(200 + static_cast<int>(detected.graph.faces.size()) * 32, 280, 650));
+            dialog.resize(1320, std::clamp(250 + static_cast<int>(detected.graph.faces.size()) * 32, 330, 650));
             auto* layout = new QVBoxLayout(&dialog);
             auto* explanation = new QLabel(QStringLiteral(
                 "Review each measured outline. New reference outlines create no area; existing definitions are always kept. A deduction reduces its parent; choose its classification explicitly. "
@@ -21148,7 +21149,7 @@ public:
                 property->properties.contains("appraisal_policy");
             const auto parent_scope = area_scope_name(entity->properties);
             const bool nested_appraisal = declared_appraisal && parent_scope == "building" &&
-                ansi_boundary_dimensions(snapshot, *entity);
+                ansi_appraisal_partition_context(snapshot, entity->id);
             if (declared_appraisal && entity->type == "room_boundary") {
                 throw std::invalid_argument("Architectural room boundaries are independent of appraisal deductions.");
             }
@@ -21227,28 +21228,11 @@ public:
                 properties["deduction_ids"] = deduction_ids_json(deduction_ids);
             }
             if (nested_appraisal) {
-                auto candidate = entities;
-                candidate.at(entity->id).properties = properties;
-                std::set<std::string> active, complete;
-                std::function<void(const std::string&)> validate = [&](const std::string& id) {
-                    if (!active.insert(id).second) throw std::invalid_argument("Cyclic appraisal deductions are not allowed.");
-                    const auto& node = candidate.at(id);
-                    std::vector<AreaDeduction> children;
-                    for (const auto& child_id : read_deduction_ids(node.properties)) {
-                        const auto child = candidate.find(child_id);
-                        if (child == candidate.end() || !is_closed_boundary_entity(child->second.type) ||
-                            child->second.type == "room_boundary" || area_scope_name(child->second.properties) == "site" ||
-                            read_string(child->second.properties, "floor_id") != floor_id)
-                            throw std::invalid_argument("Nested deductions must be measurement areas on the same building floor.");
-                        if (!complete.contains(child_id)) validate(child_id);
-                        children.push_back({child_id, read_boundary(child->second.properties)});
-                    }
-                    MeasurementArea partition{id, *building_id, *floor_id, "physical", read_boundary(node.properties),
-                        std::move(children), read_stored_factor(node.properties).rational, AreaScope::building};
-                    (void)calculate_area(partition, profile);
-                    active.erase(id);complete.insert(id);
-                };
-                validate(entity->id);
+                const auto prepared = prepare_ansi_appraisal_partition_targets(
+                    snapshot, {{entity->id, read_deduction_ids(properties)}});
+                if (prepared.size() != 1 || prepared.front().id != entity->id)
+                    throw std::logic_error("Appraisal partition preparation returned an unexpected parent.");
+                properties = prepared.front().properties;
             }
             return editSelectedProperties(std::move(properties), "edit area deductions");
         } catch (const std::exception& error) {

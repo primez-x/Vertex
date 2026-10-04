@@ -13,6 +13,7 @@
 #include <cmath>
 #include <filesystem>
 #include <iostream>
+#include <set>
 #include <stdexcept>
 
 namespace {
@@ -274,6 +275,108 @@ void deeper_and_sibling_decisions() {
     const auto trace=calculate_area({root,"b","f","living",boundary_geometry(decode_identified_boundary_entity(parent)),tools,{1,1}},physical);
     require(std::abs(trace.net_square_metres-83)<1e-10,"both explicit sibling deductions count once:100minus16minus1");
 }
+void ansi_nested_measured_partitions() {
+    auto document=fixture(false,true);
+    auto property=document.snapshot().entities().at("p");
+    property.properties["appraisal_policy"]["policy_kind"]="ansi_z765_2021";
+    property.properties["appraisal_policy"]["ansi"]={{"interior_inspected",true},
+        {"direct_measurement",true},{"acquisition_increment","inch"}};
+    auto floor=document.snapshot().entities().at("f");
+    floor.properties["appraisal_facts"]["ansi"]={{"any_part_below_grade",false}};
+    document.apply(ApplyEntityChanges{document.revision(),{EntityChange::upsert(property),
+        EntityChange::upsert(floor),EntityChange::upsert(stroke("room",2,8)),
+        EntityChange::upsert(stroke("void",4,6))},{},"Declare ANSI measured floor and room outlines"});
+    const auto source=document.snapshot();
+    const auto detected=detect_measurement_areas(source,"outer");
+    require(detected.graph.faces.size()==3,"ANSI review detects exact gross100 room36 and exclusion4 outlines");
+    const auto root_index=outer_index(detected);
+    std::size_t room_index=detected.graph.faces.size(),void_index=detected.graph.faces.size();
+    for(std::size_t i=0;i<detected.graph.faces.size();++i) {
+        if(detected.graph.faces[i].area_square_metres==36)room_index=i;
+        if(detected.graph.faces[i].area_square_metres==4)void_index=i;
+    }
+    require(detected.graph.faces[root_index].area_square_metres==100 &&
+        room_index<detected.graph.faces.size() && void_index<detected.graph.faces.size(),
+        "nested ANSI outlines retain their independently measured gross geometry");
+    require(detected.graph.faces[room_index].parent_face_index==root_index &&
+        detected.graph.faces[void_index].parent_face_index==room_index,
+        "ANSI review exposes immediate floor room and exclusion containment");
+    std::vector<MeasurementAreaChoice> choices(detected.graph.faces.size());
+    choices[root_index]={MeasurementAreaDisposition::define_area,"above_grade_finished"};
+    choices[room_index]={MeasurementAreaDisposition::deduct_from_parent,"above_grade_finished"};
+    choices[void_index]={MeasurementAreaDisposition::deduct_from_parent,"role:other_void"};
+    const auto definition=prepare_measurement_area_definition(source,"outer",choices);
+    require(definition.area_ids.size()==3 && definition.command.entity_changes.size()==3 &&
+        definition.face_area_ids.size()==3,"one ANSI definition command contains the complete nested partition");
+    require(definition.face_area_ids.at(root_index) && definition.face_area_ids.at(room_index) &&
+        definition.face_area_ids.at(void_index),"every explicitly chosen ANSI outline has an identified area");
+    const auto root=*definition.face_area_ids.at(root_index);
+    const auto room=*definition.face_area_ids.at(room_index);
+    const auto excluded=*definition.face_area_ids.at(void_index);
+    const auto preview=Document::preview_command(source,definition.command);
+    require(preview.entities().at(root).properties.at("deduction_ids")==Json::array({room}) &&
+        preview.entities().at(room).properties.at("deduction_ids")==Json::array({excluded}),
+        "ANSI partition links the room only to its floor and the exclusion only to its room");
+    require(document.snapshot().entities()==source.entities(),"ANSI partition preparation preserves all source strokes");
+    const auto checks=measurement_linework_source_checks(preview.entities());
+    for(const auto& [id,owner]:std::vector<std::pair<std::string,std::string>>{
+        {root,"outer"},{room,"room"},{excluded,"void"}}) {
+        const auto& area=preview.entities().at(id);
+        require(checks.at(id).current,"every nested ANSI area retains current measured source lineage");
+        for(const auto& edge:area.extensions.at("measurement_linework_sources"))
+            for(const auto& use:edge)require(use.at("owner_id")==owner,
+                "nested ANSI areas retain their own exact original source identities");
+    }
+    document.apply(definition.command);
+    const auto committed=document.snapshot();
+    const auto repeated=prepare_measurement_area_definition(committed,"outer",choices);
+    require(repeated.command.entity_changes.empty() && repeated.area_ids==definition.area_ids &&
+        repeated.face_area_ids==definition.face_area_ids,"ANSI re-detection retains exact IDs and complete links without duplicates");
+    document.undo(document.revision());
+    require(document.snapshot().entities()==source.entities(),"one Undo removes the entire ANSI nested definition");
+    document.redo(document.revision());
+    require(document.snapshot().entities()==committed.entities(),"Redo restores exact ANSI area IDs links and source lineage");
+
+    std::vector<EntityChange> declarations;
+    for(const auto& id:{root,room}) {
+        auto area=committed.entities().at(id);
+        area.properties["appraisal_facts"]={{"finish","finished"},{"access","direct_interior"},
+            {"area_use","dwelling"},{"boundary_role","measured_area"},{"ansi",{
+                {"year_round_suitable",true},{"finish_matches_dwelling",true},{"dwelling_identity","primary"},
+                {"ceiling",{{"kind","flat"},{"minimum_height_m",2.4384}}}}}};
+        declarations.push_back(EntityChange::upsert(area));
+    }
+    document.apply(ApplyEntityChanges{document.revision(),std::move(declarations),{},"Declare observed ANSI floor and room facts"});
+    const auto report=build_appraisal_document_report(document.snapshot(),"p",AreaUnit::square_metre);
+    require(report.qualified && report.calculation &&
+        std::abs(report.calculation->property.gla().total.square_metres-96)<1e-10,
+        "ANSI floor64 plus room32 contributes GLA96 with exclusion4 removed exactly once");
+    for(const auto& [id,expected]:std::vector<std::pair<std::string,double>>{{root,64},{room,32},{excluded,4}}) {
+        const auto status=std::find_if(report.boundaries.begin(),report.boundaries.end(),
+            [&](const auto& value){return value.boundary_id==id;});
+        require(status!=report.boundaries.end() && status->measurement &&
+            std::abs(status->measurement->net_square_metres-expected)<1e-10,
+            "ANSI report keeps each nested partition's own exact net geometry");
+    }
+    const auto qualified=document.snapshot();
+    const auto withheld_ancestors=[&](const AppraisalDocumentReport& invalid) {
+        require(!invalid.qualified && !invalid.calculation,"unavailable grandchild withholds qualified ANSI totals");
+        for(const auto& id:{root,room}) {
+            const auto status=std::find_if(invalid.boundaries.begin(),invalid.boundaries.end(),
+                [&](const auto& value){return value.boundary_id==id;});
+            require(status!=invalid.boundaries.end() && !status->measurement,
+                "unavailable grandchild withholds every ancestor's geometry trace");
+        }
+    };
+    std::set<std::string,std::less<>> visible;
+    for(const auto& [id,entity]:qualified.entities())visible.insert(id);
+    visible.erase("void");
+    withheld_ancestors(build_appraisal_document_report(qualified,"p",AreaUnit::square_metre,&visible));
+    visible.insert("void");visible.erase(excluded);
+    withheld_ancestors(build_appraisal_document_report(qualified,"p",AreaUnit::square_metre,&visible));
+    document.apply(ApplyEntityChanges{document.revision(),{EntityChange::upsert(stroke("void",4.5,6.5))},{},"Move exclusion source"});
+    withheld_ancestors(build_appraisal_document_report(document.snapshot(),"p",AreaUnit::square_metre));
+}
 void active_phase_sources() {
     auto document=fixture();
     auto phases=ModelPhases::create({"outer","inner"},{"outer"},{{"future","Future",{}, {"inner"}}});
@@ -306,7 +409,7 @@ void active_phase_sources() {
 }
 int main() {
     sketch::testing::noninteractive_errors();
-    try {combine_adjacent_detected_areas();reference_and_deduction();previous_outer_remains_current();invalid_and_appraisal();deeper_and_sibling_decisions();active_phase_sources();
+    try {combine_adjacent_detected_areas();reference_and_deduction();previous_outer_remains_current();invalid_and_appraisal();deeper_and_sibling_decisions();ansi_nested_measured_partitions();active_phase_sources();
         std::cout<<"Nested measurement area definition checks passed\n";return 0;
     } catch(const std::exception& error) {std::cerr<<error.what()<<'\n';return 1;}
 }

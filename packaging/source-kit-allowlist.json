@@ -1647,6 +1647,10 @@
     },
     {
       "category": "docs",
+      "path": "docs/plans/2026-10-04-nested-appraisal-partition-authoring.md"
+    },
+    {
+      "category": "docs",
       "path": "docs/product-scope.md"
     },
     {
@@ -2607,6 +2611,10 @@
     },
     {
       "category": "docs",
+      "path": "docs/verification/nested-appraisal-partitions-2026-10-04.md"
+    },
+    {
+      "category": "docs",
       "path": "docs/verification/nested-measured-areas-2026-10-03.md"
     },
     {
@@ -2756,6 +2764,10 @@
     {
       "category": "source",
       "path": "include/sketch/annotation_entity_codec.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/appraisal_area_partition.hpp"
     },
     {
       "category": "source",
@@ -3639,6 +3651,10 @@
     },
     {
       "category": "source",
+      "path": "src/core/appraisal_area_partition.cpp"
+    },
+    {
+      "category": "source",
       "path": "src/core/appraisal_dispatcher.cpp"
     },
     {
@@ -4180,6 +4196,10 @@
     {
       "category": "source",
       "path": "tests/ansi_appraisal_desktop_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/appraisal_area_partition_tests.cpp"
     },
     {
       "category": "source",

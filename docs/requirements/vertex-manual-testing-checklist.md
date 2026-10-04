@@ -1,6 +1,6 @@
 # Vertex user testing checklist
 
-407 practical tasks, grouped by how you use the app (including U100a). This replaces the earlier engineering-oriented checklist. The old 130-item list is preserved separately as engineering-requirements-checklist.md.
+408 practical tasks, grouped by how you use the app (including U100a). This replaces the earlier engineering-oriented checklist. The old 130-item list is preserved separately as engineering-requirements-checklist.md.
 
 This is a user acceptance list for the intended app, not a claim that every listed action is implemented or working in the current preview. If you cannot find a control, or a feature is absent, mark **Blocked / missing** and describe it. Specialized sections can be skipped if you do not use them or lack the device or sample files.
 
@@ -347,7 +347,7 @@ drawing; switching modes does not change existing geometry.
 
 - [ ] **U052 — Create an area from existing closed linework**
   - Steps: Choose Measured lines in Draw. Draw three sides of a rectangle, entering one of those sides with D (distance and heading) instead of clicking, then press A for the closing side. Select the finished stroke, choose Tools → Detect closed areas and choose its classification. Open the third left-panel tab, Details, and inspect the new area's edge lengths, perimeter and area. Repeat detection, then Undo, Redo, save and reopen. Also try a loose stub, a crossing separator and a smaller closed loop inside the rectangle.
-  - Expected: Detection creates measured areas from the closed faces in the selected stroke's floor/layer context while keeping all source strokes. One Undo removes the newly defined areas together. Repeating detection adds no identical area. Loose lines alone add no appraisal total; nested holes are refused with an explanation. Details shows measurements and appraisal results according to the project's setup and recorded facts.
+  - Expected: Detection creates measured areas from the closed faces in the selected stroke's floor/layer context while keeping all source strokes. One Undo removes the newly defined areas together. Repeating detection adds no identical area. Loose lines alone add no appraisal total. Inner outlines require explicit reference, definition or deduction choices; ANSI nested partitions are covered in U407. Details shows measurements and appraisal results according to the project's setup and recorded facts.
   - Also try: Draw a closed outline with one crossing separator and define the two areas. Select the separator and drag it to make one area larger. Watch the proposal before releasing, then inspect Details, Undo, Redo and save/reopen. Select a standalone closed stroke and use its rotation handle for a quarter turn.
   - Expected: The source stroke and unambiguous derived areas update together in one Undo step. Declared classifications stay assigned to their areas; their measured sizes and GLA contributions update. A rotated stroke keeps its handle orientation. Deleted sources or ambiguous changed boundaries withhold affected totals and identify the issue instead of continuing to show qualified old measurements.
   - Result: Not tested
@@ -2311,7 +2311,7 @@ drawing; switching modes does not change existing geometry.
   - Notes: ______________________________
 
 - [ ] **U383 — Correct an invalid nested-area choice**
-  - Steps: In the nested review, try subtracting an inner outline while its parent is Reference only. Try giving parent and child the same classification. Correct the choices. After definition, move the inner source stroke and open Details and Review measured sources.
+  - Steps: In an ordinary Measurement project, open the nested review and try subtracting an inner outline while its parent is Reference only. Try giving parent and child the same classification. Correct the choices. After definition, move the inner source stroke and open Details and Review measured sources. Test ANSI partition authoring separately in U407.
   - Expected: Invalid choices explain the issue and cannot be applied. Correct choices restore a valid preview. Moving the inner source marks its derived area stale and withholds dependent GLA until the source review is accepted; unchanged outer gross geometry is retained.
   - Result: Not tested
   - Notes: ______________________________
@@ -2469,6 +2469,14 @@ drawing; switching modes does not change existing geometry.
 - [ ] **U406 — Review survey closure without changing measurements silently**
   - Steps: Enter `SE,0,10 m`, `SW,90,20 m`, `NE,0,10 m`, and `CURVE,NE,90,20.0005 m,-180`. Set closure tolerance to `0.01 m`, Calculate and inspect the proposed closure before adding. Try an open traverse and an inward curve that crosses another edge.
   - Expected: The residual is disclosed. A curved final call cannot have its endpoint adjusted; adding retains that curve and uses a separate closing line. Open or intersecting calls cannot become area boundaries. A residual too small for a valid closing segment produces an explanation instead of silently moving the endpoint.
+  - Result: Not tested
+  - Notes: ______________________________
+
+## Nested appraisal rooms and exclusions
+
+- [ ] **U407 — Define a room and its internal void from measured outlines**
+  - Steps: Use a test project. In Details > Setup choose ANSI Z765-2021 for a single-family exterior measurement. With Measured lines, draw three contained closed outlines: outer 10 m × 10 m, room 6 m × 6 m, and void 2 m × 2 m inside the room. Select a measured stroke and run Detect closed areas. Define the outer as above-grade finished, deduct the room from its parent as above-grade finished, and deduct the void from its parent as other void. Review, cancel once, then apply. In Edit facts supply the test's above-grade, finished, primary-dwelling, direct-access and flat-ceiling observations for the outer and room, plus the required property measurement observations. Inspect Details, Undo/Redo, save/reopen and export the appraisal PDF. Use the room's deduction editor to remove and restore its void link.
+  - Expected: Review shows outer gross100/deduct36/net64 m² and room gross36/deduct4/net32 m². One Apply creates both links together. Labels alone do not establish GLA. After the explicit observations qualify, GLA is 96 m², displayed as 1033 whole sq ft under this profile. The real 4 m² void is excluded once. Cancel changes nothing. Fact edits retain both links and source geometry. Undo/Redo, reopening and the PDF agree with Details. Removing/restoring a link is reversible. Ordinary measurement Auto-Subtract retains its existing TYPE and nesting rules.
   - Result: Not tested
   - Notes: ______________________________
 
