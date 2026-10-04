@@ -8,6 +8,7 @@
 #include "sketch/wall_measurement.hpp"
 #include "sketch/project_organization.hpp"
 #include "sketch/measurement_linework_source.hpp"
+#include "sketch/measurement_linework.hpp"
 #include "sketch/model_phases.hpp"
 #include <algorithm>
 #include <cmath>
@@ -1094,6 +1095,17 @@ std::optional<std::string> validate_boundary_integrity(
     std::map<std::string, std::set<std::string, std::less<>>, std::less<>> edges;
     std::set<std::string, std::less<>> future_boundaries;
     for (const auto& [id, entity] : entities) {
+        if (entity.type == "measurement_linework") {
+            if (!entity.properties.contains("model"))
+                throw std::invalid_argument("Measured stroke " + id + ": missing model");
+            const auto decoded = decode_measurement_linework_model(entity.properties.at("model"));
+            if (!decoded.supported()) {
+                future_boundaries.insert(id);
+                if (!unsupported) unsupported = "Measured stroke " + id + ": " + decoded.diagnostic;
+            } else if (decoded.model->stroke_id != entity.id)
+                throw std::invalid_argument("Measured stroke " + id + ": model owner identity differs");
+            continue;
+        }
         if (!can_recognize_boundary_entity_type(entity.type)) continue;
         const auto version = inspect_boundary_entity_version(entity);
         if (version.format == BoundaryEntityFormat::identified_v1) {
@@ -1166,11 +1178,20 @@ std::optional<std::string> validate_boundary_integrity(
         }
         const auto& dimension = *decoded.dimension;
         const auto owner = entities.find(dimension.boundary_id);
-        if (owner == entities.end() || !can_recognize_boundary_entity_type(owner->second.type))
+        if (owner == entities.end() || (!can_recognize_boundary_entity_type(owner->second.type) &&
+                                      owner->second.type != "measurement_linework"))
             throw std::invalid_argument("Dimension " + id + ": missing or invalid boundary owner");
+        if (owner->second.type == "measurement_linework" && dimension.kind == BoundaryDimensionKind::area)
+            throw std::invalid_argument("Dimension " + id + ": area dimensions cannot target measured strokes");
         // The future geometry is opaque. Preserve a well-formed reference in
         // the read-only document without pretending to resolve its child IDs.
         if (future_boundaries.contains(owner->first)) continue;
+        if (owner->second.type == "measurement_linework") {
+            // Full analytical resolution also checks shared vertex identity and
+            // nondegenerate tangents; edge membership alone is insufficient.
+            (void)dimension.resolve(owner->second);
+            continue;
+        }
         const auto boundary_edges = edges.find(owner->first);
         if (boundary_edges == edges.end())
             throw std::invalid_argument("Dimension " + id + ": missing identified source boundary");

@@ -2,6 +2,7 @@
 #include "sketch/boundary_entity.hpp"
 #include "sketch/boundary_integrity.hpp"
 #include "sketch/boundary_dimension.hpp"
+#include "sketch/measurement_linework.hpp"
 #include "sketch/boundary_authoring_session.hpp"
 #include "sketch/boundary_construction.hpp"
 #include "sketch/constraint_entity.hpp"
@@ -11,6 +12,7 @@
 #include <sqlite3.h>
 
 #include <functional>
+#include <cmath>
 #include <cstdlib>
 #include <iostream>
 #include <numbers>
@@ -201,6 +203,127 @@ Entity area_dimension() {
          {"target", {{"entity_id", "boundary-1"}}},
          {"text_position", {2, 1.5}}, {"placement_origin", "manual"}},
         false, Json::object()};
+}
+
+Entity measured_dimension_stroke() {
+    MeasurementLinework model; model.stroke_id = "dimension-stroke";
+    model.extensions = {{"vendor_model", {1, 2, 3}}};
+    const std::vector<Vec2> points{{0, 0}, {2, 0}, {2, 3}};
+    for (std::size_t i = 1; i < points.size(); ++i) {
+        ConstructionReceipt receipt;
+        receipt.segment_id = "stroke-edge-" + std::to_string(i);
+        receipt.kind = BoundaryConstructionKind::line_to_point;
+        receipt.start = points[i - 1]; receipt.chord_end = points[i];
+        model.edges.push_back({receipt.segment_id, "stroke-vertex-" + std::to_string(i - 1),
+                              "stroke-vertex-" + std::to_string(i), receipt});
+    }
+    return {model.stroke_id, "measurement_linework",
+        {{"property_id", "stroke-property"}, {"building_id", "stroke-building"},
+         {"floor_id", "stroke-floor"}, {"layer_id", "stroke-layer"},
+         {"model", encode_measurement_linework_model(model)}, {"stroke_color", "#123456"}},
+        true, {{"vendor_entity", "preserve"}}};
+}
+
+Document measured_dimension_document(std::vector<Entity> additions) {
+    std::vector<Entity> values{{"stroke-property", "property", Json::object(), false},
+        {"stroke-building", "building", {{"property_id", "stroke-property"}}, false},
+        {"stroke-floor", "floor", {{"building_id", "stroke-building"}}, false},
+        {"stroke-layer", "layer", {{"floor_id", "stroke-floor"}}, false}};
+    for (auto& entity : additions) values.push_back(std::move(entity));
+    return Document::create(std::move(values));
+}
+
+Entity measured_length_dimension() {
+    auto value = dimension();
+    value.properties["target"] = {{"entity_id", "dimension-stroke"}, {"segment_id", "stroke-edge-2"}};
+    value.extensions = {{"vendor_dimension", "preserve"}};
+    return value;
+}
+
+Entity measured_angle_dimension() {
+    auto value = angle_dimension();
+    value.properties["target"] = {{"entity_id", "dimension-stroke"}, {"segment_id", "stroke-edge-1"},
+        {"second_segment_id", "stroke-edge-2"}, {"vertex_id", "stroke-vertex-1"}};
+    return value;
+}
+
+void test_measured_dimensions_replay_and_validate_atomically() {
+    auto document = measured_dimension_document({measured_dimension_stroke(), measured_length_dimension(),
+                                                measured_angle_dimension()});
+    const auto original = document.snapshot();
+    require(document.is_editable() && !validate_boundary_integrity(original.entities()),
+            "supported open measured dimensions must be admitted");
+    const auto length = *decode_boundary_dimension_entity(measured_length_dimension()).dimension;
+    const auto angle = *decode_boundary_dimension_entity(measured_angle_dimension()).dimension;
+    require(length.resolve(original.entities().at("dimension-stroke")).segment_length() == 3 &&
+            std::abs(angle.resolve(original.entities().at("dimension-stroke")).angle() - std::numbers::pi / 2) < 1e-12,
+            "measured dimensions must resolve stable terminal and shared targets");
+    auto invalid_angle = measured_angle_dimension();
+    invalid_angle.properties["target"]["vertex_id"] = "stroke-vertex-0";
+    require_rejected_unchanged(document, invalid_angle,
+        "existing measured edges with a nonshared angle vertex were accepted");
+    invalid_angle.properties["target"]["vertex_id"] = "missing-vertex";
+    require_rejected_unchanged(document, invalid_angle, "missing measured angle vertex was accepted");
+    auto invalid_length = measured_length_dimension();
+    invalid_length.properties["target"]["segment_id"] = "missing-edge";
+    require_rejected_unchanged(document, invalid_length, "missing measured dimension edge was accepted");
+    auto area = area_dimension(); area.properties["target"]["entity_id"] = "dimension-stroke";
+    require_rejected_unchanged(document, area, "measured area dimension was accepted");
+
+    BoundaryGeometryEdit resize;
+    resize.boundary_id = "dimension-stroke"; resize.kind = BoundaryGeometryEditKind::resize_segment;
+    resize.target_id = "stroke-edge-2"; resize.target_length_metres = 4;
+    ApplyBoundaryConstraintChanges command;
+    command.expected_revision = document.revision(); command.message = "resize dimensioned measured edge";
+    command.measured_source_completion = true;
+    command.measured_stroke_edits.push_back({"dimension-stroke", resize, parse_quantity("4000 mm"), {}, {}});
+    document.apply(command);
+    const auto changed = document.snapshot();
+    const auto& changed_stroke = changed.entities().at("dimension-stroke");
+    require(length.resolve(changed_stroke).segment_length() == 4 &&
+            changed.entities().at(length.id) == original.entities().at(length.id) &&
+            changed.entities().at(angle.id) == original.entities().at(angle.id),
+            "typed measured edit must refresh resolved values without changing retained dimension targets");
+    const auto before_model = *decode_measurement_linework_model(original.entities().at("dimension-stroke").properties.at("model")).model;
+    const auto after_model = *decode_measurement_linework_model(changed_stroke.properties.at("model")).model;
+    require(before_model.edges == after_model.edges && before_model.extensions == after_model.extensions &&
+            changed_stroke.extensions == original.entities().at("dimension-stroke").extensions,
+            "dimensioned measured edit must preserve original receipts, identities and metadata");
+    document = reopen(changed, ProjectStore::required_format_version(changed));
+    require(document.snapshot().entities() == changed.entities(), "measured dimensions changed on reopen");
+    document.undo(document.revision());
+    require(document.snapshot().entities() == original.entities(), "Undo failed to restore dimensioned stroke input");
+    document.redo(document.revision());
+    require(document.snapshot().entities() == changed.entities(), "Redo failed to restore dimensioned stroke replay");
+
+    auto malformed = original.entities();
+    malformed.at("dimension-stroke").properties["model"]["segments"][0]["end_vertex_id"] = "bad-join";
+    bool rejected = false;
+    try { (void)validate_boundary_integrity(malformed); }
+    catch (const std::invalid_argument&) { rejected = true; }
+    require(rejected, "dimension integrity must independently refuse malformed supported stroke replay");
+}
+
+void test_future_measured_dimension_owners_remain_opaque() {
+    auto future_stroke = measured_dimension_stroke();
+    future_stroke.properties["model"] = {{"version", 999}, {"vendor_future", {1, 2, 3}}};
+    auto document = measured_dimension_document({future_stroke, measured_length_dimension(), measured_angle_dimension()});
+    require(!document.is_editable(), "future measured dimension owner must remain read-only");
+    const auto original = document.snapshot();
+    auto loaded = reopen(original, ProjectStore::required_format_version(original));
+    require(!loaded.is_editable() && loaded.snapshot().entities() == original.entities(),
+            "opaque measured model and well-formed references must reopen exactly");
+    auto invalid_area = area_dimension(); invalid_area.properties["target"]["entity_id"] = future_stroke.id;
+    bool rejected_area = false;
+    try { (void)measured_dimension_document({future_stroke, invalid_area}); }
+    catch (const DocumentError&) { rejected_area = true; }
+    require(rejected_area, "future measured owner must not hide an invalid area dimension");
+    auto invalid_known = dimension(); invalid_known.id = "invalid-unrelated-dimension";
+    invalid_known.properties["target"]["segment_id"] = "missing-edge";
+    bool rejected_known = false;
+    try { (void)measured_dimension_document({future_stroke, measured_length_dimension(), rectangle(), invalid_known}); }
+    catch (const DocumentError&) { rejected_known = true; }
+    require(rejected_known, "future measured owner must not hide invalid unrelated known boundary dimensions");
 }
 
 void test_advanced_dimension_references_are_validated() {
@@ -1499,6 +1622,8 @@ int main() {
         test_future_boundary_version_is_preserved_read_only();
         test_dimension_references_are_atomic_and_survive_history();
         test_advanced_dimension_references_are_validated();
+        test_measured_dimensions_replay_and_validate_atomically();
+        test_future_measured_dimension_owners_remain_opaque();
         test_unknown_dimensions_preserve_read_only_without_hiding_invalid_known_data();
         test_v1_upgrade_preserves_original_file_and_reversible_history();
         test_abandoned_unknown_history_and_forged_navigation();

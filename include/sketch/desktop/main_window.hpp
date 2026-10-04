@@ -504,13 +504,13 @@ public:
     [[nodiscard]] bool editBoundaryDimension(const QString& id, const QString& x,
         const QString& y, const QString& height_mm, const QString& color,
         bool bold, bool italic, bool visible, const QString& rotation_degrees);
-    // Creates a segment-length dimension from a stable identified edge. The
-    // displayed value continues to resolve from the current boundary geometry.
+    // Creates a physical segment-length dimension from a stable identified
+    // boundary or measured-stroke edge, resolved from current analytical geometry.
     [[nodiscard]] QString createLengthDimension(const QString& boundary_id,
                                                 const QString& segment_id,
                                                 Vec2 text_position,
                                                 std::optional<Revision> expected_revision = std::nullopt);
-    // Creates a semantic angle dimension from two identified boundary edges
+    // Creates a semantic angle dimension from two boundary or measured-stroke edges
     // and their shared vertex. The analytical angle is resolved from current
     // geometry; the text position is stored in model metres.
     [[nodiscard]] QString createAngleDimension(const QString& boundary_id,
@@ -546,10 +546,10 @@ public:
     void showAppraisalFacts();
     [[nodiscard]] bool setSelectedCalculationRule(bool include_in_building,
                                                    bool include_in_living);
-    // Applies an analytic transform to a selected identified boundary or wall.
-    // Pivot: analytical boundary bounds center or wall endpoint midpoint. Offsets
-    // use the current input unit. Wall clones include hosted openings; originals
-    // remain unchanged. The name is retained for existing callers.
+    // Applies an analytic transform to a selected area, measured stroke or wall.
+    // Pivot: analytical geometry bounds center or wall endpoint midpoint. Offsets
+    // use the current input unit. Clones retain independent owned dimensions;
+    // wall clones include hosted openings. Originals remain unchanged.
     [[nodiscard]] bool transformSelectedBoundary(const QString& rotation_degrees,
                                                  bool flip_horizontal,
                                                  bool flip_vertical,

@@ -1,4 +1,5 @@
 #include "sketch/boundary_dimension.hpp"
+#include "sketch/measurement_linework.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -538,20 +539,39 @@ Entity encode_boundary_dimension_entity(const BoundaryDimension& dimension,
     return result;
 }
 
+IdentifiedBoundary resolve_dimension_geometry_owner(const Entity& entity) {
+    if (entity.type == "measurement_linework") {
+        if (!entity.properties.contains("model")) invalid("dimension measured source is missing its model");
+        const auto decoded = decode_measurement_linework_model(entity.properties.at("model"));
+        if (!decoded.supported()) invalid("dimension measured source is unsupported: " + decoded.diagnostic);
+        const auto replay = replay_measurement_linework(*decoded.model);
+        if (replay.stroke_id != entity.id) invalid("dimension measured source identity differs from its model");
+        IdentifiedBoundary result{entity.id, entity.type, {}};
+        result.segments.reserve(replay.edges.size());
+        for (const auto& edge : replay.edges)
+            result.segments.push_back({edge.segment_id, edge.start_vertex_id, edge.end_vertex_id, edge.segment});
+        return result;
+    }
+    if (!can_recognize_boundary_entity_type(entity.type)) {
+        invalid("dimension source entity type is not a supported boundary");
+    }
+    const auto source_version = inspect_boundary_entity_version(entity);
+    if (source_version.format != BoundaryEntityFormat::identified_v1) {
+        invalid("dimension source boundary must use identified model version one");
+    }
+    return decode_identified_boundary_entity(entity);
+}
+
 BoundaryDimensionResolution resolve_boundary_dimension(const BoundaryDimension& dimension,
                                                         const Entity& boundary_entity) {
     validate_model(dimension);
     if (boundary_entity.id != dimension.boundary_id) {
         invalid("dimension source boundary id does not match target entity id");
     }
-    if (!can_recognize_boundary_entity_type(boundary_entity.type)) {
-        invalid("dimension source entity type is not a supported boundary");
+    if (dimension.kind == BoundaryDimensionKind::area && boundary_entity.type == "measurement_linework") {
+        invalid("area dimensions cannot target measured strokes");
     }
-    const auto source_version = inspect_boundary_entity_version(boundary_entity);
-    if (source_version.format != BoundaryEntityFormat::identified_v1) {
-        invalid("dimension source boundary must use identified model version one");
-    }
-    const auto source = decode_identified_boundary_entity(boundary_entity);
+    const auto source = resolve_dimension_geometry_owner(boundary_entity);
     if (dimension.kind == BoundaryDimensionKind::segment_length) {
         const auto found = find_segment(source, dimension.segment_id);
         if (found == nullptr) {

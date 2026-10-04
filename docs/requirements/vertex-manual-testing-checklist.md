@@ -1,6 +1,6 @@
 # Vertex user testing checklist
 
-415 practical tasks, grouped by how you use the app (including U100a). This replaces the earlier engineering-oriented checklist. The old 130-item list is preserved separately as engineering-requirements-checklist.md.
+419 practical tasks, grouped by how you use the app (including U100a). This replaces the earlier engineering-oriented checklist. The old 130-item list is preserved separately as engineering-requirements-checklist.md.
 
 This is a user acceptance list for the intended app, not a claim that every listed action is implemented or working in the current preview. If you cannot find a control, or a feature is absent, mark **Blocked / missing** and describe it. Specialized sections can be skipped if you do not use them or lack the device or sample files.
 
@@ -2526,6 +2526,32 @@ drawing; switching modes does not change existing geometry.
 - [ ] **U414 — Update appraisal areas when their connected measured lines change**
   - Steps: Draw and define two adjoining measured rooms, then record the required appraisal facts until Details shows qualified GLA. Add a relationship to the dividing line and move a connected endpoint. Inspect the geometry, room dimensions, deductions and GLA before accepting. Undo, Redo and save/reopen. Repeat with a combined measured area and an active remodeling alternative.
   - Expected: Previously current, unambiguous, unauthored areas and measurements update in the same reversible edit, including combined-area member lineage. Recorded classifications and observations are retained. An ambiguous, authored or already-stale area requires source review and withholds qualified totals. The active design phase governs sources; hiding a layer alone does not change GLA.
+  - Result: Not tested
+  - Notes: ______________________________
+
+## Saved dimensions on measured lines
+
+- [ ] **U415 — Add saved dimensions to an open or curved measured line**
+  - Steps: Choose Measured lines and draw an open stroke, then a curved stroke. Select each and open Tools > dimension creator, or the canvas right-click dimension action. Add a length to the final edge. Choose Angle, two connected edges and their shared point, then add the angle. Try a closed measured stroke as well.
+  - Expected: The selected stroke is the default source. Its final edge can receive a saved length. A curve shows physical arc length; the angle uses its endpoint tangent. The angle point list contains genuine shared points of the chosen edges. Identical edges cannot produce an angle. Area is unavailable for measured strokes, including closed ones; define a measured area first.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **U416 — Style a saved line dimension and edit its source**
+  - Steps: Select a saved length or angle dimension. Change its color, paper text size and position. Move a source vertex, resize an edge and edit a connected relationship. Undo, Redo, save and reopen. Add an automatically positioned length in each workspace at different zoom levels.
+  - Expected: The displayed value follows the actual source geometry. Ordinary geometry edits retain the saved position, style and target edge or point. Automatic placement starts beside the chosen line at a readable distance using the current workspace zoom. Undo and reopening retain the complete edit.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **U417 — Move and duplicate a line with saved dimensions**
+  - Steps: Select a dimensioned stroke and open Transform selection. Preview a rotation, reflection and offset; Cancel once, then Apply. Drag it together with an ordinary area and with a connected wall. Create a transformed copy, then Copy/Paste into another project. Edit the copy.
+  - Expected: Preview changes no saved objects. Apply and dragging move the source and its dimension positions together once. Valid connected moves retain their relationships. Copies contain independent dimension and source references; editing one leaves the original unchanged. Each committed change is one Undo/Redo step.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **U418 — Reopen, remove and export dimensioned measured lines**
+  - Steps: Save/reopen a stroke with styled length and angle dimensions. Delete its owner, Undo and Redo, then save/reopen again. Restore it and inspect sheet preview, SVG and PDF at two output scales.
+  - Expected: Delete removes the stroke and attached dimensions together. Undo restores their exact saved values, positions and styles, including after reopening. Output contains the saved dimensions and styles at the chosen sheet scale.
   - Result: Not tested
   - Notes: ______________________________
 

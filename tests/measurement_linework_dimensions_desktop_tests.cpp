@@ -1,0 +1,323 @@
+#include "sketch/desktop/main_window.hpp"
+#include "sketch/boundary_dimension.hpp"
+#include "sketch/measurement_linework.hpp"
+#include "sketch/constraint_authoring.hpp"
+#include "support/noninteractive_errors.hpp"
+#include "../src/desktop/plan_canvas.hpp"
+#include <QAction>
+#include <QAbstractItemModel>
+#include <QApplication>
+#include <QCheckBox>
+#include <QComboBox>
+#include <QDialog>
+#include <QDialogButtonBox>
+#include <QDir>
+#include <QElapsedTimer>
+#include <QFile>
+#include <QFont>
+#include <QImage>
+#include <QFontDatabase>
+#include <QLabel>
+#include <QLineEdit>
+#include <QMouseEvent>
+#include <QPdfDocument>
+#include <QPdfSelection>
+#include <QPushButton>
+#include <QStandardPaths>
+#include <QTemporaryDir>
+#include <QTimer>
+#include <QUuid>
+#include <QXmlStreamReader>
+#include <algorithm>
+#include <cmath>
+#include <functional>
+#include <iostream>
+#include <numbers>
+#include <set>
+#include <stdexcept>
+
+namespace {
+using namespace sketch;using namespace sketch::desktop;using Json=nlohmann::json;
+void require(bool value,const char* message){if(!value)throw std::runtime_error(message);}
+void require_near(double a,double b){if(std::abs(a-b)>=1e-9)throw std::runtime_error("actual measured dimension "+std::to_string(a)+" differs from analytical expectation "+std::to_string(b));}
+bool same(Vec2 a,Vec2 b){return a.x==b.x&&a.y==b.y;}
+Entity stroke(const std::string& id,const std::vector<Vec2>& points,bool arc=false,bool closed=false) {
+    MeasurementLinework model;model.stroke_id=id;model.anchor=points.front();model.closed=closed;
+    model.extensions={{"vendor",{{"literal",id+":v1"},{"keep",7}}}};
+    for(std::size_t i=1;i<points.size();++i) {
+        ConstructionReceipt receipt;receipt.segment_id=id+":e"+std::to_string(i);receipt.start=points[i-1];receipt.chord_end=points[i];
+        receipt.kind=arc&&i==1?BoundaryConstructionKind::arc_chord_angle:BoundaryConstructionKind::line_to_point;
+        if(arc&&i==1)receipt.angle=parse_angle("90 deg");
+        model.edges.push_back({receipt.segment_id,id+":v"+std::to_string(i-1),closed&&i+1==points.size()?id+":v0":id+":v"+std::to_string(i),receipt});
+    }
+    return {id,"measurement_linework",{{"property_id","p"},{"building_id","b"},{"floor_id","f"},{"layer_id","l"},
+        {"model",encode_measurement_linework_model(model)}},true};
+}
+std::shared_ptr<Document> fixture() {
+    auto repeated=stroke("repeat",{{0,6},{2,6},{2,8},{2,6},{3,6}});
+    auto model=*decode_measurement_linework_model(repeated.properties.at("model")).model;
+    model.edges[2].end_vertex_id="repeat:v1";model.edges[3].start_vertex_id="repeat:v1";
+    repeated.properties["model"]=encode_measurement_linework_model(model);
+    return std::make_shared<Document>(Document::create({{"p","property",Json::object(),false},
+        {"b","building",{{"property_id","p"}},false},{"f","floor",{{"building_id","b"}},false},{"l","layer",{{"floor_id","f"}},false},
+        stroke("open",{{0,0},{2,0},{2,3}}),stroke("arc",{{5,0},{7,0},{7,2}},true),
+        stroke("closed",{{10,0},{12,0},{12,2},{10,0}},false,true),repeated,
+        stroke("partner",{{2,3},{4,3}})}));
+}
+template<class T>T& control(QWidget& owner,const char* name){auto* result=owner.findChild<T*>(name);require(result,"actual dimension control must exist");return *result;}
+void choose(QComboBox& box,const QString& data){const auto index=box.findData(data);require(index>=0,"creator must offer stable measured target");box.setCurrentIndex(index);QApplication::processEvents();}
+void prepare(MainWindow& window){window.setAttribute(Qt::WA_DontShowOnScreen);window.resize(1200,800);window.setMetricUnits(true);window.show();QApplication::processEvents();}
+PlanCanvas& canvas(MainWindow& window){auto* value=dynamic_cast<PlanCanvas*>(window.findChild<QWidget*>("measurementPlanCanvas"));require(value,"real plan canvas must exist");return *value;}
+void capture(QWidget& widget,const QString& name){const auto directory=qEnvironmentVariable("VERTEX_TEST_CAPTURE_DIR");if(directory.isEmpty())return;
+    require(QDir().mkpath(directory)&&widget.grab().save(QDir(directory).filePath(name)),"actual measured dimension capture must save");}
+BoundaryDimension dimension(const DocumentSnapshot& snapshot,const std::string& id){const auto decoded=decode_boundary_dimension_entity(snapshot.entities().at(id));require(decoded.supported(),"saved dimension must decode");return *decoded.dimension;}
+std::vector<BoundaryDimension> dimensions(const DocumentSnapshot& snapshot,const std::string& owner){std::vector<BoundaryDimension> result;
+    for(const auto& [id,entity]:snapshot.entities()){(void)id;if(entity.type!="dimension")continue;const auto decoded=decode_boundary_dimension_entity(entity);
+        if(decoded.dimension&&decoded.dimension->boundary_id==owner)result.push_back(*decoded.dimension);}return result;}
+void creator(MainWindow& window,const std::function<void(QDialog&)>& fn){std::exception_ptr failure;bool opened=false;
+    QTimer::singleShot(0,&window,[&]{auto* dialog=window.findChild<QDialog*>("dimensionCreatorDialog");try{require(dialog,"actual creator dialog opens");opened=true;fn(*dialog);}catch(...){failure=std::current_exception();}
+        if(dialog)dialog->reject();});auto& action=control<QAction>(window,"dimensionCreator");require(action.isEnabled(),"actual creator QAction must be enabled");action.trigger();
+    if(failure)std::rethrow_exception(failure);require(opened,"creator callback must run");}
+void styled(MainWindow& window,const QString& id,Vec2 point){require(!id.isEmpty(),"native dimension creation must succeed");
+    require(window.editBoundaryDimension(id,QString::number(point.x,'g',17)+" m",QString::number(point.y,'g',17)+" m","4.2","#713ba2",true,false,true,"0"),"native dimension style and manual placement edit must succeed");}
+void exact_history(MainWindow& window,const DocumentSnapshot& before,const DocumentSnapshot& after){require(after.revision()==before.revision()+1&&after.history().size()==before.history().size()+1,"dimension workflow must commit one atomic revision");
+    require(window.undoCommand()&&window.document().snapshot().entities()==before.entities()&&window.redoCommand()&&window.document().snapshot().entities()==after.entities(),"UndoRedo must restore exact source/dimension entities");}
+
+void actual_creator_terminal_arc_and_revisits() {
+    MainWindow window(fixture());prepare(window);require(window.selectEntity("open"),"select real measured source");
+    creator(window,[&](QDialog& dialog){auto& owner=control<QComboBox>(dialog,"dimensionSourceBoundary");require(owner.currentData().toString()=="open","creator must default to selected measured stroke");
+        auto& kind=control<QComboBox>(dialog,"dimensionCreateKind");const auto area=kind.findData(QStringLiteral("area"));
+        require(area<0||!(kind.model()->flags(kind.model()->index(area,0))&Qt::ItemIsEnabled),"Area must be unavailable for measured strokes");
+        choose(control<QComboBox>(dialog,"dimensionFirstSegment"),"open:e2");
+        require(control<QComboBox>(dialog,"dimensionVertex").count()==0&&!control<QPushButton>(dialog,"addAngleDimension").isEnabled(),"identical edge pair must offer no false shared angle");
+        const auto before=window.document().snapshot();control<QPushButton>(dialog,"addLengthDimension").click();
+        const auto list=dimensions(window.document().snapshot(),"open");require(list.size()==1&&list[0].segment_id=="open:e2","actual Add length must retain terminal edge target");
+        require_near(list[0].resolve(window.document().snapshot().entities().at("open")).segment_length_metres,3);
+        require(window.document().revision()==before.revision()+1&&!control<QLabel>(dialog,"dimensionCreatorStatus").text().isEmpty(),"creator reports one saved dimension");
+        choose(owner,"arc");choose(control<QComboBox>(dialog,"dimensionFirstSegment"),"arc:e1");control<QPushButton>(dialog,"addLengthDimension").click();
+        choose(kind,"angle");choose(control<QComboBox>(dialog,"dimensionFirstSegment"),"arc:e1");choose(control<QComboBox>(dialog,"dimensionSecondSegment"),"arc:e2");
+        choose(control<QComboBox>(dialog,"dimensionVertex"),"arc:v1");control<QLineEdit>(dialog,"dimensionCreateX").setText("8");control<QLineEdit>(dialog,"dimensionCreateY").setText("1");
+        control<QPushButton>(dialog,"addAngleDimension").click();const auto arc=dimensions(window.document().snapshot(),"arc");require(arc.size()==2,"real creator saves arc length and tangent angle");
+        for(const auto& item:arc){const auto resolved=item.resolve(window.document().snapshot().entities().at("arc"));if(item.kind==BoundaryDimensionKind::angle)require_near(resolved.angle_radians,3*std::numbers::pi/4);else require_near(resolved.segment_length_metres,std::sqrt(2.0)*std::numbers::pi/2);}
+        choose(owner,"repeat");auto& vertex=control<QComboBox>(dialog,"dimensionVertex");require(vertex.count()==1&&vertex.currentData()==QStringLiteral("repeat:v1"),"revisited shared vertex is listed once by stable identity");
+        choose(control<QComboBox>(dialog,"dimensionFirstSegment"),"repeat:e1");choose(control<QComboBox>(dialog,"dimensionSecondSegment"),"repeat:e3");choose(vertex,"repeat:v1");
+        control<QPushButton>(dialog,"addAngleDimension").click();require(dimensions(window.document().snapshot(),"repeat").size()==1,"nonadjacent edges sharing revisited ID support saved angle");
+        capture(dialog,"measured-dimension-creator.png");});
+    const auto before=window.document().snapshot();require(window.createAreaDimension("closed",{11,1}).isEmpty()&&window.document().snapshot().entities()==before.entities()&&window.document().revision()==before.revision(),
+        "even a closed measured stroke cannot acquire saved area semantics");
+    const auto angle=dimensions(before,"repeat").front();require(window.selectEntity("repeat")&&window.moveSelectedBoundaryVertex("repeat:v1",{3,7},before.revision()),"native revisited vertex edit must preserve dimension binding");
+    const auto after=window.document().snapshot();require(dimension(after,angle.id)==angle,"manual angle placement and stable references survive vertex edits");
+    (void)angle.resolve(after.entities().at("repeat"));exact_history(window,before,after);
+}
+
+void connected_edit_updates_saved_values() {
+    MainWindow window(fixture());prepare(window);
+    const auto length=window.createLengthDimension("open","open:e2",{4,2});styled(window,length,{4,2});
+    const auto related=window.createLengthDimension("partner","partner:e1",{3,4});styled(window,related,{3,4});
+    const auto angle=window.createAngleDimension("open","open:e1","open:e2","open:v1",{1,-1});styled(window,angle,{1,-1});
+    PersistentConstraint join;join.id="terminal-join";join.relation=ConstraintRelationKind::coincident;
+    join.bindings={{"open",WallEndpointRole::end,"open:e2","open:v2"},{"partner",WallEndpointRole::start,"partner:e1","partner:v0"}};
+    window.document().apply(ApplyEntityChanges{.expected_revision=window.document().revision(),.entity_changes={EntityChange::upsert(encode_constraint_entity(join))},.message="Retain terminal relationship"});
+    const auto before=window.document().snapshot();require(window.selectEntity("open")&&window.moveSelectedBoundaryVertex("open:v2",{5,4},before.revision()),"native endpoint edit must follow persisted stroke relationship");
+    const auto after=window.document().snapshot();const auto changed=dimension(after,length.toStdString());require_near(changed.resolve(after.entities().at("open")).segment_length_metres,5);
+    require(changed==dimension(before,length.toStdString())&&dimension(after,related.toStdString())==dimension(before,related.toStdString()),"nonrigid edits retain manual placements/styles/identities");
+    require(std::abs(dimension(after,related.toStdString()).resolve(after.entities().at("partner")).segment_length_metres-2)>1e-5,"connected owner's saved value must reflect moved geometry");
+    exact_history(window,before,after);
+}
+
+void transformed_clone_is_independent() {
+    MainWindow window(fixture());prepare(window);
+    const auto length=window.createLengthDimension("open","open:e2",{4,2});styled(window,length,{4,2});
+    const auto angle=window.createAngleDimension("open","open:e1","open:e2","open:v1",{1,-1});styled(window,angle,{1,-1});
+    const auto before=window.document().snapshot();
+    require(window.selectEntity("open"),"select source for measured clone");
+    if(!window.transformSelectedBoundary("90",true,false,"3 m","-2 m",true))
+        throw std::runtime_error("transformed measured clone: "+window.lastError().toStdString());
+    const auto after=window.document().snapshot();std::string copy;
+    for(const auto& [id,entity]:after.entities())if(!before.entities().contains(id)&&entity.type=="measurement_linework")copy=id;
+    require(!copy.empty(),"transformed clone must have a fresh measured owner");
+    for(const auto& [id,entity]:before.entities())require(after.entities().at(id)==entity,"transformed clone must preserve every original entity");
+    const auto owned=dimensions(after,copy);require(owned.size()==2,"transformed clone must preserve both owned dimensions");
+    for(const auto& item:owned) {
+        const auto original=dimension(before,item.kind==BoundaryDimensionKind::angle?angle.toStdString():length.toStdString());
+        require(item.id!=original.id&&item.segment_id!=original.segment_id&&item.presentation==original.presentation,"clone must retain style and remap identity");
+        require_near(item.text_position.x,item.kind==BoundaryDimensionKind::angle?1.5:4.5);
+        require_near(item.text_position.y,item.kind==BoundaryDimensionKind::angle?-.5:2.5);
+        const auto resolved=item.resolve(after.entities().at(copy));
+        if(item.kind==BoundaryDimensionKind::angle)require_near(resolved.angle_radians,std::numbers::pi/2);else require_near(resolved.segment_length_metres,3);
+    }
+    exact_history(window,before,after);
+}
+
+void actual_transform_preview_cancel_and_apply() {
+    MainWindow window(fixture());prepare(window);
+    const auto length=window.createLengthDimension("open","open:e2",{4,2});styled(window,length,{4,2});
+    require(window.selectEntity("open"),"select measured owner for real transform dialog");
+    const auto before=window.document().snapshot();
+    const auto exercise=[&](bool apply) {
+        std::exception_ptr failure;bool opened=false;
+        QTimer::singleShot(0,&window,[&] {
+            auto* dialog=window.findChild<QDialog*>("boundaryTransformDialog");
+            try {
+                require(dialog,"measured transform dialog must open");opened=true;
+                control<QLineEdit>(*dialog,"boundaryRotationDegrees").setText("90");
+                control<QLineEdit>(*dialog,"boundaryOffsetX").setText("3 m");
+                control<QLineEdit>(*dialog,"boundaryOffsetY").setText("-2 m");
+                control<QCheckBox>(*dialog,"boundaryFlipHorizontal").setChecked(true);
+                QApplication::processEvents();
+                auto& buttons=control<QDialogButtonBox>(*dialog,"boundaryTransformButtons");
+                require(buttons.button(QDialogButtonBox::Apply)->isEnabled(),"valid measured transform preview must enable Apply");
+                auto* preview=dynamic_cast<PlanCanvas*>(dialog->findChild<QWidget*>("wallTransformPreview"));
+                require(preview&&preview->labels().size()==2,"real preview must show original and proposed saved dimension labels");
+                require(window.document().snapshot().entities()==before.entities(),"preview must not mutate document or label placement");
+                capture(*dialog,apply?"measured-transform-apply.png":"measured-transform-cancel.png");
+                buttons.button(apply?QDialogButtonBox::Apply:QDialogButtonBox::Cancel)->click();
+            }catch(...){failure=std::current_exception();if(dialog)dialog->reject();}
+        });
+        window.showBoundaryTransformEditor();
+        if(failure)std::rethrow_exception(failure);require(opened,"transform callback must execute");
+    };
+    exercise(false);require(window.document().snapshot().entities()==before.entities()&&window.document().revision()==before.revision(),"Cancel must preserve source, labels and revision");
+    exercise(true);const auto after=window.document().snapshot();const auto moved=dimension(after,length.toStdString());
+    require_near(moved.text_position.x,4.5);require_near(moved.text_position.y,2.5);exact_history(window,before,after);
+}
+
+void mixed_canvas_move_retains_placed_dimensions() {
+    auto document=fixture();
+    Entity area{"ordinary-area","boundary",{{"property_id","p"},{"building_id","b"},{"floor_id","f"},{"layer_id","l"},
+        {"classification","living"},{"segments",Json::array({{{"start",{10,0}},{"end",{12,0}},{"sweep_radians",0}},
+        {{"start",{12,0}},{"end",{12,2}},{"sweep_radians",0}},{{"start",{12,2}},{"end",{10,2}},{"sweep_radians",0}},
+        {{"start",{10,2}},{"end",{10,0}},{"sweep_radians",0}}})}},false};
+    area=upgrade_legacy_boundary_entity(area);
+    document->apply(ApplyEntityChanges{.expected_revision=document->revision(),.entity_changes={EntityChange::upsert(area)},.message="Add ordinary identified area"});
+    MainWindow window(document);prepare(window);
+    const auto length=window.createLengthDimension("open","open:e2",{4,2});styled(window,length,{4,2});
+    require(window.selectEntity("open")&&window.selectEntity("ordinary-area",true)&&window.selectedEntityIds().size()==2,"select stroke and unauthored area together");
+    auto& surface=canvas(window);surface.setSnapEnabled(false);surface.setOverviewMapEnabled(false);surface.setViewTransform({6,1},50);
+    const auto before=window.document().snapshot();
+    const QPointF start=QRectF(surface.rect()).center()+QPointF(5*surface.viewScale(),0);
+    const QPointF end=start+QPointF(75,-50);
+    QMouseEvent down(QEvent::MouseButtonPress,start,surface.mapToGlobal(start.toPoint()),Qt::LeftButton,Qt::LeftButton,Qt::NoModifier);
+    QMouseEvent drag(QEvent::MouseMove,end,surface.mapToGlobal(end.toPoint()),Qt::NoButton,Qt::LeftButton,Qt::NoModifier);
+    QMouseEvent up(QEvent::MouseButtonRelease,end,surface.mapToGlobal(end.toPoint()),Qt::LeftButton,Qt::NoButton,Qt::NoModifier);
+    QApplication::sendEvent(&surface,&down);QApplication::sendEvent(&surface,&drag);
+    require(window.document().snapshot().entities()==before.entities(),"mixed canvas preview cannot alter placements");
+    QApplication::sendEvent(&surface,&up);QElapsedTimer completion;completion.start();
+    while(surface.entitiesMovePreviewPending()&&completion.elapsed()<3000)QApplication::processEvents(QEventLoop::AllEvents,30);
+    QApplication::processEvents();
+    const auto after=window.document().snapshot();
+    if(after.revision()==before.revision())throw std::runtime_error("mixed ordinary area Move did not commit: "+window.lastError().toStdString());
+    const auto placement=dimension(after,length.toStdString());require_near(placement.text_position.x,5.5);require_near(placement.text_position.y,3);
+    require(placement.presentation==dimension(before,length.toStdString()).presentation,"mixed ordinary Move must preserve label style");
+    require(after.entities().at("ordinary-area")!=before.entities().at("ordinary-area")&&after.entities().at("open")!=before.entities().at("open"),"both selected owners must move");
+    exact_history(window,before,after);capture(window,"mixed-measured-dimension-move.png");
+}
+
+void automatic_placement_uses_active_workspace_scale() {
+    for(const auto workspace:{Workspace::measurement,Workspace::architectural}) {
+        MainWindow window(fixture());prepare(window);window.setWorkspace(workspace);QApplication::processEvents();
+        auto& measurement=canvas(window);
+        auto* architectural=dynamic_cast<PlanCanvas*>(window.findChild<QWidget*>("architecturalPlanCanvas"));
+        require(architectural,"second real workspace canvas must exist");
+        measurement.setViewTransform({2,1},100);architectural->setViewTransform({2,1},40);
+        require(window.selectEntity("open"),"select measured stroke in each workspace");
+        creator(window,[&](QDialog& dialog) {
+            choose(control<QComboBox>(dialog,"dimensionFirstSegment"),"open:e2");
+            control<QPushButton>(dialog,"addLengthDimension").click();
+        });
+        const auto items=dimensions(window.document().snapshot(),"open");require(items.size()==1,"active workspace creator must save one length");
+        const auto scale=workspace==Workspace::measurement?measurement.viewScale():architectural->viewScale();
+        require_near(std::hypot(items[0].text_position.x-2,items[0].text_position.y-1.5)*scale,24);
+    }
+}
+
+void mixed_wall_anchor_move_keeps_whole_transaction_admission() {
+    MainWindow window(fixture());prepare(window);
+    const auto length=window.createLengthDimension("open","open:e2",{4,2});styled(window,length,{4,2});
+    const auto wall=window.createStraightWall({2,3},{4,3});require(!wall.isEmpty(),"mixed movement fixture needs real wall");
+    PersistentConstraint join;join.id="stroke-wall-join";join.relation=ConstraintRelationKind::coincident;
+    join.bindings={{"open",WallEndpointRole::end,"open:e2","open:v2"},{wall.toStdString(),WallEndpointRole::start}};
+    PersistentConstraint anchor;anchor.id="wall-anchor";anchor.relation=ConstraintRelationKind::fixed_anchor;
+    anchor.bindings={{wall.toStdString(),WallEndpointRole::start}};anchor.anchor=Vec2{2,3};
+    window.document().apply(ApplyEntityChanges{.expected_revision=window.document().revision(),
+        .entity_changes={EntityChange::upsert(encode_constraint_entity(join)),EntityChange::upsert(encode_constraint_entity(anchor))},.message="Retain mixed hard relations"});
+    require(window.selectEntity("open")&&window.selectEntity(wall,true),"select stroke and anchored wall together");
+    auto& surface=canvas(window);surface.setSnapEnabled(false);surface.setOverviewMapEnabled(false);surface.setViewTransform({2,2},60);
+    const auto before=window.document().snapshot();const QPointF start=QRectF(surface.rect()).center()+QPointF(60,-60),end=start+QPointF(90,-60);
+    QMouseEvent down(QEvent::MouseButtonPress,start,surface.mapToGlobal(start.toPoint()),Qt::LeftButton,Qt::LeftButton,Qt::NoModifier);
+    QMouseEvent drag(QEvent::MouseMove,end,surface.mapToGlobal(end.toPoint()),Qt::NoButton,Qt::LeftButton,Qt::NoModifier);
+    QMouseEvent up(QEvent::MouseButtonRelease,end,surface.mapToGlobal(end.toPoint()),Qt::LeftButton,Qt::NoButton,Qt::NoModifier);
+    QApplication::sendEvent(&surface,&down);QApplication::sendEvent(&surface,&drag);QApplication::sendEvent(&surface,&up);
+    QElapsedTimer completion;completion.start();while(surface.entitiesMovePreviewPending()&&completion.elapsed()<3000)QApplication::processEvents(QEventLoop::AllEvents,30);
+    QApplication::processEvents();
+    const auto after=window.document().snapshot();
+    if(after.revision()==before.revision())throw std::runtime_error("mixed anchored wall Move did not commit: "+window.lastError().toStdString());
+    const auto placement=dimension(after,length.toStdString());require_near(placement.text_position.x,5.5);require_near(placement.text_position.y,3);
+    const auto lock=decode_constraint_entity(after.entities().at("wall-anchor"));require(lock.supported()&&lock.constraint->anchor.has_value(),"moved wall retains its fixed anchor");
+    require_near(lock.constraint->anchor->x,3.5);require_near(lock.constraint->anchor->y,4);
+    require(after.entities().at("stroke-wall-join")==before.entities().at("stroke-wall-join"),"mixed movement preserves coincidence identity");
+    exact_history(window,before,after);
+}
+
+void transform_clipboard_output_delete_and_reopen() {
+    QTemporaryDir temporary;require(temporary.isValid(),"native dimension workflow needs output directory");MainWindow window(fixture());prepare(window);
+    const auto length=window.createLengthDimension("open","open:e2",{4,2});styled(window,length,{4,2});
+    const auto angle=window.createAngleDimension("open","open:e1","open:e2","open:v1",{1,-1});styled(window,angle,{1,-1});
+    const auto arc_length=window.createLengthDimension("arc","arc:e1",{8,-1});styled(window,arc_length,{8,-1});
+    const auto arc_angle=window.createAngleDimension("arc","arc:e1","arc:e2","arc:v1",{8,1});styled(window,arc_angle,{8,1});
+    const auto before=window.document().snapshot();require_near(dimension(before,arc_length.toStdString()).resolve(before.entities().at("arc")).segment_length_metres,std::sqrt(2.0)*std::numbers::pi/2);
+    require_near(dimension(before,arc_angle.toStdString()).resolve(before.entities().at("arc")).angle_radians,3*std::numbers::pi/4);
+    require(window.selectEntity("open")&&window.transformSelectedBoundary("90",true,false,"3 m","-2 m",false),"native rigid stroke transform must include saved dimensions");
+    const auto after=window.document().snapshot();const auto moved_length=dimension(after,length.toStdString()),moved_angle=dimension(after,angle.toStdString());
+    require_near(moved_length.text_position.x,4.5);require_near(moved_length.text_position.y,2.5);require_near(moved_angle.text_position.x,1.5);require_near(moved_angle.text_position.y,-.5);
+    require(moved_length.presentation==dimension(before,length.toStdString()).presentation&&moved_angle.presentation==dimension(before,angle.toStdString()).presentation,"rigid placement completion retains persisted style");
+    exact_history(window,before,after);canvas(window).fitView();QApplication::processEvents();
+    std::vector<QString> texts;for(const auto& item:{moved_length,moved_angle,dimension(after,arc_length.toStdString()),dimension(after,arc_angle.toStdString())}){const auto found=std::find_if(canvas(window).labels().begin(),canvas(window).labels().end(),[&](const auto& label){return label.id==QString::fromStdString(item.id);});
+        require(found!=canvas(window).labels().end()&&found->color==QColor("#713ba2")&&found->bold,"real canvas projects saved measured dimension style");texts.push_back(found->text);}
+    const auto svg=temporary.filePath("measured-dimensions.svg"),pdf=temporary.filePath("measured-dimensions.pdf");require(window.exportDraftSvg(svg)&&window.exportDraftPdf(pdf),"actual plan export must include measured dimension projection");
+    QFile input(svg);require(input.open(QIODevice::ReadOnly),"SVG must reopen");QXmlStreamReader xml(input.readAll());QString svg_text;
+    while(!xml.atEnd()){xml.readNext();if(xml.isCharacters())svg_text+=xml.text().toString();}require(!xml.hasError(),"SVG must be valid XML");
+    QPdfDocument output;require(output.load(pdf)==QPdfDocument::Error::None&&output.pageCount()>0,"actual dimension PDF must reopen");const auto pdf_text=output.getAllText(0).text().simplified();
+    for(const auto& text:texts)require(svg_text.contains(text)&&pdf_text.contains(text.simplified()),"SVG and PDF must contain persisted measured dimension text");
+    capture(window,"styled-measured-dimensions.png");const auto capture_dir=qEnvironmentVariable("VERTEX_TEST_CAPTURE_DIR");
+    if(!capture_dir.isEmpty()) {
+        const auto paper=output.pagePointSize(0);
+        require(output.render(0,{1000,static_cast<int>(std::lround(1000*paper.height()/paper.width()))}).save(QDir(capture_dir).filePath("styled-measured-dimensions-pdf.png")),"actual PDF capture must preserve page aspect ratio and save");
+    }
+    require(window.selectEntity("open")&&window.copySelection(),"native Copy includes saved measured dimensions");MainWindow target;prepare(target);const auto empty=target.document().snapshot();
+    if(!target.pasteSelection())throw std::runtime_error("native measured dimension Paste: "+target.lastError().toStdString());
+    const auto pasted=target.document().snapshot();std::string copied;for(const auto& [id,entity]:pasted.entities())if(entity.type=="measurement_linework")copied=id;
+    require(!copied.empty()&&copied!="open"&&window.document().snapshot().entities()==after.entities(),"copy source remains exact and independent");
+    const auto owned=dimensions(pasted,copied);require(owned.size()==2,"paste retains both owned semantic dimensions");
+    const auto model=*decode_measurement_linework_model(pasted.entities().at(copied).properties.at("model")).model;
+    std::set<std::string> segments,vertices;for(const auto& edge:model.edges){segments.insert(edge.segment_id);vertices.insert(edge.start_vertex_id);vertices.insert(edge.end_vertex_id);}
+    for(const auto& item:owned){require(item.id!=length.toStdString()&&item.id!=angle.toStdString()&&segments.contains(item.segment_id)&&item.segment_id!="open:e1"&&item.segment_id!="open:e2","copied dimension and source edge IDs must be fresh");
+        const auto original=item.kind==BoundaryDimensionKind::angle?moved_angle:moved_length;require(item.presentation==original.presentation,"copied presentation remains exact");
+        if(item.kind==BoundaryDimensionKind::angle)require(vertices.contains(item.vertex_id)&&segments.contains(item.secondary_segment_id)&&item.vertex_id!="open:v1","copied tangent bindings must map to fresh owned geometry");
+        const auto resolved=item.resolve(pasted.entities().at(copied));if(item.kind==BoundaryDimensionKind::angle)require_near(resolved.angle_radians,std::numbers::pi/2);else require_near(resolved.segment_length_metres,3);}
+    exact_history(target,empty,pasted);
+    require(target.selectEntity(QString::fromStdString(copied))&&target.moveSelectedBoundaryVertex(QString::fromStdString(model.edges.back().end_vertex_id),{6,4},target.document().revision()),"pasted independent source remains editable");
+    require(window.document().snapshot().entities()==after.entities(),"editing copied dimensions/source cannot alter original");
+    require(window.selectEntity("open"),"select source for actual Delete");const auto before_delete=window.document().snapshot();control<QAction>(window,"deleteSelection").trigger();const auto deleted=window.document().snapshot();
+    require(!deleted.entities().contains("open")&&!deleted.entities().contains(length.toStdString())&&!deleted.entities().contains(angle.toStdString())&&deleted.entities().at("arc")==after.entities().at("arc"),"Delete removes owner and owned dimensions atomically, preserving unrelated sources");
+    exact_history(window,before_delete,deleted);const auto file=temporary.filePath("deleted-measured-dimensions.bldproj");require(window.saveProjectAs(file),"native deleted-state project must save");
+    require(window.createNewProject(),"release writer ownership before testing editable reopen");
+    MainWindow reopened;prepare(reopened);require(reopened.openProject(file)&&reopened.document().is_editable()&&reopened.document().snapshot().entities()==deleted.entities(),"native reopen retains exact deletion and editable dimension history");
+    if(!reopened.undoCommand())throw std::runtime_error("Undo after measured-dimension reopen: "+reopened.lastError().toStdString());
+    if(reopened.document().snapshot().entities()!=after.entities()) {
+        std::string difference;
+        for(const auto& [id,entity]:after.entities()) {
+            const auto current=reopened.document().snapshot();const auto found=current.entities().find(id);
+            if(found==current.entities().end())difference+=" missing:"+id;
+            else if(found->second!=entity)difference+=" changed:"+id;
+        }
+        throw std::runtime_error("Undo after reopen differs:"+difference);
+    }
+}
+}
+int main(int argc,char** argv){sketch::testing::noninteractive_errors();QStandardPaths::setTestModeEnabled(true);QApplication app(argc,argv);
+    QCoreApplication::setApplicationName("Vertex-measured-dimensions-"+QUuid::createUuid().toString(QUuid::WithoutBraces));
+    try{require(QFontDatabase::addApplicationFont(":/fonts/Inter.ttf")>=0,"bundled Inter must load");app.setFont(QFont("Inter",10));
+        actual_creator_terminal_arc_and_revisits();connected_edit_updates_saved_values();transformed_clone_is_independent();actual_transform_preview_cancel_and_apply();mixed_canvas_move_retains_placed_dimensions();mixed_wall_anchor_move_keeps_whole_transaction_admission();automatic_placement_uses_active_workspace_scale();transform_clipboard_output_delete_and_reopen();}
+    catch(const std::exception& error){std::cerr<<"measurement_linework_dimensions_desktop_tests: "<<error.what()<<'\n';return 1;}
+    std::cout<<"Measured dimension desktop tests passed\n";return 0;}

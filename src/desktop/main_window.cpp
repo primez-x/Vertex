@@ -698,7 +698,7 @@ std::vector<Entity> clipboard_entities_for_selection(const DocumentSnapshot& sna
     const bool closed_boundary = root->second.type == "boundary" ||
                                  root->second.type == "measurement_boundary" ||
                                  root->second.type == "room_boundary";
-    if (closed_boundary) {
+    if (closed_boundary || root->second.type=="measurement_linework") {
         for (const auto& [id, entity] : snapshot.entities()) {
             (void)id;
             if (entity.type != "dimension" || !entity.properties.is_object()) continue;
@@ -1610,7 +1610,7 @@ DimensionCanvasProjection project_boundary_dimension(const BoundaryDimension& di
         overlay=dimension_overlay(resolved.segment,dimension.text_position);
     } else if (resolved.kind==BoundaryDimensionKind::angle) {
         text=format_dimension_angle(resolved.angle_radians);
-        overlay=angle_dimension_overlay(decode_identified_boundary_entity(boundary),dimension);
+        overlay=angle_dimension_overlay(resolve_dimension_geometry_owner(boundary),dimension);
     } else {
         text=format_boundary_area(resolved.area_square_metres,metric,ansi);
     }
@@ -5099,6 +5099,53 @@ public:
             clone ? identities.at(original.id) : original.id};
     }
 
+    std::pair<Command,std::string> makeSelectedTransformCommand(const DocumentSnapshot& source,
+        const Entity& original,const QString& rotation_degrees,bool flip_horizontal,bool flip_vertical,
+        const QString& offset_x,const QString& offset_y,bool clone) {
+        if(original.type=="wall")return makeWallTransformCommand(source,original,rotation_degrees,
+            flip_horizontal,flip_vertical,offset_x,offset_y,clone);
+        if(original.type!="measurement_linework")return makeBoundaryTransformCommand(source,original,
+            rotation_degrees,flip_horizontal,flip_vertical,offset_x,offset_y,clone);
+        bool valid=rotation_degrees.trimmed().isEmpty();
+        const auto degrees=valid?0.0:rotation_degrees.trimmed().toDouble(&valid);
+        if(!valid || !std::isfinite(degrees) || std::abs(degrees)>360000)
+            throw std::invalid_argument("Rotation must be a finite value between -360000 and 360000 degrees.");
+        const auto offset=[&](const QString& value) {
+            return value.trimmed().isEmpty()?0.0:parse_quantity(value.toStdString(),m_metric_units?Unit::metre:Unit::foot).metres;
+        };
+        Boundary geometry;
+        for(const auto& edge:resolve_dimension_geometry_owner(original).segments)geometry.push_back(edge.segment);
+        const auto bounds=boundary_bounds(geometry);
+        const PlanarTransform transform{{std::midpoint(bounds.minimum.x,bounds.maximum.x),std::midpoint(bounds.minimum.y,bounds.maximum.y)},
+            degrees*std::numbers::pi/180.0,flip_horizontal,flip_vertical,{offset(offset_x),offset(offset_y)}};
+        if(!clone)return {measuredStrokeTransformCommand(source,{id_from(original.id)},transform),original.id};
+        auto graph=independentAreaCopyGraph(source,clipboard_entities_for_selection(source,original.id));
+        std::map<std::string,std::string,std::less<>> identities;
+        for(const auto& entity:graph)identities.emplace(entity.id,new_id(entity.type.c_str()));
+        for(const auto& entity:graph)if(entity.type=="measurement_linework") {
+            const auto decoded=decode_measurement_linework_model(entity.properties.at("model"));
+            if(!decoded.supported())throw std::invalid_argument(decoded.diagnostic);
+            for(const auto& edge:decoded.model->edges) {
+                identities.try_emplace(edge.segment_id,new_id("segment"));
+                identities.try_emplace(edge.start_vertex_id,new_id("vertex"));
+                identities.try_emplace(edge.end_vertex_id,new_id("vertex"));
+            }
+        }
+        std::vector<EntityChange> creation;
+        for(auto entity:graph) {
+            entity.id=identities.at(entity.id);remap_entity_references(entity,identities);
+            creation.push_back(EntityChange::upsert(std::move(entity)));
+        }
+        const auto detached=Document::preview_command(source,ApplyEntityChanges{source.revision(),creation,{},"Preview copied measured stroke"});
+        const auto root=identities.at(original.id);
+        const auto command=measuredStrokeTransformCommand(detached,{id_from(root)},transform);
+        const auto proposed=Document::preview_command(detached,command);
+        for(const auto& [id,entity]:source.entities())
+            if(proposed.entities().at(id)!=entity)throw std::invalid_argument("Measured clone would change an original object.");
+        for(auto& change:creation)change.entity=proposed.entities().at(change.entity.id);
+        return {ApplyEntityChanges{source.revision(),std::move(creation),{},"Clone transformed measured stroke"},root};
+    }
+
     [[nodiscard]] bool transformSelectedBoundary(const QString& rotation_degrees,
                                                   bool flip_horizontal,
                                                   bool flip_vertical,
@@ -5117,14 +5164,11 @@ public:
             const auto source = authoringSnapshot();
             const auto found = source.entities().find(m_selected_id.toStdString());
             if (found == source.entities().end() ||
-                (found->second.type != "wall" && !is_closed_boundary_entity(found->second.type))) {
-                throw std::invalid_argument("Select a wall or an identified closed boundary first.");
+                (found->second.type != "wall" && found->second.type!="measurement_linework" && !is_closed_boundary_entity(found->second.type))) {
+                throw std::invalid_argument("Select a wall, measured line or identified boundary first.");
             }
-            auto [command, root] = found->second.type == "wall" ?
-                makeWallTransformCommand(source, found->second, rotation_degrees, flip_horizontal,
-                    flip_vertical, offset_x, offset_y, clone) :
-                makeBoundaryTransformCommand(source, found->second, rotation_degrees, flip_horizontal,
-                    flip_vertical, offset_x, offset_y, clone);
+            auto [command, root] = makeSelectedTransformCommand(source,found->second,rotation_degrees,
+                flip_horizontal,flip_vertical,offset_x,offset_y,clone);
             command = augmentAuthoredCommand(command, source);
             const auto* changes = std::get_if<ApplyEntityChanges>(&command);
             if (!changes || !changes->entity_changes.empty()) {
@@ -5377,6 +5421,48 @@ public:
             if (std::none_of(graph.begin(),graph.end(),[&](const auto& entity){return entity.id==id;})) graph.push_back(source.entities().at(id));
     }
 
+    Command completeOrdinaryMeasuredDimensionMovement(const DocumentSnapshot& source,
+        Command command,const PlanarTransform& transform) {
+        auto* ordinary=std::get_if<ApplyEntityChanges>(&command);
+        if(!ordinary)return command;
+        QStringList measured;
+        for(const auto& change:ordinary->entity_changes)
+            if(change.kind==EntityChangeKind::upsert && change.entity.type=="measurement_linework") {
+                const auto original=source.entities().find(change.entity.id);
+                if(original==source.entities().end())continue;
+                const auto graph=clipboard_entities_for_selection(source,original->first);
+                if(std::any_of(graph.begin(),graph.end(),[](const auto& entity){return entity.type=="dimension";}))
+                    measured.push_back(id_from(original->first));
+            }
+        if(measured.isEmpty())return command;
+        // Prove each stroke from authoritative replay, then let ordinary
+        // admission validate the complete mixed transaction, including moved
+        // anchors on selected walls or strokes without saved dimensions.
+        for(const auto& id:measured) {
+            const auto replacement=std::find_if(ordinary->entity_changes.begin(),ordinary->entity_changes.end(),[&](const auto& change) {
+                return change.kind==EntityChangeKind::upsert && change.entity.id==id.toStdString();
+            });
+            auto expected=source.entities().at(id.toStdString());
+            const auto decoded=decode_measurement_linework_model(expected.properties.at("model"));
+            if(!decoded.supported())throw std::invalid_argument(decoded.diagnostic);
+            expected.properties["model"]=encode_measurement_linework_model(transformed_measurement_linework(*decoded.model,transform));
+            if(replacement->entity!=expected)
+                throw std::invalid_argument("Mixed movement differs from measured source replay.");
+        }
+        for(const auto& [id,entity]:source.entities())if(entity.type=="dimension") {
+            const auto decoded=decode_boundary_dimension_entity(entity);
+            if(!decoded.supported() || !measured.contains(id_from(decoded.dimension->boundary_id)))continue;
+            if(std::any_of(ordinary->entity_changes.begin(),ordinary->entity_changes.end(),[&](const auto& change) {
+                return (change.kind==EntityChangeKind::upsert?change.entity.id:change.entity_id)==id;
+            }))throw std::invalid_argument("Mixed movement overlaps a source-owned measured dimension.");
+            auto dimension=*decoded.dimension;
+            dimension.text_position=transform_point(dimension.text_position,transform);
+            const auto moved=encode_boundary_dimension_entity(dimension,&entity);
+            if(moved!=entity)ordinary->entity_changes.push_back(EntityChange::upsert(moved));
+        }
+        return command;
+    }
+
     Command makeSelectionGeometryTransformCommand(const DocumentSnapshot& source,
         const QStringList& root_ids, const PlanarTransform& transform,
         std::vector<EntityChange> supplemental_changes = {}) {
@@ -5455,10 +5541,10 @@ public:
         }
         std::vector<EntityChange> changes;
         for (auto& [id,entity] : supplemental) changes.push_back(EntityChange::upsert(std::move(entity)));
-        const Command command=completeMeasuredAreaConsequences(source, transformations.empty()
+        const Command command=completeMeasuredAreaConsequences(source, completeOrdinaryMeasuredDimensionMovement(source,transformations.empty()
             ? Command{ApplyEntityChanges{source.revision(),std::move(changes),{},"Rotate measured strokes"}}
             : Command{TransformBoundaries{source.revision(),std::move(transformations),std::move(changes),
-                "Transform areas with deductions and source walls"}});
+                "Transform areas with deductions and source walls"}},transform));
         const auto candidate=Document::preview_command(source,command);
         for (const auto& entity : graph)
             if (is_closed_boundary_entity(entity.type) && !wall_measurement_source_current(candidate,candidate.entities().at(entity.id)))
@@ -5533,9 +5619,9 @@ public:
             changes.insert(changes.end(),std::make_move_iterator(wall_changes.entity_changes.begin()),
                 std::make_move_iterator(wall_changes.entity_changes.end()));
         }
-        const Command command = completeMeasuredAreaConsequences(source, augmentAuthoredCommand(translations.empty()
+        const Command command = completeMeasuredAreaConsequences(source, augmentAuthoredCommand(completeOrdinaryMeasuredDimensionMovement(source,translations.empty()
             ? Command{ApplyEntityChanges{source.revision(),std::move(changes),{},"Move selected objects"}}
-            : Command{TranslateBoundaries{source.revision(),std::move(translations),std::move(changes),"Move selected objects"}}, source));
+            : Command{TranslateBoundaries{source.revision(),std::move(translations),std::move(changes),"Move selected objects"}},PlanarTransform{{},0,false,false,offset}), source));
         const auto candidate = Document::preview_command(source,command);
         for (const auto& id : model_ids) {
             const auto& entity = source.entities().at(id.toStdString());
@@ -8348,7 +8434,7 @@ public:
         const auto context = captureModalContext();
         const auto source = authoringSnapshot();
         const bool supported_selection = original &&
-            (original->type == "wall" || is_closed_boundary_entity(original->type));
+            (original->type == "wall" || original->type=="measurement_linework" || is_closed_boundary_entity(original->type));
         std::optional<std::pair<Command, std::string>> candidate_command;
         QDialog dialog(owner);
         styleDialog(dialog);
@@ -8357,7 +8443,7 @@ public:
         dialog.resize(520, 330);
         auto* layout = new QVBoxLayout(&dialog);
         auto* help = new QLabel(QStringLiteral(
-            "Pivot: boundary bounds center or wall endpoint midpoint. Rotation is in degrees; offsets use the current input units."),
+            "Pivot: area or measured-line bounds center, or wall endpoint midpoint. Rotation is in degrees; offsets use the current input units."),
             &dialog);
         help->setWordWrap(true);
         layout->addWidget(help);
@@ -8420,11 +8506,8 @@ public:
                 if (!m_document->is_editable()) throw std::invalid_argument("This document is read-only.");
                 if (m_boundary_session) throw std::invalid_argument("Finish or cancel the active boundary before transforming the selection.");
                 if (!modalContextUnchanged(context)) throw std::invalid_argument(lastError().toStdString());
-                auto candidate = original->type == "wall" ? makeWallTransformCommand(source, *original, rotation->text(),
-                    flip_horizontal->isChecked(), flip_vertical->isChecked(), offset_x->text(),
-                    offset_y->text(), clone->isChecked()) : makeBoundaryTransformCommand(source, *original,
-                    rotation->text(), flip_horizontal->isChecked(), flip_vertical->isChecked(),
-                    offset_x->text(), offset_y->text(), clone->isChecked());
+                auto candidate = makeSelectedTransformCommand(source,*original,rotation->text(),
+                    flip_horizontal->isChecked(),flip_vertical->isChecked(),offset_x->text(),offset_y->text(),clone->isChecked());
                 candidate.first = augmentAuthoredCommand(candidate.first, source);
                 const auto* changes = std::get_if<ApplyEntityChanges>(&candidate.first);
                 const auto proposed = changes && changes->entity_changes.empty() ? source :
@@ -8433,6 +8516,12 @@ public:
                 std::vector<CanvasLabel> labels;
                 const auto add_owner = [&](const DocumentSnapshot& snapshot, const std::string& root, bool selected) {
                     const auto& root_entity = snapshot.entities().at(root);
+                    if(root_entity.type=="measurement_linework") {
+                        Boundary path;
+                        for(const auto& edge:resolve_dimension_geometry_owner(root_entity).segments)path.push_back(edge.segment);
+                        geometry.push_back({id_from(root),selected?QStringLiteral("measurement_linework"):QStringLiteral("source"),path,0,selected});
+                        return;
+                    }
                     if (is_closed_boundary_entity(root_entity.type)) {
                         const auto boundary = read_boundary(root_entity.properties);
                         if (boundary.empty()) throw std::invalid_argument("Boundary has no preview geometry.");
@@ -8478,7 +8567,7 @@ public:
                 const auto add_graph = [&](const DocumentSnapshot& snapshot,const std::string& root,bool selected) {
                     const auto graph=independentAreaCopyGraph(snapshot,clipboard_entities_for_selection(snapshot,root));
                     for (const auto& entity : graph) {
-                        if (is_closed_boundary_entity(entity.type) || entity.type=="wall") add_owner(snapshot,entity.id,selected);
+                        if (is_closed_boundary_entity(entity.type) || entity.type=="wall" || entity.type=="measurement_linework") add_owner(snapshot,entity.id,selected);
                         if (!can_recognize_boundary_dimension_entity_type(entity.type)) continue;
                         const auto decoded=decode_boundary_dimension_entity(entity);
                         if (!decoded.supported()) throw std::invalid_argument(decoded.unsupported_reason);
@@ -19130,12 +19219,12 @@ public:
             const auto source = authoringSnapshot();
             const auto found = source.entities().find(dimension.boundary_id);
             if (found == source.entities().end() ||
-                !can_recognize_boundary_entity_type(found->second.type)) {
-                throw std::invalid_argument("Choose an identified boundary as the dimension source.");
+                (!can_recognize_boundary_entity_type(found->second.type) && found->second.type!="measurement_linework")) {
+                throw std::invalid_argument("Choose an identified boundary or measured line as the dimension source.");
             }
             auto target = found->second;
             const auto original_target = target;
-            if (inspect_boundary_entity_version(target).format == BoundaryEntityFormat::anonymous_legacy) {
+            if (target.type!="measurement_linework" && inspect_boundary_entity_version(target).format == BoundaryEntityFormat::anonymous_legacy) {
                 target = upgrade_legacy_boundary_entity(target);
                 dimension.boundary_id = target.id;
             }
@@ -19682,6 +19771,7 @@ public:
                 }
                 const auto placeable = entity.type == "boundary" ||
                     entity.type == "measurement_linework" ||
+                    entity.type == "dimension" ||
                     entity.type == "measurement_boundary" || entity.type == "room_boundary" ||
                     entity.type == "wall" || entity.type == "room" || entity.type == "slab" ||
                     entity.type == "roof" || entity.type == "stair" || entity.type == "railing" || entity.type == "column" ||
@@ -26009,7 +26099,7 @@ public:
         auto* y = new QLineEdit(QStringLiteral("0"), &dialog);
         x->setObjectName(QStringLiteral("dimensionCreateX"));
         y->setObjectName(QStringLiteral("dimensionCreateY"));
-        form->addRow(QStringLiteral("Source boundary"), boundary);
+        form->addRow(QStringLiteral("Source"), boundary);
         form->addRow(QStringLiteral("Dimension"), kind);
         form->addRow(QStringLiteral("First segment"), first_segment);
         form->addRow(QStringLiteral("Second segment"), second_segment);
@@ -26073,11 +26163,11 @@ public:
             boundary->clear();
             const auto snapshot = authoringSnapshot();
             for (const auto& [id, entity] : snapshot.entities()) {
-                if (!can_recognize_boundary_entity_type(entity.type)) continue;
+                if (!can_recognize_boundary_entity_type(entity.type) && entity.type!="measurement_linework") continue;
                 try {
-                    if (inspect_boundary_entity_version(entity).format != BoundaryEntityFormat::identified_v1)
+                    if (entity.type!="measurement_linework" && inspect_boundary_entity_version(entity).format != BoundaryEntityFormat::identified_v1)
                         continue;
-                    const auto identified = decode_identified_boundary_entity(entity);
+                    const auto identified = resolve_dimension_geometry_owner(entity);
                     if (identified.segments.empty()) continue;
                     boundary->addItem(QString::fromStdString(entity.properties.value("name", id)), QString::fromStdString(id));
                 } catch (const std::exception&) {
@@ -26088,7 +26178,7 @@ public:
             const auto preferred = boundary->findData(selected);
             if (preferred >= 0) boundary->setCurrentIndex(preferred);
         };
-        const auto populate_targets = [this, boundary, first_segment, second_segment, vertex, status] {
+        const auto populate_targets = [this, boundary, first_segment, second_segment, vertex, status, kind, automatic] {
             first_segment->clear();
             second_segment->clear();
             vertex->clear();
@@ -26096,7 +26186,12 @@ public:
             const auto found = source.entities().find(boundary->currentData().toString().toStdString());
             if (found == source.entities().end()) return;
             try {
-                const auto identified = decode_identified_boundary_entity(found->second);
+                const bool measured=found->second.type=="measurement_linework";
+                if(auto* choices=qobject_cast<QStandardItemModel*>(kind->model()))
+                    if(auto* area=choices->item(kind->findData(QStringLiteral("area"))))area->setEnabled(!measured);
+                if(measured && kind->currentData()==QStringLiteral("area"))kind->setCurrentIndex(0);
+                automatic->setText(measured?QStringLiteral("Place length dimension beside the line"):QStringLiteral("Place length dimension outside the boundary"));
+                const auto identified = resolve_dimension_geometry_owner(found->second);
                 std::set<std::string, std::less<>> vertices;
                 std::size_t index = 0;
                 for (const auto& segment : identified.segments) {
@@ -26108,17 +26203,46 @@ public:
                     vertices.insert(segment.start_vertex_id);
                     vertices.insert(segment.end_vertex_id);
                 }
+                std::size_t vertex_index=0;
                 for (const auto& id : vertices)
-                    vertex->addItem(QString::fromStdString(id), QString::fromStdString(id));
+                    vertex->addItem(QStringLiteral("Point %1").arg(++vertex_index), QString::fromStdString(id));
                 if (second_segment->count() > 1) second_segment->setCurrentIndex(1);
             } catch (const std::exception&) {
-                status->setText(QStringLiteral("The selected boundary cannot be dimensioned."));
+                status->setText(QStringLiteral("The selected geometry cannot be dimensioned."));
             }
         };
+        const auto populate_shared_vertices=[this,boundary,first_segment,second_segment,vertex,add_angle] {
+            const auto previous=vertex->currentData();vertex->clear();add_angle->setEnabled(false);
+            try {
+                const auto source=authoringSnapshot();
+                const auto found=source.entities().find(boundary->currentData().toString().toStdString());
+                if(found==source.entities().end())return;
+                const auto geometry=resolve_dimension_geometry_owner(found->second);
+                const auto first=std::find_if(geometry.segments.begin(),geometry.segments.end(),[&](const auto& edge) {
+                    return edge.segment_id==first_segment->currentData().toString().toStdString();
+                });
+                const auto second=std::find_if(geometry.segments.begin(),geometry.segments.end(),[&](const auto& edge) {
+                    return edge.segment_id==second_segment->currentData().toString().toStdString();
+                });
+                if(first==geometry.segments.end() || second==geometry.segments.end() || first==second)return;
+                std::map<std::string,std::size_t,std::less<>> indices;
+                for(const auto& edge:geometry.segments)
+                    for(const auto& id:{edge.start_vertex_id,edge.end_vertex_id})
+                        if(!indices.contains(id))indices.emplace(id,indices.size()+1);
+                for(const auto& id:{first->start_vertex_id,first->end_vertex_id})
+                    if(id==second->start_vertex_id || id==second->end_vertex_id)
+                        vertex->addItem(QStringLiteral("Point %1").arg(indices.at(id)),QString::fromStdString(id));
+                if(const auto index=vertex->findData(previous);index>=0)vertex->setCurrentIndex(index);
+                add_angle->setEnabled(vertex->count()>0);
+            } catch(const std::exception&) { /* Source diagnostics remain in the creator. */ }
+        };
+        QObject::connect(first_segment,&QComboBox::currentIndexChanged,&dialog,[populate_shared_vertices](int){populate_shared_vertices();});
+        QObject::connect(second_segment,&QComboBox::currentIndexChanged,&dialog,[populate_shared_vertices](int){populate_shared_vertices();});
         QObject::connect(boundary, &QComboBox::currentIndexChanged, &dialog,
-                         [populate_targets](int) { populate_targets(); });
+                         [populate_targets,populate_shared_vertices](int) { populate_targets();populate_shared_vertices(); });
         populate_boundaries();
         populate_targets();
+        populate_shared_vertices();
 
         const auto parse_position = [x, y] {
             bool x_ok = false;
@@ -26139,7 +26263,8 @@ public:
                 dimension.kind = BoundaryDimensionKind::segment_length;
                 if (automatic->isChecked()) {
                     const auto source = authoringSnapshot();
-                    const auto identified = decode_identified_boundary_entity(source.entities().at(dimension.boundary_id));
+                    const auto& owner=source.entities().at(dimension.boundary_id);
+                    const auto identified = resolve_dimension_geometry_owner(owner);
                     const auto found = std::find_if(identified.segments.begin(), identified.segments.end(),
                         [&](const auto& item) { return item.segment_id == dimension.segment_id; });
                     if (found == identified.segments.end()) throw std::invalid_argument("Choose a source edge.");
@@ -26149,8 +26274,25 @@ public:
                     // Mid-arc tangent follows the chord direction for either
                     // sweep sign; winding chooses the boundary's exterior.
                     const auto direction = std::atan2(segment.end.y-segment.start.y, segment.end.x-segment.start.x);
-                    const auto side = signed_area(boundary_geometry(identified)) > 0 ? -1.0 : 1.0;
-                    const auto offset = std::max(0.25, segment_length(segment)*0.1);
+                    double side = owner.type=="measurement_linework"?1.0:signed_area(boundary_geometry(identified)) > 0 ? -1.0 : 1.0;
+                    const auto offset = owner.type=="measurement_linework" ?
+                        24.0/std::max(1.0,(m_workspace==Workspace::measurement?m_measurementCanvas:m_architecturalCanvas)->viewScale()) : std::max(0.25, segment_length(segment)*0.1);
+                    if(owner.type=="measurement_linework") {
+                        const auto clearance=[&](double candidate_side) {
+                            const Vec2 point{midpoint->x-std::sin(direction)*offset*candidate_side,midpoint->y+std::cos(direction)*offset*candidate_side};
+                            double score=std::numeric_limits<double>::infinity();
+                            for(const auto& edge:identified.segments)if(edge.segment_id!=dimension.segment_id)
+                                for(int sample=0;sample<=16;++sample)if(const auto other=point_at_segment(edge.segment,sample/16.0))
+                                    score=std::min(score,std::hypot(point.x-other->x,point.y-other->y));
+                            for(const auto& [id,entity]:source.entities()) {
+                                (void)id;if(!can_recognize_boundary_dimension_entity_type(entity.type))continue;
+                                const auto decoded=decode_boundary_dimension_entity(entity);
+                                if(decoded.supported())score=std::min(score,std::hypot(point.x-decoded.dimension->text_position.x,point.y-decoded.dimension->text_position.y));
+                            }
+                            return score;
+                        };
+                        if(clearance(-1.0)>clearance(1.0))side=-1.0;
+                    }
                     dimension.text_position = {midpoint->x-std::sin(direction)*offset*side,
                                                midpoint->y+std::cos(direction)*offset*side};
                     dimension.placement = BoundaryDimensionPlacement::automatic;
@@ -30521,6 +30663,10 @@ private:
                         auto* constraints = menu.addAction(QStringLiteral("Dimensions and constraints…"));
                         QObject::connect(constraints, &QAction::triggered, owner,
                                          [this] { showConstraintEditor(); });
+                    }
+                    if(entity && (entity->type=="measurement_linework" || can_recognize_boundary_entity_type(entity->type))) {
+                        auto* dimension=owner->findChild<QAction*>(QStringLiteral("dimensionCreator"));
+                        if(dimension){menu.addAction(dimension);dimension->setEnabled(m_document->is_editable());}
                     }
                 }
                 const auto selected = selectedEntity();
@@ -37113,7 +37259,7 @@ public:
                         if (resolved.kind == BoundaryDimensionKind::segment_length)
                             overlay = dimension_overlay(resolved.segment, dimension.text_position);
                         else if (resolved.kind == BoundaryDimensionKind::angle)
-                            overlay = angle_dimension_overlay(decode_identified_boundary_entity(boundary_entity), dimension);
+                            overlay = angle_dimension_overlay(resolve_dimension_geometry_owner(boundary_entity), dimension);
                         if (overlay) {
                             auto line = geometry_entity(id_from(dimension.id) + suffix,
                                 *overlay, color);

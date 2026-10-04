@@ -200,6 +200,9 @@
       "package": 3,
       "blocker": null,
       "implementation_sources": [
+        "tests/measurement_linework_dimensions_desktop_tests.cpp",
+        "tests/measurement_linework_dimensions_storage_tests.cpp",
+        "docs/verification/measured-line-dimensions-2026-10-04.md",
         "include/sketch/project_ownership.hpp",
         "src/core/project_ownership.cpp",
         "src/core/project_store.cpp",
@@ -213,7 +216,7 @@
         "scripts/generate_workflow_acceptance_evidence.py",
         "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "A broker-backed ProjectOwnershipSession reserves normalized paths and existing file identities, detects external content changes, and is integrated into desktop open/save/Save As. Unit, cross-process, and desktop workflow fixtures cover contention, Windows path casing, external edits, read-only second opens, and a durable Document latch through navigation and validated forks. Clean-machine lifetime, restart recovery, hostile writer races, and full production acceptance remain open. Deterministic Debug/Release workflow evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
+      "implementation_note": "A broker-backed ProjectOwnershipSession reserves normalized paths and existing file identities, detects external content changes, and is integrated into desktop open/save/Save As. Unit, cross-process, and desktop workflow fixtures cover contention, Windows path casing, external edits, read-only second opens, and a durable Document latch through navigation and validated forks. Clean-machine lifetime, restart recovery, hostile writer races, and full production acceptance remain open. Deterministic Debug/Release workflow evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit. Saved measured-stroke length/angle dimensions now follow replay-backed geometry, source-owned rigid placements, mixed canvas movement, independent clone/clipboard, editable reopen and shared SVG/PDF projection. Native36/extraction34 protect retained bindings. This focused evidence does not recertify historical acceptance or establish Apex native compatibility, full output parity or ANSI approval."
     },
     {
       "id": "CORE-SCOPE-001",
@@ -1274,6 +1277,9 @@
       "package": 4,
       "blocker": null,
       "implementation_sources": [
+        "tests/measurement_linework_dimensions_desktop_tests.cpp",
+        "tests/measurement_linework_dimensions_storage_tests.cpp",
+        "docs/verification/measured-line-dimensions-2026-10-04.md",
         "tests/measurement_linework_clipboard_desktop_tests.cpp",
         "docs/verification/measured-line-clipboard-2026-10-04.md",
         "tests/nested_appraisal_copy_desktop_tests.cpp",
@@ -1291,7 +1297,7 @@
         "tests/boundary_canvas_tests.cpp",
         "docs/verification/area-appearance-selection-filters-2026-10-01.md"
       ],
-      "implementation_note": "Bounded local JSON clipboard supports copy, paste, cut, and guarded delete for supported geometry graphs. Ctrl-click toggles ordered selection roots, both plan canvases highlight the selection, and combined clipboard/delete commands deduplicate hosted dependencies in one revision and undo/redo step; paste preserves root order with fresh identities and remapped links. Canvas movement combines compatible architectural objects, individual annotation instances, and reference images in one admitted command, retaining owner metadata and wall measurements; partial constrained-group moves reject without publishing any member. Source or selection replacement cancels captured mouse gestures. Native movement evidence covers history, save/reopen, conflicts, and stale release; the development-host reference fixture tests downstream editing after asserting isolated import rejection, not decoder acceptance. Paste selects mapped annotation children rather than invisible owner containers, exposing immediate canvas transforms. Transforms resolve unique owners and preserve admitted raw metadata; older annotation states upgrade completely for independent axis resizing. Copy now slices selected labels/symbols, merges same-owner subsets, preserves raw artwork/transform/text/opaque metadata and carries only their targeted overrides. Individual and mixed annotation cut/delete update owners atomically while preserving unselected siblings; explicit whole-owner selection dominates child selection. Cut publishes its prepared clipboard only after document commit. Native clipboard coverage includes multiple owners, hosted geometry, fresh identities, history, save/reopen, invalid and read-only refusal. Both plan canvases now offer category filtering for new click, Ctrl-click, window/crossing marquee, double-click and context picks. Filtering retains scene content and existing transforms; excluded occupied content cannot start idle drawing. Independent nested ANSI appraisal copies retain complete dependency graphs and source-specific appearance/dimensions; source ownership stays unchanged, and copied sloped evidence remains unqualified until observed confirmation. Supported destination policy, site scope, stair bindings, stale deep sources and cyclic graphs have explicit admission rules. See docs/verification/nested-appraisal-copy-2026-10-04.md for the scoped runtime evidence. Broader linked-object policies and production qualification remain open. Current historical Debug/Release acceptance evidence remains hash-bound to its named sources and fixtures; this scoped checkpoint does not certify full parity."
+      "implementation_note": "Bounded local JSON clipboard supports copy, paste, cut, and guarded delete for supported geometry graphs. Ctrl-click toggles ordered selection roots, both plan canvases highlight the selection, and combined clipboard/delete commands deduplicate hosted dependencies in one revision and undo/redo step; paste preserves root order with fresh identities and remapped links. Canvas movement combines compatible architectural objects, individual annotation instances, and reference images in one admitted command, retaining owner metadata and wall measurements; partial constrained-group moves reject without publishing any member. Source or selection replacement cancels captured mouse gestures. Native movement evidence covers history, save/reopen, conflicts, and stale release; the development-host reference fixture tests downstream editing after asserting isolated import rejection, not decoder acceptance. Paste selects mapped annotation children rather than invisible owner containers, exposing immediate canvas transforms. Transforms resolve unique owners and preserve admitted raw metadata; older annotation states upgrade completely for independent axis resizing. Copy now slices selected labels/symbols, merges same-owner subsets, preserves raw artwork/transform/text/opaque metadata and carries only their targeted overrides. Individual and mixed annotation cut/delete update owners atomically while preserving unselected siblings; explicit whole-owner selection dominates child selection. Cut publishes its prepared clipboard only after document commit. Native clipboard coverage includes multiple owners, hosted geometry, fresh identities, history, save/reopen, invalid and read-only refusal. Both plan canvases now offer category filtering for new click, Ctrl-click, window/crossing marquee, double-click and context picks. Filtering retains scene content and existing transforms; excluded occupied content cannot start idle drawing. Independent nested ANSI appraisal copies retain complete dependency graphs and source-specific appearance/dimensions; source ownership stays unchanged, and copied sloped evidence remains unqualified until observed confirmation. Supported destination policy, site scope, stair bindings, stale deep sources and cyclic graphs have explicit admission rules. See docs/verification/nested-appraisal-copy-2026-10-04.md for the scoped runtime evidence. Broader linked-object policies and production qualification remain open. Current historical Debug/Release acceptance evidence remains hash-bound to its named sources and fixtures; this scoped checkpoint does not certify full parity. Saved measured-stroke length/angle dimensions now follow replay-backed geometry, source-owned rigid placements, mixed canvas movement, independent clone/clipboard, editable reopen and shared SVG/PDF projection. Native36/extraction34 protect retained bindings. This focused evidence does not recertify historical acceptance or establish Apex native compatibility, full output parity or ANSI approval."
     },
     {
       "id": "APX-EDIT-002",
@@ -1304,6 +1310,9 @@
       "package": 4,
       "blocker": null,
       "implementation_sources": [
+        "tests/measurement_linework_dimensions_desktop_tests.cpp",
+        "tests/measurement_linework_dimensions_storage_tests.cpp",
+        "docs/verification/measured-line-dimensions-2026-10-04.md",
         "tests/nested_appraisal_copy_desktop_tests.cpp",
         "docs/verification/nested-appraisal-copy-2026-10-04.md",
         "include/sketch/geometry_operations.hpp",
@@ -1326,7 +1335,7 @@
         "tests/project_store_tests.cpp",
         "tests/project_exchange_tests.cpp"
       ],
-      "implementation_note": "The desktop exposes rotation around a deterministic bounding-box pivot, independent horizontal/vertical reflection, and offsets for identified closed boundaries. Receipt-backed copies and in-place transforms preserve original local construction inputs, topology identities where retained, metadata, and attached dimension placement through atomic commands. Architectural rigid group transforms now rebase exact wall-length receipts and supported curve-input provenance while retaining entered expressions; unsupported provenance and scaling of retained measurements reject. The architectural transaction path applies type-aware transforms to canonical building geometry, dimensions, and local vectors while removing stale generic transform markers. Typed transform history uses format 6 for deterministic reconstruction across save, recovery, and exchange. Broader reference/annotation coverage, linked-relationship propagation, visible architectural binding, and production qualification remain open. Current Debug/Release acceptance evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit. Selected curved-wall rigid intent now retains exact construction, receipts and hosted objects while connected owners continue through persisted endpoint solving. Independently reconstructed proof4/envelope10 grants coordinate-exchange authority only to selected wall IDs; dependents keep old guards. Native27/extraction25 preserve this through Undo/deleted/recovery history. Focused authoring, desktop and persistence checks cover both workspaces, generic/measured curves, rotation/reflection/translation, explicit hard conflicts, exact Undo/Redo/save/reopen, strict codecs, compact assets and tamper/downgrade refusal. Broader compatibility and production qualification remain open."
+      "implementation_note": "The desktop exposes rotation around a deterministic bounding-box pivot, independent horizontal/vertical reflection, and offsets for identified closed boundaries. Receipt-backed copies and in-place transforms preserve original local construction inputs, topology identities where retained, metadata, and attached dimension placement through atomic commands. Architectural rigid group transforms now rebase exact wall-length receipts and supported curve-input provenance while retaining entered expressions; unsupported provenance and scaling of retained measurements reject. The architectural transaction path applies type-aware transforms to canonical building geometry, dimensions, and local vectors while removing stale generic transform markers. Typed transform history uses format 6 for deterministic reconstruction across save, recovery, and exchange. Broader reference/annotation coverage, linked-relationship propagation, visible architectural binding, and production qualification remain open. Current Debug/Release acceptance evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit. Selected curved-wall rigid intent now retains exact construction, receipts and hosted objects while connected owners continue through persisted endpoint solving. Independently reconstructed proof4/envelope10 grants coordinate-exchange authority only to selected wall IDs; dependents keep old guards. Native27/extraction25 preserve this through Undo/deleted/recovery history. Focused authoring, desktop and persistence checks cover both workspaces, generic/measured curves, rotation/reflection/translation, explicit hard conflicts, exact Undo/Redo/save/reopen, strict codecs, compact assets and tamper/downgrade refusal. Broader compatibility and production qualification remain open. Saved measured-stroke length/angle dimensions now follow replay-backed geometry, source-owned rigid placements, mixed canvas movement, independent clone/clipboard, editable reopen and shared SVG/PDF projection. Native36/extraction34 protect retained bindings. This focused evidence does not recertify historical acceptance or establish Apex native compatibility, full output parity or ANSI approval."
     },
     {
       "id": "APX-EDIT-003",
@@ -1554,6 +1563,9 @@
       "package": 6,
       "blocker": null,
       "implementation_sources": [
+        "tests/measurement_linework_dimensions_desktop_tests.cpp",
+        "tests/measurement_linework_dimensions_storage_tests.cpp",
+        "docs/verification/measured-line-dimensions-2026-10-04.md",
         "src/core/boundary_dimension.cpp",
         "tests/boundary_dimension_tests.cpp",
         "tests/boundary_workflow_tests.cpp",
@@ -1561,7 +1573,7 @@
         "scripts/generate_workflow_acceptance_evidence.py",
         "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "Segment-length dimensions have stable references and an inspector for position, paper text height, color, bold/italic, rotation, and visibility. Version 2 presentation survives save/reopen, undo/redo, and boundary transforms. Shared canvas/sheet rendering preserves paper text size across model output scales and fitted previews, with pixel/DPI and rotated-hit tests. Straight segment dimensions now regenerate matching extension and dimension linework from the stable source edge in both canvases and shared output; curved segment dimensions use a true offset analytical arc with radial extension lines. Semantic angle dimensions reference two stable segments plus their shared vertex and derive current tangent angles; area dimensions reference a complete closed boundary and derive current area. Both kinds persist, recalculate after geometry edits, render through the shared canvas/output path, and can be created from the offline dimension dialog through normal undoable commands. Apex workflow parity, compatibility certification, and complete output qualification remain open. Deterministic Debug/Release workflow evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit."
+      "implementation_note": "Segment-length dimensions have stable references and an inspector for position, paper text height, color, bold/italic, rotation, and visibility. Version 2 presentation survives save/reopen, undo/redo, and boundary transforms. Shared canvas/sheet rendering preserves paper text size across model output scales and fitted previews, with pixel/DPI and rotated-hit tests. Straight segment dimensions now regenerate matching extension and dimension linework from the stable source edge in both canvases and shared output; curved segment dimensions use a true offset analytical arc with radial extension lines. Semantic angle dimensions reference two stable segments plus their shared vertex and derive current tangent angles; area dimensions reference a complete closed boundary and derive current area. Both kinds persist, recalculate after geometry edits, render through the shared canvas/output path, and can be created from the offline dimension dialog through normal undoable commands. Apex workflow parity, compatibility certification, and complete output qualification remain open. Deterministic Debug/Release workflow evidence is hash-bound to the named sources and fixtures; the qualification boundary remains explicit. Saved measured-stroke length/angle dimensions now follow replay-backed geometry, source-owned rigid placements, mixed canvas movement, independent clone/clipboard, editable reopen and shared SVG/PDF projection. Native36/extraction34 protect retained bindings. This focused evidence does not recertify historical acceptance or establish Apex native compatibility, full output parity or ANSI approval."
     },
     {
       "id": "APX-ANNO-003",
@@ -1744,6 +1756,9 @@
       "package": 6,
       "blocker": null,
       "implementation_sources": [
+        "tests/measurement_linework_dimensions_desktop_tests.cpp",
+        "tests/measurement_linework_dimensions_storage_tests.cpp",
+        "docs/verification/measured-line-dimensions-2026-10-04.md",
         "src/desktop/main_window.cpp",
         "include/sketch/dxf_project_exchange.hpp",
         "src/core/dxf_project_exchange.cpp",
@@ -1753,7 +1768,7 @@
         "scripts/generate_workflow_acceptance_evidence.py",
         "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "Local save/open and bounded native DXF/IFC mapping are implemented. The DXF desktop review assigns source layers to existing destinations across floors or creates source-named layers on the active floor, preserves exact source bytes and commits one undoable import. Planar CIRCLE records now reconstruct exact two-semicircle boundaries, including uniform signed/rotated INSERTs and source-unit conversion. Nonuniform or numerically unrepresentable circles require retained-source diagnostics. Expanded primitive work is preflighted before candidate creation. Native block activation compares circle content as well as the existing generated plan primitives. Label/symbol export now uses each child's assigned native layer with explicit broken-reference diagnostics. These scoped implementations do not certify native Apex import/export, legacy exchange or external consumer fidelity. Native Apex compatibility and the complete fidelity-report acceptance statement remain open. Historical acceptance evidence remains hash-bound to its named sources and fixtures."
+      "implementation_note": "Local save/open and bounded native DXF/IFC mapping are implemented. The DXF desktop review assigns source layers to existing destinations across floors or creates source-named layers on the active floor, preserves exact source bytes and commits one undoable import. Planar CIRCLE records now reconstruct exact two-semicircle boundaries, including uniform signed/rotated INSERTs and source-unit conversion. Nonuniform or numerically unrepresentable circles require retained-source diagnostics. Expanded primitive work is preflighted before candidate creation. Native block activation compares circle content as well as the existing generated plan primitives. Label/symbol export now uses each child's assigned native layer with explicit broken-reference diagnostics. These scoped implementations do not certify native Apex import/export, legacy exchange or external consumer fidelity. Native Apex compatibility and the complete fidelity-report acceptance statement remain open. Historical acceptance evidence remains hash-bound to its named sources and fixtures. Saved measured-stroke length/angle dimensions now follow replay-backed geometry, source-owned rigid placements, mixed canvas movement, independent clone/clipboard, editable reopen and shared SVG/PDF projection. Native36/extraction34 protect retained bindings. This focused evidence does not recertify historical acceptance or establish Apex native compatibility, full output parity or ANSI approval."
     },
     {
       "id": "APX-DOC-003",
@@ -1766,6 +1781,9 @@
       "package": 6,
       "blocker": null,
       "implementation_sources": [
+        "tests/measurement_linework_dimensions_desktop_tests.cpp",
+        "tests/measurement_linework_dimensions_storage_tests.cpp",
+        "docs/verification/measured-line-dimensions-2026-10-04.md",
         "src/desktop/main_window.cpp",
         "tests/desktop_smoke.cpp",
         "include/sketch/sheet_view_model.hpp",
@@ -1778,7 +1796,7 @@
         "scripts/generate_workflow_acceptance_evidence.py",
         "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "Selected-sheet PDF, SVG, PNG, and print preview share the validated persisted-sheet renderer. Ordered drawing-set PDF and print preview render every persisted page in explicit order, including mixed physical sizes, and bind the complete set to a fingerprint independent of local sheet selection. PDF and print use sheet physical dimensions, SVG writes exact millimetre dimensions, and PNG derives its pixel width and height from the selected sheet millimetres at 144 DPI under a 100-megapixel limit. Outputs remain visibly draft-stamped. Physical printer calibration, Apex output comparison, and the production gate remain open."
+      "implementation_note": "Selected-sheet PDF, SVG, PNG, and print preview share the validated persisted-sheet renderer. Ordered drawing-set PDF and print preview render every persisted page in explicit order, including mixed physical sizes, and bind the complete set to a fingerprint independent of local sheet selection. PDF and print use sheet physical dimensions, SVG writes exact millimetre dimensions, and PNG derives its pixel width and height from the selected sheet millimetres at 144 DPI under a 100-megapixel limit. Outputs remain visibly draft-stamped. Physical printer calibration, Apex output comparison, and the production gate remain open. Saved measured-stroke length/angle dimensions now follow replay-backed geometry, source-owned rigid placements, mixed canvas movement, independent clone/clipboard, editable reopen and shared SVG/PDF projection. Native36/extraction34 protect retained bindings. This focused evidence does not recertify historical acceptance or establish Apex native compatibility, full output parity or ANSI approval."
     },
     {
       "id": "APX-UI-001",

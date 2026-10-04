@@ -1124,7 +1124,7 @@ unknown project `format_version` is rejected rather than opened unsafely.
 ## SQLite schema
 
 The SQLite `application_id` is `0x50535444` (`PSTD`). `user_version` and metadata
-`format_version` are equal and range from `1` through `23`, according to the
+`format_version` are equal and range from `1` through `36`, according to the
 retained semantics. The baseline application tables below are shared; later
 versions add the proof columns and recovery data documented in this file.
 
@@ -1873,3 +1873,36 @@ their historical topology policy.
 Every retained version-8 command requires native format 22, including undone or
 deleted history. JSON/assets extraction advertises exchange version 20.
 Older document semantics retain their existing format floors and command bytes.
+
+## Measured-stroke constraints and saved dimensions (native 35–36)
+
+Native 35 protects retained measured replay/schema 5, command envelope 11 and
+constraint bindings to measured strokes. These forms retain original entered
+quantities, stable edge and vertex IDs, simultaneous vertex corrections and
+explicit rigid transformations. The command completes eligible source-area
+consequences and source-owned annotation offsets before final validation.
+
+Native 36 additionally admits existing dimension models 1 and 2 whose
+`target.entity_id` names a `measurement_linework` owner. Length targets use its
+stable segment ID and resolve physical analytical length. Angle targets name
+two distinct segments and their actual shared stable vertex, resolving outgoing
+endpoint tangents. Open, terminal and revisited vertices remain legitimate;
+closed strokes still cannot supply an area dimension. Unsupported owner models
+remain opaque/read-only rather than acquiring inferred area semantics.
+
+Ordinary vertex or length edits retain placed text coordinates and presentation.
+Explicit measured rigid transforms reconstruct attached text coordinates once
+with the complete pivot, reflection, rotation and translation. Mixed typed
+boundary movement verifies the supplemental stroke against the same source
+transform before reconstructing dimension positions; overlapping dimension
+replacements refuse. Ordinary desktop mixed-object movement proves each stroke
+payload by replay, places its dimensions from source, then validates the whole
+ordinary transaction, including selected constraints and anchors.
+
+Both native markers declare 36 whenever any retained revision has a dimension
+targeting a measured stroke, including a genuine v1 stroke, entity-only import,
+undone creation or deleted dimension. Logical JSON/assets extraction advertises
+34 for this reader floor (native 35 maps to extraction 33). No SQLite table or
+dimension schema change is required. Lowering both markers cannot make retained
+new semantics readable by an older format. Original files remain preserved
+through the normal save/migration workflow.

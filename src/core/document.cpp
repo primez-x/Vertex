@@ -1559,6 +1559,42 @@ bool has_exterior_source_completion(const ApplyBoundaryConstraintChanges& comman
             !has_measured_source_completion(command) && has_supplemental_source_completion(command)) || command.exterior_corner_move.has_value();
 }
 
+static bool has_measured_stroke_dimensions(const std::map<std::string,Entity,std::less<>>& source,
+    const std::string& owner) {
+    return std::any_of(source.begin(),source.end(),[&](const auto& entry) {
+        const auto& entity=entry.second;
+        if(!can_recognize_boundary_dimension_entity_type(entity.type))return false;
+        const auto target=entity.properties.find("target");
+        return target!=entity.properties.end() && target->is_object() &&
+            target->value("entity_id",nlohmann::json())==owner;
+    });
+}
+
+static void complete_measured_stroke_dimensions(const std::map<std::string,Entity,std::less<>>& source,
+    std::map<std::string,Entity,std::less<>>& entities,
+    const std::map<std::string,PlanarTransform,std::less<>>& transforms) {
+    if(transforms.empty())return;
+    for(const auto& [id,original]:source) {
+        if(!can_recognize_boundary_dimension_entity_type(original.type))continue;
+        const auto decoded=decode_boundary_dimension_entity(original);
+        if(!decoded.supported()) {
+            const auto target=original.properties.find("target");
+            if(target!=original.properties.end() && target->is_object() && target->contains("entity_id") &&
+               target->at("entity_id").is_string() && transforms.contains(target->at("entity_id").get<std::string>()))
+                throw std::invalid_argument("Unsupported attached dimension cannot follow a measured transform");
+            continue;
+        }
+        const auto transform=transforms.find(decoded.dimension->boundary_id);
+        if(transform==transforms.end())continue;
+        const auto candidate=entities.find(id);
+        if(candidate==entities.end() || candidate->second!=original)
+            throw std::invalid_argument("Measured transform overlaps an edit of its attached dimension");
+        auto dimension=*decoded.dimension;
+        dimension.text_position=transform_point(dimension.text_position,transform->second);
+        candidate->second=encode_boundary_dimension_entity(dimension,&original);
+    }
+}
+
 static void complete_measured_stroke_annotations(const std::map<std::string,Entity,std::less<>>& source,
     std::map<std::string,Entity,std::less<>>& entities,
     const ApplyBoundaryConstraintChanges& command) {
@@ -1886,6 +1922,10 @@ std::map<std::string, Entity, std::less<>> boundary_constraint_entities(
     if(measured_completion) {
         try {
             result=complete_measurement_linework_sources(source,result);
+            std::map<std::string,PlanarTransform,std::less<>> transforms;
+            for(const auto& edit:command.measured_stroke_edits)
+                if(edit.rigid_transform)transforms.emplace(edit.stroke_id,*edit.rigid_transform);
+            complete_measured_stroke_dimensions(source,result,transforms);
             complete_measured_stroke_annotations(source,result,command);
         }
         catch(const std::exception& error){document_error(DocumentErrorCode::invalid_entity,error.what());}
@@ -2019,6 +2059,7 @@ std::map<std::string, Entity, std::less<>> boundary_translation_entities(
     }
     auto result = intermediate;
     std::unordered_set<std::string> touched;
+    std::map<std::string,PlanarTransform,std::less<>> measured_transforms;
     for (const auto& change : command.entity_changes) {
         if (change.kind != EntityChangeKind::upsert && change.kind != EntityChangeKind::erase)
             document_error(DocumentErrorCode::invalid_entity, "Invalid supplemental entity change kind");
@@ -2030,11 +2071,27 @@ std::map<std::string, Entity, std::less<>> boundary_translation_entities(
             document_error(DocumentErrorCode::invalid_entity, "Supplemental entity ID is invalid");
         if (change.kind == EntityChangeKind::upsert) {
             validate_entity(change.entity);
+            const auto previous=source.find(id);
+            if(previous!=source.end() && previous->second.type=="measurement_linework" &&
+               has_measured_stroke_dimensions(source,id)) {
+                const auto offset=command.translations.front().offset;
+                if(!std::all_of(command.translations.begin(),command.translations.end(),[&](const auto& value) {
+                    return value.offset.x==offset.x && value.offset.y==offset.y;
+                }))throw std::invalid_argument("Measured dimensions require one shared translation for a mixed group");
+                const PlanarTransform transform{{},0,false,false,offset};
+                const auto decoded=decode_measurement_linework_model(previous->second.properties.at("model"));
+                if(!decoded.supported())throw std::invalid_argument(decoded.diagnostic);
+                auto expected=previous->second;
+                expected.properties["model"]=encode_measurement_linework_model(transformed_measurement_linework(*decoded.model,transform));
+                if(expected!=change.entity)throw std::invalid_argument("Measured stroke differs from the shared translation");
+                measured_transforms.emplace(id,transform);
+            }
             result.insert_or_assign(id, change.entity);
         } else result.erase(id);
     }
     // Supplemental edits get ordinary admission against the translated state;
     // they cannot use the typed proof to launder an unrelated receipt edit.
+    complete_measured_stroke_dimensions(source,result,measured_transforms);
     validate_boundary_change(history, intermediate, result);
     try { validate_boundary_identity_transition(history, source, result); }
     catch (const std::exception& error) { document_error(DocumentErrorCode::invalid_entity, error.what()); }
@@ -2158,6 +2215,7 @@ std::map<std::string, Entity, std::less<>> boundary_transform_entities(
     auto intermediate = transformed_boundary_entities_batch(source,command.transformations);
     auto result = intermediate;
     std::set<std::string> touched;
+    std::map<std::string,PlanarTransform,std::less<>> measured_transforms;
     for (const auto& change : command.entity_changes) {
         const auto& id = change.kind == EntityChangeKind::upsert ? change.entity.id : change.entity_id;
         if (protected_ids.contains(id) || !touched.insert(id).second)
@@ -2188,6 +2246,13 @@ std::map<std::string, Entity, std::less<>> boundary_transform_entities(
                     throw std::invalid_argument("Rigid wall transform must preserve physical dimensions and source context");
             }
             moved_walls.insert(id);
+        } else if(change.entity.type=="measurement_linework" && has_measured_stroke_dimensions(source,id)) {
+            const auto decoded=decode_measurement_linework_model(previous->second.properties.at("model"));
+            if(!decoded.supported())throw std::invalid_argument(decoded.diagnostic);
+            auto expected=previous->second;
+            expected.properties["model"]=encode_measurement_linework_model(transformed_measurement_linework(*decoded.model,shared));
+            if(expected!=change.entity)throw std::invalid_argument("Measured stroke differs from the shared rigid transform");
+            measured_transforms.emplace(id,shared);
         } else if (change.entity.type == "opening") {
             // Hosting distances do not change when the host endpoint identities are retained.
             for (const auto* key : {"wall_id", "opening_kind", "offset_m", "offset", "width_m", "width",
@@ -2208,6 +2273,7 @@ std::map<std::string, Entity, std::less<>> boundary_transform_entities(
             throw std::invalid_argument("Rigid exterior transform must include every source wall");
     std::set<std::string> transformed_ids = owners;
     transformed_ids.insert(moved_walls.begin(),moved_walls.end());
+    for(const auto& [id,transform]:measured_transforms){(void)transform;transformed_ids.insert(id);}
     for (const auto& [id, entity] : source) {
         if (entity.type != "constraint")
             continue;
@@ -2236,6 +2302,7 @@ std::map<std::string, Entity, std::less<>> boundary_transform_entities(
             throw std::invalid_argument("Rigid transform must preserve constraint endpoint identities, values and metadata");
     }
     // Reject ordinary receipt edits before any canonical source reconciliation.
+    complete_measured_stroke_dimensions(source,result,measured_transforms);
     validate_boundary_change(history,intermediate,result);
     if (identity) {
         if (result != source)

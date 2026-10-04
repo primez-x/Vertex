@@ -74,9 +74,8 @@ struct BoundaryDimension {
                vertex_id == other.vertex_id && secondary_segment_id == other.secondary_segment_id;
     }
 
-    // Resolves the stable analytical target from canonical identified boundary
-    // geometry. The returned value is a segment length, angle, or area based
-    // on this dimension's semantic kind.
+    // Resolves stable analytical targets from identified boundaries or replayed
+    // measured strokes. Area dimensions require an identified boundary owner.
     [[nodiscard]] BoundaryDimensionResolution resolve(const Entity& boundary_entity) const;
 };
 
@@ -101,6 +100,11 @@ struct BoundaryDimensionDecodeResult {
     const Entity& entity);
 [[nodiscard]] Entity encode_boundary_dimension_entity(
     const BoundaryDimension& dimension, const Entity* original = nullptr);
+// Returns an endpoint/edge view of authoritative identified boundary geometry
+// or supported measured-stroke replay, retaining both terminal and revisited
+// stable vertex IDs. This view does not confer closed-area semantics on strokes.
+// Unsupported or malformed owners throw std::invalid_argument.
+[[nodiscard]] IdentifiedBoundary resolve_dimension_geometry_owner(const Entity& entity);
 [[nodiscard]] BoundaryDimensionResolution resolve_boundary_dimension(
     const BoundaryDimension& dimension, const Entity& boundary_entity);
 

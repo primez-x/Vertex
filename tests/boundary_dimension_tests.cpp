@@ -1,4 +1,5 @@
 #include "sketch/boundary_dimension.hpp"
+#include "sketch/measurement_linework.hpp"
 
 #include <nlohmann/json.hpp>
 
@@ -114,6 +115,116 @@ void test_arc_resolution_uses_analytic_segment_length() {
             "arc resolution must retain the analytical sweep");
     require(std::abs(resolved.segment_length_metres - std::numbers::pi) < 1e-12,
             "arc dimension must derive the analytic arc length independently");
+}
+
+void test_open_measured_stroke_dimensions_follow_replayed_stable_targets() {
+    sketch::MeasurementLinework model;
+    model.stroke_id = "measured-stroke";
+    model.anchor = {-1, 0};
+    sketch::ConstructionReceipt arc;
+    arc.segment_id = "measured-arc";
+    arc.kind = sketch::BoundaryConstructionKind::arc_chord_angle;
+    arc.start = {-1, 0}; arc.chord_end = Vec2{1, 0};
+    arc.angle = sketch::parse_angle("180 deg");
+    sketch::ConstructionReceipt tail;
+    tail.segment_id = "measured-tail";
+    tail.kind = sketch::BoundaryConstructionKind::line_to_point;
+    tail.start = {1, 0}; tail.chord_end = Vec2{3, 0};
+    model.edges = {{arc.segment_id, "measured-start", "measured-join", arc},
+                   {tail.segment_id, "measured-join", "measured-end", tail}};
+    sketch::BoundaryGeometryEdit resize;
+    resize.boundary_id = model.stroke_id;
+    resize.kind = sketch::BoundaryGeometryEditKind::resize_segment;
+    resize.target_id = tail.segment_id; resize.target_length_metres = 4;
+    model = sketch::edited_measurement_linework(model, resize, sketch::parse_quantity("4 m"));
+    model = sketch::transformed_measurement_linework(model, {{}, 0, false, false, {7, 11}});
+    const Entity stroke{model.stroke_id, "measurement_linework",
+        {{"model", sketch::encode_measurement_linework_model(model)}}, true};
+    const auto original_stroke = stroke;
+    const auto view = sketch::resolve_dimension_geometry_owner(stroke);
+    require(view.id == stroke.id && view.type == stroke.type && view.segments.size() == 2 &&
+                view.segments.back().end_vertex_id == "measured-end",
+            "shared measured dimension adapter must retain the open terminal vertex identity");
+    auto length = manual_dimension(arc.segment_id);
+    length.boundary_id = model.stroke_id;
+    try {
+        const auto resolved = length.resolve(stroke);
+        require(std::abs(resolved.segment_length() - std::numbers::pi) < 1e-12 &&
+                    resolved.segment.sweep_radians == std::numbers::pi,
+                "open measured arc dimension must use physical arc length rather than its chord");
+        length.segment_id = tail.segment_id;
+        const auto terminal = length.resolve(stroke);
+        require(terminal.segment_length() == 4 && terminal.segment.end.x == 12 && terminal.segment.end.y == 11,
+                "terminal edge dimension must follow retained IDs through edit and transform replay");
+        auto angle = length;
+        angle.kind = sketch::BoundaryDimensionKind::angle;
+        angle.segment_id = arc.segment_id;
+        angle.secondary_segment_id = tail.segment_id;
+        angle.vertex_id = "measured-join";
+        require(std::abs(angle.resolve(stroke).angle() - std::numbers::pi / 2) < 1e-12,
+                "open measured angle must use outgoing tangents at the stable shared vertex");
+        angle.vertex_id = "measured-start";
+        rejected([&] { (void)angle.resolve(stroke); },
+                 "existing edges without the selected shared vertex must reject");
+        angle.vertex_id = "missing-vertex";
+        rejected([&] { (void)angle.resolve(stroke); }, "missing measured angle vertex must reject");
+        length.segment_id = "missing-edge";
+        rejected([&] { (void)length.resolve(stroke); }, "missing measured segment must reject");
+        require(stroke == original_stroke, "dimension resolution must preserve measured source JSON exactly");
+        auto reflected = stroke;
+        reflected.properties["model"] = sketch::encode_measurement_linework_model(
+            sketch::transformed_measurement_linework(model, {{}, 0, true, false, {}}));
+        length.segment_id = arc.segment_id;
+        const auto reflected_arc = length.resolve(reflected);
+        require(reflected_arc.segment.sweep_radians == -std::numbers::pi &&
+                    std::abs(reflected_arc.segment_length() - std::numbers::pi) < 1e-12,
+                "reflected measured arc must retain signed sweep and physical dimension length");
+    } catch (const std::exception& error) {
+        fail(std::string("supported open measured dimension resolution failed: ") + error.what());
+    }
+}
+
+void test_measured_revisited_vertices_and_area_refusal() {
+    sketch::MeasurementLinework model;
+    model.stroke_id = "revisited";
+    const std::vector<Vec2> points{{0, 0}, {2, 0}, {2, 2}, {2, 0}, {4, 0}};
+    const std::vector<std::string> vertices{"v0", "v1", "v2", "v1", "terminal"};
+    for (std::size_t i = 1; i < points.size(); ++i) {
+        sketch::ConstructionReceipt receipt;
+        receipt.segment_id = "e" + std::to_string(i);
+        receipt.kind = sketch::BoundaryConstructionKind::line_to_point;
+        receipt.start = points[i - 1]; receipt.chord_end = points[i];
+        model.edges.push_back({receipt.segment_id, vertices[i - 1], vertices[i], receipt});
+    }
+    Entity stroke{model.stroke_id, "measurement_linework",
+        {{"model", sketch::encode_measurement_linework_model(model)}}, true};
+    auto angle = manual_dimension("e1");
+    angle.boundary_id = model.stroke_id;
+    angle.kind = sketch::BoundaryDimensionKind::angle;
+    angle.secondary_segment_id = "e3"; angle.vertex_id = "v1";
+    require(std::abs(angle.resolve(stroke).angle() - std::numbers::pi / 2) < 1e-12,
+            "nonconsecutive measured edges must resolve a retained revisited shared vertex");
+    auto area = manual_dimension(); area.boundary_id = model.stroke_id;
+    area.kind = sketch::BoundaryDimensionKind::area; area.segment_id.clear();
+    rejected([&] { (void)area.resolve(stroke); }, "open measured stroke must refuse area dimensions");
+    // A closed retrace has no area/winding invariant, but remains measurable.
+    model.edges.resize(2); model.closed = true;
+    model.edges[1].end_vertex_id = "v0";
+    model.edges[1].receipt.chord_end = Vec2{0, 0};
+    stroke.properties["model"] = sketch::encode_measurement_linework_model(model);
+    auto length = manual_dimension("e2"); length.boundary_id = model.stroke_id;
+    require(length.resolve(stroke).segment_length() == 2,
+            "closed zero-area retrace must retain measured segment semantics");
+    rejected([&] { (void)area.resolve(stroke); }, "closed measured stroke must refuse area dimensions");
+    stroke.properties["model"] = {{"version", 999}, {"opaque", {1, 2, 3}}};
+    bool area_refused_first = false;
+    try { (void)area.resolve(stroke); }
+    catch (const std::invalid_argument& error) {
+        area_refused_first = std::string(error.what()) == "area dimensions cannot target measured strokes";
+    }
+    require(area_refused_first, "future measured area target must reject before opaque model decoding");
+    rejected([&] { (void)sketch::resolve_dimension_geometry_owner(stroke); },
+             "future measured dimension geometry must remain unresolved");
 }
 
 void test_reordering_and_geometry_edits_follow_stable_segment_id() {
@@ -488,6 +599,8 @@ void test_presentation_validation_is_strict() {
 }  // namespace
 
 int main() {
+    test_open_measured_stroke_dimensions_follow_replayed_stable_targets();
+    test_measured_revisited_vertices_and_area_refusal();
     test_straight_resolution_derives_length_from_canonical_geometry();
     test_arc_resolution_uses_analytic_segment_length();
     test_reordering_and_geometry_edits_follow_stable_segment_id();

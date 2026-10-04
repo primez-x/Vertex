@@ -1117,3 +1117,21 @@ requires **Review measured sources** before defining another copy. Changes to
 boundaries, deduction links and phase membership commit as one undoable command
 after the complete preview. Cancel commits nothing. New nested deduction chains
 are rejected; keep a deeper outline as a reference or a separately defined area.
+
+## Saved dimensions on measured lines
+
+Select a saved **Measured lines** stroke and choose **Tools → Add length, angle
+or area dimension…**, or its right-click dimension action. The source defaults
+to the selected stroke. Choose an edge for Length, or two distinct edges and
+their shared point for Angle. Terminal edges and revisited stable points are
+supported. Curved lengths measure the actual arc; angles use endpoint tangents.
+The Area choice is unavailable for strokes, including closed strokes. Define a
+measured area to calculate its area or appraisal contribution.
+
+Automatic lengths start beside the line using the active workspace's zoom.
+Select a saved dimension to edit its position, paper text size, color, visibility
+and typography. A later ordinary vertex or length edit recalculates its value
+and retains that placement. Moving or transforming its owner carries the placed
+dimension with it. Transform selection includes a preview, Cancel, Apply and
+Create a copy. A copy has independent source and dimension references; Undo,
+Redo, native save/reopen and the shared drawing outputs retain these references.

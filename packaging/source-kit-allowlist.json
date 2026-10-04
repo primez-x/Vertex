@@ -1651,6 +1651,10 @@
     },
     {
       "category": "docs",
+      "path": "docs/plans/2026-10-04-measured-line-dimensions.md"
+    },
+    {
+      "category": "docs",
       "path": "docs/plans/2026-10-04-nested-appraisal-copy.md"
     },
     {
@@ -2596,6 +2600,10 @@
     {
       "category": "docs",
       "path": "docs/verification/measured-line-clipboard-2026-10-04.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/verification/measured-line-dimensions-2026-10-04.md"
     },
     {
       "category": "docs",
@@ -4656,6 +4664,14 @@
     {
       "category": "source",
       "path": "tests/measurement_linework_desktop_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/measurement_linework_dimensions_desktop_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/measurement_linework_dimensions_storage_tests.cpp"
     },
     {
       "category": "source",
