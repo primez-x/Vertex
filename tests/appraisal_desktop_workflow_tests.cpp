@@ -377,6 +377,121 @@ QString declarations(const char* kind = "residential_declared", const char* use 
              QString::fromLatin1(grade), QString::fromLatin1(use), QString::fromLatin1(role));
 }
 
+void auto_subtract_phase_chooser_workflow() {
+    using namespace sketch;
+    using sketch::desktop::MainWindow;
+    MainWindow window;
+    auto* workflow=window.findChild<QComboBox*>("calculationWorkflow");
+    workflow->setCurrentIndex(workflow->findData(QStringLiteral("appraisal")));
+    const auto active=window.createBoundary(square(0,0,4),QStringLiteral("above_grade_finished"));
+    const auto inactive=window.createBoundary(square(0,0,5),QStringLiteral("above_grade_finished"));
+    const auto demolished=window.createBoundary(square(0,0,6),QStringLiteral("above_grade_finished"));
+    const auto garage=window.createBoundary(square(0.5,0.5,1),QStringLiteral("garage"));
+    require(!active.isEmpty() && !inactive.isEmpty() && !demolished.isEmpty() && !garage.isEmpty(),
+            "phase chooser fixture creates real same-floor parent areas and a garage");
+    auto phases=ModelPhases::create({active.toStdString(),inactive.toStdString(),demolished.toStdString(),garage.toStdString()},
+        {active.toStdString(),demolished.toStdString(),garage.toStdString()},
+        {{"current-design","Current design",{demolished.toStdString()},{}},
+         {"other-design","Other design",{},{inactive.toStdString()}},
+         {"without-garage","Without garage",{garage.toStdString()},{}}},"current-design");
+    auto phase_entity=Entity::create("model_phases",{{"model",phases.to_json()}});
+    phase_entity.id="auto-subtract-phase-fixture";
+    window.document().apply(ApplyEntityChanges{window.document().revision(),
+        {EntityChange::upsert(phase_entity)}, {}, "Phase-aware subtraction chooser fixture"});
+    require(window.selectEntity(garage),"phase chooser selects the active garage");
+    auto* action=window.findChild<QAction*>("autoSubtract");
+    require(action && action->isEnabled(),"active subtractor exposes its native chooser");
+    const auto chooser=[&](const std::function<void(QDialog&,QComboBox&,QDialogButtonBox&,QPushButton&)>& inspect) {
+        bool seen=false;
+        std::exception_ptr failure;
+        QTimer::singleShot(0,&window,[&] {
+            auto* dialog=window.findChild<QDialog*>("autoSubtractDialog");
+            if (!dialog) return;
+            seen=true;
+            try {
+                auto* target=dialog->findChild<QComboBox*>("autoSubtractTarget");
+                auto* buttons=dialog->findChild<QDialogButtonBox*>("autoSubtractButtons");
+                auto* remove=dialog->findChild<QPushButton*>("removeAutoSubtract");
+                require(target && buttons && remove,"phase chooser exposes its native controls");
+                inspect(*dialog,*target,*buttons,*remove);
+            } catch (...) { failure=std::current_exception(); dialog->reject(); }
+            if (dialog->isVisible()) dialog->reject();
+        });
+        action->trigger();
+        if (failure) std::rethrow_exception(failure);
+        require(seen,"phase chooser opens the actual native dialog");
+    };
+    const auto before_cancel=window.document().snapshot();
+    chooser([&](auto& dialog,auto& target,auto& buttons,auto&) {
+        require(target.findData(active)>=0 && target.findData(inactive)<0 && target.findData(demolished)<0,
+                "chooser offers active parents and excludes inactive alternatives and demolished parents");
+        target.setCurrentIndex(target.findData(active));
+        require(buttons.button(QDialogButtonBox::Apply)->isEnabled(),"active compatible parent enables Apply");
+        dialog.reject();
+    });
+    require(window.document().snapshot().entities()==before_cancel.entities() &&
+                window.document().revision()==before_cancel.revision() &&
+                window.document().snapshot().history().size()==before_cancel.history().size(),
+            "phase chooser Cancel preserves exact entities, revision and history");
+    // Layer eye filters are presentation; they must not remove semantic targets.
+    const auto layer=window.createLayer(QStringLiteral("floor-1"),QStringLiteral("Hidden parent presentation"));
+    require(!layer.isEmpty(),"phase chooser presentation fixture creates a layer");
+    auto snapshot=window.document().snapshot();
+    auto hidden_parent=snapshot.entities().at(active.toStdString());
+    hidden_parent.properties["layer_id"]=layer.toStdString();
+    window.document().apply(ApplyEntityChanges{snapshot.revision(),{EntityChange::upsert(hidden_parent)}, {},
+        "Place active parent on a presentation layer"});
+    require(window.setContainerVisible(layer,false) && window.selectEntity(garage),"hide the parent presentation only");
+    const auto before_add=window.document().snapshot();
+    chooser([&](auto&,auto& target,auto& buttons,auto&) {
+        require(target.findData(active)>=0,"active parent remains addable with its layer eye hidden");
+        target.setCurrentIndex(target.findData(active));
+        buttons.button(QDialogButtonBox::Apply)->click();
+    });
+    const auto added=window.document().snapshot();
+    require(added.revision()==before_add.revision()+1 &&
+                added.entities().at(active.toStdString()).properties.at("deduction_ids")==std::vector<std::string>{garage.toStdString()} &&
+                window.undoCommand() && window.document().snapshot().entities()==before_add.entities() &&
+                window.redoCommand() && window.document().snapshot().entities()==added.entities(),
+            "phase-aware chooser Apply adds one exact link with atomic Undo and Redo");
+    require(window.selectRemodelingAlternative(QString{}) && window.selectEntity(garage) &&
+                window.applySelectedAutoSubtract(demolished),"baseline allows linking the future demolished parent");
+    require(window.selectRemodelingAlternative(QStringLiteral("current-design")) && window.selectEntity(garage),
+            "return to the design which demolishes a linked parent");
+    snapshot=window.document().snapshot();
+    auto invalid_parent=snapshot.entities().at(demolished.toStdString());
+    invalid_parent.properties["classification"]="garage";
+    window.document().apply(ApplyEntityChanges{snapshot.revision(),{EntityChange::upsert(invalid_parent)}, {},
+        "Make the inactive linked target incompatible"});
+    require(window.selectEntity(garage),"select source after invalidating its inactive parent");
+    const auto before_remove=window.document().snapshot();
+    chooser([&](auto&,auto& target,auto& buttons,auto& remove) {
+        require(target.findData(demolished)>=0,"inactive incompatible linked parent remains visible for repair");
+        target.setCurrentIndex(target.findData(demolished));
+        require(!buttons.button(QDialogButtonBox::Apply)->isEnabled() && remove.isEnabled(),
+                "inactive invalid target permits only Remove");
+        remove.click();
+    });
+    const auto removed=window.document().snapshot();
+    require(removed.revision()==before_remove.revision()+1 &&
+                removed.entities().at(demolished.toStdString()).properties.value("deduction_ids",std::vector<std::string>{}).empty() &&
+                window.undoCommand() && window.document().snapshot().entities()==before_remove.entities() &&
+                window.redoCommand() && window.document().snapshot().entities()==removed.entities(),
+            "removing an inactive invalid link changes one revision and supports exact Undo and Redo");
+    require(window.selectRemodelingAlternative(QStringLiteral("without-garage")) && window.selectEntity(garage),
+            "a linked source can be selected after it is demolished");
+    const auto inactive_source=window.document().snapshot();
+    chooser([&](auto& dialog,auto& target,auto& buttons,auto& remove) {
+        require(target.findData(active)>=0 && target.count()==1,"inactive source exposes its existing linked parent only");
+        target.setCurrentIndex(target.findData(active));
+        require(!buttons.button(QDialogButtonBox::Apply)->isEnabled() && remove.isEnabled(),
+                "inactive subtractor disables additions while preserving link removal");
+        dialog.reject();
+    });
+    require(window.document().snapshot().entities()==inactive_source.entities() && window.document().revision()==inactive_source.revision(),
+            "inactive-source chooser Cancel preserves exact model state");
+}
+
 bool set_appraisal_fact(QDialog& dialog, const char* key, const char* value) {
     auto* box = dialog.findChild<QComboBox*>(QString::fromLatin1(key));
     const auto index = box ? box->findData(QString::fromLatin1(value)) : -1;
@@ -3174,6 +3289,7 @@ int main(int argc, char** argv) {
             return 0;
         }
         if (app.arguments().contains(QStringLiteral("--auto-subtract-only"))) {
+            auto_subtract_phase_chooser_workflow();
             auto_subtract_selected_area_workflow();
             auto_subtract_context_repair_workflow();
             auto_subtract_uses_current_declared_facts();
@@ -3182,6 +3298,7 @@ int main(int argc, char** argv) {
             return 0;
         }
         auto_subtract_selected_area_workflow();
+        auto_subtract_phase_chooser_workflow();
         auto_subtract_context_repair_workflow();
         auto_subtract_uses_current_declared_facts();
         auto_subtract_rejects_equal_declared_facts_despite_stale_categories();

@@ -20265,6 +20265,29 @@ public:
             if (!m_measurementCanvas || !m_measurementCanvas->drawingCommandIdle())
                 throw std::invalid_argument("Finish the active canvas gesture before completing the bay-window return.");
             const auto current = m_document->snapshot();
+            if (m_linework_drawing) {
+                requireLineworkDrawing(current.revision());
+                requireLineworkHistorySource();
+                const auto& drawing = *m_linework_drawing;
+                if (!drawing.has_anchor || drawing.model.closed || drawing.model.edges.size() < 2)
+                    throw std::invalid_argument("Draw the first bay side and front before completing the return.");
+                const auto replay = replay_measurement_linework(drawing.model);
+                const auto& entering = replay.edges[replay.edges.size() - 2];
+                const auto& front = replay.edges.back();
+                const auto pen = lineworkPen();
+                if (entering.end_vertex_id != front.start_vertex_id ||
+                    entering.segment.end.x != front.segment.start.x ||
+                    entering.segment.end.y != front.segment.start.y ||
+                    drawing.pen_vertex != front.end_vertex_id ||
+                    pen.x != front.segment.end.x || pen.y != front.segment.end.y)
+                    throw std::invalid_argument("The measured bay's joined edges or current pen changed. Start a new stroke.");
+                const auto edge = complete_bay_window_return(entering.segment, front.segment);
+                ConstructionReceipt receipt;
+                receipt.kind = BoundaryConstructionKind::line_to_point;
+                receipt.start = edge.start;
+                receipt.chord_end = edge.end;
+                return appendLineworkReceipt(std::move(receipt), current.revision());
+            }
             if (m_tool == CanvasTool::boundary) {
                 if (!m_boundary_session || m_boundary_document != m_document ||
                     !m_boundary_source || !m_boundary_context ||
@@ -36245,6 +36268,8 @@ public:
             const auto snapshot=authoringSnapshot();
             const auto organization=organize_project(snapshot);
             const auto source_context=before_drawing ? drawing_context : organization.drawing_context(source->id);
+            const auto semantic_visibility=visible_project_entities_with_phase(snapshot,ProjectViewFilter{});
+            const bool source_active=before_drawing || semantic_visibility.contains(source->id);
             QDialog dialog(owner);
             dialog.setObjectName(QStringLiteral("autoSubtractDialog"));
             styleDialog(dialog);
@@ -36270,8 +36295,10 @@ public:
                 QString area_type;
                 try {
                     area_type=QString::fromStdString(area_subtraction_type(snapshot,parent));
-                    if (before_drawing) eligible=area_subtraction_type(snapshot,*source)!=area_type.toStdString();
-                    else { (void)prepare_area_subtraction_target(snapshot,*source,id); eligible=true; }
+                    if (same_context && source_active && semantic_visibility.contains(id)) {
+                        if (before_drawing) eligible=area_subtraction_type(snapshot,*source)!=area_type.toStdString();
+                        else { (void)prepare_area_subtraction_target(snapshot,*source,id); eligible=true; }
+                    }
                 } catch (const std::exception&) { /* Existing links remain removable after invalid edits. */ }
                 if (!eligible && (before_drawing || !linked)) continue;
                 auto name=QString::fromStdString(read_string(parent.properties,"name").value_or("Area"));

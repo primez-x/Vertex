@@ -10,6 +10,11 @@ namespace sketch {
 [[nodiscard]] std::string area_subtraction_type(const DocumentSnapshot&, const Entity&);
 // Pure calculation adjustment. The subtractor may be newly encoded and absent
 // from the snapshot. Only the returned target's deduction_ids can change.
+// Additions require active phase members; removals can repair unavailable links.
 [[nodiscard]] Entity prepare_area_subtraction_target(const DocumentSnapshot&,
     const Entity& subtractor, std::string_view target_id, bool remove = false);
+// Validate a saved Finish target against its historical reconstruction rules.
+// This only accepts an exact saved target and cannot prepare a new adjustment.
+void validate_historical_area_subtraction_target(const DocumentSnapshot&,
+    const Entity& subtractor, const Entity& expected_target);
 }

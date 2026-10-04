@@ -115,7 +115,8 @@ void require_new_entity_id(const std::map<std::string, Entity, std::less<>>& sou
 
 std::vector<Entity> encode_new_entities(const DocumentSnapshot& snapshot,
                                         const BoundaryCommitIntent& intent,
-                                        std::vector<std::string>& created_boundary_ids) {
+                                        std::vector<std::string>& created_boundary_ids,
+                                        const std::map<std::string, Entity, std::less<>>* historical_entities = nullptr) {
     if (intent.chains.empty()) invalid("boundary commit requires at least one accepted chain");
     if (intent.auto_subtract_target_id && (intent.auto_subtract_target_id->empty() || intent.chains.size() != 1))
         invalid("Auto-Subtract commit requires one created area and a nonempty target");
@@ -164,7 +165,14 @@ std::vector<Entity> encode_new_entities(const DocumentSnapshot& snapshot,
     }
     if (intent.auto_subtract_target_id) {
         const auto source = result.front();
-        result.push_back(prepare_area_subtraction_target(snapshot, source, *intent.auto_subtract_target_id));
+        if (historical_entities) {
+            const auto target = historical_entities->find(*intent.auto_subtract_target_id);
+            if (target == historical_entities->end()) invalid("historical Auto-Subtract target is missing");
+            validate_historical_area_subtraction_target(snapshot, source, target->second);
+            result.push_back(target->second);
+        } else {
+            result.push_back(prepare_area_subtraction_target(snapshot, source, *intent.auto_subtract_target_id));
+        }
     }
     return result;
 }
@@ -184,6 +192,19 @@ ApplyEntityChanges command_for(const DocumentSnapshot& snapshot,
 }
 
 }  // namespace
+
+void validate_historical_boundary_commit(const DocumentSnapshot& snapshot,
+    const BoundaryCommitIntent& intent,
+    const std::map<std::string, Entity, std::less<>>& expected_after_entities) {
+    std::vector<std::string> boundary_ids;
+    const auto created = encode_new_entities(snapshot, intent, boundary_ids, &expected_after_entities);
+    auto candidate = snapshot.entities();
+    for (const auto& entity : created) candidate.insert_or_assign(entity.id, entity);
+    const auto trial = Document::preview_command(snapshot, Command{command_for(snapshot, intent, created)});
+    if (entity_map_digest(trial.entities()) != entity_map_digest(candidate) ||
+        entity_map_digest(candidate) != entity_map_digest(expected_after_entities))
+        invalid("Finish geometry does not match its archived input");
+}
 
 class BoundaryCommitBuilder final {
 public:

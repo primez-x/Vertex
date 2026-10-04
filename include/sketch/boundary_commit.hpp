@@ -71,6 +71,13 @@ private:
     const DocumentSnapshot& snapshot,
     const BoundaryCommitIntent& intent);
 
+// Validate an already archived Finish against its exact recorded entity map.
+// Historical Auto-Subtract admission predates semantic phase checks. This
+// returns no preview or command and cannot authorize a new live edit.
+void validate_historical_boundary_commit(const DocumentSnapshot& snapshot,
+    const BoundaryCommitIntent& intent,
+    const std::map<std::string, Entity, std::less<>>& expected_after_entities);
+
 // Apply verifies the complete source snapshot and the public display values,
 // recomputes from the sealed normalized intent, then commits all entities as
 // one atomic Document command. Rejected, stale, foreign, or modified previews

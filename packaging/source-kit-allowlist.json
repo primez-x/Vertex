@@ -1639,6 +1639,10 @@
     },
     {
       "category": "docs",
+      "path": "docs/plans/2026-10-04-measured-bay-and-phase-subtraction.md"
+    },
+    {
+      "category": "docs",
       "path": "docs/product-scope.md"
     },
     {
@@ -2392,6 +2396,10 @@
     {
       "category": "docs",
       "path": "docs/verification/2026-10-03-combined-measured-areas.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/verification/2026-10-04-measured-bay-and-phase-subtraction.md"
     },
     {
       "category": "docs",
@@ -4467,6 +4475,18 @@
     },
     {
       "category": "fixtures",
+      "path": "tests/fixtures/phase-subtraction-history/demolished-parent.sketch"
+    },
+    {
+      "category": "fixtures",
+      "path": "tests/fixtures/phase-subtraction-history/inactive-parent.sketch"
+    },
+    {
+      "category": "fixtures",
+      "path": "tests/fixtures/phase-subtraction-history/README.md"
+    },
+    {
+      "category": "fixtures",
       "path": "tests/fixtures/README.md"
     },
     {
@@ -4652,6 +4672,10 @@
     {
       "category": "source",
       "path": "tests/persistent_sequence_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/phase_subtraction_history_tests.cpp"
     },
     {
       "category": "source",

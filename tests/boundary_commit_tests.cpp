@@ -3,6 +3,7 @@
 
 #include "sketch/boundary_entity.hpp"
 #include "sketch/document_digest.hpp"
+#include "sketch/model_phases.hpp"
 #include "support/noninteractive_errors.hpp"
 
 #include <functional>
@@ -496,6 +497,156 @@ void test_declared_area_types_override_equal_saved_manual_categories() {
     document.redo(document.revision());require(document.snapshot().entities()==linked.entities(),"declared subtraction redo restores exact source and parent link");
 }
 
+void expect_phase_subtraction_rejected(Document& document, const DocumentSnapshot& snapshot,
+                                      const Entity& source, std::string_view target_id,
+                                      std::string_view message) {
+    const auto digest = sketch::document_snapshot_digest(snapshot);
+    const auto original_source = source;
+    expect_document_unchanged(document, [&] {
+        (void)sketch::prepare_area_subtraction_target(snapshot, source, target_id);
+    }, message);
+    require(sketch::document_snapshot_digest(snapshot) == digest && source == original_source,
+            "phase rejection must preserve the exact supplied snapshot and source");
+}
+
+void test_subtraction_requires_active_phase_members_in_both_directions() {
+    struct Case { const char* name; int phase; bool eligible; };
+    const std::vector<Case> cases{
+        {"baseline member", 0, true},
+        {"current proposed member", 1, true},
+        {"proposed member in baseline", 2, false},
+        {"proposed member in another alternative", 3, false},
+        {"demolished member", 4, false},
+        {"baseline member before demolition", 5, true},
+    };
+    for (const auto& test : cases) {
+        for (const bool source_is_member : {true, false}) {
+            auto document = declared_subtraction_document();
+            const std::string member = source_is_member ? "declared-child" : "declared-parent";
+            auto phases = sketch::ModelPhases::create({member}, {member}, {});
+            switch (test.phase) {
+            case 1: phases = sketch::ModelPhases::create({member}, {}, {{"future", "Future", {}, {member}}}, "future"); break;
+            case 2: phases = sketch::ModelPhases::create({member}, {}, {{"future", "Future", {}, {member}}}); break;
+            case 3: phases = sketch::ModelPhases::create({member}, {},
+                {{"future", "Future", {}, {member}}, {"other", "Other", {}, {}}}, "other"); break;
+            case 4: phases = sketch::ModelPhases::create({member}, {member}, {{"remove", "Remove", {member}, {}}}, "remove"); break;
+            case 5: phases = sketch::ModelPhases::create({member}, {member}, {{"remove", "Remove", {member}, {}}}); break;
+            }
+            document.apply(sketch::ApplyEntityChanges{document.revision(),
+                {EntityChange::upsert(entity("phases", "model_phases", {{"model", phases.to_json()}}))}});
+            const auto snapshot = document.snapshot();
+            const auto& source = snapshot.entities().at("declared-child");
+            const auto& target = snapshot.entities().at("declared-parent");
+            if (!test.eligible) {
+                expect_phase_subtraction_rejected(document, snapshot, source, target.id,
+                    std::string("subtraction must reject ") + test.name + (source_is_member ? " source" : " target"));
+                continue;
+            }
+            const auto digest = sketch::document_snapshot_digest(snapshot);
+            auto expected = target;
+            expected.properties["deduction_ids"] = json::array({"declared-child"});
+            require(sketch::prepare_area_subtraction_target(snapshot, source, target.id) == expected,
+                    "eligible baseline/current proposed member and unregistered counterpart must remain usable");
+            require(sketch::document_snapshot_digest(snapshot) == digest &&
+                    sketch::document_snapshot_digest(document.snapshot()) == digest,
+                    "successful phase preparation must preserve source geometry, metadata and history");
+            if (!source_is_member) {
+                auto pending = source;
+                pending.id = "pending-subtractor";
+                expected.properties["deduction_ids"] = json::array({"pending-subtractor"});
+                require(sketch::prepare_area_subtraction_target(snapshot, pending, target.id) == expected,
+                        "a newly authored unregistered subtractor absent from the snapshot remains supported");
+            }
+        }
+    }
+}
+
+void test_phase_invalid_existing_deductions_reject_additions_but_allow_removal() {
+    for (const bool demolished : {false, true}) {
+        for (const bool target_is_unavailable : {false, true}) {
+            auto document = declared_subtraction_document();
+            auto target = document.snapshot().entities().at("declared-parent");
+            target.properties["deduction_ids"] = json::array({"declared-child"});
+            const std::string member = target_is_unavailable ? target.id : "declared-child";
+            const auto phases = demolished
+                ? sketch::ModelPhases::create({member}, {member}, {{"future", "Future", {member}, {}}}, "future")
+                : sketch::ModelPhases::create({member}, {}, {{"future", "Future", {}, {member}}});
+            document.apply(sketch::ApplyEntityChanges{document.revision(), {EntityChange::upsert(target),
+                EntityChange::upsert(entity("phases", "model_phases", {{"model", phases.to_json()}}))}});
+            const auto snapshot = document.snapshot();
+            const auto& stored_source = snapshot.entities().at("declared-child");
+            auto pending = stored_source;
+            pending.id = "pending-subtractor";
+            expect_phase_subtraction_rejected(document, snapshot, pending, target.id,
+                "addition must revalidate the phase of the target and every already linked deduction");
+            expect_phase_subtraction_rejected(document, snapshot, stored_source, target.id,
+                "idempotent addition must not authorize an inactive or demolished existing link");
+            auto invalid_source = stored_source;
+            invalid_source.properties["appraisal_facts"] = "stale";
+            invalid_source.properties["classification"] = "";
+            const auto digest = sketch::document_snapshot_digest(snapshot);
+            auto expected = target;
+            expected.properties.erase("deduction_ids");
+            require(sketch::prepare_area_subtraction_target(snapshot, invalid_source, target.id, true) == expected,
+                    "removal must repair inactive/demolished source or target links despite invalid source TYPE");
+            require(sketch::document_snapshot_digest(snapshot) == digest &&
+                    sketch::document_snapshot_digest(document.snapshot()) == digest,
+                    "repair preparation must preserve exact entities and history");
+        }
+    }
+}
+
+void test_subtraction_rejects_multiple_phase_registries() {
+    auto document = declared_subtraction_document();
+    const auto phases = sketch::ModelPhases::create({"declared-child", "declared-parent"},
+                                                   {"declared-child", "declared-parent"}, {});
+    document.apply(sketch::ApplyEntityChanges{document.revision(), {
+        EntityChange::upsert(entity("phases", "model_phases", {{"model", phases.to_json()}})),
+        EntityChange::upsert(entity("second-phases", "model_phases", {{"model", phases.to_json()}}))}});
+    const auto snapshot = document.snapshot();
+    expect_phase_subtraction_rejected(document, snapshot, snapshot.entities().at("declared-child"), "declared-parent",
+        "multiple phase registries must refuse added deductions without mutation");
+}
+
+void test_historical_subtraction_validation_requires_exact_saved_target() {
+    auto document = declared_subtraction_document();
+    auto target = document.snapshot().entities().at("declared-parent");
+    target.properties["vendor_number"] = 1;
+    target.extensions["number"] = 1;
+    const auto phases = sketch::ModelPhases::create({target.id}, {}, {{"future", "Future", {}, {target.id}}});
+    document.apply(sketch::ApplyEntityChanges{document.revision(), {
+        EntityChange::upsert(target),
+        EntityChange::upsert(entity("phases", "model_phases", {{"model", phases.to_json()}}))}});
+    const auto snapshot = document.snapshot();
+    const auto& source = snapshot.entities().at("declared-child");
+    auto expected = target;
+    expected.properties["deduction_ids"] = json::array({"declared-child"});
+    expect_phase_subtraction_rejected(document, snapshot, source, target.id,
+        "current additions remain phase strict even when historical target validation is available");
+    const auto digest = sketch::document_snapshot_digest(snapshot);
+    sketch::validate_historical_area_subtraction_target(snapshot, source, expected);
+    require(sketch::document_snapshot_digest(snapshot) == digest &&
+            sketch::document_snapshot_digest(document.snapshot()) == digest,
+            "historical validation must preserve exact snapshot entities and history");
+    for (int field = 0; field < 7; ++field) {
+        auto altered = expected;
+        switch (field) {
+        case 0: altered.id = "unavailable-target"; break;
+        case 1: altered.type = "boundary"; break;
+        case 2: altered.required = true; break;
+        case 3: altered.properties["deduction_ids"] = json::array(); break;
+        case 4: altered.properties["vendor_number"] = 1.0; break;
+        case 5: altered.extensions["number"] = 1.0; break;
+        case 6: altered.extensions["vendor"] = {{"retain", "altered"}}; break;
+        }
+        expect_document_unchanged(document, [&] {
+            sketch::validate_historical_area_subtraction_target(snapshot, source, altered);
+        }, "historical subtraction validation must reject any altered target field or JSON representation");
+        require(sketch::document_snapshot_digest(snapshot) == digest,
+                "rejected historical validation must preserve the supplied snapshot");
+    }
+}
+
 void test_equal_declared_area_types_reject_despite_different_saved_categories() {
     auto document=declared_subtraction_document(false,true);const auto source=document.snapshot();
     const auto& child=source.entities().at("declared-child");const auto& parent=source.entities().at("declared-parent");
@@ -550,6 +701,10 @@ void test_explicit_pending_and_undeclared_legacy_area_types_remain_usable() {
 int main() {
     sketch::testing::noninteractive_errors();
     try {
+        test_subtraction_requires_active_phase_members_in_both_directions();
+        test_phase_invalid_existing_deductions_reject_additions_but_allow_removal();
+        test_subtraction_rejects_multiple_phase_registries();
+        test_historical_subtraction_validation_requires_exact_saved_target();
         test_declared_area_types_override_equal_saved_manual_categories();
         test_equal_declared_area_types_reject_despite_different_saved_categories();
         test_invalid_declarations_never_fall_back_to_stale_manual_area_types();

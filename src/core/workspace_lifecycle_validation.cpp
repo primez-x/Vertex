@@ -58,10 +58,9 @@ void validate_workspace_finish_deltas(const DocumentSnapshot& snapshot,
                 throw std::invalid_argument("Redraw geometry does not match its archived input");
             continue;
         }
-        const auto preview = preview_boundary_commit(prefix.snapshot(),
-            {session.options(), session.accepted_chains(), input.source.context, "Finish boundary", input.auto_subtract_target_id});
-        if (!preview.accepted() || preview.candidate_digest() != entity_map_digest(after.entities))
-            throw std::invalid_argument("Finish geometry does not match its archived input");
+        validate_historical_boundary_commit(prefix.snapshot(),
+            {session.options(), session.accepted_chains(), input.source.context, "Finish boundary", input.auto_subtract_target_id},
+            after.entities);
     }
 }
 

@@ -1,6 +1,7 @@
 #include "sketch/area_subtraction.hpp"
 #include "sketch/boundary_entity.hpp"
 #include "sketch/calculations.hpp"
+#include "sketch/model_phases.hpp"
 #include "sketch/project_organization.hpp"
 
 #include <algorithm>
@@ -16,6 +17,23 @@ using Json = nlohmann::json;
 }
 bool measurement(const Entity& entity) {
     return entity.type == "boundary" || entity.type == "measurement_boundary";
+}
+std::set<std::string, std::less<>> unavailable_phase_members(const DocumentSnapshot& snapshot) {
+    std::set<std::string, std::less<>> unavailable;
+    bool found = false;
+    for (const auto& [id, entity] : snapshot.entities()) {
+        (void)id;
+        if (entity.type != "model_phases") continue;
+        if (found) invalid("multiple design phase registries require resolution before adding deductions");
+        found = true;
+        const auto phases = ModelPhases::from_json(entity.properties.at("model"));
+        const auto active = phases.active_state();
+        for (const auto& member : phases.entity_ids()) {
+            const auto state = active.find(member);
+            if (state == active.end() || state->second == ModelPhase::demolished) unavailable.insert(member);
+        }
+    }
+    return unavailable;
 }
 std::string text(const Json& value, const char* key) {
     const auto found = value.find(key);
@@ -148,8 +166,9 @@ std::string area_subtraction_type(const DocumentSnapshot& snapshot, const Entity
     return grade == GradeStatus::above ? "above_grade_finished" : "below_grade_finished";
 }
 
-Entity prepare_area_subtraction_target(const DocumentSnapshot& snapshot, const Entity& subtractor,
-                                       std::string_view target_id, bool remove) {
+namespace {
+Entity prepare_target(const DocumentSnapshot& snapshot, const Entity& subtractor,
+                      std::string_view target_id, bool remove, bool enforce_active_phase) {
     if (!measurement(subtractor) || subtractor.id.empty() || target_id.empty() || subtractor.id == target_id)
         invalid("choose distinct measurement source and target areas");
     const auto found = snapshot.entities().find(target_id);
@@ -164,6 +183,10 @@ Entity prepare_area_subtraction_target(const DocumentSnapshot& snapshot, const E
         else result.properties["deduction_ids"] = ids;
         return result;
     }
+    const auto unavailable = enforce_active_phase ? unavailable_phase_members(snapshot)
+                                                  : std::set<std::string, std::less<>>{};
+    if (unavailable.contains(subtractor.id) || unavailable.contains(result.id))
+        invalid("source and target must be available in the active design phase");
     const auto source_owner = context(snapshot, subtractor), target_owner = context(snapshot, result);
     if (!same_owner(source_owner, target_owner)) invalid("source and target must share property, building and floor");
     if (text(subtractor.properties, "calculation_scope") != text(result.properties, "calculation_scope") &&
@@ -182,6 +205,7 @@ Entity prepare_area_subtraction_target(const DocumentSnapshot& snapshot, const E
     std::vector<AreaDeduction> tools;
     for (const auto& id : ids) {
         if (id == result.id) invalid("target cannot deduct itself");
+        if (unavailable.contains(id)) invalid("existing deduction is unavailable in the active design phase");
         const auto existing = snapshot.entities().find(id);
         const auto* tool = id == subtractor.id ? &subtractor : existing != snapshot.entities().end() ? &existing->second : nullptr;
         if (!tool || !same_owner(context(snapshot, *tool), target_owner) || !deductions(*tool).empty())
@@ -194,5 +218,21 @@ Entity prepare_area_subtraction_target(const DocumentSnapshot& snapshot, const E
         "physical", geometry(result), tools, {1, 1}}, physical);
     result.properties["deduction_ids"] = ids;
     return result;
+}
+}  // namespace
+
+Entity prepare_area_subtraction_target(const DocumentSnapshot& snapshot, const Entity& subtractor,
+                                       std::string_view target_id, bool remove) {
+    return prepare_target(snapshot, subtractor, target_id, remove, true);
+}
+
+void validate_historical_area_subtraction_target(const DocumentSnapshot& snapshot, const Entity& subtractor,
+                                                const Entity& expected_target) {
+    const auto reconstructed = prepare_target(snapshot, subtractor, expected_target.id, false, false);
+    if (reconstructed.id != expected_target.id || reconstructed.type != expected_target.type ||
+        reconstructed.required != expected_target.required ||
+        reconstructed.properties.dump() != expected_target.properties.dump() ||
+        reconstructed.extensions.dump() != expected_target.extensions.dump())
+        invalid("historical subtraction target does not exactly match the reconstructed target");
 }
 }

@@ -2426,6 +2426,26 @@ drawing; switching modes does not change existing geometry.
   - Result: Not tested
   - Notes: ______________________________
 
+## Measured bay returns and phased adjustments
+
+- [ ] **U400 — Complete a bay return with Measured lines**
+  - Steps: Choose Measured lines. Draw a diagonal bay side followed by its straight front. Press B, then continue drawing. Undo and Redo the return. Finish, save and reopen.
+  - Expected: B adds the matching diagonal return at the current pen. Earlier measurements remain unchanged. Undo removes only the return; Redo restores it. Reopening retains the lines. A curved front or disconnected stroke explains why B cannot complete the return without changing the drawing.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **U401 — Adjust areas within the current design phase**
+  - Steps: Create an area and a smaller area of a different type inside it. Put a potential parent in another design alternative, then open Auto-Subtract. Switch to the alternative containing that parent and try again. Hide its layer using the eye control and inspect the choices again. Cancel once, then add the adjustment and Undo/Redo it.
+  - Expected: Add choices include only areas in the current design phase; demolished and inactive alternative areas cannot become new deduction links. Hiding a layer does not change calculation eligibility. Cancel changes nothing, and Undo/Redo restores the complete adjustment.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **U402 — Remove an adjustment whose design phase changed**
+  - Steps: Add a valid area adjustment. Change the design phase so its parent or subtracting area is no longer active. Select the subtracting area, open Auto-Subtract and remove its existing link. Undo and Redo the removal.
+  - Expected: The existing link remains available for removal, even when it cannot be added under the current phase. Removal repairs the relationship without moving geometry. Undo/Redo preserves the original link and its removal.
+  - Result: Not tested
+  - Notes: ______________________________
+
 ## Issue report template
 
 - Task ID(s):

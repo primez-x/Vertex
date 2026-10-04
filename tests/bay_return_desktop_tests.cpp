@@ -2,6 +2,8 @@
 #include "sketch/boundary_dimension.hpp"
 #include "sketch/boundary_entity.hpp"
 #include "sketch/wall_measurement.hpp"
+#include "sketch/measurement_linework.hpp"
+#include "sketch/desktop/boundary_input_dialog.hpp"
 #include "../src/desktop/plan_canvas.hpp"
 #include "support/noninteractive_errors.hpp"
 
@@ -18,6 +20,9 @@
 #include <QStandardPaths>
 #include <QTemporaryDir>
 #include <QToolButton>
+#include <QComboBox>
+#include <QPushButton>
+#include <QTimer>
 #include <QUuid>
 
 #include <algorithm>
@@ -478,6 +483,95 @@ void altered_chain_rejected(bool curved) {
             "failed validation does not advance the pending wall endpoint");
 }
 
+void measured_linework_return() {
+    QTemporaryDir directory;
+    require(directory.isValid(),"measured bay fixture has temporary storage");
+    MainWindow window({},nullptr,directory.filePath(QStringLiteral("text-library.json")));
+    auto& canvas=prepare(window);
+    require(window.beginMeasurementLinework() &&
+                window.appendMeasurementLineworkPoint({0.125,-0.25}) &&
+                window.appendMeasurementLineworkPoint({1.125,0.75}) &&
+                window.appendMeasurementLineworkHeading(QStringLiteral("2125 mm"),QStringLiteral("0 deg")),
+            "measured bay has two authoritative edges and an exact typed front");
+    const auto before=window.document().snapshot();
+    const auto strokes=ids(before,"measurement_linework");
+    require(strokes.size()==1,"measured bay uses one actual measured stroke");
+    const auto original=*decode_measurement_linework_model(before.entities().at(strokes.front()).properties.at("model")).model;
+    require(original.edges.size()==2 && canvas.boundaryDraftPreview() && canvas.boundaryDraftPreview()->pen_position &&
+                same(*canvas.boundaryDraftPreview()->pen_position,{3.25,0.75}),
+            "measured bay retains a live native drawing chain");
+    invoke_return(window,canvas,false);
+    const auto after=window.document().snapshot();
+    const auto returned=*decode_measurement_linework_model(after.entities().at(strokes.front()).properties.at("model")).model;
+    const auto replay=replay_measurement_linework(returned);
+    require(after.revision()==before.revision()+1 && returned.edges.size()==3 &&
+                returned.edges[0]==original.edges[0] && returned.edges[1]==original.edges[1] &&
+                returned.edges.back().start_vertex_id==original.edges.back().end_vertex_id &&
+                same(replay.edges.back().segment.start,{3.25,0.75}) &&
+                same(replay.edges.back().segment.end,{4.25,-0.25}) &&
+                replay.edges.back().segment.sweep_radians==0,
+            "native B appends one exact joined measured return and preserves every original receipt");
+    const auto& receipt=returned.edges.back().receipt;
+    require(receipt.kind==BoundaryConstructionKind::line_to_point &&
+                same(receipt.start,{3.25,0.75}) && receipt.chord_end &&
+                same(*receipt.chord_end,{4.25,-0.25}) &&
+                returned.edges[1].receipt.distance->original_expression=="2125 mm" &&
+                returned.edges[1].receipt.heading->original_expression=="0 deg",
+            "bay receipt records the exact return without rounding or replacing typed source inputs");
+    require(canvas.boundaryDraftPreview() && canvas.boundaryDraftPreview()->pen_position &&
+                same(*canvas.boundaryDraftPreview()->pen_position,{4.25,-0.25}),
+            "measured bay continues at its exact returned pen");
+    key(canvas,Qt::Key_Z,Qt::ControlModifier);
+    require(window.document().snapshot().entities()==before.entities() && canvas.boundaryDraftPreview() &&
+                same(*canvas.boundaryDraftPreview()->pen_position,{3.25,0.75}),
+            "native Undo removes only the measured return and restores its pen");
+    key(canvas,Qt::Key_Y,Qt::ControlModifier);
+    require(window.document().snapshot().entities()==after.entities() && canvas.boundaryDraftPreview() &&
+                same(*canvas.boundaryDraftPreview()->pen_position,{4.25,-0.25}),
+            "native Redo restores the exact measured receipt, IDs and pen");
+    window.finishMeasurementLinework();
+    reopened_equals(window,after,directory,QStringLiteral("measured-bay-return"));
+}
+
+void measured_linework_return_rejections(bool curved, bool stale) {
+    MainWindow window;
+    auto& canvas=prepare(window);
+    require(window.beginMeasurementLinework() && window.appendMeasurementLineworkPoint({0,0}),
+            "measured rejection starts a live stroke");
+    if (curved) {
+        bool seen=false;
+        QTimer::singleShot(0,&window,[&] {
+            auto* dialog=dynamic_cast<BoundaryInputDialog*>(window.findChild<QDialog*>("measuredLineInput"));
+            require(dialog,"measured rejection opens the actual curved input dialog");
+            seen=true;
+            dialog->findChild<QComboBox*>("boundaryInputMethod")->setCurrentIndex(4);
+            dialog->findChild<QComboBox*>("boundaryInputChordDefinition")->setCurrentIndex(0);
+            dialog->findChild<QLineEdit*>("boundaryInputEndX")->setText("1 m");
+            dialog->findChild<QLineEdit*>("boundaryInputEndY")->setText("1 m");
+            dialog->findChild<QLineEdit*>("boundaryInputSweep")->setText("30 deg");
+            dialog->findChild<QPushButton*>("boundaryInputAdd")->click();
+        });
+        key(canvas,Qt::Key_D);
+        require(seen,"native D admitted the curved entering edge");
+    } else require(window.appendMeasurementLineworkPoint({1,1}),"measured rejection has an entering edge");
+    require(window.appendMeasurementLineworkPoint({3,1}),"measured rejection has a front edge");
+    if (stale) window.document().apply(NameRevision{window.document().revision(),"foreign measured-bay revision"});
+    const auto before=window.document().snapshot();
+    const auto draft=*canvas.boundaryDraftPreview();
+    if (!curved && !stale) {
+        const auto position=QRectF(canvas.rect()).center();
+        mouse(canvas,QEvent::MouseButtonPress,position,Qt::MiddleButton,Qt::MiddleButton);
+        require(!window.completeBayWindowReturn() && window.lastError().contains("gesture",Qt::CaseInsensitive),
+                "pending measured pan rejects B before mutation");
+        mouse(canvas,QEvent::MouseButtonRelease,position,Qt::MiddleButton);
+    } else require(!window.completeBayWindowReturn() && !window.lastError().isEmpty(),
+                    "curved or stale measured sources reject the bay helper");
+    unchanged(before,window.document().snapshot());
+    require(canvas.boundaryDraftPreview() && canvas.boundaryDraftPreview()->pen_position && draft.pen_position &&
+                same(*canvas.boundaryDraftPreview()->pen_position,*draft.pen_position),
+            "measured return rejection preserves the live measured pen");
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -501,6 +595,10 @@ int main(int argc, char** argv) {
         negative_contexts_and_key_routing();
         altered_chain_rejected(true);
         altered_chain_rejected(false);
+        measured_linework_return();
+        measured_linework_return_rejections(true,false);
+        measured_linework_return_rejections(false,true);
+        measured_linework_return_rejections(false,false);
         std::cout << "bay_return_desktop_tests passed\n";
         return 0;
     } catch (const std::exception& error) {
