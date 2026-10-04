@@ -85,6 +85,25 @@ void ansi_canonical_units_declarations_and_curve_dimensions() {
     panel.setDocument(document.snapshot(),"p",true);panel.setSelectedBoundary("a");
     require(panel.report() && panel.report()->qualified && label(panel,"appraisalDetailsGla")=="100 sq ft",
         "ANSI primary GLA remains canonical whole square feet in metric workspace and excludes ADU");
+    require(label(panel,"appraisalDetailsStatus").contains("ANSI Z765-2021 profile") &&
+        label(panel,"appraisalDetailsStatus").contains("validation pending"),
+        "the profile and unresolved validation must be visible beside the prominent GLA total");
+    const auto capture_directory = qEnvironmentVariable("VERTEX_TEST_CAPTURE_DIR");
+    if (!capture_directory.isEmpty()) {
+        panel.resize(340, 850); panel.show(); QApplication::processEvents();
+        require(QDir().mkpath(capture_directory) && panel.grab().save(QDir(capture_directory).filePath("appraisal-details-ansi-profile.png")),
+            "save the actual ANSI profile and GLA panel capture");
+        QTemporaryDir library_directory;
+        sketch::desktop::MainWindow window(std::make_shared<sketch::Document>(sketch::Document::create(entities)), nullptr,
+            library_directory.filePath("library.json"));
+        window.setAttribute(Qt::WA_DontShowOnScreen); window.resize(1280, 900);
+        window.setWorkspaceTheme(sketch::WorkspaceTheme::light); window.setMetricUnits(true);
+        auto* tabs = window.findChild<QTabWidget*>("sidebarTabs");
+        require(tabs != nullptr && tabs->count() == 3, "actual workspace exposes Layers, Library and Details");
+        tabs->setCurrentIndex(2); window.show(); QApplication::processEvents();
+        require(window.grab().save(QDir(capture_directory).filePath("appraisal-details-ansi-workspace.png")),
+            "save the actual workspace with the prominent ANSI profile and GLA total");
+    }
     const auto totals=label(panel,"appraisalDetailsTotals");
     require(totals.contains("ADU",Qt::CaseInsensitive) && totals.contains("100 sq ft") && totals.contains("Supplemental metric diagnostic"),
         "ANSI keeps ADU category separate and clearly labels metric diagnostic totals");

@@ -794,6 +794,14 @@ if(SKETCH_BUILD_DESKTOP)
     qt_add_resources(redraw_angle_removal_desktop_tests redraw_angle_test_fonts PREFIX "/fonts" BASE assets/fonts
       FILES assets/fonts/Inter.ttf)
     add_test(NAME redraw_angle_removal_desktop COMMAND redraw_angle_removal_desktop_tests)
+    add_executable(room_relationship_move_desktop_tests tests/room_relationship_move_desktop_tests.cpp)
+    target_link_libraries(room_relationship_move_desktop_tests PRIVATE sketch_desktop)
+    qt_add_resources(room_relationship_move_desktop_tests room_relationship_move_fonts PREFIX "/fonts" BASE assets/fonts
+      FILES assets/fonts/Inter.ttf)
+    add_test(NAME room_relationship_move_desktop COMMAND room_relationship_move_desktop_tests)
+    set_tests_properties(room_relationship_move_desktop PROPERTIES
+      ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_PLUGIN_PATH=${SKETCH_QT_PREFIX}/plugins"
+      ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${SKETCH_QT_BIN};PATH=path_list_prepend:${CMAKE_SOURCE_DIR}/.deps/native/x64-windows/$<IF:$<CONFIG:Debug>,debug/bin,bin>")
     add_executable(object_appearance_desktop_tests tests/object_appearance_desktop_tests.cpp)
     target_link_libraries(object_appearance_desktop_tests PRIVATE sketch_desktop)
     qt_add_resources(object_appearance_desktop_tests object_appearance_test_fonts PREFIX "/fonts" BASE assets/fonts

@@ -71,6 +71,10 @@ private:
 // build a revision-bound preview against the edited after snapshot. The
 // `edited_after` vector normally starts as the output of the same document
 // snapshot and changes only the target geometry the user moved.
+// This legacy adapter proposes and commits DEPENDENTS ONLY. It does not
+// author the edited driver. Interactive authored moves must combine a typed
+// driver command and dependent transforms, and validate the complete candidate
+// before publishing it. The desktop relationship dialog does that composition.
 [[nodiscard]] RoomRelationshipGeometryPreview preview_room_relationship_geometry(
     const DocumentSnapshot& source,
     const RoomRelationshipSnapshot& relationships,

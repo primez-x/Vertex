@@ -9967,6 +9967,9 @@ public:
             auto* preview_canvas = new PlanCanvas(&dialog);
             preview_canvas->setObjectName(QStringLiteral("roomRelationshipPropagationPreview"));
             preview_canvas->setAccessibleName(QStringLiteral("Relationship geometry preview"));
+            preview_canvas->setMetricUnits(m_metric_units);
+            preview_canvas->setSelectionControlsVisible(false);
+            new BoundaryPreviewFit(preview_canvas);
             preview_canvas->setMinimumHeight(360);
             preview_canvas->setCanvasBackground(QColor(248, 250, 253));
             preview_canvas->setOverviewMapEnabled(false);
@@ -10025,9 +10028,88 @@ public:
                 return degrees * std::numbers::pi / 180.0;
             };
 
-            std::optional<RoomRelationshipGeometryPreview> candidate_preview;
-            const auto draw_preview = [&](const std::vector<RelationshipGeometry>& edited,
-                                           const RoomRelationshipGeometryPreview* relationship_preview) {
+            struct AuthoredRelationshipMove {
+                Command command;
+                DocumentSnapshot candidate;
+            };
+            // Author through the same typed adapters as ordinary transforms.
+            // The pure relationship solver intentionally proposes dependents
+            // only; its old commit helper cannot commit the authored driver.
+            const auto build_move = [&](const QString& reference_id, const PlanarTransform& transform) {
+                QStringList roots{reference_id};
+                std::vector<RoomReference> references;
+                std::vector<RoomRelation> relations;
+                for (const auto& [id, entity] : source.entities()) {
+                    if (entity.type != "room_relationships") continue;
+                    const auto model = RoomRelationshipSnapshot::from_json(entity.properties.at("model"));
+                    for (const auto& reference : model.references()) {
+                        const auto existing = std::find_if(references.begin(), references.end(),
+                            [&](const auto& value) { return value.id == reference.id; });
+                        if (existing == references.end()) references.push_back(reference);
+                        else if (*existing != reference) throw std::invalid_argument("Relationship records declare conflicting roles for the same reference.");
+                    }
+                    for (const auto& relation : model.relations())
+                        if (std::find(relations.begin(), relations.end(), relation) == relations.end()) relations.push_back(relation);
+                }
+                // Validate the union: individually valid records can conceal a
+                // cycle or contradictory drivers across record boundaries.
+                const auto model = RoomRelationshipSnapshot::create(std::move(references), std::move(relations));
+                const auto captured_all = snapshot_room_relationship_geometry(source, model);
+                if (captured_all.has_diagnostics()) throw std::invalid_argument(captured_all.diagnostics.front());
+                const auto& before = captured_all.records;
+                std::set<std::string> caused{reference_id.toStdString()};
+                bool expanded = true;
+                while (expanded) {
+                    expanded = false;
+                    for (const auto& relation : model.relations())
+                        if (relation.kind != RoomRelationKind::independent && caused.contains(relation.target_id))
+                            expanded = caused.insert(relation.source_id).second || expanded;
+                }
+                // Rebuild the complete command after every dependency expansion,
+                // rather than append unverified upserts to a sealed wall proof.
+                for (std::size_t pass = 0; pass <= source.entities().size(); ++pass) {
+                    const auto command = makeSelectionGeometryTransformCommand(source, roots, transform);
+                    const auto candidate = Document::preview_command(source, command);
+                    QStringList additions;
+                    {
+                        const auto after = snapshot_room_relationship_geometry(candidate, model);
+                        if (after.has_diagnostics()) throw std::invalid_argument(after.diagnostics.front());
+                        const auto proposal = propose_room_relationship_geometry(model, before, after.records);
+                        if (proposal.has_diagnostics()) throw std::invalid_argument(proposal.diagnostics.front());
+                        for (const auto& change : proposal.changes) {
+                            const auto original = std::find_if(before.begin(), before.end(),
+                                [&](const auto& value) { return value.id == change.source_id; });
+                            if (original == before.end()) throw std::invalid_argument("A relationship source is unavailable.");
+                            auto expected = original->geometry;
+                            for (auto& segment : expected) segment = transform_segment(segment, transform);
+                            if (!same_geometry(expected, change.geometry))
+                                throw std::invalid_argument("Relationship records require conflicting moves. No geometry was changed.");
+                            const auto id = id_from(change.source_id);
+                            if (!roots.contains(id) && !additions.contains(id)) additions.push_back(id);
+                        }
+                        for (const auto& geometry : after.records) {
+                            const auto original = std::find_if(before.begin(), before.end(),
+                                [&](const auto& value) { return value.id == geometry.id; });
+                            if (original == before.end()) throw std::invalid_argument("A relationship reference is unavailable.");
+                            if (same_geometry(original->geometry, geometry.geometry)) continue;
+                            if (!caused.contains(geometry.id))
+                                throw std::invalid_argument("The physical source would move another declared reference without a relationship. Review its relationships first.");
+                            auto expected = original->geometry;
+                            for (auto& segment : expected) segment = transform_segment(segment, transform);
+                            if (!same_geometry(expected, geometry.geometry))
+                                throw std::invalid_argument("The complete candidate does not preserve the requested rigid move.");
+                        }
+                    }
+                    if (additions.empty()) return AuthoredRelationshipMove{command, candidate};
+                    additions.sort();
+                    roots.append(additions);
+                }
+                throw std::invalid_argument("Relationship propagation did not reach a stable candidate.");
+            };
+            std::optional<AuthoredRelationshipMove> candidate_preview;
+            std::optional<PlanarTransform> candidate_transform;
+            QString candidate_reference;
+            const auto draw_original = [&] {
                 std::vector<CanvasEntity> entities;
                 const auto add_entity = [&](const RelationshipGeometry& geometry, bool selected,
                                             QString suffix) {
@@ -10037,31 +10119,14 @@ public:
                                         selected});
                 };
                 for (const auto& geometry : captured.records) add_entity(geometry, false, {});
-                for (const auto& geometry : edited) {
-                    const auto original = std::find_if(captured.records.begin(), captured.records.end(),
-                        [&](const auto& value) { return value.id == geometry.id; });
-                    if (original == captured.records.end() ||
-                        same_geometry(geometry.geometry, original->geometry)) continue;
-                    add_entity(geometry, true, QStringLiteral(" · proposed"));
-                }
-                if (relationship_preview) {
-                    for (const auto& change : relationship_preview->changes()) {
-                        add_entity({change.source_id, change.source_kind, change.geometry}, true,
-                                   QStringLiteral(" · follows"));
-                    }
-                }
                 preview_canvas->setEntities(std::move(entities));
                 preview_canvas->fitView();
             };
-            draw_preview([&] {
-                std::vector<RelationshipGeometry> initial;
-                initial.reserve(captured.records.size());
-                for (const auto& geometry : captured.records) initial.push_back(geometry);
-                return initial;
-            }(), nullptr);
+            draw_original();
 
             const auto update_preview = [&] {
                 candidate_preview.reset();
+                candidate_transform.reset();
                 try {
                     if (!modalContextUnchanged(context))
                         throw std::invalid_argument(lastError().toStdString());
@@ -10070,42 +10135,51 @@ public:
                     const auto rotation_radians = parse_rotation();
                     const auto dx = parse_offset(offset_x, "Offset X");
                     const auto dy = parse_offset(offset_y, "Offset Y");
-                    auto edited = captured.records;
-                    const auto target = std::find_if(edited.begin(), edited.end(),
+                    const auto target = std::find_if(captured.records.begin(), captured.records.end(),
                         [&](const auto& value) { return value.id == selected_id; });
-                    if (target == edited.end()) throw std::invalid_argument("The selected reference is unavailable.");
+                    if (target == captured.records.end()) throw std::invalid_argument("The selected reference is unavailable.");
                     const auto bounds = boundary_bounds(target->geometry);
                     const PlanarTransform transform{{(bounds.minimum.x + bounds.maximum.x) * 0.5,
                                                       (bounds.minimum.y + bounds.maximum.y) * 0.5},
                                                      rotation_radians, false, false, {dx, dy}};
-                    for (auto& segment : target->geometry)
-                        segment = transform_segment(segment, transform);
-                    const auto preview = preview_room_relationship_geometry(source, record->model, edited);
-                    draw_preview(edited, preview.accepted() ? &preview : nullptr);
-                    if (!preview.accepted()) {
-                        QStringList messages;
-                        for (const auto& diagnostic : preview.diagnostics())
-                            messages.push_back(QString::fromUtf8(diagnostic));
-                        status->setText(QStringLiteral("Preview blocked:\n%1")
-                                            .arg(messages.join(QStringLiteral("\n"))));
-                        apply->setEnabled(false);
-                        return;
+                    auto preview = build_move(id_from(selected_id), transform);
+                    // Display the actual candidate, including source walls and
+                    // deductions outside the currently displayed relationship model.
+                    std::vector<CanvasEntity> shown;
+                    QStringList moved;
+                    for (const auto& [id, entity] : source.entities()) {
+                        if (!is_closed_boundary_entity(entity.type) && entity.type != "wall") continue;
+                        const auto geometry = entity.type == "wall"
+                            ? Boundary{*read_required_segment(entity.properties, "baseline")}
+                            : read_boundary(entity.properties);
+                        const auto thickness = entity.type == "wall"
+                            ? read_finite_number(entity.properties, "thickness_m").value_or(0.12) : 0.0;
+                        shown.push_back({id_from(id), id_from(entity.type), geometry, thickness, false});
+                        const auto& replacement = preview.candidate.entities().at(id);
+                        const auto proposed = entity.type == "wall"
+                            ? Boundary{*read_required_segment(replacement.properties, "baseline")}
+                            : read_boundary(replacement.properties);
+                        if (!same_geometry(geometry, proposed)) {
+                            shown.push_back({id_from(id) + QStringLiteral(" · proposed"), id_from(entity.type), proposed, thickness, true});
+                            moved.push_back(id_from(id));
+                        }
                     }
-                    candidate_preview = preview;
-                    if (preview.changes().empty()) {
-                        status->setText(QStringLiteral("No dependent geometry changes are declared for this move."));
+                    preview_canvas->setEntities(std::move(shown));
+                    preview_canvas->fitView();
+                    if (preview.candidate.entities() == source.entities()) {
+                        status->setText(QStringLiteral("No geometry changes. Enter an offset or rotation."));
                         apply->setEnabled(false);
                     } else {
-                        QStringList moved;
-                        for (const auto& change : preview.changes())
-                            moved.push_back(QString::fromUtf8(change.source_id));
-                        status->setText(QStringLiteral("Preview ready at revision %1. Dependents to move: %2. Apply commits one undoable operation.")
+                        candidate_transform = transform;
+                        candidate_reference = id_from(selected_id);
+                        candidate_preview = std::move(preview);
+                        status->setText(QStringLiteral("Preview ready at revision %1. Driver and related geometry to move: %2. Apply commits one undoable operation.")
                                             .arg(source.revision())
                                             .arg(moved.join(QStringLiteral(", "))));
                         apply->setEnabled(true);
                     }
                 } catch (const std::exception& error) {
-                    draw_preview(captured.records, nullptr);
+                    draw_original();
                     status->setText(QStringLiteral("Preview: %1").arg(QString::fromUtf8(error.what())));
                     apply->setEnabled(false);
                 }
@@ -10123,9 +10197,11 @@ public:
                         update_preview();
                         return;
                     }
-                    const auto command = make_room_relationship_geometry_command(
-                        authoringSnapshot(), *candidate_preview);
-                    applyDocumentCommand(Command{command});
+                    if (!candidate_transform) return;
+                    const auto rebuilt = build_move(candidate_reference, *candidate_transform);
+                    if (document_snapshot_digest(rebuilt.candidate) != document_snapshot_digest(candidate_preview->candidate))
+                        throw std::invalid_argument("The relationship preview changed. Review it again before applying.");
+                    applyDocumentCommand(rebuilt.command);
                     clearError();
                     refresh();
                     dialog.accept();

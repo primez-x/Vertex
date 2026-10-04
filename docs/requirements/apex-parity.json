@@ -2346,7 +2346,7 @@
       "requirement": "Model rooms and architectural boundaries separately from appraisal measurement boundaries, with explicit relationships where desired.",
       "source_urls": [],
       "evidence_status": "documented",
-      "implementation_status": "verified",
+      "implementation_status": "in_progress",
       "acceptance": "A room can relate to, follow, or remain independent from a measurement boundary without silently conflating classifications or geometry.",
       "package": 4,
       "blocker": null,
@@ -2360,6 +2360,8 @@
         "tests/room_relationships_tests.cpp",
         "tests/room_relationship_geometry_tests.cpp",
         "tests/room_relationship_geometry_commit_tests.cpp",
+        "tests/room_relationship_move_desktop_tests.cpp",
+        "docs/verification/authored-relationship-moves-2026-10-04.md",
         "docs/room-relationships.md",
         "src/desktop/main_window.cpp",
         "tests/desktop_smoke.cpp",
@@ -2367,7 +2369,7 @@
         "scripts/generate_workflow_acceptance_evidence.py",
         "tests/test_workflow_acceptance_evidence.py"
       ],
-      "implementation_note": "Room, appraisal-boundary, and architectural-wall references have separate kinds with independent/follows/derived-from relations and graph validation. A typed room_relationships Document entity and Windows editor now persist and validate declarations through undoable history; selected closed geometry can be copied into a distinct named room_boundary entity; architectural room volumes add explicit boundary, hole, height, and elevation semantics while remaining separate from room_boundary; a detached proposal engine validates rigid target-first propagation and multi-driver agreement without mutation; a revision-bound Document adapter commits identified and receipt-backed boundary changes atomically with dependent dimensions and digest/stale checks; the Windows editor provides a visible canvas preview and confirmation step. Controlled retargeting replaces one declared target through a validated, revision-checked, undoable operation, rejects missing targets, no-op edits, wrong relation kinds, and cycles, and preserves geometry until propagation is separately confirmed. Current Debug/Release workflow evidence covers relation creation, independent semantics, retarget geometry preservation, undo/redo, propagation, and save/reopen; imported Apex and production compatibility evidence remain open."
+      "implementation_note": "2026-10-04 review corrected premature verified status: the desktop preview previously moved only dependents on Apply; the authored driver now commits with them through existing typed transforms, with one history step, stable dimensions/receipts, all-record graph validation, independent rotation and ownership-safe reopening. Split-preserving logical physical-wall references and connected solve beyond the detached transform graph remain production gaps. Room, appraisal-boundary, and architectural-wall references have separate kinds with independent/follows/derived-from relations and graph validation. A typed room_relationships Document entity and Windows editor now persist and validate declarations through undoable history; selected closed geometry can be copied into a distinct named room_boundary entity; architectural room volumes add explicit boundary, hole, height, and elevation semantics while remaining separate from room_boundary; a detached proposal engine validates rigid target-first propagation and multi-driver agreement without mutation; a revision-bound Document adapter commits identified and receipt-backed boundary changes atomically with dependent dimensions and digest/stale checks; the Windows editor provides a visible canvas preview and confirmation step. Controlled retargeting replaces one declared target through a validated, revision-checked, undoable operation, rejects missing targets, no-op edits, wrong relation kinds, and cycles, and preserves geometry until propagation is separately confirmed. Current Debug/Release workflow evidence covers relation creation, independent semantics, retarget geometry preservation, undo/redo, propagation, and save/reopen; imported Apex and production compatibility evidence remain open."
     },
     {
       "id": "ARCH-MOD-010",

@@ -296,7 +296,7 @@ struct AppraisalDetailsPanel::Impl {
         if(!report->configured)status->setText(QStringLiteral("Use Setup to enable Appraisal and declare the property, floor and area facts. Automatic totals will then appear here."));
         else if(!report->qualified || !report->calculation)status->setText(QStringLiteral("Totals withheld. Resolve the issues below with Setup or Edit facts. Individual measurements are diagnostics."));
         else {
-            status->setText(ansi()?QStringLiteral("Vertex rule checks passed. Primary GLA: whole square feet; dimensions: 0.1 ft. Totals round once after aggregation."):
+            status->setText(ansi()?QStringLiteral("ANSI Z765-2021 profile · rules v%1. Whole sq ft; dimensions: 0.1 ft. Final standards validation pending.").arg(report->policy->version):
                 QStringLiteral("Qualified under the declared property policy. Totals sum unrounded contributions and round once."));
             if(ansi() && std::any_of(report->boundaries.begin(),report->boundaries.end(),[](const auto& boundary) {
                 return !boundary.exclusion && boundary.facts && boundary.facts->ansi &&

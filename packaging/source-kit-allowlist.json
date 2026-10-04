@@ -1639,6 +1639,10 @@
     },
     {
       "category": "docs",
+      "path": "docs/plans/2026-10-04-authored-relationship-moves.md"
+    },
+    {
+      "category": "docs",
       "path": "docs/plans/2026-10-04-boundary-point-removal.md"
     },
     {
@@ -2484,6 +2488,10 @@
     {
       "category": "docs",
       "path": "docs/verification/area-appearance-selection-filters-2026-10-01.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/verification/authored-relationship-moves-2026-10-04.md"
     },
     {
       "category": "docs",
@@ -4932,6 +4940,10 @@
     {
       "category": "source",
       "path": "tests/room_relationship_geometry_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/room_relationship_move_desktop_tests.cpp"
     },
     {
       "category": "source",

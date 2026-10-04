@@ -2589,6 +2589,20 @@ drawing; switching modes does not change existing geometry.
   - Result: Not tested
   - Notes: ______________________________
 
+## Related geometry and visible GLA
+
+- [ ] **U424 — Move a related room and its driving area or wall together**
+  - Steps: Declare that a room follows a measured area or wall in Room relationships. Open Preview propagation, choose that driver and enter an offset or rotation. Cancel once, then reopen and Apply. Inspect both objects and their dimensions, Undo/Redo, save and reopen. Repeat with an Independent relation.
+  - Expected: Preview shows the exact driver and dependent positions. Apply moves both in one reversible edit, retaining wall-hosted doors/windows and attached measurements. Independent geometry stays unchanged; its chosen driver can still move. Contradictory or stale edits explain the problem and cannot apply.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **U425 — Find GLA and its calculation basis**
+  - Steps: Open the left Details tab, use Setup to choose the appraisal profile, and record the required property/floor/area facts. Inspect the GLA total and profile, choose an area to see edge lengths, gross area, deductions and net area, then open Full report.
+  - Expected: GLA is visible without selecting a canvas object. The ANSI profile, when selected, appears beneath qualified totals with its pending standards-validation status. Missing facts withhold the total and explain what to correct. Floor/area contributions and Full report agree; the app does not label unverified results ANSI-approved.
+  - Result: Not tested
+  - Notes: ______________________________
+
 ## Issue report template
 
 - Task ID(s):
