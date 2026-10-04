@@ -530,9 +530,12 @@ void repeated_native_proposals_and_boundary_phases(bool boundary, bool manual, b
         key(canvas, Qt::Key_Right, Qt::ControlModifier);
         const Vec2 first{4.01317, endpoint.y};
         const auto& witness = selected_directional(canvas, endpoint, first, window.lastError());
+        // The intended chain measurement is 2.7675 m. Independent floating
+        // subtraction can land below the half-mm while the actual witness
+        // length lands above it; assert its readable rounded presentation.
         require(witness.command_text.startsWith(QStringLiteral("→")) &&
-            witness.dimension_text == PlanCanvas::drawingLengthText(4.01317-endpoint.x, true),
-            "native directional cue includes the arrow and exact segment measurement");
+            witness.dimension_text == (first_side ? QStringLiteral("4 m") : QStringLiteral("≈ 2.768 m")),
+            "native directional cue includes the arrow and an honest readable segment measurement");
         const auto painted = canvas.grab().toImage();
         const auto position = screen(canvas, first)*painted.devicePixelRatio();
         const QRect marker(qRound(position.x())-10, qRound(position.y())-10, 21, 21);

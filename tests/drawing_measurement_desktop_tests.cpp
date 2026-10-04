@@ -6,6 +6,7 @@
 
 #include <QApplication>
 #include <QCoreApplication>
+#include <QDir>
 #include <QEventLoop>
 #include <QFont>
 #include <QFontDatabase>
@@ -16,6 +17,7 @@
 #include <QMouseEvent>
 #include <QStandardPaths>
 #include <QTimer>
+#include <QToolButton>
 #include <QUuid>
 
 #include <cmath>
@@ -108,6 +110,99 @@ void right_drag(PlanCanvas& canvas) {
             "native right drag pans to its final release position");
 }
 
+void capture(PlanCanvas& canvas,const QString& name) {
+    const auto directory=qEnvironmentVariable("VERTEX_TEST_CAPTURE_DIR");
+    if (directory.isEmpty()) return;
+    process_events();
+    require(QDir().mkpath(directory) && canvas.grab().save(QDir(directory).filePath(name)),
+            "native compact measurement and draft overview screenshot saves for review");
+}
+
+void test_overview_navigation_preserves_native_authoring_drafts() {
+    for (const auto kind : {0,1,2}) {
+        MainWindow window;
+        auto& canvas=prepare(window);
+        window.setMetricUnits(true);
+        auto* snap=window.findChild<QToolButton*>(QStringLiteral("snapTool"));
+        require(snap,"overview fixture has the persistent native Snap control");
+        snap->setChecked(false);
+        canvas.setSnapEnabled(false);
+        canvas.setOverviewMapEnabled(true);
+        canvas.setViewTransform({0,0},80);
+        if (kind==0)
+            require(window.beginBoundaryDrawing(BoundaryAuthoringMode::draw_first,QStringLiteral("measurement")),
+                    "overview fixture starts native boundary drawing");
+        if (kind==2)
+            require(window.beginMeasurementLinework(),"overview fixture starts native measured-line drawing");
+        click(canvas,{0,0});
+        if (kind==0) click(canvas,{2,0});
+        mouse(canvas,QEvent::MouseMove,screen(canvas,{1,2}));
+        const auto wall=canvas.wallPreview();
+        const auto draft=canvas.boundaryDraftPreview();
+        require(kind==1 ? wall.has_value() : draft && draft->rubber_band,
+                "overview fixture has an active native rubber-band endpoint");
+        require(close(kind==1 ? wall->end : draft->rubber_band->end,{1,2}),
+                "overview fixture preserves its explicit unsnapped endpoint");
+        const auto before=window.document().snapshot();
+        const auto same_point=[](const std::optional<Vec2>& a,const std::optional<Vec2>& b) {
+            return a.has_value()==b.has_value() && (!a || (a->x==b->x && a->y==b->y));
+        };
+        const auto unchanged=[&] {
+            require(window.document().revision()==before.revision() &&
+                        window.document().snapshot().entities()==before.entities(),
+                    "overview gesture must not create or edit document entities");
+            if (kind==1) {
+                const auto current=canvas.wallPreview();
+                require(current && same_point(current->start,wall->start) && same_point(current->end,wall->end) &&
+                            current->dimension_text==wall->dimension_text,
+                        "overview press, move and release must retain the native pending wall endpoint and readout");
+            } else {
+                const auto current=canvas.boundaryDraftPreview();
+                require(current && current->rubber_band &&
+                            same_point(current->rubber_band->start,draft->rubber_band->start) &&
+                            same_point(current->rubber_band->end,draft->rubber_band->end) &&
+                            current->segments.size()==draft->segments.size() &&
+                            same_point(current->anchor,draft->anchor) &&
+                            same_point(current->pen_position,draft->pen_position),
+                        "overview press, move and release must retain native boundary and measured-line authoring geometry");
+                for (std::size_t index=0;index<draft->segments.size();++index) {
+                    const auto& a=current->segments[index];
+                    const auto& b=draft->segments[index];
+                    require(a.start.x==b.start.x && a.start.y==b.start.y &&
+                                a.end.x==b.end.x && a.end.y==b.end.y && a.sweep_radians==b.sweep_radians,
+                            "overview navigation retains every accepted analytical draft segment exactly");
+                }
+            }
+        };
+        const auto map_center=canvas.overviewMapRect().adjusted(8,22,-8,-8).center();
+        const auto scale=canvas.viewScale();
+        mouse(canvas,QEvent::MouseMove,map_center);
+        unchanged();
+        mouse(canvas,QEvent::MouseButtonPress,map_center,Qt::LeftButton,Qt::LeftButton);
+        unchanged();
+        const auto centered=canvas.viewCenter();
+        require(close(centered,kind==0 ? Vec2{1,1} : Vec2{0.5,1}),
+                "native overview center matches the unchanged draft geometry bounds");
+        mouse(canvas,QEvent::MouseMove,map_center+QPointF(16,-12),Qt::NoButton,Qt::LeftButton);
+        unchanged();
+        mouse(canvas,QEvent::MouseButtonRelease,map_center+QPointF(24,-16),Qt::LeftButton);
+        unchanged();
+        // These fixtures span exactly 2 m vertically; the overview's padding
+        // makes that span 2.52 m. Its taller axis governs the map scale.
+        const auto map_height=canvas.overviewMapRect().adjusted(8,22,-8,-8).height();
+        const Vec2 released{centered.x+24*2.52/map_height,centered.y+16*2.52/map_height};
+        require(canvas.viewScale()==scale && close(canvas.viewCenter(),released),
+                "overview drag pans to the final release position without changing zoom");
+        mouse(canvas,QEvent::MouseButtonPress,map_center,Qt::LeftButton,Qt::LeftButton);
+        unchanged();
+        mouse(canvas,QEvent::MouseButtonRelease,map_center,Qt::LeftButton);
+        unchanged();
+        require(close(canvas.viewCenter(),centered),
+                "draft overview bounds stay stable throughout navigation and repeated center clicks");
+        capture(canvas,QStringLiteral("compact-overview-%1.png").arg(kind==0 ? "boundary" : kind==1 ? "wall" : "measured-lines"));
+    }
+}
+
 void test_clicked_wall_geometry_and_visible_lengths_at_zoom() {
     struct Example { bool metric; double scale; double step; const char* text; };
     for (const auto example : {Example{false,20,0.3048,"13 ft 0 in"},
@@ -155,8 +250,45 @@ void test_clicked_wall_geometry_and_visible_lengths_at_zoom() {
     require(PlanCanvas::drawingLengthText(31.5*0.3048,false)==QStringLiteral("31 ft 6 in") &&
             PlanCanvas::drawingLengthText((31*12+6.25)*0.0254,false)==QStringLiteral("31 ft 6 1/4 in"),
             "drawing fractional labels retain whole feet, inches, and reduced fractions");
-    require(PlanCanvas::drawingLengthText(0.1234567,false).contains(QLatin1Char('.')),
-            "arbitrary exact endpoint measurements must honestly retain decimal precision");
+}
+
+void test_arbitrary_drawing_lengths_are_readable_without_claiming_exactness() {
+    struct Example { double metres; bool metric; const char* text; };
+    for (const auto example : {Example{std::sqrt(5.0),true,"≈ 2.236 m"},
+                               Example{0.1234567,true,"≈ 123 mm"},
+                               Example{-0.1234567,true,"≈ -123 mm"},
+                               Example{1.234,true,"1.234 m"},
+                               Example{0.026,true,"26 mm"},
+                               Example{0.1234567,false,"≈ 4 7/8 in"},
+                               Example{-0.1234567,false,"≈ -4 7/8 in"},
+                               Example{11.99*0.0254,false,"≈ 1 ft 0 in"},
+                               Example{0.0015875,false,"1/16 in"},
+                               Example{0.0,true,"0 mm"},
+                               Example{0.0,false,"0 in"}}) {
+        require(PlanCanvas::drawingLengthText(example.metres,example.metric)==
+                    QString::fromUtf8(example.text),
+                "drawing lengths use millimetres or sixteenths with an honest approximation marker");
+    }
+    for (const auto metric : {false,true}) {
+        MainWindow window;
+        auto& canvas=prepare(window);
+        window.setMetricUnits(metric);
+        auto* snap=window.findChild<QToolButton*>(QStringLiteral("snapTool"));
+        require(snap,"arbitrary endpoint fixture has the persistent native Snap control");
+        snap->setChecked(false);
+        canvas.setSnapEnabled(false);
+        click(canvas,{0,0});
+        mouse(canvas,QEvent::MouseMove,screen(canvas,{1,2}));
+        require(canvas.wallPreview() && close(canvas.wallPreview()->end,{1,2}) &&
+                    canvas.wallPreview()->dimension_text.startsWith(QStringLiteral("≈ ")) &&
+                    canvas.wallPreview()->dimension_text.size()<24,
+                "arbitrary pending wall readout is compact while the endpoint retains exact geometry");
+        capture(canvas,QStringLiteral("compact-arbitrary-%1.png").arg(metric ? "metric" : "imperial"));
+        const auto before=window.document().snapshot();
+        click(canvas,{1,2});
+        require(close(new_wall(before,window.document().snapshot()).end,{1,2}),
+                "rounded display never rounds committed wall geometry");
+    }
 }
 
 void test_typed_exact_and_endpoint_priority() {
@@ -364,7 +496,14 @@ int main(int argc,char** argv) {
     const auto font=QFontDatabase::addApplicationFont(QStringLiteral(":/fonts/Inter.ttf"));
     if (font>=0) QApplication::setFont(QFont(QFontDatabase::applicationFontFamilies(font).front(),10));
     try {
+        if (QCoreApplication::arguments().contains(QStringLiteral("--overview-navigation-only"))) {
+            test_overview_navigation_preserves_native_authoring_drafts();
+            std::cout<<"Overview authoring navigation tests passed\n";
+            return 0;
+        }
         test_clicked_wall_geometry_and_visible_lengths_at_zoom();
+        test_arbitrary_drawing_lengths_are_readable_without_claiming_exactness();
+        test_overview_navigation_preserves_native_authoring_drafts();
         test_typed_exact_and_endpoint_priority();
         test_measurement_draft_length_closure_and_right_cancel();
         test_mouse_wall_and_measurement_closure_retain_exact_off_grid_anchor();

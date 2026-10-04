@@ -26,6 +26,12 @@ pixels, preservation of the original RGBA region, and read/write failures;
 these helper checks do not qualify native framebuffer rendering or production
 output.
 
+Native RGB images are captured from OCCT into owned Qt image storage and written
+through `QImageWriter`/`QSaveFile`, avoiding the native WIC filename limit. Row
+order, padding and RGB/BGR channels are preserved. The existing staging, footer,
+fingerprint and pending-geometry guards still apply; failed encoding preserves
+the original destination.
+
 Version 1 hashes a compact canonical JSON manifest. Its serialized document
 summary contains only:
 

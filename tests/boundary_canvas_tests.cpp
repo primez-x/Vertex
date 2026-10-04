@@ -949,6 +949,59 @@ void test_overview_map_navigation() {
             "overview map can be restored after being hidden");
 }
 
+void test_overview_map_includes_unfinished_drawing_geometry() {
+    // The two diagonals have identical bounds. Only their draft strokes can
+    // change the overview pixels; its title, extent and viewport stay fixed.
+    for (const auto kind : {0,1,2,3}) {
+        PlanCanvas canvas;
+        canvas.resize(640,480);
+        canvas.setGridEnabled(false);
+        canvas.setSnapEnabled(false);
+        const auto set_draft=[&](bool opposite) {
+            const Vec2 start{20,opposite ? 30.0 : 10.0};
+            const Vec2 end{60,opposite ? 10.0 : 30.0};
+            if (kind==0) {
+                BoundaryDraftPreview draft;
+                draft.segments.push_back({start,end,0});
+                canvas.setBoundaryDraftPreview(draft);
+            } else if (kind==1) {
+                BoundaryDraftPreview draft;
+                draft.rubber_band=Segment{start,end,0};
+                canvas.setBoundaryDraftPreview(draft);
+            } else if (kind==2) {
+                canvas.setWallPreview(std::pair{start,end});
+            } else {
+                canvas.setBoundaryPreview({start,end});
+            }
+        };
+        set_draft(false);
+        const auto first=render(canvas,false);
+        set_draft(true);
+        const auto second=render(canvas,false);
+        const auto inner=canvas.overviewMapRect().adjusted(8,22,-8,-8);
+        require(differing_pixels(first,second,inner.toAlignedRect())>20,
+                "overview must paint accepted and live unfinished boundary, measured-line and wall strokes");
+        const auto scale=canvas.viewScale();
+        const auto position=inner.center();
+        QMouseEvent press(QEvent::MouseButtonPress,position,position,
+                          Qt::LeftButton,Qt::LeftButton,Qt::NoModifier);
+        QApplication::sendEvent(&canvas,&press);
+        QMouseEvent release(QEvent::MouseButtonRelease,position,position,
+                            Qt::LeftButton,Qt::NoButton,Qt::NoModifier);
+        QApplication::sendEvent(&canvas,&release);
+        require(std::abs(canvas.viewCenter().x-40)<1e-9 &&
+                    std::abs(canvas.viewCenter().y-20)<1e-9 && canvas.viewScale()==scale,
+                "overview navigation uses unfinished drawing bounds without changing zoom");
+        require(kind==2 ? canvas.wallPreview().has_value() :
+                    kind==3 || canvas.boundaryDraftPreview().has_value(),
+                "overview navigation preserves the active drawing draft");
+        canvas.clearPreview();
+        const auto cleared=render(canvas,false);
+        require(differing_pixels(second,cleared,inner.toAlignedRect())>20,
+                "cancelling the draft removes it from overview without retaining drawing entities");
+    }
+}
+
 }  // namespace
 
 void test_site_scale_fit() {
@@ -3960,6 +4013,7 @@ int main(int argc, char** argv) {
         test_effective_cursor_matches_click();
         test_cursor_measurement_readout_is_transient_and_contextual();
         test_overview_map_navigation();
+        test_overview_map_includes_unfinished_drawing_geometry();
         test_site_scale_fit();
         test_arc_render_orientation();
         test_analytic_arc_fit_bounds();

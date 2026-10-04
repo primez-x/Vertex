@@ -1,5 +1,10 @@
 # Native desktop workflow checkpoint
 
+Canvas drawing and selected-size readouts use millimetres or fractional inches
+instead of long decimal expansions. `≈` identifies display rounding; exact
+geometry and entered measurements are retained. The overview includes unfinished
+boundary, measured-line and wall drafts without making them document entities.
+
 This checkpoint is the first real Qt Widgets desktop workflow for Vertex. It is
 an internal implementation checkpoint, not a production-ready
 release and not an Apex compatibility claim. The native UI is a dense,

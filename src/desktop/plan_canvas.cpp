@@ -645,7 +645,7 @@ void PlanCanvas::clearPreview() {
     update();
 }
 
-std::optional<std::pair<Vec2, Vec2>> PlanCanvas::contentBounds() const {
+std::optional<std::pair<Vec2, Vec2>> PlanCanvas::contentBounds(bool include_drafts) const {
     Vec2 minimum{std::numeric_limits<double>::max(), std::numeric_limits<double>::max()};
     Vec2 maximum{std::numeric_limits<double>::lowest(), std::numeric_limits<double>::lowest()};
     bool has_content = false;
@@ -711,6 +711,33 @@ std::optional<std::pair<Vec2, Vec2>> PlanCanvas::contentBounds() const {
         for (const auto& line : grid.lines) {
             include(line.start);
             include(line.end);
+        }
+    }
+    // Draft extents are navigation-only. Fitted output and fitView retain the
+    // committed content contract, with no transient entities manufactured.
+    if (include_drafts) {
+        const auto include_segment = [&](const Segment& segment) {
+            include(segment.start);
+            include(segment.end);
+            try {
+                const auto bounds = segment_bounds(segment);
+                include(bounds.minimum);
+                include(bounds.maximum);
+            } catch (const std::invalid_argument&) {
+                // As with retained content, finite endpoints remain useful.
+            }
+        };
+        for (const auto& point : m_boundary_preview) include(point);
+        if (m_wall_preview) {
+            include(m_wall_preview->start);
+            include(m_wall_preview->end);
+        }
+        if (m_boundary_draft_preview) {
+            const auto& draft = *m_boundary_draft_preview;
+            for (const auto& segment : draft.segments) include_segment(segment);
+            if (draft.rubber_band) include_segment(*draft.rubber_band);
+            if (draft.anchor) include(*draft.anchor);
+            if (draft.pen_position) include(*draft.pen_position);
         }
     }
     if (!has_content) return std::nullopt;
@@ -1243,7 +1270,7 @@ void PlanCanvas::renderSceneWithTransform(QPainter& painter, const QRectF& viewp
 
 void PlanCanvas::drawOverviewMap(QPainter& painter) const {
     const auto map = overviewMapRect();
-    const auto bounds = contentBounds();
+    const auto bounds = contentBounds(true);
     if (map.isEmpty()) return;
     const auto light = m_canvas_background.lightnessF() > 0.5;
     painter.save();
@@ -1287,6 +1314,24 @@ void PlanCanvas::drawOverviewMap(QPainter& painter) const {
     painter.setRenderHint(QPainter::Antialiasing, true);
     painter.setBrush(Qt::NoBrush);
     painter.setClipRect(inner);
+    const auto draw_segment = [&](const Segment& segment) {
+        if (!std::isfinite(segment.start.x) || !std::isfinite(segment.start.y) ||
+            !std::isfinite(segment.end.x) || !std::isfinite(segment.end.y)) return;
+        if (segment.sweep_radians == 0.0) {
+            painter.drawLine(to_map(segment.start), to_map(segment.end));
+        } else if (const auto arc = arc_info(segment)) {
+            QPainterPath path;
+            path.moveTo(to_map(segment.start));
+            constexpr int samples = 32;
+            for (int index = 1; index <= samples; ++index)
+                path.lineTo(to_map(arc_point(segment, *arc,
+                                             static_cast<double>(index) / samples)));
+            painter.drawPath(path);
+        }
+    };
+    const auto draw_boundary = [&](const Boundary& boundary) {
+        for (const auto& segment : boundary) draw_segment(segment);
+    };
     for (const auto& entity : m_entities) {
         auto pen_color = color_for(entity, light);
         pen_color.setAlpha(light ? 235 : 220);
@@ -1294,25 +1339,35 @@ void PlanCanvas::drawOverviewMap(QPainter& painter) const {
                  Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);
         pen.setCosmetic(true);
         painter.setPen(pen);
-        const auto draw_boundary = [&](const Boundary& boundary) {
-            for (const auto& segment : boundary) {
-                if (segment.sweep_radians == 0.0) {
-                    painter.drawLine(to_map(segment.start), to_map(segment.end));
-                    continue;
-                }
-                if (const auto arc = arc_info(segment)) {
-                    QPainterPath path;
-                    path.moveTo(to_map(segment.start));
-                    constexpr int samples = 32;
-                    for (int index = 1; index <= samples; ++index)
-                        path.lineTo(to_map(arc_point(segment, *arc,
-                                                     static_cast<double>(index) / samples)));
-                    painter.drawPath(path);
-                }
-            }
-        };
         draw_boundary(entity.stroke_segments ? *entity.stroke_segments : entity.segments);
         for (const auto& hole : entity.holes) draw_boundary(hole);
+    }
+    const auto draft_pen = [&](QColor color, Qt::PenStyle style = Qt::SolidLine) {
+        QPen pen(color, 1.5, style, Qt::RoundCap, Qt::RoundJoin);
+        pen.setCosmetic(true);
+        painter.setPen(pen);
+    };
+    draft_pen(QColor(255, 220, 126, 185));
+    for (std::size_t index = 1; index < m_boundary_preview.size(); ++index)
+        draw_segment({m_boundary_preview[index-1], m_boundary_preview[index], 0});
+    if (m_boundary_draft_preview) {
+        const auto& draft = *m_boundary_draft_preview;
+        draw_boundary(draft.segments);
+        if (draft.rubber_band) {
+            draft_pen(QColor(255, 111, 173, 235), Qt::DashLine);
+            draw_segment(*draft.rubber_band);
+        }
+        const auto draw_marker = [&](std::optional<Vec2> point, QColor color) {
+            if (!point || !std::isfinite(point->x) || !std::isfinite(point->y)) return;
+            draft_pen(color);
+            painter.drawEllipse(to_map(*point), 2.5, 2.5);
+        };
+        draw_marker(draft.anchor, QColor(114, 222, 164));
+        draw_marker(draft.pen_position, QColor(103, 202, 255));
+    }
+    if (m_wall_preview) {
+        draft_pen(QColor(37, 99, 235, 225), Qt::DashLine);
+        draw_segment({m_wall_preview->start, m_wall_preview->end, 0});
     }
     const auto visible_width = width() / std::max(m_scale, minimum_scale);
     const auto visible_height = height() / std::max(m_scale, minimum_scale);
@@ -1341,7 +1396,7 @@ void PlanCanvas::drawOverviewMap(QPainter& painter) const {
 bool PlanCanvas::navigateOverviewMap(QPointF position) {
     const auto map = overviewMapRect();
     if (map.isEmpty() || !map.contains(position)) return false;
-    const auto bounds = contentBounds();
+    const auto bounds = contentBounds(true);
     if (!bounds) return true;
     const auto inner = map.adjusted(8.0, 22.0, -8.0, -8.0);
     const auto minimum = bounds->first;
@@ -1362,7 +1417,6 @@ bool PlanCanvas::navigateOverviewMap(QPointF position) {
     const auto previous_scale = m_scale;
     m_view_center = {world_center.x + (position.x() - inner.center().x()) / map_scale,
                      world_center.y - (position.y() - inner.center().y()) / map_scale};
-    updateCursor(position);
     update();
     notifyNavigationChanged(previous_center, previous_scale);
     return true;
@@ -1754,6 +1808,15 @@ void PlanCanvas::pointerPress(QPointF position, Qt::MouseButton button,
     if (middle_pan || (button == Qt::LeftButton && overviewMapRect().contains(position)))
         beginPerformanceMeasurement(PerformanceMetric::navigation);
     setFocus();
+    // The overview is a navigation surface, even while a temporary dimension
+    // placement is active. Never publish its device points as authoring input.
+    // Space-pan keeps its existing priority over a left overview press.
+    if (button == Qt::LeftButton && !m_space_pan_armed && navigateOverviewMap(position)) {
+        m_gesture_button = button;
+        m_overview_dragging = true;
+        setCursor(Qt::ClosedHandCursor);
+        return;
+    }
     updateCursor(position);
     m_gesture_button = button;
     if (middle_pan) {
@@ -1785,10 +1848,6 @@ void PlanCanvas::pointerPress(QPointF position, Qt::MouseButton button,
         m_left_gesture = LeftGesture::canvas_pan;
         m_pan_start=position;
         m_pan_view_start=m_view_center;
-        return;
-    }
-    if (navigateOverviewMap(position)) {
-        m_overview_dragging = true;
         return;
     }
     const bool control = modifiers.testFlag(Qt::ControlModifier);
@@ -1892,6 +1951,16 @@ void PlanCanvas::pointerPress(QPointF position, Qt::MouseButton button,
 
 void PlanCanvas::pointerMove(QPointF position, Qt::KeyboardModifiers modifiers) {
     m_pending_dimension_space_tap.reset();
+    if (m_overview_dragging) {
+        (void)navigateOverviewMap(position);
+        return;
+    }
+    if (m_gesture_button == Qt::NoButton && overviewMapRect().contains(position)) {
+        // Hovering into the map must not move a pending endpoint before its
+        // navigation press or change the extents used by the next map gesture.
+        setCursor(Qt::OpenHandCursor);
+        return;
+    }
     m_last_mouse_position = position;
     if (m_move_release_pending || m_transform_release_pending || m_vertex_release_pending) return;
     if (m_gesture_button == Qt::RightButton && !m_right_dragging &&
@@ -1899,10 +1968,6 @@ void PlanCanvas::pointerMove(QPointF position, Qt::KeyboardModifiers modifiers) 
         m_right_dragging = true;
         m_panning = true;
         setCursor(Qt::ClosedHandCursor);
-    }
-    if (m_overview_dragging) {
-        (void)navigateOverviewMap(position);
-        return;
     }
     if (m_left_gesture == LeftGesture::marquee && m_selection_start) {
         m_selection_end = position;
@@ -2039,6 +2104,13 @@ void PlanCanvas::pointerRelease(QPointF position, Qt::MouseButton button,
                                Qt::KeyboardModifiers modifiers) {
     m_pending_dimension_space_tap.reset();
     if (button != m_gesture_button) return;
+    if (m_overview_dragging) {
+        // Apply the final map location even when the platform omitted a move,
+        // then leave the authoring cursor and draft exactly as they were.
+        (void)navigateOverviewMap(position);
+        resetGesture();
+        return;
+    }
     // Publish the final effective point before any click callback. A normal
     // click can cross a snap boundary between press and release without Qt
     // delivering an intervening move event; authoring must use the release
@@ -3490,8 +3562,8 @@ void PlanCanvas::drawSelectionDimensions(QPainter& painter, const QRectF& viewpo
                                     opening->host_baseline->sweep_radians != 0;
         QString text = (curved_opening ? QStringLiteral("Arc W %1  ×  H %2")
                        : opening ? QStringLiteral("W %1  ×  H %2") : QStringLiteral("W %1  ×  D %2"))
-            .arg(display_cursor_length(dimension_width, m_metric_units),
-                 display_cursor_length(dimension_depth, m_metric_units));
+            .arg(drawingLengthText(dimension_width, m_metric_units),
+                 drawingLengthText(dimension_depth, m_metric_units));
         if (invalid_opening) text += QStringLiteral("  ·  Invalid");
         if (transforming && m_transform_preview_exact) {
             if (m_transform_preview_pending) text += QStringLiteral("  ·  Checking");
@@ -3928,16 +4000,32 @@ double PlanCanvas::drawingLengthIncrementMetres() const noexcept {
 QString PlanCanvas::drawingLengthText(double metres, bool metric) {
     if (!std::isfinite(metres)) return QStringLiteral("—");
     if (metric) {
-        const auto millimetres=std::abs(metres)<1.0;
-        return QStringLiteral("%1 %2").arg(metres*(millimetres ? 1000.0 : 1.0),0,'g',12)
-            .arg(millimetres ? QStringLiteral("mm") : QStringLiteral("m"));
+        const auto ticks = metres * 1000.0;
+        if (!std::isfinite(ticks))
+            return QStringLiteral("≈ %1 m").arg(metres,0,'g',6);
+        const auto rounded = std::round(ticks) / 1000.0;
+        const auto millimetres = std::abs(rounded) < 1.0;
+        auto number = QString::number(rounded == 0.0 ? 0.0 :
+            rounded * (millimetres ? 1000.0 : 1.0), 'f', millimetres ? 0 : 3);
+        if (!millimetres) {
+            while (number.endsWith(QLatin1Char('0'))) number.chop(1);
+            if (number.endsWith(QLatin1Char('.'))) number.chop(1);
+        }
+        // Ignore only numerical noise in ordinary exact construction values.
+        // This label is derived presentation; it never feeds geometry edits.
+        const auto prefix = std::abs(metres-rounded) > 1e-10
+            ? QStringLiteral("≈ ") : QString{};
+        return QStringLiteral("%1%2 %3").arg(prefix,number,
+            millimetres ? QStringLiteral("mm") : QStringLiteral("m"));
     }
     const auto inches=std::abs(metres)/0.0254;
     const auto sixteenths=std::round(inches*16.0);
-    const auto sign=metres<0 ? QStringLiteral("-") : QString{};
-    // Do not conceal a true endpoint's arbitrary precision behind a fraction.
-    if (std::abs(inches*16.0-sixteenths)>1e-7 || sixteenths>9e15)
-        return QStringLiteral("%1%2 in").arg(sign).arg(inches,0,'g',12);
+    if (!std::isfinite(sixteenths)) return QStringLiteral("—");
+    const auto prefix = std::abs(inches*16.0-sixteenths)>1e-7
+        ? QStringLiteral("≈ ") : QString{};
+    const auto sign=metres<0 && sixteenths>0 ? QStringLiteral("-") : QString{};
+    if (sixteenths>9e15)
+        return QStringLiteral("≈ %1%2 in").arg(sign).arg(inches,0,'g',6);
     const auto ticks=static_cast<qint64>(sixteenths);
     const auto feet=ticks/192;
     const auto whole=(ticks%192)/16;
@@ -3948,8 +4036,8 @@ QString PlanCanvas::drawingLengthText(double metres, bool metric) {
         if (!inch_text.isEmpty()) inch_text += QLatin1Char(' ');
         inch_text += QStringLiteral("%1/%2").arg(numerator/divisor).arg(16/divisor);
     }
-    return feet>0 ? QStringLiteral("%1%2 ft %3 in").arg(sign).arg(feet).arg(inch_text)
-                  : QStringLiteral("%1%2 in").arg(sign).arg(inch_text);
+    return feet>0 ? QStringLiteral("%1%2%3 ft %4 in").arg(prefix,sign).arg(feet).arg(inch_text)
+                  : QStringLiteral("%1%2%3 in").arg(prefix,sign,inch_text);
 }
 
 std::optional<Vec2> PlanCanvas::drawingOrigin() const {

@@ -43,6 +43,8 @@ public:
     [[nodiscard]] bool transformControlsVisible() const noexcept;
     // Export the OCCT framebuffer directly. This deliberately does not use
     // QWidget::grab(), which cannot capture the native OCCT child surface.
+    // Qt encodes and atomically writes the captured pixels, avoiding the native
+    // image codec's narrow filename and temporary-path limitations.
     [[nodiscard]] bool exportViewImage(const QString& path);
 
     [[nodiscard]] bool isReady() const noexcept;

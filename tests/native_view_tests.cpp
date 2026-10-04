@@ -5,6 +5,7 @@
 #include "sketch/desktop/main_window.hpp"
 #include "sketch/visualization/native_model_view.hpp"
 #include "support/noninteractive_errors.hpp"
+#include "../src/visualization/framebuffer_image.hpp"
 #include <QApplication>
 #include <QDir>
 #include <QDialog>
@@ -30,6 +31,58 @@
 
 namespace {
 void check(bool condition, const char* message) { if (!condition) throw std::runtime_error(message); }
+void check_framebuffer_conversion() {
+    for (const auto format : {Image_Format_RGB, Image_Format_BGR, Image_Format_RGB32,
+                             Image_Format_BGR32, Image_Format_RGBA, Image_Format_BGRA}) {
+        for (const bool top_down : {false, true}) {
+            Image_PixMap pixels;
+            check(pixels.InitZero(format, 2, 2, 16), "Pixel fixture must allocate padded rows");
+            pixels.SetTopDown(top_down);
+            pixels.SetPixelColor(0, 0, Quantity_Color(1, 0, 0, Quantity_TOC_RGB));
+            pixels.SetPixelColor(1, 0, Quantity_Color(0, 1, 0, Quantity_TOC_RGB));
+            pixels.SetPixelColor(0, 1, Quantity_Color(0, 0, 1, Quantity_TOC_RGB));
+            pixels.SetPixelColor(1, 1, Quantity_Color(1, 1, 1, Quantity_TOC_RGB));
+            const auto image = sketch::visualization::detail::framebufferImage(pixels);
+            check(image.size() == QSize(2, 2) && image.pixelColor(0, 0) == QColor(Qt::red) &&
+                  image.pixelColor(1, 0) == QColor(Qt::green) && image.pixelColor(0, 1) == QColor(Qt::blue) &&
+                  image.pixelColor(1, 1) == QColor(Qt::white),
+                  "Framebuffer copy must preserve color channels, logical row order and padding");
+        }
+    }
+    Image_PixMap empty;
+    check(sketch::visualization::detail::framebufferImage(empty).isNull(), "Empty framebuffer must be refused");
+    Image_PixMap depth;
+    check(depth.InitZero(Image_Format_GrayF, 2, 2) &&
+          sketch::visualization::detail::framebufferImage(depth).isNull(), "Depth buffers cannot be exported as RGB");
+}
+
+void check_export_paths(sketch::visualization::NativeModelView& view, QTemporaryDir& temporary,
+                        const QString& wall_id) {
+    check_framebuffer_conversion();
+    const auto reference = temporary.filePath("short-native.png");
+    check(view.exportViewImage(reference), "Short-path native export must succeed");
+    const QImage expected(reference);
+    const auto directory = temporary.filePath(QString(110, QLatin1Char('x')) + QLatin1Char('/') +
+                                               QString(110, QLatin1Char('y')) + QStringLiteral("/\u00e9tage"));
+    check(QDir().mkpath(directory), "Long Unicode export fixture must create its own directory");
+    const auto long_path = directory + QStringLiteral("/native-framebuffer.png");
+    check(long_path.size() > 260 && view.exportViewImage(long_path) && QImage(long_path) == expected,
+          "Long Unicode paths must preserve the exact native framebuffer pixels");
+    const auto blocked = temporary.filePath("preserved.unsupported-vertex-image");
+    QFile original(blocked);
+    check(original.open(QIODevice::WriteOnly) && original.write("keep original") == 13,
+          "Failed-output fixture must create its own destination");
+    original.close();
+    view.setSelectedEntity(wall_id);
+    check(view.transformControlsVisible(), "Failed export fixture must begin with selected-object controls");
+    check(!view.exportViewImage(blocked), "Unknown image encodings must fail explicitly");
+    check(original.open(QIODevice::ReadOnly) && original.readAll() == QByteArray("keep original"),
+          "Failed encoding must preserve existing destination bytes");
+    check(view.transformControlsVisible() && view.exportViewImage(temporary.filePath("after-failure.png")) &&
+          view.transformControlsVisible() && QImage(temporary.filePath("after-failure.png")) == expected,
+          "Export failure must restore editing controls and leave the framebuffer free of selection overlays");
+    view.setSelectedEntity({});
+}
 void settle_geometry(sketch::visualization::NativeModelView& view) {
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
     while (view.isGeometryPending() && std::chrono::steady_clock::now() < deadline) {
@@ -483,8 +536,8 @@ int main(int argc,char** argv) {
     }
     const int scenario_index = arguments.indexOf(QStringLiteral("--scenario"));
     const QString scenario = scenario_index < 0 ? QStringLiteral("all") : arguments.value(scenario_index + 1);
-    if (scenario != "all" && scenario != "geometry" && scenario != "forms" && scenario != "publication" && scenario != "gestures" && scenario != "resize") {
-        std::cerr << "Native scenario must be all, geometry, forms, publication, gestures or resize\n";
+    if (scenario != "all" && scenario != "geometry" && scenario != "forms" && scenario != "publication" && scenario != "gestures" && scenario != "resize" && scenario != "export-path") {
+        std::cerr << "Native scenario must be all, geometry, forms, publication, gestures, resize or export-path\n";
         return 1;
     }
     QTemporaryDir temporary;
@@ -512,6 +565,14 @@ int main(int argc,char** argv) {
                 return;
             }
             check(ready_settled(view),"Native viewport must be ready");
+            if (scenario == "all" || scenario == "export-path") {
+                check_export_paths(view, temporary, wall_id);
+                if (scenario == "export-path") {
+                    std::cout << "Native export path checks passed at DPR " << ratio << '\n';
+                    application.exit(0);
+                    return;
+                }
+            }
             if (scenario == "all" || scenario == "resize") {
                 check_native_resize(document.snapshot(), temporary);
                 if (scenario == "resize") {

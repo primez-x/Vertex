@@ -1,6 +1,6 @@
 # Vertex user testing checklist
 
-389 practical tasks, grouped by how you use the app (including U100a). This replaces the earlier engineering-oriented checklist. The old 130-item list is preserved separately as engineering-requirements-checklist.md.
+392 practical tasks, grouped by how you use the app (including U100a). This replaces the earlier engineering-oriented checklist. The old 130-item list is preserved separately as engineering-requirements-checklist.md.
 
 This is a user acceptance list for the intended app, not a claim that every listed action is implemented or working in the current preview. If you cannot find a control, or a feature is absent, mark **Blocked / missing** and describe it. Specialized sections can be skipped if you do not use them or lack the device or sample files.
 
@@ -2344,6 +2344,26 @@ drawing; switching modes does not change existing geometry.
 - [ ] **U388 — Reopen an undone vertical dimension placement**
   - Steps: Place a pending dimension with V, then Undo once. Save the unfinished drawing and reopen it. Redo the placement, Undo again, tap Space to omit it, then Undo and save/reopen again.
   - Expected: The reopened pending label is visible and vertical. Redo restores the recorded placement. Undo of omission returns a visible vertical pending label; reopening retains that orientation. No side or measurement changes.
+  - Result: Not tested
+  - Notes: ______________________________
+
+## Drawing feedback and image output
+
+- [ ] **U389 — Read practical drawing dimensions**
+  - Steps: With Snap off, draw a diagonal wall or measured line. Switch Imperial/Metric, inspect its length, and select and resize a component to inspect its width and depth. Also draw a precisely entered 12-foot wall.
+  - Expected: Ordinary labels use millimetres or feet and fractional inches. A rounded display has an approximation mark (`≈`); a common exact measurement stays uncluttered. Entered measurements and the saved geometry are preserved.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **U390 — Navigate an unfinished drawing with the overview**
+  - Steps: On an empty layer, enable Map. Start a wall, measured line or measurement boundary and move the cursor to preview the next side. Click and drag inside the overview, then continue drawing on the main canvas. Cancel the unfinished drawing and repeat on a layer with existing objects.
+  - Expected: The overview shows unfinished sides and their live preview. Navigating it pans the view without placing a side or changing the pending drawing. After cancellation, its unfinished lines disappear from the overview.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **U391 — Export a 3D image into a long or accented folder path**
+  - Steps: Open a residential or light-commercial model, select an object, and export a native 3D PNG into nested folders with a long name and an accented character. Reopen the PNG. Repeat export into your normal folder and try a destination you cannot write to.
+  - Expected: Valid destinations produce the same model view with the normal output footer. Selection controls stay available in Vertex and do not appear in the export. A failed export reports the problem and preserves any existing destination file.
   - Result: Not tested
   - Notes: ______________________________
 

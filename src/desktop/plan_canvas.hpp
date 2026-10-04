@@ -572,7 +572,7 @@ private:
     [[nodiscard]] std::optional<Vec2> drawingOrigin() const;
     void handleTouchEvent(QTouchEvent& event);
     void resetTouchInput();
-    [[nodiscard]] std::optional<std::pair<Vec2, Vec2>> contentBounds() const;
+    [[nodiscard]] std::optional<std::pair<Vec2, Vec2>> contentBounds(bool include_drafts = false) const;
     [[nodiscard]] std::optional<QRectF> selectionBounds(const QRectF& viewport) const;
     [[nodiscard]] std::optional<QRectF> selectionFrame(const QRectF& viewport) const;
     enum class SelectionHandle { none, resize, rotate, left, right, top, bottom };

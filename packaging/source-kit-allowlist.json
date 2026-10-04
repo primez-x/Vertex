@@ -2451,6 +2451,10 @@
     },
     {
       "category": "docs",
+      "path": "docs/verification/canvas-readouts-and-native-image-paths-2026-10-03.md"
+    },
+    {
+      "category": "docs",
       "path": "docs/verification/ceiling-measurement-rounding-2026-10-03.md"
     },
     {
@@ -4096,6 +4100,10 @@
     {
       "category": "source",
       "path": "src/desktop/text_library_dialog.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/visualization/framebuffer_image.hpp"
     },
     {
       "category": "source",

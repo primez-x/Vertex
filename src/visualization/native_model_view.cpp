@@ -1,5 +1,6 @@
 #include "sketch/visualization/native_model_view.hpp"
 #include "sketch/visualization/native_geometry_preparation.hpp"
+#include "framebuffer_image.hpp"
 
 #include "sketch/architectural_workflow_contract.hpp"
 #include "sketch/document.hpp"
@@ -27,6 +28,9 @@
 #include <QApplication>
 #include <QByteArray>
 #include <QGuiApplication>
+#include <QFileInfo>
+#include <QImageWriter>
+#include <QSaveFile>
 #include <QLabel>
 #include <QMouseEvent>
 #include <QKeyEvent>
@@ -783,7 +787,6 @@ public:
             show_operation_error(QStringLiteral("3D view image export requires a destination path"));
             return false;
         }
-        const QByteArray encoded_path = path.toUtf8();
         const bool restore_manipulator = !manipulator.IsNull() && manipulator->IsAttached();
         const auto highlighted_id = selected_entity_id;
         detach_manipulator();
@@ -799,10 +802,25 @@ public:
             }
         };
         try {
-            if (!view->Dump(encoded_path.constData(), Graphic3d_BT_RGB)) {
+            int width = 0, height = 0;
+            view->Window()->Size(width, height);
+            Image_PixMap pixels;
+            if (width <= 0 || height <= 0 || !view->ToPixMap(pixels, width, height, Graphic3d_BT_RGB)) {
                 restore_controls();
                 show_operation_error(QStringLiteral(
-                    "OCCT could not export the 3D framebuffer (check the path and image codec)"));
+                    "OCCT could not capture the 3D framebuffer"));
+                return false;
+            }
+            const auto image = detail::framebufferImage(pixels);
+            QSaveFile destination(path);
+            const auto encoding = QFileInfo(path).suffix().toLatin1().toLower();
+            QImageWriter writer(&destination, encoding);
+            if (image.isNull() || encoding.isEmpty() || !destination.open(QIODevice::WriteOnly) ||
+                !writer.write(image) || !destination.commit()) {
+                destination.cancelWriting();
+                restore_controls();
+                show_operation_error(QStringLiteral("3D image could not be saved: %1")
+                    .arg(writer.errorString()));
                 return false;
             }
         } catch (const Standard_Failure& error) {
