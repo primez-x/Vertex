@@ -5648,6 +5648,43 @@ public:
             for(const auto& entity:dependencies)
                 if(std::none_of(graph.begin(),graph.end(),[&](const auto& present){return present.id==entity.id;}))graph.push_back(entity);
         }
+        const bool partial_wall_callouts=promoted_owners.empty() && !model_ids.isEmpty() &&
+            std::all_of(model_ids.begin(),model_ids.end(),[&](const auto& id){return source.entities().at(id.toStdString()).type=="wall";}) &&
+            std::any_of(changes.begin(),changes.end(),[](const auto& change){return change.kind==EntityChangeKind::upsert &&
+                can_recognize_boundary_dimension_entity_type(change.entity.type);});
+        if(partial_wall_callouts) {
+            // Complete perimeter promotion owns source translation above. The
+            // remaining partial wall selection keeps its existing connected
+            // solve and appends only narrow saved-callout placement authority.
+            // A callout does not authorize moving a constraint's anchor.
+            auto movement=wallGeometryCommand(source,wallTranslationIntent(source,model_ids,offset).targets,
+                "Move walls and measurement callouts");
+            auto* connected=std::get_if<ApplyBoundaryConstraintChanges>(&movement);
+            if(!connected)throw std::invalid_argument("The selected wall movement did not produce connected geometry authority.");
+            for(const auto& change:changes) {
+                if(change.kind!=EntityChangeKind::upsert || !can_recognize_boundary_dimension_entity_type(change.entity.type))continue;
+                const auto& original=source.entities().at(change.entity.id);
+                const auto decoded=decode_boundary_dimension_entity(original);
+                if(!decoded.supported())throw std::invalid_argument(decoded.unsupported_reason);
+                auto expected=*decoded.dimension;
+                expected.text_position={expected.text_position.x+offset.x,expected.text_position.y+offset.y};
+                expected.placement=BoundaryDimensionPlacement::manual;
+                expected.automatic_placement_version.reset();
+                if(encode_boundary_dimension_entity(expected,&original)!=change.entity)
+                    throw std::invalid_argument("A callout move cannot change its target, styling or metadata.");
+                connected->dimension_placement_moves.push_back({change.entity.id,offset});
+            }
+            connected->dimension_placement_completion=true;
+            std::erase_if(changes,[](const auto& change){return change.kind==EntityChangeKind::upsert &&
+                can_recognize_boundary_dimension_entity_type(change.entity.type);});
+            if(!changes.empty()) {
+                connected->supplemental_source_completion=true;
+                connected->supplemental_entity_changes.insert(connected->supplemental_entity_changes.end(),
+                    std::make_move_iterator(changes.begin()),std::make_move_iterator(changes.end()));
+            }
+            (void)Document::preview_command(source,movement);
+            return movement;
+        }
         std::vector<BoundaryTranslation> translations;
         std::vector<std::string> walls;
         std::vector<ArchitecturalOperation> operations;

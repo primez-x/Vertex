@@ -1675,6 +1675,10 @@
     },
     {
       "category": "docs",
+      "path": "docs/plans/2026-10-04-partial-wall-callout-movement.md"
+    },
+    {
+      "category": "docs",
       "path": "docs/plans/2026-10-04-source-derived-arc-reconstruction.md"
     },
     {
@@ -2692,6 +2696,10 @@
     {
       "category": "docs",
       "path": "docs/verification/output-view-appearance-20261003.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/verification/partial-wall-callout-movement-2026-10-04.md"
     },
     {
       "category": "docs",
@@ -4544,6 +4552,10 @@
     {
       "category": "source",
       "path": "tests/desktop_workspace_recovery_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/dimension_placement_completion_tests.cpp"
     },
     {
       "category": "source",

@@ -3,6 +3,8 @@
 #include "sketch/measurement_linework.hpp"
 #include "sketch/constraint_authoring.hpp"
 #include "sketch/wall_measurement.hpp"
+#include "sketch/sheet_view_entity_codec.hpp"
+#include "sketch/annotation_entity_codec.hpp"
 #include "support/noninteractive_errors.hpp"
 #include "../src/desktop/plan_canvas.hpp"
 #include <QAction>
@@ -87,8 +89,15 @@ void exact_history(MainWindow& window,const DocumentSnapshot& before,const Docum
     require(window.undoCommand()&&window.document().snapshot().entities()==before.entities()&&window.redoCommand()&&window.document().snapshot().entities()==after.entities(),"UndoRedo must restore exact source/dimension entities");}
 
 void saved_dimension_canvas_drag(int kind,bool mixed=false) {
+    const bool partial=kind>=9;
+    const bool plain=kind==13;
+    const bool rotated=kind==12;
+    const Vec2 shift=rotated?Vec2{.4,-.8}:Vec2{.8,.4};
+    const auto projected=[&](Vec2 point){return rotated?Vec2{-(point.y+4),point.x-10}:point;};
     QTemporaryDir directory;require(directory.isValid(),"Isolated dimension drag project directory");
     auto document=fixture();
+    if(plain)document->apply(ApplyEntityChanges{document->revision(),
+        {EntityChange::upsert(make_annotation_entity("callout-annotations",AnnotationState{}))},{},"Create annotation state for grouped note"});
     Entity area{"drag-area","boundary",{{"property_id","p"},{"building_id","b"},{"floor_id","f"},{"layer_id","l"},
         {"classification","living"},{"segments",Json::array({{{"start",{10,0}},{"end",{12,0}},{"sweep_radians",0}},
         {{"start",{12,0}},{"end",{12,2}},{"sweep_radians",0}},{{"start",{12,2}},{"end",{10,2}},{"sweep_radians",0}},
@@ -107,10 +116,10 @@ void saved_dimension_canvas_drag(int kind,bool mixed=false) {
             window.createStraightWall({20,3},{20,0},"exterior")};
         for(qsizetype i=0;i<source_walls.size();++i)
             require(!source_walls[i].isEmpty() && window.selectEntity(source_walls[i],i!=0),"Select complete physical perimeter");
-        owner=window.createMeasurementBoundaryFromSelectedWalls().toStdString();
-        require(!owner.empty(),"Create wall-derived measured callout owner");
+        owner=plain?"drag-area":window.createMeasurementBoundaryFromSelectedWalls().toStdString();
+        require(!owner.empty(),"Create or retain measured callout owner");
     }
-    if(kind>=7) {
+    if(kind==7 || kind==8) {
         const QStringList second_walls{window.createStraightWall({28,0},{32,0},"exterior"),
             window.createStraightWall({32,0},{32,3},"exterior"),window.createStraightWall({32,3},{28,3},"exterior"),
             window.createStraightWall({28,3},{28,0},"exterior")};
@@ -126,7 +135,7 @@ void saved_dimension_canvas_drag(int kind,bool mixed=false) {
     if(kind==0)id=window.createLengthDimension("open","open:e2",{4,2});
     else if(kind==1)id=window.createAngleDimension("open","open:e1","open:e2","open:v1",{1,-1});
     else if(kind==2)id=window.createAreaDimension("drag-area",{11,1});
-    else if(kind==5)id=window.createAreaDimension(QString::fromStdString(owner),{22,1.5});
+    else if(kind==5 || kind==9 || kind==13)id=window.createAreaDimension(QString::fromStdString(owner),{22,1.5});
     else if(kind>=6) {
         const auto items=dimensions(window.document().snapshot(),owner);
         require(items.size()==4 && items.front().placement==BoundaryDimensionPlacement::automatic,
@@ -144,7 +153,7 @@ void saved_dimension_canvas_drag(int kind,bool mixed=false) {
     }
     require(!id.isEmpty(),"Create dimension through actual authoring API");
     const auto initial=dimension(window.document().snapshot(),id.toStdString());
-    if(kind<3 || kind==5)styled(window,id,initial.text_position);
+    if(kind<3 || kind==5 || kind==9)styled(window,id,initial.text_position);
     auto retained=window.document().snapshot().entities().at(id.toStdString());
     retained.extensions["vendor_drag_metadata"]={{"literal",owner},{"keep",17}};
     window.document().apply(ApplyEntityChanges{.expected_revision=window.document().revision(),
@@ -164,18 +173,36 @@ void saved_dimension_canvas_drag(int kind,bool mixed=false) {
         require(proof.accepted(),"Parallel relation between both current measured owners is valid");
         apply_constraint_authoring(window.document(),proof);
     }
+    if(rotated) {
+        CoordinatedView view;view.id="callout-offset-plan";view.name="Offset rotated plan";
+        view.origin_m={10,-4,0};view.up={1,0,0};
+        window.document().apply(ApplyEntityChanges{window.document().revision(),
+            {EntityChange::upsert(make_sheet_view_entity("callout-plan-owner",SheetViewModel::create({view},{})))},
+            {},"Create rotated callout view"});
+        window.setWorkspace(Workspace::architectural);
+        require(window.selectEntity(id),"Refresh rotated callout view choices");
+        auto& views=control<QComboBox>(window,"architecturalView");
+        const auto index=views.findData(QStringLiteral("callout-offset-plan"),Qt::UserRole+1);
+        require(index>=3,"Persisted rotated plan is available");views.setCurrentIndex(index);QApplication::processEvents();
+    }
+    const auto note=plain?window.createAnnotationLabel("note","Move with wall",{22,1.5}):QString{};
+    if(plain && note.isEmpty())throw std::runtime_error("Create ordinary label with plain wall and saved callout: "+window.lastError().toStdString());
     require(window.selectEntity(kind==8?second_id:id),"Select saved measurement callout");
     if(!second_owner.empty())require(window.selectEntity(kind==8?id:second_id,true),"Select both perimeter callouts");
+    if(partial)source_walls.resize(kind==11?2:1);
     if(mixed) {
         if(source_walls.isEmpty())require(window.selectEntity(QString::fromStdString(owner),true),"Select source and its callout together");
         else for(const auto& wall:source_walls)require(window.selectEntity(wall,true),"Select physical sources with callout, without analytical owner");
     }
+    if(plain)require(window.selectEntity(note,true),"Include ordinary note in plain-wall callout selection");
     control<QToolButton>(window,"snapTool").setChecked(false);
-    auto& surface=canvas(window);surface.setSnapEnabled(false);surface.setOverviewMapEnabled(false);
+    auto* target_surface=rotated?dynamic_cast<PlanCanvas*>(window.findChild<QWidget*>("architecturalPlanCanvas")):&canvas(window);
+    require(target_surface,"Target callout canvas exists");auto& surface=*target_surface;
+    surface.setSnapEnabled(false);surface.setOverviewMapEnabled(false);
     const auto before=window.document().snapshot();const auto original=dimension(before,id.toStdString());
     const auto measured_before=original.resolve(before.entities().at(owner));
     const auto other_original=second_owner.empty()?std::optional<BoundaryDimension>{}:dimension(before,second_id.toStdString());
-    surface.setViewTransform(original.text_position,80);QApplication::processEvents();
+    surface.setViewTransform(projected(original.text_position),80);QApplication::processEvents();
     const auto bounds=surface.selectionBounds();require(bounds.has_value(),"Visible dimension selection frame");
     const QPointF start=mixed ? bounds->center() : QRectF(surface.rect()).center();
     const QPointF end=start+QPointF(64,-32);
@@ -192,17 +219,24 @@ void saved_dimension_canvas_drag(int kind,bool mixed=false) {
         send(QEvent::MouseButtonPress,start,Qt::LeftButton,Qt::LeftButton);
         send(QEvent::MouseButtonRelease,start,Qt::LeftButton,Qt::NoButton);
         require(window.document().revision()==before.revision(),"A click alone cannot change callout placement");
+    }
+    if(!mixed || partial) {
         send(QEvent::MouseButtonPress,start,Qt::LeftButton,Qt::LeftButton);
         send(QEvent::MouseMove,end,Qt::NoButton,Qt::LeftButton);settle();
         QKeyEvent escape(QEvent::KeyPress,Qt::Key_Escape,Qt::NoModifier);QApplication::sendEvent(&surface,&escape);
         send(QEvent::MouseButtonRelease,end,Qt::LeftButton,Qt::NoButton);QApplication::processEvents();
         require(window.document().revision()==before.revision() && window.document().snapshot().entities()==before.entities(),
             "Escape cancels the live callout move without changing source or history");
-        require(window.selectEntity(id),"Reselect canceled dimension");surface.setViewTransform(original.text_position,80);
+        require(window.selectEntity(id),"Reselect canceled dimension");
+        if(partial)for(const auto& wall:source_walls)require(window.selectEntity(wall,true),"Restore partial perimeter selection after cancellation");
+        if(plain)require(window.selectEntity(note,true),"Restore grouped note after cancellation");
+        surface.setViewTransform(projected(original.text_position),80);
     }
     send(QEvent::MouseButtonPress,start,Qt::LeftButton,Qt::LeftButton);
     send(QEvent::MouseMove,end,Qt::NoButton,Qt::LeftButton);settle();
     require(window.document().snapshot().entities()==before.entities(),"Exact callout preview does not commit early");
+    const auto proposal=surface.entitiesMovePreview();
+    if(partial)require(!proposal.empty(),"Partial wall and callout move exposes its admitted geometry proposal");
     capture(window,QStringLiteral("dimension-drag-%1-%2-preview.png").arg(kind).arg(mixed?"group":"single"));
     send(QEvent::MouseButtonRelease,end,Qt::LeftButton,Qt::NoButton);settle();
     const auto after=window.document().snapshot();
@@ -217,24 +251,64 @@ void saved_dimension_canvas_drag(int kind,bool mixed=false) {
         require(wall_measurement_source_current(after,after.entities().at(owner)) &&
             wall_measurement_source_current(after,after.entities().at(second_owner)),"Both measured owners remain current in either selection order");
     }
-    require_near(moved.text_position.x,original.text_position.x+0.8);require_near(moved.text_position.y,original.text_position.y+0.4);
+    require_near(moved.text_position.x,original.text_position.x+shift.x);require_near(moved.text_position.y,original.text_position.y+shift.y);
     require(moved.kind==original.kind && moved.boundary_id==original.boundary_id && moved.segment_id==original.segment_id &&
         moved.vertex_id==original.vertex_id && moved.secondary_segment_id==original.secondary_segment_id && moved.presentation==original.presentation,
         "Callout drag retains its analytical target, identity and styling");
     require(after.entities().at(id.toStdString()).extensions==before.entities().at(id.toStdString()).extensions,
         "Callout drag retains unrelated metadata");
-    if(!mixed) {
+    if(!mixed || partial) {
         require(moved.placement==BoundaryDimensionPlacement::manual && !moved.automatic_placement_version,
             "Explicit callout drag becomes manual placement");
-        for(const auto& [key,entity]:before.entities())if(key!=id.toStdString())require(after.entities().at(key)==entity,
+        if(!mixed)for(const auto& [key,entity]:before.entities())if(key!=id.toStdString())require(after.entities().at(key)==entity,
             "Callout-only drag cannot alter source geometry or other objects");
     } else require(moved.placement==original.placement && moved.automatic_placement_version==original.automatic_placement_version &&
         after.entities().at(owner)!=before.entities().at(owner),"Grouped source motion shifts its callout once and retains placement provenance");
     const auto measured_after=moved.resolve(after.entities().at(owner));
-    require_near(measured_after.segment_length_metres,measured_before.segment_length_metres);
-    require_near(measured_after.angle_radians,measured_before.angle_radians);require_near(measured_after.area_square_metres,measured_before.area_square_metres);
+    if(partial) {
+        if(plain) {
+            require(after.entities().at(owner)==before.entities().at(owner),"Plain wall movement does not redraw an unrelated measured outline");
+            bool found{};
+            for(const auto& [key,entity]:after.entities())if(entity.type==kAnnotationEntityType) {
+                for(const auto& value:decode_annotation_entity(entity).labels)if(value.id==note.toStdString()) {
+                    found=true;require_near(value.placement.position.x,22+shift.x);require_near(value.placement.position.y,1.5+shift.y);
+                }
+            }
+            require(found,"Grouped ordinary annotation survives plain-wall move");
+        } else require(after.entities().at(owner)!=before.entities().at(owner) &&
+            wall_measurement_source_current(after,after.entities().at(owner)),"Partial wall movement redraws a current measured exterior");
+        for(const auto& wall:source_walls) {
+            const auto& old=before.entities().at(wall.toStdString()).properties.at("baseline");
+            const auto& now=after.entities().at(wall.toStdString()).properties.at("baseline");
+            for(const auto* endpoint:{"start","end"}) {
+                require_near(now.at(endpoint).at(0).get<double>(),old.at(endpoint).at(0).get<double>()+shift.x);
+                require_near(now.at(endpoint).at(1).get<double>(),old.at(endpoint).at(1).get<double>()+shift.y);
+            }
+        }
+        require(after.history().back().boundary_constraint_changes &&
+            command_to_json(*after.history().back().boundary_constraint_changes).at("version")==15,
+            "Partial wall and callout drag retains its typed placement command");
+        if(kind==9)require(std::abs(measured_after.area_square_metres-measured_before.area_square_metres)>1e-4,
+            "Partial wall movement updates the actual area callout value");
+    } else {
+        require_near(measured_after.segment_length_metres,measured_before.segment_length_metres);
+        require_near(measured_after.angle_radians,measured_before.angle_radians);require_near(measured_after.area_square_metres,measured_before.area_square_metres);
+    }
     const auto label=std::find_if(surface.labels().begin(),surface.labels().end(),[&](const auto& value){return value.id==id;});
-    require(label!=surface.labels().end() && same(label->position,moved.text_position),"Canvas label displays the committed measurement position");
+    require(label!=surface.labels().end(),"Committed callout label is visible");
+    const auto expected_position=projected(moved.text_position);
+    require_near(label->position.x,expected_position.x);require_near(label->position.y,expected_position.y);
+    if(partial)for(const auto& proposed:proposal) {
+        const auto committed=std::find_if(surface.entities().begin(),surface.entities().end(),[&](const auto& value){return value.id==proposed.id;});
+        require(committed!=surface.entities().end() && committed->segments.size()==proposed.segments.size(),
+            "Committed partial move retains every admitted projected owner and dimension guide");
+        for(std::size_t edge=0;edge<proposed.segments.size();++edge) {
+            const auto& expected=proposed.segments[edge];const auto& actual=committed->segments[edge];
+            require_near(actual.start.x,expected.start.x);require_near(actual.start.y,expected.start.y);
+            require_near(actual.end.x,expected.end.x);require_near(actual.end.y,expected.end.y);
+            require_near(actual.sweep_radians,expected.sweep_radians);
+        }
+    }
     exact_history(window,before,after);capture(window,QStringLiteral("dimension-drag-%1-%2-applied.png").arg(kind).arg(mixed?"group":"single"));
     const auto file=directory.filePath("callout-drag.bldproj");require(window.saveProjectAs(file) && window.createNewProject(),"Save moved callout and release writer lease");
     MainWindow reopened;prepare(reopened);
@@ -482,6 +556,9 @@ int main(int argc,char** argv){sketch::testing::noninteractive_errors();QStandar
         saved_dimension_canvas_drag(3,true);saved_dimension_canvas_drag(4,true);
         saved_dimension_canvas_drag(5,true);saved_dimension_canvas_drag(6,true);
         saved_dimension_canvas_drag(7,true);saved_dimension_canvas_drag(8,true);
+        saved_dimension_canvas_drag(9,true);saved_dimension_canvas_drag(10,true);saved_dimension_canvas_drag(11,true);
+        saved_dimension_canvas_drag(12,true);
+        saved_dimension_canvas_drag(13,true);
         actual_creator_terminal_arc_and_revisits();connected_edit_updates_saved_values();transformed_clone_is_independent();actual_transform_preview_cancel_and_apply();mixed_canvas_move_retains_placed_dimensions();mixed_wall_anchor_move_keeps_whole_transaction_admission();automatic_placement_uses_active_workspace_scale();transform_clipboard_output_delete_and_reopen();}
     catch(const std::exception& error){std::cerr<<"measurement_linework_dimensions_desktop_tests: "<<error.what()<<'\n';return 1;}
     std::cout<<"Measured dimension desktop tests passed\n";return 0;}

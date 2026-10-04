@@ -451,6 +451,67 @@ bool points_near(Vec2 first, Vec2 second, double tolerance = kPointComparisonTol
         std::hypot(first.x - second.x, first.y - second.y) <= tolerance;
 }
 
+bool points_exact(Vec2 first, Vec2 second) {
+    return first.x == second.x && first.y == second.y;
+}
+
+std::set<std::string, std::less<>> canonicalize_coincident_points(
+    const ConstraintSolveRequest& request,
+    const std::map<std::string, Vec2, std::less<>>& original,
+    std::map<std::string, Vec2, std::less<>>& solved) {
+    std::map<std::string, std::string, std::less<>> parents;
+    const auto root = [&](const std::string& id) {
+        parents.try_emplace(id, id);
+        auto result = id;
+        while (parents.at(result) != result) result = parents.at(result);
+        auto current = id;
+        while (parents.at(current) != current) {
+            const auto next = parents.at(current);
+            parents.at(current) = result;
+            current = next;
+        }
+        return result;
+    };
+    for (const auto& constraint : request.constraints) {
+        if (const auto* joint = std::get_if<CoincidentConstraint>(&constraint)) {
+            const auto first = root(joint->first), second = root(joint->second);
+            parents.at(std::max(first, second)) = std::min(first, second);
+        }
+    }
+    std::map<std::string, std::vector<std::string>, std::less<>> classes;
+    std::set<std::string, std::less<>> joined_points;
+    for (const auto& [id, parent] : parents) {
+        (void)parent;
+        classes[root(id)].push_back(id);
+        joined_points.insert(id);
+    }
+    std::map<std::string, Vec2, std::less<>> anchors;
+    for (const auto& constraint : request.constraints) {
+        const auto* anchor = std::get_if<FixedAnchorConstraint>(&constraint);
+        if (!anchor || !joined_points.contains(anchor->point)) continue;
+        const Vec2 position{anchor->x, anchor->y};
+        const auto [found, inserted] = anchors.emplace(root(anchor->point), position);
+        if (!inserted && !points_exact(found->second, position))
+            invalid("Coincident endpoints have incompatible exact fixed positions");
+    }
+    for (const auto& [id, members] : classes) {
+        auto position = anchors.contains(id) ? anchors.at(id) : solved.at(id);
+        // Restore an unchanged shared vertex once. Restoring whole walls
+        // independently can split an exact joint after a tolerance-based solve.
+        if (!anchors.contains(id) && std::all_of(members.begin(), members.end(),
+            [&](const auto& member) {
+                return points_exact(original.at(member), original.at(id)) &&
+                    points_near(solved.at(member), original.at(id));
+            })) position = original.at(id);
+        for (const auto& member : members) {
+            if (!points_near(solved.at(member), position, constraint_linear_tolerance_metres))
+                invalid("Constraint solver did not preserve a coincident endpoint joint");
+        }
+        for (const auto& member : members) solved.at(member) = position;
+    }
+    return joined_points;
+}
+
 bool has_organization_reference(const Entity& entity) {
     return entity.properties.contains("layer_id") || entity.properties.contains("floor_id") ||
         entity.properties.contains("building_id") || entity.properties.contains("property_id");
@@ -1225,6 +1286,7 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(
             }
         }
 
+        const auto coincident_points = canonicalize_coincident_points(request, positions, solved_points);
         std::set<std::string,std::less<>> selected_rigid_ids;
         for (const auto& wall_id : affected_walls) {
             const auto old = old_baselines.at(wall_id);
@@ -1234,7 +1296,11 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(
                 solved_points.at(point_id({wall_id, WallEndpointRole::end})),
                 rigid_transform ? transform_segment(old,*rigid_transform).sweep_radians :
                     exterior_physical_ids.contains(wall_id) ? read_baseline(candidate.at(wall_id)).sweep_radians : old.sweep_radians};
-            if (!rigid_transform && baseline_same(old, proposed)) {
+            if (!rigid_transform && baseline_same(old, proposed) &&
+                (!coincident_points.contains(point_id({wall_id, WallEndpointRole::start})) ||
+                    points_exact(old.start, proposed.start)) &&
+                (!coincident_points.contains(point_id({wall_id, WallEndpointRole::end})) ||
+                    points_exact(old.end, proposed.end))) {
                 proposed = old;
             }
             if (proposed.start.x == old.start.x && proposed.start.y == old.start.y &&
@@ -1273,7 +1339,9 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(
 
         if (boundary_edit) result.boundary_edits_.push_back(*boundary_edit);
         for (const auto& [id, binding] : point_bindings) {
-            if (!boundaries.contains(binding.owner_id) || points_near(solved_points.at(id), positions.at(id)))
+            if (!boundaries.contains(binding.owner_id) ||
+                (coincident_points.contains(id) ? points_exact(solved_points.at(id), positions.at(id)) :
+                    points_near(solved_points.at(id), positions.at(id))))
                 continue;
             if (boundary_edit && binding.owner_id == boundary_edit->boundary_id)
                 continue;
@@ -1295,8 +1363,11 @@ ConstraintAuthoringPreview ConstraintAuthoringBuilder::build(
                     const auto& vertex = role == WallEndpointRole::start ? edge.start_vertex_id : edge.end_vertex_id;
                     if (!seen.insert(vertex).second) continue;
                     WallEndpointBinding binding{owner_id,role,edge.segment_id,vertex};
-                    const auto solved = solved_points.at(point_id(binding));
-                    if (points_near(solved,endpoint_position(edge.segment,role))) continue;
+                    const auto id = point_id(binding);
+                    const auto solved = solved_points.at(id);
+                    const auto previous = endpoint_position(edge.segment,role);
+                    if (coincident_points.contains(id) ? points_exact(solved,previous) : points_near(solved,previous))
+                        continue;
                     BoundaryGeometryEdit edit;
                     edit.boundary_id = owner_id; edit.target_id = vertex; edit.target_position = solved;
                     proof.vertex_edits.push_back(std::move(edit));

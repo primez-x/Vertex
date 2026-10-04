@@ -1,5 +1,12 @@
 # Portable project extraction
 
+Exchange version 39 identifies retained command-envelope-15 dimension placement
+completion and requires native reader 41. This floor persists across every
+retained state, including undone or deleted dimensions and walls. Extraction
+preserves the typed original-position/offset intent and its command history;
+entity-only materialization does not claim to retain absent placement history.
+The isolated geometry importer protocol is unchanged.
+
 Exchange version 32 identifies retained curved-survey source semantics requiring
 native reader 34. The marker remains necessary after Undo, owner deletion or
 correction to straight calls, and for preserved future survey payloads. Source

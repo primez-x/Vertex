@@ -1640,12 +1640,70 @@ static bool v6_physical_wall_extensions_supported(const Entity& previous, const 
     return retained == previous.extensions;
 }
 
+static bool has_dimension_placement_completion(const ApplyBoundaryConstraintChanges& command) {
+    return command.dimension_placement_completion || !command.dimension_placement_moves.empty();
+}
+
 bool has_exterior_source_completion(const ApplyBoundaryConstraintChanges& command) {
     return command.exterior_source_completion || !command.physical_entity_changes.empty() ||
         !command.exterior_source_edits.empty() || (!has_rigid_wall_transform(command) &&
-            !has_measured_source_completion(command) && has_supplemental_source_completion(command)) ||
+            !has_measured_source_completion(command) && !has_dimension_placement_completion(command) &&
+            has_supplemental_source_completion(command)) ||
         command.exterior_corner_move.has_value() || command.exterior_segment_resize.has_value() ||
         command.exterior_segment_arc.has_value();
+}
+
+static void validate_dimension_placement_intent(const ApplyBoundaryConstraintChanges& command, bool admission) {
+    if (!has_dimension_placement_completion(command)) return;
+    if (!command.dimension_placement_completion)
+        throw std::invalid_argument("Dimension placement lane requires its explicit completion mode");
+    if (command.wall_split || command.exterior_corner_move || command.exterior_segment_resize || command.exterior_segment_arc)
+        throw std::invalid_argument("Dimension placement cannot borrow split, corner, resize or arc intent authority");
+    if (admission && (command.dimension_placement_moves.empty() || command.wall_edits.empty()))
+        throw std::invalid_argument("Dimension placement completion requires explicit moves and a typed wall proof");
+    std::set<std::string, std::less<>> ids;
+    for (const auto& move : command.dimension_placement_moves) {
+        if (!is_valid_identifier(move.dimension_id) || !std::isfinite(move.offset.x) || !std::isfinite(move.offset.y))
+            throw std::invalid_argument("Dimension placement requires a valid saved ID and finite offset");
+        if (!ids.insert(move.dimension_id).second)
+            throw std::invalid_argument("Dimension placement repeats a saved callout");
+        for (const auto* lane : {&command.entity_changes, &command.physical_entity_changes, &command.supplemental_entity_changes})
+            for (const auto& change : *lane)
+                if ((change.kind == EntityChangeKind::upsert ? change.entity.id : change.entity_id) == move.dimension_id)
+                    throw std::invalid_argument("Dimension placement overlaps an explicit raw entity change");
+    }
+}
+
+static void complete_dimension_placements(const std::map<std::string, Entity, std::less<>>& source,
+    std::map<std::string, Entity, std::less<>>& candidate, const ApplyBoundaryConstraintChanges& command) {
+    for (const auto& move : command.dimension_placement_moves) {
+        const auto original = source.find(move.dimension_id);
+        const auto current = candidate.find(move.dimension_id);
+        if (original == source.end() || current == candidate.end() || original->second.type != current->second.type ||
+            original->second.required != current->second.required)
+            throw std::invalid_argument("Dimension placement requires the same surviving saved callout");
+        const auto before = decode_boundary_dimension_entity(original->second);
+        const auto after = decode_boundary_dimension_entity(current->second);
+        if (!before.supported() || !after.supported())
+            throw std::invalid_argument("Dimension placement requires supported source and candidate callouts");
+        const auto& a = *before.dimension; auto b = *after.dimension;
+        if (a.id != b.id || a.boundary_id != b.boundary_id || a.kind != b.kind || a.segment_id != b.segment_id ||
+            a.vertex_id != b.vertex_id || a.secondary_segment_id != b.secondary_segment_id || a.segment_chain_ids != b.segment_chain_ids)
+            throw std::invalid_argument("Dimension placement cannot remap its stable analytical target");
+        const auto old_owner = source.find(a.boundary_id);
+        const auto new_owner = candidate.find(b.boundary_id);
+        if (old_owner == source.end() || new_owner == candidate.end() || old_owner->second.type != new_owner->second.type)
+            throw std::invalid_argument("Dimension placement analytical owner must survive with the same type");
+        (void)a.resolve(old_owner->second); (void)b.resolve(new_owner->second);
+        b.text_position = {a.text_position.x + move.offset.x, a.text_position.y + move.offset.y};
+        if (!std::isfinite(b.text_position.x) || !std::isfinite(b.text_position.y))
+            throw std::invalid_argument("Dimension placement text position overflows");
+        b.placement = BoundaryDimensionPlacement::manual;
+        b.automatic_placement_version.reset();
+        // Automatic source reflow is an intentional predecessor. Preserve its
+        // surviving entity, style and opaque metadata while changing placement.
+        current->second = encode_boundary_dimension_entity(b, &current->second);
+    }
 }
 
 static bool has_measured_stroke_dimensions(const std::map<std::string,Entity,std::less<>>& source,
@@ -1885,7 +1943,7 @@ static void validate_wall_split_lifetime(const WallSplitIntent& intent,
 std::map<std::string, Entity, std::less<>> boundary_constraint_entities(
     const std::map<std::string, Entity, std::less<>>& source,
     const ApplyBoundaryConstraintChanges& command, bool retained_replay = false) {
-    try { validate_exterior_resize_related_edits(command); }
+    try { validate_exterior_resize_related_edits(command); validate_dimension_placement_intent(command, true); }
     catch (const std::exception& error) { document_error(DocumentErrorCode::invalid_entity,error.what()); }
     if(command.wall_split) {
         (void)command_to_json(Command{command});
@@ -1895,7 +1953,7 @@ std::map<std::string, Entity, std::less<>> boundary_constraint_entities(
     }
     const bool source_completion = has_exterior_source_completion(command);
     const bool measured_completion=has_measured_source_completion(command);
-    if (source_completion || measured_completion) (void)command_to_json(Command{command});
+    if (source_completion || measured_completion || has_dimension_placement_completion(command)) (void)command_to_json(Command{command});
     if (command.boundary_edits.empty() && command.wall_edits.empty() && !source_completion && !measured_completion)
         document_error(DocumentErrorCode::invalid_entity,
                        "Boundary constraint transaction requires geometry edits");
@@ -2119,6 +2177,10 @@ std::map<std::string, Entity, std::less<>> boundary_constraint_entities(
             complete_measured_stroke_annotations(source,result,command);
         }
         catch(const std::exception& error){document_error(DocumentErrorCode::invalid_entity,error.what());}
+    }
+    if (has_dimension_placement_completion(command)) {
+        try { complete_dimension_placements(source, result, command); }
+        catch (const std::exception& error) { document_error(DocumentErrorCode::invalid_entity, error.what()); }
     }
     if (command.exterior_segment_resize) {
         try { validate_exterior_segment_resize_result(source, result, *command.exterior_segment_resize); }
@@ -2923,6 +2985,8 @@ nlohmann::json command_to_json(const Command& command) {
             }
             return encoded;
         } else if constexpr (std::is_same_v<T, ApplyBoundaryConstraintChanges>) {
+            try { validate_dimension_placement_intent(typed, false); }
+            catch (const std::exception& error) { document_error(DocumentErrorCode::invalid_entity, error.what()); }
             if(typed.wall_split) {
                 if(!typed.boundary_edits.empty() || !typed.entity_changes.empty() || !typed.wall_edits.empty() ||
                     !typed.physical_entity_changes.empty() || !typed.exterior_source_edits.empty() ||
@@ -3067,6 +3131,32 @@ nlohmann::json command_to_json(const Command& command) {
                     encoded["exterior_segment_arc"] = encode_exterior_segment_arc(*typed.exterior_segment_arc);
                     if(encoded.dump().size()>1024*1024)throw std::invalid_argument("Exterior segment arc proof exceeds the persisted proof budget");
                 }
+                if (has_dimension_placement_completion(typed)) {
+                    encoded["version"] = 15;
+                    if (!encoded.contains("wall_edits")) encoded["wall_edits"] = nlohmann::json::array();
+                    encoded["source_completion"] = has_exterior_source_completion(typed);
+                    encoded["supplemental_source_completion"] = has_supplemental_source_completion(typed);
+                    encoded["supplemental_asset_reference_completion"] = typed.supplemental_asset_reference_completion;
+                    encoded["rigid_wall_transform_completion"] = has_rigid_wall_transform(typed);
+                    encoded["measured_source_completion"] = has_measured_source_completion(typed);
+                    if (!encoded.contains("measured_stroke_edits")) encoded["measured_stroke_edits"] = nlohmann::json::array();
+                    encoded["physical_entity_changes"] = command_to_json(ApplyEntityChanges{
+                        typed.expected_revision, typed.physical_entity_changes, {}, typed.message}).at("entity_changes");
+                    if (!encoded.contains("exterior_source_edits")) encoded["exterior_source_edits"] = nlohmann::json::array();
+                    const auto supplements = command_to_json(ApplyEntityChanges{typed.expected_revision, typed.supplemental_entity_changes,
+                        typed.supplemental_asset_reference_completion ? std::vector<AssetChange>{} : typed.supplemental_asset_changes, typed.message});
+                    encoded["supplemental_entity_changes"] = supplements.at("entity_changes");
+                    encoded["supplemental_asset_changes"] = typed.supplemental_asset_reference_completion ?
+                        command_asset_references_to_json(typed.supplemental_asset_changes) : supplements.at("asset_changes");
+                    encoded["exterior_corner_move"] = nullptr;
+                    encoded["dimension_placement_completion"] = true;
+                    encoded["dimension_placement_moves"] = nlohmann::json::array();
+                    for (const auto& move : typed.dimension_placement_moves)
+                        encoded["dimension_placement_moves"].push_back({{"dimension_id", move.dimension_id},
+                            {"offset", {move.offset.x, move.offset.y}}});
+                    if (encoded.dump().size() > 1024*1024)
+                        throw std::invalid_argument("Dimension placement proof exceeds the persisted proof budget");
+                }
             } catch (const std::exception& error) {
                 document_error(DocumentErrorCode::invalid_entity, error.what());
             }
@@ -3109,7 +3199,7 @@ Command command_from_json(const nlohmann::json& value,
     try {
         if (!value.is_object() || !value.contains("version") || !value.contains("kind") ||
             !value.at("version").is_number_integer() ||
-            (value.at("version") != 1 && value.at("version") != 2 && value.at("version") != 3 && value.at("version") != 4 && value.at("version") != 5 && value.at("version") != 6 && value.at("version") != 7 && value.at("version") != 8 && value.at("version") != 9 && value.at("version") != 10 && value.at("version") != 11 && value.at("version") != 12 && value.at("version") != 13 && value.at("version") != 14) ||
+            (value.at("version") != 1 && value.at("version") != 2 && value.at("version") != 3 && value.at("version") != 4 && value.at("version") != 5 && value.at("version") != 6 && value.at("version") != 7 && value.at("version") != 8 && value.at("version") != 9 && value.at("version") != 10 && value.at("version") != 11 && value.at("version") != 12 && value.at("version") != 13 && value.at("version") != 14 && value.at("version") != 15) ||
             !value.at("kind").is_string()) {
             document_error(DocumentErrorCode::invalid_entity, "serialized command envelope is invalid");
         }
@@ -3165,6 +3255,39 @@ Command command_from_json(const nlohmann::json& value,
             return result;
         }
         if (kind == "apply_boundary_constraint_changes") {
+            if (value.at("version") == 15) {
+                command_exact_fields(value,{"version","kind","expected_revision","message","entity_changes","boundary_edits","wall_edits",
+                    "physical_entity_changes","exterior_source_edits","supplemental_entity_changes","supplemental_asset_changes",
+                    "source_completion","supplemental_source_completion","supplemental_asset_reference_completion",
+                    "rigid_wall_transform_completion","measured_source_completion","measured_stroke_edits","exterior_corner_move",
+                    "dimension_placement_completion","dimension_placement_moves"},
+                    DocumentErrorCode::invalid_entity,"serialized dimension placement command");
+                if (!value.at("dimension_placement_completion").is_boolean() || !value.at("dimension_placement_completion").get<bool>() ||
+                    !value.at("dimension_placement_moves").is_array() || !value.at("exterior_corner_move").is_null())
+                    throw std::invalid_argument("Dimension placement mode disagrees with its typed lane");
+                if (!value.at("measured_source_completion").is_boolean() || !value.at("measured_stroke_edits").is_array())
+                    throw std::invalid_argument("Dimension placement measured mode is invalid");
+                const bool measured = value.at("measured_source_completion").get<bool>();
+                if (!measured && !value.at("measured_stroke_edits").empty())
+                    throw std::invalid_argument("Dimension placement measured mode disagrees with its typed lane");
+                // Delegate unchanged lanes to the strict historical decoder;
+                // its measured discriminator permits an empty boundary lane.
+                auto lanes = value; lanes["version"] = 11; lanes["measured_source_completion"] = true;
+                lanes.erase("dimension_placement_completion"); lanes.erase("dimension_placement_moves");
+                auto result = std::get<ApplyBoundaryConstraintChanges>(command_from_json(lanes, asset_resolver));
+                result.measured_source_completion = measured;
+                result.dimension_placement_completion = true;
+                for (const auto& move : value.at("dimension_placement_moves")) {
+                    command_exact_fields(move,{"dimension_id","offset"},DocumentErrorCode::invalid_entity,"serialized dimension placement move");
+                    if (!move.at("dimension_id").is_string() || !move.at("offset").is_array() || move.at("offset").size()!=2 ||
+                        !move.at("offset")[0].is_number() || !move.at("offset")[1].is_number())
+                        throw std::invalid_argument("Dimension placement move is malformed");
+                    result.dimension_placement_moves.push_back({move.at("dimension_id").get<std::string>(),
+                        {move.at("offset")[0].get<double>(),move.at("offset")[1].get<double>()}});
+                }
+                (void)command_to_json(Command{result});
+                return result;
+            }
             if (value.at("version") == 14) {
                 command_exact_fields(value,{"version","kind","expected_revision","message","entity_changes","boundary_edits","wall_edits",
                     "physical_entity_changes","exterior_source_edits","supplemental_entity_changes","supplemental_asset_changes",

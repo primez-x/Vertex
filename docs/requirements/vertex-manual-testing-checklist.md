@@ -2633,6 +2633,18 @@ drawing; switching modes does not change existing geometry.
   - Result: Not tested
   - Notes: ______________________________
 
+- [ ] **U431 — Drag one wall with its saved measurement label**
+  - Steps: Draw a closed wall outline and define its measured exterior with saved dimensions. Select one wall, then Ctrl-click one of the measured exterior's dimension labels. Start a drag from inside the selected bounds. Inspect the wall, connected corners, label, dimensions and area. Press Escape during a second drag. Undo and Redo the completed drag, then save and reopen. Also try in a saved plan view whose orientation is rotated from the default Top view; drag right and up on screen.
+  - Expected: The wall and following corners move together, and the selected label shifts once with the wall. Dimensions and area update to match the moved geometry. In the rotated saved view, the wall and label follow the pointer as shown in that view and retain their intended relationship. Escape cancels the second drag. Undo/Redo and reopening preserve the completed move.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **U432 — Drag a wall, ordinary text label and measurement label together**
+  - Steps: Draw a wall without an associated measured exterior, create an independent measured shape with a saved dimension, and add an ordinary text label. Select the wall, then Ctrl-click both labels. Drag from inside the selected bounds. Inspect the wall, both labels and the independent measured shape. Undo and Redo, then save and reopen.
+  - Expected: The wall and both selected labels move together. The dimension label shifts once while its independent measured shape and measured value stay unchanged. Undo/Redo and reopening preserve the group move.
+  - Result: Not tested
+  - Notes: ______________________________
+
 ## Issue report template
 
 - Task ID(s):

@@ -1,4 +1,30 @@
-# Vertex project formats v1 through v40
+# Vertex project formats v1 through v41
+
+## Connected geometry with explicit dimension placement (v41)
+
+Constraint-command envelope 15 retains `dimension_placement_moves`, a list of
+dimension IDs and model-space offsets, and its explicit completion discriminator.
+This narrow authority composes a connected geometry edit with selected callout
+placement in one revision. It does not permit raw dimension supplements, source
+replacement or removal of geometric constraints.
+
+Replay resolves each dimension against the original and reconstructed geometry.
+After exterior redraw and measured-source consequences, it uses the original
+text position plus the retained offset, sets manual placement and clears the
+automatic-placement version. Stable analytical target identities, presentation
+style and opaque metadata remain intact. Invalid or retired targets, conflicting
+raw edits, duplicate intents and nonfinite/overflowed coordinates refuse the
+complete command. Unselected automatic dimensions retain normal source reflow.
+Ordinary selected labels or reference images may accompany this typed placement
+lane without implying an exterior-source redraw. Explicit exterior and measured
+completion flags still require their corresponding reconstruction proofs. The
+legacy supplemental inference for envelopes 1 through 14 remains unchanged.
+
+Retained envelope-15 history requires native 41 / extraction 39, including Undo
+and deleted states. Emptying the placement vector cannot downgrade the envelope;
+an empty completion cannot authorize a live edit. Entity-only materialization
+without retained placement intent keeps its existing reader requirements. Earlier
+command dialects and the isolated geometry importer protocol remain unchanged.
 
 ## Physical-source measured curve reconstruction (v40)
 

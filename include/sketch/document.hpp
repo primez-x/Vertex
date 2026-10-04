@@ -251,6 +251,15 @@ struct ApplyBoundaryConstraintChanges {
     std::optional<ExteriorSegmentResizeIntent> exterior_segment_resize;
     // Envelope fourteen independently reconstructs endpoint-fixed curvature.
     std::optional<ExteriorSegmentArcIntent> exterior_segment_arc;
+    // Envelope fifteen places existing saved callouts after all typed geometry
+    // and automatic reflow. Offsets use the original source text position.
+    struct DimensionPlacementMove {
+        std::string dimension_id;
+        Vec2 offset;
+    };
+    std::vector<DimensionPlacementMove> dimension_placement_moves;
+    // Retain the dialect even if a caller strips the placement lane.
+    bool dimension_placement_completion{};
 };
 
 using Command = std::variant<ApplyEntityChanges, NameRevision, TranslateBoundary,
