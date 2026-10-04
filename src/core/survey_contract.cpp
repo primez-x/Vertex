@@ -85,6 +85,7 @@ SurveyTraverse::SurveyTraverse(std::string provenance, std::vector<SurveyLeg> le
     check(!legs_.empty() && legs_.size() <= maximum_legs, "Invalid survey leg count");
     check(tolerance_ >= 0, "Negative closure tolerance");
     std::set<std::string> ids;
+    const bool curved = std::any_of(legs_.begin(), legs_.end(), [](const auto& leg) { return leg.sweep_radians != 0; });
     vertices_.push_back({});
     for (auto& leg : legs_) {
         text(leg.id); check(ids.insert(leg.id).second, "Duplicate survey leg ID");
@@ -97,13 +98,39 @@ SurveyTraverse::SurveyTraverse(std::string provenance, std::vector<SurveyLeg> le
         if (leg.quadrant == BearingQuadrant::south_east || leg.quadrant == BearingQuadrant::south_west) north = -north;
         if (leg.quadrant == BearingQuadrant::north_west || leg.quadrant == BearingQuadrant::south_west) east = -east;
         vertices_.push_back({finite(vertices_.back().east_m + east), finite(vertices_.back().north_m + north)});
-        diagnostics_.perimeter_m = finite(diagnostics_.perimeter_m + leg.distance_m);
+        leg.sweep_radians = finite(leg.sweep_radians);
+        const auto& a = vertices_[vertices_.size() - 2];
+        const auto& b = vertices_.back();
+        const Segment segment = leg.sweep_radians == 0 ? Segment{{a.east_m, a.north_m}, {b.east_m, b.north_m}, 0} :
+            arc_from_chord_angle({a.east_m, a.north_m}, {b.east_m, b.north_m}, leg.sweep_radians);
+        measured_segments_.push_back(segment);
+        diagnostics_.perimeter_m = finite(diagnostics_.perimeter_m + (curved ? segment_length(segment) : leg.distance_m));
     }
     diagnostics_.east_error_m = vertices_.back().east_m; diagnostics_.north_error_m = vertices_.back().north_m;
     diagnostics_.linear_error_m = finite(std::hypot(diagnostics_.east_error_m, diagnostics_.north_error_m));
     diagnostics_.relative_error = finite(diagnostics_.linear_error_m / diagnostics_.perimeter_m);
     diagnostics_.closed = diagnostics_.linear_error_m <= tolerance_;
-    if (!diagnostics_.closed || legs_.size() < 3) return;
+    if (!diagnostics_.closed) return;
+    if (curved) {
+        auto boundary = measured_segments_;
+        // Closure tolerance reports measured closure; it is never used to
+        // relax analytical intersection or degenerate-segment checks.
+        if (diagnostics_.linear_error_m > default_geometry_tolerance_metres)
+            boundary.push_back({boundary.back().end, boundary.front().start, 0});
+        const auto issues = validate_boundary(boundary);
+        if (!issues.empty()) {
+            const auto& issue = issues.front();
+            throw std::invalid_argument("Invalid curved survey boundary (" + provenance_ + ", segment " +
+                std::to_string(issue.segment_index + 1) + (issue.other_segment_index ? ", segment " +
+                std::to_string(*issue.other_segment_index + 1) : "") + "): " + issue.message);
+        }
+        const auto area = finite(std::abs(signed_area(boundary)));
+        check(area > 0, "Degenerate survey polygon");
+        diagnostics_.area_m2 = area;
+        diagnostics_.acres = finite(area / 4046.8564224);
+        return;
+    }
+    if (legs_.size() < 3) return;
     // Area includes the explicit closing segment to origin; retain the measured endpoint.
     auto polygon = vertices_;
     if (polygon.back().east_m == 0 && polygon.back().north_m == 0) polygon.pop_back();
@@ -123,10 +150,14 @@ SurveyTraverse::SurveyTraverse(std::string provenance, std::vector<SurveyLeg> le
 }
 std::string SurveyTraverse::serialize() const {
     nlohmann::json legs=nlohmann::json::array(), vertices=nlohmann::json::array();
-    for (const auto& leg: legs_) legs.push_back({{"id",leg.id},{"quadrant",quadrant(leg.quadrant)},{"angle_degrees",leg.angle_degrees},{"distance_m",leg.distance_m}});
+    const bool curved = std::any_of(legs_.begin(), legs_.end(), [](const auto& leg) { return leg.sweep_radians != 0; });
+    for (const auto& leg: legs_) {
+        legs.push_back({{"id",leg.id},{"quadrant",quadrant(leg.quadrant)},{"angle_degrees",leg.angle_degrees},{"distance_m",leg.distance_m}});
+        if (curved) legs.back()["sweep_radians"] = leg.sweep_radians;
+    }
     for (const auto& v: vertices_) vertices.push_back({{"east_m",v.east_m},{"north_m",v.north_m}});
     const auto& d=diagnostics_;
-    return nlohmann::json{{"version",1},{"provenance",provenance_},{"legs",legs},{"vertices",vertices},{"closure_tolerance_m",tolerance_},
+    return nlohmann::json{{"version",curved ? 2 : 1},{"provenance",provenance_},{"legs",legs},{"vertices",vertices},{"closure_tolerance_m",tolerance_},
         {"diagnostics",{{"east_error_m",d.east_error_m},{"north_error_m",d.north_error_m},{"linear_error_m",d.linear_error_m},{"perimeter_m",d.perimeter_m},{"relative_error",d.relative_error},{"closed",d.closed},{"area_m2",d.area_m2 ? nlohmann::json(*d.area_m2) : nlohmann::json(nullptr)},{"acres",d.acres ? nlohmann::json(*d.acres) : nlohmann::json(nullptr)}}}}.dump();
 }
 }

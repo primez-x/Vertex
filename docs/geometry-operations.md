@@ -206,9 +206,13 @@ DXF exports analytical lines/arcs and explicitly diagnoses loss of native typed
 expressions and identities. Unsupported receipt models stay opaque rather than
 becoming guessed geometry. See the [canvas plan](plans/2026-10-03-measurement-linework-canvas.md)
 and [verification checkpoint](verification/measurement-linework-canvas-2026-10-03.md).
-Same-stroke continuation after Undo, stroke transforms/editing, combined rise/run,
-relative-turn/curve input UI, nested holes and real native Apex roundtrips remain
-scoped gaps. This checkpoint does not certify full production or ANSI compliance.
+Measured-line history restores the same stroke and retained pen after Undo.
+Stable-vertex jumps start an independent stroke without a connecting edge.
+The shared precise-input dialog accepts combined rise/run, relative turns and
+analytical chord/angle, chord/height and chord/arc-length entries through the
+ordinary receipt path. Stroke transforms/editing, nested holes and real native
+Apex roundtrips remain scoped gaps. This checkpoint does not certify full
+production or ANSI compliance.
 Physical key preset verification, editable shortcut persistence, and broader
 semantic dependency migration remain open. Callers must not replace a document
 entity with a geometry result while silently dropping its owned semantics;

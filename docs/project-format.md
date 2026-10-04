@@ -1,4 +1,49 @@
-# Vertex project formats v1 through v33
+# Vertex project formats v1 through v34
+
+## Curved survey source provenance (v34)
+
+Survey call reports use version 2 when any call is a circular arc. The typed
+`measurement_boundary.extensions.survey_source` wrapper then uses version 2,
+including after a later correction back to straight calls. Current and original
+reports retain entered text, exact quantity receipts and their own report/input
+versions. The common identified boundary model stores analytical signed sweeps;
+no new geometry representation or SQLite columns are introduced.
+
+Native format 34 and extraction version 32 protect this source contract across
+all retained revisions, including Undo, deleted owners and entity-only imports.
+A v1 wrapper carrying v2 or future report/input metadata cannot lower the floor.
+Future or malformed typed discriminators preserve their JSON with read-only
+protection; collisions on unrelated entity types remain opaque. Ordinary v1
+straight-call projects retain their previous reader floor.
+
+Document admission checks source structure and versions, rather than treating
+archival calls as live geometry. Ordinary drawing edits and transformations may
+intentionally differ from the recorded calls. Opening those calls or correcting
+a boundary requires sealed reconstruction from entered expressions and matching
+receipts. Derived report vertices and diagnostics are recalculated. Loading a
+project therefore does not certify the semantic accuracy of its archival survey
+receipts. Future payloads remain preserved without being consumed.
+
+The report contains `provenance`, ordered `legs`, local `vertices`,
+`closure_tolerance_m`, `diagnostics` and `input_provenance`. V2 legs add signed
+`sweep_radians`; `distance_m` remains the chord distance. The v2 entered-input
+record retains `legs_text`, `source_text`, `closure_tolerance_expression`,
+`default_unit` (`m` or `ft`), ordered `distances` and ordered `curves`. Each
+distance receipt records `leg_id`, `line_number`, `original_expression` and
+`exact_metres` with integral `numerator`/`denominator`. Each curve receipt uses
+`version: 1`, `leg_id`, `line_number`, `construction_kind` and
+`original_expression`. `chord_angle` retains normalized `sweep_radians`;
+`chord_height` retains signed `exact_metres`; `chord_arc_length` retains measured
+arc `exact_metres` plus Boolean `clockwise`. Chord and arc-length receipts are
+distinct. Positive sweep/height is counter-clockwise, and negative is clockwise.
+
+The source wrapper retains `report`, optional `original_report`,
+`added_closing_segment`, `adjusted_final_endpoint` and `endpoint_adjustment_m`
+(`null` or an object with `east`/`north` metre offsets). The first correction
+also retains `original_closure` with those closure fields. `placement` records
+its current anchor and called-north orientation. Derived diagnostic totals and
+vertices are never accepted as replacement input; a reconstructed report is
+required before generating or correcting a boundary.
 
 ## Grouped measured regions (v33)
 

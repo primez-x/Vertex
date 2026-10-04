@@ -1,5 +1,12 @@
 # Portable project extraction
 
+Exchange version 32 identifies retained curved-survey source semantics requiring
+native reader 34. The marker remains necessary after Undo, owner deletion or
+correction to straight calls, and for preserved future survey payloads. Source
+JSON remains archival; consumers must reconstruct entered calls and receipts
+before using it as trusted geometry. Unrelated vendor extensions do not acquire
+these semantics.
+
 `extract_project` writes a new directory containing versioned `project.json`
 and content-addressed `assets/<sha256>.bin` files. It exports all retained
 revisions and deduplicates identical asset bytes. It never replaces an existing

@@ -19,6 +19,7 @@
 #include "sketch/sheet_view_entity_codec.hpp"
 #include "sketch/building_entity.hpp"
 #include "sketch/quantity.hpp"
+#include "sketch/survey_report.hpp"
 #include "sketch/field_adapter_contract.hpp"
 #include "sketch/annotation_entity_codec.hpp"
 #include "sketch/georeferencing_entity_codec.hpp"
@@ -194,15 +195,16 @@ void test_shortcuts_and_measurement_keypad(const QString& capture_directory) {
         auto* object_tool = window.findChild<QToolButton*>(QStringLiteral("createBuildingObject"));
         require(window.findChild<QWidget*>(QStringLiteral("toolPanel")) == nullptr &&
                     window.findChild<QToolButton*>(QStringLiteral("toggleProjectPanel")) == nullptr &&
-                    sidebar_tabs && sidebar_tabs->count() == 2 &&
+                    sidebar_tabs && sidebar_tabs->count() == 3 &&
                     sidebar_tabs->tabText(0) == QStringLiteral("Layers") &&
-                    sidebar_tabs->tabText(1) == QStringLiteral("Library") && status_controls &&
+                    sidebar_tabs->tabText(1) == QStringLiteral("Library") &&
+                    sidebar_tabs->tabText(2) == QStringLiteral("Details") && status_controls &&
                     object_tool && object_tool->toolButtonStyle() == Qt::ToolButtonTextBesideIcon &&
                     object_tool->iconSize() == QSize(16, 16) &&
                     window.findChild<QToolButton*>(QStringLiteral("selectTool")) == nullptr &&
                     window.findChild<QToolButton*>(QStringLiteral("drawFirstBoundary")) == nullptr &&
                     window.findChild<QToolButton*>(QStringLiteral("defineFirstBoundary")) == nullptr,
-                "the canvas must have no top tool strip, use Layers/Library sidebar tabs, and retain one pointer surface");
+                "the canvas must have no top tool strip, use Layers/Library/Details sidebar tabs, and retain one pointer surface");
         auto* settings = window.findChild<QAction*>(QStringLiteral("keyboardShortcutSettings"));
         auto* user_guide = window.findChild<QAction*>(QStringLiteral("userGuide"));
         auto* about = window.findChild<QAction*>(QStringLiteral("aboutAction"));
@@ -794,14 +796,18 @@ void test_room_boundary_from_existing_geometry() {
             "existing-geometry fixture must create four walls");
     require(window.selectEntity(first), "existing-geometry fixture must select a source wall");
     const auto before = window.document().revision();
+    const auto before_entities = window.document().snapshot().entities();
     const auto room = window.createRoomBoundaryFromExistingGeometry(QStringLiteral("Living room"));
     require(!room.isEmpty() && window.document().revision() == before + 1,
             "connected existing walls must create one room boundary command");
     const auto snapshot = window.document().snapshot();
     require(snapshot.entities().at(room.toStdString()).type == "room_boundary" &&
-                snapshot.entities().size() == 11 &&
+                snapshot.entities().size() == before_entities.size() + 1 &&
                 snapshot.entities().at(room.toStdString()).properties.at("name") == "Living room",
             "room creation must preserve source walls and persist its classification");
+    for (const auto& source_id : {first, second, third, fourth})
+        require(snapshot.entities().at(source_id.toStdString()) == before_entities.at(source_id.toStdString()),
+            "derived room must preserve every source wall field");
     require(window.undoCommand() && !window.document().snapshot().entities().contains(room.toStdString()) &&
                 window.redoCommand() && window.document().snapshot().entities().contains(room.toStdString()),
             "room creation from existing geometry must participate in undo and redo");
@@ -5601,10 +5607,9 @@ void test_survey_calculator(const QString& capture_directory) {
                     entered.at("distances").at(0).at("exact_metres").at("denominator") == 1,
                 "survey export must preserve entered units, expressions, and exact rational metres");
         saved.close();
-        auto tampered = report;
+        auto tampered = sketch::build_survey_report({"NE, 90, 100\nSE, 0, 100\nSW, 90, 100\nNW, 0, 100",
+            "Deed fixture", "0.001 m", sketch::Unit::metre});
         tampered["diagnostics"]["area_m2"] = 1.0;
-        tampered["input_provenance"]["default_unit"] = "m";
-        tampered["input_provenance"]["legs_text"] = "NE, 90, 100\nSE, 0, 100\nSW, 90, 100\nNW, 0, 100";
         require(saved.open(QIODevice::WriteOnly | QIODevice::Truncate), "prepare report reopen fixture");
         saved.write(QByteArray::fromStdString(tampered.dump()));
         saved.close();
@@ -5647,7 +5652,7 @@ void test_survey_calculator(const QString& capture_directory) {
         saved.write(QByteArray::fromStdString(tampered.dump()));
         saved.close();
         open_fixture();
-        require(input->toPlainText() == restored_input && result->text().contains("Unsupported"),
+        require(input->toPlainText() == restored_input && result->text().contains("unsupported", Qt::CaseInsensitive),
                 "unsupported report version must not replace current entries");
         input->setPlainText("NE, 45:30:15.5, 100 ft");
         require(!output->isEnabled() && result->text().isEmpty(), "edits must invalidate stale survey results");
@@ -5658,7 +5663,7 @@ void test_survey_calculator(const QString& capture_directory) {
                 "open traverses must not display acreage or allow area creation");
         input->setPlainText("NE, 91, 100 ft");
         calculate->click();
-        require(!output->isEnabled() && result->text().contains("Line 1"), "invalid survey leg must identify its line");
+        require(!output->isEnabled() && result->text().contains("line 1", Qt::CaseInsensitive), "invalid survey leg must identify its line");
         dialog->reject();
     });
     action->trigger();
@@ -8088,6 +8093,12 @@ int main(int argc, char** argv) {
     if (argc == 2 && std::string_view(argv[1]) == "--drawing-set-output-only") {
         test_drawing_set_pdf_and_ordering();
         std::cout << "Drawing-set ordering and PDF tests passed\n";
+        return 0;
+    }
+    if (argc == 2 && std::string_view(argv[1]) == "--survey-only") {
+        test_survey_calculator({});
+        test_survey_explicit_endpoint_closure();
+        std::cout << "Survey report desktop workflows passed\n";
         return 0;
     }
     if (argc == 2 && std::string_view(argv[1]) == "--boundary-insertion-preview-only") {

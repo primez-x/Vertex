@@ -2,7 +2,7 @@
 
 These standalone C++20 contracts provide local calculation and deterministic JSON output for APX-SPEC-001 and APX-SPEC-002. They do not establish Apex parity or complete either user workflow.
 
-`SurveyTraverse` accepts ordered identified quadrant-bearing legs, positive metre distances, provenance, and an absolute closure tolerance. Angles range from 0 to 90 degrees measured from north or south toward east or west. Local geometry starts at (0,0). Output retains every measured vertex and leg. Diagnostics contain signed endpoint errors, linear closure, perimeter, and the dimensionless error/perimeter ratio. Acreage uses 4046.8564224 square metres per international acre. An open traverse has null area and acres. A closed traverse with at least three legs computes planar area including the endpoint-to-origin segment; it does not silently adjust bearings or distribute closure error. Degenerate or intersecting closed boundaries fail. Geodesic area, curve calls, arbitrary distance units, legal-survey certification, and Apex file import are outside this contract.
+`SurveyTraverse` accepts ordered identified quadrant-bearing legs, positive metre distances, provenance, and an absolute closure tolerance. Angles range from 0 to 90 degrees measured from north or south toward east or west. Local geometry starts at (0,0). A curved leg's distance is its chord; its signed sweep describes an analytical circular arc. Output retains every measured vertex and leg. Diagnostics contain signed endpoint errors, linear closure, measured perimeter, and the dimensionless error/perimeter ratio. Acreage uses 4046.8564224 square metres per international acre. An open traverse has null area and acres. Closed boundaries use analytical area and intersection checks, including valid two-arc regions. Perimeter excludes any separately proposed closing line. Straight-only reports preserve their v1 schema and numerical path. No bearing or distance is silently adjusted. Geodesic area, legal-survey certification and Apex file import remain outside this contract.
 
 `GeoreferencingContract` maps local planar metre coordinates through an explicitly supplied invertible 2D affine transform to a declared projected CRS in easting/northing metre order. It does not fit a transform or infer CRS semantics. Control points are observations; even a single point can measure residuals for a supplied transform, but does not establish calibration quality. Residuals are transformed minus observed coordinates, with RMS and maximum magnitude. Ill-conditioned transforms and nonfinite inputs or intermediate results fail. Geographic/angular coordinates and unknown unit enum values are unsupported.
 
@@ -20,6 +20,21 @@ cannot exceed 90 degrees. Incomplete DMS calls are rejected, not guessed.
 NE/SE/SW/NW bearings use the same north/south-relative
 convention as the core contract. Explicit distance units override workspace
 defaults. Source/reference and closure tolerance accompany the calculation.
+
+Curve calls specify chord bearing and chord length, then one construction:
+
+- `CURVE, NE, 90, 20 m, -180` uses signed decimal central angle in degrees.
+- `ARC_HEIGHT, NE, 90, 20 m, -10 m` uses signed arc height.
+- `ARC_LENGTH, NE, 90, 20 m, 31.415926536 m, CW` uses measured arc length and direction.
+
+Positive sweep/height is counter-clockwise; negative is clockwise. Length calls
+require `CW` or `CCW` and an arc length greater than the chord. Every arc is
+validated even in an open traverse. Zero/full-turn, unsupported constructions
+and intersecting closed outlines are rejected. Mixed curve calls produce v2
+reports with v2 entered-input provenance and versioned construction receipts.
+The shared `build_survey_report` / `rebuild_survey_report` API reconstructs
+normalized calls and verifies their receipts; derived display values never
+establish measurement truth.
 
 Calculate reports closure error, perimeter, and area/acreage when available.
 The adjacent canvas previews measured legs, including open traverses. A cyan
@@ -43,10 +58,16 @@ area-bearing traverse within tolerance. This adjusts that leg's endpoint
 instead of creating an extra segment, while retaining the measured calls.
 The choice clears when inputs change. No bearing or distance is silently
 adjusted. Open traverses cannot be added as areas.
+The endpoint-adjustment choice is disabled for a curved final call and refused
+by the core. Retaining measured calls adds a separate straight closing segment;
+a nonzero residual at or below geometry tolerance produces an explicit insertion
+error instead of silently moving an arc endpoint. The shared
+`make_survey_boundary` helper validates the exact proposed boundary.
 The dialog's document, revision, selection, layer, and units must still match
 the captured drawing context before insertion.
 
-The boundary's `extensions.survey_source` contains version 1, the original
+The boundary's `extensions.survey_source` contains version 1 for straight-only
+calls or version 2 for curved calls, the retained
 report, `added_closing_segment`, `adjusted_final_endpoint`, and
 `endpoint_adjustment_m` (east/north offsets, or null when no adjustment was
 selected). This is historical source metadata:
@@ -54,7 +75,7 @@ subsequent boundary edits do not recalculate it or claim to update the original
 survey. Geometry and metadata save/reopen and undo/redo together; the boundary
 uses the common canvas and vector-output path.
 
-Selecting a boundary carrying version-1 `survey_source` and opening **Survey
+Selecting a boundary carrying version-1 or version-2 `survey_source` and opening **Survey
 traverse** restores its original input directly from the project. The dialog
 identifies this as the original source and recomputes it using the same input
 validation as report reopening. It does not infer revised calls from subsequent
@@ -70,6 +91,10 @@ choice is restored when reopening and saved with the correction. The first
 correction preserves `original_report` and `original_closure`; subsequent
 reports remain recoverable through project history. `placement` records the
 current anchor and called-north orientation.
+Source version 2 remains sticky after subsequent straight-call corrections. The
+reader floor scans all retained history and preserves future source/report/input
+versions with read-only protection. Archival source metadata is never compared
+with live edited geometry during admission.
 
 Surviving call rows keep their vertex and edge identities when their original
 ownership can be established. Changes to leg count or a reordered boundary

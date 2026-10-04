@@ -7,11 +7,13 @@
 #include "sketch/project_store.hpp"
 #include "sketch/quantity.hpp"
 #include "sketch/survey_contract.hpp"
+#include "sketch/survey_report.hpp"
 #include "support/noninteractive_errors.hpp"
 
 #include <cmath>
 #include <filesystem>
 #include <iostream>
+#include <numbers>
 #include <stdexcept>
 #include <string_view>
 
@@ -324,6 +326,55 @@ void test_atomic_undo_redo_save_reopen() {
     } catch (...) { std::filesystem::remove_all(folder); throw; }
     std::filesystem::remove_all(folder);
 }
+
+void test_line_curve_line_keeps_rows_dimensions_and_sticky_source() {
+    const auto straight = build_survey_report({"NE,0,10 m\nNE,90,20 m\nSE,0,10 m\nSW,90,20 m", "fixture", "0.01 m", Unit::metre});
+    const auto curved = build_survey_report({"NE,0,10 m\nCURVE,NE,90,20 m,-180\nSE,0,10 m\nSW,90,20 m", "fixture", "0.01 m", Unit::metre});
+    auto dimension = BoundaryDimension{.id = "curve-length", .boundary_id = "survey-1", .segment_id = "s1", .text_position = {105, 211}};
+    auto angle = BoundaryDimension{.id = "curve-angle", .boundary_id = "survey-1", .segment_id = "s1", .text_position = {109, 209}};
+    angle.kind = BoundaryDimensionKind::angle;
+    angle.vertex_id = "v2";
+    angle.secondary_segment_id = "s2";
+    auto document = Document::create({survey(straight), encode_boundary_dimension_entity(dimension), encode_boundary_dimension_entity(angle)});
+    const auto before = document.snapshot().entities();
+    document.apply(survey_boundary_update_command(document.snapshot(), "survey-1", curved, false));
+    const auto after_curve = document.snapshot().entities();
+    const auto& changed = after_curve.at("survey-1");
+    const auto model = decode_identified_boundary_entity(changed);
+    require(model.segments.size() == 4 && model.segments[1].segment_id == "s1" &&
+        model.segments[1].segment.sweep_radians == -std::numbers::pi, "line to curve lost row identity or sweep");
+    require(std::abs(dimension.resolve(changed).segment_length() - 10 * std::numbers::pi) < 1e-10,
+        "stable dimension did not measure corrected arc length");
+    require(std::isfinite(angle.resolve(changed).angle()), "angle dimension lost corrected curve endpoint");
+    require(changed.extensions.at("survey_source").at("version") == 2 &&
+        changed.extensions.at("survey_source").at("original_report") == straight, "curve source did not version or archive original");
+    document.undo(document.revision());
+    require(document.snapshot().entities() == before, "curve correction undo changed original entities");
+    document.redo(document.revision());
+    require(document.snapshot().entities() == after_curve, "curve correction redo changed corrected entities");
+    document.apply(survey_boundary_update_command(document.snapshot(), "survey-1", straight, false));
+    const auto final = document.snapshot().entities().at("survey-1");
+    require(final.extensions.at("survey_source").at("version") == 2 &&
+        final.extensions.at("survey_source").at("report").at("version") == 1 &&
+        final.extensions.at("survey_source").at("original_report") == straight,
+        "source wrapper forgot acquired curve semantics or original report");
+    require(decode_identified_boundary_entity(final).segments[1].segment_id == "s1" &&
+        dimension.resolve(final).segment_length() == 20, "curve to line lost stable dimension target");
+}
+
+void test_curved_endpoint_adjustment_rejects_in_core() {
+    auto document = Document::create({survey()});
+    const auto input = build_survey_report({"SE,0,10 m\nSW,90,20 m\nNE,0,10 m\nCURVE,NE,90,20.0005 m,-180", "fixture", "0.01 m", Unit::metre});
+    rejected_unchanged(document, [&] {
+        (void)survey_boundary_update_command(document.snapshot(), "survey-1", input, true);
+    }, "core adjusted a measured curved final endpoint");
+    const auto command = survey_boundary_update_command(document.snapshot(), "survey-1", input, false);
+    const auto model = decode_identified_boundary_entity(command.entity_changes.front().entity);
+    require(model.segments.size() == 5 && model.segments[3].segment.sweep_radians == -std::numbers::pi &&
+        model.segments[4].segment.sweep_radians == 0, "retained curve did not get a separate closing line");
+    require(std::abs(model.segments[3].segment.end.x - model.segments[0].segment.start.x - 0.0005) < 1e-10,
+        "retained measured curve endpoint silently snapped");
+}
 }
 
 int main() {
@@ -337,6 +388,8 @@ int main() {
         test_forged_receipts_versions_read_only_and_stale_reject();
         test_receipt_backed_open_and_malformed_source_reject();
         test_atomic_undo_redo_save_reopen();
+        test_line_curve_line_keeps_rows_dimensions_and_sticky_source();
+        test_curved_endpoint_adjustment_rejects_in_core();
         std::cout << "survey boundary update tests passed\n";
     } catch (const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }
 }

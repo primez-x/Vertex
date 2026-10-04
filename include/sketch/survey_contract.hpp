@@ -1,4 +1,5 @@
 #pragma once
+#include "sketch/geometry.hpp"
 #include <optional>
 #include <string>
 #include <string_view>
@@ -9,7 +10,8 @@ namespace sketch {
 // Degree/minute fields in D:M:S are integers; bounds are [0,90], [0,60), [0,60).
 [[nodiscard]] double parse_survey_angle(std::string_view expression);
 enum class BearingQuadrant { north_east, south_east, south_west, north_west };
-struct SurveyLeg { std::string id; BearingQuadrant quadrant; double angle_degrees{}; double distance_m{}; };
+// A curved leg's distance is its chord; positive sweep is counter-clockwise.
+struct SurveyLeg { std::string id; BearingQuadrant quadrant; double angle_degrees{}; double distance_m{}; double sweep_radians{}; };
 struct SurveyVertex { double east_m{}, north_m{}; };
 struct SurveyClosureDiagnostics {
     double east_error_m{}, north_error_m{}, linear_error_m{}, perimeter_m{}, relative_error{};
@@ -25,12 +27,14 @@ public:
                             double closure_tolerance_m = 1e-6);
     [[nodiscard]] const std::vector<SurveyVertex>& vertices() const noexcept { return vertices_; }
     [[nodiscard]] const SurveyClosureDiagnostics& diagnostics() const noexcept { return diagnostics_; }
+    [[nodiscard]] const Boundary& measured_segments() const noexcept { return measured_segments_; }
     [[nodiscard]] std::string serialize() const;
 private:
     std::string provenance_;
     std::vector<SurveyLeg> legs_;
     double tolerance_;
     std::vector<SurveyVertex> vertices_;
+    Boundary measured_segments_;
     SurveyClosureDiagnostics diagnostics_;
 };
 }

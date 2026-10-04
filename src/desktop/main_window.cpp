@@ -50,6 +50,7 @@
 #include "sketch/hosted_opening_geometry.hpp"
 #include "sketch/document_wall_plan.hpp"
 #include "sketch/survey_boundary_update.hpp"
+#include "sketch/survey_report.hpp"
 #include "sketch/model_phases.hpp"
 #include "sketch/room_relationships.hpp"
 #include "sketch/room_relationship_geometry_commit.hpp"
@@ -6775,7 +6776,7 @@ public:
             QPushButton:focus, QToolButton:focus, QComboBox:focus, QLineEdit:focus,
             QAbstractSpinBox:focus { border: 2px solid $accent; }
             QPushButton:disabled, QToolButton:disabled { color: $muted; background: $background; }
-            QComboBox, QLineEdit, QAbstractSpinBox { color: $foreground; background: $surface;
+            QComboBox, QLineEdit, QAbstractSpinBox, QDialog#surveyCalculator QPlainTextEdit { color: $foreground; background: $surface;
                 border: 1px solid $border; border-radius: 8px; padding: 5px 10px; min-height: 20px; }
             QComboBox { padding-right: 24px; }
             QComboBox::drop-down { border: 0; width: 24px; }
@@ -6795,6 +6796,7 @@ public:
             QWidget#appraisalDetailsPanel QLabel { color: $foreground; }
             QDialog#appraisalFactsDialog QLabel, QDialog#appraisalSetupDialog QLabel,
             QDialog#appraisalFactsDialog QCheckBox, QDialog#appraisalSetupDialog QCheckBox,
+            QDialog#surveyCalculator QLabel, QDialog#surveyCalculator QCheckBox,
             QDialog#boundaryGeometryDialog QLabel, QDialog#boundaryGeometryDialog QCheckBox {
                 color: $foreground; background: transparent; }
             QWidget#appraisalFactsContent, QWidget#appraisalFactsViewport { background: $background; }
@@ -18442,8 +18444,11 @@ public:
         form->addRow(QStringLiteral("Unsuffixed distances"), input_units);
         layout->addLayout(form);
         auto* help = new QLabel(QStringLiteral(
-            "One leg per line: quadrant, angle, distance with units.\n"
+            "One call per line: quadrant, angle, distance with units.\n"
             "Example: NE, 45:30:15, 100 ft. Angles accept decimal degrees or degrees:minutes:seconds.\n"
+            "Curves: CURVE, NE, 90, 20 m, -180 (chord and signed sweep in degrees); "
+            "ARC_HEIGHT, NE, 90, 20 m, -10 m; ARC_LENGTH, NE, 90, 20 m, 31.41592653589793 m, CW.\n"
+            "Negative sweep or height is clockwise; positive is counterclockwise. Curve bearing and distance describe the chord.\n"
             "Quadrants: NE, SE, SW, NW; angles: 0–90°.\n"
             "Coordinates start at a local origin. No closure adjustment is applied.\n"
             "Add boundary retains measured legs and adds a closing segment to the origin if needed. "
@@ -18461,6 +18466,7 @@ public:
         preview->setTool(CanvasTool::select);
         preview->setOverviewMapEnabled(false);
         preview->setSnapEnabled(false);
+        preview->setCanvasBackground(QColor(m_theme == WorkspaceTheme::dark ? "#141b27" : "#f8fafc"));
         preview->setMinimumSize(280, 220);
         entry_split->addWidget(preview);
         entry_split->setSizes({340, 520});
@@ -18493,38 +18499,78 @@ public:
         buttons->addButton(QDialogButtonBox::Close);
         layout->addWidget(buttons);
         std::optional<QString> report;
-        const auto measured_boundary = [](const json& source) {
-            Boundary boundary;
-            const auto& vertices = source.at("vertices");
-            const auto point = [](const json& v) {
-                return Vec2{v.at("east_m").get<double>(), v.at("north_m").get<double>()};
-            };
-            for (std::size_t index = 1; index < vertices.size(); ++index)
-                boundary.push_back({point(vertices[index - 1]), point(vertices[index]), 0.0});
-            return boundary;
-        };
+        QString measured_summary;
         const auto refresh_preview = [&] {
             if (!report) { preview->setEntities({}); return; }
-            const auto source = json::parse(report->toStdString());
-            const auto measured = measured_boundary(source);
-            std::vector<CanvasEntity> geometry{{"survey-measured", "measurement_boundary", measured}};
-            if (!measured.empty() && !source.at("diagnostics").at("area_m2").is_null()) {
-                const auto origin = measured.front().start;
-                const auto end = measured.back().end;
-                if (end.x != origin.x || end.y != origin.y) {
-                    const auto from = close_endpoint->isChecked() ? measured.back().start : end;
-                    geometry.push_back({"survey-proposed-closure", "measurement_boundary",
-                                        {{from, origin, 0.0}}, 0.08, true});
+            try {
+                const auto rebuilt = rebuild_survey_report(json::parse(report->toStdString()));
+                const auto& source = rebuilt.report();
+                const auto& measured = rebuilt.measured_segments();
+                std::vector<CanvasEntity> geometry{{"survey-measured", "measurement_boundary", measured}};
+                const auto& diagnostics = source.at("diagnostics");
+                const bool has_area = !diagnostics.at("area_m2").is_null();
+                const bool curved_final_leg = !measured.empty() && measured.back().sweep_radians != 0.0;
+                // A valid measured report need not support the selected insertion
+                // choice. Validate both choices through the core without silently
+                // consenting to an endpoint adjustment or losing measured output.
+                const auto propose_boundary = [&](SurveyClosureMode mode, QString* failure = nullptr)
+                    -> std::optional<SurveyBoundaryResult> {
+                    try { return make_survey_boundary(rebuilt, mode); }
+                    catch (const std::exception& error) {
+                        if (failure) *failure = QString::fromUtf8(error.what());
+                        return std::nullopt;
+                    }
+                };
+                std::optional<SurveyBoundaryResult> adjusted;
+                if (has_area && !curved_final_leg && diagnostics.at("linear_error_m").get<double>() > 0.0)
+                    adjusted = propose_boundary(SurveyClosureMode::adjust_final_endpoint);
+                close_endpoint->setEnabled(adjusted.has_value());
+                if (!adjusted) {
+                    const QSignalBlocker blocker(close_endpoint);
+                    close_endpoint->setChecked(false);
                 }
+                QString boundary_error;
+                std::optional<SurveyBoundaryResult> proposed;
+                if (has_area) {
+                    proposed = close_endpoint->isChecked() ? adjusted :
+                        propose_boundary(SurveyClosureMode::retain_measured_calls, &boundary_error);
+                    if (proposed && (proposed->added_closing_segment || proposed->adjusted_final_endpoint)) {
+                        geometry.push_back({"survey-proposed-closure", "measurement_boundary",
+                                            {proposed->boundary.back()}, 0.08, true});
+                    }
+                }
+                add_boundary->setEnabled(proposed.has_value() && m_document->is_editable());
+                update_boundary->setEnabled(proposed.has_value() && m_document->is_editable() &&
+                    !survey_target_id.isEmpty() && m_selected_id == survey_target_id);
+                auto summary = measured_summary;
+                if (!boundary_error.isEmpty()) {
+                    summary += QStringLiteral("\nBoundary unavailable: %1").arg(boundary_error);
+                    if (curved_final_leg)
+                        summary += QStringLiteral("\nThe final call is curved and cannot use endpoint adjustment.");
+                } else if (proposed && proposed->added_closing_segment && curved_final_leg) {
+                    summary += QStringLiteral("\nThe final call is curved. Its measured endpoint is retained; a straight closing leg completes the boundary.");
+                }
+                result->setText(summary);
+                preview->setEntities(std::move(geometry));
+                preview->setMetricUnits(input_units->currentData().toString() == "m");
+                layout->activate();
+                preview->fitView();
+            } catch (const std::exception& error) {
+                report.reset();
+                export_report->setEnabled(false);
+                add_boundary->setEnabled(false);
+                update_boundary->setEnabled(false);
+                const QSignalBlocker blocker(close_endpoint);
+                close_endpoint->setChecked(false);
+                close_endpoint->setEnabled(false);
+                preview->setEntities({});
+                result->setText(QString::fromUtf8(error.what()));
             }
-            preview->setEntities(std::move(geometry));
-            preview->setMetricUnits(input_units->currentData().toString() == "m");
-            layout->activate();
-            preview->fitView();
         };
         const auto invalidate = [&] {
-            report.reset(); result->clear(); export_report->setEnabled(false); add_boundary->setEnabled(false);
+            report.reset(); measured_summary.clear(); result->clear(); export_report->setEnabled(false); add_boundary->setEnabled(false);
             update_boundary->setEnabled(false);
+            const QSignalBlocker blocker(close_endpoint);
             close_endpoint->setChecked(false);
             close_endpoint->setEnabled(false);
             preview->setEntities({});
@@ -18538,64 +18584,26 @@ public:
             invalidate();
             try {
                 const auto unit = input_units->currentData().toString() == QStringLiteral("m") ? Unit::metre : Unit::foot;
-                if (input->toPlainText().size() > 1024 * 1024)
-                    throw std::invalid_argument("Survey input exceeds 1 MiB.");
-                std::vector<SurveyLeg> legs;
-                auto distance_entries = json::array();
-                const auto lines = input->toPlainText().split('\n');
-                int line_number = 0;
-                for (const auto& line : lines) {
-                    ++line_number;
-                    if (line.trimmed().isEmpty()) continue;
-                    try {
-                        if (legs.size() >= SurveyTraverse::maximum_legs)
-                            throw std::invalid_argument("Too many survey legs.");
-                        const auto fields = line.split(',');
-                        if (fields.size() != 3) throw std::invalid_argument("Use quadrant, angle, distance.");
-                        const auto quadrant = fields[0].trimmed().toUpper();
-                        const std::map<QString, BearingQuadrant> quadrants{
-                            {"NE", BearingQuadrant::north_east}, {"SE", BearingQuadrant::south_east},
-                            {"SW", BearingQuadrant::south_west}, {"NW", BearingQuadrant::north_west}};
-                        if (!quadrants.contains(quadrant)) throw std::invalid_argument("Use NE, SE, SW, or NW.");
-                        const auto angle = parse_survey_angle(fields[1].trimmed().toStdString());
-                        const auto quantity = parse_quantity(fields[2].trimmed().toStdString(), unit);
-                        const auto distance = quantity.metres;
-                        if (distance <= 0) throw std::invalid_argument("Distance must be positive.");
-                        legs.push_back({"leg-" + std::to_string(legs.size() + 1), quadrants.at(quadrant), angle, distance});
-                        distance_entries.push_back({{"leg_id", legs.back().id},
-                            {"line_number", line_number}, {"original_expression", quantity.original_expression},
-                            {"exact_metres", {{"numerator", quantity.exact_metres.numerator},
-                                              {"denominator", quantity.exact_metres.denominator}}}});
-                    } catch (const std::exception& error) {
-                        throw std::invalid_argument("Line " + std::to_string(line_number) + ": " + error.what());
-                    }
-                }
-                const SurveyTraverse traverse(provenance->text().trimmed().toStdString(), std::move(legs),
-                    parse_quantity(tolerance->text().trimmed().toStdString(), unit).metres);
-                const auto& d = traverse.diagnostics();
+                const auto report_json = build_survey_report({input->toPlainText().toStdString(),
+                    provenance->text().toStdString(), tolerance->text().toStdString(), unit});
+                const auto rebuilt = rebuild_survey_report(report_json);
+                const auto& d = rebuilt.report().at("diagnostics");
+                const bool has_area = !d.at("area_m2").is_null();
                 auto summary = QStringLiteral("%1\nClosure error: %2 m (east %3 m; north %4 m)\nPerimeter: %5 m")
-                    .arg(d.closed ? QStringLiteral("Within closure tolerance") : QStringLiteral("Open traverse"))
-                    .arg(d.linear_error_m, 0, 'g', 10).arg(d.east_error_m, 0, 'g', 10)
-                    .arg(d.north_error_m, 0, 'g', 10).arg(d.perimeter_m, 0, 'g', 10);
-                if (d.area_m2) summary += QStringLiteral("\nArea: %1 m² · %2 acres")
-                    .arg(*d.area_m2, 0, 'f', 4).arg(*d.acres, 0, 'f', 6);
+                    .arg(d.at("closed").get<bool>() ? QStringLiteral("Within closure tolerance") : QStringLiteral("Open traverse"))
+                    .arg(d.at("linear_error_m").get<double>(), 0, 'g', 10).arg(d.at("east_error_m").get<double>(), 0, 'g', 10)
+                    .arg(d.at("north_error_m").get<double>(), 0, 'g', 10).arg(d.at("perimeter_m").get<double>(), 0, 'g', 10);
+                if (has_area) summary += QStringLiteral("\nArea: %1 m² · %2 acres")
+                    .arg(d.at("area_m2").get<double>(), 0, 'f', 4).arg(d.at("acres").get<double>(), 0, 'f', 6);
                 else summary += QStringLiteral("\nArea unavailable for this traverse.");
-                auto report_json = json::parse(traverse.serialize());
-                report_json["input_provenance"] = {
-                    {"version", 1}, {"default_unit", unit == Unit::metre ? "m" : "ft"},
-                    {"legs_text", input->toPlainText().toStdString()},
-                    {"source_text", provenance->text().toStdString()},
-                    {"closure_tolerance_expression", tolerance->text().toStdString()},
-                    {"distances", std::move(distance_entries)}};
-                report = QString::fromStdString(report_json.dump(2));
-                result->setText(summary);
+                measured_summary = std::move(summary);
+                report = QString::fromStdString(rebuilt.report().dump(2));
                 export_report->setEnabled(true);
-                add_boundary->setEnabled(d.area_m2.has_value() && m_document->is_editable());
-                update_boundary->setEnabled(d.area_m2.has_value() && m_document->is_editable() &&
-                    !survey_target_id.isEmpty() && m_selected_id == survey_target_id);
-                close_endpoint->setEnabled(d.area_m2.has_value() && d.linear_error_m > 0.0);
                 refresh_preview();
-            } catch (const std::exception& error) { result->setText(QString::fromUtf8(error.what())); }
+            } catch (const std::exception& error) {
+                invalidate();
+                result->setText(QString::fromUtf8(error.what()));
+            }
         });
         QObject::connect(add_boundary, &QPushButton::clicked, &dialog, [&] {
             if (!report) return;
@@ -18604,22 +18612,18 @@ public:
                 return;
             }
             try {
-                const auto source = json::parse(report->toStdString());
-                if (source.at("diagnostics").at("area_m2").is_null())
-                    throw std::invalid_argument("An open traverse cannot become an area boundary.");
-                auto boundary = measured_boundary(source);
-                const auto start = boundary.front().start;
-                const auto end = boundary.back().end;
+                const auto rebuilt = rebuild_survey_report(json::parse(report->toStdString()));
+                const auto& source = rebuilt.report();
                 const bool adjust_endpoint = close_endpoint->isEnabled() && close_endpoint->isChecked();
-                const bool closing_segment = !adjust_endpoint && (start.x != end.x || start.y != end.y);
-                if (adjust_endpoint) boundary.back().end = start;
-                if (closing_segment) boundary.push_back({end, start, 0.0});
-                const auto id = createBoundary(boundary, QStringLiteral("survey"), drawing_context.revision,
-                    {{"survey_source", {{"version", 1}, {"report", source},
-                                        {"added_closing_segment", closing_segment},
-                                        {"adjusted_final_endpoint", adjust_endpoint},
-                                        {"endpoint_adjustment_m", adjust_endpoint ?
-                                            json{{"east", -end.x}, {"north", -end.y}} : json(nullptr)}}}});
+                const auto proposed = make_survey_boundary(rebuilt, adjust_endpoint
+                    ? SurveyClosureMode::adjust_final_endpoint : SurveyClosureMode::retain_measured_calls);
+                const auto id = createBoundary(proposed.boundary, QStringLiteral("survey"), drawing_context.revision,
+                    {{"survey_source", {{"version", source.at("version")}, {"report", source},
+                                        {"added_closing_segment", proposed.added_closing_segment},
+                                        {"adjusted_final_endpoint", proposed.adjusted_final_endpoint},
+                                        {"endpoint_adjustment_m", proposed.endpoint_adjustment_m ?
+                                            json{{"east", proposed.endpoint_adjustment_m->x},
+                                                 {"north", proposed.endpoint_adjustment_m->y}} : json(nullptr)}}}});
                 if (id.isEmpty()) { result->setText(lastError()); return; }
                 drawing_context = captureModalContext();
                 update_boundary->setEnabled(false);
@@ -18644,19 +18648,12 @@ public:
             result->setText(QStringLiteral("Survey boundary updated. Its identity and origin are retained; corrected calls and closure choice are saved together."));
         });
         const auto restore_input = [&](const json& loaded) {
-                if (!loaded.contains("version") || !loaded.at("version").is_number_integer() ||
-                    loaded.at("version") != 1 || !loaded.contains("input_provenance"))
-                    throw std::invalid_argument("This report has no supported editable survey input.");
-                const auto& entry = loaded.at("input_provenance");
-                if (!entry.contains("version") || !entry.at("version").is_number_integer() || entry.at("version") != 1)
-                    throw std::invalid_argument("Unsupported survey input version.");
+                const auto rebuilt = rebuild_survey_report(loaded);
+                const auto& entry = rebuilt.report().at("input_provenance");
                 const auto legs_text = entry.at("legs_text").get<std::string>();
                 const auto source_text = entry.at("source_text").get<std::string>();
                 const auto tolerance_text = entry.at("closure_tolerance_expression").get<std::string>();
                 const auto default_unit = entry.at("default_unit").get<std::string>();
-                if (legs_text.size() > 1024 * 1024 || source_text.size() > 4096 || tolerance_text.size() > 4096 ||
-                    (default_unit != "m" && default_unit != "ft"))
-                    throw std::invalid_argument("Invalid survey input size or units.");
                 // Stored vertices, diagnostics, and receipts are never trusted as
                 // calculation inputs. Rebuild everything from the entered text.
                 input->setPlainText(QString::fromStdString(legs_text));
@@ -18699,7 +18696,8 @@ public:
         if (const auto selected = selectedEntity(); selected && selected->extensions.contains("survey_source")) {
             try {
                 const auto& source = selected->extensions.at("survey_source");
-                if (!source.contains("version") || !source.at("version").is_number_integer() || source.at("version") != 1)
+                if (!source.contains("version") || !source.at("version").is_number_integer() ||
+                    (source.at("version") != 1 && source.at("version") != 2))
                     throw std::invalid_argument("Unsupported stored survey source version.");
                 restore_input(source.at("report"));
                 if (close_endpoint->isEnabled())

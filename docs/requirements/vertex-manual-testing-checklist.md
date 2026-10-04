@@ -1,6 +1,6 @@
 # Vertex user testing checklist
 
-400 practical tasks, grouped by how you use the app (including U100a). This replaces the earlier engineering-oriented checklist. The old 130-item list is preserved separately as engineering-requirements-checklist.md.
+407 practical tasks, grouped by how you use the app (including U100a). This replaces the earlier engineering-oriented checklist. The old 130-item list is preserved separately as engineering-requirements-checklist.md.
 
 This is a user acceptance list for the intended app, not a claim that every listed action is implemented or working in the current preview. If you cannot find a control, or a feature is absent, mark **Blocked / missing** and describe it. Specialized sections can be skipped if you do not use them or lack the device or sample files.
 
@@ -2446,7 +2446,34 @@ drawing; switching modes does not change existing geometry.
   - Result: Not tested
   - Notes: ______________________________
 
+## Curved survey parcels
+
+- [ ] **U403 — Draw a parcel with a curved boundary**
+  - Steps: Open Tools → Survey traverse. Enter `NE,0,10 m`, `CURVE,NE,90,20 m,-180`, `SE,0,10 m`, and `SW,90,20 m` on separate lines. Calculate and add the boundary.
+  - Expected: The preview and placed parcel have a curved top. Area is about 357.0796 m² and acreage about 0.088236. Undo removes the parcel and Redo restores it. Save/reopen retains the actual curve.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **U404 — Enter a curve by height or arc length**
+  - Steps: Repeat U403 using `ARC_HEIGHT,NE,90,20 m,-10 m` for the curved call. Repeat with `ARC_LENGTH,NE,90,20 m,31.415926536 m,CW`. Export and reopen each report.
+  - Expected: Both constructions produce the same semicircular top within the entered precision. The report restores your exact inputs. Invalid directions, zero height or an arc length shorter than its chord explain the problem and create nothing.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **U405 — Correct an existing curved survey**
+  - Steps: Select the U403 parcel and reopen Survey traverse. Change the curved chord and final westward distance from 20 m to 40 m. Calculate and Update boundary. Undo/Redo, save/reopen and open its calls again.
+  - Expected: The same parcel becomes wider with a larger curve. Layer, classification and original source remain retained. Undo restores the earlier curve and Redo restores the correction. Reopening restores the corrected calls.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **U406 — Review survey closure without changing measurements silently**
+  - Steps: Enter `SE,0,10 m`, `SW,90,20 m`, `NE,0,10 m`, and `CURVE,NE,90,20.0005 m,-180`. Set closure tolerance to `0.01 m`, Calculate and inspect the proposed closure before adding. Try an open traverse and an inward curve that crosses another edge.
+  - Expected: The residual is disclosed. A curved final call cannot have its endpoint adjusted; adding retains that curve and uses a separate closing line. Open or intersecting calls cannot become area boundaries. A residual too small for a valid closing segment produces an explanation instead of silently moving the endpoint.
+  - Result: Not tested
+  - Notes: ______________________________
+
 ## Issue report template
+
 
 - Task ID(s):
 - What I did:

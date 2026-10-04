@@ -1639,6 +1639,10 @@
     },
     {
       "category": "docs",
+      "path": "docs/plans/2026-10-04-curved-survey-calls.md"
+    },
+    {
+      "category": "docs",
       "path": "docs/plans/2026-10-04-measured-bay-and-phase-subtraction.md"
     },
     {
@@ -2396,6 +2400,10 @@
     {
       "category": "docs",
       "path": "docs/verification/2026-10-03-combined-measured-areas.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/verification/2026-10-04-curved-survey-calls.md"
     },
     {
       "category": "docs",
@@ -3203,6 +3211,14 @@
     },
     {
       "category": "source",
+      "path": "include/sketch/survey_report.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/survey_source_version.hpp"
+    },
+    {
+      "category": "source",
       "path": "include/sketch/terrain_surface.hpp"
     },
     {
@@ -3952,6 +3968,14 @@
     {
       "category": "source",
       "path": "src/core/survey_contract.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/survey_report.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/survey_source_version.cpp"
     },
     {
       "category": "source",
@@ -4856,6 +4880,10 @@
     {
       "category": "source",
       "path": "tests/survey_contract_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/survey_reader_format_tests.cpp"
     },
     {
       "category": "source",

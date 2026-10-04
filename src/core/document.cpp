@@ -22,6 +22,7 @@
 #include "sketch/measurement_linework.hpp"
 #include "sketch/roof_join_semantics.hpp"
 #include "sketch/slab_semantics.hpp"
+#include "sketch/survey_source_version.hpp"
 
 #ifdef _WIN32
 #ifndef NOMINMAX
@@ -1230,6 +1231,14 @@ std::optional<std::string> validate_state(const std::map<std::string, Entity, st
         }
     }
     std::optional<std::string> unsupported_boundary;
+    for (const auto& [id, entity] : entities) {
+        if (entity.type != "measurement_boundary" || !entity.extensions.contains("survey_source")) continue;
+        const auto admission = inspect_survey_source(entity.extensions.at("survey_source"));
+        if (admission.unsupported) {
+            unsupported_boundary = *admission.unsupported + ": " + id;
+            break;
+        }
+    }
     // Group provenance has its own reader contract. Retain unknown payloads
     // verbatim, including historical records, without authorizing mutations.
     for(const auto& [id,entity]:entities) {
