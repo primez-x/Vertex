@@ -184,6 +184,57 @@ void test_rejects_unsafe_changes() {
 }
 
 void run() {
+    const auto invalid_curve_model=RoomRelationshipSnapshot::create({{"room",K::room_boundary},{"wall",K::architectural_wall}},{{"room","wall",R::follows}});
+    const Segment unresolved_radius{{0,0},{1,0},1e-309};
+    bool unresolved_rejected=false;
+    try{validate_room_relationship_wall_path({unresolved_radius});}catch(const std::invalid_argument&){unresolved_rejected=true;}
+    require(unresolved_rejected,"finite length hid an unrepresentable analytical arc radius");
+    const auto unresolved_result=propose_room_relationship_geometry(invalid_curve_model,
+        records({{"room",K::room_boundary,rectangle(0,0,4,3)},{"wall",K::architectural_wall,{unresolved_radius}}}),
+        records({{"room",K::room_boundary,rectangle(0,0,4,3)},{"wall",K::architectural_wall,{{{1,2},{2,2},1e-309}}}}));
+    require(unresolved_result.has_diagnostics() && unresolved_result.changes.empty(),
+        "detached solver propagated an arc with unresolved analytical radius");
+    const Boundary lens{{{0,0},{2,0},std::numbers::pi},{{2,0},{0,0},std::numbers::pi}};
+    const auto lens_model=RoomRelationshipSnapshot::create({{"room",K::room_boundary},{"wall",K::architectural_wall}},{{"room","wall",R::follows}});
+    const auto lens_result=propose_room_relationship_geometry(lens_model,
+        records({{"room",K::room_boundary,lens},{"wall",K::architectural_wall,{line({0,0},{2,0})}}}),
+        records({{"room",K::room_boundary,lens},{"wall",K::architectural_wall,{line({3,2},{5,2})}}}));
+    require(!lens_result.has_diagnostics() && lens_result.changes.size()==1 && lens_result.changes[0].geometry.size()==2 &&
+        approx(lens_result.changes[0].geometry[0].start,Vec2{3,2}),"valid closed two-arc geometry was rejected by an artificial segment floor");
+    for(const auto kind : {R::follows,R::derived_from,R::independent}) {
+        const auto model=RoomRelationshipSnapshot::create({{"room",K::room_boundary},
+            {"wall",K::architectural_wall,{"wall","second"}}},{{"room","wall",kind}});
+        for(const bool curved : {false,true}) {
+            const Boundary path=curved ? Boundary{{{0,0},{1,1},std::numbers::pi/2},{{1,1},{0,2},std::numbers::pi/2}}
+                : Boundary{line({0,0},{2,0}),line({2,0},{4,0})};
+            Boundary moved;const PlanarTransform transform{{0,0},0.3,false,false,{3,2}};
+            for(const auto& segment:path)moved.push_back(transform_segment(segment,transform));
+            const auto room=rectangle(0,0,4,3);
+            const auto before=records({{"room",K::room_boundary,room},{"wall",K::architectural_wall,path}});
+            auto after=records({{"room",K::room_boundary,room},{"wall",K::architectural_wall,moved}});
+            auto result=propose_room_relationship_geometry(model,before,after);
+            require(!result.has_diagnostics() && result.changes.size()==(kind==R::independent ? 0 : 1),
+                "rigid whole-wall chain did not preserve follows/derived/independent behavior");
+            if(kind!=R::independent) {
+                require(approx(result.changes[0].geometry[0].start,transform_point(room[0].start,transform)),
+                    "chain inferred transform from only a shortened physical piece");
+                after[1].geometry.back().end.x+=0.5;
+                result=propose_room_relationship_geometry(model,before,after);
+                require(result.has_diagnostics() && result.changes.empty(),"deforming one chain member propagated a rigid room change");
+                after[1].geometry.pop_back();
+                result=propose_room_relationship_geometry(model,before,after);
+                require(result.has_diagnostics() && result.changes.empty(),"detached path changed authoritative member correspondence");
+            }
+        }
+    }
+    for(const auto& path : std::vector<Boundary>{
+        {line({0,0},{1,0}),line({2,0},{3,0})},
+        {line({0,0},{2,0}),line({2,0},{1,0})},
+        {line({0,0},{1,0}),line({1,0},{0,0})},
+        {line({0,0},{2,2}),line({2,2},{0,2}),line({0,2},{2,0})}}) {
+        bool rejected=false;try{validate_room_relationship_wall_path(path);}catch(const std::invalid_argument&){rejected=true;}
+        require(rejected,"disconnected, overlapping, closed, or crossing wall path was admitted");
+    }
     test_translation_and_chain();
     test_rotation();
     test_derived_drivers_and_conflict();

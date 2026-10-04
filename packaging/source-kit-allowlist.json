@@ -1671,6 +1671,10 @@
     },
     {
       "category": "docs",
+      "path": "docs/plans/2026-10-04-wall-chain-relationships.md"
+    },
+    {
+      "category": "docs",
       "path": "docs/plans/2026-10-04-wall-vertex-insertion.md"
     },
     {
@@ -2740,6 +2744,10 @@
     {
       "category": "docs",
       "path": "docs/verification/visual-revision-comparison-20261003.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/verification/wall-chain-relationships-2026-10-04.md"
     },
     {
       "category": "docs",
@@ -4944,6 +4952,10 @@
     {
       "category": "source",
       "path": "tests/room_relationship_move_desktop_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/room_relationship_reader_format_tests.cpp"
     },
     {
       "category": "source",

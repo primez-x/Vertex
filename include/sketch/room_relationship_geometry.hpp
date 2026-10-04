@@ -13,7 +13,8 @@ class DocumentSnapshot;
 // Geometry is supplied as a detached snapshot so callers can compare an
 // edited document candidate without mutating the authoritative Document.
 // Boundary roles require a valid closed Boundary; wall roles require exactly
-// one valid Segment. Stable entity/edge/vertex identities remain owned by the
+// a valid directed open path, matching their declared physical members.
+// Stable entity/edge/vertex identities remain owned by the
 // caller and are preserved when a proposal is committed.
 struct RelationshipGeometry {
     std::string id;
@@ -35,6 +36,13 @@ struct RoomRelationshipGeometryResult {
 
     [[nodiscard]] bool has_diagnostics() const noexcept { return !diagnostics.empty(); }
 };
+
+// Shared analytical validation for authoritative wall membership resolution
+// and detached solver inputs. Adjacent pieces meet only at their seam; outer
+// endpoints remain distinct and other intersections or overlaps are refused.
+void validate_room_relationship_wall_path(
+    const Boundary& geometry,
+    double tolerance_metres = default_geometry_tolerance_metres);
 
 // Propose rigid geometry propagation for explicit room relationships. The
 // operation compares the before snapshot with the edited after snapshot,

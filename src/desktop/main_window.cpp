@@ -2945,11 +2945,32 @@ QString room_relation_kind_label(RoomRelationKind kind) {
 }
 
 std::vector<RoomReference> document_room_references(const DocumentSnapshot& snapshot) {
+    // A split wall remains one logical reference. Reconstructing this list
+    // solely from physical entities would shorten that reference to its first
+    // piece and offer the other pieces as independent aliases on Sync.
+    std::map<std::string, RoomReference, std::less<>> declared;
+    std::set<std::string, std::less<>> wall_members;
+    for (const auto& [id, entity] : snapshot.entities()) {
+        if (entity.type != "room_relationships") continue;
+        const auto model = RoomRelationshipSnapshot::from_json(entity.properties.at("model"));
+        for (const auto& reference : model.references()) {
+            const auto [found, inserted] = declared.emplace(reference.id, reference);
+            if (!inserted && found->second != reference)
+                throw std::invalid_argument("Relationship records declare conflicting reference definitions.");
+            if (!reference.wall_members.empty())
+                wall_members.insert(reference.wall_members.begin(), reference.wall_members.end());
+        }
+    }
     std::vector<RoomReference> result;
     for (const auto& [id, entity] : snapshot.entities()) {
         const auto kind = room_reference_kind_for_entity(entity.type);
-        if (kind) result.push_back({id, *kind});
+        if (!kind) continue;
+        const auto existing = declared.find(id);
+        if (existing != declared.end()) result.push_back(existing->second);
+        else if (!wall_members.contains(id)) result.push_back({id, *kind});
     }
+    // Also validates physical aliases across separately saved models.
+    (void)RoomRelationshipSnapshot::create(result, {});
     return result;
 }
 
@@ -9882,6 +9903,12 @@ public:
             }
             auto entity = source.entities().at(record->entity_id);
             entity.properties["model"] = model.to_json();
+            // Adding/removing relations and synchronizing an already-versioned
+            // model cannot silently downgrade its durable interpretation.
+            if (record->model.schema_version() == 2) {
+                entity.properties["model"]["schema_version"] = 2;
+                (void)RoomRelationshipSnapshot::from_json(entity.properties.at("model"));
+            }
             const ApplyEntityChanges command{
                 source.revision(), {EntityChange::upsert(std::move(entity))}, {},
                 message.toStdString()};
@@ -9975,7 +10002,7 @@ public:
             preview_canvas->setOverviewMapEnabled(false);
             preview_canvas->setGridEnabled(false);
             layout->addWidget(preview_canvas, 1);
-            auto* legend = new QLabel(QStringLiteral("Original geometry uses semantic colors · cyan shows the proposed move and propagated dependents"), &dialog);
+            auto* legend = new QLabel(QStringLiteral("Blue shows the proposed wall and related geometry."), &dialog);
             legend->setObjectName(QStringLiteral("roomRelationshipPropagationLegend"));
             legend->setStyleSheet(QStringLiteral("color: #64748b;"));
             layout->addWidget(legend);
@@ -10068,8 +10095,21 @@ public:
                 // Rebuild the complete command after every dependency expansion,
                 // rather than append unverified upserts to a sealed wall proof.
                 for (std::size_t pass = 0; pass <= source.entities().size(); ++pass) {
+                    QStringList physical_roots;
+                    for (const auto& root : roots) {
+                        const auto reference = std::find_if(model.references().begin(), model.references().end(),
+                            [&](const auto& value) { return value.id == root.toStdString(); });
+                        if (reference == model.references().end())
+                            throw std::invalid_argument("A relationship reference is unavailable.");
+                        if (reference->kind == RoomReferenceKind::architectural_wall) {
+                            for (const auto& member : room_reference_wall_ids(*reference)) {
+                                const auto physical = id_from(member);
+                                if (!physical_roots.contains(physical)) physical_roots.push_back(physical);
+                            }
+                        } else if (!physical_roots.contains(root)) physical_roots.push_back(root);
+                    }
                     const auto command = augmentAuthoredCommand(
-                        makeSelectionGeometryTransformCommand(source, roots, transform), source);
+                        makeSelectionGeometryTransformCommand(source, physical_roots, transform), source);
                     const auto candidate = Document::preview_command(source, command);
                     QStringList additions;
                     {
@@ -10174,9 +10214,8 @@ public:
                         candidate_transform = transform;
                         candidate_reference = id_from(selected_id);
                         candidate_preview = std::move(preview);
-                        status->setText(QStringLiteral("Preview ready at revision %1. Driver and related geometry to move: %2. Apply commits one undoable operation.")
-                                            .arg(source.revision())
-                                            .arg(moved.join(QStringLiteral(", "))));
+                        status->setText(QStringLiteral("%1 objects will move together. Apply creates one undoable edit.")
+                                            .arg(moved.size()));
                         apply->setEnabled(true);
                     }
                 } catch (const std::exception& error) {

@@ -133,10 +133,20 @@ void rejection_and_reference_handlers() {
         {"zzz-room",RoomReferenceKind::room_boundary}},{{"wall","zzz-room",RoomRelationKind::independent}});
     Entity graph{"relationships","room_relationships",{{"model",relationship.to_json()}}};
     document=Document::create({wall("wall",{{0,0},{10,0},0}),graph,Entity{"zzz-room","room_boundary"}});
-    rejects([&]{(void)make_wall_split_command(document.snapshot(),intent());},"independent room graph source reference cannot silently shorten");
+    const auto independent_before=document.snapshot();
+    document.apply(make_wall_split_command(independent_before,intent()));
+    auto rewritten=RoomRelationshipSnapshot::from_json(document.snapshot().entities().at(graph.id).properties.at("model"));
+    const auto whole=std::find_if(rewritten.references().begin(),rewritten.references().end(),
+        [](const auto& reference){return reference.id=="wall";});
+    require(rewritten.schema_version()==2 && whole!=rewritten.references().end() &&
+        whole->wall_members==std::vector<std::string>{"wall",intent().second_wall_id} &&
+        rewritten.relations()==relationship.relations(),"independent whole-wall meaning and relation survive splitting");
     relationship=RoomRelationshipSnapshot::create({{"wall",RoomReferenceKind::architectural_wall}},{});
     graph.properties["model"]=relationship.to_json();document=Document::create({wall("wall",{{0,0},{10,0},0}),graph});
-    rejects([&]{(void)make_wall_split_command(document.snapshot(),intent());},"schema-owned room reference without relation cannot silently shorten");
+    document.apply(make_wall_split_command(document.snapshot(),intent()));
+    rewritten=RoomRelationshipSnapshot::from_json(document.snapshot().entities().at(graph.id).properties.at("model"));
+    require(rewritten.schema_version()==2 && rewritten.references().front().wall_members==
+        std::vector<std::string>{"wall",intent().second_wall_id},"unlinked whole-wall reference preserves all physical members");
     for(const auto* key:{"refs","references"}){
         Entity referent{"referent","label",{{key,Json::array({"wall"})}}};
         document=Document::create({wall("wall",{{0,0},{10,0},0}),referent});

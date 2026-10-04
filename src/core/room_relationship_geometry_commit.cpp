@@ -4,6 +4,7 @@
 #include "sketch/boundary_entity.hpp"
 #include "sketch/boundary_receipt.hpp"
 #include "sketch/constraint_authoring.hpp"
+#include "sketch/constraint_wall_edit.hpp"
 #include "sketch/document_digest.hpp"
 #include "sketch/document_solid.hpp"
 #include "sketch/wall_semantics.hpp"
@@ -85,26 +86,29 @@ GeometryCollection snapshot_geometry(const DocumentSnapshot& source,
         }
         try {
             if (reference.kind == RoomReferenceKind::architectural_wall) {
-                std::vector<const Entity*> openings;
-                for (const auto& [id, entity] : source.entities()) {
-                    (void)id;
-                    if (entity.type != "opening") continue;
-                    std::string wall_id;
-                    std::string diagnostic;
-                    if (read_document_wall_id(entity, wall_id, diagnostic) &&
-                        wall_id == reference.id) {
-                        openings.push_back(&entity);
+                Boundary path;
+                for (const auto& member : room_reference_wall_ids(reference)) {
+                    const auto physical=source.entities().find(member);
+                    if (physical==source.entities().end() || physical->second.type!="wall" || physical->second.id!=member)
+                        throw std::invalid_argument("missing or mistyped physical wall member "+member);
+                    std::vector<const Entity*> openings;
+                    for (const auto& [id, entity] : source.entities()) {
+                        (void)id;
+                        if (entity.type != "opening") continue;
+                        std::string wall_id;
+                        std::string diagnostic;
+                        if (read_document_wall_id(entity, wall_id, diagnostic) && wall_id == member)
+                            openings.push_back(&entity);
                     }
+                    Wall wall;
+                    std::string diagnostic;
+                    if (!read_document_wall(physical->second,openings,wall,diagnostic))
+                        throw std::invalid_argument("invalid relationship wall "+member+": "+diagnostic);
+                    validate_wall_semantics(wall);
+                    path.push_back(wall.baseline);
                 }
-                Wall wall;
-                std::string diagnostic;
-                if (!read_document_wall(found->second, openings, wall, diagnostic)) {
-                    add_diagnostic(result.diagnostics, seen,
-                                   "invalid relationship wall " + reference.id + ": " + diagnostic);
-                    continue;
-                }
-                validate_wall_semantics(wall);
-                result.records.push_back({reference.id, reference.kind, {wall.baseline}});
+                validate_room_relationship_wall_path(path);
+                result.records.push_back({reference.id,reference.kind,std::move(path)});
             } else {
                 result.records.push_back({reference.id, reference.kind,
                                           boundary_geometry(decode_identified_boundary_entity(
@@ -181,17 +185,21 @@ Entity update_wall_entity(const DocumentSnapshot& source, const Entity& original
     if (!read_document_wall(original, openings, wall, diagnostic)) {
         throw std::invalid_argument(diagnostic);
     }
+    if (!same_geometry(change.geometry,{transform_segment(wall.baseline,change.transform)}))
+        throw std::invalid_argument("relationship wall geometry does not match its authoritative rigid transform");
     wall.baseline = change.geometry.front();
     validate_wall_semantics(wall);
     auto updated = original;
-    update_segment_json(updated.properties["baseline"], wall.baseline);
     rebase_wall_length_receipt(updated, wall.baseline);
+    transform_wall_curve_input(updated,change.transform);
+    update_segment_json(updated.properties["baseline"], wall.baseline);
     return updated;
 }
 
 std::vector<EntityChange> build_entity_changes(
     const DocumentSnapshot& source,
     const std::vector<RelationshipGeometryChange>& changes,
+    const std::map<std::string,std::vector<std::string>,std::less<>>& wall_members,
     std::map<std::string, Entity, std::less<>>* candidate_entities) {
     std::map<std::string, Entity, std::less<>> updates;
     const auto add_update = [&](Entity entity) {
@@ -211,7 +219,16 @@ std::vector<EntityChange> build_entity_changes(
                                         change.source_id);
         }
         if (change.source_kind == RoomReferenceKind::architectural_wall) {
-            add_update(update_wall_entity(source, found->second, change));
+            const auto members=wall_members.find(change.source_id);
+            if (members==wall_members.end() || members->second.size()!=change.geometry.size())
+                throw std::invalid_argument("relationship proposal lacks authoritative physical membership");
+            validate_room_relationship_wall_path(change.geometry);
+            for (std::size_t i=0;i<members->second.size();++i) {
+                const auto& member=members->second[i];
+                validate_constraint_wall_host(member,source.entities());
+                auto part=change; part.source_id=member; part.geometry={change.geometry[i]};
+                add_update(update_wall_entity(source,source.entities().at(member),part));
+            }
         } else {
             add_update(update_boundary_entity(found->second, change));
         }
@@ -276,6 +293,9 @@ RoomRelationshipGeometryPreview preview_room_relationship_geometry(
     preview.source_snapshot_digest_ = document_snapshot_digest(source);
     try {
         const auto before = snapshot_geometry(source, relationships);
+        for (const auto& reference : relationships.references())
+            if (reference.kind==RoomReferenceKind::architectural_wall)
+                preview.wall_members_.emplace(reference.id,room_reference_wall_ids(reference));
         auto result = propose_room_relationship_geometry(relationships, before.records, edited_after);
         preview.changes_ = result.changes;
         preview.diagnostics_ = std::move(result.diagnostics);
@@ -286,7 +306,7 @@ RoomRelationshipGeometryPreview preview_room_relationship_geometry(
         if (!preview.diagnostics_.empty()) return preview;
 
         std::map<std::string, Entity, std::less<>> candidate_entities;
-        const auto entity_changes = build_entity_changes(source, preview.changes_,
+        const auto entity_changes = build_entity_changes(source, preview.changes_,preview.wall_members_,
                                                           &candidate_entities);
         const auto command = ApplyEntityChanges{source.revision(), entity_changes, {},
                                                 "Propagate room relationships"};
@@ -322,7 +342,7 @@ ApplyEntityChanges make_room_relationship_geometry_command(
     }
     try {
         std::map<std::string, Entity, std::less<>> candidate_entities;
-        const auto entity_changes = build_entity_changes(source, preview.changes_,
+        const auto entity_changes = build_entity_changes(source, preview.changes_,preview.wall_members_,
                                                           &candidate_entities);
         const auto command = ApplyEntityChanges{source.revision(), entity_changes, {},
                                                 "Propagate room relationships"};

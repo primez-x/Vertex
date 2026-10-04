@@ -1,4 +1,38 @@
-# Vertex project formats v1 through v35
+# Vertex project formats v1 through v38
+
+## Whole-wall relationship membership (v38)
+
+Room relationship schema two retains ordered physical members for one logical
+architectural wall. Splitting a member rewrites the owned list without changing
+relation endpoints or meanings. Native format 38 and extraction version 36 are
+required when schema-two or future relationship models appear in any retained
+state, including Undo, deleted records and entity-only extraction. Ordinary
+schema-one records and vendor properties on unrelated types keep prior floors.
+Downgraded native/extraction markers reject instead of dropping membership.
+
+Known schemas validate all member roles, current physical wall geometry and the
+combined graph across records. Positive future models remain opaque and make
+the project read-only. Retained known wall-split proofs are still reconstructed:
+only future relationship records are removed from the detached replay input,
+then restored exactly before full reconstructed-state comparison. Authored
+splits retain strict reference protection; this restoration exception cannot
+authorize a new split against unknown references.
+
+## Wall point insertion and whole-span dimensions (v37)
+
+Wall split command authority, physical arc-chain relations and full-span
+dimensions require native format 37 and extraction version 35. The typed split
+reconstructs both baselines, hosted opening stations, supported constraint and
+measurement consumers, and retained archive evidence. Unknown references and
+openings crossing the seam refuse atomically. Reconstructed full-state equality
+precedes detached history normalization.
+
+## Measured stroke dimensions (v36)
+
+Saved dimensions targeting identified measured strokes require native format 36
+and extraction version 34 across retained history. Stable target identities and
+authoring provenance remain part of the document; display rounding does not
+replace analytical geometry.
 
 ## Persistent measured-stroke constraints (v35)
 

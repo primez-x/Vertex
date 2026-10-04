@@ -132,7 +132,9 @@ public:
     // Any may include
     // the optional recovery ledger. Absent proofs preserve historical formats.
     // Wall split authority, arc-chain relations and whole-span dimensions require v37.
-    static constexpr std::uint32_t format_version = 37;
+    // Schema-two whole-wall relationship membership, including future opaque
+    // relationship models, requires v38 across every retained revision.
+    static constexpr std::uint32_t format_version = 38;
     static constexpr std::uint32_t recovery_format_version = 4;
     [[nodiscard]] static std::uint32_t required_format_version(const DocumentSnapshot& snapshot);
     static constexpr std::uint64_t maximum_file_bytes = 4ULL * 1024ULL * 1024ULL * 1024ULL;

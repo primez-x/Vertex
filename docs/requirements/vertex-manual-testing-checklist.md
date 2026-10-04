@@ -2603,6 +2603,12 @@ drawing; switching modes does not change existing geometry.
   - Result: Not tested
   - Notes: ______________________________
 
+- [ ] **U426 — Keep a related room attached to the whole wall after inserting points**
+  - Steps: Draw a wall, place a door or window away from the planned split points, and declare that a room follows that wall in Room relationships. Select the wall and use Insert point. Insert another point in its second piece. Use Sync references, then Preview propagation to move the original whole-wall reference. Cancel once, reopen and Apply. Undo/Redo, save and reopen. Repeat with a curved wall.
+  - Expected: The reference still represents the entire wall, with no separate child entries in the relationship pickers. Every piece moves together with the room in one reversible edit. Hosted components remain attached at their local positions. Cancel changes nothing; save/reopen retains the whole-wall relationship and Undo history.
+  - Result: Not tested
+  - Notes: ______________________________
+
 ## Issue report template
 
 - Task ID(s):

@@ -4,6 +4,7 @@
 #include "sketch/document.hpp"
 
 #include <string>
+#include <map>
 #include <vector>
 
 namespace sketch {
@@ -57,6 +58,7 @@ private:
     std::string candidate_entity_digest_;
     std::vector<RelationshipGeometryChange> changes_;
     std::vector<std::string> diagnostics_;
+    std::map<std::string,std::vector<std::string>,std::less<>> wall_members_;
 
     friend RoomRelationshipGeometryPreview preview_room_relationship_geometry(
         const DocumentSnapshot&, const RoomRelationshipSnapshot&,

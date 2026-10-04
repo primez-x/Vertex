@@ -1,6 +1,7 @@
 #pragma once
 
 #include <nlohmann/json.hpp>
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -12,8 +13,15 @@ enum class RoomRelationKind { independent, follows, derived_from };
 struct RoomReference {
     std::string id;
     RoomReferenceKind kind;
+    // Empty retains legacy singleton identity. Explicit wall chains follow
+    // native baseline direction, with id naming their first physical member.
+    std::vector<std::string> wall_members{};
     bool operator==(const RoomReference&) const = default;
 };
+
+[[nodiscard]] std::vector<std::string> room_reference_wall_ids(const RoomReference& reference);
+// Inspect an envelope without interpreting unknown positive schema versions.
+[[nodiscard]] std::uint64_t room_relationship_model_version(const nlohmann::json& value);
 
 struct RoomRelation {
     // For dependencies, source follows/is derived from target.
@@ -44,6 +52,7 @@ public:
                                            std::vector<RoomRelation> relations);
     [[nodiscard]] const std::vector<RoomReference>& references() const noexcept;
     [[nodiscard]] const std::vector<RoomRelation>& relations() const noexcept;
+    [[nodiscard]] std::uint64_t schema_version() const noexcept;
     [[nodiscard]] RoomRelationshipSnapshot retarget(
         const RoomRelationshipRetarget& edit) const;
     [[nodiscard]] nlohmann::json to_json() const;
@@ -54,6 +63,7 @@ private:
                              std::vector<RoomRelation> relations);
     std::vector<RoomReference> references_;
     std::vector<RoomRelation> relations_;
+    std::uint64_t schema_version_{1};
 };
 
 } // namespace sketch

@@ -418,14 +418,15 @@ void test_independent_and_cross_record_moves() {
     auto cycle = relation_entity({{"driver", K::room_boundary}, {"dependent", K::appraisal_measurement_boundary}},
         {{"driver", "dependent", R::follows}});
     cycle.id = "relationships-second";
-    joined.document().apply(ApplyEntityChanges{joined.document().revision(), {EntityChange::upsert(cycle)}, {}, "Cross-record cycle"});
     const auto cycle_before = joined.document().snapshot();
-    propagation_dialog(joined, [&](QDialog& dialog) {
-        set_move(dialog, "driver");
-        require(!apply_button(dialog).isEnabled() && !child<QLabel>(dialog, "roomRelationshipPropagationStatus").text().isEmpty(),
-            "a cycle hidden across separate records must refuse Apply");
-    });
-    require(joined.document().snapshot().entities() == cycle_before.entities(), "cross-record contradiction must not mutate geometry");
+    bool cycle_rejected = false;
+    try {
+        joined.document().apply(ApplyEntityChanges{joined.document().revision(),
+            {EntityChange::upsert(cycle)}, {}, "Cross-record cycle"});
+    } catch (const DocumentError&) { cycle_rejected = true; }
+    require(cycle_rejected && joined.document().snapshot().entities() == cycle_before.entities() &&
+            joined.document().revision() == cycle_before.revision(),
+        "a cycle hidden across separate records must refuse document admission without mutation");
 }
 
 void test_exterior_measurement_driver() {
@@ -463,6 +464,119 @@ void test_exterior_measurement_driver() {
     require(after.revision() == before.revision() + 1 && window.undoCommand() &&
         window.document().snapshot().entities() == before.entities(), "physical sources, exterior and dependent share one exact undo");
 }
+
+void sync_whole_wall_references(MainWindow& window, const std::string& wall,
+                                const std::vector<std::string>& members) {
+    std::exception_ptr failure;
+    QTimer::singleShot(0, &window, [&] {
+        auto* dialog = window.findChild<QDialog*>("roomRelationshipsDialog");
+        try {
+            require(dialog != nullptr, "the actual relationship editor must open for Sync");
+            child<QPushButton>(*dialog, "syncRoomRelationships").click();
+            const auto model = window.document().snapshot().entities().at("relationships").properties.at("model");
+            const auto decoded = RoomRelationshipSnapshot::from_json(model);
+            require(decoded.schema_version() == 2, "Sync must preserve schema-two interpretation");
+            const auto reference = std::find_if(decoded.references().begin(), decoded.references().end(),
+                [&](const auto& value) { return value.id == wall; });
+            require(reference != decoded.references().end() && room_reference_wall_ids(*reference) == members,
+                "Sync must preserve the ordered whole-wall reference exactly");
+            for (const char* name : {"roomRelationshipSource", "roomRelationshipTarget"}) {
+                auto& picker = child<QComboBox>(*dialog, name);
+                require(picker.findData(QString::fromStdString(wall)) >= 0, "Sync must offer the whole wall");
+                for (std::size_t index = 1; index < members.size(); ++index)
+                    require(picker.findData(QString::fromStdString(members[index])) < 0,
+                        "a whole wall's member cannot also be offered as an independent reference");
+            }
+            capture(*dialog, "room-relationship-whole-wall-sync.png");
+        } catch (...) { failure = std::current_exception(); }
+        if (dialog) dialog->reject();
+    });
+    window.showRoomRelationships();
+    if (failure) std::rethrow_exception(failure);
+}
+
+void test_split_whole_wall_move_and_history(bool curved) {
+    QTemporaryDir directory;
+    MainWindow window({}, nullptr, directory.filePath("split-library.json"));
+    prepare_window(window);
+    const auto wall = curved ? window.createCurvedWall({0,0}, {6,0}, "90 deg", "exterior")
+                             : window.createStraightWall({0,0}, {6,0}, "exterior");
+    require(!wall.isEmpty() && window.selectEntity(wall), "create and select the whole wall driver");
+    const auto opening = window.createHostedOpening("door", "4.8 m", "0.5 m", "0 m", "2 m");
+    require(!opening.isEmpty(), "place a hosted door clear of both proposed seam stations");
+    const auto room = receipt_rectangle("split-dependent", "room_boundary", 8);
+    window.document().apply(ApplyEntityChanges{window.document().revision(),
+        {EntityChange::upsert(room), EntityChange::upsert(relation_entity(
+            {{wall.toStdString(), K::architectural_wall}, {room.id, K::room_boundary}},
+            {{room.id, wall.toStdString(), R::follows}}))}, {}, "Whole-wall relationship"});
+    require(window.selectEntity(wall), "select the referenced wall before inserting a point");
+    require(window.insertSelectedBoundaryVertex("baseline", "0.4"),
+        "a whole-wall relationship must survive the actual wall point insertion command");
+    auto model = RoomRelationshipSnapshot::from_json(
+        window.document().snapshot().entities().at("relationships").properties.at("model"));
+    auto reference = std::find_if(model.references().begin(), model.references().end(),
+        [&](const auto& value) { return value.id == wall.toStdString(); });
+    require(reference != model.references().end() && reference->wall_members.size() == 2,
+        "first split must retain one whole-wall reference with two physical members");
+    const auto second = reference->wall_members[1];
+    require(window.selectEntity(QString::fromStdString(second)) &&
+            window.insertSelectedBoundaryVertex("baseline", "0.5"),
+        "splitting a non-head member must preserve the complete logical span");
+    model = RoomRelationshipSnapshot::from_json(
+        window.document().snapshot().entities().at("relationships").properties.at("model"));
+    reference = std::find_if(model.references().begin(), model.references().end(),
+        [&](const auto& value) { return value.id == wall.toStdString(); });
+    require(reference != model.references().end() && reference->wall_members.size() == 3 &&
+            reference->wall_members[1] == second,
+        "recursive split must splice the new child in native baseline order");
+    const auto members = reference->wall_members;
+    sync_whole_wall_references(window, wall.toStdString(), members);
+    const auto before = window.document().snapshot();
+    propagation_dialog(window, [&](QDialog& dialog) {
+        set_move(dialog, wall.toStdString(), "2 m", "1 m");
+        require(apply_button(dialog).isEnabled(), "all physical wall members and dependent room must preview together");
+        auto& picker = child<QComboBox>(dialog, "roomRelationshipPropagationDriver");
+        for (std::size_t index = 1; index < members.size(); ++index)
+            require(picker.findData(QString::fromStdString(members[index])) < 0,
+                "propagation must offer one logical whole wall without child aliases");
+        require(window.document().snapshot().entities() == before.entities(), "whole-wall preview must not edit the project");
+        child<QDialogButtonBox>(dialog, "roomRelationshipPropagationButtons").button(QDialogButtonBox::Cancel)->click();
+    });
+    require(window.document().snapshot().entities() == before.entities(), "Cancel must leave all split geometry unchanged");
+    propagation_dialog(window, [&](QDialog& dialog) {
+        set_move(dialog, wall.toStdString(), "2 m", "1 m");
+        require(apply_button(dialog).isEnabled(), "whole-wall move must remain applicable after Cancel");
+        capture(dialog, curved ? "room-relationship-curved-whole-wall.png" : "room-relationship-straight-whole-wall.png");
+        apply_button(dialog).click();
+        require(!dialog.isVisible(), "whole-wall Apply must close after one complete command");
+    });
+    const auto after = window.document().snapshot();
+    require(after.revision() == before.revision() + 1, "all wall members and the dependent share one revision");
+    for (const auto& member : members) {
+        const auto& original = before.entities().at(member).properties.at("baseline");
+        const auto& moved = after.entities().at(member).properties.at("baseline");
+        for (const char* endpoint : {"start", "end"})
+            require(near(moved.at(endpoint)[0].get<double>(), original.at(endpoint)[0].get<double>() + 2) &&
+                    near(moved.at(endpoint)[1].get<double>(), original.at(endpoint)[1].get<double>() + 1),
+                "every member endpoint must receive the complete requested move");
+        require(moved.at("sweep_radians") == original.at("sweep_radians"), "movement must retain each analytical sweep");
+    }
+    require_translation(before.entities().at(room.id), after.entities().at(room.id), 2, 1);
+    require(after.entities().at(opening.toStdString()) == before.entities().at(opening.toStdString()) &&
+            after.entities().at("relationships") == before.entities().at("relationships"),
+        "movement must retain hosted binding and the exact whole-wall relationship model");
+    require(window.undoCommand() && window.document().snapshot().entities() == before.entities() &&
+            window.redoCommand() && window.document().snapshot().entities() == after.entities(),
+        "all members and dependent geometry must have one exact Undo/Redo");
+    const auto project = directory.filePath(curved ? "curved-whole-wall.bldproj" : "straight-whole-wall.bldproj");
+    require(window.saveProjectAs(project) && window.createNewProject(), "save and release whole-wall project ownership");
+    MainWindow reopened({}, nullptr, directory.filePath("reopened-split-library.json"));
+    require(reopened.openProject(project) && reopened.document().is_editable() &&
+            reopened.document().snapshot().entities() == after.entities(), "whole-wall membership and geometry must reopen exactly");
+    require(reopened.undoCommand() && reopened.document().snapshot().entities() == before.entities() &&
+            reopened.redoCommand() && reopened.document().snapshot().entities() == after.entities(),
+        "persisted history must retain the complete whole-wall move");
+}
 } // namespace
 
 int main(int argc, char** argv) {
@@ -484,6 +598,10 @@ int main(int argc, char** argv) {
         if (!area_only && !refusal_only) test_wall_driver_with_hosted_opening();
         if (!area_only && !refusal_only && !wall_only) test_independent_and_cross_record_moves();
         if (!area_only && !refusal_only && !wall_only) test_exterior_measurement_driver();
+        if (!area_only && !refusal_only && !wall_only) {
+            test_split_whole_wall_move_and_history(false);
+            test_split_whole_wall_move_and_history(true);
+        }
         std::cout << "room_relationship_move_desktop_tests passed\n";
         return 0;
     } catch (const std::exception& error) {

@@ -63,6 +63,9 @@ bool valid_segment(const Segment& segment, double tolerance) {
         return false;
     }
     try {
+        // A finite arc length alone does not prove that radius, centre and
+        // extrema are representable (notably for a near-zero signed sweep).
+        (void)segment_bounds(segment);
         const auto length = segment_length(segment);
         return std::isfinite(length) && length > tolerance;
     } catch (const std::invalid_argument&) {
@@ -72,19 +75,21 @@ bool valid_segment(const Segment& segment, double tolerance) {
 
 template <typename AddDiagnostic>
 bool validate_record(const RelationshipGeometry& record, RoomReferenceKind expected_kind,
-                     double tolerance, const char* side, AddDiagnostic&& add_diagnostic) {
+                     double tolerance, const char* side, AddDiagnostic&& add_diagnostic,
+                     std::size_t expected_wall_segments=1) {
     if (record.kind != expected_kind) {
         add_diagnostic("geometry role mismatch for " + record.id + " in " + side +
                        " snapshot: expected " + kind_name(expected_kind));
         return false;
     }
     if (expected_kind == RoomReferenceKind::architectural_wall) {
-        if (record.geometry.size() != 1) {
+        if (record.geometry.size() != expected_wall_segments) {
             add_diagnostic("wall " + record.id + " in " + side +
-                           " snapshot must contain exactly one segment");
+                           " snapshot does not match declared physical membership");
             return false;
         }
-        if (!valid_segment(record.geometry.front(), tolerance)) {
+        try { validate_room_relationship_wall_path(record.geometry,tolerance); }
+        catch (const std::invalid_argument&) {
             add_diagnostic("invalid wall geometry for " + record.id + " in " + side +
                            " snapshot");
             return false;
@@ -92,11 +97,6 @@ bool validate_record(const RelationshipGeometry& record, RoomReferenceKind expec
         return true;
     }
 
-    if (record.geometry.size() < 3) {
-        add_diagnostic("boundary " + record.id + " in " + side +
-                       " snapshot must contain at least three segments");
-        return false;
-    }
     const auto issues = validate_boundary(record.geometry, tolerance);
     if (!issues.empty()) {
         add_diagnostic("invalid boundary geometry for " + record.id + " in " + side +
@@ -167,6 +167,31 @@ DerivedTransform derive_rigid_transform(const Boundary& before, const Boundary& 
 
 } // namespace
 
+void validate_room_relationship_wall_path(const Boundary& geometry,double tolerance) {
+    if (!std::isfinite(tolerance) || !(tolerance>0) || geometry.empty() || geometry.size()>256)
+        throw std::invalid_argument("Room wall path requires bounded nonempty geometry and a positive tolerance");
+    for (std::size_t i=0;i<geometry.size();++i) {
+        if (!valid_segment(geometry[i],tolerance)) throw std::invalid_argument("Room wall path contains invalid geometry");
+        if (i) {
+            const auto gap=distance(geometry[i-1].end,geometry[i].start);
+            if (!std::isfinite(gap) || gap>tolerance)
+                throw std::invalid_argument("Room wall path is disconnected or reverses native direction");
+        }
+        for (std::size_t j=0;j<i;++j) {
+            const auto hit=segment_intersection(geometry[j],geometry[i],tolerance);
+            if (hit.kind==SegmentIntersectionKind::none) continue;
+            if (j+1!=i || hit.kind==SegmentIntersectionKind::overlap ||
+                hit.kind==SegmentIntersectionKind::indeterminate || hit.points.empty() ||
+                std::any_of(hit.points.begin(),hit.points.end(),[&](Vec2 point){
+                    return distance(point,geometry[j].end)>tolerance || distance(point,geometry[i].start)>tolerance;
+                })) throw std::invalid_argument("Room wall path has overlap or unexpected analytical intersections");
+        }
+    }
+    const auto outer_distance=distance(geometry.front().start,geometry.back().end);
+    if (!std::isfinite(outer_distance) || outer_distance<=tolerance)
+        throw std::invalid_argument("Room wall path requires distinct outer endpoints");
+}
+
 RoomRelationshipGeometryResult propose_room_relationship_geometry(
     const RoomRelationshipSnapshot& relationships,
     const std::vector<RelationshipGeometry>& before,
@@ -177,9 +202,11 @@ RoomRelationshipGeometryResult propose_room_relationship_geometry(
     }
 
     std::map<std::string, RoomReferenceKind, std::less<>> roles;
+    std::map<std::string,std::size_t,std::less<>> wall_sizes;
     for (const auto& reference : relationships.references()) {
         (void)kind_name(reference.kind);
         roles.emplace(reference.id, reference.kind);
+        wall_sizes.emplace(reference.id,room_reference_wall_ids(reference).size());
     }
 
     const auto index_records = [](const std::vector<RelationshipGeometry>& records,
@@ -205,6 +232,9 @@ RoomRelationshipGeometryResult propose_room_relationship_geometry(
     std::set<std::string, std::less<>> diagnostic_keys;
     const auto add_diagnostic = [&](std::string diagnostic) {
         if (diagnostic_keys.insert(diagnostic).second) result.diagnostics.push_back(std::move(diagnostic));
+    };
+    const auto valid_record=[&](const RelationshipGeometry& record,RoomReferenceKind kind,const char* side) {
+        return validate_record(record,kind,tolerance_metres,side,add_diagnostic,wall_sizes.at(record.id));
     };
 
     std::map<std::string, std::vector<std::string>, std::less<>> drivers;
@@ -264,10 +294,8 @@ RoomRelationshipGeometryResult propose_room_relationship_geometry(
                     usable = false;
                     continue;
                 }
-                if (!validate_record(before_it->second, role->second, tolerance_metres, "before",
-                                     add_diagnostic) ||
-                    !validate_record(working_it->second, role->second, tolerance_metres, "after",
-                                     add_diagnostic)) {
+                if (!valid_record(before_it->second,role->second,"before") ||
+                    !valid_record(working_it->second,role->second,"after")) {
                     usable = false;
                     continue;
                 }
@@ -315,10 +343,8 @@ RoomRelationshipGeometryResult propose_room_relationship_geometry(
                     } else if (working_it == working_records.end()) {
                         add_diagnostic("missing after geometry for source " + source_id);
                         blocked.insert(source_id);
-                    } else if (!validate_record(before_it->second, role->second, tolerance_metres,
-                                                "before", add_diagnostic) ||
-                               !validate_record(working_it->second, role->second, tolerance_metres,
-                                                "after", add_diagnostic)) {
+                    } else if (!valid_record(before_it->second,role->second,"before") ||
+                               !valid_record(working_it->second,role->second,"after")) {
                         blocked.insert(source_id);
                     } else {
                         Boundary candidate;
@@ -334,8 +360,7 @@ RoomRelationshipGeometryResult propose_room_relationship_geometry(
                             candidate.clear();
                         }
                         const bool candidate_valid = !candidate.empty() &&
-                            validate_record({source_id, role->second, candidate}, role->second,
-                                            tolerance_metres, "proposed", add_diagnostic);
+                            valid_record({source_id,role->second,candidate},role->second,"proposed");
                         if (candidate_valid) {
                             if (!same_geometry(working_it->second.geometry, candidate,
                                                tolerance_metres)) {

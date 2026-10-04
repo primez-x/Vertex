@@ -1,9 +1,11 @@
 #include "sketch/document.hpp"
+#include "sketch/document_wall.hpp"
 #include "sketch/door_operation.hpp"
 #include "sketch/opening_assembly.hpp"
 #include "sketch/assembly_model.hpp"
 #include "sketch/model_phases.hpp"
 #include "sketch/room_relationships.hpp"
+#include "sketch/room_relationship_geometry.hpp"
 #include "sketch/vertical_levels.hpp"
 #include "sketch/reference_grid.hpp"
 #include "sketch/terrain_surface.hpp"
@@ -46,6 +48,7 @@
 #include <random>
 #include <set>
 #include <sstream>
+#include <tuple>
 #include <type_traits>
 #include <unordered_set>
 
@@ -464,7 +467,8 @@ void validate_entity(const Entity& entity) {
         }, "model phases");
     } else if (entity.type == "room_relationships") {
         validate_embedded_model([](const nlohmann::json& model) {
-            (void)RoomRelationshipSnapshot::from_json(model);
+            if (room_relationship_model_version(model) <= 2)
+                (void)RoomRelationshipSnapshot::from_json(model);
         }, "room relationships");
     } else if (entity.type == "vertical_levels") {
         validate_embedded_model([](const nlohmann::json& model) {
@@ -762,6 +766,10 @@ std::optional<std::string> validate_measurement_linework_integrity(
 
 std::optional<std::string> validate_state(const std::map<std::string, Entity, std::less<>>& entities,
                     const std::map<std::string, Asset, std::less<>>& assets) {
+    std::optional<std::string> unsupported_relationship;
+    std::map<std::string, RoomReference, std::less<>> room_references;
+    std::vector<RoomRelation> room_relations;
+    std::set<std::tuple<std::string, std::string, RoomRelationKind>> room_relation_keys;
     for (const auto& [id, entity] : entities) {
         validate_entity(entity);
         if (entity.type=="wall") {
@@ -1215,21 +1223,65 @@ std::optional<std::string> validate_state(const std::map<std::string, Entity, st
             }
         } else if (entity.type == "room_relationships") {
             try {
-                const auto model = RoomRelationshipSnapshot::from_json(entity.properties.at("model"));
+                const auto& payload = entity.properties.at("model");
+                const auto version = room_relationship_model_version(payload);
+                if (version > 2) {
+                    if (!unsupported_relationship)
+                        unsupported_relationship = "Unsupported room relationship model " +
+                            std::to_string(version) + ": " + id;
+                    continue;
+                }
+                const auto model = RoomRelationshipSnapshot::from_json(payload);
                 for (const auto& reference : model.references()) {
-                    const auto target = entities.find(reference.id);
-                    if (target == entities.end()) {
-                        document_error(DocumentErrorCode::dangling_reference,
-                                       "room relationships " + id + " references missing entity " + reference.id);
+                    const auto [definition, inserted] = room_references.emplace(reference.id, reference);
+                    if (!inserted && definition->second != reference) {
+                        document_error(DocumentErrorCode::invalid_entity,
+                            "Room relationship records disagree on logical reference " + reference.id);
                     }
                     const auto expected = reference.kind == RoomReferenceKind::room_boundary
                         ? "room_boundary" : reference.kind == RoomReferenceKind::appraisal_measurement_boundary
                         ? "measurement_boundary" : "wall";
-                    if (target->second.type != expected) {
-                        document_error(DocumentErrorCode::invalid_entity,
-                                       "room relationships " + id + " reference " + reference.id +
-                                       " has type " + target->second.type + ", expected " + expected);
+                    const auto members = room_reference_wall_ids(reference);
+                    Boundary wall_path;
+                    for (const auto& member : members) {
+                        const auto target = entities.find(member);
+                        if (target == entities.end()) {
+                            document_error(DocumentErrorCode::dangling_reference,
+                                "room relationships " + id + " references missing entity " + member);
+                        }
+                        if (target->second.type != expected) {
+                            document_error(DocumentErrorCode::invalid_entity,
+                                "room relationships " + id + " reference " + member +
+                                " has type " + target->second.type + ", expected " + expected);
+                        }
+                        if (reference.kind == RoomReferenceKind::architectural_wall) {
+                            // Reader admission shares the established wall decoder,
+                            // including supported legacy property names. Typed edits
+                            // retain their stricter authoring checks separately.
+                            std::vector<const Entity*> openings;
+                            for (const auto& [opening_id, opening] : entities) {
+                                (void)opening_id;
+                                if (opening.type != "opening") continue;
+                                std::string host_id;
+                                std::string diagnostic;
+                                if (read_document_wall_id(opening, host_id, diagnostic) && host_id == member)
+                                    openings.push_back(&opening);
+                            }
+                            Wall wall;
+                            std::string diagnostic;
+                            if (!read_document_wall(target->second, openings, wall, diagnostic))
+                                document_error(DocumentErrorCode::invalid_entity,
+                                    "Invalid relationship wall " + member + ": " + diagnostic);
+                            validate_wall_semantics(wall);
+                            wall_path.push_back(wall.baseline);
+                        }
                     }
+                    if (reference.kind == RoomReferenceKind::architectural_wall)
+                        validate_room_relationship_wall_path(wall_path);
+                }
+                for (const auto& relation : model.relations()) {
+                    if (room_relation_keys.emplace(relation.source_id, relation.target_id, relation.kind).second)
+                        room_relations.push_back(relation);
                 }
             } catch (const DocumentError&) {
                 throw;
@@ -1239,7 +1291,21 @@ std::optional<std::string> validate_state(const std::map<std::string, Entity, st
             }
         }
     }
-    std::optional<std::string> unsupported_boundary;
+    // Separate records are one semantic graph. Deduplicate exact definitions,
+    // then check physical aliases, cross-record cycles and driver conflicts.
+    try {
+        std::vector<RoomReference> references;
+        references.reserve(room_references.size());
+        for (const auto& [id, reference] : room_references) {
+            (void)id;
+            references.push_back(reference);
+        }
+        (void)RoomRelationshipSnapshot::create(std::move(references), std::move(room_relations));
+    } catch (const std::exception& error) {
+        document_error(DocumentErrorCode::invalid_entity,
+            "Invalid combined room relationship graph: " + std::string(error.what()));
+    }
+    std::optional<std::string> unsupported_boundary = std::move(unsupported_relationship);
     for(const auto& [id,entity]:entities)
         if(entity.type=="wall" && entity.extensions.contains("wall_split_archive") &&
             entity.extensions.at("wall_split_archive").at("version")!=1)
@@ -1665,11 +1731,35 @@ static std::map<std::string, Asset, std::less<>> boundary_constraint_assets(
     return result;
 }
 
+std::map<std::string, Entity, std::less<>> replay_retained_wall_split(
+    const std::map<std::string, Entity, std::less<>>& source, const WallSplitIntent& intent) {
+    // Restoration may retain future models that cannot lend split authority.
+    // Replay every understood proof against detached known data, then restore
+    // opaque bytes before the caller's complete expected/actual comparison.
+    // Authored operations continue through the strict, unfiltered replay path.
+    auto known = source;
+    std::map<std::string, Entity, std::less<>> opaque;
+    for (const auto& [id, entity] : source) {
+        if (entity.type == "room_relationships" &&
+            room_relationship_model_version(entity.properties.at("model")) > 2) {
+            opaque.emplace(id, entity);
+            known.erase(id);
+        }
+    }
+    auto expected = replayed_wall_split_entities(known, intent);
+    for (auto& [id, entity] : opaque) {
+        if (!expected.emplace(id, std::move(entity)).second)
+            throw std::invalid_argument("Retained wall split collides with an opaque relationship entity");
+    }
+    return expected;
+}
+
 void validate_completed_constraint_change(const std::map<std::string, Entity, std::less<>>& before,
     const std::map<std::string, Entity, std::less<>>& after,
-    const ApplyBoundaryConstraintChanges& command) {
+    const ApplyBoundaryConstraintChanges& command, bool retained_replay = false) {
     if(command.wall_split) {
-        const auto expected=replayed_wall_split_entities(before,*command.wall_split);
+        const auto expected = retained_replay ? replay_retained_wall_split(before, *command.wall_split) :
+            replayed_wall_split_entities(before, *command.wall_split);
         if(expected!=after)document_error(DocumentErrorCode::constraint_violation,"Wall split differs from complete source reconstruction");
         const auto normalized=wall_split_validation_source(before,expected,*command.wall_split);
         validate_constraint_change(normalized,after,true,true,false);
@@ -1762,7 +1852,8 @@ std::map<std::string, Entity, std::less<>> boundary_constraint_entities(
     const ApplyBoundaryConstraintChanges& command, bool retained_replay = false) {
     if(command.wall_split) {
         (void)command_to_json(Command{command});
-        try{return replayed_wall_split_entities(source,*command.wall_split);}
+        try{return retained_replay ? replay_retained_wall_split(source, *command.wall_split) :
+            replayed_wall_split_entities(source,*command.wall_split);}
         catch(const std::exception& error){document_error(DocumentErrorCode::invalid_entity,error.what());}
     }
     const bool source_completion = has_exterior_source_completion(command);
@@ -3702,7 +3793,7 @@ Document Document::restore(DocumentSnapshot snapshot) {
         // rules must not reject restoration of a shorter derivation prefix.
         if (record.boundary_constraint_changes && (record.boundary_constraint_changes->wall_split || has_exterior_source_completion(*record.boundary_constraint_changes) ||
             has_rigid_wall_transform(*record.boundary_constraint_changes)))
-            validate_completed_constraint_change(previous.entities, record.entities, *record.boundary_constraint_changes);
+            validate_completed_constraint_change(previous.entities, record.entities, *record.boundary_constraint_changes, true);
         else validate_constraint_change(previous.entities, record.entities,
                 record.boundary_constraint_changes.has_value(), !record.source_revision.has_value(),
                 record.boundary_transforms.has_value() || record.source_revision.has_value());

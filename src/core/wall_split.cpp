@@ -10,6 +10,7 @@
 #include "sketch/room_relationships.hpp"
 #include <algorithm>
 #include <cmath>
+#include <iterator>
 #include <set>
 #include <stdexcept>
 
@@ -68,7 +69,7 @@ bool canonical(std::string_view key) {
     static const std::set<std::string,std::less<>> keys={"wall_id","wall_ids","entity_id","entity_ids",
         "object_id","object_ids","host_id","host_ids","target_id","target_ids","source_entity_id",
         "source_entity_ids","source_id","source_ids","parent_id","parent_ids","owner_id",
-        "host_entity_id","host_entity_ids","refs","references"};
+        "host_entity_id","host_entity_ids","refs","references","wall_members"};
     return keys.contains(key);
 }
 bool mentions(const Json& value,const std::string& id) {
@@ -180,8 +181,18 @@ Entities replayed_wall_split_entities(const Entities& source,const WallSplitInte
         auto unhandled=entity;
         if(entity.type=="room_relationships") {
             const auto relationships=RoomRelationshipSnapshot::from_json(entity.properties.at("model"));
-            for(const auto& reference:relationships.references())if(reference.id==intent.wall_id)
-                reject("Wall split cannot preserve whole-object room reference in "+id+": "+reference.id);
+            auto& model=result.at(id).properties.at("model");
+            for(const auto& reference:relationships.references()) {
+                if(reference.kind!=RoomReferenceKind::architectural_wall)continue;
+                auto members=room_reference_wall_ids(reference);
+                const auto selected=std::find(members.begin(),members.end(),intent.wall_id);
+                if(selected==members.end())continue;
+                members.insert(std::next(selected),intent.second_wall_id);
+                for(auto& encoded:model.at("references"))if(encoded.at("id")==reference.id)encoded["wall_members"]=members;
+                model["schema_version"]=2;
+            }
+            (void)RoomRelationshipSnapshot::from_json(model);
+            unhandled.properties.erase("model");
         }
         if(entity.type=="opening" && entity.properties.value("wall_id",std::string{})==intent.wall_id) {
             const auto offset=entity.properties.at("offset_m").get<double>();
@@ -259,7 +270,7 @@ Entities replayed_wall_split_entities(const Entities& source,const WallSplitInte
 Entities wall_split_validation_source(const Entities& source,const Entities& reconstructed,const WallSplitIntent& intent) {
     auto normalized=source;
     for(const auto& [id,entity]:reconstructed) {
-        if(id==intent.wall_id || id==intent.second_wall_id || entity.type=="constraint" ||
+        if(id==intent.wall_id || id==intent.second_wall_id || entity.type=="constraint" || entity.type=="room_relationships" ||
             std::any_of(intent.measured_owners.begin(),intent.measured_owners.end(),[&](const auto& owner){return owner.boundary_id==id;}))
             normalized.insert_or_assign(id,entity);
     }

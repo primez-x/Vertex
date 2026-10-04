@@ -21,6 +21,39 @@ std::vector<RoomReference> refs() {
             {"wall-a", K::architectural_wall}, {"wall-b", K::architectural_wall}};
 }
 void run() {
+    const nlohmann::json chain={{"schema_version",2},{"references",nlohmann::json::array({
+        {{"id","room"},{"kind","room_boundary"}},
+        {{"id","wall-a"},{"kind","architectural_wall"},{"wall_members",{"wall-a","wall-c"}}}})},{"relations",nlohmann::json::array({
+        {{"source_id","room"},{"target_id","wall-a"},{"kind","follows"}}})}};
+    require(RoomRelationshipSnapshot::from_json(chain).to_json()==chain,
+        "Explicit whole-wall chain semantics must roundtrip as schema two");
+    const auto chain_model=RoomRelationshipSnapshot::from_json(chain);
+    require(chain_model.schema_version()==2 && room_reference_wall_ids(chain_model.references().back())==
+        std::vector<std::string>{"wall-a","wall-c"},"wall members lost native correspondence");
+    auto sticky=RoomRelationshipSnapshot::create(refs(),{}).to_json();sticky["schema_version"]=2;
+    const auto sticky_model=RoomRelationshipSnapshot::from_json(sticky);
+    require(sticky_model.schema_version()==2 && sticky_model.to_json()==sticky,"schema two ordinary references must not downgrade");
+    auto sticky_retarget=RoomRelationshipSnapshot::create(refs(),{{"room","wall-a",R::follows}}).to_json();
+    sticky_retarget["schema_version"]=2;
+    require(RoomRelationshipSnapshot::from_json(sticky_retarget).retarget({"room","wall-a","wall-b",R::follows}).schema_version()==2,
+        "retarget downgraded sticky schema two");
+    for(int corruption=0;corruption<6;++corruption){
+        auto bad=chain;
+        if(corruption==0)bad["references"][1]["wall_members"]={"wall-c","wall-a"};
+        if(corruption==1)bad["references"][1]["wall_members"]={"wall-a","wall-a"};
+        if(corruption==2)bad["references"][1]["wall_members"]={"wall-a"};
+        if(corruption==3)bad["references"][0]["wall_members"]={"room","other"};
+        if(corruption==4)bad["references"].push_back({{"id","wall-c"},{"kind","architectural_wall"}});
+        if(corruption==5)bad["schema_version"]=1;
+        rejects([&]{(void)RoomRelationshipSnapshot::from_json(bad);});
+    }
+    auto future=chain;future["schema_version"]=3;
+    require(room_relationship_model_version(future)==3,"future positive schema inspection must remain opaque");
+    rejects([&]{(void)RoomRelationshipSnapshot::from_json(future);});
+    for(const auto version : {nlohmann::json(0),nlohmann::json(-1),nlohmann::json(2.0),nlohmann::json("2")}) {
+        auto invalid_version=chain;invalid_version["schema_version"]=version;
+        rejects([&]{(void)room_relationship_model_version(invalid_version);});
+    }
     static_assert(std::is_same_v<decltype(std::declval<RoomRelationshipSnapshot&>().references()),
                                 const std::vector<RoomReference>&>);
     auto references = refs();
