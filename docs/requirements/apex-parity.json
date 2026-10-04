@@ -1368,9 +1368,16 @@
         "tests/desktop_smoke.cpp",
         "docs/desktop-workflow.md",
         "scripts/generate_workflow_acceptance_evidence.py",
-        "tests/test_workflow_acceptance_evidence.py"
+        "tests/test_workflow_acceptance_evidence.py",
+        "include/sketch/wall_split.hpp",
+        "src/core/wall_split.cpp",
+        "tests/wall_vertex_insertion_tests.cpp",
+        "tests/wall_vertex_insertion_desktop_tests.cpp",
+        "tests/wall_split_storage_tests.cpp",
+        "tests/arc_chain_constraint_tests.cpp",
+        "docs/verification/wall-vertex-insertion-2026-10-04.md"
       ],
-      "implementation_note": "Typed vertex insertion preserves topology identities, archives construction inputs, migrates endpoint dimensions and constraints, and creates a second-piece automatic dimension where applicable. The insertion dialog now shows numbered edges, the canonical split and inserted vertex, plus persistent-only before/after coordinate freedom for supported straight components. It retains the exact candidate command, rejects invalid or stale contexts and commits one undoable edit. Transform/copy previews report source and proposed/copy component freedom. Release regressions cover cancellation, invalidation, exact Apply, undo/redo and save/reopen. Legacy anonymous geometry requires an explicit identity upgrade, now available through More, Commands and the selected legacy boundary context menu. Promotion assigns stable topology identities without repairing geometry or rewriting opaque metadata and is one revision-fenced undoable command. Native coverage checks subsequent insertion/transform, save/reopen and atomic refusal of ambiguous, approximate-join, owned-receipt, stale, read-only and unsupported inputs. Wall/object insertion, curved-owner freedom, broader compatibility acceptance and production qualification remain open. Historical acceptance artifacts do not certify these changes."
+      "implementation_note": "Typed boundary insertion preserves topology identities, archives construction inputs, migrates endpoint constraints and dimensions, and creates second-piece automatic dimensions. The physical-wall Insert point path adds strict envelope12 source reconstruction for straight/signed-arc partitions, exact input archives, hosted-opening stations, slope, joins/phases/view membership and source-current exterior outline completion. Manual full-span dimensions become ordered physical-length chains. A split physical arc lock remains one total relationship instead of separate child locks. The actual dialog previews footprints, seam and lengths, supports Cancel, refuses invalid/stale/multiple-selection contexts and commits one reversible edit; stored coordinate freedom accounts for new connected pieces. Native37/exchange35 protects retained history and entity-only split/chain models. Unsupported whole-object room relationships, hosted assemblies and section dimensions refuse precisely and remain adapter gaps. Explicit boundary identity upgrade and independent cloning retain their existing behavior. Native regression evidence is recorded separately and historical acceptance artifacts are not renewed. Broader object insertion, compatibility, complete freedom reporting and full production qualification remain open."
     },
     {
       "id": "APX-EDIT-004",

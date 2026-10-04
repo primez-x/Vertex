@@ -503,11 +503,73 @@ Entity reconstruct_exterior_corner_wall(const Entity& source, const Segment& bas
     return result;
 }
 
+void validate_wall_split_archive(const Entity& wall) {
+    const auto archive=wall.extensions.find("wall_split_archive");
+    if(archive==wall.extensions.end())return;
+    if(!archive->is_object() || archive->size()!=2 || !archive->contains("version") ||
+        archive->at("version")!=1 || !archive->contains("pieces") || !archive->at("pieces").is_array() ||
+        archive->at("pieces").empty() || archive->at("pieces").size()>10000)
+        invalid("Unsupported wall split archive: "+wall.id);
+    for(const auto& piece:archive->at("pieces")) {
+        if(!piece.is_object() || piece.size()!=6 || !piece.contains("source_wall_id") ||
+            !piece.contains("source_baseline") || !piece.contains("fraction") || !piece.contains("second_piece") ||
+            !piece.contains("partition_baseline") || !piece.contains("length_entry") ||
+            !piece.at("source_wall_id").is_string() || piece.at("source_wall_id").get_ref<const std::string&>().empty() ||
+            !piece.at("second_piece").is_boolean())
+            invalid("Malformed wall split archive: "+wall.id);
+        auto source=wall; source.properties["baseline"]=piece.at("source_baseline");
+        const auto old=read_baseline(source);
+        auto partition=wall; partition.properties["baseline"]=piece.at("partition_baseline");
+        const auto child=read_baseline(partition);
+        const auto fraction=finite_number(piece.at("fraction"),"Archived split fraction");
+        if(!(fraction>0 && fraction<1))invalid("Archived split fraction is not interior: "+wall.id);
+        const bool second=piece.at("second_piece").get<bool>();
+        const auto ratio=second ? 1-fraction : fraction;
+        Vec2 seam{std::lerp(old.start.x,old.end.x,fraction),std::lerp(old.start.y,old.end.y,fraction)};
+        if(old.sweep_radians!=0) {
+            const auto dx=old.end.x-old.start.x,dy=old.end.y-old.start.y,k=0.5/std::tan(old.sweep_radians/2);
+            const Vec2 center{old.start.x+dx/2-dy*k,old.start.y+dy/2+dx*k};
+            const auto angle=old.sweep_radians*fraction,x=old.start.x-center.x,y=old.start.y-center.y;
+            seam={center.x+x*std::cos(angle)-y*std::sin(angle),center.y+x*std::sin(angle)+y*std::cos(angle)};
+        }
+        const Segment expected=second ? Segment{seam,old.end,old.sweep_radians*ratio} : Segment{old.start,seam,old.sweep_radians*ratio};
+        if(!same_baseline(child,expected))invalid("Archived wall split does not reconstruct its directed child: "+wall.id);
+        if(std::abs(segment_length(child)-segment_length(old)*ratio)>constraint_linear_tolerance_metres ||
+            child.sweep_radians!=old.sweep_radians*ratio)
+            invalid("Archived wall split does not partition its source measure: "+wall.id);
+        if(!piece.at("length_entry").is_null())(void)validate_length_receipt(piece.at("length_entry"),source);
+    }
+}
+
+Entity reconstruct_split_wall(const Entity& source,const Segment& baseline,double fraction,bool second_piece) {
+    validate_wall_split_archive(source);
+    json receipt=nullptr;
+    if(const auto section=source.extensions.find("constraint_authoring");section!=source.extensions.end()) {
+        if(!section->is_object() || !section->contains("version") || section->at("version")!=1)
+            invalid("Wall split cannot archive unsupported constraint_authoring metadata: "+source.id);
+        if(section->contains("last_length_entry"))receipt=section->at("last_length_entry");
+    }
+    auto result=reconstruct_exterior_corner_wall(source,baseline);
+    if(!result.extensions.contains("wall_split_archive"))
+        result.extensions["wall_split_archive"]={{"version",1},{"pieces",json::array()}};
+    result.extensions["wall_split_archive"]["pieces"].push_back({{"source_wall_id",source.id},
+        {"source_baseline",source.properties.at("baseline")},{"fraction",fraction},{"second_piece",second_piece},
+        {"partition_baseline",result.properties.at("baseline")},{"length_entry",std::move(receipt)}});
+    validate_wall_split_archive(result);
+    return result;
+}
+
 void validate_constraint_wall_geometry_transition(const std::map<std::string,Entity,std::less<>>& before,
     const std::map<std::string,Entity,std::less<>>& after,bool qualified) {
     for (const auto& [id,source] : before) {
         const auto found=after.find(id);
         if (source.type!="wall" || found==after.end() || found->second.type!="wall") continue;
+        if(source.extensions.contains("wall_split_archive") &&
+            (!found->second.extensions.contains("wall_split_archive") ||
+                source.extensions.at("wall_split_archive")!=found->second.extensions.at("wall_split_archive")))
+            invalid("Wall edit cannot discard or rewrite its split input archive: "+id);
+        if(!source.extensions.contains("wall_split_archive") && found->second.extensions.contains("wall_split_archive"))
+            invalid("Wall split archive requires a typed source reconstruction: "+id);
         // Legacy wall markers may contain only material/dimension metadata.
         // They have no curve provenance to rebase; do not promote them into
         // physical wall geometry during an unrelated entity edit.

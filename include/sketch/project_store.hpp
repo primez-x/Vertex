@@ -131,7 +131,8 @@ public:
     // saved dimensions targeting measured strokes require v36 across retained history.
     // Any may include
     // the optional recovery ledger. Absent proofs preserve historical formats.
-    static constexpr std::uint32_t format_version = 36;
+    // Wall split authority, arc-chain relations and whole-span dimensions require v37.
+    static constexpr std::uint32_t format_version = 37;
     static constexpr std::uint32_t recovery_format_version = 4;
     [[nodiscard]] static std::uint32_t required_format_version(const DocumentSnapshot& snapshot);
     static constexpr std::uint64_t maximum_file_bytes = 4ULL * 1024ULL * 1024ULL * 1024ULL;

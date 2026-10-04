@@ -2,6 +2,9 @@
 #include "sketch/document.hpp"
 
 namespace sketch {
+[[nodiscard]] Entity reconstruct_split_wall(const Entity& source, const Segment& baseline,
+    double fraction, bool second_piece);
+void validate_wall_split_archive(const Entity& wall);
 // Reconstructs the baseline and its exact entry/derivation receipt. All
 // unrelated wall and receipt metadata remains owned by the original entity.
 // Version four first verifies the exact selected curve transform, then rebases

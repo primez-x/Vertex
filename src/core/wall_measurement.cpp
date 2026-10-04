@@ -1638,4 +1638,96 @@ std::vector<BoundaryGeometryEdit> exterior_wall_measurement_source_updates(
     return result;
 }
 
+std::map<std::string,Entity,std::less<>> complete_wall_split_measurement_sources(
+    const std::map<std::string,Entity,std::less<>>& original,
+    const std::map<std::string,Entity,std::less<>>& physical,const WallSplitIntent& intent) {
+    auto result=physical;
+    std::set<std::string> consumed;
+    const auto close=[](Vec2 a,Vec2 b){return std::hypot(a.x-b.x,a.y-b.y)<=default_geometry_tolerance_metres;};
+    for(const auto& [id,owner]:original) {
+        if(owner.type!="measurement_boundary" ||
+            inspect_boundary_entity_version(owner).format!=BoundaryEntityFormat::identified_v1 ||
+            !owner.properties.contains("wall_measurement_source"))continue;
+        std::vector<std::string> ids;
+        try{ids=exterior_wall_measurement_source_ids(owner);}catch(const std::invalid_argument&){continue;}
+        if(std::find(ids.begin(),ids.end(),intent.wall_id)==ids.end() || !wall_measurement_source_current(original,owner))continue;
+        const auto mapping=std::find_if(intent.measured_owners.begin(),intent.measured_owners.end(),
+            [&](const auto& value){return value.boundary_id==id;});
+        if(mapping==intent.measured_owners.end())reject("Wall split requires fresh analytical identities for measured owner: "+id);
+        consumed.insert(id);
+        if(original.contains(mapping->automatic_dimension_id))reject("Wall split dimension identity is already used: "+mapping->automatic_dimension_id);
+        const auto identified=decode_identified_boundary_entity(owner);
+        for(const auto& edge:identified.segments)
+            if(edge.segment_id==mapping->segment_id || edge.start_vertex_id==mapping->vertex_id ||
+                edge.end_vertex_id==mapping->vertex_id)reject("Wall split analytical identities must be fresh: "+id);
+        const auto old=derive_exterior_wall_measurement(original,ids);
+        const auto old_index=std::find(old.ordered_wall_ids.begin(),old.ordered_wall_ids.end(),intent.wall_id);
+        if(old_index==old.ordered_wall_ids.end())reject("Wall split measured source lost old physical edge: "+id);
+        const auto& old_geometry=old.boundary.at(static_cast<std::size_t>(old_index-old.ordered_wall_ids.begin()));
+        const IdentifiedSegment* retained=nullptr;bool reversed=false;
+        for(const auto& edge:identified.segments) {
+            const bool forward=close(edge.segment.start,old_geometry.start) && close(edge.segment.end,old_geometry.end) &&
+                std::abs(edge.segment.sweep_radians-old_geometry.sweep_radians)<=1e-9;
+            const bool reverse=close(edge.segment.start,old_geometry.end) && close(edge.segment.end,old_geometry.start) &&
+                std::abs(edge.segment.sweep_radians+old_geometry.sweep_radians)<=1e-9;
+            if(!forward && !reverse)continue;
+            if(retained)reject("Wall split analytical correspondence is ambiguous: "+id);
+            retained=&edge;reversed=reverse;
+        }
+        if(!retained)reject("Wall split measured source has no analytical edge correspondence: "+id);
+        ids.push_back(intent.second_wall_id);
+        const auto replacement=derive_replacement_exterior_wall_measurement(result,owner,ids);
+        if(replacement.boundary.size()!=identified.segments.size()+1 ||
+            replacement.ordered_wall_ids.size()!=replacement.boundary.size())
+            reject("Wall split measured source changed unrelated analytical topology: "+id);
+        std::map<std::string,std::size_t,std::less<>> next;
+        for(std::size_t i=0;i<replacement.ordered_wall_ids.size();++i)
+            if(!next.emplace(replacement.ordered_wall_ids[i],i).second)reject("Wall split source has ambiguous physical lineage: "+id);
+        auto first=replacement.boundary.at(next.at(reversed ? intent.second_wall_id : intent.wall_id));
+        auto second=replacement.boundary.at(next.at(reversed ? intent.wall_id : intent.second_wall_id));
+        if(reversed){std::swap(first.start,first.end);first.sweep_radians=-first.sweep_radians;
+            std::swap(second.start,second.end);second.sweep_radians=-second.sweep_radians;}
+        if(!close(first.end,second.start) || !close(first.start,retained->segment.start) || !close(second.end,retained->segment.end))
+            reject("Wall split offset children do not retain the original outer corners: "+id);
+        // Offset mitres move the analytical edge's ends. Its seam ratio must
+        // therefore come from the complete derived child lengths.
+        BoundaryGeometryEdit insertion;insertion.boundary_id=id;insertion.target_id=retained->segment_id;
+        insertion.kind=BoundaryGeometryEditKind::insert_vertex;
+        insertion.fraction=segment_length(first)/(segment_length(first)+segment_length(second));
+        insertion.new_vertex_id=mapping->vertex_id;insertion.new_segment_id=mapping->segment_id;
+        insertion.new_dimension_id=mapping->automatic_dimension_id;
+        result=edited_boundary_entities(result,insertion);
+        auto split=decode_identified_boundary_entity(result.at(id));
+        const auto split_edge=std::find_if(split.segments.begin(),split.segments.end(),
+            [&](const auto& edge){return edge.segment_id==retained->segment_id;});
+        split_edge->segment=first;std::next(split_edge)->segment=second;
+        // Reconstruct the unaffected edges by proven old physical lineage.
+        for(auto& edge:split.segments) {
+            if(edge.segment_id==retained->segment_id || edge.segment_id==mapping->segment_id)continue;
+            const auto prior=std::find_if(identified.segments.begin(),identified.segments.end(),
+                [&](const auto& value){return value.segment_id==edge.segment_id;});
+            std::optional<std::size_t> lineage;
+            for(std::size_t i=0;i<old.boundary.size();++i) {
+                const auto& before=old.boundary[i];
+                if((close(prior->segment.start,before.start)&&close(prior->segment.end,before.end)) ||
+                    (close(prior->segment.start,before.end)&&close(prior->segment.end,before.start))) {
+                    if(lineage)reject("Wall split neighbor lineage is ambiguous: "+id);lineage=i;
+                }
+            }
+            if(!lineage)reject("Wall split lost neighboring measured edge: "+id);
+            auto after=replacement.boundary.at(next.at(old.ordered_wall_ids.at(*lineage)));
+            if(close(prior->segment.start,old.boundary[*lineage].end)) {std::swap(after.start,after.end);after.sweep_radians=-after.sweep_radians;}
+            edge.segment=after;
+        }
+        BoundaryGeometryEdit redraw;redraw.boundary_id=redraw.target_id=id;
+        redraw.kind=BoundaryGeometryEditKind::redefine_boundary;
+        redraw.replacement_segments=encode_identified_boundary_entity(split).properties.at("segments");
+        std::sort(ids.begin(),ids.end());redraw.replacement_wall_source_ids=ids;
+        result=edited_boundary_entities(result,redraw);
+        if(!wall_measurement_source_current(result,result.at(id)))reject("Wall split measured owner remains stale: "+id);
+    }
+    if(consumed.size()!=intent.measured_owners.size())reject("Wall split measured identity mapping includes an unaffected or stale owner");
+    return result;
+}
+
 } // namespace sketch

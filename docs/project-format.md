@@ -1124,7 +1124,7 @@ unknown project `format_version` is rejected rather than opened unsafely.
 ## SQLite schema
 
 The SQLite `application_id` is `0x50535444` (`PSTD`). `user_version` and metadata
-`format_version` are equal and range from `1` through `36`, according to the
+`format_version` are equal and range from `1` through `37`, according to the
 retained semantics. The baseline application tables below are shared; later
 versions add the proof columns and recovery data documented in this file.
 
@@ -1906,3 +1906,35 @@ undone creation or deleted dimension. Logical JSON/assets extraction advertises
 dimension schema change is required. Lowering both markers cannot make retained
 new semantics readable by an older format. Original files remain preserved
 through the normal save/migration workflow.
+
+## Physical wall splits and full-span dimensions (native37)
+
+Command envelope12 is a strict `apply_boundary_constraint_changes` envelope
+containing only version, kind, expected_revision, message and wall_split. Its
+version-one intent names the original wall, fresh second wall and coincident
+seam relation, a strict interior fraction, and fresh analytical identities for
+each affected source-current measured owner. It admits no ordinary entity or
+asset mutation lanes. Replay independently reconstructs every consequence from
+the retained source before comparison with saved state. Historical reuse of
+entity or analytical identities rejects.
+
+Each wall's version-one `extensions.wall_split_archive` retains directed source
+and partition baselines, source identity, fraction, piece role and original exact
+length entry. Its historical geometry is independently validated and retained
+unchanged by subsequent ordinary edits. Signed arcs retain their construction
+archive through the existing analytical reconstruction path. Unsupported future
+archives remain opaque/read-only.
+
+Fixed physical arc-length constraints use relation version4 with ordered pairs
+of opposite endpoints for contiguous directed curved pieces. One equation sums
+their physical lengths at their saved signed sweeps against the original exact
+quantity. It does not impose independent piece locks or new equal-radius rules.
+Dimension version3 stores `target.segment_ids` instead of `target.segment_id`
+for an ordered contiguous chain. Its value is the sum of analytical member
+lengths, retaining text placement, presentation and opaque metadata.
+
+Reader37 applies to split commands, split archives, version4 arc-total relations
+and version3 dimensions anywhere in retained history, including entity-only
+imports, undone creation and deleted objects. Logical extraction advertises
+exchange35. Both native markers and the package validator agree; existing older
+histories retain their previous minimum floor. No SQLite table change is needed.

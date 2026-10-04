@@ -157,6 +157,23 @@ struct ExteriorCornerMoveIntent {
     bool move_connected_objects{true};
 };
 
+struct WallSplitMeasuredOwnerIds {
+    std::string boundary_id;
+    std::string vertex_id;
+    std::string segment_id;
+    std::string automatic_dimension_id;
+};
+
+// One source-reconstructed physical partition. No entity payload can lend
+// authority to a split or to its dependent measured geometry.
+struct WallSplitIntent {
+    std::string wall_id;
+    std::string second_wall_id;
+    double fraction{};
+    std::string seam_constraint_id;
+    std::vector<WallSplitMeasuredOwnerIds> measured_owners;
+};
+
 // Geometry is replayed before the relation changes are validated.
 // The original entity_changes lane contains only constraints. Version six's
 // physical lane admits existing-wall changes under ordinary provenance rules;
@@ -208,6 +225,8 @@ struct ApplyBoundaryConstraintChanges {
     // Retain envelope eleven even for relation-only stroke commands and when
     // the stroke-edit vector is emptied. Other completion modes are separate.
     bool measured_source_completion{};
+    // Envelope twelve admits only this source-reconstructed split intent.
+    std::optional<WallSplitIntent> wall_split;
 };
 
 using Command = std::variant<ApplyEntityChanges, NameRevision, TranslateBoundary,

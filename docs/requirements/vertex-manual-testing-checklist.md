@@ -1,6 +1,6 @@
 # Vertex user testing checklist
 
-419 practical tasks, grouped by how you use the app (including U100a). This replaces the earlier engineering-oriented checklist. The old 130-item list is preserved separately as engineering-requirements-checklist.md.
+423 practical tasks, grouped by how you use the app (including U100a). This replaces the earlier engineering-oriented checklist. The old 130-item list is preserved separately as engineering-requirements-checklist.md.
 
 This is a user acceptance list for the intended app, not a claim that every listed action is implemented or working in the current preview. If you cannot find a control, or a feature is absent, mark **Blocked / missing** and describe it. Specialized sections can be skipped if you do not use them or lack the device or sample files.
 
@@ -2552,6 +2552,32 @@ drawing; switching modes does not change existing geometry.
 - [ ] **U418 — Reopen, remove and export dimensioned measured lines**
   - Steps: Save/reopen a stroke with styled length and angle dimensions. Delete its owner, Undo and Redo, then save/reopen again. Restore it and inspect sheet preview, SVG and PDF at two output scales.
   - Expected: Delete removes the stroke and attached dimensions together. Undo restores their exact saved values, positions and styles, including after reopening. Output contains the saved dimensions and styles at the chosen sheet scale.
+  - Result: Not tested
+  - Notes: ______________________________
+
+## Insert points in walls
+
+- [ ] **U419 — Split a wall with Insert point**
+  - Steps: Draw and select a wall. Choose Tools > Insert point. Change the position from 0.5 to 0.4, inspect the two wall lengths and seam, and Cancel. Reopen and Apply. Undo and Redo.
+  - Expected: Preview and Cancel leave the drawing unchanged. Apply creates two connected walls with the original thickness and layer, in one reversible edit. Invalid or endpoint positions cannot apply.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **U420 — Split a wall containing doors or windows**
+  - Steps: Place doors or windows before and after the proposed split. Insert the point between them, then save/reopen and Undo. Try inserting through a door or window.
+  - Expected: Valid insertion leaves openings in the same physical positions and retains their hosts. An insertion crossing an opening identifies the conflict and changes nothing.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **U421 — Keep appraisal measurements when splitting an exterior wall**
+  - Steps: Draw a closed exterior wall loop, define its measured area and record its appraisal facts. Note the area, perimeter and Details totals. Insert a point in one exterior wall. Inspect the outline, dimensions and Details, then save/reopen and Undo.
+  - Expected: The new wall seam does not change the measured outline, area or facts. Source-current measurements remain current. A manually placed full-wall dimension still measures the full original span; automatic piece dimensions reflect each child. Undo restores the original wall and outline together.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **U422 — Split a curved wall with a physical-length lock**
+  - Steps: Draw a curved wall and add Fixed physical arc length through Dimensions and constraints. Insert an interior point, then inspect the curve and retained relationship. Try a compatible connected edit, Undo and save/reopen.
+  - Expected: Both pieces reconstruct the original curve. The saved relationship retains the original total physical arc length as one total; it does not replace it with separate fixed lengths. Conflicts explain the problem and cannot apply.
   - Result: Not tested
   - Notes: ______________________________
 

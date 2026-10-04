@@ -156,6 +156,13 @@ void test_open_measured_stroke_dimensions_follow_replayed_stable_targets() {
         const auto terminal = length.resolve(stroke);
         require(terminal.segment_length() == 4 && terminal.segment.end.x == 12 && terminal.segment.end.y == 11,
                 "terminal edge dimension must follow retained IDs through edit and transform replay");
+        auto whole = length;
+        whole.segment_id = arc.segment_id;
+        whole.segment_chain_ids = {arc.segment_id, tail.segment_id};
+        const auto whole_resolution = whole.resolve(stroke);
+        require(std::abs(whole_resolution.segment_length() - (std::numbers::pi + 4)) < 1e-12 &&
+                whole_resolution.segment.sweep_radians == 0,
+                "receipt-backed measured chain must sum physical arc and edited line lengths");
         auto angle = length;
         angle.kind = sketch::BoundaryDimensionKind::angle;
         angle.segment_id = arc.segment_id;
@@ -536,7 +543,7 @@ void test_presentation_versioning_round_trip_and_metadata() {
                  "upgrading may not reinterpret or overwrite even a matching vendor property");
     }
     auto future = upgraded;
-    future.properties["dimension_version"] = 3;
+    future.properties["dimension_version"] = 4;
     future.properties["presentation"] = "opaque future semantics";
     require(!sketch::decode_boundary_dimension_entity(future).supported() &&
             sketch::decode_boundary_dimension_entity(future).original_entity == future,
@@ -596,9 +603,75 @@ void test_presentation_validation_is_strict() {
     rejected([&] { (void)sketch::encode_boundary_dimension_entity(model); }, "nonfinite typed rotation must reject");
 }
 
+void test_segment_chain_codec_and_physical_resolution() {
+    auto model = rectangle_model();
+    model.segments[0].segment = sketch::arc_from_chord_angle({0, 0}, {4, 0}, std::numbers::pi);
+    auto dimension = manual_dimension();
+    dimension.segment_chain_ids = {"segment-a", "segment-b"};
+    dimension.presentation = sketch::BoundaryDimensionPresentation{3.0, "#123456", true, true, false, 0.2};
+    auto encoded = sketch::encode_boundary_dimension_entity(dimension);
+    require(encoded.properties.at("dimension_version") == 3 &&
+            encoded.properties.at("target").at("segment_ids") == dimension.segment_chain_ids &&
+            !encoded.properties.at("target").contains("segment_id"),
+            "chain dimensions must persist one canonical ordered v3 target");
+    encoded.properties["opaque"] = {{"number", 1.0}};
+    encoded.properties["target"]["vendor"] = "retain";
+    encoded.extensions["vendor"] = json::array({1, 2});
+    const auto decoded = sketch::decode_boundary_dimension_entity(encoded);
+    require(decoded.dimension == dimension && decoded.version == 3,
+            "styled chain dimension must round trip exactly");
+    require(sketch::encode_boundary_dimension_entity(*decoded.dimension, &encoded) == encoded,
+            "chain codec must preserve opaque target and entity metadata");
+    const auto resolved = dimension.resolve(sketch::encode_identified_boundary_entity(model));
+    require(std::abs(resolved.segment_length() - (2 * std::numbers::pi + 3)) < 1e-12 &&
+            resolved.segment.start.x == 0 && resolved.segment.end.x == 4 &&
+            resolved.segment.end.y == 3 && resolved.segment.sweep_radians == 0,
+            "mixed arc and line chain must sum physical lengths and expose outer overlay endpoints");
+    require(std::abs(resolved.segment_length() - sketch::segment_length(resolved.segment)) > 1,
+            "whole chain length must not collapse to its outer chord");
+    dimension.presentation.reset();
+    require(sketch::decode_boundary_dimension_entity(sketch::encode_boundary_dimension_entity(dimension)).dimension == dimension,
+            "unstyled chain dimensions must retain their absent presentation");
+}
+
+void test_segment_chain_validation_and_future_opacity() {
+    auto dimension = manual_dimension();
+    dimension.segment_chain_ids = {"segment-a", "segment-b"};
+    const auto valid = sketch::encode_boundary_dimension_entity(dimension);
+    for (const auto& ids : std::vector<std::vector<std::string>>{{"segment-a"},
+            {"segment-a", "segment-a"}, {"segment-b", "segment-c"},
+            std::vector<std::string>(129, "segment-a")}) {
+        auto invalid = dimension; invalid.segment_chain_ids = ids;
+        rejected([&] { (void)sketch::encode_boundary_dimension_entity(invalid); },
+                 "invalid typed chain count, duplicate, or first ID must reject");
+    }
+    for (const auto& ids : std::vector<json>{json::array(), json::array({"segment-a"}),
+            json::array({"segment-a", "segment-a"}), json::array({"segment-a", 2}), "segment-a"}) {
+        auto invalid = valid; invalid.properties["target"]["segment_ids"] = ids;
+        rejected([&] { (void)sketch::decode_boundary_dimension_entity(invalid); },
+                 "malformed known chain targets must reject");
+    }
+    auto invalid = valid; invalid.properties["target"]["segment_id"] = "segment-a";
+    rejected([&] { (void)sketch::decode_boundary_dimension_entity(invalid); }, "ambiguous chain target must reject");
+    invalid = valid; invalid.properties["dimension_kind"] = "angle";
+    rejected([&] { (void)sketch::decode_boundary_dimension_entity(invalid); }, "v3 known non-chain kind must reject");
+    invalid = valid; invalid.properties["dimension_version"] = 1;
+    rejected([&] { (void)sketch::decode_boundary_dimension_entity(invalid); }, "v1 chain target must reject");
+    auto gap = dimension; gap.segment_chain_ids = {"segment-a", "segment-c"};
+    rejected([&] { (void)gap.resolve(sketch::encode_identified_boundary_entity(rectangle_model())); },
+             "chain with separated stable vertices must reject");
+    auto future = valid; future.properties["dimension_version"] = 999;
+    future.properties["target"]["segment_ids"] = "opaque";
+    const auto decoded = sketch::decode_boundary_dimension_entity(future);
+    require(!decoded.supported() && decoded.original_entity == future,
+            "future chain dimension semantics must remain exact opaque data");
+}
+
 }  // namespace
 
 int main() {
+    test_segment_chain_codec_and_physical_resolution();
+    test_segment_chain_validation_and_future_opacity();
     test_open_measured_stroke_dimensions_follow_replayed_stable_targets();
     test_measured_revisited_vertices_and_area_refusal();
     test_straight_resolution_derives_length_from_canonical_geometry();

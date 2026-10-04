@@ -389,10 +389,19 @@ void append_relation(ConstraintSolveRequest& request, const PersistentConstraint
             request.constraints.push_back(
                 FixedLengthConstraint{id, point_at(0), point_at(1), value.length->metres});
             break;
-        case ConstraintRelationKind::fixed_arc_length:
-            request.constraints.push_back(FixedLengthConstraint{id,point_at(0),point_at(1),
-                constraint_arc_chord_target(value,entities)});
+        case ConstraintRelationKind::fixed_arc_length: {
+            if (value.bindings.size()==2) {
+                request.constraints.push_back(FixedLengthConstraint{id,point_at(0),point_at(1),
+                    constraint_arc_chord_target(value,entities)});
+                break;
+            }
+            WeightedLengthSumConstraint total{id,{},value.length->metres};
+            const auto segments=resolve_constraint_arc_segments(value,entities);
+            for (std::size_t i=0;i<segments.size();++i)
+                total.terms.push_back({point_at(2*i),point_at(2*i+1),constraint_arc_length_coefficient(segments[i])});
+            request.constraints.push_back(std::move(total));
             break;
+        }
         case ConstraintRelationKind::parallel:
             request.constraints.push_back(
                 ParallelConstraint{id, point_at(0), point_at(1), point_at(2), point_at(3)});
@@ -519,6 +528,9 @@ std::string relation_description(const Entities& entities,
                 point_at(1);
         }
         case ConstraintRelationKind::fixed_arc_length:
+            if (constraint.bindings.size()>2)
+                return "fixed physical arc total ("+constraint.length->original_expression+") on "+
+                    std::to_string(constraint.bindings.size()/2)+" connected segments";
             return "fixed physical arc length ("+constraint.length->original_expression+") on "+
                 wall_display_name(entities,constraint.bindings.at(0).owner_id);
         case ConstraintRelationKind::parallel:

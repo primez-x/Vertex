@@ -1,5 +1,16 @@
 # Placed boundary dimensions
 
+Version3 segment-length dimensions may target an ordered `target.segment_ids`
+chain of 2 to 128 distinct, forward-contiguous stable edges. The singular
+`segment_id` field is omitted from their JSON. Resolution verifies stable shared
+vertices and sums actual line/arc lengths; a chord between outer endpoints is
+only an overlay anchor, never the measured value. Splitting a manually
+dimensioned edge expands that same dimension's chain and retains its ID, label
+position, style and opaque metadata. Repeated insertion expands the affected
+chain member again. Automatic single-edge dimensions remain individual piece
+dimensions. Copy/Paste remaps all chain members. Native37 protects this target
+meaning across retained history and entity-only projects.
+
 Placed dimensions are stable `dimension` entities. A v1 segment-length
 dimension stores a stable reference to the identified boundary entity and its
 stable segment ID, together with the world position of the label:

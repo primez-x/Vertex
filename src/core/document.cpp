@@ -17,6 +17,7 @@
 #include "sketch/boundary_dimension.hpp"
 #include "sketch/boundary_transform.hpp"
 #include "sketch/wall_measurement.hpp"
+#include "sketch/wall_split.hpp"
 #include "sketch/project_organization.hpp"
 #include "sketch/wall_semantics.hpp"
 #include "sketch/measurement_linework.hpp"
@@ -801,6 +802,13 @@ std::optional<std::string> validate_state(const std::map<std::string, Entity, st
                 }
                 if (entity.extensions.contains("curve_input_derivation")) validate_wall_curve_input(entity);
                 validate_wall_length_input(entity);
+                if(entity.extensions.contains("wall_split_archive")) {
+                    const auto& archive=entity.extensions.at("wall_split_archive");
+                    if(!archive.is_object() || !archive.contains("version") || !archive.at("version").is_number_integer() ||
+                        archive.at("version").get<std::int64_t>()<=0)
+                        throw std::invalid_argument("Wall split archive requires a positive version: "+id);
+                    if(archive.at("version")==1)validate_wall_split_archive(entity);
+                }
             }
             catch (const std::exception& error) { document_error(DocumentErrorCode::invalid_entity,error.what()); }
         }
@@ -1232,6 +1240,10 @@ std::optional<std::string> validate_state(const std::map<std::string, Entity, st
         }
     }
     std::optional<std::string> unsupported_boundary;
+    for(const auto& [id,entity]:entities)
+        if(entity.type=="wall" && entity.extensions.contains("wall_split_archive") &&
+            entity.extensions.at("wall_split_archive").at("version")!=1)
+            unsupported_boundary="Unsupported wall split archive: "+id;
     for (const auto& [id, entity] : entities) {
         if (entity.type != "measurement_boundary" || !entity.extensions.contains("survey_source")) continue;
         const auto admission = inspect_survey_source(entity.extensions.at("survey_source"));
@@ -1656,6 +1668,13 @@ static std::map<std::string, Asset, std::less<>> boundary_constraint_assets(
 void validate_completed_constraint_change(const std::map<std::string, Entity, std::less<>>& before,
     const std::map<std::string, Entity, std::less<>>& after,
     const ApplyBoundaryConstraintChanges& command) {
+    if(command.wall_split) {
+        const auto expected=replayed_wall_split_entities(before,*command.wall_split);
+        if(expected!=after)document_error(DocumentErrorCode::constraint_violation,"Wall split differs from complete source reconstruction");
+        const auto normalized=wall_split_validation_source(before,expected,*command.wall_split);
+        validate_constraint_change(normalized,after,true,true,false);
+        return;
+    }
     std::set<std::string,std::less<>> rigid_ids;
     for(const auto& edit:command.wall_edits)if(edit.version==4) {
         const auto found=before.find(edit.wall_id);
@@ -1720,9 +1739,32 @@ static void validate_exterior_source_redraw(const BoundaryGeometryEdit& edit) {
         throw std::invalid_argument("Automatic exterior source updates require retained-topology version-three redraws");
 }
 
+static void validate_wall_split_lifetime(const WallSplitIntent& intent,
+    const std::vector<RevisionRecord>& history,std::size_t preceding_records) {
+    std::set<std::string> fresh{intent.second_wall_id,intent.seam_constraint_id};
+    for(const auto& owner:intent.measured_owners) {
+        if(!fresh.insert(owner.vertex_id).second || !fresh.insert(owner.segment_id).second ||
+            (!owner.automatic_dimension_id.empty() && !fresh.insert(owner.automatic_dimension_id).second))
+            throw std::invalid_argument("Wall split fresh identities overlap");
+    }
+    for(std::size_t i=0;i<preceding_records;++i)for(const auto& [id,entity]:history[i].entities) {
+        if(fresh.contains(id))throw std::invalid_argument("Wall split identity was already used in retained history: "+id);
+        if(!can_recognize_boundary_entity_type(entity.type) ||
+            inspect_boundary_entity_version(entity).format!=BoundaryEntityFormat::identified_v1)continue;
+        for(const auto& edge:decode_identified_boundary_entity(entity).segments)
+            if(fresh.contains(edge.segment_id) || fresh.contains(edge.start_vertex_id) || fresh.contains(edge.end_vertex_id))
+                throw std::invalid_argument("Wall split child identity was already used in retained history: "+id);
+    }
+}
+
 std::map<std::string, Entity, std::less<>> boundary_constraint_entities(
     const std::map<std::string, Entity, std::less<>>& source,
     const ApplyBoundaryConstraintChanges& command, bool retained_replay = false) {
+    if(command.wall_split) {
+        (void)command_to_json(Command{command});
+        try{return replayed_wall_split_entities(source,*command.wall_split);}
+        catch(const std::exception& error){document_error(DocumentErrorCode::invalid_entity,error.what());}
+    }
     const bool source_completion = has_exterior_source_completion(command);
     const bool measured_completion=has_measured_source_completion(command);
     if (source_completion || measured_completion) (void)command_to_json(Command{command});
@@ -2725,6 +2767,17 @@ nlohmann::json command_to_json(const Command& command) {
             }
             return encoded;
         } else if constexpr (std::is_same_v<T, ApplyBoundaryConstraintChanges>) {
+            if(typed.wall_split) {
+                if(!typed.boundary_edits.empty() || !typed.entity_changes.empty() || !typed.wall_edits.empty() ||
+                    !typed.physical_entity_changes.empty() || !typed.exterior_source_edits.empty() ||
+                    !typed.supplemental_entity_changes.empty() || !typed.supplemental_asset_changes.empty() ||
+                    typed.exterior_source_completion || typed.supplemental_source_completion || typed.exterior_corner_move ||
+                    typed.supplemental_asset_reference_completion || typed.rigid_wall_transform_completion ||
+                    !typed.measured_stroke_edits.empty() || typed.measured_source_completion)
+                    document_error(DocumentErrorCode::invalid_entity,"Wall split intent cannot borrow another command lane");
+                return nlohmann::json{{"version",12},{"kind","apply_boundary_constraint_changes"},
+                    {"expected_revision",typed.expected_revision},{"message",typed.message},{"wall_split",encode_wall_split(*typed.wall_split)}};
+            }
             auto encoded = command_to_json(ApplyEntityChanges{
                 typed.expected_revision, typed.entity_changes, {}, typed.message});
             encoded["kind"] = "apply_boundary_constraint_changes";
@@ -2859,7 +2912,7 @@ Command command_from_json(const nlohmann::json& value,
     try {
         if (!value.is_object() || !value.contains("version") || !value.contains("kind") ||
             !value.at("version").is_number_integer() ||
-            (value.at("version") != 1 && value.at("version") != 2 && value.at("version") != 3 && value.at("version") != 4 && value.at("version") != 5 && value.at("version") != 6 && value.at("version") != 7 && value.at("version") != 8 && value.at("version") != 9 && value.at("version") != 10 && value.at("version") != 11) ||
+            (value.at("version") != 1 && value.at("version") != 2 && value.at("version") != 3 && value.at("version") != 4 && value.at("version") != 5 && value.at("version") != 6 && value.at("version") != 7 && value.at("version") != 8 && value.at("version") != 9 && value.at("version") != 10 && value.at("version") != 11 && value.at("version") != 12) ||
             !value.at("kind").is_string()) {
             document_error(DocumentErrorCode::invalid_entity, "serialized command envelope is invalid");
         }
@@ -2915,6 +2968,14 @@ Command command_from_json(const nlohmann::json& value,
             return result;
         }
         if (kind == "apply_boundary_constraint_changes") {
+            if(value.at("version")==12) {
+                command_exact_fields(value,{"version","kind","expected_revision","message","wall_split"},
+                    DocumentErrorCode::invalid_entity,"serialized wall split command");
+                if(!value.at("message").is_string())document_error(DocumentErrorCode::invalid_entity,"Wall split message must be a string");
+                ApplyBoundaryConstraintChanges result;result.expected_revision=command_revision(value.at("expected_revision"),"Wall split revision");
+                result.message=value.at("message").get<std::string>();result.wall_split=decode_wall_split(value.at("wall_split"));
+                return result;
+            }
             const bool measured_envelope=value.at("version")==11;
             const bool combined_envelope=value.at("version")==10 || measured_envelope;
             if(measured_envelope) {
@@ -3393,6 +3454,7 @@ Revision Document::apply(const Command& command) {
                 next.action = typed_command.message.empty()
                     ? "Apply boundary constraints" : typed_command.message;
                 validate_action(next.action);
+                if(typed_command.wall_split)validate_wall_split_lifetime(*typed_command.wall_split,history_,history_.size());
                 next.boundary_constraint_changes = typed_command;
                 next.entities = boundary_constraint_entities(current.entities, typed_command);
                 next.assets = boundary_constraint_assets(current.assets, typed_command);
@@ -3400,7 +3462,8 @@ Revision Document::apply(const Command& command) {
                 validate_completed_constraint_change(current.entities, next.entities, typed_command);
                 try {
                     validate_boundary_identity_transition(
-                        boundary_identity_history_, current.entities, next.entities);
+                        boundary_identity_history_, typed_command.wall_split ?
+                            wall_split_validation_source(current.entities,next.entities,*typed_command.wall_split) : current.entities, next.entities);
                 } catch (const std::exception& error) {
                     document_error(DocumentErrorCode::invalid_entity, error.what());
                 }
@@ -3637,7 +3700,7 @@ Document Document::restore(DocumentSnapshot snapshot) {
         // Undo/redo restores an exact retained state and its provenance. The
         // source-state and stack checks below validate navigation; mutation
         // rules must not reject restoration of a shorter derivation prefix.
-        if (record.boundary_constraint_changes && (has_exterior_source_completion(*record.boundary_constraint_changes) ||
+        if (record.boundary_constraint_changes && (record.boundary_constraint_changes->wall_split || has_exterior_source_completion(*record.boundary_constraint_changes) ||
             has_rigid_wall_transform(*record.boundary_constraint_changes)))
             validate_completed_constraint_change(previous.entities, record.entities, *record.boundary_constraint_changes);
         else validate_constraint_change(previous.entities, record.entities,
@@ -3797,9 +3860,11 @@ Document Document::restore(DocumentSnapshot snapshot) {
                                    "Boundary constraint transaction proof does not match revision");
                 auto expected = previous;
                 try {
+                    if(proof.wall_split)validate_wall_split_lifetime(*proof.wall_split,snapshot.history_,index);
                     expected.entities = boundary_constraint_entities(previous.entities, proof, true);
                     expected.assets = boundary_constraint_assets(previous.assets, proof);
-                    validate_boundary_identity_transition(identity_history, previous.entities, record.entities);
+                    validate_boundary_identity_transition(identity_history, proof.wall_split ?
+                        wall_split_validation_source(previous.entities,expected.entities,*proof.wall_split) : previous.entities, record.entities);
                 } catch (const std::exception& error) {
                     document_error(DocumentErrorCode::invalid_history, error.what());
                 }

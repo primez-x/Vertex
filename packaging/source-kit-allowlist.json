@@ -1663,6 +1663,10 @@
     },
     {
       "category": "docs",
+      "path": "docs/plans/2026-10-04-wall-vertex-insertion.md"
+    },
+    {
+      "category": "docs",
       "path": "docs/product-scope.md"
     },
     {
@@ -2751,6 +2755,10 @@
     },
     {
       "category": "docs",
+      "path": "docs/verification/wall-vertex-insertion-2026-10-04.md"
+    },
+    {
+      "category": "docs",
       "path": "docs/verification/wall-workflow-2026-10-01.md"
     },
     {
@@ -3300,6 +3308,10 @@
     {
       "category": "source",
       "path": "include/sketch/wall_semantics.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/wall_split.hpp"
     },
     {
       "category": "source",
@@ -4059,6 +4071,10 @@
     },
     {
       "category": "source",
+      "path": "src/core/wall_split.cpp"
+    },
+    {
+      "category": "source",
       "path": "src/core/windows_appraisal_boundary.cpp"
     },
     {
@@ -4252,6 +4268,10 @@
     {
       "category": "source",
       "path": "tests/appraisal_report_desktop_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/arc_chain_constraint_tests.cpp"
     },
     {
       "category": "source",
@@ -5204,6 +5224,18 @@
     {
       "category": "source",
       "path": "tests/wall_semantics_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/wall_split_storage_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/wall_vertex_insertion_desktop_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/wall_vertex_insertion_tests.cpp"
     },
     {
       "category": "source",

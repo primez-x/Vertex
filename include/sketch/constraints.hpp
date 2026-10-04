@@ -46,6 +46,20 @@ struct FixedLengthConstraint {
     double length_metres{};
 };
 
+struct WeightedLengthTerm {
+    ConstraintPointId first;
+    ConstraintPointId second;
+    double coefficient{};
+};
+
+// One scalar equation preserves a physical total while individual pieces
+// retain freedom to exchange length. Coefficients are positive constants.
+struct WeightedLengthSumConstraint {
+    ConstraintId id;
+    std::vector<WeightedLengthTerm> terms;
+    double total_metres{};
+};
+
 struct ParallelConstraint {
     ConstraintId id;
     ConstraintPointId first_start;
@@ -85,7 +99,8 @@ struct AffineStationConstraint {
 using PlanarConstraint =
     std::variant<HorizontalConstraint, VerticalConstraint, CoincidentConstraint,
                  FixedLengthConstraint, ParallelConstraint, PerpendicularConstraint,
-                 FixedAnchorConstraint, AffineStationConstraint>;
+                 FixedAnchorConstraint, AffineStationConstraint,
+                 WeightedLengthSumConstraint>;
 
 enum class WindingOrientation { clockwise = -1, counter_clockwise = 1 };
 

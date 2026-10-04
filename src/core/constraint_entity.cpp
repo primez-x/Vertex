@@ -1,6 +1,7 @@
 #include "sketch/constraint_entity.hpp"
 #include "sketch/measurement_linework.hpp"
 #include "sketch/boundary_entity.hpp"
+#include "sketch/constraint_tolerances.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -22,6 +23,7 @@ using json = nlohmann::json;
 constexpr std::size_t kMaximumIdentifierBytes = 128;
 constexpr std::size_t kMaximumJsonDepth = 64;
 constexpr std::size_t kMaximumJsonValues = 100'000;
+constexpr std::size_t kMaximumArcChainSegments = 128;
 
 [[noreturn]] void invalid(std::string_view message) {
     throw std::invalid_argument(std::string(message));
@@ -321,6 +323,8 @@ std::vector<std::string> decode_wall_ids(const json& properties,
 
 void validate_binding_count(const std::vector<WallEndpointBinding>& bindings,
                             ConstraintRelationKind relation) {
+    if (relation==ConstraintRelationKind::fixed_arc_length && bindings.size()>=2 &&
+        bindings.size()%2==0 && bindings.size()<=2*kMaximumArcChainSegments) return;
     if (bindings.size() != expected_binding_count(relation)) {
         invalid("constraint binding count does not match its relation");
     }
@@ -529,9 +533,7 @@ void validate_model(const PersistentConstraint& constraint) {
     if (!valid_identifier(constraint.id)) {
         invalid("constraint id is empty or invalid");
     }
-    if (constraint.bindings.size() != expected_binding_count(constraint.relation)) {
-        invalid("constraint binding count does not match its relation");
-    }
+    validate_binding_count(constraint.bindings,constraint.relation);
     std::vector<WallEndpointBinding> seen;
     seen.reserve(constraint.bindings.size());
     for (const auto& binding : constraint.bindings) {
@@ -584,10 +586,21 @@ void validate_model(const PersistentConstraint& constraint) {
             break;
     }
     if (constraint.relation==ConstraintRelationKind::fixed_arc_length) {
-        const auto& first=constraint.bindings.at(0); const auto& second=constraint.bindings.at(1);
-        if (first.owner_id!=second.owner_id || first.role==second.role || first.segment_id!=second.segment_id ||
-            (!first.segment_id.empty() && first.vertex_id==second.vertex_id))
-            invalid("Fixed arc length requires opposite endpoints of the same curved segment");
+        std::set<std::pair<std::string,std::string>> segments;
+        for (std::size_t i=0;i<constraint.bindings.size();i+=2) {
+            const auto& first=constraint.bindings.at(i); const auto& second=constraint.bindings.at(i+1);
+            if (first.owner_id!=second.owner_id || first.role==second.role || first.segment_id!=second.segment_id ||
+                (!first.segment_id.empty() && first.vertex_id==second.vertex_id))
+                invalid("Fixed arc length requires opposite endpoints of each curved segment");
+            if (!segments.emplace(first.owner_id,first.segment_id).second)
+                invalid("Fixed arc length chain repeats a segment");
+            if (i>0) {
+                const auto& previous=constraint.bindings.at(i-1);
+                if (previous.owner_id==first.owner_id && !first.segment_id.empty() &&
+                    previous.vertex_id!=first.vertex_id)
+                    invalid("Fixed arc length chain has disconnected stable vertices");
+            }
+        }
     }
 }
 
@@ -705,13 +718,16 @@ ConstraintEntityDecodeResult decode_constraint_entity(const Entity& entity) {
     }
 
     const auto relation = relation_from_name(relation_text);
-    const bool known=relation && ((version==3 && *relation==ConstraintRelationKind::fixed_arc_length) ||
+    const bool known=relation && (((version==3 || version==4) && *relation==ConstraintRelationKind::fixed_arc_length) ||
         ((version==1 || version==2) && *relation!=ConstraintRelationKind::fixed_arc_length));
     if (known) {
-        if (version==3 && (!properties.contains("entity_ids") || properties.contains("wall_ids")))
-            invalid("Fixed arc length version three requires generic entity_ids owners");
+        if ((version==3 || version==4) && (!properties.contains("entity_ids") || properties.contains("wall_ids")))
+            invalid("Fixed arc length requires generic entity_ids owners");
         const auto& bindings = required_property(properties, "bindings");
-        if (!bindings.is_array() || bindings.size() != expected_binding_count(*relation))
+        const bool count=version==4 ? bindings.is_array() && bindings.size()>=4 &&
+            bindings.size()%2==0 && bindings.size()<=2*kMaximumArcChainSegments
+            : bindings.is_array() && bindings.size()==expected_binding_count(*relation);
+        if (!count)
             invalid("constraint has the wrong number of endpoint bindings");
     }
     const auto raw_bindings = decode_binding_envelope(properties);
@@ -796,7 +812,7 @@ Entity encode_constraint_entity(const PersistentConstraint& constraint, const En
         [](const auto& b) { return !b.segment_id.empty(); });
     const bool arc=constraint.relation==ConstraintRelationKind::fixed_arc_length;
     const bool generic=boundary || arc;
-    properties["version"] = arc ? 3 : boundary ? 2 : 1;
+    properties["version"] = arc ? (constraint.bindings.size()>2 ? 4 : 3) : boundary ? 2 : 1;
     properties["relation"] = std::string(constraint_relation_name(constraint.relation));
     properties["bindings"] = encode_bindings(constraint.bindings, original_bindings);
     properties.erase(generic ? "wall_ids" : "entity_ids");
@@ -842,9 +858,12 @@ Segment resolve_constraint_arc_segment(const PersistentConstraint& constraint,
     validate_model(constraint);
     if (constraint.relation!=ConstraintRelationKind::fixed_arc_length)
         invalid("Arc segment resolution requires a fixed arc length relation");
+    if (constraint.bindings.size()!=2)
+        invalid("Single arc resolution cannot measure an arc chain");
     const auto& first=constraint.bindings.at(0); const auto& second=constraint.bindings.at(1);
     const auto found=entities.find(first.owner_id);
     if (found==entities.end()) invalid("Fixed arc length owner is missing");
+    if (found->second.id!=first.owner_id) invalid("Fixed arc length owner identity is inconsistent");
     Segment segment;
     if (first.segment_id.empty()) {
         const auto& owner=found->second;
@@ -878,6 +897,53 @@ Segment resolve_constraint_arc_segment(const PersistentConstraint& constraint,
     (void)arc_from_chord_angle(segment.start,segment.end,segment.sweep_radians);
     (void)segment_length(segment);
     return segment;
+}
+
+std::vector<Segment> resolve_constraint_arc_segments(const PersistentConstraint& constraint,
+    const std::map<std::string,Entity,std::less<>>& entities) {
+    validate_model(constraint);
+    if (constraint.relation!=ConstraintRelationKind::fixed_arc_length)
+        invalid("Arc chain resolution requires a fixed arc length relation");
+    std::vector<Segment> segments;
+    segments.reserve(constraint.bindings.size()/2);
+    for (std::size_t i=0;i<constraint.bindings.size();i+=2) {
+        auto single=constraint;
+        single.bindings={constraint.bindings[i],constraint.bindings[i+1]};
+        auto segment=resolve_constraint_arc_segment(single,entities);
+        if (constraint.bindings[i].role==WallEndpointRole::end) {
+            std::swap(segment.start,segment.end);
+            segment.sweep_radians=-segment.sweep_radians;
+        }
+        if (!segments.empty()) {
+            const auto& previous=segments.back();
+            const long double gap=std::hypot(static_cast<long double>(previous.end.x)-segment.start.x,
+                static_cast<long double>(previous.end.y)-segment.start.y);
+            if (!std::isfinite(gap) || gap>constraint_linear_tolerance_metres)
+                invalid("Fixed arc length chain geometry is disconnected");
+        }
+        segments.push_back(segment);
+    }
+    return segments;
+}
+
+double resolve_constraint_arc_length(const PersistentConstraint& constraint,
+    const std::map<std::string,Entity,std::less<>>& entities) {
+    long double total=0;
+    for (const auto& segment : resolve_constraint_arc_segments(constraint,entities))
+        total+=segment_length(segment);
+    if (!std::isfinite(total) || !(total>0) || total>std::numeric_limits<double>::max())
+        invalid("Fixed arc length total is outside the supported range");
+    return static_cast<double>(total);
+}
+
+double constraint_arc_length_coefficient(const Segment& segment) {
+    (void)arc_from_chord_angle(segment.start,segment.end,segment.sweep_radians);
+    if (segment.sweep_radians==0) invalid("Arc length coefficient requires a genuine curve");
+    const long double sweep=segment.sweep_radians;
+    const long double coefficient=std::abs(sweep/(2*std::sin(sweep/2)));
+    if (!std::isfinite(coefficient) || !(coefficient>0) || coefficient>std::numeric_limits<double>::max())
+        invalid("Arc length coefficient is outside the supported range");
+    return static_cast<double>(coefficient);
 }
 
 double constraint_arc_chord_target(const PersistentConstraint& constraint,

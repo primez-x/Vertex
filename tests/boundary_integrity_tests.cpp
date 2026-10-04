@@ -12,6 +12,7 @@
 #include <sqlite3.h>
 
 #include <functional>
+#include <algorithm>
 #include <cmath>
 #include <cstdlib>
 #include <iostream>
@@ -779,6 +780,48 @@ void test_legacy_lineage_preserves_v1_without_laundering_identity() {
     const_cast<std::vector<RevisionRecord>&>(forged.history()).back().entities.at("boundary-1") = upgraded;
     require_invalid_snapshot_not_published(forged);
 }
+void test_manual_chain_fresh_topology_mapping_preserves_all_targets() {
+    auto owner = rectangle();
+    BoundaryDimension dimension{"mapped-chain", owner.id, "edge-0", {8, 9}};
+    dimension.segment_chain_ids = {"edge-0", "edge-1"};
+    dimension.presentation = BoundaryDimensionPresentation{};
+    auto dimension_entity = encode_boundary_dimension_entity(dimension);
+    dimension_entity.properties["text_position"] = Json::array({8, 9});
+    dimension_entity.properties["presentation"]["text_height_mm"] = 2.5;
+    dimension_entity.properties["target"]["vendor"] = {{"number", 1.0}};
+    auto document = Document::create({owner, dimension_entity});
+    const auto before = document.snapshot();
+    auto fresh = decode_identified_boundary_entity(owner);
+    for (std::size_t i = 0; i < fresh.segments.size(); ++i) {
+        fresh.segments[i].segment_id = "fresh-edge-" + std::to_string(i);
+        fresh.segments[i].start_vertex_id = "fresh-vertex-" + std::to_string(i);
+        fresh.segments[i].end_vertex_id = "fresh-vertex-" + std::to_string((i + 1) % fresh.segments.size());
+    }
+    BoundaryGeometryEdit edit;
+    edit.kind = BoundaryGeometryEditKind::redefine_boundary;
+    edit.boundary_id = edit.target_id = owner.id;
+    edit.fresh_topology = true;
+    edit.replacement_segments = encode_identified_boundary_entity(fresh).properties.at("segments");
+    edit.replacement_child_mapping = {{"segments", {{"edge-0", "fresh-edge-0"}, {"edge-1", "fresh-edge-1"}}},
+                                     {"vertices", Json::object()}};
+    document.apply(EditBoundaryGeometry{document.revision(), edit});
+    const auto after = document.snapshot();
+    auto expected = dimension_entity;
+    expected.properties["target"]["segment_ids"] = Json::array({"fresh-edge-0", "fresh-edge-1"});
+    require(after.entities().at(dimension.id).properties.dump() == expected.properties.dump() &&
+            decode_boundary_dimension_entity(after.entities().at(dimension.id)).dimension->resolve(after.entities().at(owner.id)).segment_length() == 7,
+            "fresh topology mapping must remap every chain ID while preserving exact presentation and target metadata");
+    document.undo(document.revision());
+    require(document.snapshot().entities() == before.entities(), "chain topology mapping undo must restore exact input");
+    auto invalid = edit;
+    invalid.replacement_child_mapping["segments"].erase("edge-1");
+    bool rejected = false;
+    try { document.apply(EditBoundaryGeometry{document.revision(), invalid}); }
+    catch (const DocumentError&) { rejected = true; }
+    require(rejected && document.snapshot().entities() == before.entities(),
+            "missing non-first chain mapping must reject atomically");
+}
+
 void test_typed_vertex_split_preserves_identity_and_rejects_forgery() {
     BoundaryAuthoringOptions options;
     options.automatic_dimension_placement = true;
@@ -805,7 +848,15 @@ void test_typed_vertex_split_preserves_identity_and_rejects_forgery() {
     auto reverse_angle = end_angle;
     reverse_angle.id = "reverse-angle";
     std::swap(reverse_angle.segment_id, reverse_angle.secondary_segment_id);
-    std::vector<Entity> entities{owner, encode_boundary_dimension_entity(start_angle),
+    BoundaryDimension manual{"manual-span", owner.id, first.segment_id, {8.0, 9.0}};
+    manual.presentation = BoundaryDimensionPresentation{4.0, "#123456", true, false, true, 0.5};
+    auto manual_entity = encode_boundary_dimension_entity(manual);
+    manual_entity.properties["text_position"] = Json::array({8, 9});
+    manual_entity.properties["presentation"]["text_height_mm"] = 4;
+    manual_entity.properties["opaque"] = {{"number", 1.0}};
+    manual_entity.properties["target"]["vendor"] = "preserve";
+    manual_entity.extensions["vendor"] = Json::array({1, 2});
+    std::vector<Entity> entities{owner, manual_entity, encode_boundary_dimension_entity(start_angle),
         encode_boundary_dimension_entity(end_angle), encode_boundary_dimension_entity(reverse_angle)};
     for (const auto& dimension : accepted.dimensions)
         entities.push_back(encode_boundary_dimension_entity(dimension));
@@ -827,6 +878,46 @@ void test_typed_vertex_split_preserves_identity_and_rejects_forgery() {
     const auto after = document.snapshot();
     const auto& edited = after.entities().at(owner.id);
     const auto geometry = decode_identified_boundary_entity(edited);
+    const auto retained_manual = *decode_boundary_dimension_entity(after.entities().at(manual.id)).dimension;
+    auto expected_manual = manual;
+    expected_manual.segment_chain_ids = {first.segment_id, split.new_segment_id};
+    require(retained_manual == expected_manual && retained_manual.resolve(edited).segment_length() == 4.0,
+        "manual split dimension must retain identity, placement and style while measuring both pieces");
+    require(after.entities().at(manual.id).properties.at("opaque") == manual_entity.properties.at("opaque") &&
+        after.entities().at(manual.id).properties.at("target").at("vendor") == "preserve" &&
+        after.entities().at(manual.id).extensions == manual_entity.extensions &&
+        after.entities().at(manual.id).properties.at("presentation").dump() == manual_entity.properties.at("presentation").dump() &&
+        after.entities().at(manual.id).properties.at("text_position").dump() == manual_entity.properties.at("text_position").dump(),
+        "manual split dimension must retain opaque metadata");
+    auto recursive_split = split;
+    recursive_split.target_id = split.new_segment_id;
+    recursive_split.new_vertex_id = "recursive-manual-vertex";
+    recursive_split.new_segment_id = "recursive-manual-edge";
+    recursive_split.new_dimension_id = "recursive-auto-dimension";
+    auto recursive_entities = edited_boundary_entities(after.entities(), recursive_split);
+    const auto recursive_manual = *decode_boundary_dimension_entity(recursive_entities.at(manual.id)).dimension;
+    require(recursive_manual.segment_chain_ids == std::vector<std::string>{first.segment_id,
+            split.new_segment_id, recursive_split.new_segment_id} &&
+            recursive_manual.resolve(recursive_entities.at(owner.id)).segment_length() == 4.0 &&
+            recursive_manual.text_position.x == manual.text_position.x &&
+            recursive_manual.text_position.y == manual.text_position.y && recursive_manual.presentation == manual.presentation,
+        "recursive insertion must expand the manual whole span without changing text or style");
+    BoundaryGeometryEdit resize_piece;
+    resize_piece.kind = BoundaryGeometryEditKind::resize_segment;
+    resize_piece.boundary_id = owner.id;
+    resize_piece.target_id = recursive_split.new_segment_id;
+    resize_piece.target_length_metres = 3.0;
+    recursive_entities = edited_boundary_entities(recursive_entities, resize_piece);
+    const auto resized_manual = *decode_boundary_dimension_entity(recursive_entities.at(manual.id)).dimension;
+    require(std::abs(resized_manual.resolve(recursive_entities.at(owner.id)).segment_length() - 4.75) < 1e-9 &&
+            resized_manual == recursive_manual,
+        "manual whole span must derive its length from later geometry without stale stored measurements");
+    auto invalid_chain = recursive_entities;
+    invalid_chain.at(manual.id).properties["target"]["segment_ids"][1] = "missing-span-piece";
+    bool invalid_chain_rejected = false;
+    try { (void)validate_boundary_integrity(invalid_chain); }
+    catch (const std::invalid_argument&) { invalid_chain_rejected = true; }
+    require(invalid_chain_rejected, "authoritative boundary integrity must validate every chain member");
     require(geometry == insert_boundary_vertex(accepted.boundary, first.segment_id, 0.25,
         split.new_vertex_id, split.new_segment_id), "typed split must reproduce canonical geometry");
     require(edited.extensions.at("boundary_geometry_derivation").at("source_boundary_authoring") == receipt,
@@ -860,7 +951,7 @@ void test_typed_vertex_split_preserves_identity_and_rejects_forgery() {
     try { document.apply(EditBoundaryGeometry{document.revision(), invalid}); }
     catch (const DocumentError&) { rejected = true; }
     require(rejected && document.snapshot().entities() == after.entities(), "duplicate split IDs must reject atomically");
-    auto reopened = reopen(document.snapshot(), 7);
+    auto reopened = reopen(document.snapshot(), 37);
     require(reopened.snapshot().entities() == after.entities(), "split and proof must survive save and reopen");
     reopened.undo(reopened.revision());
     const auto branch = reopened.snapshot();
@@ -941,6 +1032,54 @@ void test_typed_vertex_split_preserves_identity_and_rejects_forgery() {
         std::abs(signed_area(boundary_geometry(arc_after)) - signed_area(boundary_geometry(arc_before))) < 1e-9 &&
         std::abs(perimeter(boundary_geometry(arc_after)) - perimeter(boundary_geometry(arc_before))) < 1e-9,
         "typed analytical arc split must preserve winding, sweep, area and perimeter");
+    for (const bool reverse : {false, true}) {
+        PersistentConstraint arc_lock;
+        arc_lock.id = reverse ? "reverse-arc-lock" : "forward-arc-lock";
+        arc_lock.relation = ConstraintRelationKind::fixed_arc_length;
+        arc_lock.bindings = {{curved.id, WallEndpointRole::start, "edge-0", "vertex-0"},
+                            {curved.id, WallEndpointRole::end, "edge-0", "vertex-1"}};
+        if (reverse) std::reverse(arc_lock.bindings.begin(), arc_lock.bindings.end());
+        arc_lock.length = parse_quantity("4442.882938158366 mm");
+        auto arc_lock_entity = encode_constraint_entity(arc_lock);
+        arc_lock_entity.properties["bindings"][0]["vendor"] = {{"number", 1.0}};
+        arc_lock_entity.properties["bindings"][1]["vendor"] = "end-note";
+        arc_lock_entity.extensions["opaque"] = true;
+        auto locked_arc = Document::create({curved, arc_lock_entity});
+        const auto input = locked_arc.snapshot();
+        locked_arc.apply(EditBoundaryGeometry{locked_arc.revision(), arc_split});
+        const auto split_snapshot = locked_arc.snapshot();
+        const auto& migrated_entity = split_snapshot.entities().at(arc_lock.id);
+        const auto migrated = *decode_constraint_entity(migrated_entity).constraint;
+        require(migrated.bindings.size() == 4 && migrated_entity.properties.at("version") == 4 &&
+            std::abs(resolve_constraint_arc_length(migrated, split_snapshot.entities()) -
+                     segment_length(arc_before.segments[0].segment)) < 1e-9,
+            "arc insertion must retain one physical total constraint across its directed pieces");
+        require(migrated_entity.properties.at("quantity_entries") == arc_lock_entity.properties.at("quantity_entries") &&
+            migrated_entity.properties.at("length_m") == arc_lock_entity.properties.at("length_m") &&
+            migrated_entity.extensions == arc_lock_entity.extensions &&
+            migrated_entity.properties.at("bindings")[0].at("vendor") ==
+                arc_lock_entity.properties.at("bindings")[0].at("vendor") &&
+            migrated_entity.properties.at("bindings")[3].at("vendor") == "end-note",
+            "arc insertion must preserve original ID, quantity and opaque binding metadata");
+        require(migrated.bindings.front().segment_id == (reverse ? arc_split.new_segment_id : "edge-0") &&
+                migrated.bindings.back().segment_id == (reverse ? "edge-0" : arc_split.new_segment_id),
+            "arc constraint traversal order must survive forward and reverse insertion");
+        auto recursive = arc_split;
+        recursive.target_id = arc_split.new_segment_id;
+        recursive.new_vertex_id = "recursive-arc-vertex";
+        recursive.new_segment_id = "recursive-arc-edge";
+        locked_arc.apply(EditBoundaryGeometry{locked_arc.revision(), recursive});
+        const auto recursive_snapshot = locked_arc.snapshot();
+        const auto recursive_lock = *decode_constraint_entity(recursive_snapshot.entities().at(arc_lock.id)).constraint;
+        require(recursive_lock.bindings.size() == 6 &&
+                std::abs(resolve_constraint_arc_length(recursive_lock, recursive_snapshot.entities()) -
+                         segment_length(arc_before.segments[0].segment)) < 1e-9,
+            "recursive arc insertion must expand the existing total chain");
+        locked_arc.undo(locked_arc.revision());
+        require(locked_arc.snapshot().entities() == split_snapshot.entities(), "recursive arc insertion undo must be exact");
+        locked_arc.undo(locked_arc.revision());
+        require(locked_arc.snapshot().entities() == input.entities(), "arc constraint insertion undo must restore input");
+    }
 }
 
 } // namespace
@@ -1613,6 +1752,7 @@ int main() {
         test_mixed_resize_and_simultaneous_vertex_batch_replay();
         test_raw_commands_cannot_bypass_identity_validation();
         test_typed_vertex_split_preserves_identity_and_rejects_forgery();
+        test_manual_chain_fresh_topology_mapping_preserves_all_targets();
         test_boundary_redefinition_proofs_and_reference_policy();
         test_changed_topology_explicit_reference_resolution();
         test_redraw_automatic_angle_removal_requires_version_five();

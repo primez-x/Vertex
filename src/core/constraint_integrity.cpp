@@ -217,9 +217,9 @@ std::optional<std::string> validate_constraint_integrity(const Entities& entitie
                              constraint.length->metres) <= linear_tolerance;
                 break;
             case ConstraintRelationKind::fixed_arc_length:
-                (void)constraint_arc_chord_target(constraint,entities);
+                if (constraint.bindings.size()==2) (void)constraint_arc_chord_target(constraint,entities);
                 satisfied = constraint.length.has_value() &&
-                    std::abs(segment_length(resolve_constraint_arc_segment(constraint,entities))-
+                    std::abs(resolve_constraint_arc_length(constraint,entities)-
                         constraint.length->metres)<=linear_tolerance;
                 break;
             case ConstraintRelationKind::fixed_anchor:

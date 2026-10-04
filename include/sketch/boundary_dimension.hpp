@@ -6,10 +6,11 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace sketch {
 
-enum class BoundaryDimensionFormat { supported_v1, supported_v2, unsupported_version };
+enum class BoundaryDimensionFormat { supported_v1, supported_v2, supported_v3, unsupported_version };
 
 struct BoundaryDimensionVersion {
     BoundaryDimensionFormat format{};
@@ -21,7 +22,7 @@ enum class BoundaryDimensionPlacement { manual, automatic };
 
 // Placed dimensions share one persisted presentation contract while keeping
 // their analytical target explicit. Segment lengths reference one stable
-// edge; angles reference two stable edges and their common vertex; areas
+// edge or an ordered physical edge chain; angles reference two stable edges and their common vertex; areas
 // reference the complete closed boundary.
 enum class BoundaryDimensionKind { segment_length, angle, area };
 
@@ -64,6 +65,10 @@ struct BoundaryDimension {
     BoundaryDimensionKind kind{BoundaryDimensionKind::segment_length};
     std::string vertex_id;
     std::string secondary_segment_id;
+    // Empty for a single edge. Otherwise 2..128 unique, contiguous forward
+    // edges, with segment_id == front() for existing C++ callers. Persisted
+    // v3 target.segment_ids is canonical and omits target.segment_id.
+    std::vector<std::string> segment_chain_ids;
 
     bool operator==(const BoundaryDimension& other) const noexcept {
         return id == other.id && boundary_id == other.boundary_id &&
@@ -71,7 +76,8 @@ struct BoundaryDimension {
                text_position.y == other.text_position.y && placement == other.placement &&
                automatic_placement_version == other.automatic_placement_version &&
                presentation == other.presentation && kind == other.kind &&
-               vertex_id == other.vertex_id && secondary_segment_id == other.secondary_segment_id;
+               vertex_id == other.vertex_id && secondary_segment_id == other.secondary_segment_id &&
+               segment_chain_ids == other.segment_chain_ids;
     }
 
     // Resolves stable analytical targets from identified boundaries or replayed
@@ -80,7 +86,7 @@ struct BoundaryDimension {
 };
 
 // Unsupported future versions or dimension kinds remain opaque and retain
-// their complete source entity. Malformed known v1/v2 data throws
+// their complete source entity. Malformed known v1/v2/v3 data throws
 // std::invalid_argument rather than being partially decoded.
 struct BoundaryDimensionDecodeResult {
     std::optional<BoundaryDimension> dimension;

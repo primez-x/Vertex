@@ -9,6 +9,12 @@
 
 namespace sketch {
 
+// Dedicated split correspondence preserves every outer vertex, surviving edge
+// and placed dimension identity while deriving the analytical seam from sources.
+[[nodiscard]] std::map<std::string, Entity, std::less<>> complete_wall_split_measurement_sources(
+    const std::map<std::string, Entity, std::less<>>& original,
+    const std::map<std::string, Entity, std::less<>>& physical, const WallSplitIntent& intent);
+
 struct WallMeasurementResult {
     Boundary boundary;
     nlohmann::json source;

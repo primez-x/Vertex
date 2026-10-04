@@ -60,6 +60,7 @@
 #include "sketch/calculations.hpp"
 #include "sketch/appraisal_document.hpp"
 #include "sketch/wall_measurement.hpp"
+#include "sketch/wall_split.hpp"
 #include "sketch/project_store.hpp"
 #include "sketch/project_resource_catalog.hpp"
 #include "sketch/project_ownership.hpp"
@@ -498,6 +499,7 @@ void remap_entity_references(Entity& entity,
     if (entity.type == "dimension" && properties.contains("target")) {
         reference(properties.at("target"), "entity_id");
         reference(properties.at("target"), "segment_id");
+        reference(properties.at("target"), "segment_ids");
         reference(properties.at("target"), "second_segment_id");
         reference(properties.at("target"), "vertex_id");
     }
@@ -6023,6 +6025,7 @@ public:
                     dimension.id = identities.at(id);
                     dimension.boundary_id = identities.at(original.id);
                     if (!dimension.segment_id.empty()) dimension.segment_id = identities.at(dimension.segment_id);
+                    for (auto& child : dimension.segment_chain_ids) child = identities.at(child);
                     if (!dimension.secondary_segment_id.empty())
                         dimension.secondary_segment_id = identities.at(
                             dimension.secondary_segment_id);
@@ -8660,9 +8663,13 @@ public:
             const auto size = universe.size();
             universe.insert(source.owner_ids.begin(), source.owner_ids.end());
             universe.insert(proposed.owner_ids.begin(), proposed.owner_ids.end());
-            const std::vector<std::string> seeds(universe.begin(), universe.end());
-            source = analyze_persistent_constraint_component(before, seeds);
-            proposed = analyze_persistent_constraint_component(after, seeds);
+            std::vector<std::string> source_seeds,proposed_seeds;
+            for(const auto& id:universe) {
+                if(before.entities().contains(id))source_seeds.push_back(id);
+                if(after.entities().contains(id))proposed_seeds.push_back(id);
+            }
+            source = analyze_persistent_constraint_component(before, source_seeds);
+            proposed = analyze_persistent_constraint_component(after, proposed_seeds);
             if (universe.size() == size) break;
         }
         if (!source.supported || !proposed.supported ||
@@ -8678,10 +8685,165 @@ public:
     static QString persistentFreedomHelp() {
         return QStringLiteral("Independent X/Y endpoint coordinates across the connected objects under saved relationships. "
             "Includes translation and rotation; excludes temporary editing anchors, wall thickness, height and curve parameters. "
-            "Before and after use the same connected object scope. Unavailable means the model cannot be diagnosed safely.");
+            "Before and after use the same connected scope, with new objects included only after insertion. Unavailable means the model cannot be diagnosed safely.");
+    }
+
+    WallSplitIntent selectedWallSplitIntent(const DocumentSnapshot& source,
+        const std::string& wall_id, const QString& fraction_text) {
+        bool ok=false;
+        const auto fraction=fraction_text.trimmed().toDouble(&ok);
+        if(!ok || !std::isfinite(fraction) || fraction<=0 || fraction>=1)
+            throw std::invalid_argument("Choose a split fraction strictly between 0 and 1.");
+        WallSplitIntent intent{wall_id,new_id("wall"),fraction,new_id("constraint"),{}};
+        const auto same_point=[](Vec2 a,Vec2 b) {
+            return std::hypot(a.x-b.x,a.y-b.y)<=default_geometry_tolerance_metres;
+        };
+        for(const auto& [id,entity]:source.entities()) {
+            if(entity.type!="measurement_boundary" || !entity.properties.contains("wall_measurement_source") ||
+               inspect_boundary_entity_version(entity).format!=BoundaryEntityFormat::identified_v1 ||
+               !wall_measurement_source_current(source,entity)) continue;
+            const auto ids=exterior_wall_measurement_source_ids(entity);
+            if(std::find(ids.begin(),ids.end(),wall_id)==ids.end()) continue;
+            const auto derived=derive_replacement_exterior_wall_measurement(source.entities(),entity,ids);
+            const auto physical=std::find(derived.ordered_wall_ids.begin(),derived.ordered_wall_ids.end(),wall_id);
+            if(physical==derived.ordered_wall_ids.end())
+                throw std::invalid_argument("The measured area has no analytical edge for this wall: "+id);
+            const auto& analytical=derived.boundary.at(static_cast<std::size_t>(physical-derived.ordered_wall_ids.begin()));
+            const auto identified=decode_identified_boundary_entity(entity);
+            std::string target;
+            for(const auto& edge:identified.segments) {
+                const bool forward=same_point(edge.segment.start,analytical.start) &&
+                    same_point(edge.segment.end,analytical.end) &&
+                    std::abs(edge.segment.sweep_radians-analytical.sweep_radians)<=1e-12;
+                const bool reversed=same_point(edge.segment.start,analytical.end) &&
+                    same_point(edge.segment.end,analytical.start) &&
+                    std::abs(edge.segment.sweep_radians+analytical.sweep_radians)<=1e-12;
+                if(!forward && !reversed) continue;
+                if(!target.empty()) throw std::invalid_argument("The measured area has ambiguous wall correspondence: "+id);
+                target=edge.segment_id;
+            }
+            if(target.empty()) throw std::invalid_argument("The measured area needs source review before splitting this wall: "+id);
+            WallSplitMeasuredOwnerIds children{id,new_id("vertex"),new_id("segment"),{}};
+            for(const auto& [dimension_id,candidate]:source.entities()) {
+                (void)dimension_id;
+                if(candidate.type!="dimension") continue;
+                const auto decoded=decode_boundary_dimension_entity(candidate);
+                if(!decoded.supported()) throw std::invalid_argument(decoded.unsupported_reason);
+                const auto& dimension=*decoded.dimension;
+                if(dimension.boundary_id==id && dimension.kind==BoundaryDimensionKind::segment_length &&
+                   dimension.segment_id==target && dimension.segment_chain_ids.empty() &&
+                   dimension.placement==BoundaryDimensionPlacement::automatic) {
+                    children.automatic_dimension_id=new_id("dimension");break;
+                }
+            }
+            intent.measured_owners.push_back(std::move(children));
+        }
+        return intent;
+    }
+
+    void showWallVertexInsertion() {
+        const auto context=captureModalContext();
+        const auto workspace=m_workspace;
+        const auto source=authoringSnapshot();
+        const auto selected=selectedEntity();
+        std::optional<Command> candidate;
+        std::optional<DocumentSnapshot> proposed;
+        QDialog dialog(owner);styleDialog(dialog);
+        dialog.setObjectName(QStringLiteral("wallVertexInsertionDialog"));
+        dialog.setWindowTitle(QStringLiteral("Insert wall point"));dialog.resize(600,560);
+        auto* layout=new QVBoxLayout(&dialog);
+        auto* form=new QFormLayout;
+        auto* fraction=new QLineEdit(QStringLiteral("0.5"),&dialog);
+        fraction->setObjectName(QStringLiteral("wallVertexFraction"));
+        fraction->setAccessibleName(QStringLiteral("Wall split fraction"));
+        form->addRow(QStringLiteral("Position (0..1)"),fraction);layout->addLayout(form);
+        auto* preview=new PlanCanvas(&dialog);
+        preview->setObjectName(QStringLiteral("wallVertexInsertionPreview"));
+        preview->setGridEnabled(false);preview->setOverviewMapEnabled(false);
+        preview->setSelectionTransformEnabled(false,false);preview->setSelectionAxisResizeEnabled(false);
+        preview->setMinimumHeight(260);layout->addWidget(preview,1);
+        auto* summary=new QLabel(&dialog);summary->setWordWrap(true);
+        summary->setObjectName(QStringLiteral("wallVertexInsertionSummary"));layout->addWidget(summary);
+        auto* freedom=new QLabel(&dialog);freedom->setWordWrap(true);freedom->setTextFormat(Qt::PlainText);
+        freedom->setObjectName(QStringLiteral("wallVertexInsertionFreedom"));
+        freedom->setToolTip(persistentFreedomHelp());layout->addWidget(freedom);
+        auto* status=new QLabel(&dialog);status->setWordWrap(true);status->setTextFormat(Qt::PlainText);
+        status->setObjectName(QStringLiteral("wallVertexInsertionStatus"));layout->addWidget(status);
+        auto* buttons=new QDialogButtonBox(QDialogButtonBox::Apply|QDialogButtonBox::Cancel,&dialog);
+        buttons->setObjectName(QStringLiteral("wallVertexInsertionButtons"));layout->addWidget(buttons);
+        PlanSceneCaches before_caches,after_caches;
+        SnapshotPlanSceneOptions options;options.metric_units=context.metric_units;
+        options.label_font=preview->font();options.label_device=preview;
+        const auto context_valid=[&] {
+            return modalContextUnchanged(context) && m_selected_ids.size()==1 && workspace==m_workspace && m_document->is_editable() &&
+                !m_boundary_session && !m_pending_wall_start;
+        };
+        const auto update=[&] {
+            candidate.reset();proposed.reset();summary->clear();freedom->clear();status->clear();
+            buttons->button(QDialogButtonBox::Apply)->setEnabled(false);
+            std::vector<CanvasEntity> geometry;std::vector<CanvasLabel> labels;
+            try {
+                if(!selected || selected->type!="wall" || m_selected_ids.size()!=1) throw std::invalid_argument("Select one wall first.");
+                if(!context_valid()) throw std::invalid_argument("The editing context changed. Reopen this tool after finishing the drawing.");
+                const auto intent=selectedWallSplitIntent(source,selected->id,fraction->text());
+                auto command=make_wall_split_command(source,intent);
+                auto result=Document::preview_command(source,command);
+                const auto before=projectSnapshotPlanScene(source,options,before_caches);
+                const auto after=projectSnapshotPlanScene(result,options,after_caches);
+                for(auto item:before.all_geometry) if(item.id.toStdString()==selected->id) {
+                    item.id+=QStringLiteral(":original");item.selected=false;item.filled=false;
+                    item.stroke_color=QColor(160,168,181);geometry.push_back(std::move(item));
+                }
+                std::set<std::string> represented{intent.wall_id,intent.second_wall_id};
+                for(const auto& [id,entity]:result.entities()) if(entity.type=="opening" || entity.type=="window") {
+                    const auto host=entity.properties.find("wall_id");
+                    if(host!=entity.properties.end() && host->is_string() && represented.contains(host->get<std::string>()))
+                        represented.insert(id);
+                }
+                for(auto item:after.all_geometry) if(represented.contains(item.id.toStdString())) {
+                    item.selected=false;geometry.push_back(std::move(item));
+                }
+                for(const auto& label:after.all_labels) {
+                    if(label.id.toStdString()==intent.wall_id || label.id.toStdString()==intent.second_wall_id ||
+                       label.id.startsWith(id_from(intent.wall_id)+QStringLiteral(":")) ||
+                       label.id.startsWith(id_from(intent.second_wall_id)+QStringLiteral(":"))) labels.push_back(label);
+                }
+                const auto first=read_required_segment(result.entities().at(intent.wall_id).properties,"baseline");
+                const auto second=read_required_segment(result.entities().at(intent.second_wall_id).properties,"baseline");
+                if(!first || !second) throw std::invalid_argument("Split wall geometry is unavailable.");
+                const auto p=first->end;
+                const auto r=std::max(0.035,(segment_length(*first)+segment_length(*second))*0.008);
+                CanvasEntity marker{QStringLiteral("split-point"),QStringLiteral("marker"),
+                    {{{p.x-r,p.y},{p.x+r,p.y},0},{{p.x,p.y-r},{p.x,p.y+r},0}},0,false};
+                marker.stroke_color=QColor(22,150,85);geometry.push_back(std::move(marker));
+                summary->setText(QStringLiteral("First wall: %1    Second wall: %2")
+                    .arg(format_length(segment_length(*first),context.metric_units),format_length(segment_length(*second),context.metric_units)));
+                freedom->setText(persistentFreedomSummary(source,result,selected->id,selected->id));
+                candidate=std::move(command);proposed=std::move(result);
+                buttons->button(QDialogButtonBox::Apply)->setEnabled(true);
+            } catch(const std::exception& error) {status->setText(QString::fromUtf8(error.what()));}
+            preview->setEntities(std::move(geometry));preview->setLabels(std::move(labels));preview->fitView();
+        };
+        QObject::connect(fraction,&QLineEdit::textChanged,&dialog,update);
+        QTimer timer(&dialog);timer.setInterval(100);
+        QObject::connect(&timer,&QTimer::timeout,&dialog,[&] {if(candidate && !context_valid())update();});timer.start();
+        QObject::connect(buttons,&QDialogButtonBox::rejected,&dialog,&QDialog::reject);
+        QObject::connect(buttons->button(QDialogButtonBox::Apply),&QPushButton::clicked,&dialog,[&] {
+            if(!candidate || !proposed) return;
+            try {
+                if(!context_valid()){update();return;}
+                const auto exact=Document::preview_command(source,*candidate);
+                if(exact.entities()!=proposed->entities()) throw std::invalid_argument("The preview changed. Reopen the tool.");
+                applyDocumentCommand(*candidate);clearError();refresh();dialog.accept();
+            } catch(const std::exception& error) {status->setText(QString::fromUtf8(error.what()));}
+        });
+        update();dialog.exec();
     }
 
     void showBoundaryVertexInsertion() {
+        if(const auto selected=selectedEntity();selected && selected->type=="wall") {
+            showWallVertexInsertion();return;
+        }
         const auto context = captureModalContext();
         const auto workspace = m_workspace;
         const auto source = authoringSnapshot();
@@ -19932,6 +20094,16 @@ public:
         }
         try {
             const auto source = authoringSnapshot();
+            const auto selected=source.entities().find(m_selected_id.toStdString());
+            if(selected!=source.entities().end() && selected->second.type=="wall") {
+                if(m_selected_ids.size()!=1 || m_boundary_session || m_pending_wall_start)
+                    throw std::invalid_argument("Select one wall after finishing or cancelling the active drawing.");
+                if(!segment_id.trimmed().isEmpty() && segment_id.trimmed()!=QStringLiteral("baseline"))
+                    throw std::invalid_argument("Wall point insertion targets the baseline.");
+                const auto command=make_wall_split_command(source,selectedWallSplitIntent(source,selected->first,fraction_text));
+                (void)Document::preview_command(source,command);
+                applyDocumentCommand(command);clearError();refresh();return true;
+            }
             const auto command = boundaryVertexInsertionCommand(source, m_selected_id.toStdString(), segment_id, fraction_text);
             (void)Document::preview_command(source, command);
             applyDocumentCommand(command);
@@ -20761,6 +20933,7 @@ public:
                     reference.name += QStringLiteral(" · %1 / %2 at %3").arg(child_name(dimension.segment_id),
                         child_name(dimension.secondary_segment_id), child_name(dimension.vertex_id, true));
                 } else {
+                    for(const auto& child:dimension.segment_chain_ids) reference.children.insert({false,child});
                     reference.name += QStringLiteral(" · %1").arg(child_name(dimension.segment_id));
                 }
                 references.push_back(std::move(reference));
@@ -26937,7 +27110,7 @@ public:
             {QStringLiteral("Paste selection"), [this] { pasteSelection(); }},
             {QStringLiteral("Delete selection"), [this] { deleteSelection(); }},
             {QStringLiteral("Upgrade boundary identities"), [this] { (void)upgradeSelectedBoundaryIdentities(); }},
-            {QStringLiteral("Insert boundary vertex"), [this] { showBoundaryVertexInsertion(); }},
+            {QStringLiteral("Insert point"), [this] { showBoundaryVertexInsertion(); }},
             {QStringLiteral("Jump to boundary vertex"), [this] { showBoundaryVertexJump(); }},
             {QStringLiteral("Align side to original start X (X)"), [this] { (void)proposeDrawingAlignment(true); }},
             {QStringLiteral("Align side to original start Y (Y)"), [this] { (void)proposeDrawingAlignment(false); }},
@@ -28410,7 +28583,7 @@ private:
         m_delete_action->setObjectName(QStringLiteral("deleteSelection"));
         m_delete_action->setShortcut(QKeySequence::Delete);
         m_delete_action->setShortcutContext(Qt::WindowShortcut);
-        m_insert_vertex_action = new QAction(QStringLiteral("Insert boundary vertex…"), owner);
+        m_insert_vertex_action = new QAction(QStringLiteral("Insert point…"), owner);
         m_insert_vertex_action->setObjectName(QStringLiteral("insertBoundaryVertex"));
         m_upgrade_boundary_identities_action = new QAction(QStringLiteral("Upgrade boundary identities"), owner);
         m_upgrade_boundary_identities_action->setObjectName(QStringLiteral("upgradeBoundaryIdentities"));

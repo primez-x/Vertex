@@ -24,6 +24,46 @@ struct MutablePoint {
     double y{};
 };
 
+class WeightedLengthSumEquation final : public GCS::Constraint {
+public:
+    WeightedLengthSumEquation(const std::vector<std::pair<GCS::Point,GCS::Point>>& points,
+                              std::vector<double> coefficients, double* target)
+        : coefficients_(std::move(coefficients)) {
+        for (const auto& [first,second] : points) {
+            pvec.insert(pvec.end(),{first.x,first.y,second.x,second.y});
+        }
+        pvec.push_back(target);
+        origpvec=pvec;
+    }
+
+    void errorgrad(double* error, double* gradient, double* parameter) override {
+        long double residual=-static_cast<long double>(*pvec.back());
+        long double derivative=parameter==pvec.back() ? -1.0L : 0.0L;
+        for (std::size_t i=0;i<coefficients_.size();++i) {
+            // PlaneGCS redirects pvec when extracting subsystems. Never retain
+            // constructor pointers or cache coordinates outside this vector.
+            const auto offset=4*i;
+            const long double dx=static_cast<long double>(*pvec[offset+2])-*pvec[offset];
+            const long double dy=static_cast<long double>(*pvec[offset+3])-*pvec[offset+1];
+            const long double chord=std::hypot(dx,dy);
+            residual+=coefficients_[i]*chord;
+            if (chord>0) {
+                const auto x=coefficients_[i]*dx/chord;
+                const auto y=coefficients_[i]*dy/chord;
+                // Multiple terms can share a joint or redirected coordinate.
+                if (parameter==pvec[offset]) derivative-=x;
+                if (parameter==pvec[offset+1]) derivative-=y;
+                if (parameter==pvec[offset+2]) derivative+=x;
+                if (parameter==pvec[offset+3]) derivative+=y;
+            }
+        }
+        if (error) *error=static_cast<double>(residual);
+        if (gradient) *gradient=static_cast<double>(derivative);
+    }
+private:
+    std::vector<double> coefficients_;
+};
+
 const ConstraintId& constraint_id(const PlanarConstraint& constraint) {
     return std::visit([](const auto& item) -> const ConstraintId& { return item.id; }, constraint);
 }
@@ -207,6 +247,38 @@ bool validate_request(const ConstraintSolveRequest& request,
                             message = "fixed length requires a non-degenerate initial segment";
                             return false;
                         }
+                    }
+                    return true;
+                }
+                else if constexpr (std::is_same_v<Item, WeightedLengthSumConstraint>) {
+                    if (item.terms.empty() || item.terms.size()>128 ||
+                        !std::isfinite(item.total_metres) || item.total_metres<=0) {
+                        message="weighted length sum requires bounded terms and a finite positive total";
+                        return false;
+                    }
+                    std::set<std::pair<ConstraintPointId,ConstraintPointId>> seen;
+                    long double total=0;
+                    for (const auto& term : item.terms) {
+                        const auto first=point_indices.find(term.first);
+                        const auto second=point_indices.find(term.second);
+                        if (first==point_indices.end() || second==point_indices.end() || term.first==term.second ||
+                            !seen.emplace(std::min(term.first,term.second),std::max(term.first,term.second)).second ||
+                            !std::isfinite(term.coefficient) || term.coefficient<=0) {
+                            message="weighted length terms require distinct existing endpoints and unique positive weights";
+                            return false;
+                        }
+                        const auto& a=request.points[first->second];
+                        const auto& b=request.points[second->second];
+                        const auto chord=stable_distance(a,b);
+                        if (!finite_separation(a,b) || !(chord>0)) {
+                            message="weighted length terms require finite nondegenerate segments";
+                            return false;
+                        }
+                        total+=static_cast<long double>(term.coefficient)*chord;
+                    }
+                    if (!std::isfinite(total) || total>std::numeric_limits<double>::max()) {
+                        message="weighted length sum is outside the supported numeric range";
+                        return false;
                     }
                     return true;
                 }
@@ -413,6 +485,19 @@ static ConstraintPreview planar_constraint_preview(const ConstraintSolveRequest&
                                                         solver_point(item.second),
                                                         &target_values.back(), tag);
                     }
+                    else if constexpr (std::is_same_v<Item, WeightedLengthSumConstraint>) {
+                        std::vector<std::pair<GCS::Point,GCS::Point>> points;
+                        std::vector<double> coefficients;
+                        for (const auto& term : item.terms) {
+                            points.emplace_back(solver_point(term.first),solver_point(term.second));
+                            coefficients.push_back(term.coefficient);
+                        }
+                        target_values.push_back(item.total_metres);
+                        auto* relation=new WeightedLengthSumEquation(points,std::move(coefficients),&target_values.back());
+                        relation->setTag(tag);
+                        relation->setDriving(true);
+                        system.addConstraint(relation);
+                    }
                     else if constexpr (std::is_same_v<Item, ParallelConstraint>) {
                         GCS::Line first_line;
                         first_line.p1 = solver_point(item.first_start);
@@ -539,6 +624,18 @@ static ConstraintPreview planar_constraint_preview(const ConstraintSolveRequest&
                         linear_residual = std::abs(stable_distance(solved(item.first),
                                                                   solved(item.second))
                                                    - item.length_metres);
+                    }
+                    else if constexpr (std::is_same_v<Item, WeightedLengthSumConstraint>) {
+                        long double total=0;
+                        bool valid=true;
+                        for (const auto& term : item.terms) {
+                            const auto chord=stable_distance(solved(term.first),solved(term.second));
+                            valid=valid && std::isfinite(chord) && chord>0;
+                            total+=static_cast<long double>(term.coefficient)*chord;
+                        }
+                        linear_residual=valid && std::isfinite(total)
+                            ? static_cast<double>(std::abs(total-item.total_metres))
+                            : std::numeric_limits<double>::infinity();
                     }
                     else if constexpr (std::is_same_v<Item, ParallelConstraint>) {
                         const auto residual = parallel_residual(

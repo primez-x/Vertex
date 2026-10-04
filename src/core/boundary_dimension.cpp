@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <limits>
 #include <numbers>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -207,6 +208,16 @@ void validate_model(const BoundaryDimension& dimension) {
     if (!valid_identifier(dimension.boundary_id)) {
         invalid("dimension target entity id is empty or invalid");
     }
+    if (!dimension.segment_chain_ids.empty()) {
+        if (dimension.kind != BoundaryDimensionKind::segment_length ||
+            dimension.segment_chain_ids.size() < 2 || dimension.segment_chain_ids.size() > 128 ||
+            dimension.segment_id != dimension.segment_chain_ids.front())
+            invalid("dimension segment chain must contain 2..128 edges and match its first segment id");
+        std::set<std::string> unique;
+        for (const auto& id : dimension.segment_chain_ids)
+            if (!valid_identifier(id) || !unique.insert(id).second)
+                invalid("dimension segment chain IDs must be valid and unique");
+    }
     switch (dimension.kind) {
         case BoundaryDimensionKind::segment_length:
             if (!valid_identifier(dimension.segment_id)) {
@@ -369,6 +380,9 @@ BoundaryDimensionVersion inspect_boundary_dimension_version(const Entity& entity
     if (version == 2) {
         return {BoundaryDimensionFormat::supported_v2, version, {}};
     }
+    if (version == 3) {
+        return {BoundaryDimensionFormat::supported_v3, version, {}};
+    }
     return {BoundaryDimensionFormat::unsupported_version, version,
             "unsupported boundary dimension version " + std::to_string(version)};
 }
@@ -392,6 +406,8 @@ BoundaryDimensionDecodeResult decode_boundary_dimension_entity(const Entity& ent
         return unsupported_result(entity, version, kind,
                                   "unsupported boundary dimension kind " + kind);
     }
+    if (version == 3 && *parsed_kind != BoundaryDimensionKind::segment_length)
+        invalid("dimension version three requires segment_length chain semantics");
 
     const auto& target = required_property(entity.properties, "target");
     if (!target.is_object()) {
@@ -402,9 +418,23 @@ BoundaryDimensionDecodeResult decode_boundary_dimension_entity(const Entity& ent
     std::string segment_id;
     std::string vertex_id;
     std::string secondary_segment_id;
+    std::vector<std::string> segment_chain_ids;
+    if (version != 3 && target.contains("segment_ids"))
+        invalid("dimension segment chain requires version three");
     if (*parsed_kind == BoundaryDimensionKind::segment_length) {
-        segment_id = json_identifier(required_property(target, "segment_id"),
-                                     "dimension target segment_id must be a valid id");
+        if (version == 3) {
+            if (target.contains("segment_id") || target.contains("second_segment_id") || target.contains("vertex_id"))
+                invalid("chain dimension target cannot contain single-edge or angle target fields");
+            const auto& ids = required_property(target, "segment_ids");
+            if (!ids.is_array() || ids.size() < 2 || ids.size() > 128)
+                invalid("dimension segment chain must contain 2..128 edges");
+            for (const auto& id : ids)
+                segment_chain_ids.push_back(json_identifier(id, "dimension segment chain ID must be valid"));
+            segment_id = segment_chain_ids.front();
+        } else {
+            segment_id = json_identifier(required_property(target, "segment_id"),
+                                         "dimension target segment_id must be a valid id");
+        }
     } else if (*parsed_kind == BoundaryDimensionKind::angle) {
         segment_id = json_identifier(required_property(target, "segment_id"),
                                      "angle dimension target segment_id must be a valid id");
@@ -457,8 +487,9 @@ BoundaryDimensionDecodeResult decode_boundary_dimension_entity(const Entity& ent
         .kind = *parsed_kind,
         .vertex_id = vertex_id,
         .secondary_segment_id = secondary_segment_id,
+        .segment_chain_ids = std::move(segment_chain_ids),
     };
-    if (version == 2)
+    if (version == 2 || (version == 3 && entity.properties.contains("presentation")))
         result.presentation = decode_presentation(required_property(entity.properties, "presentation"));
     validate_model(result);
     return BoundaryDimensionDecodeResult{
@@ -474,6 +505,8 @@ Entity encode_boundary_dimension_entity(const BoundaryDimension& dimension,
                                          const Entity* original) {
     validate_model(dimension);
     Entity result{dimension.id, "dimension", Json::object(), false, Json::object()};
+    bool preserve_presentation = false;
+    bool preserve_text_position = false;
     if (original != nullptr) {
         validate_entity_container(*original);
         if (original->id != dimension.id) {
@@ -483,16 +516,20 @@ Entity encode_boundary_dimension_entity(const BoundaryDimension& dimension,
         if (!previous.supported()) {
             invalid("cannot encode over unsupported dimension semantics");
         }
-        if (previous.version == 2 && !dimension.presentation)
+        if ((previous.version == 2 || (previous.version == 3 && previous.dimension->presentation)) && !dimension.presentation)
             invalid("cannot remove version two dimension presentation");
-        if (previous.version == 1 && dimension.presentation && original->properties.contains("presentation"))
+        if (previous.version == 1 && (dimension.presentation || !dimension.segment_chain_ids.empty()) &&
+            original->properties.contains("presentation"))
             invalid("dimension presentation upgrade would overwrite opaque version one metadata");
+        preserve_presentation = dimension.presentation == previous.dimension->presentation;
+        preserve_text_position = dimension.text_position.x == previous.dimension->text_position.x &&
+            dimension.text_position.y == previous.dimension->text_position.y;
         result = *original;
     }
 
     auto& properties = result.properties;
-    properties["dimension_version"] = dimension.presentation ? 2 : 1;
-    if (dimension.presentation) {
+    properties["dimension_version"] = !dimension.segment_chain_ids.empty() ? 3 : (dimension.presentation ? 2 : 1);
+    if (dimension.presentation && !preserve_presentation) {
         const auto& value = *dimension.presentation;
         properties["presentation"] = {{"text_height_mm", value.text_height_mm}, {"color", value.color},
             {"bold", value.bold}, {"italic", value.italic}, {"visible", value.visible},
@@ -510,24 +547,33 @@ Entity encode_boundary_dimension_entity(const BoundaryDimension& dimension,
     target["entity_id"] = dimension.boundary_id;
     switch (dimension.kind) {
         case BoundaryDimensionKind::segment_length:
-            target["segment_id"] = dimension.segment_id;
+            if (dimension.segment_chain_ids.empty()) {
+                target["segment_id"] = dimension.segment_id;
+                target.erase("segment_ids");
+            } else {
+                target["segment_ids"] = dimension.segment_chain_ids;
+                target.erase("segment_id");
+            }
             target.erase("second_segment_id");
             target.erase("vertex_id");
             break;
         case BoundaryDimensionKind::angle:
+            target.erase("segment_ids");
             target["segment_id"] = dimension.segment_id;
             target["second_segment_id"] = dimension.secondary_segment_id;
             target["vertex_id"] = dimension.vertex_id;
             break;
         case BoundaryDimensionKind::area:
+            target.erase("segment_ids");
             target.erase("segment_id");
             target.erase("second_segment_id");
             target.erase("vertex_id");
             break;
     }
     properties["target"] = std::move(target);
-    properties["text_position"] = Json::array({dimension.text_position.x,
-                                                  dimension.text_position.y});
+    if (!preserve_text_position)
+        properties["text_position"] = Json::array({dimension.text_position.x,
+                                                 dimension.text_position.y});
     properties["placement_origin"] =
         std::string(boundary_dimension_placement_name(dimension.placement));
     if (dimension.placement == BoundaryDimensionPlacement::automatic) {
@@ -573,6 +619,25 @@ BoundaryDimensionResolution resolve_boundary_dimension(const BoundaryDimension& 
     }
     const auto source = resolve_dimension_geometry_owner(boundary_entity);
     if (dimension.kind == BoundaryDimensionKind::segment_length) {
+        if (!dimension.segment_chain_ids.empty()) {
+            const IdentifiedSegment* first = nullptr;
+            const IdentifiedSegment* previous = nullptr;
+            double length = 0;
+            for (const auto& id : dimension.segment_chain_ids) {
+                const auto edge = find_segment(source, id);
+                if (!edge) invalid("dimension source boundary is missing a chain segment id");
+                if (previous && (previous->end_vertex_id != edge->start_vertex_id ||
+                    std::hypot(previous->segment.end.x - edge->segment.start.x,
+                               previous->segment.end.y - edge->segment.start.y) > default_geometry_tolerance_metres))
+                    invalid("dimension segment chain must have contiguous geometry and stable vertex IDs");
+                if (!first) first = edge;
+                length += segment_length(edge->segment);
+                previous = edge;
+            }
+            if (!std::isfinite(length)) invalid("dimension segment chain length must be finite");
+            return BoundaryDimensionResolution{{first->segment.start, previous->segment.end, 0.0},
+                                               length, BoundaryDimensionKind::segment_length, 0.0, 0.0};
+        }
         const auto found = find_segment(source, dimension.segment_id);
         if (found == nullptr) {
             invalid("dimension source boundary is missing the target segment id");

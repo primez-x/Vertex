@@ -19,7 +19,7 @@ namespace sketch {
 // view only: it never grants a stroke closed-boundary or area semantics.
 [[nodiscard]] IdentifiedBoundary resolve_constraint_segment_owner(const Entity& entity);
 
-// Existing names are stable v1/v2 relation spellings; fixed_arc_length is v3.
+// Existing names are stable v1/v2 relation spellings; fixed_arc_length is v3/v4.
 // The codec deliberately does not expose solver point coordinates.
 enum class ConstraintRelationKind {
     horizontal,
@@ -79,6 +79,15 @@ struct ConstraintEntityDecodeResult {
 [[nodiscard]] Segment resolve_constraint_arc_segment(
     const PersistentConstraint& constraint,
     const std::map<std::string, Entity, std::less<>>& entities);
+// v4 pairs describe an ordered, directed chain of genuine curved segments.
+// Adjacent coordinates and same-owner stable vertex identities must agree.
+[[nodiscard]] std::vector<Segment> resolve_constraint_arc_segments(
+    const PersistentConstraint& constraint,
+    const std::map<std::string, Entity, std::less<>>& entities);
+[[nodiscard]] double resolve_constraint_arc_length(
+    const PersistentConstraint& constraint,
+    const std::map<std::string, Entity, std::less<>>& entities);
+[[nodiscard]] double constraint_arc_length_coefficient(const Segment& segment);
 [[nodiscard]] double constraint_arc_chord_target(
     const PersistentConstraint& constraint,
     const std::map<std::string, Entity, std::less<>>& entities);
@@ -92,7 +101,8 @@ struct ConstraintEntityDecodeResult {
 [[nodiscard]] ConstraintEntityDecodeResult decode_constraint_entity(const Entity& entity);
 
 // Encodes baseline-only relations as v1, boundary relations as v2, and
-// physical fixed_arc_length alone as v3 (generic entity_ids owners).
+// physical fixed_arc_length as v3 for one arc or v4 for a directed arc chain
+// (generic entity_ids owners).
 // When original is provided, its stable id/type,
 // required flag, unrelated properties, extensions, and opaque future fields
 // are retained while canonical v1 fields are replaced. The original must be a

@@ -893,7 +893,13 @@ static std::map<std::string, Entity, std::less<>> edited_boundary_entities_impl(
                     // Replace only analytical targets. Re-encoding would
                     // normalize presentation numbers and unrelated metadata.
                     auto& target = entity.properties.at("target");
-                    target.at("segment_id") = mapped_child(dimension.segment_id, "segments");
+                    if (dimension.segment_chain_ids.empty()) {
+                        target.at("segment_id") = mapped_child(dimension.segment_id, "segments");
+                    } else {
+                        auto& ids = target.at("segment_ids");
+                        for (std::size_t i = 0; i < dimension.segment_chain_ids.size(); ++i)
+                            ids.at(i) = mapped_child(dimension.segment_chain_ids[i], "segments");
+                    }
                     if (dimension.kind == BoundaryDimensionKind::angle) {
                         target.at("second_segment_id") = mapped_child(dimension.secondary_segment_id, "segments");
                         target.at("vertex_id") = mapped_child(dimension.vertex_id, "vertices");
@@ -905,11 +911,9 @@ static std::map<std::string, Entity, std::less<>> edited_boundary_entities_impl(
                 (void)dimension.resolve(result.at(edit.boundary_id));
                 if (dimension.kind == BoundaryDimensionKind::segment_length &&
                     dimension.placement == BoundaryDimensionPlacement::automatic) {
-                    const auto edge = std::find_if(edited.segments.begin(), edited.segments.end(),
-                        [&](const auto& item) { return item.segment_id == dimension.segment_id; });
                     const auto side = dimension.automatic_placement_version.value_or(1) == 1 ? 1.0 :
                         (signed_area(boundary_geometry(edited)) > 0 ? -1.0 : 1.0);
-                    dimension.text_position = split_dimension_position(edge->segment, side);
+                    dimension.text_position = split_dimension_position(dimension.resolve(result.at(edit.boundary_id)).segment, side);
                     entity = encode_boundary_dimension_entity(dimension, &entity);
                 }
             }
@@ -932,6 +936,7 @@ static std::map<std::string, Entity, std::less<>> edited_boundary_entities_impl(
             dimension.id = edit.replacement_dimension_ids[i];
             if (source.contains(dimension.id)) throw std::invalid_argument("Redefinition dimension ID is not fresh");
             dimension.segment_id = edited.segments[i].segment_id;
+            dimension.segment_chain_ids.clear();
             const auto side = dimension.automatic_placement_version.value_or(1) == 1 ? 1.0 :
                 (signed_area(boundary_geometry(edited)) > 0 ? -1.0 : 1.0);
             dimension.text_position = split_dimension_position(edited.segments[i].segment, side);
@@ -955,12 +960,9 @@ static std::map<std::string, Entity, std::less<>> edited_boundary_entities_impl(
             (void)dimension.resolve(result.at(edit.boundary_id));
             if (dimension.kind != BoundaryDimensionKind::segment_length ||
                 dimension.placement != BoundaryDimensionPlacement::automatic) continue;
-            const auto edge = std::find_if(edited.segments.begin(), edited.segments.end(),
-                [&](const auto& item) { return item.segment_id == dimension.segment_id; });
-            if (edge == edited.segments.end()) throw std::invalid_argument("Dimension edge is missing");
             const auto side = dimension.automatic_placement_version.value_or(1) == 1 ? 1.0 :
                 (signed_area(boundary_geometry(edited)) > 0 ? -1.0 : 1.0);
-            dimension.text_position = split_dimension_position(edge->segment, side);
+            dimension.text_position = split_dimension_position(dimension.resolve(result.at(edit.boundary_id)).segment, side);
             entity = encode_boundary_dimension_entity(dimension, &entity);
         }
     }
@@ -978,6 +980,52 @@ static std::map<std::string, Entity, std::less<>> edited_boundary_entities_impl(
                 const auto decoded = decode_constraint_entity(entity);
                 if (!decoded.supported())
                     throw std::invalid_argument(decoded.unsupported_reason);
+                if (decoded.constraint->relation == ConstraintRelationKind::fixed_arc_length) {
+                    auto bindings = nlohmann::json::array();
+                    bool expanded = false;
+                    const auto& old_bindings = decoded.constraint->bindings;
+                    for (std::size_t i = 0; i < old_bindings.size(); i += 2) {
+                        const auto& first = old_bindings[i];
+                        const auto& second = old_bindings[i + 1];
+                        const auto& first_json = entity.properties.at("bindings").at(i);
+                        const auto& second_json = entity.properties.at("bindings").at(i + 1);
+                        if (first.owner_id != edit.boundary_id || first.segment_id != edit.target_id) {
+                            bindings.push_back(first_json);
+                            bindings.push_back(second_json);
+                            continue;
+                        }
+                        // Duplicate each original endpoint's opaque binding
+                        // object before replacing only its canonical identity.
+                        // The directed pair order is retained for reverse arcs.
+                        const auto append_piece = [&](const IdentifiedSegment& piece) {
+                            auto start = first_json;
+                            auto end = second_json;
+                            start["segment_id"] = piece.segment_id;
+                            end["segment_id"] = piece.segment_id;
+                            start["vertex_id"] = first.role == WallEndpointRole::start ?
+                                piece.start_vertex_id : piece.end_vertex_id;
+                            end["vertex_id"] = second.role == WallEndpointRole::start ?
+                                piece.start_vertex_id : piece.end_vertex_id;
+                            bindings.push_back(std::move(start));
+                            bindings.push_back(std::move(end));
+                        };
+                        if (first.role == WallEndpointRole::start) {
+                            append_piece(*first_piece);
+                            append_piece(*second_piece);
+                        } else {
+                            append_piece(*second_piece);
+                            append_piece(*first_piece);
+                        }
+                        expanded = true;
+                    }
+                    if (expanded) {
+                        entity.properties.at("bindings") = std::move(bindings);
+                        entity.properties.at("version") = 4;
+                    }
+                    const auto remapped = decode_constraint_entity(entity);
+                    (void)resolve_constraint_arc_length(*remapped.constraint, result);
+                    continue;
+                }
                 // Known constraints are point relations. Preserve their exact
                 // endpoint points and opaque binding metadata, including spans
                 // that now traverse both pieces rather than one shorter edge.
@@ -1003,6 +1051,19 @@ static std::map<std::string, Entity, std::less<>> edited_boundary_entities_impl(
             }
             if (dimension.kind == BoundaryDimensionKind::angle)
                 (void)dimension.resolve(result.at(edit.boundary_id));
+            if (dimension.kind == BoundaryDimensionKind::segment_length &&
+                (!dimension.segment_chain_ids.empty() || dimension.placement == BoundaryDimensionPlacement::manual)) {
+                auto ids = dimension.segment_chain_ids;
+                if (ids.empty()) ids.push_back(dimension.segment_id);
+                const auto member = std::find(ids.begin(), ids.end(), edit.target_id);
+                if (member != ids.end()) {
+                    ids.insert(std::next(member), edit.new_segment_id);
+                    dimension.segment_chain_ids = std::move(ids);
+                    entity = encode_boundary_dimension_entity(dimension, &entity);
+                }
+                (void)dimension.resolve(result.at(edit.boundary_id));
+                continue;
+            }
             if (dimension.kind == BoundaryDimensionKind::segment_length &&
                 dimension.segment_id == edit.target_id &&
                 dimension.placement == BoundaryDimensionPlacement::automatic) {
@@ -1198,6 +1259,8 @@ std::optional<std::string> validate_boundary_integrity(
         if (dimension.kind == BoundaryDimensionKind::segment_length) {
             if (!boundary_edges->second.contains(dimension.segment_id))
                 throw std::invalid_argument("Dimension " + id + ": missing identified source segment");
+            if (!dimension.segment_chain_ids.empty())
+                (void)dimension.resolve(owner->second);
         } else if (dimension.kind == BoundaryDimensionKind::angle) {
             if (!boundary_edges->second.contains(dimension.segment_id) ||
                 !boundary_edges->second.contains(dimension.secondary_segment_id)) {

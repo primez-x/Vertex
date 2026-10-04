@@ -435,6 +435,8 @@ public:
     // Splits one identified boundary edge at a strict interior fraction,
     // preserving the original edge identity for the first piece and creating
     // fresh identities for the inserted vertex and second piece.
+    // For one selected architectural wall, segment_id is "baseline"; creates
+    // connected wall pieces with hosted/source dependencies completed atomically.
     [[nodiscard]] bool insertSelectedBoundaryVertex(const QString& segment_id,
                                                      const QString& fraction);
     // Direct stable-ID coordinate editing used by canvas vertex handles.
