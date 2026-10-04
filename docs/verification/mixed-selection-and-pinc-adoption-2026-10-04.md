@@ -86,6 +86,26 @@ with envelope16 was packaged/restored with identical bytes; the rebuilt CLI
 independently inspected, validated and extracted it as version40 without changing
 the source. Source/project installation evidence is recorded separately.
 
+## Delivered internal build
+
+Implementation commit `749ef7f499836c2f91a8fcdfcc6124a91b65575c` was pushed and
+its exact remote ref verified. The offline package
+`artifacts/packages/vertex-offline-20261004-mixed-pinc` contains 4,068 files,
+including 1,416 source-kit files and 2,645 runtime files. The new installation
+at `artifacts/installed/vertex-20261004-mixed-pinc` finished with exit 0.
+Its application SHA-256 is
+`1a67b7710561b94baf3be55308252c036fb9f43166ec6139bd679c7e21c00a33`,
+identical to the verified build and installed-runtime report.
+
+All six sampled installed source/reopen runs pass: measurement, residential
+architecture and light-commercial architecture. The installed CLI validates
+the restored native42 history with developer dependency paths removed.
+The Desktop Vertex shortcut was updated and read back to confirm this exact
+installed executable. The prior installation was preserved. Local
+`delivery.json`, runtime/transfer reports and capture-review hashes retain the
+separate evidence. This is developer-host installation/runtime verification;
+it does not establish clean-machine or network-denied qualification.
+
 ## Remaining required work
 
 The palette currently uses the active profile and measurement-linework detected
