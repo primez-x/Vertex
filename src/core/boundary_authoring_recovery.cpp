@@ -338,15 +338,21 @@ Json write_dimension(const BoundaryDimension& dimension) {
         }
         result["automatic_placement_version"] = *dimension.automatic_placement_version;
     }
+    if (dimension.presentation) {
+        const auto entity = encode_boundary_dimension_entity(dimension);
+        result["presentation"] = entity.properties.at("presentation");
+    }
     return result;
 }
 
-BoundaryDimension read_dimension(const Json& value) {
+BoundaryDimension read_dimension(const Json& value, bool allow_presentation) {
     require_exact_keys(value,
                        {"id", "boundary_id", "segment_id", "text_position", "placement"},
                        {"id", "boundary_id", "segment_id", "text_position", "placement",
-                        "automatic_placement_version"},
+                        "automatic_placement_version", "presentation"},
                        "boundary authoring dimension");
+    if (!allow_presentation && value.contains("presentation"))
+        invalid("dimension presentation requires recovery checkpoint version three");
     const auto placement =
         dimension_placement_from_name(read_string(value.at("placement"), "dimension placement"));
     if (placement == BoundaryDimensionPlacement::manual && value.contains("automatic_placement_version")) {
@@ -372,6 +378,12 @@ BoundaryDimension read_dimension(const Json& value) {
     require_identifier(result.id, "dimension id");
     require_identifier(result.boundary_id, "dimension boundary_id");
     require_identifier(result.segment_id, "dimension segment_id");
+    if (value.contains("presentation")) {
+        auto entity = encode_boundary_dimension_entity(result);
+        entity.properties["dimension_version"] = 2;
+        entity.properties["presentation"] = value.at("presentation");
+        result.presentation = decode_boundary_dimension_entity(entity).dimension->presentation;
+    }
     return result;
 }
 
@@ -409,7 +421,8 @@ Json write_chain(const BoundaryAuthoringChainRecord& chain) {
 }
 
 BoundaryAuthoringChainRecord read_chain(const Json& value,
-                                        const BoundaryAuthoringRecoveryLimits& limits) {
+                                        const BoundaryAuthoringRecoveryLimits& limits,
+                                        bool allow_presentation) {
     require_exact_keys(value,
                        {"anchor", "boundary_id", "type", "classification", "edges",
                         "dimensions", "classified"},
@@ -459,7 +472,7 @@ BoundaryAuthoringChainRecord read_chain(const Json& value,
     }
     result.dimensions.reserve(encoded_dimensions.size());
     for (const auto& encoded : encoded_dimensions) {
-        result.dimensions.push_back(read_dimension(encoded));
+        result.dimensions.push_back(read_dimension(encoded, allow_presentation));
     }
     return result;
 }
@@ -643,7 +656,8 @@ Json write_action(const BoundaryAuthoringAction& action) {
 
 BoundaryAuthoringAction read_action(const Json& value,
                                     const BoundaryAuthoringRecoveryLimits& limits,
-                                    std::size_t& total_generated_ids) {
+                                    std::size_t& total_generated_ids,
+                                    bool allow_presentation) {
     require_object(value, "boundary authoring action");
     if (!value.contains("kind")) invalid("boundary authoring action is missing kind");
     const auto kind = action_kind_from_name(
@@ -695,10 +709,10 @@ BoundaryAuthoringAction read_action(const Json& value,
             break;
         case BoundaryAuthoringActionKind::manual_dimension:
         case BoundaryAuthoringActionKind::automatic_dimension:
-            result.dimension = read_dimension(value.at("dimension"));
+            result.dimension = read_dimension(value.at("dimension"), allow_presentation);
             break;
         case BoundaryAuthoringActionKind::close_chain:
-            result.chain = read_chain(value.at("chain"), limits);
+            result.chain = read_chain(value.at("chain"), limits, allow_presentation);
             break;
     }
     return result;
@@ -745,7 +759,10 @@ void preflight_action_fields(const BoundaryAuthoringAction& action,
         if (r.chord_input) { text(r.chord_input->length.original_expression);
             text(r.chord_input->heading.original_expression); text(r.chord_input->heading.normalized_expression); }
     };
-    const auto dimension_strings = [&](const BoundaryDimension& d) { text(d.id); text(d.boundary_id); text(d.segment_id); };
+    const auto dimension_strings = [&](const BoundaryDimension& d) {
+        text(d.id); text(d.boundary_id); text(d.segment_id);
+        if (d.presentation) text(d.presentation->color);
+    };
     if (action.generated_ids.size() > limits.max_generated_ids_per_action ||
         action.generated_ids.size() > limits.max_json_values || action.generated_ids.size() > limits.max_encoded_bytes / 3)
         invalid("action identity collection exceeds preallocation budget");
@@ -811,6 +828,8 @@ BoundaryAuthoringRecoveryVersion inspect_boundary_authoring_recovery(
         return {BoundaryAuthoringRecoveryFormat::supported_v1, version, {}};
     }
     if (version==boundary_authoring_recovery_version_v2) return {BoundaryAuthoringRecoveryFormat::supported_v2,version,{}};
+    if (version == boundary_authoring_recovery_version_v3)
+        return {BoundaryAuthoringRecoveryFormat::supported_v3, version, {}};
     return {BoundaryAuthoringRecoveryFormat::unsupported_version, version,
             "unsupported boundary authoring recovery version"};
 }
@@ -859,7 +878,8 @@ BoundaryAuthoringRecoveryDecodeResult decode_boundary_authoring_recovery(
     checkpoint.actions.reserve(encoded_actions.size());
     std::size_t total_generated_ids = 0;
     for (const auto& encoded_action : encoded_actions) {
-        checkpoint.actions.push_back(read_action(encoded_action, limits, total_generated_ids));
+        checkpoint.actions.push_back(read_action(encoded_action, limits, total_generated_ids,
+            checkpoint.version >= boundary_authoring_recovery_version_v3));
     }
     checkpoint.history_position = read_index(envelope.at("history_position"), "history position");
     checkpoint.counters = read_counters(envelope.at("counters"));
@@ -879,7 +899,9 @@ Json encode_boundary_authoring_recovery(
     const BoundaryAuthoringCheckpoint& checkpoint,
     const BoundaryAuthoringRecoveryLimits& limits) {
     validate_limits(limits);
-    if ((checkpoint.version != boundary_authoring_recovery_version && checkpoint.version != boundary_authoring_recovery_version_v2) ||
+    if ((checkpoint.version != boundary_authoring_recovery_version &&
+         checkpoint.version != boundary_authoring_recovery_version_v2 &&
+         checkpoint.version != boundary_authoring_recovery_version_v3) ||
         checkpoint.replay_version != boundary_authoring_recovery_replay_version) {
         invalid("unsupported boundary authoring recovery version");
     }

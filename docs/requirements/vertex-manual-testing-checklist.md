@@ -1,6 +1,6 @@
 # Vertex user testing checklist
 
-385 practical tasks, grouped by how you use the app (including U100a). This replaces the earlier engineering-oriented checklist. The old 130-item list is preserved separately as engineering-requirements-checklist.md.
+389 practical tasks, grouped by how you use the app (including U100a). This replaces the earlier engineering-oriented checklist. The old 130-item list is preserved separately as engineering-requirements-checklist.md.
 
 This is a user acceptance list for the intended app, not a claim that every listed action is implemented or working in the current preview. If you cannot find a control, or a feature is absent, mark **Blocked / missing** and describe it. Specialized sections can be skipped if you do not use them or lack the device or sample files.
 
@@ -2318,6 +2318,32 @@ drawing; switching modes does not change existing geometry.
 - [ ] **U384 — Start an area at the cursor with Enter**
   - Steps: Press Ctrl+Shift+D and choose a classification. Move the cursor to an empty starting point and press Enter. Type `12 ft` and Right; move the pointer outside the side and press Enter to place its dimension. Repeat with `8 ft` and Up, then `12 ft` and Left. Press Enter to close, position the last dimension and press Enter again. Undo, Redo and save/reopen. Repeat the starting step with Snap off.
   - Expected: The first Enter fixes the starting point without creating a side. Snap on uses the snapped cursor; Snap off uses the exact cursor. Enter still places each side's dimension separately. The completed rectangle measures 96 square feet and commits as one undoable operation. Holding Enter or panning cannot accidentally accept a starting point. Saved geometry and dimensions reopen unchanged.
+  - Result: Not tested
+  - Notes: ______________________________
+
+## Define First dimension labels
+
+- [ ] **U385 — Orient a dimension horizontally or vertically**
+  - Steps: Start Define First with Ctrl+Shift+D, choose a classification, then anchor with Enter. Type `12 ft` and Right. While its label follows the pointer, press V, then H, then V again. Click or press Enter to place it. Continue and close the area; save/reopen and export a PDF.
+  - Expected: V turns the text vertically and H makes it horizontal immediately. Placement keeps the chosen orientation. The side remains 12 feet and reopened/printed text has the same orientation.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **U386 — Omit a dimension label without losing its side**
+  - Steps: In Define First, enter a side and tap Space while its dimension is pending. Undo and Redo. Finish a 12 ft by 8 ft rectangle, omitting one label. Save/reopen and export it.
+  - Expected: Space hides only that side's dimension text and lets you continue drawing. Undo makes the label pending and visible again; Redo hides it. The completed rectangle remains 96 square feet. Reopened and exported drawings preserve the omitted label.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **U387 — Pan while a dimension is waiting for placement**
+  - Steps: With a Define First dimension pending, hold Space, left-drag the canvas, release the mouse, then release Space. Repeat with right-drag and middle-drag. Move the pointer and press Enter to place the label.
+  - Expected: The canvas moves and the label remains pending. Releasing Space after a pointer gesture cannot omit it or place a new node. Enter places it at the chosen position after navigation.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **U388 — Reopen an undone vertical dimension placement**
+  - Steps: Place a pending dimension with V, then Undo once. Save the unfinished drawing and reopen it. Redo the placement, Undo again, tap Space to omit it, then Undo and save/reopen again.
+  - Expected: The reopened pending label is visible and vertical. Redo restores the recorded placement. Undo of omission returns a visible vertical pending label; reopening retains that orientation. No side or measurement changes.
   - Result: Not tested
   - Notes: ______________________________
 

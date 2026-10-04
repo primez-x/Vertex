@@ -3048,6 +3048,80 @@ void test_svg_palette_reader_floor() {
     require(ProjectStore::required_format_version(Document::create({vendor}).snapshot())==1,"vendor palette collision stays opaque");
 }
 
+void test_styled_dimension_checkpoint_archive_roundtrip() {
+    using namespace sketch;
+    TempDirectory temporary;
+    auto document = Document::create({entity("p", "property"), entity("b", "building", {{"property_id", "p"}}),
+        entity("f", "floor", {{"building_id", "b"}}), entity("l", "layer", {{"floor_id", "f"}})});
+    ProjectWorkspace workspace(document.snapshot());
+    BoundaryAuthoringSession session(BoundaryAuthoringMode::define_first);
+    session.set_classification("living_area");
+    (void)session.anchor({0, 0});
+    (void)session.add_line_to({4, 0});
+    BoundaryDimensionPresentation presentation;
+    presentation.visible = false;
+    presentation.rotation_radians = std::numbers::pi / 2;
+    (void)session.place_manual_dimension({2, -1}, presentation);
+    require(session.undo(), "native styled checkpoint fixture must retain a Redo-only placement");
+    BoundaryActiveRecovery active{capture_boundary_recovery_source(workspace.snapshot(), {"p", "b", "f", "l"}),
+        session.recovery_checkpoint()};
+    auto ticket = workspace.prepare_boundary_checkpoint(active); (void)workspace.commit(ticket);
+    for (bool discarded : {false, true}) {
+        if (discarded) { auto discard = workspace.prepare_discard_boundary(); (void)workspace.commit(discard); }
+        const auto capture = workspace.capture();
+        RecoveryLedger ledger{{"history", "workspace_history", encode_workspace_history_record(capture.document(),
+            capture_workspace_history_record(capture), capture.active_boundary())}};
+        if (capture.active_boundary()) ledger.push_back({"active", "boundary_active",
+            encode_boundary_active_recovery(*capture.active_boundary())});
+        const auto path = temporary.path / (discarded ? "discarded-styled.bldproj" : "active-styled.bldproj");
+        (void)ProjectStore::save_archive(path, {capture.document(), ledger, ArchiveRole::ordinary});
+        sqlite3* database = nullptr;
+        require(sqlite3_open_v2(path.string().c_str(), &database, SQLITE_OPEN_READONLY, nullptr) == SQLITE_OK,
+            "test must open styled recovery metadata");
+        const auto format = metadata_value(database, "format_version");
+        sqlite3_close(database);
+        require(format == "4", "existing recovery container safely carries its versioned checkpoint");
+        const auto loaded = ProjectStore::load_archive(path, ArchiveRole::ordinary);
+        require(loaded.supported() && loaded.archive->recovery().size() == ledger.size(),
+            "native active and historical styled ledgers must reopen without presentation loss");
+        for (const auto& expected : ledger) {
+            const auto& records = loaded.archive->recovery();
+            const auto actual = std::find_if(records.begin(), records.end(), [&](const auto& row) {
+                return row.record_id == expected.record_id;
+            });
+            require(actual != records.end() && actual->record_kind == expected.record_kind &&
+                actual->envelope == expected.envelope, "native recovery preserves each styled record exactly");
+        }
+        auto restored = ProjectWorkspace::restore_archive(*loaded.archive, *loaded.recovery.decoded);
+        if (discarded) {
+            const auto restored_capture = restored->capture();
+            require(!restored->active_boundary() && encode_workspace_history_record(restored_capture.document(),
+                capture_workspace_history_record(restored_capture), restored_capture.active_boundary()) == ledger.front().envelope,
+                "discarded native archive restores inactive state and exact lifecycle input");
+            auto undo_discard = restored->prepare_undo();
+            (void)restored->commit(undo_discard);
+        }
+        const auto restored_input = restored->active_boundary();
+        require(restored_input && restored_input->checkpoint == active.checkpoint, "native archive restores the exact styled checkpoint and Redo timeline");
+        auto restored_session = BoundaryAuthoringSession::from_recovery_checkpoint(restored_input->checkpoint);
+        require(restored_session.redo(), "native recovery must restore hidden placement Redo");
+        const auto chain = restored_session.active_chain();
+        require(chain && chain->dimensions.front().presentation == presentation &&
+            chain->segments.front().segment.start.x == 0 && chain->segments.front().segment.start.y == 0 &&
+            chain->segments.front().segment.end.x == 4 && chain->segments.front().segment.end.y == 0 &&
+            chain->segments.front().segment.sweep_radians == 0, "native styled Redo preserves exact presentation and geometry");
+        if (!discarded) {
+            execute_sql(path, "UPDATE project_recovery_records SET envelope_json=json_set(envelope_json,'$.checkpoint.version',4) WHERE record_kind='boundary_active'");
+            rewrite_logical_digest(path);
+            const auto hash = ProjectStore::file_sha256(path);
+            const auto future = ProjectStore::load_archive(path, ArchiveRole::ordinary);
+            require(!future.supported() && future.recovery.opaque() && !future.archive,
+                "future nested checkpoints cannot partially resume a native archive");
+            require(ProjectStore::file_sha256(path) == hash, "opaque future recovery inspection preserves original bytes");
+        }
+    }
+}
+
 void test_native_room_topology_is_validated_on_restore() {
     TempDirectory temp;
     const auto path = temp.path / "room.bldproj";
@@ -3092,6 +3166,7 @@ int main() {
         test_physical_arc_length_history_requires_v12();
         test_direct_curve_length_history_requires_v13();
         test_native_room_topology_is_validated_on_restore();
+        test_styled_dimension_checkpoint_archive_roundtrip();
         test_save_reopen_preserves_exact_revision_history_and_assets();
         test_existing_destination_requires_fingerprint_and_creates_backup();
         test_external_change_and_injected_failure_preserve_original();

@@ -1,5 +1,21 @@
 # Vertex project formats v1 through v31
 
+## Manual dimension presentation in recovery
+
+Define First dimension orientation and omission use the existing version-two
+`area_dimension` presentation, including `visible` and `rotation_radians`.
+Unfinished and historical sessions with this presentation use boundary recovery
+checkpoint schema 3 / replay 1. The checkpoint scans the entire retained action
+timeline, including Redo-only placements, and canonically replays presentation.
+See [dimension presentation checkpoints](boundary-recovery.md#dimension-presentation-checkpoints).
+
+The native container remains v1–31. Recovery-bearing files retain the existing
+container floor; older readers encounter an unknown nested checkpoint and
+preserve the whole ledger opaquely without granting editable state. Completed
+dimension presentation and JSON/assets recovery extraction already have their
+required representation. New native/extraction version numbers are unnecessary
+for this presentation extension.
+
 ## Exact chord length and heading (v31)
 
 A standalone construction receipt with `version: 2` stores `chord_input` as

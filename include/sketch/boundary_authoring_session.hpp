@@ -180,6 +180,7 @@ struct BoundaryAuthoringAction {
 
 inline constexpr std::uint32_t boundary_authoring_recovery_version = 1;
 inline constexpr std::uint32_t boundary_authoring_recovery_version_v2 = 2;
+inline constexpr std::uint32_t boundary_authoring_recovery_version_v3 = 3;
 inline constexpr std::uint32_t boundary_authoring_recovery_replay_version = 1;
 // Compatibility constant for the default linear-action plus quadratic-closure
 // work ceiling. Sessions and typed recovery use the stored resource policy.
@@ -201,6 +202,8 @@ struct BoundaryAuthoringCheckpoint {
 };
 
 [[nodiscard]] bool boundary_authoring_checkpoint_has_typed_chord(const BoundaryAuthoringCheckpoint& checkpoint) noexcept;
+[[nodiscard]] bool boundary_authoring_checkpoint_has_dimension_presentation(
+    const BoundaryAuthoringCheckpoint& checkpoint) noexcept;
 
 enum class BoundaryAuthoringFaultPoint {
     before_semantic_mutation,
@@ -349,7 +352,9 @@ public:
     // automatic placement is enabled. Draw First measured linework has no
     // pending dimensions by default; enabling automatic placement emits the
     // deterministic automatic dimension for each edge.
-    [[nodiscard]] BoundaryDimension place_manual_dimension(Vec2 world_position);
+    [[nodiscard]] BoundaryDimension place_manual_dimension(
+        Vec2 world_position,
+        std::optional<BoundaryDimensionPresentation> presentation = std::nullopt);
     [[nodiscard]] BoundaryDimension place_automatic_dimension();
 
     // close_chain requires all pending dimensions to be resolved, then performs

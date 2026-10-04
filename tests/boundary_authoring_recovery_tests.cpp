@@ -10,6 +10,7 @@
 #include <iostream>
 #include <initializer_list>
 #include <limits>
+#include <numbers>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -613,6 +614,154 @@ void test_counter_tampering_and_resource_budgets() {
     }
 }
 
+void test_styled_checkpoint_preserves_dimension_presentation() {
+    BoundaryAuthoringSession source(BoundaryAuthoringMode::define_first);
+    source.set_classification("living_area");
+    (void)source.anchor({0.0, 0.0});
+    (void)source.add_line(q("2 m"), angle("0 rad"));
+    (void)source.place_manual_dimension({1.0, -0.25});
+    auto checkpoint = source.recovery_checkpoint();
+    checkpoint.version = 3;
+    checkpoint.actions.back().dimension->presentation =
+        BoundaryDimensionPresentation{3.5, "#123abc", true, true, false, 1.5707963267948966};
+    const auto encoded = encode_boundary_authoring_recovery(checkpoint);
+    require(encoded["version"] == 3 &&
+                encoded["actions"].back()["dimension"]["presentation"]["visible"] == false,
+            "styled recovery must retain the full dimension presentation");
+    const auto decoded = decode_boundary_authoring_recovery(encoded);
+    require(decoded.supported() && *decoded.checkpoint == checkpoint,
+            "styled checkpoint must round trip without changing receipts or presentation");
+    auto restored = BoundaryAuthoringSession::from_recovery_checkpoint(*decoded.checkpoint);
+    require(restored.active_chain()->dimensions.front().presentation ==
+                checkpoint.actions.back().dimension->presentation,
+            "recovery replay must apply presentation to the pending dimension");
+}
+
+void test_styled_dimensions_recover_accepted_chains_and_revise_namespace() {
+    BoundaryAuthoringSession source(BoundaryAuthoringMode::define_first);
+    source.set_classification("living_area");
+    (void)source.anchor({0.0, 0.0});
+    const BoundaryDimensionPresentation horizontal{4.0, "#123abc", true, true, true, 0.0};
+    const BoundaryDimensionPresentation vertical{3.5, "#456def", false, true, true,
+                                                  std::numbers::pi / 2.0};
+    const BoundaryDimensionPresentation hidden{2.5, "#263241", true, false, false, 0.0};
+    (void)source.add_line(q("2000 mm"), angle("0 deg"));
+    (void)source.place_manual_dimension({1.0, -0.25}, horizontal);
+    (void)source.add_line(q("2 m"), angle("90 deg"));
+    (void)source.place_manual_dimension({2.25, 1.0}, vertical);
+    (void)source.add_closing_segment();
+    (void)source.place_manual_dimension({1.0, 1.0}, hidden);
+    const auto accepted = source.close_chain();
+    round_trip_view(source, "accepted styled dimensions must survive recovery and fresh-namespace replay");
+    const auto checkpoint = source.recovery_checkpoint();
+    require(checkpoint.version == 3 && boundary_authoring_checkpoint_has_dimension_presentation(checkpoint),
+            "styled accepted history must select the presentation recovery dialect");
+    const auto encoded = encode_boundary_authoring_recovery(checkpoint);
+    const auto close_dimensions = encoded["actions"].back()["chain"]["dimensions"];
+    require(close_dimensions[0]["presentation"]["rotation_radians"] == 0.0 &&
+                close_dimensions[1]["presentation"]["rotation_radians"] == std::numbers::pi / 2.0 &&
+                close_dimensions[2]["presentation"]["visible"] == false,
+            "close records must retain horizontal, vertical and hidden dimension presentation");
+    auto revised = BoundaryAuthoringSession::revise_recovery_checkpoint(checkpoint);
+    const auto revised_chain = revised.accepted_chains().front();
+    for (std::size_t index = 0; index < accepted.dimensions.size(); ++index) {
+        require(revised_chain.dimensions[index].presentation == accepted.dimensions[index].presentation &&
+                    revised_chain.dimensions[index].text_position.x == accepted.dimensions[index].text_position.x &&
+                    revised_chain.dimensions[index].id != accepted.dimensions[index].id &&
+                    revised_chain.dimensions[index].boundary_id == revised_chain.boundary.id &&
+                    revised_chain.dimensions[index].segment_id == revised_chain.boundary.segments[index].segment_id,
+                "revision must retain styled measured intent while regenerating all topology identities");
+    }
+    auto chain_only = checkpoint;
+    for (auto& action : chain_only.actions) if (action.dimension) action.dimension->presentation.reset();
+    require(boundary_authoring_checkpoint_has_dimension_presentation(chain_only),
+            "presentation detection must inspect close records as well as placement actions");
+    for (const auto legacy_version : {1, 2}) {
+        auto downgraded = encoded;
+        downgraded["version"] = legacy_version;
+        rejected([&] { (void)decode_boundary_authoring_recovery(downgraded); },
+                 "known older recovery dialects must reject presentation rather than discard it");
+        auto downgraded_checkpoint = checkpoint;
+        downgraded_checkpoint.version = legacy_version;
+        rejected([&] { (void)encode_boundary_authoring_recovery(downgraded_checkpoint); },
+                 "a styled checkpoint cannot be written using an older known dialect");
+    }
+    for (const int malformed_field : {0, 1, 2, 3, 4, 5}) {
+        auto malformed = encoded;
+        auto& style = malformed["actions"][3]["dimension"]["presentation"];
+        if (malformed_field == 0) style.erase("bold");
+        if (malformed_field == 1) style["unexpected"] = true;
+        if (malformed_field == 2) style["visible"] = 0;
+        if (malformed_field == 3) style["text_height_mm"] = 0.49;
+        if (malformed_field == 4) style["color"] = "red";
+        if (malformed_field == 5) style["rotation_radians"] = "vertical";
+        rejected([&] { (void)decode_boundary_authoring_recovery(malformed); },
+                 "known presentation recovery must reject malformed style fields");
+    }
+    auto malformed_chain = encoded;
+    malformed_chain["actions"].back()["chain"]["dimensions"][0]["presentation"]["italic"] = "yes";
+    rejected([&] { (void)decode_boundary_authoring_recovery(malformed_chain); },
+             "presentation validation must also cover accepted close records");
+    for (const std::string_view field : {"text_height_mm", "color", "bold", "italic", "visible",
+                                        "rotation_radians"}) {
+        auto tampered = encoded;
+        auto& style = tampered["actions"].back()["chain"]["dimensions"][0]["presentation"];
+        if (field == "text_height_mm") style[field] = 3.0;
+        else if (field == "color") style[field] = "#ffffff";
+        else if (field == "rotation_radians") style[field] = 0.25;
+        else style[field] = !style[field].get<bool>();
+        rejected([&] { (void)decode_boundary_authoring_recovery(tampered); },
+                 "all six presentation fields must participate in canonical close replay equality");
+    }
+    auto future = encoded;
+    future["version"] = 4;
+    future["actions"][3]["dimension"]["presentation"] = "future presentation";
+    require(decode_boundary_authoring_recovery(future).original_envelope == future,
+            "future recovery dialects must remain completely opaque, including unknown presentation");
+    future["version"] = 3;
+    future["replay_version"] = 99;
+    require(decode_boundary_authoring_recovery(future).original_envelope == future,
+            "future replay dialects inside v3 must preserve the complete envelope");
+}
+
+void test_styled_redo_only_history_and_typed_chord_compatibility() {
+    BoundaryAuthoringSession source(BoundaryAuthoringMode::define_first);
+    source.set_classification("living_area");
+    (void)source.anchor({0.0, 0.0});
+    (void)source.add_line(q("2 m"), angle("0 deg"));
+    const BoundaryDimensionPresentation hidden{2.5, "#263241", false, false, false, 0.0};
+    const auto styled = source.place_manual_dimension({1.0, -0.25}, hidden);
+    require(source.undo(), "styled placement must be undoable");
+    const auto checkpoint = source.recovery_checkpoint();
+    require(checkpoint.version == 3 && checkpoint.history_position < checkpoint.actions.size() &&
+                source.active_chain()->dimensions.empty() &&
+                boundary_authoring_checkpoint_has_dimension_presentation(checkpoint),
+            "styled data only in redo history must select v3 even with an unstyled active state");
+    round_trip_view(source, "redo-only presentation must survive recovery and revision");
+    auto restored = BoundaryAuthoringSession::from_recovery_checkpoint(
+        *decode_boundary_authoring_recovery(encode_boundary_authoring_recovery(checkpoint)).checkpoint);
+    require(restored.redo() && restored.active_chain()->dimensions.front() == styled,
+            "recovering an undone styled placement must restore exact presentation on redo");
+    require(restored.undo(), "redo placement should be undoable again");
+    (void)restored.place_manual_dimension({1.0, -0.5});
+    const auto unstyled = restored.recovery_checkpoint();
+    require(unstyled.version == 1 && !boundary_authoring_checkpoint_has_dimension_presentation(unstyled) &&
+                !encode_boundary_authoring_recovery(unstyled)["actions"].back()["dimension"].contains("presentation"),
+            "replacing the styled redo branch with an unstyled placement must retain the legacy encoding");
+
+    BoundaryAuthoringSession typed(BoundaryAuthoringMode::define_first);
+    typed.set_classification("living_area");
+    (void)typed.anchor({0.0, 0.0});
+    (void)typed.add_arc_chord_angle(q("2 m"), angle("0 deg"), angle("90 deg"));
+    require(typed.recovery_checkpoint().version == 2,
+            "unstyled typed chord input must retain recovery v2");
+    (void)typed.place_manual_dimension({1.0, -0.25}, hidden);
+    require(typed.recovery_checkpoint().version == 3 &&
+                boundary_authoring_checkpoint_has_typed_chord(typed.recovery_checkpoint()),
+            "presentation recovery v3 must also support typed chord receipts");
+    round_trip_view(typed, "typed chord and presentation must replay together in recovery v3");
+}
+
 void test_fault_injection_is_atomic() {
     BoundaryAuthoringSession source(BoundaryAuthoringMode::draw_first);
     (void)source.anchor({0.0, 0.0});
@@ -726,6 +875,9 @@ int main() {
         test_unknown_version_is_opaque_and_known_shape_is_strict();
         test_reset_and_cancel_terminal_semantics();
         test_counter_tampering_and_resource_budgets();
+        test_styled_checkpoint_preserves_dimension_presentation();
+        test_styled_dimensions_recover_accepted_chains_and_revise_namespace();
+        test_styled_redo_only_history_and_typed_chord_compatibility();
         test_fault_injection_is_atomic();
         std::cout << "Boundary authoring recovery tests passed\n";
         return 0;

@@ -66,7 +66,7 @@ const Json& array(const Json& value) {
 }
 bool scan_input_versions(const Json& value) {
     if (future(value, 2)) return true;
-    return future(value.at("checkpoint"));
+    return future(value.at("checkpoint"), boundary_authoring_recovery_version_v3);
 }
 bool scan_history_versions(const Json& history) {
     bool unsupported = false;
@@ -159,7 +159,7 @@ RecoveryLedgerDecodeResult decode_recovery_ledger(const DocumentSnapshot& docume
             unsupported = unsupported || outer_future;
             if (!outer_future) {
                 if (slot == &active) {
-                    const bool nested = future(row.envelope.at("checkpoint"));
+                    const bool nested = future(row.envelope.at("checkpoint"), boundary_authoring_recovery_version_v3);
                     unsupported = unsupported || nested;
                 } else if (slot == &history) {
                     const bool nested = scan_history_versions(row.envelope);

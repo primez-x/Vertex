@@ -21,6 +21,22 @@ line and places its dimension; automatic placement is an option. A closes the
 area. Define First must not be implemented as solving dimensions on an existing
 chain of walls.
 
+During Define First's manual dimension step, **H** makes the label horizontal
+and **V** makes it vertical. The preview changes immediately; click or Enter
+records its position and orientation. Tap **Space** to omit that label and
+continue drawing. The hidden dimension retains its measured-edge association,
+so omitting text never changes the boundary, perimeter or area. Space held
+during a pointer gesture pans instead. Modified keys, held-key repeats, text
+editing, inactive canvases and changed drawing contexts cannot accept a pending
+dimension. Undo returns an omitted label to a visible pending placement.
+
+Placed orientation and visibility survive local Undo/Redo, draft recovery and
+native save/reopen. An unplaced H/V choice is transient; a pending placement
+restored from an undone dimension recovers that dimension's recorded orientation.
+See [checkpoint presentation](boundary-recovery.md#dimension-presentation-checkpoints)
+for the versioned recovery contract. Full tutorial and physical keyboard
+qualification remain part of the production acceptance gate.
+
 Draw First begins with measured linework and subsequently defines/classifies
 areas, as described in the official
 [Apex v7 Draw First tutorial](https://apexwin.com/support/ApexSketchv7/ApexSketchv7-DrawFirst.pdf).

@@ -233,6 +233,12 @@ cursor, just like clicking; with Snap off it uses the unsnapped position. It
 creates no side or saved document command. Enter still places each pending
 dimension separately and closes the completed outline through the ordinary
 workflow. Held Enter and active canvas navigation do not accept drawing input.
+While its dimension is pending, press **H** or **V** to orient the text, then
+click or press Enter to place it. Tap **Space** to omit that dimension label;
+the measured side and calculated area remain intact. Hold Space and drag to
+pan without omitting anything. Undo makes an omitted label pending and visible
+again. Placed orientation and visibility are retained in saved drafts and
+completed projects; reopening an undone placement recovers its orientation.
 Starting or resuming an accepted measured-boundary workflow selects Measurement
 in Draw; a cancelled classification or refused start preserves the prior choice.
 Accepted edge methods and expressions repeat within that drawing session; absolute

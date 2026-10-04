@@ -876,11 +876,25 @@ void test_rigid_curve_archive_exchange_v11(const std::filesystem::path& root) {
   (void)extract(document.snapshot(), "rigid-curve-deleted-v11");
 }
 
-void test_archive_extraction(const std::filesystem::path& root) {
+void test_archive_extraction(const std::filesystem::path& root, bool styled = false) {
   for (const auto role : {sketch::ArchiveRole::ordinary,
                           sketch::ArchiveRole::recovery_copy}) {
-    auto document = sketch::Document::create();
+    auto document = styled ? sketch::Document::create({
+        {"p", "property", nlohmann::json::object()}, {"b", "building", {{"property_id", "p"}}},
+        {"f", "floor", {{"building_id", "b"}}}, {"l", "layer", {{"floor_id", "f"}}}}) : sketch::Document::create();
     sketch::ProjectWorkspace workspace(document.snapshot());
+    if (styled) {
+      sketch::BoundaryAuthoringSession session(sketch::BoundaryAuthoringMode::define_first);
+      session.set_classification("living_area"); (void)session.anchor({0, 0});
+      (void)session.add_line_to({4, 0});
+      sketch::BoundaryDimensionPresentation presentation;
+      presentation.visible = false; presentation.rotation_radians = 1.5707963267948966;
+      (void)session.place_manual_dimension({2, -1}, presentation);
+      check(session.undo(), "styled extraction must carry a Redo-only placement");
+      sketch::BoundaryActiveRecovery active{sketch::capture_boundary_recovery_source(workspace.snapshot(), {"p", "b", "f", "l"}),
+        session.recovery_checkpoint()};
+      auto activation = workspace.prepare_boundary_checkpoint(active); (void)workspace.commit(activation);
+    }
     const auto captured = workspace.capture();
     auto history = sketch::capture_workspace_history_record(captured);
     history.extensions = {{"preserve", nlohmann::json::array({nullptr, 1, "raw"})}};
@@ -888,6 +902,8 @@ void test_archive_extraction(const std::filesystem::path& root) {
         "z-history", "workspace_history",
         sketch::encode_workspace_history_record(captured.document(), history,
                                                  captured.active_boundary())}};
+    if (captured.active_boundary()) recovery.push_back({"active", "boundary_active",
+        sketch::encode_boundary_active_recovery(*captured.active_boundary())});
     if (role == sketch::ArchiveRole::recovery_copy) {
       sketch::RecoveryCopyRecord copy;
       copy.archive_id = "archive-exchange-copy";
@@ -903,17 +919,18 @@ void test_archive_extraction(const std::filesystem::path& root) {
     }
     const sketch::ProjectArchiveSnapshot source(captured.document(), recovery,
                                                  role);
-    const auto archive_path = root / (role == sketch::ArchiveRole::ordinary
+    const auto prefix = styled ? std::string("styled-") : std::string{};
+    const auto archive_path = root / (prefix + (role == sketch::ArchiveRole::ordinary
                                           ? "exchange-ordinary.bldproj"
-                                          : "exchange-recovery.bldproj");
+                                          : "exchange-recovery.bldproj"));
     (void)sketch::ProjectStore::save_archive(archive_path, source);
     const auto loaded = sketch::ProjectStore::load_archive(archive_path, role);
     check(loaded.supported() && loaded.archive.has_value(),
           "archive extraction fixture must reopen in its recorded role");
 
-    const auto destination = root / (role == sketch::ArchiveRole::ordinary
+    const auto destination = root / (prefix + (role == sketch::ArchiveRole::ordinary
                                          ? "exchange-ordinary"
-                                         : "exchange-recovery");
+                                         : "exchange-recovery"));
     sketch::extract_project_archive(*loaded.archive, destination);
     std::ifstream input(destination / "project.json");
     const auto exported = nlohmann::json::parse(input);
@@ -981,6 +998,7 @@ int main() {
     test_direct_curve_length_exchange_v10(root);
     test_rigid_curve_archive_exchange_v11(root);
     test_archive_extraction(root);
+    test_archive_extraction(root, true);
     test_straight_wall_only_authoring_exchange_v8(root);
     test_safe_curved_wall_history_exchange_replays(root);
     const std::vector<std::byte> bytes{std::byte{1}, std::byte{2}, std::byte{0},

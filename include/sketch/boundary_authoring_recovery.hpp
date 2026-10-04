@@ -14,6 +14,7 @@ namespace sketch {
 enum class BoundaryAuthoringRecoveryFormat {
     supported_v1,
     supported_v2,
+    supported_v3,
     unsupported_version,
 };
 

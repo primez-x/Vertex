@@ -416,6 +416,7 @@ PlanCanvas::PlanCanvas(QWidget* parent) : QWidget(parent) {
 }
 
 void PlanCanvas::setEntities(std::vector<CanvasEntity> entities) {
+    m_pending_dimension_space_tap.reset();
     // Replacing the document projection invalidates the captured revision and
     // its transient host-wall geometry, even when the selected ID survives.
     if (m_touch_active || m_gesture_button != Qt::NoButton ||
@@ -636,6 +637,7 @@ void PlanCanvas::setBoundaryDraftPreview(std::optional<BoundaryDraftPreview> pre
 }
 
 void PlanCanvas::clearPreview() {
+    m_pending_dimension_space_tap.reset();
     m_boundary_preview.clear();
     m_wall_preview.reset();
     m_drawing_witnesses.clear();
@@ -804,6 +806,7 @@ void PlanCanvas::setNavigationChanged(std::function<void(Vec2, double)> callback
 void PlanCanvas::notifyNavigationChanged(Vec2 previous_center, double previous_scale) {
     if (m_view_center.x == previous_center.x && m_view_center.y == previous_center.y &&
         m_scale == previous_scale) return;
+    m_pending_dimension_space_tap.reset();
     const auto callback = m_navigation_changed;
     if (callback) callback(m_view_center, m_scale);
 }
@@ -1212,8 +1215,11 @@ void PlanCanvas::renderSceneWithTransform(QPainter& painter, const QRectF& viewp
         for (const auto& label : draft.labels) {
             if (label.text.isEmpty()) continue;
             const auto center = to_screen(label.position);
+            painter.save();
+            painter.translate(center);
+            painter.rotate(-label.rotation_radians * 180.0 / std::numbers::pi);
             auto bounds = metrics.boundingRect(label.text);
-            bounds.moveCenter(center);
+            bounds.moveCenter(QPointF{});
             bounds.adjust(-5.0, -3.0, 5.0, 3.0);
             painter.setPen(Qt::NoPen);
             painter.setBrush(background.lightnessF() > 0.5
@@ -1225,6 +1231,7 @@ void PlanCanvas::renderSceneWithTransform(QPainter& painter, const QRectF& viewp
                                : QColor(255, 239, 172));
             painter.setBrush(Qt::NoBrush);
             painter.drawText(bounds, Qt::AlignCenter, label.text);
+            painter.restore();
         }
         painter.restore();
     }
@@ -1457,12 +1464,14 @@ void PlanCanvas::setSymbolDropped(std::function<void(QString, double, Vec2)> cal
 }
 
 void PlanCanvas::dragEnterEvent(QDragEnterEvent* event) {
+    m_pending_dimension_space_tap.reset();
     if (m_symbol_dropped && event->mimeData()->hasFormat("application/x-vertex-symbol") &&
         event->mimeData()->data("application/x-vertex-symbol").size() <= 4096)
         event->acceptProposedAction();
 }
 
 void PlanCanvas::dragMoveEvent(QDragMoveEvent* event) {
+    m_pending_dimension_space_tap.reset();
     if (m_symbol_dropped && event->mimeData()->hasFormat("application/x-vertex-symbol")) {
         updateCursor(event->position());
         event->acceptProposedAction();
@@ -1470,6 +1479,7 @@ void PlanCanvas::dragMoveEvent(QDragMoveEvent* event) {
 }
 
 void PlanCanvas::dropEvent(QDropEvent* event) {
+    m_pending_dimension_space_tap.reset();
     if (!m_symbol_dropped) return;
     const auto payload = event->mimeData()->data("application/x-vertex-symbol");
     if (payload.size() > 4096) return;
@@ -1499,6 +1509,21 @@ void PlanCanvas::setCancelRequested(std::function<void()> callback) {
 
 void PlanCanvas::setPreciseInputRequested(std::function<void()> callback) {
     m_precise_input_requested = std::move(callback);
+}
+
+void PlanCanvas::setPendingDimensionTargetRequested(
+    std::function<std::optional<CanvasPendingDimensionTarget>()> callback) {
+    m_pending_dimension_target_requested = std::move(callback);
+}
+
+void PlanCanvas::setPendingDimensionOrientationRequested(
+    std::function<void(CanvasPendingDimensionTarget, bool)> callback) {
+    m_pending_dimension_orientation_requested = std::move(callback);
+}
+
+void PlanCanvas::setPendingDimensionOmissionRequested(
+    std::function<void(CanvasPendingDimensionTarget)> callback) {
+    m_pending_dimension_omission_requested = std::move(callback);
 }
 
 void PlanCanvas::setBayWindowReturnRequested(std::function<void()> callback) {
@@ -1583,6 +1608,7 @@ bool PlanCanvas::event(QEvent* event) {
     case QEvent::TabletPress:
     case QEvent::TabletMove:
     case QEvent::TabletRelease:
+        m_pending_dimension_space_tap.reset();
         beginPerformanceMeasurement(PerformanceMetric::input);
         break;
     default:
@@ -1744,6 +1770,15 @@ void PlanCanvas::pointerPress(QPointF position, Qt::MouseButton button,
         return;
     }
     if (button != Qt::LeftButton) return;
+    if (m_space_pan_armed) {
+        m_left_gesture = LeftGesture::space_pan;
+        m_left_start = position;
+        m_pan_start = position;
+        m_pan_view_start = m_view_center;
+        m_panning = true;
+        setCursor(Qt::ClosedHandCursor);
+        return;
+    }
     if (m_point_placement_requested) {
         m_left_start = position;
         m_left_dragging = false;
@@ -1754,15 +1789,6 @@ void PlanCanvas::pointerPress(QPointF position, Qt::MouseButton button,
     }
     if (navigateOverviewMap(position)) {
         m_overview_dragging = true;
-        return;
-    }
-    if (m_space_pan_armed) {
-        m_left_gesture = LeftGesture::space_pan;
-        m_left_start = position;
-        m_pan_start = position;
-        m_pan_view_start = m_view_center;
-        m_panning = true;
-        setCursor(Qt::ClosedHandCursor);
         return;
     }
     const bool control = modifiers.testFlag(Qt::ControlModifier);
@@ -1865,6 +1891,7 @@ void PlanCanvas::pointerPress(QPointF position, Qt::MouseButton button,
 }
 
 void PlanCanvas::pointerMove(QPointF position, Qt::KeyboardModifiers modifiers) {
+    m_pending_dimension_space_tap.reset();
     m_last_mouse_position = position;
     if (m_move_release_pending || m_transform_release_pending || m_vertex_release_pending) return;
     if (m_gesture_button == Qt::RightButton && !m_right_dragging &&
@@ -2009,14 +2036,16 @@ void PlanCanvas::pointerMove(QPointF position, Qt::KeyboardModifiers modifiers) 
 }
 
 void PlanCanvas::pointerRelease(QPointF position, Qt::MouseButton button,
-                                Qt::KeyboardModifiers modifiers) {
+                               Qt::KeyboardModifiers modifiers) {
+    m_pending_dimension_space_tap.reset();
     if (button != m_gesture_button) return;
     // Publish the final effective point before any click callback. A normal
     // click can cross a snap boundary between press and release without Qt
     // delivering an intervening move event; authoring must use the release
     // point the user actually chose.
     updateCursor(position);
-    if (button == Qt::LeftButton && m_point_placement_requested) {
+    if (button == Qt::LeftButton && m_point_placement_requested &&
+        m_left_gesture != LeftGesture::space_pan) {
         if ((position-m_left_start).manhattanLength()>=QApplication::startDragDistance()) {
             pointerMove(position,modifiers);
             resetGesture();
@@ -2043,7 +2072,7 @@ void PlanCanvas::pointerRelease(QPointF position, Qt::MouseButton button,
     }
     if (button == Qt::LeftButton) {
         // Consume the final location even if the platform omitted a move event.
-        if (m_left_gesture == LeftGesture::object_move ||
+        if (m_left_gesture == LeftGesture::space_pan || m_left_gesture == LeftGesture::object_move ||
             m_left_gesture == LeftGesture::selection_axis_resize ||
             m_left_gesture == LeftGesture::selection_resize ||
             m_left_gesture == LeftGesture::selection_rotate ||
@@ -2197,6 +2226,7 @@ void PlanCanvas::pointerRelease(QPointF position, Qt::MouseButton button,
 }
 
 void PlanCanvas::resetGesture() {
+    m_pending_dimension_space_tap.reset();
     ++m_opening_width_preview_serial;
     ++m_boundary_vertex_preview_serial;
     m_gesture_button = Qt::NoButton;
@@ -3673,6 +3703,7 @@ void PlanCanvas::mouseReleaseEvent(QMouseEvent* event) {
 }
 
 void PlanCanvas::wheelEvent(QWheelEvent* event) {
+    m_pending_dimension_space_tap.reset();
     beginPerformanceMeasurement(PerformanceMetric::input);
     const auto steps = static_cast<double>(event->angleDelta().y()) / 120.0;
     if (steps != 0.0) {
@@ -3682,6 +3713,17 @@ void PlanCanvas::wheelEvent(QWheelEvent* event) {
 }
 
 void PlanCanvas::keyPressEvent(QKeyEvent* event) {
+    if (event->key() != Qt::Key_Space) m_pending_dimension_space_tap.reset();
+    if ((event->key() == Qt::Key_H || event->key() == Qt::Key_V) &&
+        hasFocus() && event->modifiers() == Qt::NoModifier && !event->isAutoRepeat() &&
+        drawingCommandIdle() && !m_point_placement_requested &&
+        m_pending_dimension_target_requested && m_pending_dimension_orientation_requested) {
+        if (const auto target = m_pending_dimension_target_requested()) {
+            m_pending_dimension_orientation_requested(*target, event->key() == Qt::Key_H);
+            event->accept();
+            return;
+        }
+    }
     const bool directional_modifiers = event->modifiers() == Qt::ControlModifier ||
         event->modifiers() == (Qt::ControlModifier | Qt::ShiftModifier);
     if (hasFocus() && directional_modifiers && drawingCommandIdle() &&
@@ -3738,6 +3780,10 @@ void PlanCanvas::keyPressEvent(QKeyEvent* event) {
         beginPerformanceMeasurement(PerformanceMetric::input);
     }
     if (event->key() == Qt::Key_Space && !event->isAutoRepeat()) {
+        m_pending_dimension_space_tap.reset();
+        if (hasFocus() && event->modifiers() == Qt::NoModifier && drawingCommandIdle() &&
+            !m_point_placement_requested && m_pending_dimension_target_requested)
+            m_pending_dimension_space_tap = m_pending_dimension_target_requested();
         m_space_pan_armed = true;
         if (m_gesture_button == Qt::NoButton) setCursor(Qt::OpenHandCursor);
         event->accept();
@@ -3826,11 +3872,15 @@ void PlanCanvas::keyPressEvent(QKeyEvent* event) {
 
 void PlanCanvas::keyReleaseEvent(QKeyEvent* event) {
     if (event->key() == Qt::Key_Space && !event->isAutoRepeat()) {
+        const auto tap = std::exchange(m_pending_dimension_space_tap, std::nullopt);
         m_space_pan_armed = false;
         if (m_gesture_button == Qt::NoButton) {
             if (m_last_mouse_position) updateCursor(*m_last_mouse_position);
             else setCursor(Qt::CrossCursor);
         }
+        if (tap && hasFocus() && event->modifiers() == Qt::NoModifier && drawingCommandIdle() &&
+            !m_point_placement_requested && m_pending_dimension_omission_requested)
+            m_pending_dimension_omission_requested(*tap);
         event->accept();
         return;
     }
@@ -3838,6 +3888,7 @@ void PlanCanvas::keyReleaseEvent(QKeyEvent* event) {
 }
 
 void PlanCanvas::resizeEvent(QResizeEvent* event) {
+    m_pending_dimension_space_tap.reset();
     QWidget::resizeEvent(event);
     if (m_last_mouse_position) updateCursor(*m_last_mouse_position);
     update();

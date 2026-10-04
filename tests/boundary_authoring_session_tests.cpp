@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
+#include <limits>
 #include <numbers>
 #include <numeric>
 #include <stdexcept>
@@ -380,6 +381,63 @@ void test_malformed_exact_quantity_rejects_without_state_change() {
     require(session.view() == before, "malformed exact angle mutated session state");
 }
 
+void test_manual_presentation_retains_geometry_receipts_and_semantic_history() {
+    BoundaryAuthoringSession session(BoundaryAuthoringMode::define_first);
+    session.set_classification("living_area");
+    (void)session.anchor({0.0, 0.0});
+    const BoundaryDimensionPresentation horizontal{4.0, "#12abCD", true, false, true, 0.0};
+    const BoundaryDimensionPresentation vertical{3.0, "#654321", false, true, true,
+                                                  std::numbers::pi / 2.0};
+    const BoundaryDimensionPresentation hidden{2.5, "#263241", false, false, false, 0.0};
+    (void)session.add_line(q("2000 mm"), angle("0 deg"));
+    const auto before_dimension = session.active_chain();
+    const auto first = session.place_manual_dimension({1.0, -0.25}, horizontal);
+    require(first.presentation == horizontal && session.active_chain()->receipts == before_dimension->receipts &&
+                session.active_chain()->segments == before_dimension->segments,
+            "horizontal presentation must leave measured geometry and original numeric receipts intact");
+    require(session.undo() && session.phase() == BoundaryAuthoringPhase::awaiting_dimension &&
+                session.active_chain()->dimensions.empty(),
+            "undo must restore the pending edge before its styled dimension");
+    require(session.redo() && session.active_chain()->dimensions.front() == first,
+            "redo must restore all presentation fields and stable dimension identity");
+    (void)session.add_line(q("2 m"), angle("90 deg"));
+    const auto second = session.place_manual_dimension({2.25, 1.0}, vertical);
+    (void)session.add_closing_segment();
+    const auto receipts = session.active_chain()->receipts;
+    const auto third = session.place_manual_dimension({1.0, 1.0}, hidden);
+    const auto accepted = session.close_chain();
+    require(accepted.dimensions == std::vector<BoundaryDimension>{first, second, third} &&
+                accepted.receipts == receipts &&
+                std::abs(std::abs(signed_area(boundary_geometry(accepted.boundary))) - 2.0) < 1e-12,
+            "accepting horizontal, vertical and hidden dimensions must retain analytical area and receipts");
+    require(session.undo() && session.active_chain()->dimensions.back().presentation == hidden &&
+                session.redo() && session.accepted_chains().front() == accepted,
+            "close undo and redo must retain the accepted dimension presentations");
+}
+
+void test_invalid_manual_presentation_is_transactional() {
+    BoundaryAuthoringSession session(BoundaryAuthoringMode::define_first);
+    session.set_classification("living_area");
+    (void)session.anchor({0.0, 0.0});
+    (void)session.add_line(q("2 m"), angle("0 deg"));
+    (void)session.place_manual_dimension({1.0, -0.25});
+    require(session.undo(), "dimension undo should establish an existing redo branch");
+    const auto before = session.recovery_checkpoint();
+    const auto view = session.view();
+    for (const int invalid_field : {0, 1, 2, 3, 4}) {
+        BoundaryDimensionPresentation style;
+        if (invalid_field == 0) style.text_height_mm = 0.49;
+        if (invalid_field == 1) style.text_height_mm = 20.01;
+        if (invalid_field == 2) style.color = "#12345g";
+        if (invalid_field == 3) style.text_height_mm = std::numeric_limits<double>::quiet_NaN();
+        if (invalid_field == 4) style.rotation_radians = std::numeric_limits<double>::infinity();
+        rejected([&] { (void)session.place_manual_dimension({1.0, -0.25}, style); },
+                 "invalid manual presentation must fail the existing dimension codec validation");
+        require(session.recovery_checkpoint() == before && session.view() == view,
+                "rejected presentation must preserve pending state, counters and redo history");
+    }
+}
+
 void test_strict_close_rejects_self_intersection_and_near_join() {
     BoundaryAuthoringSession session(BoundaryAuthoringMode::draw_first);
     (void)session.anchor({0.0, 0.0});
@@ -407,6 +465,8 @@ int main() {
         test_invalid_operations_are_atomic_and_semantic_history_excludes_pointer();
         test_explicit_closure_dimension_and_session_identity_lifetime();
         test_malformed_exact_quantity_rejects_without_state_change();
+        test_manual_presentation_retains_geometry_receipts_and_semantic_history();
+        test_invalid_manual_presentation_is_transactional();
         test_strict_close_rejects_self_intersection_and_near_join();
         std::cout << "Boundary authoring session tests passed\n";
         return 0;

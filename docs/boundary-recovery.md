@@ -2,9 +2,37 @@
 
 Typed chord inputs opt into checkpoint schema 2 / replay 1. Qualification scans
 all retained actions, including Redo and closed chains; checkpoints without typed
-chords retain schema 1. The outer workspace recovery envelope remains unchanged.
+chords and presentation retain schema 1. The outer workspace recovery envelope remains unchanged.
 See [native format 31](project-format.md#exact-chord-length-and-heading-v31) for
 exact receipt fields and older-reader behavior.
+
+## Dimension presentation checkpoints
+
+Manual dimension presentation opts into checkpoint schema **3 / replay 1**.
+The optional `presentation` object on an action dimension or closed-chain
+dimension uses the existing dimension-entity version-two fields:
+`text_height_mm`, `color`, `bold`, `italic`, `visible`, and `rotation_radians`.
+They are validated by the shared dimension codec. Invalid values leave semantic
+state, pending dimensions, allocation counters and Redo unchanged.
+
+Promotion scans the complete retained timeline, including dimensions that exist
+only in Redo or accepted close actions. Canonical replay preserves all six fields
+and checks the close record against replayed dimensions. Namespace revision
+remaps identities while retaining presentation. Known checkpoint versions one
+and two reject presentation rather than silently dropping it. Version three can
+also contain typed chord construction. Unsupported future checkpoint versions
+or replay dialects preserve the complete enclosing history/ledger opaquely;
+they cannot yield a partly editable recovered project.
+
+Aggregate active and historical recovery adapters recognize checkpoint versions
+one through three. There is no new native container or JSON/assets extraction
+version: committed dimension presentation was already supported, and existing
+versioned recovery envelopes provide the older-reader preservation boundary.
+Native recovery save/load and extraction retain the raw envelope and full timeline.
+
+The implementation history below records earlier milestones and their original
+limitations; it does not supersede this current presentation contract or certify
+the production acceptance gate.
 
 This document defines the implementation and reference contract for durable
 unfinished boundary recovery in Vertex.

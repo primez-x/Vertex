@@ -22,6 +22,7 @@
 #include <array>
 #include <cstdint>
 #include <optional>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -245,6 +246,18 @@ struct CanvasReferenceGrid {
 struct BoundaryDraftLabel {
     Vec2 position{};
     QString text;
+    double rotation_radians{};
+};
+
+// Captured by the host at key-down and re-admitted at key-up. Canvas gestures
+// never manufacture document authority or infer which pending edge to omit.
+struct CanvasPendingDimensionTarget {
+    std::string identity_namespace;
+    std::string boundary_id;
+    std::string segment_id;
+    std::uint64_t revision{};
+    std::uint64_t semantic_serial{};
+    bool operator==(const CanvasPendingDimensionTarget&) const = default;
 };
 
 // A document-independent rendering value for an unfinished boundary. The
@@ -495,6 +508,12 @@ public:
     // painted entity under the pointer, or an empty string for canvas space.
     void setRightClicked(std::function<void(Vec2, QString)> callback);
     void setFinishRequested(std::function<void()> callback);
+    void setPendingDimensionTargetRequested(
+        std::function<std::optional<CanvasPendingDimensionTarget>()> callback);
+    void setPendingDimensionOrientationRequested(
+        std::function<void(CanvasPendingDimensionTarget, bool horizontal)> callback);
+    void setPendingDimensionOmissionRequested(
+        std::function<void(CanvasPendingDimensionTarget)> callback);
     void setCancelRequested(std::function<void()> callback);
     void setPreciseInputRequested(std::function<void()> callback);
     void setBayWindowReturnRequested(std::function<void()> callback);
@@ -802,6 +821,10 @@ private:
     std::function<void(Vec2)> m_cursor_moved;
     std::function<void(Vec2, QString)> m_right_clicked;
     std::function<void()> m_finish_requested;
+    std::function<std::optional<CanvasPendingDimensionTarget>()> m_pending_dimension_target_requested;
+    std::function<void(CanvasPendingDimensionTarget, bool)> m_pending_dimension_orientation_requested;
+    std::function<void(CanvasPendingDimensionTarget)> m_pending_dimension_omission_requested;
+    std::optional<CanvasPendingDimensionTarget> m_pending_dimension_space_tap;
     std::function<void()> m_cancel_requested;
     std::function<void()> m_precise_input_requested;
     std::function<void()> m_bay_window_return_requested;

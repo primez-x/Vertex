@@ -29764,6 +29764,22 @@ private:
             if (canvas!=active) return;
             onCanvasPoint(point);
         });
+        canvas->setPendingDimensionTargetRequested([this, canvas] {
+            return pendingDimensionTarget(canvas);
+        });
+        canvas->setPendingDimensionOrientationRequested([this, canvas](CanvasPendingDimensionTarget target,
+                                                                 bool horizontal) {
+            if (pendingDimensionTarget(canvas) != std::optional{target}) return;
+            auto& presentation = m_boundary_dimension_choices[{target.boundary_id, target.segment_id}];
+            presentation.rotation_radians = horizontal ? 0.0 : std::numbers::pi / 2.0;
+            refreshBoundaryPreview(false);
+        });
+        canvas->setPendingDimensionOmissionRequested([this, canvas](CanvasPendingDimensionTarget target) {
+            if (pendingDimensionTarget(canvas) != std::optional{target}) return;
+            auto presentation = pendingDimensionPresentation().value_or(BoundaryDimensionPresentation{});
+            presentation.visible = false;
+            onCanvasPoint(*m_boundary_session->view().pointer, target.revision, std::nullopt, presentation);
+        });
         canvas->setEntitySelectionClicked([this](QString id, bool toggle) {
             if (!m_pending_symbol_id.isEmpty()) {
                 const auto symbol_id = m_pending_symbol_id;
@@ -30051,7 +30067,7 @@ private:
                 try {
                     const auto snapshot = m_document->snapshot();
                     if (!m_document->is_editable() || m_workspace != Workspace::measurement ||
-                        (place_anchor && canvas != m_measurementCanvas) ||
+                        canvas != m_measurementCanvas ||
                         m_boundary_document != m_document || !m_boundary_source || !m_boundary_context ||
                         m_boundary_context->layer_id != m_active_layer_id.toStdString() ||
                         inspect_boundary_recovery_source(snapshot,
@@ -34424,6 +34440,7 @@ private:
     }
 
     void refreshBoundaryPreview(bool semantic_change = true) {
+        if (semantic_change) ++m_pending_dimension_semantic_serial;
         if (m_linework_drawing) {
             updateDrawingInput(); refreshLineworkPreview();
             if (m_drawing_measurement_button) {
@@ -34452,15 +34469,40 @@ private:
             return;
         }
         const auto state = m_boundary_session->view();
+        if (m_boundary_dimension_choice_namespace != state.identity_namespace) {
+            m_boundary_dimension_choices.clear();
+            m_boundary_dimension_choice_namespace = state.identity_namespace;
+            // An undone placement is still authoritative redo input. Restore
+            // its orientation once, rather than serializing transient UI state
+            // or copying the complete recovery timeline on every pointer move.
+            if (state.pending_dimension && state.semantic_redo_depth != 0) {
+                const auto checkpoint = m_boundary_session->recovery_checkpoint();
+                for (auto index = checkpoint.history_position; index < checkpoint.actions.size(); ++index) {
+                    const auto& action = checkpoint.actions[index];
+                    if (action.kind != BoundaryAuthoringActionKind::manual_dimension || !action.dimension ||
+                        action.dimension->boundary_id != state.pending_dimension->boundary_id ||
+                        action.dimension->segment_id != state.pending_dimension->segment_id) continue;
+                    if (action.dimension->presentation) {
+                        auto presentation = *action.dimension->presentation;
+                        presentation.visible = true; // Undo of omission makes the label pending again.
+                        m_boundary_dimension_choices[{action.dimension->boundary_id,
+                            action.dimension->segment_id}] = std::move(presentation);
+                    }
+                    break;
+                }
+            }
+        }
         BoundaryDraftPreview preview;
         const auto append_chain = [&](const auto& edges, const auto& dimensions) {
             for (const auto& edge : edges) preview.segments.push_back(edge.segment);
             for (const auto& dimension : dimensions) {
+                if (dimension.presentation && !dimension.presentation->visible) continue;
                 const auto edge = std::find_if(edges.begin(), edges.end(), [&](const auto& item) {
                     return item.segment_id == dimension.segment_id;
                 });
                 if (edge != edges.end()) preview.labels.push_back({dimension.text_position,
-                    PlanCanvas::drawingLengthText(segment_length(edge->segment), m_metric_units)});
+                    PlanCanvas::drawingLengthText(segment_length(edge->segment), m_metric_units),
+                    dimension.presentation ? dimension.presentation->rotation_radians : 0.0});
             }
         };
         for (const auto& chain : state.accepted_chains)
@@ -34483,7 +34525,8 @@ private:
                     return item.segment_id == state.pending_dimension->segment_id;
                 });
                 if (edge != chain.segments.end()) preview.labels.push_back({*state.pointer,
-                    PlanCanvas::drawingLengthText(segment_length(edge->segment), m_metric_units)});
+                    PlanCanvas::drawingLengthText(segment_length(edge->segment), m_metric_units),
+                    pendingDimensionPresentation().value_or(BoundaryDimensionPresentation{}).rotation_radians});
             }
         }
         const auto mode = state.mode == BoundaryAuthoringMode::draw_first
@@ -34494,7 +34537,7 @@ private:
         case BoundaryAuthoringPhase::awaiting_anchor:
             preview.instruction = mode + QStringLiteral("  •  Click to place the first node  •  Esc cancels"); break;
         case BoundaryAuthoringPhase::awaiting_dimension:
-            preview.instruction = mode + QStringLiteral("  •  Click or Enter to place this edge's dimension  •  Ctrl+Z undoes"); break;
+            preview.instruction = mode + QStringLiteral("  •  Click or Enter to place this edge's dimension  •  H horizontal / V vertical  •  Space omits  •  Ctrl+Z undoes"); break;
         case BoundaryAuthoringPhase::drawing:
             preview.instruction = mode + QStringLiteral("  •  Click to place each node  •  X/Y align, Enter accepts  •  A closes  •  D precise input"); break;
         case BoundaryAuthoringPhase::completed:
@@ -34780,8 +34823,40 @@ private:
         m_architecturalCanvas->setBoundaryDraftPreview(std::move(preview));
     }
 
+    std::optional<CanvasPendingDimensionTarget> pendingDimensionTarget(PlanCanvas* canvas) const {
+        if (canvas != m_measurementCanvas || m_workspace != Workspace::measurement ||
+            m_tool != CanvasTool::boundary || !m_boundary_session ||
+            m_boundary_session->mode() != BoundaryAuthoringMode::define_first ||
+            m_boundary_session->phase() != BoundaryAuthoringPhase::awaiting_dimension ||
+            !m_document->is_editable() || m_boundary_document != m_document ||
+            !m_boundary_source || !m_boundary_context ||
+            m_boundary_context->layer_id != m_active_layer_id.toStdString()) return std::nullopt;
+        try {
+            const auto snapshot = m_document->snapshot();
+            if (inspect_boundary_recovery_source(snapshot,
+                capture_boundary_recovery_source(*m_boundary_source, *m_boundary_context)) !=
+                BoundaryRecoverySourceStatus::current) return std::nullopt;
+            const auto state = m_boundary_session->view();
+            if (!state.pending_dimension || !state.pointer) return std::nullopt;
+            return CanvasPendingDimensionTarget{state.identity_namespace,
+                state.pending_dimension->boundary_id, state.pending_dimension->segment_id,
+                snapshot.revision(), m_pending_dimension_semantic_serial};
+        } catch (const std::exception&) {
+            return std::nullopt;
+        }
+    }
+
+    std::optional<BoundaryDimensionPresentation> pendingDimensionPresentation() const {
+        if (!m_boundary_session) return std::nullopt;
+        const auto pending = m_boundary_session->pending_dimension();
+        if (!pending) return std::nullopt;
+        const auto found = m_boundary_dimension_choices.find({pending->boundary_id, pending->segment_id});
+        return found == m_boundary_dimension_choices.end() ? std::nullopt : std::optional{found->second};
+    }
+
     void onCanvasPoint(Vec2 point, std::optional<Revision> expected_revision = std::nullopt,
-                       std::optional<ConstructionReceipt> original_input = std::nullopt) {
+                       std::optional<ConstructionReceipt> original_input = std::nullopt,
+                       std::optional<BoundaryDimensionPresentation> presentation = std::nullopt) {
         clearDrawingAlignment();
         if (expected_revision && m_document->revision() != *expected_revision) {
             setError(QStringLiteral("The project changed before this drawing input could be applied."));
@@ -34831,6 +34906,11 @@ private:
                 setError(QStringLiteral("The boundary's drawing context changed or is read-only."));
                 return;
             }
+            if (m_boundary_session->phase() == BoundaryAuthoringPhase::awaiting_dimension &&
+                !pendingDimensionTarget(m_measurementCanvas)) {
+                setError(QStringLiteral("The pending dimension's drawing context changed or is read-only."));
+                return;
+            }
             const auto original = *m_boundary_session;
             const auto restored_navigation = m_restored_boundary_navigation;
             try {
@@ -34843,7 +34923,8 @@ private:
                 case BoundaryAuthoringPhase::drawing:
                     (void)candidate.add_line_to(point); break;
                 case BoundaryAuthoringPhase::awaiting_dimension: {
-                    (void)candidate.place_manual_dimension(point);
+                    (void)candidate.place_manual_dimension(point,
+                        presentation ? presentation : pendingDimensionPresentation());
                     const auto chain = candidate.active_chain();
                     if (chain && !chain->segments.empty() &&
                         chain->segments.back().segment.end.x == chain->anchor.x &&
@@ -35597,6 +35678,9 @@ private:
         m_measurementCanvas->clearPreview();
         m_architecturalCanvas->clearPreview();
         m_boundary_session.reset();
+        m_boundary_dimension_choices.clear();
+        m_boundary_dimension_choice_namespace.clear();
+        ++m_pending_dimension_semantic_serial;
         m_boundary_subtract_target.reset();
         m_boundary_input_preferences={};
         m_boundary_input_namespace.clear();
@@ -37623,6 +37707,9 @@ private:
     std::optional<LineworkDrawing> m_linework_drawing;
     std::optional<MeasurementLinework> m_drawing_input_linework;
     std::optional<BoundaryAuthoringSession> m_boundary_session;
+    std::map<std::pair<std::string, std::string>, BoundaryDimensionPresentation> m_boundary_dimension_choices;
+    std::string m_boundary_dimension_choice_namespace;
+    std::uint64_t m_pending_dimension_semantic_serial{};
     std::optional<QString> m_boundary_subtract_target;
     QAction* m_auto_subtract_action{};
     QAction* m_draw_subtract_action{};

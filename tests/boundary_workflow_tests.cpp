@@ -27,6 +27,7 @@
 #include <QFont>
 #include <QFontDatabase>
 #include <QFontMetricsF>
+#include <QFocusEvent>
 #include <QPainterPath>
 #include <QPixmap>
 #include <QPushButton>
@@ -934,6 +935,203 @@ void test_precision_and_draw_first_classification_modals() {
     require(receipt.record->edges.front().receipt.kind == sketch::BoundaryConstructionKind::line_heading,
             "precision form must retain its exact input receipt through desktop commit");
     require_both_canvas_labels(window, 4);
+}
+
+void test_define_first_pending_dimension_keys_and_persistence() {
+    MainWindow window;
+    prepare_window(window);
+    QApplication::setActiveWindow(&window);
+    window.setMetricUnits(true);
+    auto* drawing = canvas(window, QStringLiteral("measurementPlanCanvas"));
+    drawing->setSnapEnabled(false);
+    require(window.beginBoundaryDrawing(BoundaryAuthoringMode::define_first, QStringLiteral("living")),
+            "pending keys fixture must start Define First");
+    send_click(*drawing, {0, 0});
+    send_click(*drawing, {2, 1});
+    send_move_at_screen(*drawing, model_to_canvas(*drawing, {1, -.5}));
+    send_key(*drawing, Qt::Key_V);
+    require(std::abs(preview(*drawing).labels.back().rotation_radians - std::numbers::pi / 2) < 1e-12,
+            "V must immediately rotate the diagonal edge's pending label vertically");
+    const auto capture = [&](const QString& name) {
+        const auto directory = qEnvironmentVariable("VERTEX_TEST_CAPTURE_DIR");
+        if (!directory.isEmpty()) require(QDir().mkpath(directory) && drawing->grab().save(QDir(directory).filePath(name)),
+                                         "pending dimension capture must save");
+    };
+    capture(QStringLiteral("define-first-pending-vertical.png"));
+    // H repeat and modified H must not overwrite the explicit V selection.
+    QKeyEvent repeat(QEvent::KeyPress, Qt::Key_H, Qt::NoModifier, {}, true);
+    QApplication::sendEvent(drawing, &repeat);
+    send_key(*drawing, Qt::Key_H, Qt::ShiftModifier);
+    require(std::abs(preview(*drawing).labels.back().rotation_radians - std::numbers::pi / 2) < 1e-12,
+            "modified and repeated orientation keys must leave the pending choice unchanged");
+    send_key(*drawing, Qt::Key_Return);
+    require(window.undoCommand() && window.redoCommand(), "manual orientation placement must support local undo/redo");
+    QTemporaryDir directory;
+    const auto draft_path = directory.filePath(QStringLiteral("pending-style-draft.bldproj"));
+    require(window.saveProjectAs(draft_path) && window.openProject(draft_path),
+            "placed pending dimension style must survive draft recovery");
+    drawing = canvas(window, QStringLiteral("measurementPlanCanvas"));
+    drawing->setSnapEnabled(false);
+    send_click(*drawing, {2, 3});
+    send_move_at_screen(*drawing, model_to_canvas(*drawing, {2.5, 2}));
+    send_key(*drawing, Qt::Key_H);
+    require(preview(*drawing).labels.back().rotation_radians == 0,
+            "H must immediately rotate the vertical edge's pending label horizontally");
+    capture(QStringLiteral("define-first-pending-horizontal.png"));
+    send_click(*drawing, {2.5, 2});
+    send_click(*drawing, {0, 2});
+    send_move_at_screen(*drawing, model_to_canvas(*drawing, {1, 3}));
+    send_key(*drawing, Qt::Key_Space);
+    require(preview(*drawing).segments.size() == 3 && preview(*drawing).labels.size() == 2,
+            "stationary Space must resolve the pending dimension while retaining its measured edge");
+    capture(QStringLiteral("define-first-pending-hidden.png"));
+    require(window.undoCommand() && preview(*drawing).labels.size() == 3 && window.redoCommand() &&
+                preview(*drawing).labels.size() == 2,
+            "hidden dimension placement must undo and redo locally");
+    send_key(*drawing, Qt::Key_Return);
+    send_move_at_screen(*drawing, model_to_canvas(*drawing, {-.5, 1}));
+    send_key(*drawing, Qt::Key_Space);
+    require(!drawing->boundaryDraftPreview(), "Space must finish the pending closing edge dimension");
+    const auto committed = window.document().snapshot();
+    const auto boundary = sketch::decode_identified_boundary_entity(committed_boundary(committed));
+    require(std::abs(std::abs(sketch::signed_area(sketch::boundary_geometry(boundary))) - 4.0) < 1e-12,
+            "omitted dimensions must preserve the exact closed area");
+    const auto dimensions = committed_dimensions(committed);
+    require(dimensions.size() == 4, "omitted labels must retain semantic dimensions and measured targets");
+    for (std::size_t index = 0; index < boundary.segments.size(); ++index) {
+        const auto found = std::find_if(dimensions.begin(), dimensions.end(), [&](const auto& item) {
+            return item.segment_id == boundary.segments[index].segment_id;
+        });
+        require(found != dimensions.end() && found->presentation,
+                "manual key placement must persist presentation");
+        require(found->presentation->visible == (index < 2) &&
+                    std::abs(found->presentation->rotation_radians - (index == 0 ? std::numbers::pi / 2 : 0)) < 1e-12,
+                "V/H and Space must persist the selected rotation and visibility for their exact edge");
+    }
+    for (const auto* target : {drawing, canvas(window, QStringLiteral("architecturalPlanCanvas"))}) {
+        const auto count = std::count_if(target->entities().begin(), target->entities().end(), [](const auto& item) {
+            return item.type == QStringLiteral("dimension_line");
+        });
+        require(count == 2, "suppressed dimensions must not render committed linework in either canvas");
+    }
+    const auto path = directory.filePath(QStringLiteral("pending-style-committed.bldproj"));
+    require(window.saveProjectAs(path) && window.openProject(path) &&
+                window.document().snapshot().entities() == committed.entities() &&
+                window.undoCommand() && window.redoCommand() &&
+                window.document().snapshot().entities() == committed.entities(),
+            "pending dimension style must survive reopen and document undo/redo");
+}
+
+void test_define_first_pending_space_gesture_and_context_guards() {
+    {
+        MainWindow window;
+        prepare_window(window);
+        QApplication::setActiveWindow(&window);
+        auto* drawing = canvas(window, QStringLiteral("measurementPlanCanvas"));
+        require(window.beginBoundaryDrawing(BoundaryAuthoringMode::define_first, QStringLiteral("living")),
+                "missing pointer keys fixture must start Define First");
+        const auto before = window.document().snapshot();
+        send_key(*drawing, Qt::Key_H); send_key(*drawing, Qt::Key_V); send_key(*drawing, Qt::Key_Space);
+        require(!preview(*drawing).anchor && preview(*drawing).segments.empty() && preview(*drawing).labels.empty(),
+                "orientation and omission keys with no pending target or pointer must not anchor or mutate");
+        require_same_document(before, window.document().snapshot(), "startup key refusal must preserve document");
+    }
+    for (const int guard : {0, 1, 2, 3, 4, 5, 6}) {
+        MainWindow window;
+        prepare_window(window);
+        QApplication::setActiveWindow(&window);
+        window.setMetricUnits(true);
+        auto* drawing = canvas(window, QStringLiteral("measurementPlanCanvas"));
+        require(window.beginBoundaryDrawing(BoundaryAuthoringMode::define_first, QStringLiteral("living")),
+                "Space guard fixture must start Define First");
+        send_click(*drawing, {0, 0});
+        send_click(*drawing, {2, 1});
+        send_move_at_screen(*drawing, model_to_canvas(*drawing, {1, -.5}));
+        drawing->setFocus();
+        QKeyEvent press(QEvent::KeyPress, Qt::Key_Space, Qt::NoModifier);
+        QApplication::sendEvent(drawing, &press);
+        const auto center = drawing->viewCenter();
+        if (guard == 0) send_drag(*drawing, {0, 0}, {.5, .5});
+        if (guard == 1) send_key(*drawing, Qt::Key_Return); // Space-held Enter remains guarded.
+        if (guard == 2) {
+            QFocusEvent lost(QEvent::FocusOut, Qt::OtherFocusReason);
+            QApplication::sendEvent(drawing, &lost);
+        }
+        if (guard == 3) {
+            auto layer = window.document().snapshot().entities().at(window.activeLayerId().toStdString());
+            layer.properties["name"] = "Pending dimension stale context";
+            window.document().apply(sketch::ApplyEntityChanges{window.document().revision(),
+                {sketch::EntityChange::upsert(layer)}, {}, "pending dimension guard"});
+        }
+        if (guard == 4) window.document().mark_read_only("pending dimension read-only guard");
+        if (guard == 3 || guard == 4) {
+            send_key(*drawing, Qt::Key_V);
+            require(preview(*drawing).labels.back().rotation_radians == 0,
+                    "stale and read-only contexts must refuse pending orientation keys");
+        }
+        if (guard == 5) {
+            require(window.undoCommand() && window.redoCommand(), "key pair guard must change local semantic state");
+        }
+        if (guard == 6) send_move_at_screen(*drawing, model_to_canvas(*drawing, {1.2, -.5}));
+        const auto before = window.document().snapshot();
+        QKeyEvent release(QEvent::KeyRelease, Qt::Key_Space, Qt::NoModifier);
+        QApplication::sendEvent(drawing, &release);
+        process_events();
+        require(preview(*drawing).segments.size() == 1 && preview(*drawing).labels.size() == 1 &&
+                    preview(*drawing).instruction.contains(QStringLiteral("place this edge")),
+                QStringLiteral("Space consumed by gesture, key, focus, source, editability, history or pointer move must not omit; guard=%1")
+                    .arg(guard).toStdString());
+        if (guard == 0) require(!same_point(center, drawing->viewCenter()), "Space-left drag must remain pan");
+        require_same_document(before, window.document().snapshot(), "refused Space must preserve the document");
+    }
+    MainWindow window;
+    prepare_window(window);
+    auto* drawing = canvas(window, QStringLiteral("measurementPlanCanvas"));
+    require(window.beginBoundaryDrawing(BoundaryAuthoringMode::define_first, QStringLiteral("living")), "inactive guard fixture");
+    QApplication::setActiveWindow(&window);
+    send_click(*drawing, {0, 0}); send_click(*drawing, {2, 1});
+    auto* inactive = canvas(window, QStringLiteral("architecturalPlanCanvas"));
+    send_key(*inactive, Qt::Key_V); send_key(*inactive, Qt::Key_Space); send_key(*inactive, Qt::Key_Return);
+    require(preview(*drawing).instruction.contains(QStringLiteral("place this edge")) &&
+                preview(*drawing).labels.back().rotation_radians == 0,
+            "inactive architectural canvas must not orient, omit or place the pending dimension");
+    QLineEdit editor(&window);
+    editor.show(); editor.setFocus();
+    QKeyEvent text_key(QEvent::KeyPress, Qt::Key_V, Qt::NoModifier, QStringLiteral("v"));
+    QApplication::sendEvent(&editor, &text_key);
+    require(editor.text() == QStringLiteral("v") && preview(*drawing).labels.back().rotation_radians == 0,
+            "text entry must receive V without changing the pending dimension");
+}
+
+void test_define_first_undone_orientation_restores_pending_preview() {
+    MainWindow window;
+    prepare_window(window);
+    QApplication::setActiveWindow(&window);
+    auto* drawing = canvas(window, QStringLiteral("measurementPlanCanvas"));
+    require(window.beginBoundaryDrawing(BoundaryAuthoringMode::define_first, QStringLiteral("living")),
+            "undone orientation fixture must start Define First");
+    send_click(*drawing, {0, 0}); send_click(*drawing, {2, 1});
+    send_key(*drawing, Qt::Key_V); send_key(*drawing, Qt::Key_Return);
+    require(window.undoCommand(), "vertical placement must undo to pending");
+    QTemporaryDir directory;
+    const auto path = directory.filePath(QStringLiteral("undone-pending-dimension.bldproj"));
+    const auto require_vertical_pending = [&] {
+        const auto pending = preview(*drawing);
+        require(pending.instruction.contains(QStringLiteral("place this edge")) && pending.labels.size() == 1 &&
+                    std::abs(pending.labels.front().rotation_radians - std::numbers::pi / 2) < 1e-12,
+                "undone placed or omitted V style must recover a visible vertical pending label");
+    };
+    require_vertical_pending();
+    require(window.saveProjectAs(path) && window.openProject(path), "undone V checkpoint must reopen");
+    require_vertical_pending();
+    require(window.redoCommand() && std::abs(preview(*drawing).labels.front().rotation_radians -
+                std::numbers::pi / 2) < 1e-12 && window.undoCommand(),
+            "retained styled redo action must still place and undo vertically");
+    send_key(*drawing, Qt::Key_Space);
+    require(preview(*drawing).labels.empty() && window.undoCommand(), "vertical omission must undo to pending");
+    require(window.saveProject() && window.openProject(path), "undone omitted style checkpoint must reopen");
+    require_vertical_pending();
+    require(window.redoCommand() && preview(*drawing).labels.empty(), "recovered hidden redo must remain omitted");
 }
 
 void test_saved_boundary_draft_resumes_without_unsaved_warning() {
@@ -3143,6 +3341,12 @@ int main(int argc, char** argv) {
             test_saved_boundary_draft_resumes_without_unsaved_warning();
             return 0;
         }
+        if (application.arguments().contains(QStringLiteral("--pending-dimension-only"))) {
+            test_define_first_pending_dimension_keys_and_persistence();
+            test_define_first_pending_space_gesture_and_context_guards();
+            test_define_first_undone_orientation_restores_pending_preview();
+            return 0;
+        }
         if (application.arguments().contains(QStringLiteral("--room-labels-only"))) {
             test_concave_room_label_stays_inside_room();
             test_long_room_label_footprint_avoids_narrow_notch();
@@ -3170,6 +3374,9 @@ int main(int argc, char** argv) {
         run_test("inline_wall_rejects_stale_source_and_selection", test_inline_wall_rejects_stale_source_and_selection);
         run_test("draw_first_events_commit_receipts_labels_and_visibility", test_draw_first_events_commit_receipts_labels_and_visibility);
         run_test("define_first_events_place_manual_dimensions_and_close", test_define_first_events_place_manual_dimensions_and_close);
+        run_test("define_first_pending_dimension_keys_and_persistence", test_define_first_pending_dimension_keys_and_persistence);
+        run_test("define_first_pending_space_gesture_and_context_guards", test_define_first_pending_space_gesture_and_context_guards);
+        run_test("define_first_undone_orientation_restores_pending_preview", test_define_first_undone_orientation_restores_pending_preview);
         run_test("workspace_switch_preserves_draft_on_refusal_and_allows_finished_drawing", test_workspace_switch_preserves_draft_on_refusal_and_allows_finished_drawing);
         run_test("escape_cancels_without_document_mutation", test_escape_cancels_without_document_mutation);
         run_test("context_change_discards_draft_without_mutating_document", test_context_change_discards_draft_without_mutating_document);

@@ -340,7 +340,7 @@ WorkspaceHistoryDecodeResult decode_workspace_history_record(const DocumentSnaps
             if (value.is_null()) continue;
             if (future(value, 2)) return opaque();
             if (!value.contains("checkpoint")) invalid("missing checkpoint");
-            if (future(value.at("checkpoint"))) return opaque();
+            if (future(value.at("checkpoint"), boundary_authoring_recovery_version_v3)) return opaque();
         }
         preflight_wire_history(document, envelope, active, p, limits, wire);
         WorkspaceHistoryRecord record;

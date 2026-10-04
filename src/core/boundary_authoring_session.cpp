@@ -1397,7 +1397,8 @@ std::string BoundaryAuthoringSession::add_closing_segment() {
     return std::string(id);
 }
 
-BoundaryDimension BoundaryAuthoringSession::place_manual_dimension(Vec2 world_position) {
+BoundaryDimension BoundaryAuthoringSession::place_manual_dimension(
+    Vec2 world_position, std::optional<BoundaryDimensionPresentation> presentation) {
     require_point(world_position, "dimension position");
     require_editable(*this);
     if (!semantic_.active_chain.has_value() ||
@@ -1426,7 +1427,11 @@ BoundaryDimension BoundaryAuthoringSession::place_manual_dimension(Vec2 world_po
             return id;
         }(),
         pending.boundary_id,
-        pending.segment_id, world_position, BoundaryDimensionPlacement::manual, std::nullopt};
+        pending.segment_id, world_position, BoundaryDimensionPlacement::manual, std::nullopt,
+        std::move(presentation)};
+    // Reuse the persisted dimension contract before modifying the candidate
+    // history. Invalid presentation must leave pending state and ID fences intact.
+    if (dimension.presentation) (void)encode_boundary_dimension_entity(dimension);
     chain.pending_dimensions.pop_front();
     chain.dimensions.push_back(dimension);
     semantic.phase = chain.pending_dimensions.empty() ? BoundaryAuthoringPhase::drawing
@@ -1777,6 +1782,8 @@ BoundaryAuthoringCheckpoint BoundaryAuthoringSession::recovery_checkpoint() cons
     result.counters = public_counters();
     result.extensions = nlohmann::json::parse(recovery_extensions_);
     if (boundary_authoring_checkpoint_has_typed_chord(result)) result.version=boundary_authoring_recovery_version_v2;
+    if (boundary_authoring_checkpoint_has_dimension_presentation(result))
+        result.version = boundary_authoring_recovery_version_v3;
     return result;
 }
 
@@ -1784,6 +1791,18 @@ bool boundary_authoring_checkpoint_has_typed_chord(const BoundaryAuthoringCheckp
     for (const auto& action : checkpoint.actions) {
         if (action.receipt && action.receipt->chord_input) return true;
         if (action.chain) for (const auto& edge : action.chain->edges) if (edge.receipt.chord_input) return true;
+    }
+    return false;
+}
+
+bool boundary_authoring_checkpoint_has_dimension_presentation(
+    const BoundaryAuthoringCheckpoint& checkpoint) noexcept {
+    for (const auto& action : checkpoint.actions) {
+        if (action.dimension && action.dimension->presentation) return true;
+        if (action.chain) {
+            for (const auto& dimension : action.chain->dimensions)
+                if (dimension.presentation) return true;
+        }
     }
     return false;
 }
@@ -1908,7 +1927,8 @@ void BoundaryAuthoringSession::apply_recovery_action(
             return;
         }
         case BoundaryAuthoringActionKind::manual_dimension:
-            (void)place_manual_dimension(require_dimension().text_position);
+            (void)place_manual_dimension(require_dimension().text_position,
+                                         require_dimension().presentation);
             return;
         case BoundaryAuthoringActionKind::automatic_dimension:
             (void)require_dimension();
@@ -1924,7 +1944,9 @@ void BoundaryAuthoringSession::apply_recovery_action(
 
 void BoundaryAuthoringSession::restore_recovery_checkpoint(
     const BoundaryAuthoringCheckpoint& checkpoint) {
-    if (checkpoint.version != boundary_authoring_recovery_version && checkpoint.version != boundary_authoring_recovery_version_v2) {
+    if (checkpoint.version != boundary_authoring_recovery_version &&
+        checkpoint.version != boundary_authoring_recovery_version_v2 &&
+        checkpoint.version != boundary_authoring_recovery_version_v3) {
         invalid("unsupported boundary authoring recovery version");
     }
     if (checkpoint.replay_version != boundary_authoring_recovery_replay_version) {
@@ -1932,6 +1954,9 @@ void BoundaryAuthoringSession::restore_recovery_checkpoint(
     }
     if (checkpoint.version==boundary_authoring_recovery_version && boundary_authoring_checkpoint_has_typed_chord(checkpoint))
         invalid("typed chord input requires recovery checkpoint version two");
+    if (checkpoint.version < boundary_authoring_recovery_version_v3 &&
+        boundary_authoring_checkpoint_has_dimension_presentation(checkpoint))
+        invalid("dimension presentation requires recovery checkpoint version three");
     if (!checkpoint.extensions.is_object()) {
         invalid("boundary authoring recovery extensions must be an object");
     }

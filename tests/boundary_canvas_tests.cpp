@@ -115,6 +115,78 @@ QRect bright_pixel_bounds(const QImage& image, QRect region,
                                           : QRect{};
 }
 
+void test_pending_dimension_preview_rotates_painted_label() {
+    PlanCanvas canvas;
+    canvas.resize(800, 600);
+    canvas.setGridEnabled(false);
+    canvas.show();
+    process_events();
+    const auto empty = render(canvas, false);
+    BoundaryDraftPreview draft;
+    draft.labels.push_back({{0, 0}, QStringLiteral("12.345 m"), 0.0});
+    canvas.setBoundaryDraftPreview(draft);
+    const auto horizontal = render(canvas, false);
+    const auto region = QRect(canvas.rect().center() - QPoint(100, 100), QSize(200, 200));
+    const auto horizontal_glyphs = bright_pixel_bounds(horizontal, region, &empty);
+    draft.labels.front().rotation_radians = std::numbers::pi / 2;
+    canvas.setBoundaryDraftPreview(draft);
+    const auto vertical = render(canvas, false);
+    const auto vertical_glyphs = bright_pixel_bounds(vertical, region, &empty);
+    require(!horizontal_glyphs.isEmpty() && !vertical_glyphs.isEmpty() &&
+                horizontal_glyphs.width() > horizontal_glyphs.height() * 2 &&
+                vertical_glyphs.height() > vertical_glyphs.width() * 2 &&
+                std::abs(horizontal_glyphs.width() - vertical_glyphs.height()) <= 2,
+            "pending label rotation must rotate readable painted glyphs without changing their screen size");
+    const auto rotated_output = render(canvas, true);
+    canvas.setBoundaryDraftPreview(std::nullopt);
+    require(images_equal(rotated_output, render(canvas, true)),
+            "pending presentation must remain absent from committed export");
+}
+
+void test_pending_dimension_space_preserves_temporary_placement_pan() {
+    PlanCanvas canvas;
+    canvas.resize(800, 600);
+    canvas.show();
+    QApplication::setActiveWindow(&canvas);
+    canvas.setFocus();
+    process_events();
+    int placements = 0, omissions = 0;
+    canvas.setPendingDimensionTargetRequested([] {
+        return std::optional{sketch::desktop::CanvasPendingDimensionTarget{"session", "boundary", "edge", 7, 3}};
+    });
+    canvas.setPendingDimensionOmissionRequested([&](auto) { ++omissions; });
+    canvas.setPointPlacementRequested([&](Vec2) { ++placements; });
+    const auto key = [&](QEvent::Type type) {
+        QKeyEvent event(type, Qt::Key_Space, Qt::NoModifier);
+        QApplication::sendEvent(&canvas, &event);
+    };
+    const auto mouse = [&](QEvent::Type type, QPointF position, Qt::MouseButton button,
+                           Qt::MouseButtons buttons) {
+        QMouseEvent event(type, position, position, button, buttons, Qt::NoModifier);
+        QApplication::sendEvent(&canvas, &event);
+    };
+    const auto center = canvas.viewCenter();
+    key(QEvent::KeyPress);
+    mouse(QEvent::MouseButtonPress, {400, 300}, Qt::LeftButton, Qt::LeftButton);
+    // A release-only drag must pan even if the device omits move events.
+    mouse(QEvent::MouseButtonRelease, {440, 330}, Qt::LeftButton, Qt::NoButton);
+    key(QEvent::KeyRelease);
+    require(placements == 0 && omissions == 0 &&
+                (canvas.viewCenter().x != center.x || canvas.viewCenter().y != center.y),
+            "Space release-only drag must pan without placing or omitting during one-click placement");
+    key(QEvent::KeyPress);
+    mouse(QEvent::MouseButtonPress, {400, 300}, Qt::LeftButton, Qt::LeftButton);
+    mouse(QEvent::MouseButtonRelease, {400, 300}, Qt::LeftButton, Qt::NoButton);
+    key(QEvent::KeyRelease);
+    require(placements == 0 && omissions == 0, "Space stationary pointer gesture must not place or omit");
+    canvas.setPointPlacementRequested({});
+    key(QEvent::KeyPress); key(QEvent::KeyRelease);
+    require(omissions == 1, "unconsumed stationary Space pair must reach pending admission after placement clears");
+    canvas.setPendingDimensionTargetRequested([] { return std::optional<sketch::desktop::CanvasPendingDimensionTarget>{}; });
+    key(QEvent::KeyPress); key(QEvent::KeyRelease);
+    require(omissions == 1, "missing host target must not emit omission");
+}
+
 void save_capture(const QString& directory, const QString& filename, const QImage& image) {
     if (directory.isEmpty()) return;
     require(QDir().mkpath(directory), "boundary canvas capture directory must be writable");
@@ -3815,6 +3887,11 @@ int main(int argc, char** argv) {
             test_focus_loss_cancels_navigation_without_canceling_draft();
             return 0;
         }
+        if (application.arguments().contains(QStringLiteral("--pending-dimension-only"))) {
+            test_pending_dimension_preview_rotates_painted_label();
+            test_pending_dimension_space_preserves_temporary_placement_pan();
+            return 0;
+        }
         if (application.arguments().contains(QStringLiteral("--selection-filter-only"))) {
             test_selection_category_filters();
             test_opt_in_screen_paper_stroke_width();
@@ -3858,6 +3935,8 @@ int main(int argc, char** argv) {
         test_selection_annotations_remain_legible_and_rotation_handle_reachable();
         test_selection_corner_handle_enters_viewport_from_offscreen_anchor();
         test_dimension_ticks_are_paper_space();
+        test_pending_dimension_preview_rotates_painted_label();
+        test_pending_dimension_space_preserves_temporary_placement_pan();
         test_dimension_ticks_respect_angular_geometry();
         test_dark_canvas_semantic_strokes_and_overrides();
         test_wall_footprint_uses_geometry_thickness();

@@ -20,14 +20,29 @@ void same_opaque(const RecoveryLedgerDecodeResult& decoded, const RecoveryLedger
             actual.envelope.dump() == source[i].envelope.dump(), "opaque ledger must preserve row order and exact JSON values");
     }
 }
-void run(BoundaryAuthoringMode mode, bool subtraction = false) {
+void run(BoundaryAuthoringMode mode, bool subtraction = false, std::uint32_t dialect = 1) {
     auto document = Document::create({{"p", "property", {{"name", "Property"}}}, {"b", "building", {{"property_id", "p"}}},
         {"f", "floor", {{"building_id", "b"}}}, {"l", "layer", {{"floor_id", "f"}}}});
     ProjectWorkspace workspace(document.snapshot());
     BoundaryAuthoringSession session(mode); session.set_classification("living_area");
     (void)session.anchor({0, 0});
+    if (dialect == 2) {
+        (void)session.add_arc_chord_angle(parse_quantity("2 m"), parse_angle("0 deg"), parse_angle("90 deg"));
+        (void)session.place_manual_dimension({1, -1});
+        require(session.recovery_checkpoint().version == 2, "typed chord fixture must use the actual v2 recovery dialect");
+    }
+    if (dialect == 3) {
+        (void)session.add_line_to({2, 0});
+        BoundaryDimensionPresentation presentation;
+        presentation.visible = false;
+        presentation.rotation_radians = 1.5707963267948966;
+        (void)session.place_manual_dimension({1, -1}, presentation);
+        require(session.undo(), "styled fixture must retain its placement only in Redo");
+        require(session.recovery_checkpoint().version == 3, "Redo-only style must promote the actual checkpoint dialect");
+    }
     BoundaryActiveRecovery active{capture_boundary_recovery_source(workspace.snapshot(), {"p", "b", "f", "l"}),
         session.recovery_checkpoint()};
+    active.checkpoint.version = dialect;
     if (subtraction) active.auto_subtract_target_id = "chosen-target";
     auto activation = workspace.prepare_boundary_checkpoint(active); (void)workspace.commit(activation);
     const auto snapshot = workspace.capture();
@@ -37,6 +52,15 @@ void run(BoundaryAuthoringMode mode, bool subtraction = false) {
     auto decoded = decode_recovery_ledger(snapshot.document(), ledger, ArchiveRole::ordinary);
     require(decoded.supported() && decoded.decoded->active && decoded.decoded->history && !decoded.decoded->recovery_copy,
         "ordinary active workspace must decode as one aggregate");
+    if (dialect == 3) {
+        auto restored = BoundaryAuthoringSession::from_recovery_checkpoint(decoded.decoded->active->checkpoint);
+        require(restored.redo(), "aggregate recovery must preserve styled Redo");
+        const auto chain = restored.active_chain();
+        const auto& dimension = chain->dimensions.front();
+        require(dimension.presentation && !dimension.presentation->visible &&
+            dimension.presentation->rotation_radians == 1.5707963267948966,
+            "aggregate recovery must preserve hidden vertical presentation");
+    }
     if (subtraction) require(decoded.decoded->active->auto_subtract_target_id == "chosen-target",
         "unfinished target must remain authoritative inside aggregate recovery");
     RecoveryCopyRecord copy; copy.archive_id = "archive"; copy.owner_token = "owner";
@@ -70,6 +94,8 @@ void run(BoundaryAuthoringMode mode, bool subtraction = false) {
     }
     auto future = ledger; future[1].envelope["checkpoint"]["replay_version"] = 99;
     same_opaque(decode_recovery_ledger(snapshot.document(), future, ArchiveRole::recovery_copy), future);
+    future = ledger; future[1].envelope["checkpoint"]["version"] = 4;
+    same_opaque(decode_recovery_ledger(snapshot.document(), future, ArchiveRole::recovery_copy), future);
     future = ledger; future.push_back({"unknown", "future_kind", {{"number", 1.0}, {"values", Json::array({nullptr, "x"})}}});
     // Unknown aggregate must be recognized before canonical replay of an otherwise malformed known payload.
     future[1].envelope["checkpoint"]["actions"][0]["kind"] = "invalid-action";
@@ -100,7 +126,9 @@ void run(BoundaryAuthoringMode mode, bool subtraction = false) {
 int main() {
     sketch::testing::noninteractive_errors();
     try { run(BoundaryAuthoringMode::draw_first); run(BoundaryAuthoringMode::define_first);
-          run(BoundaryAuthoringMode::define_first, true); }
+          run(BoundaryAuthoringMode::define_first, true);
+          run(BoundaryAuthoringMode::define_first, false, 2);
+          run(BoundaryAuthoringMode::define_first, false, 3); }
     catch (const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }
     return 0;
 }

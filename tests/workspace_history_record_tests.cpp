@@ -18,7 +18,7 @@ Document fixture() {
         {"b", "building", {{"property_id", "p"}}}, {"f", "floor", {{"building_id", "b"}}},
         {"l", "layer", {{"floor_id", "f"}}}});
 }
-void run(BoundaryAuthoringMode mode, bool subtraction = false) {
+void run(BoundaryAuthoringMode mode, bool subtraction = false, std::uint32_t dialect = 1) {
     auto doc = fixture();
     if (subtraction) {
         Entity parent{"parent", "measurement_boundary", {{"floor_id", "f"}, {"layer_id", "l"}, {"classification", "garage"},
@@ -31,14 +31,21 @@ void run(BoundaryAuthoringMode mode, bool subtraction = false) {
     ProjectWorkspace w(doc.snapshot());
     BoundaryAuthoringSession session(mode);
     session.set_classification("living_area"); (void)session.anchor({0, 0});
-    const auto dimension = [&] { if (mode == BoundaryAuthoringMode::define_first)
-        (void)session.place_automatic_dimension(); };
+    const auto dimension = [&] { if (mode == BoundaryAuthoringMode::define_first) {
+        if (dialect == 3) {
+            BoundaryDimensionPresentation presentation;
+            presentation.visible = false;
+            presentation.rotation_radians = 1.5707963267948966;
+            (void)session.place_manual_dimension({5, 4}, presentation);
+        } else (void)session.place_automatic_dimension();
+    }};
     (void)session.add_line_to({4, 0}); dimension();
     (void)session.add_line_to({4, 3}); dimension();
     (void)session.add_line_to({0, 3}); dimension();
     (void)session.add_closing_segment(); dimension(); (void)session.close_chain();
     BoundaryActiveRecovery active{capture_boundary_recovery_source(w.snapshot(), {"p", "b", "f", "l"}),
         session.recovery_checkpoint(), {{"opaque_number", 1.0}}};
+    active.checkpoint.version = dialect;
     if (subtraction) active.auto_subtract_target_id = "parent";
     commit(w, w.prepare_boundary_checkpoint(active));
     // Active input is a separate record, but required for complete validation.
@@ -163,7 +170,9 @@ void admission_symmetry() {
 int main() {
     sketch::testing::noninteractive_errors();
     try { run(BoundaryAuthoringMode::draw_first); run(BoundaryAuthoringMode::define_first);
-          run(BoundaryAuthoringMode::define_first, true); admission_symmetry(); }
+          run(BoundaryAuthoringMode::define_first, true);
+          run(BoundaryAuthoringMode::define_first, false, 2);
+          run(BoundaryAuthoringMode::define_first, false, 3); admission_symmetry(); }
     catch (const std::exception& e) { std::cerr << e.what() << '\n'; return 1; }
     return 0;
 }
