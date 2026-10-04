@@ -138,6 +138,7 @@ struct AnsiCeilingFacts {
     std::optional<double> minimum_height_m;
     std::optional<double> at_least_7ft_area_m2;
     std::optional<double> room_floor_area_m2;
+    std::optional<bool> complete_room_observed;
     std::vector<std::string> below_5ft_deduction_ids;
     std::string stair_from_floor_id;
     std::string room_boundary_id;
@@ -298,7 +299,7 @@ struct AppraisalCalculationReport {
 [[nodiscard]] CalculationProfile builtin_appraisal_profile();
 // Opt-in rule checks based on public Fannie Mae guidance; no certification.
 // Canonical report is whole square feet; retained geometry remains unrounded.
-[[nodiscard]] CalculationProfile ansi_appraisal_profile();
+[[nodiscard]] CalculationProfile ansi_appraisal_profile(unsigned version = 1);
 // Reuses calculate_areas validation and unrounded factored values. Only building
 // scope and explicitly mapped categories contribute; GLA is above-grade finished.
 [[nodiscard]] AppraisalCalculationReport calculate_appraisal_areas(

@@ -105,7 +105,7 @@ struct AppraisalDetailsPanel::Impl {
     }
     bool ansi() const {return report && report->policy && report->policy->kind==AppraisalPolicyKind::ansi_z765_2021;}
     CalculationProfile profile() const {
-        if(ansi())return ansi_appraisal_profile();
+        if(ansi())return ansi_appraisal_profile(report->policy->version);
         auto value=builtin_appraisal_profile();value.display_unit=metric?AreaUnit::square_metre:AreaUnit::square_foot;
         if(report)value.decimal_places=report->display_decimal_places;return value;
     }
@@ -177,6 +177,7 @@ struct AppraisalDetailsPanel::Impl {
                 row(QStringLiteral("Exact factor"),QStringLiteral("%1/%2").arg(value.factor.numerator).arg(value.factor.denominator))+
                 row(QStringLiteral("Adjusted area"),area(value.factored_square_metres))+
                 row(QStringLiteral("Boundary perimeter"),length(value.perimeter_metres)));
+            if(ansi())html+=table(appraisal_sloped_ceiling_rows(*boundary,*report));
             // A current validated trace authorizes showing these analytical edge
             // lengths; stale/invalid sources never expose this branch.
             if(owner) {
@@ -266,7 +267,9 @@ struct AppraisalDetailsPanel::Impl {
             if(ansi() && std::any_of(report->boundaries.begin(),report->boundaries.end(),[](const auto& boundary) {
                 return !boundary.exclusion && boundary.facts && boundary.facts->ansi &&
                     boundary.facts->ansi->ceiling.kind==CeilingKind::sloped;
-            }))status->setText(status->text()+QStringLiteral(" Sloped-room totals are provisional: the gross-room denominator awaits final-standard verification."));
+            }))status->setText(status->text()+(report->policy->version==1 ?
+                QStringLiteral(" Legacy V1 sloped-room totals are provisional. Setup offers the finished-room V2 rule.") :
+                QStringLiteral(" V2 sloped rooms use countable finished area. Final ANSI validation remains pending.")));
             const auto& aggregate=report->calculation->property;
             gla->setText(area(aggregate.gla().total.square_metres));
             double all=0;QString residential,nonstandard,other;

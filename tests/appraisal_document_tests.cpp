@@ -186,6 +186,76 @@ void ansi_flat_ceiling_precision_changes_contributions() {
     }
 }
 
+void ansi_finished_room_v2_uses_current_exclusion_geometry() {
+    auto entities = ansi_fixture_entities();
+    entities.front().properties["appraisal_policy"]["version"] = 2;
+    auto& room = entities.back();
+    room.properties["boundary"] = square(0, 0, 10);
+    room.properties["deduction_ids"] = {"low-v2"};
+    room.properties["appraisal_facts"]["ansi"]["ceiling"] = {
+        {"kind", "sloped"}, {"at_least_7ft_area_m2", 35}, {"room_floor_area_m2", 100},
+        {"complete_room_observed", true}, {"below_5ft_deduction_ids", {"low-v2"}},
+        {"room_boundary_id", room.id}, {"source_geometry_sha256", sketch::appraisal_ceiling_geometry_digest(
+            rectangle_geometry(0, 0, 10, 10), {{"low-v2", rectangle_geometry(1, 1, 6, 6)}})}};
+    auto low = room;
+    low.id = "low-v2";
+    low.properties["boundary"] = square(1, 1, 6);
+    low.properties.erase("deduction_ids");
+    low.properties["appraisal_facts"] = {{"boundary_role", "other_void"}};
+    entities.push_back(low);
+    const auto snapshot = sketch::Document::create(entities).snapshot();
+    auto report = sketch::build_appraisal_document_report(snapshot, "property-1");
+    require(report.qualified && report.calculation && report.policy->version == 2 &&
+        status(report, "area-1").qualification.derived_category == sketch::AppraisalAreaCategory::above_grade_finished,
+        "V2 must use 35/64 finished room area, not 35/100 gross footprint");
+    near(report.calculation->property.gla().total.square_metres, 64, 1e-7,
+        "Actual low-height region must be excluded exactly once from V2 GLA");
+    require(status(report, "area-1").measurement->profile_id == "vertex-ansi-z765-2021-v2" &&
+        status(report, "area-1").measurement->profile_version == 2,
+        "V2 calculation provenance must not advertise the previous rule");
+    for (const auto confirmation : {nlohmann::json(), nlohmann::json(false), nlohmann::json("true")}) {
+        auto changed = entities;
+        auto& evidence = changed[4].properties["appraisal_facts"]["ansi"]["ceiling"];
+        evidence.erase("complete_room_observed");
+        if (!confirmation.is_null()) evidence["complete_room_observed"] = confirmation;
+        report = sketch::build_appraisal_document_report(sketch::Document::create(changed).snapshot(), "property-1");
+        require(!report.qualified && !report.calculation,
+            "V2 cannot reuse unconfirmed or malformed complete-room observations");
+    }
+    auto partitioned = entities;
+    auto& child = partitioned.back();
+    child.properties["appraisal_facts"] = entities[4].properties["appraisal_facts"];
+    child.properties["appraisal_facts"]["ansi"]["ceiling"] = {{"kind", "flat"}, {"minimum_height_m", 2.4384}};
+    partitioned[4].properties["appraisal_facts"]["ansi"]["ceiling"]["below_5ft_deduction_ids"] = nlohmann::json::array();
+    report = sketch::build_appraisal_document_report(sketch::Document::create(partitioned).snapshot(), "property-1");
+    require(!report.qualified && !report.calculation,
+        "A sloped parent cannot mistake a measured child ownership partition for an excluded part of the physical room");
+    for(const auto role:{"measured_area","stair_footprint"}) {
+        auto wrapped=entities;
+        wrapped[4].properties["appraisal_facts"]["ansi"]["ceiling"]["below_5ft_deduction_ids"]=nlohmann::json::array();
+        wrapped.back().properties["deduction_ids"]={"measured-grandchild"};
+        auto grandchild=wrapped[4];grandchild.id="measured-grandchild";
+        grandchild.properties["boundary"]=square(2,2,2);grandchild.properties.erase("deduction_ids");
+        grandchild.properties["appraisal_facts"]["boundary_role"]=role;
+        grandchild.properties["appraisal_facts"]["ansi"]["ceiling"]=std::string(role)=="stair_footprint" ?
+            nlohmann::json{{"kind","stairs"},{"stair_from_floor_id",grandchild.properties.at("floor_id")}} :
+            nlohmann::json{{"kind","flat"},{"minimum_height_m",2.4384}};
+        wrapped.push_back(grandchild);
+        report=sketch::build_appraisal_document_report(sketch::Document::create(wrapped).snapshot(),"property-1");
+        require(!report.qualified && !report.calculation,
+            "An exclusion wrapper must not conceal a measured/stair grandchild in a V2 complete-room ceiling test");
+    }
+    auto legacy = entities;
+    legacy.front().properties["appraisal_policy"]["version"] = 1;
+    legacy[4].properties["appraisal_facts"]["ansi"]["ceiling"].erase("complete_room_observed");
+    report = sketch::build_appraisal_document_report(sketch::Document::create(legacy).snapshot(), "property-1");
+    require(report.qualified && report.calculation &&
+        status(report, "area-1").qualification.derived_category == sketch::AppraisalAreaCategory::above_grade_nonstandard_finished,
+        "Opening an existing V1 project must retain its recorded whole-room interpretation");
+    require(snapshot.entities() == sketch::Document::create(entities).snapshot().entities(),
+        "Reporting must not rewrite saved observations or migrate a policy implicitly");
+}
+
 void ansi_nested_partitions_and_ceiling_binding() {
     auto entities = ansi_fixture_entities();
     entities.back().properties["boundary"] = square(0, 0, 10);
@@ -213,6 +283,14 @@ void ansi_nested_partitions_and_ceiling_binding() {
         "Parent removes full child and child adds only its own net; below-five-foot geometry disappears exactly once");
     near(status(report, "area-1").measurement->net_square_metres, 64, 1e-7, "Parent owns remaining floor region");
     near(status(report, "room-2").measurement->net_square_metres, 32, 1e-7, "Sloped room physically removes below-five-foot strip");
+    auto v2_nested = entities;
+    v2_nested.front().properties["appraisal_policy"]["version"] = 2;
+    v2_nested[5].properties["appraisal_facts"]["ansi"]["ceiling"]["complete_room_observed"] = true;
+    const auto v2_report = sketch::build_appraisal_document_report(sketch::Document::create(v2_nested).snapshot(), "property-1");
+    require(v2_report.qualified && v2_report.calculation,
+        "V2 supports a flat floor containing a complete sloped room with actual low-height exclusions");
+    near(v2_report.calculation->property.gla().total.square_metres, 96, 1e-7,
+        "V2 nested room and floor must contribute their disjoint counted geometry once");
     auto changed = entities;
     changed[5].properties["boundary"] = square(0, 1, 6);
     report = sketch::build_appraisal_document_report(sketch::Document::create(changed).snapshot(), "property-1");
@@ -825,6 +903,7 @@ int main() {
         qualified_document_recalculates_from_geometry();
         ansi_declarations_and_canonical_reporting();
         ansi_flat_ceiling_precision_changes_contributions();
+        ansi_finished_room_v2_uses_current_exclusion_geometry();
         ansi_nested_partitions_and_ceiling_binding();
         ansi_stairs_and_adu_totals();
         declaration_and_factor_failures_retain_physical_traces();

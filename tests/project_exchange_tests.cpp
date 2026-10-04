@@ -1267,8 +1267,9 @@ int main() {
     std::filesystem::remove_all(residual);
     // Only this test's unique, resolved temporary tree is removed.
     // Retained appraisal evidence has a reader floor even after Undo/deletion.
+    for (const unsigned policy_version : {1U,2U}) {
     auto ansi_property = sketch::Entity{"exchange-ansi", "property",
-        {{"appraisal_policy", {{"policy_kind", "ansi_z765_2021"}, {"version", 1}}}}, false, nlohmann::json::object()};
+        {{"appraisal_policy", {{"policy_kind", "ansi_z765_2021"}, {"version", policy_version}}}}, false, nlohmann::json::object()};
     auto ansi_document = sketch::Document::create({});
     ansi_document.apply(sketch::ApplyEntityChanges{0, {sketch::EntityChange::upsert(ansi_property)}, {}, "ANSI rules"});
     const auto ansi_head = ansi_document.snapshot();
@@ -1278,12 +1279,13 @@ int main() {
     ansi_document.undo(ansi_document.revision());
     int ansi_sequence = 0;
     for (const auto& snapshot : {ansi_head, ansi_document.snapshot(), ansi_deleted.snapshot()}) {
-      const auto destination = root / ("ansi-evidence-" + std::to_string(ansi_sequence++));
+      const auto destination = root / ("ansi-evidence-v" + std::to_string(policy_version) + "-" + std::to_string(ansi_sequence++));
       sketch::extract_project(snapshot, destination);
       std::ifstream input(destination / "project.json");
       const auto encoded = nlohmann::json::parse(input);
-      check(encoded.at("exchange_version") == 19 && encoded.at("revisions").size() == snapshot.history().size(),
-          "current, undone and deleted appraisal evidence must advertise exchange19 without dropping history");
+      check(encoded.at("exchange_version") == (policy_version==2?30:19) && encoded.at("revisions").size() == snapshot.history().size(),
+          "current, undone and deleted appraisal evidence must advertise the recorded rule reader floor without dropping history");
+    }
     }
     test_view_appearance_export_floor(root);
     test_live_exterior_source_exchange_v17(root);

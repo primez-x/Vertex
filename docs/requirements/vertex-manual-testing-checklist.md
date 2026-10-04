@@ -1,6 +1,6 @@
 # Vertex user testing checklist
 
-393 practical tasks, grouped by how you use the app (including U100a). This replaces the earlier engineering-oriented checklist. The old 130-item list is preserved separately as engineering-requirements-checklist.md.
+395 practical tasks, grouped by how you use the app (including U100a). This replaces the earlier engineering-oriented checklist. The old 130-item list is preserved separately as engineering-requirements-checklist.md.
 
 This is a user acceptance list for the intended app, not a claim that every listed action is implemented or working in the current preview. If you cannot find a control, or a feature is absent, mark **Blocked / missing** and describe it. Specialized sections can be skipped if you do not use them or lack the device or sample files.
 
@@ -2372,6 +2372,20 @@ drawing; switching modes does not change existing geometry.
 - [ ] **U392 — Save and reopen a project in deeply nested folders**
   - Steps: Choose an existing nested folder on your local Windows drive, including accented characters in a folder or project name. Save a drawing there, close and reopen it, edit a wall, and Save again. Reopen once more. Repeat with an unfinished drawing saved in the project.
   - Expected: Vertex saves and opens the chosen file without requiring you to shorten its folder path. The wall edit and unfinished drawing persist. Saving an existing file keeps the normal replacement/conflict safeguards and previous-file backup behavior.
+  - Result: Not tested
+  - Notes: ______________________________
+
+## Sloped-room appraisal calculations
+
+- [ ] **U393 — Check a sloped room's counted area**
+  - Steps: In Details → Setup, select the ANSI-oriented V2 rule. Draw the complete room and a separate boundary around the portion below five feet high. In Edit facts, choose Sloped ceiling, link the low-height boundary, enter the observed area at least seven feet high, and confirm that the boundary and observation describe the complete room outside its voids. Select the room in Details and open Full report.
+  - Expected: The low region is excluded once. Details and the report show the gross footprint, excluded area, denominator and seven-foot share. The half-height check uses the countable finished room rather than its gross footprint. Missing observations withhold GLA. Final ANSI validation is identified as pending.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **U394 — Change an existing sloped-room calculation rule**
+  - Steps: Open a project using ANSI-oriented V1. In Setup choose V2 and Cancel; reopen Setup and save V2. Reconfirm the room in Edit facts. Undo and Redo the changes, then save and reopen the project.
+  - Expected: Opening or cancelling Setup preserves the recorded V1 rule. Saving V2 preserves observations and withholds unconfirmed sloped totals until you reconfirm them. Undo/Redo restores the corresponding rule and facts. Save/reopen retains the selected rule and calculation basis.
   - Result: Not tested
   - Notes: ______________________________
 

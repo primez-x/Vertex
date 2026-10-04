@@ -58,7 +58,7 @@ bool ansi(const AppraisalDocumentReport& report) {
     return report.policy && report.policy->kind==AppraisalPolicyKind::ansi_z765_2021;
 }
 CalculationProfile profile(const AppraisalDocumentReport& report,bool metric) {
-    if(ansi(report))return ansi_appraisal_profile();
+    if(ansi(report))return ansi_appraisal_profile(report.policy->version);
     auto value=builtin_appraisal_profile();
     value.display_unit=metric ? AreaUnit::square_metre : AreaUnit::square_foot;
     value.decimal_places=report.display_decimal_places;
@@ -213,7 +213,7 @@ QString summary(const DocumentSnapshot& source,const AppraisalDocumentReport& re
     }
     if(ansi(report)) {
         html+=QStringLiteral("<h3>ANSI profile and unresolved normative validation</h3><p>Profile: %1 v%2. ADU and detached-other identities remain separate from primary dwelling GLA.</p>")
-            .arg(text(ansi_appraisal_profile().id).toHtmlEscaped()).arg(ansi_appraisal_profile().version);
+            .arg(text(ansi_appraisal_profile(report.policy->version).id).toHtmlEscaped()).arg(report.policy->version);
         if(report.ansi_measurement)html+=QStringLiteral("<table width='100%' border='1' cellspacing='0'>%1</table>").arg(measurement_declarations(*report.ansi_measurement));
         for(const auto& limitation:report.policy_limitations)html+=QStringLiteral("<p>%1</p>").arg(escaped(limitation));
         if(!report.policy_evidence.empty()) {
@@ -259,6 +259,7 @@ QString boundary_details(const DocumentSnapshot& source,const AppraisalDocumentR
         html+=row(QStringLiteral("Gross boundary area"),area(value.base_square_metres,report,metric));
         html+=row(QStringLiteral("Applied deductions (union)"),area(value.deducted_square_metres,report,metric));
         html+=row(QStringLiteral("Physical net: gross − deductions"),area(value.net_square_metres,report,metric));
+        if(ansi(report))html+=appraisal_sloped_ceiling_rows(status,report);
         html+=row(QStringLiteral("Exact factor"),factor(value.factor));
         html+=row(QStringLiteral("Adjusted area: physical net × factor"),area(value.factored_square_metres,report,metric));
         const auto displayed=display_area(value.factored_square_metres,profile(report,metric));
@@ -316,6 +317,31 @@ QString appraisal_rounded_ceiling_height_text(double observed_metres, Acquisitio
     const auto inches=std::round(rounded/.0254);
     return QStringLiteral("%1 ft %2 in (nearest inch)")
         .arg(QString::number(std::floor(inches/12),'f',0),QString::number(std::fmod(inches,12),'f',0));
+}
+
+QString appraisal_sloped_ceiling_rows(const AppraisalBoundaryStatus& boundary,
+    const AppraisalDocumentReport& report) {
+    if (!report.policy || !boundary.facts || !boundary.facts->ansi || !boundary.measurement ||
+        boundary.facts->ansi->ceiling.kind != CeilingKind::sloped) return {};
+    const auto& ceiling=boundary.facts->ansi->ceiling;
+    const auto& measurement=*boundary.measurement;
+    const auto unrounded=[](double square_metres) {
+        return QString::number(square_metres/0.09290304,'g',12)+QStringLiteral(" sq ft (unrounded)");
+    };
+    const auto denominator=report.policy->version==2 ? measurement.net_square_metres : measurement.base_square_metres;
+    QString result=row(QStringLiteral("Sloped-room rule"),report.policy->version==2 ?
+        QStringLiteral("V2: countable finished room after exclusions") : QStringLiteral("V1: legacy gross room, provisional"));
+    result+=row(QStringLiteral("Complete physical room confirmed"),ceiling.complete_room_observed ?
+        (*ceiling.complete_room_observed ? QStringLiteral("Yes") : QStringLiteral("No")) : QStringLiteral("Undeclared"));
+    result+=row(QStringLiteral("Gross room footprint"),unrounded(measurement.base_square_metres));
+    result+=row(QStringLiteral("Excluded area (union)"),unrounded(measurement.deducted_square_metres));
+    result+=row(QStringLiteral("Ceiling threshold denominator"),unrounded(denominator));
+    if(ceiling.at_least_7ft_area_m2) {
+        result+=row(QStringLiteral("Observed area at least 7 ft high"),unrounded(*ceiling.at_least_7ft_area_m2));
+        if(denominator>0)result+=row(QStringLiteral("Seven-foot share (50% required)"),
+            QString::number(100.0*(*ceiling.at_least_7ft_area_m2/denominator),'g',12)+QStringLiteral("%"));
+    }
+    return result;
 }
 
 QString appraisal_ceiling_height_rows(const AnsiAppraisalFacts& facts) {

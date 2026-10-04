@@ -270,6 +270,9 @@ void setup_and_facts() {
     require(window.document().snapshot().entities() == initial.entities(), "cancel preserves setup");
     dialog(window, "appraisalSetupDialog", open, [&](QDialog& value) {
         choose(value, "appraisalSetupPolicy", "ansi_z765_2021");
+        auto& rule=child<QComboBox>(value,"appraisalSetupRuleVersion");
+        require(rule.currentData().toInt()==2,"new ANSI setup offers the finished-room rule by default");
+        rule.setCurrentIndex(rule.findData(1));
         choose(value, "appraisalSetupPropertyKind", "light_commercial");
         choose(value, "appraisalSetupMeasurementBasis", "exterior");
         child<QDialogButtonBox>(value, "appraisalSetupButtons").button(QDialogButtonBox::Save)->click();
@@ -449,6 +452,55 @@ void setup_and_facts() {
         capture(QStringLiteral("ansi-details-%1.png").arg(suffix), window);
         dialog(window,"appraisalSetupDialog",open,[&](QDialog& value) { capture(QStringLiteral("ansi-setup-%1.png").arg(suffix),value); value.reject(); });
         dialog(window,"appraisalFactsDialog",edit,[&](QDialog& value) { capture(QStringLiteral("ansi-facts-%1.png").arg(suffix),value); value.reject(); });
+    }
+    const auto legacy=window.document().snapshot();
+    dialog(window,"appraisalSetupDialog",open,[&](QDialog& value) {
+        auto& rule=child<QComboBox>(value,"appraisalSetupRuleVersion");
+        require(rule.currentData().toInt()==1,"opening existing V1 setup retains its recorded interpretation");
+        rule.setCurrentIndex(rule.findData(2)); value.reject();
+    });
+    require(window.document().snapshot().entities()==legacy.entities(),"cancelled rule migration preserves every observation");
+    dialog(window,"appraisalSetupDialog",open,[&](QDialog& value) {
+        auto& rule=child<QComboBox>(value,"appraisalSetupRuleVersion");rule.setCurrentIndex(rule.findData(2));
+        child<QDialogButtonBox>(value,"appraisalSetupButtons").button(QDialogButtonBox::Save)->click();
+        require(value.result()==QDialog::Accepted,"explicit V2 migration saves through the ordinary command");
+    });
+    const auto migrated=window.document().snapshot();
+    const auto unconfirmed=sketch::build_appraisal_document_report(migrated,property_id);
+    require(migrated.entities().at(property_id).properties.at("appraisal_policy").at("version")==2 &&
+        !unconfirmed.qualified && !unconfirmed.calculation &&
+        migrated.entities().at(area.toStdString()).properties==legacy.entities().at(area.toStdString()).properties,
+        "migration retains raw observations and withholds sloped totals until new complete-room confirmation");
+    require(window.undoCommand() && window.document().snapshot().entities()==legacy.entities() && window.redoCommand() &&
+        window.document().snapshot().entities()==migrated.entities(),"rule migration is atomically reversible");
+    require(window.selectEntity(area),"select complete room for V2 reconfirmation");
+    dialog(window,"appraisalFactsDialog",edit,[&](QDialog& value) {
+        child<QLineEdit>(value,"ansiAtLeast7ftArea").setText("47");
+        child<QCheckBox>(value,"ansiConfirmRoomGeometry").setChecked(true);
+        child<QDialogButtonBox>(value,"appraisalFactsButtons").button(QDialogButtonBox::Save)->click();
+        require(value.result()==QDialog::Accepted,"V2 records candidate-scoped observed height area");
+    });
+    const auto confirmed=window.document().snapshot();
+    const auto v2=sketch::build_appraisal_document_report(confirmed,property_id);
+    require(v2.qualified && v2.calculation &&
+        confirmed.entities().at(area.toStdString()).properties.at("appraisal_facts").at("ansi").at("ceiling").at("complete_room_observed")==true,
+        "47 high square feet qualify against the room's 89 countable square feet");
+    details.setSelectedBoundary(area);
+    const auto detail_trace=child<QLabel>(details,"appraisalDetailsTrace").text();
+    const auto v2_html=sketch::desktop::appraisal_report_html(confirmed,v2,true,true);
+    for(const auto& label:{"V2: countable finished room after exclusions","Ceiling threshold denominator","Seven-foot share (50% required)"})
+        require(detail_trace.contains(label) && v2_html.contains(label),"Details and PDF share the explicit unrounded ceiling calculation basis");
+    require(v2_html.contains("vertex-ansi-z765-2021-v2") &&
+        child<QLabel>(details,"appraisalDetailsStatus").text().contains("V2 sloped rooms"),"visible report provenance identifies V2 without claiming certification");
+    QTemporaryDir v2_directory;require(v2_directory.isValid(),"V2 save fixture has a unique local folder");
+    require(window.saveProjectAs(v2_directory.filePath("ansi-v2.bldproj")) && window.openProject(v2_directory.filePath("ansi-v2.bldproj")) &&
+        window.document().snapshot().entities()==confirmed.entities(),"V2 native save/reopen preserves rule and complete-room evidence");
+    require(window.selectEntity(area),"reopened V2 room can be selected for the current Details trace");
+    for(const auto theme:{sketch::WorkspaceTheme::light,sketch::WorkspaceTheme::dark}) {
+        window.setWorkspaceTheme(theme); const auto suffix=theme==sketch::WorkspaceTheme::light?"light":"dark";
+        capture(QStringLiteral("ansi-v2-details-%1.png").arg(suffix),window);
+        capture(QStringLiteral("ansi-v2-ceiling-trace-%1.png").arg(suffix),child<QLabel>(details,"appraisalDetailsTrace"));
+        dialog(window,"appraisalSetupDialog",open,[&](QDialog& value){capture(QStringLiteral("ansi-v2-setup-%1.png").arg(suffix),value);value.reject();});
     }
 }
 }

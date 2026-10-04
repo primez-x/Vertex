@@ -172,9 +172,11 @@ Declarations declarations(const Entity& property, const Entity& floor,
     const auto policy = declaration_object(property.properties, "appraisal_policy");
     exact_keys(policy, {"policy_kind", "version", "property_kind", "measurement_basis", "ansi"});
     if (!policy.contains("version")) result.missing.push_back("Declare policy version.");
-    else if (!policy.at("version").is_number_integer() || policy.at("version") != 1)
+    else if (!policy.at("version").is_number_integer() ||
+        (policy.at("version") != 1 && !(policy.at("version") == 2 && policy.value("policy_kind", Json()) == "ansi_z765_2021")))
         throw std::invalid_argument("unsupported appraisal policy version");
     AppraisalPolicy declared_policy;
+    if (policy.contains("version")) declared_policy.version = policy.at("version").get<unsigned>();
     token(policy, "policy_kind", parse_appraisal_policy_kind, declared_policy.kind);
     if (policy.contains("policy_kind") && policy.contains("version"))
         result.policy = declared_policy;
@@ -219,7 +221,7 @@ Declarations declarations(const Entity& property, const Entity& floor,
         boolean(area_evidence, "finish_matches_dwelling", evidence.finish_matches_dwelling);
         optional_token(area_evidence, "dwelling_identity", parse_dwelling_identity, evidence.dwelling_identity);
         const auto ceiling = declaration_object(area_evidence, "ceiling");
-        exact_keys(ceiling, {"kind", "minimum_height_m", "at_least_7ft_area_m2", "room_floor_area_m2", "below_5ft_deduction_ids", "stair_from_floor_id", "room_boundary_id", "source_geometry_sha256"});
+        exact_keys(ceiling, {"kind", "minimum_height_m", "at_least_7ft_area_m2", "room_floor_area_m2", "complete_room_observed", "below_5ft_deduction_ids", "stair_from_floor_id", "room_boundary_id", "source_geometry_sha256"});
         optional_token(ceiling, "kind", parse_ceiling_kind, evidence.ceiling.kind);
         const auto number = [](const Json& object, const char* key, std::optional<double>& target) {
             if (!object.contains(key)) return;
@@ -231,6 +233,7 @@ Declarations declarations(const Entity& property, const Entity& floor,
         number(ceiling, "minimum_height_m", evidence.ceiling.minimum_height_m);
         number(ceiling, "at_least_7ft_area_m2", evidence.ceiling.at_least_7ft_area_m2);
         number(ceiling, "room_floor_area_m2", evidence.ceiling.room_floor_area_m2);
+        boolean(ceiling, "complete_room_observed", evidence.ceiling.complete_room_observed);
         evidence.ceiling.stair_from_floor_id = text(ceiling, "stair_from_floor_id").value_or("");
         evidence.ceiling.room_boundary_id = text(ceiling, "room_boundary_id").value_or("");
         evidence.ceiling.source_geometry_sha256 = text(ceiling, "source_geometry_sha256").value_or("");
@@ -244,7 +247,7 @@ Declarations declarations(const Entity& property, const Entity& floor,
             if ((kind != CeilingKind::flat && ceiling.contains("minimum_height_m")) ||
                 (kind != CeilingKind::stairs && ceiling.contains("stair_from_floor_id")) ||
                 (kind != CeilingKind::sloped && (ceiling.contains("at_least_7ft_area_m2") || ceiling.contains("room_floor_area_m2") ||
-                 ceiling.contains("below_5ft_deduction_ids") || ceiling.contains("room_boundary_id") || ceiling.contains("source_geometry_sha256"))))
+                 ceiling.contains("complete_room_observed") || ceiling.contains("below_5ft_deduction_ids") || ceiling.contains("room_boundary_id") || ceiling.contains("source_geometry_sha256"))))
                 throw std::invalid_argument("ceiling evidence keys do not match the declared ceiling kind");
         }
         result.facts.ansi = std::move(evidence);
@@ -349,7 +352,7 @@ CalculationProfile appraisal_display_profile(
     const auto policy = property_properties.find("appraisal_policy");
     const bool ansi = policy != property_properties.end() && policy->is_object() &&
         policy->value("policy_kind", Json()) == "ansi_z765_2021";
-    auto profile = ansi ? ansi_appraisal_profile() : builtin_appraisal_profile();
+    auto profile = ansi ? ansi_appraisal_profile(policy->value("version", 1U)) : builtin_appraisal_profile();
     if (ansi) return profile;
     profile.display_unit = display_unit;
     const auto configuration = property_properties.find("calculation_profile");
@@ -427,7 +430,9 @@ AppraisalDocumentReport build_appraisal_document_report(
                 "https://singlefamily.fanniemae.com/media/document/pdf/fannie-mae-selling-guide-supplement-uniform-appraisal-dataset-uad-36-policy"};
             result.policy_limitations = {
                 "Rule checks use public Fannie Mae guidance. Final publisher ANSI Z765-2021 text has not been obtained or verified; this report is not compliance certification.",
-                "Sloped-ceiling threshold currently uses the complete room boundary before below-five-foot exclusions. The final standard's denominator remains unresolved; sloped rule results require review.",
+                result.policy->version == 1 ?
+                    "Legacy V1 sloped-ceiling threshold uses the gross room before exclusions and remains provisional. Choose V2 explicitly in Setup and reconfirm complete-room observations to use the finished-room rule." :
+                    "V2 sloped-ceiling threshold uses countable finished room geometry after actual exclusions. This follows the public guidance interpretation; final publisher-standard validation remains pending.",
                 "All ADUs are measured separately. This measurement summary does not implement a full UAD appraisal form or legacy UAD 2.6 ADU combination."};
         }
     } catch (const std::exception& error) { result.issues.push_back(error.what()); }
@@ -536,6 +541,12 @@ AppraisalDocumentReport build_appraisal_document_report(
                         if (!visible(visible_entity_ids, id))
                             throw std::invalid_argument("deduction " + id + " is hidden by the active design phase");
                         const auto child_owner = context(document, child->second, property_id);
+                        if (declared.policy->version == 2 && declared.facts.ansi &&
+                            declared.facts.ansi->ceiling.kind == CeilingKind::sloped) {
+                            const auto child_facts = declarations(property->second, *child_owner.floor, child->second);
+                            if (child_facts.facts.role != BoundaryRole::other_void && child_facts.facts.role != BoundaryRole::open_to_below)
+                                throw std::invalid_argument("A V2 sloped boundary must represent one complete physical room with only exclusions throughout its deduction tree. Measured child partitions need a separate whole-room height observation.");
+                        }
                         if (child_owner.floor->id != floor_id || child_owner.building->id != building_id || scope(child->second) == "site")
                             throw std::invalid_argument("nested deduction " + id + " must share the parent building floor and scope");
                         if (!source_current(child->second))

@@ -1,4 +1,33 @@
-# Vertex project formats v1 through v31
+# Vertex project formats v1 through v32
+
+## Finished-room ceiling rule (v32)
+
+ANSI-oriented policy version two uses calculation profile
+`vertex-ansi-z765-2021-v2`. Sloped observations retain the gross
+`room_floor_area_m2` as a geometry-binding check, and require Boolean
+`complete_room_observed: true`. The half-height comparison uses current net
+physical room geometry after the union of its real exclusions. Its numerator
+must be observed for that same complete physical room outside those exclusions.
+Scalar-only derivation, zero candidate area, missing confirmation, stale
+bindings and excessive high-area observations cannot qualify a contribution.
+
+A V2 sloped room may contain exclusion boundaries, including open-to-below and
+low-height regions. It cannot treat measured child partitions as voids or
+independently apply the room threshold to an arbitrary ownership remainder.
+Flat floor → complete sloped room → low-height exclusion nesting remains valid.
+
+Setup offers an explicit rule selector. Existing V1 projects retain their gross
+room interpretation, and opening a dialog never migrates them. Choosing V2
+preserves observations but withholds unconfirmed sloped totals until Edit facts
+records the complete-room confirmation. Save/Cancel and Undo/Redo use ordinary
+document commands. Details, schedules and PDF identify the selected rule; the
+ceiling trace exposes the unrounded denominator and numerator.
+
+Policy V2 or complete-room confirmation anywhere in retained history requires
+native format 32 and extraction version 30, including undone/deleted entities.
+Older readers refuse these semantics. Recomputing a digest cannot lower that
+floor. V1-only evidence retains its existing format-21/extraction-19 floor.
+This is a sourced Vertex rule interpretation, not final ANSI certification.
 
 ## Manual dimension presentation in recovery
 
@@ -9,7 +38,7 @@ checkpoint schema 3 / replay 1. The checkpoint scans the entire retained action
 timeline, including Redo-only placements, and canonically replays presentation.
 See [dimension presentation checkpoints](boundary-recovery.md#dimension-presentation-checkpoints).
 
-The native container remains v1–31. Recovery-bearing files retain the existing
+The native container supports v1–32. Recovery-bearing files retain the existing
 container floor; older readers encounter an unknown nested checkpoint and
 preserve the whole ledger opaquely without granting editable state. Completed
 dimension presentation and JSON/assets recovery extraction already have their
@@ -1697,8 +1726,9 @@ whole child footprint and the child contributes only its own net category area.
 Primary, ADU and detached-other categories are separate. The canonical report
 rounds aggregate square feet once to whole square feet; boundary dimensions use
 tenths of a foot. Display rounding does not change stored geometry. The sloped
-denominator currently uses gross room geometry and remains explicitly
-provisional pending verification against the final publisher standard.
+V1 denominator uses gross room geometry and remains explicitly provisional.
+V2 uses the countable finished-room rule described above. Final publisher
+standard validation remains pending for both versions.
 
 These semantics use existing entity JSON and require native format 21 and
 extraction version 19 even when retained only in undone or deleted history.

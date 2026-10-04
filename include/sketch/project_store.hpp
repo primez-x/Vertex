@@ -123,10 +123,11 @@ public:
     // and identified measured areas retaining linework sources require v28;
     // schema/replay-three measured stroke edit derivations require v29;
     // explicitly reviewed measured-area source replacements require v30;
-    // durable typed chord inputs and their retained command proofs require v31.
+    // durable typed chord inputs and their retained command proofs require v31;
+    // the finished-room appraisal rule and explicit room confirmation require v32.
     // Any may include
     // the optional recovery ledger. Absent proofs preserve historical formats.
-    static constexpr std::uint32_t format_version = 31;
+    static constexpr std::uint32_t format_version = 32;
     static constexpr std::uint32_t recovery_format_version = 4;
     [[nodiscard]] static std::uint32_t required_format_version(const DocumentSnapshot& snapshot);
     static constexpr std::uint64_t maximum_file_bytes = 4ULL * 1024ULL * 1024ULL * 1024ULL;

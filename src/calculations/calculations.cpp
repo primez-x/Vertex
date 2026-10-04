@@ -295,9 +295,10 @@ std::optional<BoundaryRole> parse_boundary_role(std::string_view token) {
 
 std::string_view appraisal_policy_id(AppraisalPolicy policy) {
     (void)appraisal_policy_kind_name(policy.kind);
-    if (policy.version != 1)
+    if (policy.version != 1 && !(policy.kind == AppraisalPolicyKind::ansi_z765_2021 && policy.version == 2))
         throw std::invalid_argument("Unsupported appraisal policy version");
-    if (policy.kind == AppraisalPolicyKind::ansi_z765_2021) return "vertex-ansi-z765-2021-v1";
+    if (policy.kind == AppraisalPolicyKind::ansi_z765_2021)
+        return policy.version == 2 ? "vertex-ansi-z765-2021-v2" : "vertex-ansi-z765-2021-v1";
     return policy.kind == AppraisalPolicyKind::residential_declared ?
         "vertex-residential-declared-v1" : "vertex-light-commercial-declared-v1";
 }
@@ -359,8 +360,9 @@ std::optional<CeilingKind> parse_ceiling_kind(std::string_view token) {
 }
 
 namespace {
-AppraisalQualification derive_ansi(const AppraisalFacts& f, ExactRational factor) {
-    AppraisalQualification r{"vertex-ansi-z765-2021-v1", 1};
+AppraisalQualification derive_ansi(const AppraisalFacts& f, AppraisalPolicy policy, ExactRational factor,
+                                  std::optional<double> countable_room_area) {
+    AppraisalQualification r{std::string(appraisal_policy_id(policy)), policy.version};
     auto issue = [&](std::string code, std::string message) { r.issues.push_back({std::move(code), std::move(message)}); };
     if (factor.numerator != factor.denominator) issue("factor_not_unity", "ANSI physical area requires a unity factor.");
     if (f.property_kind != PropertyKind::detached_single_family &&
@@ -370,6 +372,12 @@ AppraisalQualification derive_ansi(const AppraisalFacts& f, ExactRational factor
         issue("measurement_basis_incompatible", "ANSI requires exterior measurements or a declared plans basis.");
     if (!f.ansi) { issue("ansi_facts_missing", "Declare ANSI measurement, floor and area evidence."); return r; }
     const auto& a = *f.ansi;
+    if (policy.version == 2 && a.ceiling.kind == CeilingKind::sloped) {
+        if (a.ceiling.complete_room_observed != true)
+            issue("complete_room_observation_required", "Confirm that the complete room was observed for sloped ceiling evidence.");
+        if (!countable_room_area || !std::isfinite(*countable_room_area) || *countable_room_area <= 0)
+            issue("countable_room_geometry_required", "Sloped ceiling v2 requires positive countable complete-room geometry.");
+    }
     if (a.dwelling_identity) (void)dwelling_identity_name(*a.dwelling_identity);
     if (a.ceiling.kind) (void)ceiling_kind_name(*a.ceiling.kind);
     if (!a.measurement.interior_inspected) issue("interior_inspected_missing", "Declare whether the interior was inspected.");
@@ -431,10 +439,17 @@ AppraisalQualification derive_ansi(const AppraisalFacts& f, ExactRational factor
                     if (!high || !room || !std::isfinite(*high) || !std::isfinite(*room) || *high < 0 || *room <= 0 || *high > *room)
                         issue("sloped_ceiling_evidence_invalid", "Sloped ceilings require valid room floor and at-least-seven-foot areas.");
                     else {
-                        nonstandard = *high < *room * 0.5;
-                        if (nonstandard) r.rule_notes.push_back("Nonstandard finished: less than half the provisional whole-room denominator reaches seven feet.");
+                        if (policy.version == 1) {
+                            nonstandard = *high < *room * 0.5;
+                            if (nonstandard) r.rule_notes.push_back("Nonstandard finished: less than half the provisional whole-room denominator reaches seven feet.");
+                        } else if (countable_room_area && *countable_room_area > 0) {
+                            nonstandard = *high < *countable_room_area * 0.5;
+                            if (nonstandard) r.rule_notes.push_back("Nonstandard finished: less than half the countable finished room candidate reaches seven feet.");
+                        }
                     }
-                    r.rule_notes.push_back("Sloped ceiling denominator uses complete room geometry before below-five-foot exclusions. This interpretation is provisional because final publisher ANSI text has not been verified.");
+                    r.rule_notes.push_back(policy.version == 1 ?
+                        "Sloped ceiling denominator uses complete room geometry before below-five-foot exclusions. This interpretation is provisional because final publisher ANSI text has not been verified." :
+                        "Sloped ceiling v2 compares seven-foot area with the geometry-derived countable finished room candidate after exclusions. Final publisher ANSI text has not been verified; these rule checks are not ANSI certification.");
                 }
             }
             nonstandard = nonstandard || f.access == AccessStatus::through_unfinished;
@@ -473,8 +488,8 @@ AppraisalQualification derive_ansi(const AppraisalFacts& f, ExactRational factor
 }
 }
 
-AppraisalQualification derive_appraisal_category(const AppraisalFacts& f, AppraisalPolicy policy,
-                                                 ExactRational factor) {
+static AppraisalQualification derive_with_room_geometry(const AppraisalFacts& f, AppraisalPolicy policy,
+                                                        ExactRational factor, std::optional<double> countable_room_area) {
     AppraisalQualification result;
     result.policy_id = appraisal_policy_id(policy);
     result.policy_version = policy.version;
@@ -489,7 +504,7 @@ AppraisalQualification derive_appraisal_category(const AppraisalFacts& f, Apprai
     (void)boundary_role_name(f.role);
     if (factor.denominator <= 0 || factor.numerator < 0)
         throw std::invalid_argument("Area factor must be nonnegative with a positive denominator");
-    if (policy.kind == AppraisalPolicyKind::ansi_z765_2021) return derive_ansi(f, factor);
+    if (policy.kind == AppraisalPolicyKind::ansi_z765_2021) return derive_ansi(f, policy, factor, countable_room_area);
     auto issue = [&](std::string code, std::string message) {
         result.issues.push_back({std::move(code), std::move(message)});
     };
@@ -560,14 +575,19 @@ AppraisalQualification derive_appraisal_category(const AppraisalFacts& f, Apprai
     return result;
 }
 
+AppraisalQualification derive_appraisal_category(const AppraisalFacts& facts, AppraisalPolicy policy,
+                                                 ExactRational factor) {
+    return derive_with_room_geometry(facts, policy, factor, std::nullopt);
+}
+
 AppraisalQualification qualify_appraisal_area(const MeasurementArea& area, const AppraisalFacts& facts,
                                               AppraisalPolicy policy) {
-    auto result = derive_appraisal_category(facts, policy, area.factor);
     auto measured = area;
     measured.classification = "physical";
     const CalculationProfile physical{"vertex-physical", 1, AreaUnit::square_metre, 2,
                                        {{"physical", {false, false}}}};
     const auto calculation = calculate_area(measured, physical);
+    auto result = derive_with_room_geometry(facts, policy, area.factor, calculation.net_square_metres);
     result.physical_square_metres = calculation.net_square_metres;
     result.adjusted_square_metres = calculation.factored_square_metres;
     if (policy.kind == AppraisalPolicyKind::ansi_z765_2021 && facts.ansi) {
@@ -634,8 +654,9 @@ CalculationProfile builtin_appraisal_profile() {
     return profile;
 }
 
-CalculationProfile ansi_appraisal_profile() {
-    CalculationProfile profile{"vertex-ansi-z765-2021-v1", 1, AreaUnit::square_foot, 0, {}};
+CalculationProfile ansi_appraisal_profile(unsigned version) {
+    CalculationProfile profile{std::string(appraisal_policy_id({AppraisalPolicyKind::ansi_z765_2021, version})),
+                               version, AreaUnit::square_foot, 0, {}};
     for (const auto& [category, name] : detail::appraisal_category_tokens)
         if (category != AppraisalAreaCategory::none && category != AppraisalAreaCategory::commercial_occupiable &&
             category != AppraisalAreaCategory::commercial_common && category != AppraisalAreaCategory::commercial_service)
@@ -661,7 +682,8 @@ AppraisalCalculationReport calculate_appraisal_areas(const std::vector<Measureme
             for (const auto& [category, name] : detail::appraisal_category_tokens) {
                 if (category == AppraisalAreaCategory::none)
                     continue;
-                if (profile.id != "vertex-ansi-z765-2021-v1" && category > AppraisalAreaCategory::commercial_service) continue;
+                if (profile.id != "vertex-ansi-z765-2021-v1" && profile.id != "vertex-ansi-z765-2021-v2" &&
+                    category > AppraisalAreaCategory::commercial_service) continue;
                 const auto value = values.find(category);
                 const auto provenance = ids.find(category);
                 result.by_category.emplace(category, AppraisalAreaBucket{

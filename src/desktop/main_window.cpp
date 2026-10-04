@@ -2062,8 +2062,10 @@ DeclaredAppraisal read_appraisal_declarations(const json& property, const json& 
     const auto policy = property.value("appraisal_policy", json::object());
     appraisal_keys(policy, {"policy_kind", "version", "property_kind", "measurement_basis", "ansi"});
     if (!policy.contains("version")) result.missing.push_back(QStringLiteral("Declare policy version."));
-    else if (!policy.at("version").is_number_integer() || policy.at("version") != 1)
+    else if (!policy.at("version").is_number_integer() ||
+        (policy.at("version") != 1 && !(policy.at("version") == 2 && policy.value("policy_kind", json()) == "ansi_z765_2021")))
         throw std::invalid_argument("Unsupported appraisal policy version");
+    if (policy.contains("version")) result.policy.version = policy.at("version").get<unsigned>();
     token(policy, "policy_kind", parse_appraisal_policy_kind, result.policy.kind);
     token(policy, "property_kind", parse_property_kind, result.facts.property_kind);
     token(policy, "measurement_basis", parse_measurement_basis, result.facts.measurement_basis);
@@ -2116,7 +2118,7 @@ DeclaredAppraisal read_appraisal_declarations(const json& property, const json& 
         boolean(area_evidence, "finish_matches_dwelling", evidence.finish_matches_dwelling);
         optional_token(area_evidence, "dwelling_identity", parse_dwelling_identity, evidence.dwelling_identity);
         const auto ceiling = object(area_evidence, "ceiling");
-        appraisal_keys(ceiling, {"kind", "minimum_height_m", "at_least_7ft_area_m2", "room_floor_area_m2", "below_5ft_deduction_ids", "stair_from_floor_id", "room_boundary_id", "source_geometry_sha256"});
+        appraisal_keys(ceiling, {"kind", "minimum_height_m", "at_least_7ft_area_m2", "room_floor_area_m2", "complete_room_observed", "below_5ft_deduction_ids", "stair_from_floor_id", "room_boundary_id", "source_geometry_sha256"});
         optional_token(ceiling, "kind", parse_ceiling_kind, evidence.ceiling.kind);
         const auto number = [&](const char* key, std::optional<double>& out) {
             if (!ceiling.contains(key)) return;
@@ -2128,6 +2130,7 @@ DeclaredAppraisal read_appraisal_declarations(const json& property, const json& 
         number("minimum_height_m", evidence.ceiling.minimum_height_m);
         number("at_least_7ft_area_m2", evidence.ceiling.at_least_7ft_area_m2);
         number("room_floor_area_m2", evidence.ceiling.room_floor_area_m2);
+        boolean(ceiling, "complete_room_observed", evidence.ceiling.complete_room_observed);
         evidence.ceiling.stair_from_floor_id = text(ceiling, "stair_from_floor_id");
         evidence.ceiling.room_boundary_id = text(ceiling, "room_boundary_id");
         evidence.ceiling.source_geometry_sha256 = text(ceiling, "source_geometry_sha256");
@@ -2145,7 +2148,7 @@ DeclaredAppraisal read_appraisal_declarations(const json& property, const json& 
             if ((kind != CeilingKind::flat && ceiling.contains("minimum_height_m")) ||
                 (kind != CeilingKind::stairs && ceiling.contains("stair_from_floor_id")) ||
                 (kind != CeilingKind::sloped && (ceiling.contains("at_least_7ft_area_m2") || ceiling.contains("room_floor_area_m2") ||
-                 ceiling.contains("below_5ft_deduction_ids") || ceiling.contains("room_boundary_id") || ceiling.contains("source_geometry_sha256"))))
+                 ceiling.contains("complete_room_observed") || ceiling.contains("below_5ft_deduction_ids") || ceiling.contains("room_boundary_id") || ceiling.contains("source_geometry_sha256"))))
                 throw std::invalid_argument("Ceiling evidence does not match its declared kind");
         }
         result.facts.ansi = std::move(evidence);
@@ -2463,7 +2466,7 @@ void bind_appraisal_schedule_policy(ScheduleRow& row, const AppraisalDocumentRep
         std::string(appraisal_policy_kind_name(report.policy->kind)), false, sources,
         "Measurement policy retained for this property's appraisal output"});
     const auto profile = report.policy->kind == AppraisalPolicyKind::ansi_z765_2021
-        ? ansi_appraisal_profile() : builtin_appraisal_profile();
+        ? ansi_appraisal_profile(report.policy->version) : builtin_appraisal_profile();
     row.cells.emplace("profile_id", ScheduleCell{profile.id, false, sources,
         "Calculation profile retained for this property's appraisal output"});
 }
@@ -2528,12 +2531,12 @@ std::vector<ScheduleRow> appraisal_schedule_rows(const AppraisalDocumentReport& 
     }
     const bool ansi = report.policy && report.policy->kind == AppraisalPolicyKind::ansi_z765_2021;
     std::string qualification = ansi
-        ? "Vertex rule checks passed; ANSI Z765-2021 v1; final standards validation pending."
+        ? "Vertex rule checks passed; ANSI Z765-2021 rule v" + std::to_string(report.policy->version) + "; final standards validation pending."
         : "Qualified under declared Vertex policy v1; no ANSI/BOMA certification";
     if (ansi && std::any_of(report.boundaries.begin(), report.boundaries.end(), [](const auto& boundary) {
             return boundary.facts && boundary.facts->ansi &&
                 boundary.facts->ansi->ceiling.kind == CeilingKind::sloped;
-        })) qualification += " Sloped-room denominator remains provisional.";
+        })) qualification += report.policy->version == 1 ? " Legacy sloped-room denominator remains provisional." : " Sloped rooms use countable finished area; final standard validation pending.";
     rows.push_back(appraisal_text_row(report, "status", "STATUS", "Qualification", std::move(qualification)));
     for (const auto& [category, bucket] : report.calculation->property.by_category) {
         if (bucket.total.square_metres <= 0.0) continue;
@@ -21089,7 +21092,7 @@ public:
         QObject::connect(measurement.increment, &QComboBox::currentIndexChanged, &dialog, update_minimum_height);
         update_minimum_height();
         auto* high = new QLineEdit(ansi_group); high->setObjectName(QStringLiteral("ansiAtLeast7ftArea"));
-        high->setPlaceholderText(QStringLiteral("Observed area at least 7 ft high, in sq ft"));
+        high->setPlaceholderText(QStringLiteral("Observed area at least 7 ft high in this complete room, in sq ft"));
         if (ceiling_evidence.contains("at_least_7ft_area_m2") && ceiling_evidence.at("at_least_7ft_area_m2").is_number())
             high->setText(QString::number(ceiling_evidence.at("at_least_7ft_area_m2").get<double>() / 0.09290304, 'g', 17));
         ansi_form->addRow(QStringLiteral("At least 7 ft high (sq ft)"), high);
@@ -21110,7 +21113,7 @@ public:
             item->setData(Qt::UserRole, QString::fromStdString(id)); item->setFlags(item->flags() | Qt::ItemIsUserCheckable); item->setCheckState(Qt::Checked);
         }
         ansi_form->addRow(QStringLiteral("Actual below-5-ft boundaries"), low);
-        auto* confirm = new QCheckBox(QStringLiteral("Confirm observations for this complete room and its current deductions"), ansi_group);
+        auto* confirm = new QCheckBox(QStringLiteral("This boundary represents one complete physical room; the high-area observation excludes its current voids"), ansi_group);
         confirm->setObjectName(QStringLiteral("ansiConfirmRoomGeometry")); ansi_form->addRow(confirm);
         auto* stair = new QComboBox(ansi_group); stair->setObjectName(QStringLiteral("ansiStairFromFloor"));
         stair->addItem(QStringLiteral("Undeclared"), QString{});
@@ -21144,7 +21147,8 @@ public:
                 entity_map_digest(m_document->snapshot().entities()) != facts_digest) { error->setText(QStringLiteral("Selection or project changed; reopen this dialog.")); return; }
             try {
             json declaration{{"appraisal_policy", policy}, {"floor_appraisal_facts", level}, {"appraisal_facts", facts}};
-            declaration["appraisal_policy"]["version"] = 1;
+            declaration["appraisal_policy"]["version"] = kind->currentData().toString() == QStringLiteral("ansi_z765_2021") ?
+                (policy.value("policy_kind", json()) == "ansi_z765_2021" ? policy.value("version", 1U) : 2U) : 1U;
             const auto save = [](json& target, const char* key, QComboBox* box) {
                 target.erase(key);
                 if (!box->currentData().toString().isEmpty()) target[key] = box->currentData().toString().toStdString();
@@ -21190,6 +21194,7 @@ public:
                     }
                     const auto boundary = read_boundary(selected->properties);
                     observed["room_boundary_id"] = selected_id;
+                    if (declaration["appraisal_policy"]["version"] == 2) observed["complete_room_observed"] = true;
                     observed["room_floor_area_m2"] = std::abs(signed_area(boundary));
                     observed["source_geometry_sha256"] = appraisal_ceiling_geometry_digest(boundary, deductions);
                     observed["below_5ft_deduction_ids"] = low_ids;
@@ -24563,14 +24568,23 @@ public:
                  {"Manufactured home","manufactured_home"},{"Apartment unit","apartment_unit"},{"Multifamily","multifamily"},{"Light commercial","light_commercial"}});
             auto* basis = combo("appraisalSetupMeasurementBasis",QStringLiteral("Measurement basis"),"measurement_basis",
                 {{"Exterior","exterior"},{"Interior perimeter","interior_perimeter"},{"Plans","plans"},{"Unknown","unknown"}});
-            form->addRow(QStringLiteral("Policy version"),new QLabel(QStringLiteral("1"),&dialog));
             auto* precision = new QSpinBox(&dialog);precision->setObjectName(QStringLiteral("appraisalSetupPrecision"));precision->setRange(0,6);
             unsigned initial_precision = 2;
             try { initial_precision = appraisal_display_profile(property->properties).decimal_places; } catch (const std::exception&) {}
             precision->setValue(static_cast<int>(initial_precision));form->addRow(QStringLiteral("Area decimal places"),precision);
             const auto measurement = ansi_measurement_controls(&dialog, *layout, policy);
+            auto* rule_version = new QComboBox(&dialog);
+            rule_version->setObjectName(QStringLiteral("appraisalSetupRuleVersion"));
+            rule_version->addItem(QStringLiteral("V2 — countable finished-room area"), 2);
+            rule_version->addItem(QStringLiteral("V1 — legacy gross-room interpretation"), 1);
+            if (policy.value("policy_kind", json()) == "ansi_z765_2021")
+                rule_version->setCurrentIndex(std::max(0, rule_version->findData(policy.value("version", 1))));
+            form->addRow(QStringLiteral("ANSI calculation rule"), rule_version);
+            auto* rule_note = new QLabel(QStringLiteral("Changing V1 to V2 recalculates sloped rooms only after you reconfirm each complete-room observation in Edit facts. Cancel keeps the recorded rule. Final ANSI validation remains pending."), &dialog);
+            rule_note->setWordWrap(true); layout->addWidget(rule_note);
             const auto update_policy = [&] {
                 const bool ansi = kind->currentData().toString() == QStringLiteral("ansi_z765_2021");
+                form->setRowVisible(rule_version, ansi); rule_note->setVisible(ansi);
                 measurement.group->setVisible(ansi); precision->setEnabled(!ansi);
                 precision->setToolTip(ansi ? QStringLiteral("ANSI totals use whole square feet; dimensions use tenths of a foot.") : QString{});
             };
@@ -24578,6 +24592,7 @@ public:
             // Missing declarations remain explicit; opening Setup never infers observed facts.
             const auto update_enabled = [=](bool value) {
                 kind->setEnabled(value);property_kind->setEnabled(value);basis->setEnabled(value);
+                rule_version->setEnabled(value);
             };
             QObject::connect(enabled,&QCheckBox::toggled,&dialog,update_enabled);
             auto* error = new QLabel(&dialog);error->setWordWrap(true);layout->addWidget(error);
@@ -24602,7 +24617,8 @@ public:
                     !ansi_property_kind_supported(property_kind->currentData().toString())) {
                     error->setText(QStringLiteral("ANSI Z765 is available for detached or attached single-family and manufactured homes.")); return;
                 }
-                json declaration = policy.is_object() ? policy : json::object(); declaration["version"] = 1;
+                json declaration = policy.is_object() ? policy : json::object();
+                declaration["version"] = kind->currentData().toString() == QStringLiteral("ansi_z765_2021") ? rule_version->currentData().toInt() : 1;
                 for (const auto& [key,box] : std::initializer_list<std::pair<const char*,QComboBox*>>{
                     {"policy_kind",kind},{"property_kind",property_kind},{"measurement_basis",basis}}) {
                     const auto token = box->currentData().toString();

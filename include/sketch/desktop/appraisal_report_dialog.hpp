@@ -18,6 +18,9 @@ namespace sketch::desktop {
 [[nodiscard]] QString appraisal_rounded_ceiling_height_text(
     double observed_metres, AcquisitionIncrement increment);
 [[nodiscard]] QString appraisal_ceiling_height_rows(const AnsiAppraisalFacts& facts);
+// Unrounded candidate-area basis shared by Details and the printed audit trace.
+[[nodiscard]] QString appraisal_sloped_ceiling_rows(
+    const AppraisalBoundaryStatus& boundary, const AppraisalDocumentReport& report);
 
 // Readable bounded summary placement; overflow points to the complete report.
 void render_appraisal_summary_schedule(QPainter& painter,const QRectF& bounds,

@@ -16,8 +16,17 @@ before the seven-foot eligibility comparison, while preserving the recorded
 height. Facts previews the rounded height; Details and PDF distinguish it from
 the observation. This follows the concrete height examples in Fannie Mae's
 [September 2023 ANSI Answers, page 6](https://singlefamily.fanniemae.com/media/36856/display).
-It does not resolve the separate sloped-room denominator or final publisher
-standard qualification.
+It does not establish final publisher standard qualification.
+
+The 2026-10-03 V2 correction applies the half-height threshold to current
+countable finished room geometry after real exclusions, with an explicit
+complete-room observation. It preserves V1 results and requires an explicit
+rule change and reconfirmation. This interpretation is supported by the
+[September 2025 Fannie guidance](https://singlefamily.fanniemae.com/media/30266/display)
+and the publisher's [public February 2020 draft, sections 3.4 and 3.6](https://www.homeinnovation.com/documents/national_standards/ansi_z765/ANSI%20Z765%20-%20DRAFT%2020200207%20-%20no%20cover%20art.pdf).
+Neither is a substitute for review against the final publisher standard.
+Measured-child ownership partitions require separate whole-room membership and
+height evidence; V2 refuses ambiguous sloped partitions instead of inventing it.
 
 Fannie Mae requires ANSI Z765-2021 for relevant single-family appraisal
 measurements, calculations and reporting. Apartment/multifamily buildings need
@@ -43,9 +52,9 @@ measurement summary expose source facts, category reasons and canonical whole
 square-foot/tenth-foot figures with supplementary metric diagnostics.
 
 These are implemented Vertex rules, not full normative validation. The final
-publisher standard remains unverified, including the sloped-room denominator,
+publisher standard remains unverified, including final confirmation of the sloped-room interpretation,
 ceiling obstructions, under-stair/stair-finish exceptions and exact prescribed
-declarations. The current gross-room sloped denominator is explicitly
+declarations. The legacy V1 gross-room sloped denominator remains explicitly
 provisional. No complete legacy/UAD 3.6 form, room-count mapping, or lender
 certification is implied by the measurement summary. The
 [current UAD 3.6 supplement](https://singlefamily.fanniemae.com/media/document/pdf/fannie-mae-selling-guide-supplement-uniform-appraisal-dataset-uad-36-policy)

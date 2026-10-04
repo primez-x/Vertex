@@ -249,6 +249,102 @@ void ansi_policy_tests() {
     check(totals.property.gla().total.display.text == "1", "ANSI totals round once after summing unrounded physical areas");
 }
 
+void ansi_v2_sloped_tests() {
+    using namespace sketch;
+    const AppraisalPolicy v2{AppraisalPolicyKind::ansi_z765_2021, 2};
+    AppraisalFacts facts{PropertyKind::detached_single_family, MeasurementBasis::exterior,
+        GradeStatus::above, FinishStatus::finished, AccessStatus::direct_interior,
+        CeilingEligibility::unknown, AreaUse::dwelling, BoundaryRole::measured_area};
+    AnsiAppraisalFacts ansi;
+    ansi.measurement = {true, true, AcquisitionIncrement::inch, ""};
+    ansi.any_part_below_grade = false;
+    ansi.year_round_suitable = true;
+    ansi.finish_matches_dwelling = true;
+    ansi.dwelling_identity = DwellingIdentity::primary;
+    ansi.ceiling.kind = CeilingKind::sloped;
+    ansi.ceiling.room_floor_area_m2 = 100;
+    ansi.ceiling.at_least_7ft_area_m2 = 35;
+    ansi.ceiling.room_boundary_id = "room";
+    ansi.ceiling.source_geometry_sha256 = "document-layer-verifies-binding";
+    ansi.ceiling.complete_room_observed = true;
+    ansi.ceiling.below_5ft_deduction_ids = {"low"};
+    facts.ansi = ansi;
+    auto area = room("room", rectangle(0, 0, 10, 10));
+    area.deductions = {{"low", rectangle(0, 0, 4, 10)}};
+    const auto evaluate = [&] { return qualify_appraisal_area(area, facts, v2); };
+    auto result = evaluate();
+    check(result.qualified && result.derived_category == AppraisalAreaCategory::above_grade_finished &&
+          result.policy_version == 2 && result.policy_id == "vertex-ansi-z765-2021-v2",
+          "V2 high35 over net60 qualifies while retaining explicit v2 identity");
+    near(*result.physical_square_metres, 60, 1e-7, "V2 excludes low40 from physical contribution");
+    check(qualify_appraisal_area(area, facts, {AppraisalPolicyKind::ansi_z765_2021, 1}).derived_category ==
+          AppraisalAreaCategory::above_grade_nonstandard_finished, "V1 keeps gross100 denominator for high35");
+    result = derive_appraisal_category(facts, v2);
+    check(!result.qualified && !result.derived_category, "V2 scalar-only sloped evidence cannot derive a category");
+    facts.ansi->ceiling.at_least_7ft_area_m2 = 29.9;
+    check(evaluate().derived_category == AppraisalAreaCategory::above_grade_nonstandard_finished,
+          "V2 below half of net60 is nonstandard");
+    facts.ansi->ceiling.at_least_7ft_area_m2 = 30;
+    check(evaluate().derived_category == AppraisalAreaCategory::above_grade_finished, "V2 exact half net60 qualifies");
+    facts.ansi->ceiling.at_least_7ft_area_m2 = 61;
+    check(!evaluate().qualified, "V2 high observation cannot exceed countable net geometry");
+    facts.ansi->ceiling.at_least_7ft_area_m2 = 30;
+    for (const auto observation : {std::optional<bool>{}, std::optional<bool>{false}}) {
+        facts.ansi->ceiling.complete_room_observed = observation;
+        result = evaluate();
+        check(!result.qualified && !result.derived_category, "V2 requires affirmative complete-room observation");
+    }
+    facts.ansi->ceiling.complete_room_observed = true;
+    area.deductions.push_back({"opening", rectangle(4, 0, 2, 10)});
+    facts.ansi->ceiling.at_least_7ft_area_m2 = 25;
+    result = evaluate();
+    check(result.qualified && result.derived_category == AppraisalAreaCategory::above_grade_finished,
+          "V2 high25 over complete room minus low40 and opening20 qualifies");
+    near(*result.physical_square_metres, 40, 1e-7, "V2 actual other-void opening reduces countable denominator");
+    area.deductions[1].boundary = rectangle(0, 0, 2, 10);
+    result = evaluate();
+    check(result.qualified && result.derived_category == AppraisalAreaCategory::above_grade_nonstandard_finished,
+          "V2 overlapping exclusions use union geometry instead of double subtraction");
+    near(*result.physical_square_metres, 60, 1e-7, "V2 overlap leaves actual net60 candidate");
+    std::reverse(area.deductions.begin(), area.deductions.end());
+    area.deductions[0].id = "aaa-opening";
+    area.deductions[1].id = "zzz-low";
+    facts.ansi->ceiling.below_5ft_deduction_ids = {"zzz-low"};
+    const auto reordered = evaluate();
+    check(reordered.qualified && reordered.derived_category == result.derived_category,
+          "V2 renaming and reordering overlapping exclusions cannot alter half-test category");
+    near(*reordered.physical_square_metres, *result.physical_square_metres, 1e-7,
+         "V2 renaming and reordering exclusions preserves physical candidate");
+    area.deductions.clear();
+    facts.ansi->ceiling.below_5ft_deduction_ids.clear();
+    facts.ansi->ceiling.at_least_7ft_area_m2 = 49.9;
+    check(evaluate().derived_category == AppraisalAreaCategory::above_grade_nonstandard_finished,
+          "V2 without low geometry uses whole countable100 denominator");
+    facts.ansi->ceiling.at_least_7ft_area_m2 = 50;
+    check(evaluate().derived_category == AppraisalAreaCategory::above_grade_finished, "V2 no-low exact half qualifies");
+    area.deductions = {{"low", rectangle(0, 0, 10, 10)}};
+    facts.ansi->ceiling.below_5ft_deduction_ids = {"low"};
+    facts.ansi->ceiling.at_least_7ft_area_m2 = 0;
+    check(!evaluate().qualified && !evaluate().derived_category, "V2 zero countable candidate cannot qualify");
+    for (unsigned version : {0U, 3U}) {
+        rejected([&] { (void)appraisal_policy_id({AppraisalPolicyKind::ansi_z765_2021, version}); });
+        rejected([&] { (void)ansi_appraisal_profile(version); });
+    }
+    for (auto kind : {AppraisalPolicyKind::residential_declared, AppraisalPolicyKind::light_commercial_declared})
+        rejected([&] { (void)appraisal_policy_id({kind, 2}); });
+    for (unsigned version : {1U, 2U}) {
+        const auto profile = ansi_appraisal_profile(version);
+        check(profile.version == version && profile.id == (version == 1 ? "vertex-ansi-z765-2021-v1" : "vertex-ansi-z765-2021-v2") &&
+              profile.classifications.contains("adu_above_grade_finished"), "Both ANSI profile versions retain ADU buckets");
+        auto adu = room("adu", rectangle(0, 0, 10, 10));
+        adu.classification = "adu_above_grade_finished";
+        const auto totals = calculate_appraisal_areas({adu}, profile);
+        near(totals.property.by_category.at(AppraisalAreaCategory::adu_above_grade_finished).total.square_metres,
+             100, 1e-7, "Both ANSI profile aggregates retain ADU contributions");
+        near(totals.property.gla().total.square_metres, 0, 1e-7, "ADU remains separate from primary GLA");
+    }
+}
+
 void ansi_ceiling_rounding_helper_tests() {
     using namespace sketch;
     struct RoundedCase { double observed_metres; AcquisitionIncrement increment; double rounded_metres; };
@@ -559,6 +655,7 @@ int main() {
         using namespace sketch;
         appraisal_tests();
         ansi_policy_tests();
+        ansi_v2_sloped_tests();
         ansi_ceiling_rounding_helper_tests();
         ansi_flat_ceiling_acquisition_tests();
         declared_policy_tests();

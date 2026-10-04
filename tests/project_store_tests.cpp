@@ -3041,13 +3041,13 @@ void test_automatic_angle_redraw_reader_floor() {
     }
 }
 
-void test_ansi_appraisal_reader_floor_retains_history() {
+void test_ansi_appraisal_reader_floor_retains_history(unsigned policy_version = 1) {
     TempDirectory temp;
     auto property = entity("ansi-property", "property", {{"name", "Appraisal"}});
     auto document = Document::create({property});
     require(ProjectStore::required_format_version(document.snapshot()) == 1,
         "ordinary legacy property must not require the new appraisal reader");
-    property.properties["appraisal_policy"] = {{"policy_kind", "ansi_z765_2021"}, {"version", 1},
+    property.properties["appraisal_policy"] = {{"policy_kind", "ansi_z765_2021"}, {"version", policy_version},
         {"property_kind", "detached_single_family"}, {"measurement_basis", "exterior"},
         {"ansi", {{"interior_inspected", true}, {"direct_measurement", true},
             {"acquisition_increment", "inch"}, {"limitations_statement", ""}}}};
@@ -3057,14 +3057,16 @@ void test_ansi_appraisal_reader_floor_retains_history() {
     deleted.apply(ApplyEntityChanges{deleted.revision(), {EntityChange::erase(property.id)}, {}, "Remove property"});
     document.undo(document.revision());
     for (const auto& snapshot : {changed, document.snapshot(), deleted.snapshot()}) {
-        require(ProjectStore::required_format_version(snapshot) == 21,
-            "current, undone and deleted ANSI evidence must require reader21");
+        const auto reader_floor = policy_version == 2 ? 32U : 21U;
+        require(ProjectStore::required_format_version(snapshot) == reader_floor,
+            "current, undone and deleted ANSI evidence must preserve the recorded rule reader floor");
         const auto path = temp.path / ("ansi-" + sketch::make_stable_id() + ".bldproj");
         (void)ProjectStore::save(path, snapshot);
         const auto reopened = ProjectStore::load(path).document.snapshot();
         require(reopened.entities() == snapshot.entities() && reopened.history().size() == snapshot.history().size(),
             "native appraisal evidence and retained history must reopen exactly");
-        execute_sql(path, "PRAGMA user_version=20; UPDATE metadata SET value='20' WHERE key='format_version'");
+        const auto previous = std::to_string(reader_floor-1);
+        execute_sql(path, "PRAGMA user_version="+previous+"; UPDATE metadata SET value='"+previous+"' WHERE key='format_version'");
         rewrite_logical_digest(path);
         const auto hash = ProjectStore::file_sha256(path);
         require_error([&] { (void)ProjectStore::load(path); }, StorageErrorCode::unsupported_format,
@@ -3313,6 +3315,7 @@ int main() {
         test_view_appearance_reader_floor_and_source_integrity();
         test_svg_palette_reader_floor();
         test_ansi_appraisal_reader_floor_retains_history();
+        test_ansi_appraisal_reader_floor_retains_history(2);
         test_automatic_angle_redraw_reader_floor();
         test_rigid_group_storage_and_history_floors();
         test_live_exterior_source_storage_and_history_floor();
