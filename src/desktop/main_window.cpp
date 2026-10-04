@@ -663,11 +663,15 @@ std::vector<Entity> clipboard_entities_for_selection(const DocumentSnapshot& sna
     }
     const auto root = snapshot.entities().find(root_id);
     if (root == snapshot.entities().end()) return {};
-    static constexpr std::array<std::string_view, 13> supported{
-        "boundary", "measurement_boundary", "room_boundary", "wall", "opening", "room",
+    static constexpr std::array<std::string_view, 14> supported{
+        "boundary", "measurement_boundary", "measurement_linework", "room_boundary", "wall", "opening", "room",
         "slab", "roof", "stair", "railing", "column", "beam", "annotation_state"};
     if (std::find(supported.begin(), supported.end(), root->second.type) == supported.end()) {
         return {};
+    }
+    if (root->second.type == "measurement_linework") {
+        const auto decoded = decode_measurement_linework_model(root->second.properties.at("model"));
+        if (!decoded.supported()) throw std::invalid_argument(decoded.diagnostic);
     }
     std::vector<Entity> result{annotation_child
         ? annotation_child_subset(root->second, {std::string(selected_id)}, true)
@@ -5557,12 +5561,14 @@ public:
         std::set<std::string,std::less<>> copied_ids;
         std::set<std::string,std::less<>> copied_geometry_ids;
         std::set<std::string,std::less<>> copied_wall_ids;
-        bool contains_copied_area = false;
+        bool contains_copied_measurement = false;
         for (const auto& change : command.entity_changes)
             if (change.kind == EntityChangeKind::upsert && !source.entities().contains(change.entity.id)) {
                 copied_ids.insert(change.entity.id);
-                if (is_closed_boundary_entity(change.entity.type)) contains_copied_area = true;
-                if (is_closed_boundary_entity(change.entity.type) || can_transform_architectural_entity_type(change.entity.type) ||
+                if (is_closed_boundary_entity(change.entity.type) || change.entity.type == "measurement_linework")
+                    contains_copied_measurement = true;
+                if (is_closed_boundary_entity(change.entity.type) || change.entity.type == "measurement_linework" ||
+                    can_transform_architectural_entity_type(change.entity.type) ||
                     change.entity.type == "opening" || can_recognize_boundary_dimension_entity_type(change.entity.type))
                     copied_geometry_ids.insert(change.entity.id);
                 if (change.entity.type == "wall") copied_wall_ids.insert(change.entity.id);
@@ -5573,7 +5579,7 @@ public:
                 }
             }
         for (const auto& change : command.entity_changes) {
-            if (contains_copied_area && change.kind == EntityChangeKind::upsert) {
+            if (contains_copied_measurement && change.kind == EntityChangeKind::upsert) {
                 const auto& entity = change.entity;
                 if (entity.type == "opening" && !copied_wall_ids.contains(read_string(entity.properties,"wall_id").value_or("")))
                     throw std::invalid_argument("A copied opening must include its independently copied wall.");
@@ -5588,7 +5594,7 @@ public:
                         if (!copied_geometry_ids.contains(record.at("target_id").get<std::string>()))
                             throw std::invalid_argument("Copied appearance must belong to an independently copied object.");
             }
-            if (contains_copied_area && change.kind == EntityChangeKind::upsert && change.entity.type == "constraint") {
+            if (contains_copied_measurement && change.kind == EntityChangeKind::upsert && change.entity.type == "constraint") {
                 const auto decoded = decode_constraint_entity(change.entity);
                 if (!decoded.supported()) throw std::invalid_argument(decoded.unsupported_reason);
                 for (const auto& binding : decoded.constraint->bindings)
@@ -17960,7 +17966,9 @@ public:
 
     std::vector<Entity> independentAreaCopyGraph(const DocumentSnapshot& snapshot,
                                                 std::vector<Entity> graph) const {
-        if (std::none_of(graph.begin(),graph.end(),[](const auto& entity) { return is_closed_boundary_entity(entity.type); }))
+        if (std::none_of(graph.begin(),graph.end(),[](const auto& entity) {
+                return is_closed_boundary_entity(entity.type) || entity.type == "measurement_linework";
+            }))
             return graph;
         std::set<std::string, std::less<>> ids;
         for (const auto& entity : graph) ids.insert(entity.id);
@@ -18014,7 +18022,7 @@ public:
             const auto& bindings = decoded.constraint->bindings;
             if (!std::any_of(bindings.begin(),bindings.end(),[&](const auto& binding) { return ids.contains(binding.owner_id); })) continue;
             if (!std::all_of(bindings.begin(),bindings.end(),[&](const auto& binding) { return ids.contains(binding.owner_id); }))
-                throw std::invalid_argument("A copied area has a locked relationship to geometry outside its required dependencies. Review that relationship before copying.");
+                throw std::invalid_argument("The copied geometry has a locked relationship to geometry outside its required dependencies. Select the related geometry together or review that relationship before copying.");
             add(entity);
         }
         for (const auto& [id, entity] : snapshot.entities()) {
@@ -18087,7 +18095,13 @@ public:
                 changes.push_back(EntityChange::upsert(annotation_child_subset(
                     snapshot.entities().at(entity.id), child_ids, false)));
             } else {
-                if (entity.required)
+                // Measured strokes require reader support, but their authored
+                // geometry remains explicitly removable. Missing sources leave
+                // dependent area observations stale rather than erasing them.
+                if (entity.type == "measurement_linework") {
+                    const auto decoded = decode_measurement_linework_model(entity.properties.at("model"));
+                    if (!decoded.supported()) throw std::invalid_argument(decoded.diagnostic);
+                } else if (entity.required)
                     throw std::invalid_argument("Required project entities cannot be deleted.");
                 changes.push_back(EntityChange::erase(entity.id));
             }
@@ -19272,7 +19286,7 @@ public:
             for (const auto& dependency : independent)
                 if ((is_closed_boundary_entity(dependency.type) || dependency.type == "wall" || dependency.type == "measurement_linework") &&
                     std::none_of(entities.begin(),entities.end(),[&](const auto& entity) { return entity.id == dependency.id; }))
-                    throw std::invalid_argument("Select the area's deductions and supporting walls to cut them together, or use Copy to preserve the originals.");
+                    throw std::invalid_argument("Select the area's deductions, supporting walls and measured lines to cut them together, or use Copy to preserve the originals.");
             const ApplyEntityChanges command{
                 source.revision(), selectionRemovalChanges(source, entities), {}, "Cut selection"};
             const auto authored = augmentAuthoredCommand(Command{command});
@@ -19332,12 +19346,14 @@ public:
         };
         geometry_bounds(source.entities(),[&](const auto& bounds){existing_right=std::max(existing_right,bounds.maximum.x);});
         geometry_bounds(copied,[&](const auto& bounds){copied_left=std::min(copied_left,bounds.minimum.x);});
-        if (!std::isfinite(existing_right) || !std::isfinite(copied_left))
+        if (!std::isfinite(copied_left))
             throw std::invalid_argument("The complete measured clipboard graph has no usable placement bounds. Nothing was pasted.");
+        const bool has_existing_geometry = std::isfinite(existing_right);
         const double gap=m_measurementCanvas->gridSpacingMetres();
-        if (!std::isfinite(gap) || gap<=0)
+        if (has_existing_geometry && (!std::isfinite(gap) || gap<=0))
             throw std::invalid_argument("The drawing grid cannot provide a safe measured-copy placement. Nothing was pasted.");
-        const Vec2 offset{std::ceil(existing_right/gap)*gap+gap-copied_left,0};
+        const Vec2 offset = has_existing_geometry
+            ? Vec2{std::ceil(existing_right/gap)*gap+gap-copied_left,0} : Vec2{};
         const PlanarTransform transform{{},0,false,false,offset};
         std::vector<BoundaryTransformation> boundaries;
         std::set<std::string,std::less<>> boundary_ids;
@@ -19362,6 +19378,11 @@ public:
                 throw std::invalid_argument("The measured clipboard graph contains geometry that cannot be placed together: "+entity.type+". Nothing was pasted.");
             }
         }
+        // Apply the same graph admission in fresh and populated destinations.
+        // A fresh destination (including Cut followed by Paste) has no geometry
+        // to avoid: retain its measured location and dialect without inventing
+        // a placement operation.
+        if (!has_existing_geometry) return true;
         // The pure typed kernel retains boundary receipts/derivations and moves
         // bound dimensions from one detached source state before admission.
         auto placed=boundaries.empty()?copied:transformed_boundary_entities_batch(copied,boundaries);
@@ -19640,7 +19661,7 @@ public:
             refresh();
             if (measured_placement) {
                 m_measurementCanvas->fitView();
-                owner->statusBar()->showMessage(QStringLiteral("Measured copy placed to the right of existing geometry. The copy is selected; drag it to position."),8000);
+                owner->statusBar()->showMessage(QStringLiteral("Measured copy selected. Drag it to position."),8000);
             }
             return true;
         } catch (const std::exception& error) {
@@ -19656,7 +19677,7 @@ public:
             const auto entities = clipboardSelectionGraph(source, true);
             if (entities.empty()) {
                 throw std::invalid_argument(
-                    "Select a boundary, wall, opening, architectural object, or annotation group.");
+                    "Select a measured line, boundary, wall, opening, architectural object, or annotation group.");
             }
             const ApplyEntityChanges command{
                 source.revision(), selectionRemovalChanges(source, entities), {}, "Delete selection"};
@@ -30494,17 +30515,15 @@ private:
                 auto* properties = menu.addAction(QStringLiteral("Properties"));
                 QObject::connect(properties, &QAction::triggered, owner,
                                  [this] { positionContextEditor(); });
-                auto* copy = menu.addAction(QStringLiteral("Copy"));
-                QObject::connect(copy, &QAction::triggered, owner,
-                                 [this] { (void)copySelection(); });
-                auto* remove = menu.addAction(QStringLiteral("Delete"));
-                QObject::connect(remove, &QAction::triggered, owner,
-                                 [this] { (void)deleteSelection(); });
+                menu.addAction(m_copy_action);
+                menu.addAction(m_cut_action);
+                menu.addAction(m_delete_action);
                 auto* deselect = menu.addAction(QStringLiteral("Deselect"));
                 QObject::connect(deselect, &QAction::triggered, owner,
                                  [this] { (void)selectEntity({}); });
                 menu.addSeparator();
             }
+            menu.addAction(m_paste_action);
             auto* add_text = menu.addAction(QStringLiteral("Add text here…"));
             QObject::connect(add_text, &QAction::triggered, owner, [this, point] {
                 bool accepted = false;

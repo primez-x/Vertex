@@ -913,6 +913,15 @@ if(SKETCH_BUILD_DESKTOP)
     qt_add_resources(measurement_linework_desktop_tests measurement_linework_test_fonts
       PREFIX "/fonts" BASE assets/fonts FILES assets/fonts/Inter.ttf)
     add_test(NAME measurement_linework_desktop COMMAND measurement_linework_desktop_tests)
+    add_executable(measurement_linework_clipboard_desktop_tests tests/measurement_linework_clipboard_desktop_tests.cpp)
+    target_link_libraries(measurement_linework_clipboard_desktop_tests PRIVATE sketch_desktop)
+    qt_add_resources(measurement_linework_clipboard_desktop_tests measurement_linework_clipboard_fonts
+      PREFIX "/fonts" BASE assets/fonts FILES assets/fonts/Inter.ttf)
+    add_test(NAME measurement_linework_clipboard_desktop COMMAND measurement_linework_clipboard_desktop_tests)
+    set_tests_properties(measurement_linework_clipboard_desktop PROPERTIES TIMEOUT 90)
+    if(MSVC)
+      target_compile_options(measurement_linework_clipboard_desktop_tests PRIVATE /W4 /permissive- /utf-8)
+    endif()
     add_executable(measurement_linework_history_desktop_tests tests/measurement_linework_history_desktop_tests.cpp)
     target_link_libraries(measurement_linework_history_desktop_tests PRIVATE sketch_desktop sketch_sqlite sketch_project_workspace sketch_workspace_history_record)
     qt_add_resources(measurement_linework_history_desktop_tests measurement_linework_history_test_fonts
@@ -951,7 +960,7 @@ if(SKETCH_BUILD_DESKTOP)
     qt_add_resources(measurement_area_source_desktop_tests measurement_area_source_test_fonts
       PREFIX "/fonts" BASE assets/fonts FILES assets/fonts/Inter.ttf)
     add_test(NAME measurement_area_source_desktop COMMAND measurement_area_source_desktop_tests)
-    set_tests_properties(measurement_linework_desktop measurement_linework_history_desktop measurement_linework_precision_desktop typed_chord_desktop measurement_linework_area_desktop measurement_area_source_desktop nested_measured_area_desktop nested_appraisal_copy_desktop PROPERTIES
+    set_tests_properties(measurement_linework_clipboard_desktop measurement_linework_desktop measurement_linework_history_desktop measurement_linework_precision_desktop typed_chord_desktop measurement_linework_area_desktop measurement_area_source_desktop nested_measured_area_desktop nested_appraisal_copy_desktop PROPERTIES
       ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_PLUGIN_PATH=${SKETCH_QT_PREFIX}/plugins"
       ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${SKETCH_QT_BIN};PATH=path_list_prepend:${CMAKE_SOURCE_DIR}/.deps/native/x64-windows/$<IF:$<CONFIG:Debug>,debug/bin,bin>")
     target_link_libraries(drawing_measurement_desktop_tests PRIVATE sketch_desktop)

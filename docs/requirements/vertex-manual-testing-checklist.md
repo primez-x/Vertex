@@ -1,6 +1,6 @@
 # Vertex user testing checklist
 
-408 practical tasks, grouped by how you use the app (including U100a). This replaces the earlier engineering-oriented checklist. The old 130-item list is preserved separately as engineering-requirements-checklist.md.
+411 practical tasks, grouped by how you use the app (including U100a). This replaces the earlier engineering-oriented checklist. The old 130-item list is preserved separately as engineering-requirements-checklist.md.
 
 This is a user acceptance list for the intended app, not a claim that every listed action is implemented or working in the current preview. If you cannot find a control, or a feature is absent, mark **Blocked / missing** and describe it. Specialized sections can be skipped if you do not use them or lack the device or sample files.
 
@@ -2485,6 +2485,20 @@ drawing; switching modes does not change existing geometry.
 - [ ] **U408 — Copy a floor with its room and internal void**
   - Steps: Complete U407 in a test project. Select the outer measured area and Clone it with a 20 m horizontal offset. Inspect Details, then Undo and Redo. Undo again, Copy the original and Paste it. Move the pasted copy, edit one of its source lines, Undo, save/reopen and export the appraisal PDF. Try Paste into a separate project using an ANSI appraisal profile. For a sloped room, inspect the copied room's facts, then confirm its actual observations through Details > Edit facts.
   - Expected: Clone and Paste include the room, void, measurement sources, dimensions and appearance. The original remains unchanged. The test's flat-ceiling copy adds another 96 m² of GLA: together 192 m², displayed as 2067 sq ft. Each copy's deductions refer to its own areas. One Undo removes the entire copy and Redo restores it. Editing the copy leaves original source lines unchanged. A copied sloped room withholds GLA until its observations are explicitly confirmed; raw measurements are retained. Nested Paste into an ordinary measurement project explains the unsupported destination without changing it. Reopening and PDF agree with Details.
+  - Result: Not tested
+  - Notes: ______________________________
+
+## Copy and remove measured lines
+
+- [ ] **U409 — Copy and cut a measured line into another project**
+  - Steps: Choose Measured lines, draw two sides with exact length inputs, then finish with Enter. Select the stroke, Copy it, create a new project and Paste. Move or resize the copy and save/reopen. Return to the original, Cut the stroke, then Paste it back. Try the keyboard shortcuts and canvas right-click menu. Undo and Redo each edit.
+  - Expected: Copy leaves the original unchanged. An empty project receives the stroke at its measured position; a project with geometry receives a separate copy beside it. Exact measurements and saved style survive. Editing the copy does not change the original. Cut removes the selected stroke, Paste restores an independent editable copy, and each operation is one reversible step. Right-click on empty canvas offers Paste.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **U410 — Delete a measured line shared by two appraisal areas**
+  - Steps: Draw a rectangular measured outline and a separator that divides it into two rooms. Detect and define both rooms, then record appraisal facts until Details shows qualified totals. Select and Delete the separator. Inspect both rooms and Details, save/reopen, then Undo the deletion.
+  - Expected: Delete removes only the selected measured stroke. Both room boundaries and their facts remain; their missing measurement source is identified and qualified GLA is withheld. Unrelated lines stay unchanged. Reopening preserves the missing-source state. Undo restores the exact source and previous qualification.
   - Result: Not tested
   - Notes: ______________________________
 

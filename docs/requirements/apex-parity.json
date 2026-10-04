@@ -1234,6 +1234,8 @@
       "package": 4,
       "blocker": null,
       "implementation_sources": [
+        "tests/measurement_linework_clipboard_desktop_tests.cpp",
+        "docs/verification/measured-line-clipboard-2026-10-04.md",
         "tests/nested_appraisal_copy_desktop_tests.cpp",
         "docs/verification/nested-appraisal-copy-2026-10-04.md",
         "docs/desktop-workflow.md",
