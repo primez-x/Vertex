@@ -54,13 +54,24 @@ control, and retains its strict preview/committed image comparison. Reference
 angle composition converts model radians to degrees once. The failing branch was
 the label gesture, not reference rounding; no raster tolerance was weakened.
 
-Final Release build and all 11 affected native suites passed in Green8 (58.98
-seconds). Actual gestures cover five callout creation/placement kinds, direct
+The initial Release build and all 11 affected native suites passed in Green8
+(58.98 seconds). Actual gestures cover five callout creation/placement kinds, direct
 source groups, physical-source groups and two constrained perimeters in both
 selection orders. Checks retain exact measured values, styling, unrelated
 metadata, one-revision Apply, Cancel, no-op clicks, Undo/Redo and editable reopen.
 Canvas fixtures cover labels-only/reference-only exact results before and after
 release, in-callback completion, null rejection and duplicate completion.
+
+Final root review found that an exception from an exact preview provider could
+be treated as an accepted empty geometry result for a reference-only selection.
+An exception after marking the request pending could also leave it waiting.
+The new native RED fixture reproduced this. Failed providers now return through
+the unavailable-proposal path and release pending ownership, while already
+completed or invalidated callbacks retain their existing serial guards. Fixtures
+cover labels and references, both exception timings, unchanged preview and no
+commit. The final Green10 Release build and all 11 affected suites passed.
+The first installation is retained as evidence; the corrected r2 bundle is the
+delivered build. No user application was closed or replaced while open.
 
 Root visually inspected final angle and automatic-length callout captures and
 the two-perimeter group view, confirming the removal of generic callout-size

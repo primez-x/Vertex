@@ -303,7 +303,7 @@ void label_and_reference_rotation_preview() {
 }
 
 void exact_presentation_move_admission() {
-    for(const bool text:{false,true})for(int timing=0;timing<4;++timing) {
+    for(const bool text:{false,true})for(int timing=0;timing<6;++timing) {
         PlanCanvas canvas;setup(canvas);canvas.setEntities({});
         canvas.setSelectionTransformEnabled(false,false);canvas.setSelectionAxisResizeEnabled(false);
         CanvasLabel label;label.id="callout";label.text="Measured area";label.text_height_metres=.5;label.selected=true;
@@ -327,7 +327,9 @@ void exact_presentation_move_admission() {
         canvas.setEntitiesMovePreviewRequested([&](QStringList,Vec2 offset,std::uint64_t value)
             ->std::optional<std::vector<CanvasEntity>> {
             serial=value;delta=offset;
+            if(timing==4)throw std::runtime_error("Preview provider failed before deferral");
             require(canvas.markEntitiesMovePreviewPending(serial),"presentation move preview can be marked pending");
+            if(timing==5)throw std::runtime_error("Preview provider failed after deferral");
             if(timing==3 || (timing==0 && completed_before_release))require(canvas.completeEntitiesMovePreview(serial,std::vector<CanvasEntity>{},proposed_labels()),
                 "in-callback presentation completion accepted");
             return std::nullopt;
@@ -343,6 +345,8 @@ void exact_presentation_move_admission() {
         }
         if(timing==0 || timing==3)require(render(canvas)!=original && render(canvas,true)==output,
             "accepted presentation-only live move is visible and excluded from output");
+        if(timing>=4)require(render(canvas)==original && !canvas.entitiesMovePreviewPending(),
+            "a throwing provider must reject presentation preview and release pending ownership");
         mouse(canvas,QEvent::MouseButtonRelease,end);
         if(timing==1 || timing==2) {
             require(commits==0 && canvas.entitiesMovePreviewPending(),"released presentation edit awaits actual admission");
@@ -350,7 +354,8 @@ void exact_presentation_move_admission() {
                 timing==1?proposed_labels():std::vector<CanvasLabel>{}),"late presentation proposal completes");
         }
         QApplication::processEvents();
-        require(commits==(timing==2?0:1) && rejections==(timing==2?1:0) && !canvas.entitiesMovePreviewPending(),
+        const bool rejected=timing==2 || timing>=4;
+        require(commits==(rejected?0:1) && rejections==(rejected?1:0) && !canvas.entitiesMovePreviewPending(),
             "presentation move admission must distinguish accepted empty geometry from rejected proposal");
         require(!canvas.completeEntitiesMovePreview(serial,std::vector<CanvasEntity>{},proposed_labels()),
             "completed presentation edit cannot be committed twice");

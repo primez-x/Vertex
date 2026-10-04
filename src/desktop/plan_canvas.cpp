@@ -2021,11 +2021,15 @@ void PlanCanvas::pointerMove(QPointF position, Qt::KeyboardModifiers modifiers) 
                 m_move_preview_exact = true;
                 m_move_preview_request_in_progress = true;
                 std::optional<std::vector<CanvasEntity>> proposed;
+                bool provider_failed = false;
                 try {
                     proposed = m_entities_move_preview_requested(m_move_ids, *m_move_preview_delta, serial);
-                } catch (const std::exception&) { proposed = std::vector<CanvasEntity>{}; }
+                } catch (const std::exception&) { provider_failed = true; }
                 if (serial != m_move_preview_serial || !m_move_preview_request_in_progress) return;
                 m_move_preview_request_in_progress = false;
+                // A failed provider cannot authorize an empty reference-only
+                // proposal or leave its deferred request waiting indefinitely.
+                if (provider_failed) m_move_preview_pending = false;
                 // A marked pending request owns its later completion.
                 // Otherwise validate the callback return through the same
                 // path, including an unavailable proposal.
