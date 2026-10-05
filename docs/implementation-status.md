@@ -1,5 +1,20 @@
 # Implementation status
 
+## Physical wall clear-space engine (2026-10-04)
+
+A new analytical detector resolves active physical walls and subtracts their
+actual uncut joined footprints from bounded baseline faces. It retains curves,
+holes and source provenance, including interior wall projections and isolated
+obstacles. It also corrects a shared graph rejection of separated rotated wall
+supports without relaxing ambiguous-crossing safeguards.
+
+Seven focused native checks pass. The [checkpoint evidence](verification/pinc-physical-wall-spaces-2026-10-04.md)
+records known areas, source/phase/context behavior, exact closure, resource
+limits and remaining scope. This is a core API addition: the physical-wall
+classification consumer and palette integration remain unfinished, and the
+installed floor-reference build is unchanged. It does not complete PINC-002 or
+the unified production gate.
+
 ## Linked floor tracing (2026-10-04)
 
 Layers > Floor reference links another floor in the same building as an aligned,

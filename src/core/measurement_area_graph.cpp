@@ -114,6 +114,22 @@ Vec2 point_at(const Segment& segment, double parameter) {
 }
 struct Cut { double parameter; Vec2 point; };
 
+bool strictly_same_side(const Segment& support, const Segment& other) {
+    const auto direction=minus(support.end,support.start);
+    const auto first=minus(other.start,support.start), second=minus(other.end,support.start);
+    const auto first_cross=cross(direction,first), second_cross=cross(direction,second);
+    const auto error=[&](Vec2 delta) {
+        return roundoff*(std::abs(direction.x*delta.y)+std::abs(direction.y*delta.x));
+    };
+    const auto first_error=error(first), second_error=error(second);
+    if (!std::isfinite(first_cross) || !std::isfinite(second_cross) ||
+        !std::isfinite(first_error) || !std::isfinite(second_error)) return false;
+    // This proves separation of represented finite segments. It does not
+    // declare their supports parallel or merge anything within metre tolerance.
+    return (first_cross>first_error && second_cross>second_error) ||
+        (first_cross < -first_error && second_cross < -second_error);
+}
+
 void line_contacts(const Segment& a, const Segment& b, std::vector<Vec2>& points) {
     const auto r=minus(a.end,a.start), s=minus(b.end,b.start), q=minus(b.start,a.start);
     const double denominator=cross(r,s);
@@ -132,7 +148,12 @@ void line_contacts(const Segment& a, const Segment& b, std::vector<Vec2>& points
         return;
     }
     const double error=roundoff*(std::abs(r.x*s.y)+std::abs(r.y*s.x));
-    if(std::abs(denominator)<=error) fail("nearly parallel line intersection is numerically ambiguous");
+    if(std::abs(denominator)<=error) {
+        // Rotated, separated opposite walls can have a tiny nonzero represented
+        // determinant. Reject only after ruling out a certified disjoint pair.
+        if (strictly_same_side(a,b) || strictly_same_side(b,a)) return;
+        fail("nearly parallel line intersection is numerically ambiguous");
+    }
     for(const auto point:{a.start,a.end})
         if(same(point,b.start)||same(point,b.end)) { points.push_back(point); return; }
     const double t=cross(q,s)/denominator, u=cross(q,r)/denominator;

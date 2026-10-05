@@ -328,6 +328,39 @@ void analytical_curves() {
     require(overlap.edges.size()==2,"coincident partial arcs were not deduplicated");
     require(std::any_of(overlap.edges.begin(),overlap.edges.end(),[](const auto& edge){return edge.source_uses.size()==2;}),"arc overlap lineage lost");
 }
+void rotated_separated_supports() {
+    std::vector<MeasurementGraphSource> input;
+    append_rectangle(input,"room",{0,0},{4,3});
+    input.push_back({"divider","baseline",{{2,0},{2,3},0}});
+    const double c=std::cos(0.37), s=std::sin(0.37);
+    for (auto& wall:input) for (auto* p:{&wall.geometry.start,&wall.geometry.end}) {
+        const auto old=*p; *p={c*old.x-s*old.y,s*old.x+c*old.y};
+    }
+    const auto graph=build_measurement_area_graph(input);
+    check_faces(graph,2,12);
+    for (const auto& face:graph.faces) require_near(face.area_square_metres,6,
+        "rotated separated wall supports changed partition area");
+    require(graph.edges.size()==7,"rotated partition lost original source topology");
+    // Tiny determinant alone cannot prove a non-contact. An actual interior
+    // crossing inside that arithmetic band must still fail explicitly.
+    rejects([]{(void)build_measurement_area_graph({
+        source("a",{{0,0},{4,4},0}),
+        source("b",{{0,1e-14},{4,4-1e-14},0})});});
+    // These represented endpoints are exactly collinear (y=1.5*x), but
+    // subtracting their common endpoint rounds the directions differently.
+    // A noisy determinant must not turn their true overlap into one contact.
+    try {
+        (void)build_measurement_area_graph({
+            source("long",{{1,1.5},{9007199254740988.0,13510798882111482.0},0}),
+            source("short",{{1,1.5},{4503599627370492.0,6755399441055738.0},0})});
+    } catch (const std::invalid_argument& error) {
+        require(std::string(error.what()).find("nearly parallel")!=std::string::npos,
+            "rounded collinear overlap must fail at the uncertain line proof");
+        return;
+    }
+    throw std::runtime_error("rounded collinear overlap was reduced to one shared endpoint");
+}
+
 void strict_inputs() {
     require(build_measurement_area_graph({}).edges.empty(),"empty input should produce empty graph");
     auto input=square();
@@ -372,7 +405,8 @@ int main() {
     try {
         combine_adjacent_faces(); combine_analytical_curves(); combine_rejections();
         nested_outlines(); nested_curves_and_separate_bounds(); touching_and_ambiguous_outlines();
-        crossing_and_stubs(); overlap_and_provenance(); analytical_curves(); strict_inputs();
+        crossing_and_stubs(); overlap_and_provenance(); analytical_curves();
+        rotated_separated_supports(); strict_inputs();
         std::cout << "measurement area graph tests passed\n";
         return 0;
     } catch (const std::exception& error) {

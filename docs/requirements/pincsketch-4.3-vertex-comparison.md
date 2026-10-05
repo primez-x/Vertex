@@ -49,6 +49,14 @@ space detection and all 22 Pinc preset mappings remain unfinished. Added artwork
 has been rendered and checked as bundled resources; that does not certify every
 Pinc symbol's default size, hosting or editing behavior.
 
+The subsequent [physical-wall geometry checkpoint](../verification/pinc-physical-wall-spaces-2026-10-04.md)
+adds exact clear-space discovery from actual wall thickness, including partitions,
+stubs, curves, obstacles and nested islands, and corrects a rotated-support graph
+rejection. Seven focused native checks pass. This is the geometry foundation;
+the palette's physical-room source consumer and persisted assignment workflow
+remain unfinished. It does not change the installed build or establish PINC-002
+completion.
+
 The subsequent [sketch output checkpoint](../verification/pinc-sketch-output-2026-10-04.md)
 adds PINC-005/006. It measures painted vector primitives and finished text replay,
 including symbol artwork, rather than cropping to object anchor positions.

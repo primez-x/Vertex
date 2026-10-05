@@ -1767,6 +1767,10 @@
     },
     {
       "category": "docs",
+      "path": "docs/plans/2026-10-04-physical-wall-space-classification.md"
+    },
+    {
+      "category": "docs",
       "path": "docs/plans/2026-10-04-pinc-sketch-output-adoption.md"
     },
     {
@@ -2827,6 +2831,10 @@
     },
     {
       "category": "docs",
+      "path": "docs/verification/pinc-physical-wall-spaces-2026-10-04.md"
+    },
+    {
+      "category": "docs",
       "path": "docs/verification/pinc-sketch-output-2026-10-04.md"
     },
     {
@@ -3336,6 +3344,10 @@
     {
       "category": "source",
       "path": "include/sketch/performance_workload.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/physical_wall_spaces.hpp"
     },
     {
       "category": "source",
@@ -4116,6 +4128,10 @@
     {
       "category": "source",
       "path": "src/core/performance_workload_main.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/physical_wall_spaces.cpp"
     },
     {
       "category": "source",
@@ -5084,6 +5100,10 @@
     {
       "category": "source",
       "path": "tests/phase_subtraction_history_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/physical_wall_spaces_tests.cpp"
     },
     {
       "category": "source",
