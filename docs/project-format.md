@@ -1,5 +1,36 @@
 # Vertex project formats v1 through v42
 
+## Optional linked floor tracing
+
+A floor may retain `properties.tracing_reference` as a presentation preference:
+
+```json
+{
+  "version": 1,
+  "source_floor_id": "source-floor-id",
+  "visible": true,
+  "opacity": 0.25,
+  "offset_m": { "x": 0.0, "y": 0.0 }
+}
+```
+
+Version 1 requires exactly these fields, a nonempty source ID, boolean visibility,
+opacity from 0.05 through 0.75 and finite metre offsets within +/-1,000,000. The
+source and destination must be distinct floors with resolved organization in the
+same building and property. Unknown versions or malformed fields are preserved
+as metadata but refused by the tracing projector, with a repair diagnostic.
+Clearing the reference removes the preference in one undoable revision.
+
+The source is resolved live from the current document; geometry, annotations and
+assets are not copied into the destination floor. The XY offset is applied only
+to screen rendering. While the destination is active in the 2D workspace, its
+ordinary canvas focuses on that floor independently of reference visibility.
+The reference does not participate in quantities, selection, snapping, extents,
+sheet output or sketch export. The link persists through native save/reopen and
+Undo/Redo. Existing v42 generic entity properties already preserve this optional
+presentation metadata; it introduces no new geometry or command dialect.
+Earlier clients may preserve the preference without offering its tracing UI.
+
 ## Mixed rigid group and connected geometry completion (v42)
 
 Constraint-command envelope 16 retains an optional `rigid_group_transform`

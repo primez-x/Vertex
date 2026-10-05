@@ -326,6 +326,20 @@ public:
 
     void setEntities(std::vector<CanvasEntity> entities);
     [[nodiscard]] const std::vector<CanvasEntity>& entities() const noexcept { return m_entities; }
+    // Screen-only projection of another floor. Source world geometry stays
+    // exact; offset is applied by the renderer. Ghosts never enter document
+    // bounds, picking, snapping, composition guides, or public output.
+    void setFloorGhost(std::vector<CanvasEntity> entities, double opacity,
+                       Vec2 offset_metres, std::vector<CanvasLabel> labels = {});
+    void clearFloorGhost();
+    [[nodiscard]] const std::vector<CanvasEntity>& floorGhostEntities() const noexcept {
+        return m_floor_ghost_entities;
+    }
+    [[nodiscard]] const std::vector<CanvasLabel>& floorGhostLabels() const noexcept {
+        return m_floor_ghost_labels;
+    }
+    [[nodiscard]] double floorGhostOpacity() const noexcept { return m_floor_ghost_opacity; }
+    [[nodiscard]] Vec2 floorGhostOffset() const noexcept { return m_floor_ghost_offset; }
     void setTool(CanvasTool tool);
     void setSelectionFilter(CanvasSelectionFilter filter);
     [[nodiscard]] CanvasSelectionFilter selectionFilter() const noexcept { return m_selection_filter; }
@@ -615,7 +629,8 @@ private:
     [[nodiscard]] CanvasLabel presentedLabel(const CanvasLabel& label, bool output) const;
     [[nodiscard]] const std::vector<CanvasLabel>& positionedLabels(
         const QFont& base_font, const QPaintDevice* device, double scale,
-        double dpi, bool output, bool content_only = false, Vec2 layout_origin = {}) const;
+        double dpi, bool output, bool content_only = false, Vec2 layout_origin = {},
+        bool floor_ghost = false) const;
     [[nodiscard]] std::vector<QRectF> selectionAnnotationFootprints(
         const QRectF& viewport, const QFont& base_font) const;
     [[nodiscard]] QTransform selectionControlTransform(const QRectF& viewport) const;
@@ -702,23 +717,29 @@ private:
                     Vec2 view_center, bool output, QColor background,
                     std::optional<double> paper_pixels_per_mm,
                     std::vector<QRectF>* annotation_footprints = nullptr,
-                    bool content_only = false) const;
+                    bool content_only = false, bool floor_ghost = false) const;
     void drawReference(QPainter& painter, const CanvasReference& reference) const;
+    enum class SceneLayer { committed, screen_with_floor_ghost, floor_ghost };
     void renderSceneWithTransform(QPainter& painter, const QRectF& viewport,
                                   bool fit_to_content, QColor background,
                                   std::optional<double> explicit_scale,
                                   std::optional<Vec2> explicit_center,
                                   std::optional<double> paper_pixels_per_mm = std::nullopt,
-                                  bool content_only = false) const;
+                                  bool content_only = false,
+                                  SceneLayer layer = SceneLayer::committed) const;
 
     std::vector<CanvasEntity> m_entities;
     std::vector<CanvasLabel> m_labels;
+    std::vector<CanvasEntity> m_floor_ghost_entities;
+    std::vector<CanvasLabel> m_floor_ghost_labels;
+    double m_floor_ghost_opacity{0.25};
+    Vec2 m_floor_ghost_offset{};
     struct LabelPlacementCache {
         QByteArray key;
         std::vector<CanvasLabel> labels;
     };
     // Keep interactive picking warm while a separate output device is used.
-    mutable std::array<LabelPlacementCache, 3> m_label_placement_cache;
+    mutable std::array<LabelPlacementCache, 4> m_label_placement_cache;
     bool m_sketch_composition_guide_enabled{};
     std::uint64_t m_sketch_content_revision{};
     mutable std::uint64_t m_sketch_guide_revision{std::numeric_limits<std::uint64_t>::max()};

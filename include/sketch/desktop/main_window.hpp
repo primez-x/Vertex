@@ -154,6 +154,12 @@ public:
 
     [[nodiscard]] QString activeLayerId() const;
     [[nodiscard]] bool setActiveLayer(const QString& layer_id);
+    // A floor link is view metadata; source geometry and appraisal facts stay owned by their floor.
+    [[nodiscard]] bool setFloorReference(const QString& destination_floor_id,
+        const QString& source_floor_id, bool visible = true, double opacity = 0.25,
+        Vec2 offset_metres = {}, std::optional<Revision> expected_revision = std::nullopt);
+    [[nodiscard]] bool clearFloorReference(const QString& destination_floor_id,
+        std::optional<Revision> expected_revision = std::nullopt);
     [[nodiscard]] bool setContainerVisible(const QString& entity_id, bool visible);
     void showAllContainers();
     [[nodiscard]] bool entityVisible(const QString& entity_id) const;

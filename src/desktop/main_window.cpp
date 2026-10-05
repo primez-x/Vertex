@@ -1,5 +1,6 @@
 #include "sketch/desktop/main_window.hpp"
 #include "sketch/constraint_wall_edit.hpp"
+#include "sketch/floor_reference.hpp"
 
 #include "plan_canvas.hpp"
 #include "draft_image_stamp.hpp"
@@ -7231,6 +7232,8 @@ public:
             QWidget#appraisalDetailsContent, QWidget#appraisalDetailsViewport,
             QScrollArea#appraisalDetailsScroll { background: $surface; }
             QWidget#appraisalDetailsPanel QLabel { color: $foreground; }
+            QGroupBox#floorReferenceControls QLabel, QGroupBox#floorReferenceControls QCheckBox {
+                color: $foreground; background: transparent; }
             QDialog#appraisalFactsDialog QLabel, QDialog#appraisalSetupDialog QLabel,
             QDialog#appraisalFactsDialog QCheckBox, QDialog#appraisalSetupDialog QCheckBox,
             QDialog#surveyCalculator QLabel, QDialog#surveyCalculator QCheckBox,
@@ -9471,6 +9474,84 @@ public:
 
     QString activeLayerId() const { return m_active_layer_id; }
 
+    std::optional<DrawingContext> activeFloorContext(const DocumentSnapshot& snapshot) const {
+        return organize_project(snapshot).drawing_context(m_active_layer_id.toStdString());
+    }
+
+    std::optional<DrawingContext> tracingFloorContext(const DocumentSnapshot& snapshot) const {
+        if (m_workspace != Workspace::measurement) return std::nullopt;
+        const auto context = activeFloorContext(snapshot);
+        if (!context || context->floor_id.empty()) return std::nullopt;
+        const auto floor = snapshot.entities().find(context->floor_id);
+        // Keep the destination focused even when its link needs repair.
+        if (floor == snapshot.entities().end() || !floor->second.properties.contains("tracing_reference"))
+            return std::nullopt;
+        return context;
+    }
+
+    ProjectViewFilter tracingViewFilter(const DocumentSnapshot& snapshot) const {
+        auto filter = m_view_filter;
+        if (const auto context = tracingFloorContext(snapshot)) {
+            for (const auto& [id, entity] : snapshot.entities())
+                if (entity.type == "floor" && id != context->floor_id) filter.hidden_floor_ids.insert(id);
+        }
+        return filter;
+    }
+
+    bool setFloorReference(const QString& destination, const QString& source, bool visible,
+        double opacity, Vec2 offset, std::optional<Revision> expected_revision = std::nullopt) {
+        try {
+            const auto snapshot = m_document->snapshot();
+            const auto revision = expected_revision.value_or(snapshot.revision());
+            if (revision != snapshot.revision())
+                throw DocumentError(DocumentErrorCode::stale_revision, "The project changed before the floor reference could apply.");
+            const auto found = snapshot.entities().find(destination.toStdString());
+            if (found == snapshot.entities().end() || found->second.type != "floor")
+                throw std::invalid_argument("Choose an existing destination floor.");
+            const auto organization = organize_project(snapshot);
+            const auto target = organization.nodes.find(destination.toStdString());
+            const auto origin = organization.nodes.find(source.toStdString());
+            if (target == organization.nodes.end() || origin == organization.nodes.end() ||
+                origin->second.type != "floor" || !target->second.issues.empty() || !origin->second.issues.empty() ||
+                target->second.context.building_id.empty() || target->second.context.property_id.empty() ||
+                target->second.context.building_id != origin->second.context.building_id ||
+                target->second.context.property_id != origin->second.context.property_id || destination == source)
+                throw std::invalid_argument("Choose another floor in the same building with a resolved hierarchy.");
+            const FloorReferenceSettings settings{source.toStdString(), visible, opacity, {offset.x, offset.y}};
+            auto candidate = found->second;
+            candidate.properties["tracing_reference"] = settings.to_json();
+            if (candidate == found->second) { clearError(); return true; }
+            if (!applyEntity(std::move(candidate), "edit floor tracing reference", revision)) return false;
+            clearError();
+            refresh();
+            return true;
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Floor reference: %1").arg(QString::fromUtf8(error.what())));
+            return false;
+        }
+    }
+
+    bool clearFloorReference(const QString& destination, std::optional<Revision> expected_revision = std::nullopt) {
+        try {
+            const auto snapshot = m_document->snapshot();
+            const auto revision = expected_revision.value_or(snapshot.revision());
+            if (revision != snapshot.revision())
+                throw DocumentError(DocumentErrorCode::stale_revision, "The project changed before the floor reference could be cleared.");
+            const auto found = snapshot.entities().find(destination.toStdString());
+            if (found == snapshot.entities().end() || found->second.type != "floor")
+                throw std::invalid_argument("Choose an existing destination floor.");
+            auto candidate = found->second;
+            if (!candidate.properties.erase("tracing_reference")) { clearError(); return true; }
+            if (!applyEntity(std::move(candidate), "clear floor tracing reference", revision)) return false;
+            clearError();
+            refresh();
+            return true;
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Floor reference: %1").arg(QString::fromUtf8(error.what())));
+            return false;
+        }
+    }
+
     bool setActiveLayer(const QString& id) {
         const auto organization = organize_project(m_document->snapshot());
         const auto found = organization.nodes.find(id.toStdString());
@@ -9528,7 +9609,8 @@ public:
 
     [[nodiscard]] bool entityVisible(const QString& id) const {
         try {
-            const auto visible = visible_project_entities_with_phase(m_document->snapshot(), m_view_filter);
+            const auto snapshot = m_document->snapshot();
+            const auto visible = visible_project_entities_with_phase(snapshot, tracingViewFilter(snapshot));
             return visible.contains(id.toStdString());
         } catch (const std::exception&) {
             // A malformed phase record is a document error; organization
@@ -22974,7 +23056,7 @@ public:
                                   id.toStdString()) != view->object_ids.end();
                 };
                 std::vector<CanvasLabel> labels;
-                for (const auto& label : m_measurementCanvas->labels())
+                for (const auto& label : m_sheet_plan_labels)
                     if (includes(label.id) && (!(label.plan_only || label.model_plan) || view_kind == BuildingViewKind::plan))
                         labels.push_back(label);
                 if (view_kind == BuildingViewKind::plan)
@@ -22982,11 +23064,11 @@ public:
                 for (auto& label : section_overlay_labels(snapshot, *view, m_metric_units)) labels.push_back(std::move(label));
                 temporary_canvas->setLabels(std::move(labels));
                 std::vector<CanvasReference> references;
-                for (const auto& reference : m_measurementCanvas->references())
+                for (const auto& reference : m_sheet_plan_references)
                     if (includes(reference.id)) references.push_back(reference);
                 temporary_canvas->setReferences(std::move(references));
                 std::vector<CanvasReferenceGrid> grids;
-                for (const auto& grid : m_measurementCanvas->referenceGrids())
+                for (const auto& grid : m_sheet_plan_grids)
                     if (includes(grid.id)) grids.push_back(grid);
                 temporary_canvas->setReferenceGrids(std::move(grids));
                 auto* viewport_canvas = temporary_canvas.get();
@@ -29761,6 +29843,50 @@ private:
                              });
                          });
 
+        m_floor_reference_group = new QGroupBox(navigator_panel);
+        m_floor_reference_group->setObjectName(QStringLiteral("floorReferenceControls"));
+        auto* tracing_layout = new QVBoxLayout(m_floor_reference_group);
+        tracing_layout->setContentsMargins(8, 6, 8, 6);
+        tracing_layout->setSpacing(4);
+        m_floor_reference_source = new QComboBox(m_floor_reference_group);
+        m_floor_reference_source->setObjectName(QStringLiteral("floorReferenceSource"));
+        m_floor_reference_source->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+        m_floor_reference_source->setMinimumWidth(0);
+        m_floor_reference_source->setToolTip(QStringLiteral(
+            "Choose a floor to trace. The canvas focuses on the active floor; the linked reference is never printed or measured."));
+        tracing_layout->addWidget(m_floor_reference_source);
+        auto* tracing_row = new QHBoxLayout;
+        m_floor_reference_visible = new QCheckBox(QStringLiteral("Show reference"), m_floor_reference_group);
+        m_floor_reference_visible->setObjectName(QStringLiteral("floorReferenceVisible"));
+        tracing_row->addWidget(m_floor_reference_visible);
+        tracing_row->addStretch();
+        m_floor_reference_opacity = new QSpinBox(m_floor_reference_group);
+        m_floor_reference_opacity->setObjectName(QStringLiteral("floorReferenceOpacity"));
+        m_floor_reference_opacity->setRange(5, 75);
+        m_floor_reference_opacity->setSuffix(QStringLiteral("%"));
+        m_floor_reference_opacity->setToolTip(QStringLiteral("Reference opacity"));
+        m_floor_reference_opacity->setAccessibleName(QStringLiteral("Reference opacity"));
+        tracing_row->addWidget(m_floor_reference_opacity);
+        m_floor_reference_align = new QToolButton(m_floor_reference_group);
+        m_floor_reference_align->setObjectName(QStringLiteral("floorReferenceAlign"));
+        m_floor_reference_align->setText(QStringLiteral("Align…"));
+        m_floor_reference_align->setToolTip(QStringLiteral("Adjust reference X/Y alignment without moving its source floor"));
+        tracing_row->addWidget(m_floor_reference_align);
+        tracing_layout->addLayout(tracing_row);
+        m_floor_reference_diagnostic = new QLabel(m_floor_reference_group);
+        m_floor_reference_diagnostic->setObjectName(QStringLiteral("floorReferenceDiagnostic"));
+        m_floor_reference_diagnostic->setWordWrap(true);
+        tracing_layout->addWidget(m_floor_reference_diagnostic);
+        layers_layout->addWidget(m_floor_reference_group);
+        QObject::connect(m_floor_reference_source, &QComboBox::activated, owner,
+            [this] { commitFloorReferenceControls(true); });
+        QObject::connect(m_floor_reference_visible, &QCheckBox::toggled, owner,
+            [this] { if (!m_refreshing) commitFloorReferenceControls(false); });
+        QObject::connect(m_floor_reference_opacity, &QSpinBox::valueChanged, owner,
+            [this] { if (!m_refreshing) commitFloorReferenceControls(false); });
+        QObject::connect(m_floor_reference_align, &QToolButton::clicked, owner,
+            [this] { showFloorReferenceAlignment(); });
+
         auto* architecture_palette = new QGroupBox(QStringLiteral("Walls & openings"), navigator_panel);
         architecture_palette->setObjectName(QStringLiteral("wallOpeningPalette"));
         architecture_palette->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Maximum);
@@ -33707,7 +33833,23 @@ private:
                 attach_frames(projected->second, &frame);
             }
         }
-        m_measurementCanvas->setEntities(geometry);
+        // Floor tracing focuses only the interactive measurement surface.
+        // Saved viewports, architectural caches and native geometry retain the
+        // ordinary project visibility above, independently of that focus.
+        std::optional<SnapshotPlanScene> focused_scene;
+        if (const auto context = tracingFloorContext(snapshot)) {
+            auto focused_options = scene_options;
+            focused_options.visibility = tracingViewFilter(snapshot);
+            focused_options.scope_id = context->floor_id;
+            focused_options.scope_property_id = context->property_id;
+            focused_options.scope_building_id = context->building_id;
+            focused_scene = projectSnapshotPlanScene(snapshot, focused_options, m_floor_focus_scene_caches);
+            auto focused_geometry = geometry;
+            std::erase_if(focused_geometry, [&](const auto& entity) {
+                return !focused_scene->visible_ids.contains(entity.id.toStdString());
+            });
+            m_measurementCanvas->setEntities(std::move(focused_geometry));
+        } else m_measurementCanvas->setEntities(geometry);
         m_area_canvas_source.emplace(snapshot);
         m_area_canvas_document = m_document;
         m_area_canvas_layer = m_active_layer_id;
@@ -33746,7 +33888,8 @@ private:
             ? canonical_view_ids[architectural_view_index(m_architectural_view_kind)]
             : std::make_pair(m_active_named_view_owner.toStdString(),m_active_named_view.toStdString());
         auto labels = scene.labels;
-        m_measurementCanvas->setLabels(labels);
+        m_sheet_plan_labels = labels;
+        m_measurementCanvas->setLabels(focused_scene ? focused_scene->labels : labels);
         if (m_architectural_view_kind==BuildingViewKind::plan) {
             auto frame=architectural_view_context(snapshot,BuildingViewKind::plan).frame;
             if (!m_active_named_view.isEmpty()) {
@@ -33776,9 +33919,11 @@ private:
             }
         }
         m_architecturalCanvas->setLabels(std::move(labels));
-        m_measurementCanvas->setReferences(reference_underlays);
+        m_sheet_plan_references = reference_underlays;
+        m_measurementCanvas->setReferences(focused_scene ? focused_scene->references : reference_underlays);
         m_architecturalCanvas->setReferences(std::move(reference_underlays));
-        m_measurementCanvas->setReferenceGrids(reference_grids);
+        m_sheet_plan_grids = reference_grids;
+        m_measurementCanvas->setReferenceGrids(focused_scene ? focused_scene->grids : reference_grids);
         m_architecturalCanvas->setReferenceGrids(std::move(reference_grids));
         if (const auto graph=snapshot.entities().find(active_key.first);graph!=snapshot.entities().end()) {
             const auto model=decode_sheet_view_entity(graph->second);
@@ -33797,6 +33942,7 @@ private:
         m_architecturalCanvas->setSnapEnabled(m_snap_enabled);
         m_measurementCanvas->setMetricUnits(m_metric_units);
         m_architecturalCanvas->setMetricUnits(m_metric_units);
+        refreshFloorGhostProjection(snapshot);
         if (m_nativeModelView) {
             visualization::NativeModelView::VisibleEntityIds native_visible_ids;
             native_visible_ids.insert(visible_ids.begin(), visible_ids.end());
@@ -33806,6 +33952,35 @@ private:
                 m_selected_ids.size() == 1 ? m_selected_id : QString{});
             m_native_geometry_document = m_document;
             m_native_geometry_revision = snapshot.revision();
+        }
+    }
+
+    void refreshFloorGhostProjection(const DocumentSnapshot& snapshot) {
+        m_measurementCanvas->clearFloorGhost();
+        m_architecturalCanvas->clearFloorGhost();
+        m_floor_reference_projection_error.clear();
+        const auto context = tracingFloorContext(snapshot);
+        if (!context) return;
+        try {
+            const auto settings = resolve_floor_reference(snapshot, context->floor_id);
+            if (!settings || !settings->visible) return;
+            SnapshotPlanSceneOptions options;
+            options.metric_units = m_metric_units;
+            options.visibility = m_view_filter;
+            options.visibility.hidden_floor_ids.erase(settings->source_floor_id);
+            options.scope_id = settings->source_floor_id;
+            options.scope_property_id = context->property_id;
+            options.scope_building_id = context->building_id;
+            options.label_font = m_measurementCanvas->font();
+            options.label_device = m_measurementCanvas;
+            const auto scene = projectSnapshotPlanScene(snapshot, options, m_floor_reference_scene_caches);
+            if (!scene.diagnostics.isEmpty())
+                throw std::invalid_argument(scene.diagnostics.toStdString());
+            m_measurementCanvas->setFloorGhost(scene.geometry, settings->opacity,
+                {settings->offset_m.x, settings->offset_m.y}, scene.labels);
+        } catch (const std::exception& error) {
+            m_floor_reference_projection_error = QStringLiteral("Reference unavailable: %1")
+                .arg(QString::fromUtf8(error.what()));
         }
     }
 
@@ -33883,6 +34058,150 @@ private:
         m_model_phase_combo->setEnabled(true);
     }
 
+    void refreshFloorReferenceControls(const DocumentSnapshot& snapshot) {
+        if (!m_floor_reference_group) return;
+        const QSignalBlocker source_block(m_floor_reference_source);
+        const QSignalBlocker visible_block(m_floor_reference_visible);
+        const QSignalBlocker opacity_block(m_floor_reference_opacity);
+        m_floor_reference_source->clear();
+        m_floor_reference_source->addItem(QStringLiteral("No floor reference"), QString{});
+        m_floor_reference_ui_document = m_document;
+        m_floor_reference_ui_revision = snapshot.revision();
+        m_floor_reference_ui_source = snapshot;
+        m_floor_reference_ui_floor.clear();
+        const auto context = activeFloorContext(snapshot);
+        if (!context || context->floor_id.empty() || m_workspace != Workspace::measurement) {
+            m_floor_reference_group->hide();
+            return;
+        }
+        m_floor_reference_ui_floor = id_from(context->floor_id);
+        const auto organization = organize_project(snapshot);
+        std::vector<std::pair<QString, QString>> sources;
+        for (const auto& [id, node] : organization.nodes) {
+            if (node.type != "floor" || id == context->floor_id || !node.issues.empty() ||
+                node.context.building_id != context->building_id || node.context.property_id != context->property_id) continue;
+            const auto name = read_string(snapshot.entities().at(id).properties, "name");
+            sources.emplace_back(name && !name->empty() ? QString::fromStdString(*name) : QStringLiteral("Floor"), id_from(id));
+        }
+        std::sort(sources.begin(), sources.end());
+        for (const auto& [name, id] : sources) m_floor_reference_source->addItem(name, id);
+        const auto& floor = snapshot.entities().at(context->floor_id);
+        const auto floor_name = read_string(floor.properties, "name");
+        const auto display = floor_name && !floor_name->empty() ? QString::fromStdString(*floor_name) : QStringLiteral("Floor");
+        std::optional<FloorReferenceSettings> settings;
+        QString diagnostic = m_floor_reference_projection_error;
+        try { settings = FloorReferenceSettings::from_entity(floor); }
+        catch (const std::exception& error) { diagnostic = QString::fromUtf8(error.what()); }
+        if (settings) {
+            auto index = m_floor_reference_source->findData(id_from(settings->source_floor_id));
+            if (index < 0) {
+                m_floor_reference_source->addItem(QStringLiteral("Missing reference floor"), id_from(settings->source_floor_id));
+                index = m_floor_reference_source->count() - 1;
+            }
+            m_floor_reference_source->setCurrentIndex(index);
+        }
+        const bool linked = floor.properties.contains("tracing_reference");
+        m_floor_reference_group->setTitle(linked
+            ? QStringLiteral("Tracing · %1 (focused)").arg(display)
+            : QStringLiteral("Floor reference · %1").arg(display));
+        m_floor_reference_group->setVisible(!sources.empty() || linked);
+        m_floor_reference_source->setEnabled(snapshot.is_editable());
+        m_floor_reference_visible->setChecked(settings && settings->visible);
+        m_floor_reference_opacity->setValue(settings ? qRound(settings->opacity * 100) : 25);
+        const bool editable = settings && diagnostic.isEmpty() && snapshot.is_editable();
+        m_floor_reference_visible->setEnabled(editable);
+        m_floor_reference_opacity->setEnabled(editable);
+        m_floor_reference_align->setEnabled(editable);
+        m_floor_reference_diagnostic->setText(diagnostic);
+        m_floor_reference_diagnostic->setVisible(!diagnostic.isEmpty());
+    }
+
+    static bool sameFloorReferenceSource(const DocumentSnapshot& expected, const DocumentSnapshot& current) {
+        return expected.document_id() == current.document_id() && expected.revision() == current.revision() &&
+            expected.is_editable() == current.is_editable() && expected.entities() == current.entities() &&
+            expected.assets() == current.assets();
+    }
+
+    void commitFloorReferenceControls(bool source_changed) {
+        if (m_refreshing || !m_floor_reference_ui_revision) return;
+        const auto snapshot = m_document->snapshot();
+        const auto context = activeFloorContext(snapshot);
+        if (m_floor_reference_ui_document.lock() != m_document ||
+            !m_floor_reference_ui_source || !sameFloorReferenceSource(*m_floor_reference_ui_source, snapshot) || !context ||
+            id_from(context->floor_id) != m_floor_reference_ui_floor) {
+            setError(QStringLiteral("The active floor changed. Reopen its reference controls."));
+            refresh();
+            return;
+        }
+        const auto source = m_floor_reference_source->currentData().toString();
+        if (source.isEmpty()) {
+            (void)clearFloorReference(m_floor_reference_ui_floor, m_floor_reference_ui_revision);
+            return;
+        }
+        FloorReferenceSettings settings;
+        try {
+            const auto retained = FloorReferenceSettings::from_entity(snapshot.entities().at(context->floor_id));
+            if (retained) settings = *retained;
+        } catch (const std::exception&) {
+            if (!source_changed) { refresh(); return; }
+        }
+        if (source_changed && settings.source_floor_id != source.toStdString())
+            settings = FloorReferenceSettings{source.toStdString(), true, 0.25, {}};
+        else {
+            settings.visible = m_floor_reference_visible->isChecked();
+            // Toggling visibility must retain a more precise imported opacity
+            // when its rounded percentage control has not been edited.
+            if (m_floor_reference_opacity->value() != qRound(settings.opacity * 100))
+                settings.opacity = m_floor_reference_opacity->value() / 100.0;
+        }
+        if (!setFloorReference(m_floor_reference_ui_floor, source, settings.visible, settings.opacity,
+                {settings.offset_m.x, settings.offset_m.y}, m_floor_reference_ui_revision)) refresh();
+    }
+
+    void showFloorReferenceAlignment() {
+        const auto modal_context = captureModalContext();
+        const auto snapshot = m_document->snapshot();
+        try {
+            const auto context = activeFloorContext(snapshot);
+            if (!context) throw std::invalid_argument("Activate a drawing layer first.");
+            const auto settings = resolve_floor_reference(snapshot, context->floor_id);
+            if (!settings) throw std::invalid_argument("Choose a reference floor first.");
+            QDialog dialog(owner);
+            styleDialog(dialog);
+            dialog.setWindowTitle(QStringLiteral("Align floor reference"));
+            auto* layout = new QVBoxLayout(&dialog);
+            auto* form = new QFormLayout;
+            const auto initial_x = format_length(settings->offset_m.x, m_metric_units);
+            const auto initial_y = format_length(settings->offset_m.y, m_metric_units);
+            auto* x = new QLineEdit(initial_x, &dialog);
+            auto* y = new QLineEdit(initial_y, &dialog);
+            x->setObjectName(QStringLiteral("floorReferenceOffsetX"));
+            y->setObjectName(QStringLiteral("floorReferenceOffsetY"));
+            form->addRow(QStringLiteral("X offset"), x);
+            form->addRow(QStringLiteral("Y offset"), y);
+            layout->addLayout(form);
+            auto* reset = new QPushButton(QStringLiteral("Reset alignment"), &dialog);
+            layout->addWidget(reset);
+            QObject::connect(reset, &QPushButton::clicked, &dialog, [x, y] {
+                x->setText(QStringLiteral("0")); y->setText(QStringLiteral("0"));
+            });
+            auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+            layout->addWidget(buttons);
+            QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+            QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+            if (dialog.exec() != QDialog::Accepted) return;
+            if (!modalContextUnchanged(modal_context) || !sameFloorReferenceSource(snapshot, m_document->snapshot()))
+                throw std::invalid_argument("The project or active floor changed; reopen alignment.");
+            (void)setFloorReference(id_from(context->floor_id), id_from(settings->source_floor_id),
+                settings->visible, settings->opacity,
+                {x->text() == initial_x ? settings->offset_m.x : parse_quantity(x->text().trimmed().toStdString(), m_metric_units ? Unit::metre : Unit::foot).metres,
+                 y->text() == initial_y ? settings->offset_m.y : parse_quantity(y->text().trimmed().toStdString(), m_metric_units ? Unit::metre : Unit::foot).metres},
+                snapshot.revision());
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Floor reference alignment: %1").arg(QString::fromUtf8(error.what())));
+        }
+    }
+
     void refreshNavigator() {
         std::map<QString, bool> expansion;
         for (QTreeWidgetItemIterator item(m_navigator); *item; ++item)
@@ -33891,11 +34210,14 @@ private:
         m_navigator->clear();
         const auto snapshot = m_document->snapshot();
         const auto organization = organize_project(snapshot);
+        const auto tracing_context = tracingFloorContext(snapshot);
+        const auto effective_filter = tracingViewFilter(snapshot);
+        refreshFloorReferenceControls(snapshot);
         std::set<std::string, std::less<>> visible_ids;
         try {
-            visible_ids = visible_project_entities_with_phase(snapshot, m_view_filter);
+            visible_ids = visible_project_entities_with_phase(snapshot, effective_filter);
         } catch (const std::exception&) {
-            visible_ids = visible_project_entities(snapshot, m_view_filter);
+            visible_ids = visible_project_entities(snapshot, effective_filter);
         }
         std::map<std::string, QTreeWidgetItem*, std::less<>> items;
         for (const auto& [id, node] : organization.nodes) {
@@ -33920,6 +34242,9 @@ private:
             item->setData(0, visibility_type_role, QString::fromStdString(node.type));
             QString tooltip = id_from(id);
             for (const auto& issue : node.issues) tooltip += QLatin1Char('\n') + QString::fromStdString(issue);
+            if (tracing_context && !node.context.floor_id.empty() &&
+                node.context.floor_id != tracing_context->floor_id)
+                tooltip += QStringLiteral("\nOutside the active floor tracing view. Activate this floor's layer to draw here.");
             if (visibility_container) {
                 item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
                 // The check state represents this container's own filter. A
@@ -39417,6 +39742,18 @@ private:
     QString m_active_layer_id;
     QComboBox* m_drawing_mode_combo{};
     QComboBox* m_drawing_layer_combo{};
+    QGroupBox* m_floor_reference_group{};
+    QComboBox* m_floor_reference_source{};
+    QCheckBox* m_floor_reference_visible{};
+    QSpinBox* m_floor_reference_opacity{};
+    QToolButton* m_floor_reference_align{};
+    QLabel* m_floor_reference_diagnostic{};
+    std::weak_ptr<Document> m_floor_reference_ui_document;
+    std::optional<Revision> m_floor_reference_ui_revision;
+    std::optional<DocumentSnapshot> m_floor_reference_ui_source;
+    QString m_floor_reference_ui_floor;
+    QString m_floor_reference_projection_error;
+    PlanSceneCaches m_floor_reference_scene_caches;
     QComboBox* m_model_phase_combo{};
     QComboBox* m_pageSizeCombo{};
     QComboBox* m_architecturalViewCombo{};
@@ -39443,6 +39780,10 @@ private:
     QDeadlineTimer m_wall_measurement_notice{0};
     QString m_plan_geometry_error;
     PlanSceneCaches m_plan_scene_caches;
+    PlanSceneCaches m_floor_focus_scene_caches;
+    std::vector<CanvasLabel> m_sheet_plan_labels;
+    std::vector<CanvasReference> m_sheet_plan_references;
+    std::vector<CanvasReferenceGrid> m_sheet_plan_grids;
     std::map<std::string, PresentationOverride, std::less<>> m_object_appearance_defaults;
     std::map<std::string, std::pair<std::string, CanvasSelectionFrame>> m_plan_transform_frame_cache;
     std::map<std::string, Entity, std::less<>> m_view_projection_sources;
@@ -39939,6 +40280,15 @@ void MainWindow::setMetricUnits(bool metric) {
 
 QString MainWindow::activeLayerId() const { return m_impl->activeLayerId(); }
 bool MainWindow::setActiveLayer(const QString& id) { return m_impl->setActiveLayer(id); }
+
+bool MainWindow::setFloorReference(const QString& destination, const QString& source,
+    bool visible, double opacity, Vec2 offset, std::optional<Revision> revision) {
+    return m_impl->setFloorReference(destination, source, visible, opacity, offset, revision);
+}
+
+bool MainWindow::clearFloorReference(const QString& destination, std::optional<Revision> revision) {
+    return m_impl->clearFloorReference(destination, revision);
+}
 bool MainWindow::setContainerVisible(const QString& id, bool visible) {
     return m_impl->setContainerVisible(id, visible);
 }

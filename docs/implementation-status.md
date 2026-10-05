@@ -1,5 +1,20 @@
 # Implementation status
 
+## Linked floor tracing (2026-10-04)
+
+Layers > Floor reference links another floor in the same building as an aligned,
+adjustable live ghost in the 2D measurement canvas. Source edits update the
+reference; visibility, opacity and exact offsets survive Undo/Redo and native
+save/reopen. A linked destination has a focused canvas independent of reference
+visibility. Ghost geometry is excluded from quantities, picking, snapping,
+navigation extents and exports. Saved sheets and architectural/native views
+retain their ordinary project projection.
+
+The [checkpoint evidence](verification/pinc-floor-reference-2026-10-04.md)
+records native qualification and limits. This adds the prior-floor part of
+PINC-004; arbitrary page ghosts and architectural named-frame tracing remain
+open. Full Pinc/Apex parity and the unified production gate are not established.
+
 ## Pinc sketch composition and vector output (2026-10-04)
 
 Tools > Export sketch PDF produces a tightly cropped vector PDF from visible

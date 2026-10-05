@@ -1735,6 +1735,10 @@
     },
     {
       "category": "docs",
+      "path": "docs/plans/2026-10-04-floor-reference-adoption.md"
+    },
+    {
+      "category": "docs",
       "path": "docs/plans/2026-10-04-measured-bay-and-phase-subtraction.md"
     },
     {
@@ -2819,6 +2823,10 @@
     },
     {
       "category": "docs",
+      "path": "docs/verification/pinc-floor-reference-2026-10-04.md"
+    },
+    {
+      "category": "docs",
       "path": "docs/verification/pinc-sketch-output-2026-10-04.md"
     },
     {
@@ -3224,6 +3232,10 @@
     {
       "category": "source",
       "path": "include/sketch/field_adapter_contract.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/floor_reference.hpp"
     },
     {
       "category": "source",
@@ -4012,6 +4024,10 @@
     {
       "category": "source",
       "path": "src/core/field_adapter_contract.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/floor_reference.cpp"
     },
     {
       "category": "source",
@@ -4832,6 +4848,18 @@
     {
       "category": "fixtures",
       "path": "tests/fixtures/README.md"
+    },
+    {
+      "category": "source",
+      "path": "tests/floor_reference_canvas_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/floor_reference_desktop_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/floor_reference_tests.cpp"
     },
     {
       "category": "source",

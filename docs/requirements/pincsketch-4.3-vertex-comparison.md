@@ -25,8 +25,8 @@ labels are recorded rather than silently reconciled.
 | Symbol categories/search/click and drag placement; real dimensions/rotation/mirror | Left Library; pinned SVG catalog; hosted opening authoring | Present. Names/counts do not prove every Pinc counterpart exists or is equally useful. Audit each of the inventory's 80 named kinds for semantic counterpart, artwork and default size; add missing kinds. Do not pad catalog counts with aliases. |
 | Door/opening hosting, width, hinge and swing | Walls & openings; hosted opening properties | Present. Preserve actual hosted geometry rather than treating doors/windows solely as decoration. Reattachment and every door variant need direct workflow comparison. |
 | Reusable labels, custom text, user-saved templates and search | Text library command; `text_library_dialog.cpp`, local template store | Present. Pinc saves reusable text, not searches; do not invent a saved-search gap. Compare its inline label retrieval against Vertex's dialog workflow. |
-| Multiple pages, duplicate/rename/delete, navigation | Sheet/document organization and page controls | Present with a different property/building/floor/sheet model. A floor is not a page. Direct previous-page ghosting is missing. |
-| Image tracing, size/opacity | Reference import, calibration and reference properties | Present and supports PDF/calibration. A dedicated nonprinting tracing reference/prior-floor link is missing. |
+| Multiple pages, duplicate/rename/delete, navigation | Sheet/document organization and page controls; Layers > Floor reference | Present with a different property/building/floor/sheet model. A floor is not a page. Vertex now links a chosen source floor as a live aligned 2D ghost rather than assuming printed-page order. |
+| Image tracing, size/opacity | Reference import, calibration and reference properties; Layers > Floor reference | PDF/image calibration remains available. The new previous-floor reference provides visibility, opacity and XY alignment, with source updates and save/reopen; it is excluded from measurements and output. |
 | GLA, categories, gross/net/deductions/perimeter and print report | Details > Setup/Edit facts/Full report; appraisal document core | Present and based on recorded grade/finish/access/ceiling/identity evidence. Pinc sums category flags. Never adopt an area preset as automatic proof of ANSI eligibility. |
 | Live GLA while drawing | New compact `appraisalGlaShortcut` in status bar; same current Details report | Implemented in this change; native verification recorded separately. Click opens Details. Unqualified totals are withheld; unconfigured projects do not get a fabricated zero placeholder. |
 | Short geometric calculation arithmetic | Details and printed audit use `derive_area_arithmetic` through one shared formatter | Added rectangle/strip multiplication, triangle base/height and signed chord/arc derivation, reconciled to current gross. Native known-answer, concave/major-arc, reversed-winding and fractional ANSI-rounding checks pass. |
@@ -54,6 +54,16 @@ adds PINC-005/006. It measures painted vector primitives and finished text repla
 including symbol artwork, rather than cropping to object anchor positions.
 The other additional requirements remain open unless their individual evidence
 is recorded; neither checkpoint establishes full parity.
+
+PINC-004 now has a live same-building floor link in the Layers tab. A linked
+destination has a focused 2D measurement surface; reference visibility does not
+change that surface's export scope. Saved sheets and architectural/native views
+retain ordinary project visibility. Optional floor metadata preserves the exact
+source, opacity and metre offsets. Source errors clear the reference and expose
+a repair diagnostic. Architectural named-view tracing and printed-page ghosts
+are not established by this world-XY floor workflow. See the
+[floor-reference checkpoint](../verification/pinc-floor-reference-2026-10-04.md)
+for actual qualification and remaining limits.
 
 | ID | Required result | Evidence needed |
 | --- | --- | --- |

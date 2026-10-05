@@ -136,7 +136,7 @@ be at least equivalent; a vector PDF is acceptable in place of a raster PDF.
 - [ ] **PIN-102** — Rename a page from its action or by double-clicking its list row.
 - [ ] **PIN-103** — Delete a page while retaining at least one page.
 - [ ] **PIN-104** — Navigate pages with the list or previous/next controls.
-- [ ] **PIN-105** — Ghost the previous page behind the current one.
+- [ ] **PIN-105** — On the destination floor's active layer, use Layers > Floor reference to choose the previous floor. Show/hide the reference, adjust opacity and alignment, edit the source floor and return, then save/reopen. Confirm that it is visible while tracing and absent from the exported drawing. Vertex links floors explicitly rather than assuming that a printed page is a floor.
 - [ ] **PIN-106** — Show/hide the report composition guide. In Vertex use Tools > Sketch composition guide; its dashed frame shows the actual sketch PDF crop, rather than a fixed portrait sheet.
 - [ ] **PIN-107** — Load a raster image behind the drawing for tracing.
 - [ ] **PIN-108** — Set reference-image width and opacity.

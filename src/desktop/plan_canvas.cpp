@@ -437,6 +437,32 @@ void PlanCanvas::setEntities(std::vector<CanvasEntity> entities) {
     update();
 }
 
+void PlanCanvas::setFloorGhost(std::vector<CanvasEntity> entities, double opacity,
+                             Vec2 offset_metres, std::vector<CanvasLabel> labels) {
+    if (!std::isfinite(offset_metres.x) || !std::isfinite(offset_metres.y)) {
+        clearFloorGhost();
+        return;
+    }
+    // Selected source-floor items are ordinary reference ink, never active
+    // selection presentation. Clear only the retained canvas copy.
+    for (auto& entity : entities) entity.selected = false;
+    for (auto& label : labels) label.selected = false;
+    m_floor_ghost_entities = std::move(entities);
+    m_floor_ghost_labels = std::move(labels);
+    m_floor_ghost_opacity = std::isfinite(opacity) ? std::clamp(opacity, 0.05, 0.75) : 0.25;
+    m_floor_ghost_offset = offset_metres;
+    m_label_placement_cache[3] = {};
+    update();
+}
+
+void PlanCanvas::clearFloorGhost() {
+    m_floor_ghost_entities.clear();
+    m_floor_ghost_labels.clear();
+    m_floor_ghost_offset = {};
+    m_label_placement_cache[3] = {};
+    update();
+}
+
 void PlanCanvas::setTool(CanvasTool tool) {
     resetGesture();
     resetTouchInput();
@@ -1065,7 +1091,7 @@ void PlanCanvas::renderSceneWithTransform(QPainter& painter, const QRectF& viewp
                                           std::optional<double> explicit_scale,
                                           std::optional<Vec2> explicit_center,
                                           std::optional<double> paper_pixels_per_mm,
-                                          bool content_only) const {
+                                          bool content_only, SceneLayer layer) const {
     if (viewport.width() <= 0.0 || viewport.height() <= 0.0) {
         return;
     }
@@ -1075,6 +1101,9 @@ void PlanCanvas::renderSceneWithTransform(QPainter& painter, const QRectF& viewp
     // supplies its own model scale and center. Keep that path free of
     // interactive-only state just like fit-to-content output.
     const bool output = fit_to_content || explicit_scale.has_value();
+    const bool floor_ghost = layer == SceneLayer::floor_ghost;
+    const bool interactive = !output && !floor_ghost;
+    if (floor_ghost) view_center = view_center - m_floor_ghost_offset;
     if (!explicit_scale.has_value() && fit_to_content) {
         if (const auto bounds = contentBounds()) {
             const auto minimum = bounds->first;
@@ -1090,7 +1119,8 @@ void PlanCanvas::renderSceneWithTransform(QPainter& painter, const QRectF& viewp
     }
     painter.save();
     painter.setRenderHint(QPainter::Antialiasing, true);
-    if (!content_only) painter.fillRect(viewport, background);
+    if (!content_only && !floor_ghost) painter.fillRect(viewport, background);
+    const auto canvas_transform = painter.worldTransform();
     painter.translate(viewport.center());
     painter.scale(scale, -scale);
     // Tight output subtracts the origin from primitive coordinates before
@@ -1098,7 +1128,7 @@ void PlanCanvas::renderSceneWithTransform(QPainter& painter, const QRectF& viewp
     if (!content_only) painter.translate(-view_center.x, -view_center.y);
 
     for (const auto& reference : m_references) {
-        if (content_only) break;
+        if (content_only || floor_ghost) break;
         if (!reference.visible) continue;
         if (!output && m_move_preview_delta &&
             (!m_move_preview_exact || m_move_preview_valid) && m_move_ids.contains(reference.id)) {
@@ -1121,14 +1151,29 @@ void PlanCanvas::renderSceneWithTransform(QPainter& painter, const QRectF& viewp
         }
     }
 
-    if (m_grid_enabled && !output) {
+    if (layer == SceneLayer::screen_with_floor_ghost && !output && !content_only &&
+        (!m_floor_ghost_entities.empty() || !m_floor_ghost_labels.empty())) {
+        // Trace over raster underlays but beneath active ink and furniture.
+        // Preserve the caller's transform/clip rather than resetting to device
+        // coordinates. Only paintEvent opts into this nonprinting lane.
+        painter.save();
+        painter.setWorldTransform(canvas_transform);
+        painter.setOpacity(painter.opacity() * m_floor_ghost_opacity);
+        renderSceneWithTransform(painter, viewport, false, background,
+                                 std::nullopt, std::nullopt, paper_pixels_per_mm,
+                                 false, SceneLayer::floor_ghost);
+        painter.restore();
+    }
+
+    if (m_grid_enabled && interactive) {
         drawGrid(painter, viewport, scale, view_center);
     }
-    if (!content_only) drawReferenceGrids(painter);
+    if (!content_only && !floor_ghost) drawReferenceGrids(painter);
     std::vector<const CanvasEntity*> painted_entities;
-    painted_entities.reserve(m_entities.size());
-    for (const auto& entity : m_entities) painted_entities.push_back(&entity);
-    if (!output && ((m_vertex_move_handle && m_boundary_vertex_preview_valid) ||
+    const auto& scene_entities = floor_ghost ? m_floor_ghost_entities : m_entities;
+    painted_entities.reserve(scene_entities.size());
+    for (const auto& entity : scene_entities) painted_entities.push_back(&entity);
+    if (interactive && ((m_vertex_move_handle && m_boundary_vertex_preview_valid) ||
                     m_move_preview_valid ||
                     m_transform_preview_valid)) {
         // Candidate model owners can enter a crop/depth slice while another
@@ -1169,6 +1214,8 @@ void PlanCanvas::renderSceneWithTransform(QPainter& painter, const QRectF& viewp
             for (auto& hole : local.holes) localize(hole);
             if (local.svg_symbol) local.svg_symbol->position = local.svg_symbol->position - view_center;
             drawEntity(painter, local, true, background, paper_pixels_per_mm);
+        } else if (floor_ghost) {
+            drawEntity(painter, entity, false, background, paper_pixels_per_mm);
         } else if (!output && &interactiveEntity(entity) != &entity) {
             drawEntity(painter, interactiveEntity(entity), false, background, paper_pixels_per_mm);
         } else if (!output && !m_boundary_vertex_preview_requested &&
@@ -1222,7 +1269,7 @@ void PlanCanvas::renderSceneWithTransform(QPainter& painter, const QRectF& viewp
 
     // Transient overlays belong to the interactive canvas only. Both fitted
     // and explicitly scaled output must contain document entities alone.
-    if (!output) {
+    if (interactive) {
         if (m_boundary_preview.size() >= 2) {
             QPen pen(QColor(255, 220, 126), 0.0, Qt::DashLine);
             painter.setPen(pen);
@@ -1351,7 +1398,7 @@ void PlanCanvas::renderSceneWithTransform(QPainter& painter, const QRectF& viewp
     }
     painter.restore();
 
-    if (!output && m_wall_preview && !m_wall_preview->dimension_text.isEmpty()) {
+    if (interactive && m_wall_preview && !m_wall_preview->dimension_text.isEmpty()) {
         const auto center = QPointF(
             viewport.center().x() + ((m_wall_preview->start.x + m_wall_preview->end.x) * 0.5 -
                                      view_center.x) * scale,
@@ -1375,7 +1422,7 @@ void PlanCanvas::renderSceneWithTransform(QPainter& painter, const QRectF& viewp
         painter.restore();
     }
 
-    if (!content_only)
+    if (!content_only && !floor_ghost)
         drawReferenceGridLabels(painter, viewport, scale, view_center, output, background,
                                 paper_pixels_per_mm);
 
@@ -1384,7 +1431,9 @@ void PlanCanvas::renderSceneWithTransform(QPainter& painter, const QRectF& viewp
     // world transform keeps text upright and readable at its device scale.
     std::vector<QRectF> annotation_footprints;
     drawLabels(painter, viewport, scale, view_center, output, background,
-               paper_pixels_per_mm, output ? nullptr : &annotation_footprints, content_only);
+               paper_pixels_per_mm, interactive ? &annotation_footprints : nullptr,
+               content_only, floor_ghost);
+    if (floor_ghost) return;
 
     if (!output) {
         if (m_grid_enabled) {
@@ -2839,22 +2888,23 @@ CanvasLabel PlanCanvas::presentedLabel(const CanvasLabel& label, bool output) co
 
 const std::vector<CanvasLabel>& PlanCanvas::positionedLabels(
     const QFont& base_font, const QPaintDevice* device, double scale,
-    double dpi, bool output, bool content_only, Vec2 layout_origin) const {
-    auto& cache = m_label_placement_cache[content_only ? 2 : output ? 1 : 0];
-    auto retained_labels=m_labels;
-    if (!output && m_transform_preview_valid) {
+    double dpi, bool output, bool content_only, Vec2 layout_origin, bool floor_ghost) const {
+    auto& cache = m_label_placement_cache[floor_ghost ? 3 : content_only ? 2 : output ? 1 : 0];
+    const bool interactive = !output && !floor_ghost;
+    auto retained_labels=floor_ghost ? m_floor_ghost_labels : m_labels;
+    if (interactive && m_transform_preview_valid) {
         for (const auto& proposed : m_transform_labels_preview)
             if (std::none_of(retained_labels.begin(), retained_labels.end(),
                 [&](const auto& label) { return label.id == proposed.id; }))
                 retained_labels.push_back(proposed);
     }
-    if (!output && m_move_preview_valid) {
+    if (interactive && m_move_preview_valid) {
         for (const auto& proposed : m_move_labels_preview)
             if (std::none_of(retained_labels.begin(), retained_labels.end(),
                 [&](const auto& label) { return label.id == proposed.id; }))
                 retained_labels.push_back(proposed);
     }
-    if (!output && m_boundary_vertex_preview_valid) {
+    if (interactive && m_boundary_vertex_preview_valid) {
         for (const auto& proposed:m_boundary_vertex_labels_preview)
             if (std::none_of(retained_labels.begin(),retained_labels.end(),
                 [&](const auto& label){return label.id==proposed.id;}))
@@ -2870,8 +2920,8 @@ const std::vector<CanvasLabel>& PlanCanvas::positionedLabels(
               << device->devicePixelRatioF() << device->devType();
     const auto point_key = [&](Vec2 p) { signature << p.x << p.y; };
     for (const auto& retained : retained_labels) {
-        auto label = presentedLabel(retained, output);
-        if (!output && m_move_preview_delta && !m_move_preview_exact && m_move_ids.contains(label.id)) {
+        auto label = floor_ghost ? retained : presentedLabel(retained, output);
+        if (interactive && m_move_preview_delta && !m_move_preview_exact && m_move_ids.contains(label.id)) {
             const auto delta = *m_move_preview_delta;
             label.position = label.position + delta;
             if (label.leader_start) label.leader_start = *label.leader_start + delta;
@@ -2903,9 +2953,9 @@ const std::vector<CanvasLabel>& PlanCanvas::positionedLabels(
         labels.push_back(std::move(label));
     }
     // Reference-grid callouts are rendered labels too, with their own font.
-    signature << quint64(content_only ? 0 : m_reference_grids.size());
+    signature << quint64(content_only || floor_ghost ? 0 : m_reference_grids.size());
     for (const auto& grid : m_reference_grids) {
-        if (content_only) break;
+        if (content_only || floor_ghost) break;
         signature << grid.id << grid.visible << grid.x_label << grid.y_label;
         signature << quint64(grid.lines.size());
         for (const auto& line : grid.lines) {
@@ -2966,7 +3016,7 @@ const std::vector<CanvasLabel>& PlanCanvas::positionedLabels(
     grid_font.setWeight(QFont::DemiBold);
     const QFontMetricsF grid_metrics(grid_font, device);
     for (const auto& grid : m_reference_grids) {
-        if (content_only) break;
+        if (content_only || floor_ghost) break;
         if (!grid.visible) continue;
         for (const auto& line : grid.lines) {
             const auto& prefix = line.axis == ReferenceGridAxis::x ? grid.x_label : grid.y_label;
@@ -4017,7 +4067,9 @@ void PlanCanvas::paintEvent(QPaintEvent* event) {
     const auto generation = m_measurement_generation;
     {
         QPainter painter(this);
-        renderScene(painter, QRectF(rect()));
+        renderSceneWithTransform(painter, QRectF(rect()), false, m_canvas_background,
+                                 std::nullopt, std::nullopt, std::nullopt, false,
+                                 SceneLayer::screen_with_floor_ghost);
         if (const auto frame = sketchCompositionGuideRect()) {
             painter.save();
             painter.setClipRect(rect());
@@ -5550,7 +5602,7 @@ void PlanCanvas::drawLabels(QPainter& painter, const QRectF& viewport, double sc
                             Vec2 view_center, bool output, QColor background,
                             std::optional<double> paper_pixels_per_mm,
                             std::vector<QRectF>* annotation_footprints,
-                            bool content_only) const {
+                            bool content_only, bool floor_ghost) const {
     if (!(scale > 0.0) || !std::isfinite(scale)) {
         return;
     }
@@ -5571,7 +5623,8 @@ void PlanCanvas::drawLabels(QPainter& painter, const QRectF& viewport, double sc
         dpi = *paper_pixels_per_mm * 25.4;
     }
     for (const auto& label : positionedLabels(legacy_font, metrics_device, scale, dpi, output,
-                                            content_only, content_only ? view_center : Vec2{})) {
+                                            content_only, content_only ? view_center : Vec2{},
+                                            floor_ghost)) {
         if (!drawable_label(label)) continue;
         const auto paper = std::isfinite(label.paper_height_mm) && label.paper_height_mm > 0.0;
         auto base_font = paper ? font() : legacy_font;
