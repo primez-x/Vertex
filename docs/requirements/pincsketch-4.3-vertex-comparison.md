@@ -7,6 +7,13 @@ Source presence is not runtime qualification. PincSketch's own QA report leaves
 4.3 mouse-level rendering unverified. Its 4.2 title/project format and 4.3 package
 labels are recorded rather than silently reconciled.
 
+The current installed checkpoint is `vertex-20261004-room-repair`; the Desktop
+Vertex shortcut points to its verified executable. The chronological checkpoints
+below retain their original limits. Reviewed same-ID room repair and all 22 named
+drawing choices are now implemented, while automatic room correspondence,
+multi-room dispositions, physical-room dimensions and complete appraisal-preset
+fact-review shortcuts remain open. This does not establish full parity.
+
 ## Matching capabilities and actual differences
 
 | Workflow | Vertex implementation/access | Comparison and required action |
@@ -40,11 +47,11 @@ These are additional production requirements from the user's supplied-tool
 comparison. They remain in scope until implemented and verified; creating this
 table does not satisfy them. The original unified release gate remains binding.
 
-This implementation adds live GLA access, the spatial palette and arithmetic,
+The initial adoption checkpoint added live GLA access, the spatial palette and arithmetic,
 plus 20 independently authored SVGs (342 visible library entries total).
 [Verification](../verification/mixed-selection-and-pinc-adoption-2026-10-04.md)
 records the actual native evidence and limits. The palette currently uses the
-active calculation profile and detects measurement-linework spaces; physical-wall
+active calculation profile and detected measurement-linework spaces; physical-wall
 space detection and all 22 Pinc preset mappings remain unfinished. Added artwork
 has been rendered and checked as bundled resources; that does not certify every
 Pinc symbol's default size, hosting or editing behavior.

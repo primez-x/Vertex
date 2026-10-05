@@ -78,5 +78,24 @@ is retained locally under `artifacts/physical-room-repair-20261004/`. No physica
 printer, original Pinc runtime, paired 134-operation qualification, clean-machine
 installation or user acceptance follows from these checks.
 
-Packaging and installed-runtime evidence will be added after the observed
-installation; an existing shortcut is not evidence of this new build's adoption.
+Implementation commit `197928da8a25823fadd278a8d7b4a1d1c9c6c06b` was pushed
+and its exact remote ref verified. All six packaging stages exited 0. The bundle
+`artifacts/packages/vertex-offline-20261004-room-repair` contains 4,111 files,
+including 2,645 runtime files and 1,459 explicitly allowlisted source-kit files.
+The source-kit snapshot is that implementation commit; this subsequent delivery
+documentation is separate from the packaged bytes.
+
+Installation at `artifacts/installed/vertex-20261004-room-repair` exited 0.
+All six installed source/reopen samples passed for measurement, residential
+architecture and light-commercial architecture, with developer dependency paths
+removed. Those samples complement the focused desktop repair and palette checks;
+they do not individually exercise every new command. The report is retained at
+`installed-runtime/run-20261004-220520-048e5c56/report.json` beneath the local
+evidence directory above.
+
+The installed executable SHA-256 is
+`3238f951265e921232089dc4f184052cde2258690a891a97876f8697e0ae8fba`.
+Root verified it matches the Release build, updated the Desktop Vertex shortcut
+and read back its exact target. Earlier installations are preserved. No
+clean-machine/network-denied installation, physical printer, full compatibility
+or user-observed resolution is claimed by these developer-host checks.
