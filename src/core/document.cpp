@@ -1813,7 +1813,9 @@ static void complete_measured_stroke_annotations(const std::map<std::string,Enti
     for(const auto& [id,original]:source) {
         if(original.type!=kAnnotationEntityType)continue;
         for(const auto& record:original.properties.at("state").at("overrides")) {
-            if(record.at("target_kind")!="area" || !record.contains("plan_label_offset_m"))continue;
+            const auto& kind=record.at("target_kind");
+            if((kind!="area" && kind!="area_name" && kind!="area_calculation") ||
+               !record.contains("plan_label_offset_m"))continue;
             const auto found=transforms.find(record.at("target_id").get<std::string>());
             if(found==transforms.end())continue;
             const auto owner=entities.find(id);

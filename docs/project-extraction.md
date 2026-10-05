@@ -1,5 +1,11 @@
 # Portable project extraction
 
+Exchange version 43 identifies retained annotation state version 8 and requires
+native reader 45. It preserves independent area-name/calculation presentation
+roles and text alignment across active, undone and deleted records. Calculated
+strings are not persisted as replacement measurement authority. Older centered
+annotations retain their previous extraction floor.
+
 Exchange version 39 identifies retained command-envelope-15 dimension placement
 completion and requires native reader 41. This floor persists across every
 retained state, including undone or deleted dimensions and walls. Extraction

@@ -26,6 +26,7 @@ struct AnnotationStyle {
     std::string fill_pattern{"none"}; // none, solid, hatch
     bool bold{};
     bool italic{};
+    std::string text_alignment{"center"}; // left, center, right; v8 presentation
 };
 
 struct AnnotationPlacement {
@@ -56,21 +57,23 @@ struct LabelInstance {
 };
 
 struct PresentationOverride {
-    std::string target_kind; // area, object, output_view, wall_dimension
+    std::string target_kind; // area, area_name, area_calculation, object, output_view, wall_dimension
+    // Area roles reference the existing area owner; they create no child ID.
     std::string target_id;
     AnnotationStyle style;
     bool visible{true};
     // Optional paper-space outline and hatch spacing overrides. Absence keeps
     // existing semantic presentation defaults; neither affects geometry.
+    // Area-role and wall-dimension callouts refuse both geometry-only fields.
     std::optional<double> paper_line_width_mm;
     std::optional<double> hatch_scale;
     // Model-space label offset from an area's derived anchor or the owning
     // wall's analytical midpoint. Quantities remain derived from geometry.
     std::optional<Vec2> plan_label_offset;
-    // Placement-only area records retain semantic appearance. Wall dimensions
-    // retain their derived default text style; optional height/rotation apply.
+    // Placement-only area records retain semantic appearance. Area roles and
+    // wall dimensions retain derived default text style when inheritance is on.
     bool inherit_appearance{false};
-    // Automatic wall-length callouts only, independent of wall geometry.
+    // Automatic wall-length or live area-role callouts, independent of geometry.
     std::optional<double> paper_text_height_mm;
     std::optional<double> plan_label_rotation_radians;
 };
@@ -178,6 +181,9 @@ void validate_symbol_catalog(const std::vector<SymbolDefinition>&);
     const std::vector<SymbolDefinition>&, std::string pinned_svg = {});
 [[nodiscard]] nlohmann::json encode_annotation_state(
     const AnnotationState&, const std::vector<SymbolDefinition>&);
+// Roles or noncenter alignment select v8; centered states retain their previous
+// conditional version. Before v8, even an explicit centered alignment key is
+// refused. In v8, omitted alignment retains the centered legacy default.
 [[nodiscard]] AnnotationState decode_annotation_state(
     const nlohmann::json&, const std::vector<SymbolDefinition>&);
 

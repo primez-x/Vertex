@@ -32,7 +32,7 @@ void text(const std::string& value,std::size_t limit,bool multiline,const char* 
     (void)json(value).dump();
 }
 AnnotationState carrier(const TextLibraryDocument& document) {
-    check(document.version==1,"Unsupported text library version. Use a compatible application.");
+    check(document.version==1 || document.version==2,"Unsupported text library version. Use a compatible application.");
     check(document.entries.size()<=kTextLibraryEntryLimit,"Text library exceeds 1000 entries.");
     AnnotationState state;
     std::set<std::string> ids;
@@ -65,12 +65,15 @@ AnnotationState carrier(const TextLibraryDocument& document) {
 json encode_text_library(const TextLibraryDocument& document) {
     try {
         const auto annotations=encode_annotation_state(carrier(document),{});
-        json encoded{{"version",1},{"entries",json::array()}};
+        const bool aligned=document.version==2 || std::any_of(document.entries.begin(),document.entries.end(),
+            [](const auto& e){return e.style.text_alignment!="center";});
+        json encoded{{"version",aligned?2:1},{"entries",json::array()}};
         for(std::size_t i=0;i<document.entries.size();++i) {
             const auto& entry=document.entries[i];
             encoded["entries"].push_back({{"id",entry.id},{"name",entry.name},
                 {"category",entry.category},{"content",entry.content},
                 {"style",annotations.at("labels").at(i).at("style")}});
+            if(aligned)encoded["entries"].back()["style"]["text_alignment"]=entry.style.text_alignment;
         }
         check(encoded.dump().size()<=kTextLibraryByteLimit,"Text library exceeds its 4 MiB storage limit.");
         return encoded;
@@ -86,21 +89,28 @@ void validate_text_library(const TextLibraryDocument& document) {
 TextLibraryDocument decode_text_library(const json& encoded) {
     try {
         fields(encoded,{"version","entries"});
-        check(encoded.at("version").is_number_integer() && encoded.at("version")==1,
+        check(encoded.at("version").is_number_integer() && (encoded.at("version")==1 || encoded.at("version")==2),
             "Unsupported text library version. Use a compatible application.");
         check(encoded.at("entries").is_array() && encoded.at("entries").size()<=kTextLibraryEntryLimit,
             "Text library entries must be an array with at most 1000 records.");
         check(encoded.dump().size()<=kTextLibraryByteLimit,"Text library exceeds its 4 MiB storage limit.");
         auto annotations=encode_annotation_state(AnnotationState{},{});
+        const bool aligned=encoded.at("version")==2;
+        // A v2 library uses a v8 style carrier even when all text is centered;
+        // encoding an empty/default annotation state would select legacy v3.
+        if(aligned)annotations["version"]=8;
         LabelInstance prototype;
         prototype.id="text-style-carrier";
         AnnotationState prototype_state;
         prototype_state.labels.push_back(prototype);
         const auto prototype_wire=encode_annotation_state(prototype_state,{}).at("labels").at(0);
         TextLibraryDocument document;
+        document.version=encoded.at("version").get<int>();
         for(const auto& record:encoded.at("entries")) {
             fields(record,{"id","name","category","content","style"});
-            fields(record.at("style"),{"font_family","text_height_metres","stroke_width_metres",
+            if(aligned)fields(record.at("style"),{"font_family","text_height_metres","stroke_width_metres",
+                "stroke_color","fill_color","fill_pattern","bold","italic","text_alignment"});
+            else fields(record.at("style"),{"font_family","text_height_metres","stroke_width_metres",
                 "stroke_color","fill_color","fill_pattern","bold","italic"});
             TextLibraryEntry entry;
             entry.id=record.at("id").get<std::string>();

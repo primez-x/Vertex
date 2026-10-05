@@ -41,7 +41,27 @@ void codec_checks() {
     const auto wire=sketch::encode_text_library(source);
     require(sketch::encode_text_library(sketch::decode_text_library(wire))==wire,"styled text must round-trip");
     for(const auto key:{"version","entries"}) {auto bad=wire;bad.erase(key);rejected([&]{(void)sketch::decode_text_library(bad);});}
-    auto bad=wire;bad["version"]=2;rejected([&]{(void)sketch::decode_text_library(bad);});
+    require(wire.at("version")==1 && !wire.at("entries")[0].at("style").contains("text_alignment"),
+        "centered text must retain strict legacy library format");
+    auto aligned=source;aligned.entries[0].style.text_alignment="right";
+    const auto aligned_wire=sketch::encode_text_library(aligned);
+    const auto aligned_restored=sketch::decode_text_library(aligned_wire);
+    require(aligned_wire.at("version")==2 && aligned_restored.version==2 &&
+        aligned_restored.entries[0].style.text_alignment=="right" &&
+        sketch::encode_text_library(aligned_restored)==aligned_wire,"alignment must round-trip through deliberate library v2/carrier v8");
+    auto centered_v2=source;centered_v2.version=2;
+    const auto centered_wire=sketch::encode_text_library(centered_v2);
+    require(centered_wire.at("entries")[0].at("style").at("text_alignment")=="center" &&
+        sketch::encode_text_library(sketch::decode_text_library(centered_wire))==centered_wire,
+        "explicit v2 must retain centered alignment and its version");
+    auto bad=wire;bad["version"]=3;rejected([&]{(void)sketch::decode_text_library(bad);});
+    bad=wire;bad["entries"][0]["style"]["text_alignment"]="center";rejected([&]{(void)sketch::decode_text_library(bad);});
+    bad=aligned_wire;bad["version"]=1;rejected([&]{(void)sketch::decode_text_library(bad);});
+    bad=aligned_wire;bad["entries"][0]["style"].erase("text_alignment");rejected([&]{(void)sketch::decode_text_library(bad);});
+    for(const auto alignment:{"LEFT","justify",""}) {bad=aligned_wire;bad["entries"][0]["style"]["text_alignment"]=alignment;
+        rejected([&]{(void)sketch::decode_text_library(bad);});}
+    bad=aligned_wire;bad["entries"][0]["style"]["text_alignment"]=true;rejected([&]{(void)sketch::decode_text_library(bad);});
+    bad=aligned_wire;bad["entries"].push_back(bad["entries"][0]);rejected([&]{(void)sketch::decode_text_library(bad);});
     bad=wire;bad["opaque"]=true;rejected([&]{(void)sketch::decode_text_library(bad);});
     bad=wire;bad["entries"][0]["style"]["opaque"]=true;rejected([&]{(void)sketch::decode_text_library(bad);});
     bad=wire;bad["entries"].push_back(bad["entries"][0]);rejected([&]{(void)sketch::decode_text_library(bad);});
@@ -96,6 +116,13 @@ void store_checks() {
     absent_first.upsert(entry());const auto created=bytes(absent);
     rejected([&]{absent_second.upsert(update);});
     require(bytes(absent)==created,"an initially absent head must refuse replacing another writer's new file");
+    const auto aligned_path=directory.filePath("aligned.json");
+    sketch::desktop::TextLibraryStore aligned_store(aligned_path);auto aligned_entry=entry();aligned_entry.style.text_alignment="left";
+    aligned_store.upsert(aligned_entry);
+    sketch::desktop::TextLibraryStore aligned_reopened(aligned_path);
+    require(aligned_reopened.entries()[0].style.text_alignment=="left" &&
+        nlohmann::json::parse(bytes(aligned_path).toStdString()).at("version")==2,
+        "reusable text store must reopen explicit alignment through library v2");
 }
 void dialog_checks() {
     QTemporaryDir directory;sketch::desktop::TextLibraryStore store(directory.filePath("text.json"));

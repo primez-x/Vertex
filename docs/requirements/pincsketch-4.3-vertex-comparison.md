@@ -29,6 +29,13 @@ editing with Undo/Redo. Area ownership and classification publication,
 presentation, fidelity review, the import command and installed qualification
 remain open. This checkpoint does not change the installed Desktop build.
 
+The [independent-callout checkpoint](../verification/independent-area-callouts-2026-10-05.md)
+adds separate live area-name/calculation presentation, independent placement,
+size, color, alignment, rotation and visibility, plus reusable-text alignment.
+All 11 affected native checks pass, including actual native reopening and
+rotation/reflection. It implements this portion of PINC-010; tentative-curve
+shortcuts and direct reusable-label access remain open.
+
 ## Matching capabilities and actual differences
 
 | Workflow | Vertex implementation/access | Comparison and required action |
@@ -41,9 +48,9 @@ remain open. This checkpoint does not change the installed Desktop build.
 | Auto-close, point-of-beginning guidance, cancel/finish | Canvas/drawing input; `autoCloseDrawing`, drawing-session commands | Present. Keyboard J/along-wall offset/walk differs and remains a gap below. |
 | Curves and editing dimensions/nodes | Source-derived arc authoring and inverse editing; wall/boundary quick properties and handles | Present and broader analytical constructions. Pinc wheel-bowing a tentative wall is a distinct shortcut; add it without making zoom ambiguous. |
 | Panning, pointer zoom, fit | Unified drag, middle/right drag, wheel, status controls | Present. Preserve the user's requested Vertex gesture rules. Pinc has no explicit application right-click action in the inspected handlers. |
-| Double-click edit, moving labels/dimensions, rotation/mirroring/nudges | Quick properties; selection transforms; typed dimension placement | These controls exist. Area name and calculation currently share one callout; independent anchors, size and visibility remain gaps (PIN-037/073/074). Pinc's symbol double-click rotation conflicts with the user's requested quick-properties behavior; retain quick properties with accessible rotation controls. |
+| Double-click edit, moving labels/dimensions, rotation/mirroring/nudges | Quick properties; selection transforms; typed dimension placement | Area quick properties now offer **Separate name and value**, with independent placement, size, color, alignment, rotation and visibility. Existing combined callouts remain until adoption. Pinc's symbol double-click rotation conflicts with the user's requested quick-properties behavior; retain quick properties with accessible rotation controls. |
 | Fence rectangle and connected layout grouping | Ctrl marquee/multiselect; container organization; group transforms/copy | Selection and grouping exist. Batch style controls and some mixed transforms remain incomplete. Pinc's bbox/centroid fence rules are not exact containment semantics. |
-| Area fill/color/opacity/hatches, label position, wall/dimension styles | Area appearance, text/dimension properties; shared scene renderer | Individual appearance controls exist. Separate name/calculation callouts, imported text alignment, exterior-only/shared-edge automatic styling and batch presentation remain gaps. |
+| Area fill/color/opacity/hatches, label position, wall/dimension styles | Area appearance, text/dimension properties; shared scene renderer | Independent name/calculation callouts and reusable-text alignment are implemented and natively checked. Importing Pinc text/alignment, exterior-only/shared-edge automatic styling and batch presentation remain gaps. |
 | Symbol categories/search/click and drag placement; real dimensions/rotation/mirror | Left Library; pinned SVG catalog; hosted opening authoring | Present. Names/counts do not prove every Pinc counterpart exists or is equally useful. Audit each of the inventory's 80 named kinds for semantic counterpart, artwork and default size; add missing kinds. Do not pad catalog counts with aliases. |
 | Door/opening hosting, width, hinge and swing | Walls & openings; hosted opening properties | Present. Preserve actual hosted geometry rather than treating doors/windows solely as decoration. Reattachment and every door variant need direct workflow comparison. |
 | Reusable labels, custom text, user-saved templates and search | Text library command; `text_library_dialog.cpp`, local template store | Present. Pinc saves reusable text, not searches; do not invent a saved-search gap. Compare its inline label retrieval against Vertex's dialog workflow. |

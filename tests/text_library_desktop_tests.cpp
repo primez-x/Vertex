@@ -9,6 +9,8 @@
 #include <QDialog>
 #include <QComboBox>
 #include <QDir>
+#include <QElapsedTimer>
+#include <QEventLoop>
 #include <QFile>
 #include <QFont>
 #include <QFontDatabase>
@@ -48,6 +50,7 @@ sketch::TextLibraryEntry reusable() {
     entry.style.stroke_color="#345678";
     entry.style.bold=true;
     entry.style.italic=true;
+    entry.style.text_alignment="right";
     return entry;
 }
 PlanCanvas& canvas(MainWindow& window) {
@@ -127,12 +130,14 @@ void copied_entries_and_raw_metadata_survive_library_changes() {
     const auto second_id=second.createAnnotationLabel(QString::fromStdString(original_entry.id),{}, {2,2});
     require(!first_id.isEmpty() && !second_id.isEmpty(),"custom template IDs must resolve from the injected local library");
     const auto inserted=first.document().snapshot();auto expected=before.entities();
+    expected.at(owner.id).properties["state"]["version"]=8;
     expected.at(owner.id).properties["state"]["labels"].push_back(raw_label(inserted.entities().at(owner.id),first_id));
     require(inserted.revision()==before.revision()+1 && inserted.entities()==expected,
-        "insertion must append one instance and preserve exact owner, unrelated label and pinned artwork metadata");
+        "aligned insertion must append one instance, upgrade the style version and preserve unrelated metadata/artwork");
     require(label(first,first_id).content==original_entry.content && label(second,second_id).content==original_entry.content &&
         projected_label(first,first_id).font_family==QStringLiteral("Inter") && projected_label(first,first_id).bold &&
-        projected_label(first,first_id).italic && projected_label(first,first_id).color==QColor(QStringLiteral("#345678")),
+        projected_label(first,first_id).italic && projected_label(first,first_id).color==QColor(QStringLiteral("#345678")) &&
+        projected_label(first,first_id).text_alignment==QStringLiteral("right"),
         "independent project copies must carry chosen content, actual font and style into the canvas");
     require(first.editAnnotation(first_id,QStringLiteral("Independently edited instance"),QStringLiteral("1"),QStringLiteral("1"),
         QStringLiteral("0"),QStringLiteral("1"),true),"placed instance must remain editable");
@@ -310,8 +315,36 @@ void named_horizontal_plan_inverts_placement() {
         const sketch::Vec2 projected_delta{-direction_z*(delta.x*std::cos(angle)+delta.y*std::sin(angle)),
                                           -delta.x*std::sin(angle)+delta.y*std::cos(angle)};
         drawing->setSnapEnabled(false); // Commit refresh restores the workspace preference.
-        const auto start=screen(*drawing,projected),end=screen(*drawing,{projected.x+projected_delta.x,projected.y+projected_delta.y});
-        mouse(*drawing,QEvent::MouseButtonPress,start);mouse(*drawing,QEvent::MouseMove,end);mouse(*drawing,QEvent::MouseButtonRelease,end);
+        // Right alignment places the insertion anchor at the text edge. Drag
+        // the painted selection interior instead of an edge/control target.
+        const auto frame=drawing->selectionBounds();
+        require(frame && !frame->isEmpty(),"placed named-plan text must retain a painted selection frame");
+        const auto start=frame->center();
+        const auto end=start+QPointF(projected_delta.x*drawing->viewScale(),
+                                    -projected_delta.y*drawing->viewScale());
+        require(retained->selected && window.selectedEntityId()==placed_id,
+            "named-plan label movement must retain the authored label selection");
+        require((end-start).manhattanLength()>=QApplication::startDragDistance(),
+            "named-plan label movement must cross the drag threshold");
+        const auto move_revision=window.document().revision();
+        const auto preview_serial=drawing->entitiesMovePreviewSerial();
+        mouse(*drawing,QEvent::MouseButtonPress,start);mouse(*drawing,QEvent::MouseMove,end);
+        require(drawing->entitiesMovePreviewSerial()>preview_serial && drawing->entitiesMovePreviewPending() &&
+            window.document().revision()==move_revision,
+            "named-plan label drag must enqueue an exact move proposal before mutating the document");
+        mouse(*drawing,QEvent::MouseButtonRelease,end);
+        // Exact movement is projected on a worker, then admitted and committed
+        // by the UI event loop after release. Wait on that transition only.
+        QElapsedTimer completion;completion.start();
+        while(drawing->entitiesMovePreviewPending() && completion.elapsed()<5000)
+            QApplication::processEvents(QEventLoop::AllEvents,20);
+        if(drawing->entitiesMovePreviewPending() || window.document().revision()!=move_revision+1)
+            std::cerr<<"Named label move completion: pending="<<drawing->entitiesMovePreviewPending()
+                     <<"; revision="<<window.document().revision()<<"; expected="<<move_revision+1
+                     <<"; elapsed_ms="<<completion.elapsed()<<"; "<<window.lastError().toStdString()<<'\n';
+        require(!drawing->entitiesMovePreviewPending(),"named-plan exact label move must finish within five seconds");
+        require(window.document().revision()==move_revision+1,
+            "named-plan label movement must commit exactly one document revision");
         const auto moved=label(window,placed_id);
         if(std::abs(moved.placement.position.x-world.x-delta.x)>=1e-8 ||
             std::abs(moved.placement.position.y-world.y-delta.y)>=1e-8)

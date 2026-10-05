@@ -105,7 +105,7 @@ int main() {
             dimension_decoded.overrides.back().plan_label_offset->x==-0.5 &&
             dimension_decoded.overrides.back().inherit_appearance && !dimension_decoded.overrides.back().visible,
             "Native save/reopen must retain v6 wall callouts, v5 plan anchors, v4 area placements and opaque sibling metadata together");
-        auto future_dimension=dimension_entity;future_dimension.properties["state"]["version"]=8;
+        auto future_dimension=dimension_entity;future_dimension.properties["state"]["version"]=9;
         rejects_document([&]{(void)sketch::Document::create({future_dimension});});
         std::filesystem::remove(path);
         auto palette_state = dimension_state;
@@ -144,6 +144,46 @@ int main() {
         malformed_palette_entity = palette_entity;
         malformed_palette_entity.properties["state"]["version"] = 6;
         rejects_document([&] { (void)sketch::Document::create({malformed_palette_entity}); });
+        std::filesystem::remove(path);
+        auto role_state=palette_state;
+        role_state.labels.front().style.text_alignment="left";
+        sketch::PresentationOverride area_name{"area_name","area-1",{},false};
+        area_name.plan_label_offset=sketch::Vec2{-1.25,.5};area_name.plan_label_rotation_radians=.75;
+        area_name.paper_text_height_mm=3;area_name.style.text_alignment="right";area_name.inherit_appearance=true;
+        sketch::PresentationOverride area_calculation{"area_calculation","area-1",{},true};
+        area_calculation.plan_label_offset=sketch::Vec2{2,-.75};area_calculation.plan_label_rotation_radians=-.25;
+        area_calculation.paper_text_height_mm=6;area_calculation.style.bold=true;
+        role_state.overrides.push_back(area_name);role_state.overrides.push_back(area_calculation);
+        auto role_entity=sketch::make_annotation_entity("role-annotations",role_state);
+        role_entity.extensions["vendor_owner"]="retain";
+        role_entity.properties["state"]["labels"][0]["vendor_label"]={{"retain",1}};
+        role_entity.properties["state"]["overrides"][2]["vendor_role"]={{"retain",2}};
+        auto role_document=sketch::Document::create({role_entity});
+        (void)sketch::ProjectStore::save(path,role_document.snapshot());
+        auto role_reopened=sketch::ProjectStore::load(path).document;
+        const auto role_saved=role_reopened.snapshot().entities().at("role-annotations");
+        const auto roles_decoded=sketch::decode_annotation_entity(role_saved);
+        require(role_saved==role_entity && role_saved.properties.at("state").at("version")==8 &&
+            roles_decoded.labels.front().style.text_alignment=="left" && roles_decoded.symbols.back().svg_palette &&
+            roles_decoded.overrides[2].target_kind=="area_name" && !roles_decoded.overrides[2].visible &&
+            roles_decoded.overrides[2].style.text_alignment=="right" && roles_decoded.overrides[3].target_kind=="area_calculation" &&
+            roles_decoded.overrides[3].visible && roles_decoded.overrides[3].paper_text_height_mm==6,
+            "native reopen must retain v8 independent roles/alignment, v7 palettes and raw unknown siblings");
+        auto role_edit=role_entity;role_edit.properties["state"]["overrides"][3]["visible"]=false;
+        (void)role_reopened.apply(sketch::ApplyEntityChanges{role_reopened.revision(),{sketch::EntityChange::upsert(role_edit)}, {},"Hide only calculation callout"});
+        require(!sketch::decode_annotation_entity(role_reopened.snapshot().entities().at("role-annotations")).overrides[3].visible &&
+            role_reopened.snapshot().entities().at("role-annotations").properties.at("state").at("overrides")[2]==role_entity.properties.at("state").at("overrides")[2],
+            "editing calculation role changed the independent name or its raw metadata");
+        (void)role_reopened.undo(role_reopened.revision());
+        require(role_reopened.snapshot().entities().at("role-annotations")==role_entity,"undo lost exact role/alignment evidence");
+        (void)role_reopened.redo(role_reopened.revision());
+        require(role_reopened.snapshot().entities().at("role-annotations")==role_edit,"redo lost exact role/alignment evidence");
+        auto invalid_role=role_entity;invalid_role.properties["state"]["version"]=7;
+        rejects_document([&]{(void)sketch::Document::create({invalid_role});});
+        invalid_role=role_entity;invalid_role.properties["state"]["overrides"][2]["hatch_scale"]=1;
+        rejects_document([&]{(void)sketch::Document::create({invalid_role});});
+        invalid_role=role_entity;invalid_role.properties["state"]["labels"][0]["style"]["text_alignment"]="justify";
+        rejects_document([&]{(void)sketch::Document::create({invalid_role});});
         std::filesystem::remove(path);
         (void)sketch::ProjectStore::save(path, document.snapshot());
         const auto reopened = sketch::ProjectStore::load(path).document.snapshot();

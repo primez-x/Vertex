@@ -1231,6 +1231,22 @@ if(SKETCH_BUILD_DESKTOP)
     add_executable(area_class_palette_desktop_tests tests/area_class_palette_desktop_tests.cpp)
     add_executable(sketch_content_output_tests tests/sketch_content_output_tests.cpp)
     add_executable(floor_reference_canvas_tests tests/floor_reference_canvas_tests.cpp)
+    add_executable(canvas_label_presentation_tests tests/canvas_label_presentation_tests.cpp)
+    target_link_libraries(canvas_label_presentation_tests PRIVATE sketch_plan_canvas)
+    qt_add_resources(canvas_label_presentation_tests canvas_label_presentation_fonts
+      PREFIX "/fonts" BASE assets/fonts FILES assets/fonts/Inter.ttf)
+    add_test(NAME canvas_label_presentation COMMAND canvas_label_presentation_tests)
+    set_tests_properties(canvas_label_presentation PROPERTIES
+      ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_PLUGIN_PATH=${SKETCH_QT_PREFIX}/plugins"
+      ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${SKETCH_QT_BIN};PATH=path_list_prepend:${CMAKE_SOURCE_DIR}/.deps/native/x64-windows/$<IF:$<CONFIG:Debug>,debug/bin,bin>")
+    add_executable(area_callout_desktop_tests tests/area_callout_desktop_tests.cpp)
+    target_link_libraries(area_callout_desktop_tests PRIVATE sketch_desktop)
+    qt_add_resources(area_callout_desktop_tests area_callout_desktop_fonts
+      PREFIX "/fonts" BASE assets/fonts FILES assets/fonts/Inter.ttf)
+    add_test(NAME area_callout_desktop COMMAND area_callout_desktop_tests)
+    set_tests_properties(area_callout_desktop PROPERTIES
+      ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_PLUGIN_PATH=${SKETCH_QT_PREFIX}/plugins"
+      ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${SKETCH_QT_BIN};PATH=path_list_prepend:${CMAKE_SOURCE_DIR}/.deps/native/x64-windows/$<IF:$<CONFIG:Debug>,debug/bin,bin>")
     add_executable(floor_reference_desktop_tests tests/floor_reference_desktop_tests.cpp)
     target_link_libraries(floor_reference_desktop_tests PRIVATE sketch_desktop)
     qt_add_resources(floor_reference_desktop_tests floor_reference_desktop_fonts
@@ -1868,6 +1884,14 @@ if(BUILD_TESTING)
     target_compile_options(annotation_entity_codec_tests PRIVATE /W4 /permissive- /utf-8)
   endif()
   add_test(NAME annotation_entity_codec COMMAND annotation_entity_codec_tests)
+  add_executable(area_callout_storage_tests tests/area_callout_storage_tests.cpp)
+  target_link_libraries(area_callout_storage_tests PRIVATE sketch_constraint_authoring sketch_storage sketch_exchange sketch_sqlite)
+  if(MSVC)
+    target_compile_options(area_callout_storage_tests PRIVATE /W4 /permissive- /utf-8)
+  endif()
+  add_test(NAME area_callout_storage COMMAND area_callout_storage_tests)
+  set_tests_properties(area_callout_storage PROPERTIES ENVIRONMENT_MODIFICATION
+    "PATH=path_list_prepend:${CMAKE_SOURCE_DIR}/.deps/native/x64-windows/$<IF:$<CONFIG:Debug>,debug/bin,bin>")
   add_executable(sheet_view_model_tests tests/sheet_view_model_tests.cpp)
   target_link_libraries(sheet_view_model_tests PRIVATE sketch_sheet_view_model)
   if(MSVC)

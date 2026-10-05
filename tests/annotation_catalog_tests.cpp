@@ -24,6 +24,80 @@ int main() {
     using namespace sketch;
     const auto catalog = default_symbol_catalog();
     {
+        AnnotationState independent;
+        PresentationOverride name{"area_name","area-owner",{},false};
+        name.style.text_alignment="left";name.style.stroke_color="#123456";
+        name.plan_label_offset=Vec2{-2,1};name.plan_label_rotation_radians=.25;
+        name.paper_text_height_mm=3;name.inherit_appearance=true;
+        PresentationOverride calculation{"area_calculation","area-owner",{},true};
+        calculation.style.text_alignment="right";calculation.style.bold=true;
+        calculation.plan_label_offset=Vec2{3,-1};calculation.plan_label_rotation_radians=-.5;
+        calculation.paper_text_height_mm=7;
+        independent.overrides={name,calculation,{"area","area-owner",{},true}};
+        auto label=instantiate_label(default_label_templates().front(),"aligned-label");
+        label.style.text_alignment="left";independent.labels.push_back(label);
+        independent.symbols.push_back({"center-symbol",catalog.front().id,{},{},true});
+        const auto wire=encode_annotation_state(independent,catalog);
+        const auto restored=decode_annotation_state(nlohmann::json::parse(wire.dump()),catalog);
+        require(wire.at("version")==8 && wire.at("symbols")[0].at("style").at("text_alignment")=="center" &&
+            encode_annotation_state(restored,catalog)==wire && restored.overrides[0].target_id==restored.overrides[1].target_id &&
+            !restored.overrides[0].visible && restored.overrides[1].visible &&
+            restored.overrides[0].style.text_alignment=="left" && restored.overrides[1].style.text_alignment=="right" &&
+            restored.overrides[0].plan_label_offset->x==-2 && restored.overrides[1].plan_label_offset->x==3,
+            "independent live roles/alignment must retain distinct presentation on the same area owner");
+        for(int version=1;version<8;++version) {
+            auto old=wire;old["version"]=version;rejected([&]{(void)decode_annotation_state(old,catalog);});
+            old=encode_annotation_state(AnnotationState{},catalog);old["version"]=version;
+            auto role=wire["overrides"][0];role["style"].erase("text_alignment");old["overrides"].push_back(role);
+            rejected([&]{(void)decode_annotation_state(old,catalog);});
+        }
+        for(const auto collection:{"labels","symbols","overrides"})for(const auto alignment:{"LEFT","justify",""}) {
+            auto bad=wire;bad[collection][0]["style"]["text_alignment"]=alignment;
+            rejected([&]{(void)decode_annotation_state(bad,catalog);});
+        }
+        for(const auto invalid:{nlohmann::json(nullptr),nlohmann::json(1),nlohmann::json(true)}) {
+            auto bad=wire;bad["overrides"][0]["style"]["text_alignment"]=invalid;
+            rejected([&]{(void)decode_annotation_state(bad,catalog);});
+        }
+        for(const auto role:{0,1})for(const auto field:{"paper_line_width_mm","hatch_scale"}) {
+            auto bad=wire;bad["overrides"][role][field]=1.0;
+            rejected([&]{(void)decode_annotation_state(bad,catalog);});
+        }
+        auto duplicate=wire;duplicate["overrides"].push_back(duplicate["overrides"][0]);
+        rejected([&]{(void)decode_annotation_state(duplicate,catalog);});
+        for(const auto field:{"paper_text_height_mm","plan_label_rotation_radians"}) {
+            auto bad=wire;bad["overrides"][0][field]="invalid";rejected([&]{(void)decode_annotation_state(bad,catalog);});
+            bad=wire;bad["overrides"][0][field]=std::numeric_limits<double>::infinity();
+            rejected([&]{(void)decode_annotation_state(bad,catalog);});
+        }
+        auto invalid_height=wire;invalid_height["overrides"][0]["paper_text_height_mm"]=0;
+        rejected([&]{(void)decode_annotation_state(invalid_height,catalog);});
+        invalid_height["overrides"][0]["paper_text_height_mm"]=100.01;
+        rejected([&]{(void)decode_annotation_state(invalid_height,catalog);});
+        for(const auto invalid:{nlohmann::json::array({1}),nlohmann::json::array({"x",2}),
+            nlohmann::json::array({1,std::numeric_limits<double>::infinity()})}) {
+            auto bad=wire;bad["overrides"][1]["plan_label_offset_m"]=invalid;
+            rejected([&]{(void)decode_annotation_state(bad,catalog);});
+        }
+        auto bad_inheritance=wire;bad_inheritance["overrides"][0]["inherit_appearance"]="true";
+        rejected([&]{(void)decode_annotation_state(bad_inheritance,catalog);});
+        AnnotationState ordinary;ordinary.labels.push_back(label);ordinary.labels[0].style.text_alignment="center";
+        const auto old=encode_annotation_state(ordinary,catalog);
+        require(old.at("version")==3 && !old.at("labels")[0].at("style").contains("text_alignment") &&
+            decode_annotation_state(old,catalog).labels[0].style.text_alignment=="center",
+            "centered legacy styles must retain old versions and absent alignment payload");
+        for(int version=1;version<8;++version) {
+            auto bad=old;bad["version"]=version;bad["labels"][0]["style"]["text_alignment"]="center";
+            rejected([&]{(void)decode_annotation_state(bad,catalog);});
+        }
+        ordinary.labels[0].style.text_alignment="right";
+        require(encode_annotation_state(ordinary,catalog).at("version")==8,"alignment alone must require v8 without any area roles");
+        independent.labels.clear();independent.symbols.clear();independent.overrides[0].style.text_alignment="center";
+        independent.overrides[1].style.text_alignment="center";
+        require(encode_annotation_state(independent,catalog).at("version")==8,"default-styled area roles still require v8");
+        ordinary.labels[0].style.text_alignment="invalid";rejected([&]{(void)encode_annotation_state(ordinary,catalog);});
+    }
+    {
         const auto svg = filter_symbol_catalog(catalog, "Basin Oval", "01_bathroom").front();
         AnnotationState palette_state;
         palette_state.symbols.push_back({"palette-symbol", svg.id,
@@ -788,7 +862,7 @@ int main() {
     rejected([&]{(void)placed_symbol_preview(catalog.front(),{{},0,0.001});});
     auto malformed = encoded; malformed["version"] = 1.0;
     rejected([&]{(void)decode_annotation_state(malformed,catalog);});
-    malformed = encoded; malformed["version"] = 8;
+    malformed = encoded; malformed["version"] = 9;
     rejected([&]{(void)decode_annotation_state(malformed,catalog);});
     malformed = encoded; malformed["labels"][0]["visible"] = "false";
     rejected([&]{(void)decode_annotation_state(malformed,catalog);});

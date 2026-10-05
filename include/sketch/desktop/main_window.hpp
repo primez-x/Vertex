@@ -541,6 +541,12 @@ public:
     [[nodiscard]] bool editSelectedAreaAttributes(const QString& attributes_json);
     // Presentation-only placement relative to an area's anchor or wall midpoint.
     [[nodiscard]] bool beginSelectedPlanLabelPlacement();
+    // Explicitly adopts two independent presentation callouts; values stay derived.
+    [[nodiscard]] bool separateSelectedAreaCallouts(std::optional<Revision> expected_revision = std::nullopt);
+    [[nodiscard]] bool setSelectedAreaCalloutRole(const QString& role);
+    [[nodiscard]] bool editSelectedAreaCallout(const QString& role,const QString& x,const QString& y,
+        const QString& height_mm,const QString& color,const QString& alignment,bool visible,
+        const QString& rotation_degrees,std::optional<Revision> expected_revision = std::nullopt);
     [[nodiscard]] bool setSelectedPlanLabelPosition(Vec2 position,
         std::optional<Revision> expected_revision = std::nullopt);
     [[nodiscard]] bool resetSelectedPlanLabelPlacement(
@@ -613,7 +619,8 @@ public:
                                       std::optional<QString> width = std::nullopt,
                                       std::optional<QString> depth = std::nullopt,
                                       std::optional<bool> flip_horizontal = std::nullopt,
-                                      std::optional<bool> flip_vertical = std::nullopt);
+                                      std::optional<bool> flip_vertical = std::nullopt,
+                                      QString text_alignment = {});
     [[nodiscard]] bool deleteAnnotation(const QString& annotation_id);
     // Imports a local PNG/JPEG/BMP/TIFF raster or first-page PDF into the
     // project Asset store and creates a reference_asset entity with an

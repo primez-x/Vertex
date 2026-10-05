@@ -2713,6 +2713,42 @@ drawing; switching modes does not change existing geometry.
   - Result: Not tested
   - Notes: ______________________________
 
+- [ ] **U444 - Separate an area's name and calculated value**
+  - Steps: Draw and name a closed area. Double-click it to open its properties. Choose **Separate name and value**, then switch the callout selector between Name and Calculation.
+  - Expected: Both callouts appear separately. They still belong to the same area; separation does not change its outline, classification or total.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **U445 - Move the name without moving the calculated value**
+  - Steps: Separate an area's callouts. Choose Name and use **Place label** to move it. Choose Calculation and place it elsewhere. Undo and Redo each move.
+  - Expected: Each move affects only the chosen callout. Undo and Redo restore that callout's own position without moving the area or its other callout.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **U446 - Give the name and value different appearances**
+  - Steps: Choose Name, change its text size, color, alignment and rotation, and apply. Choose Calculation and give it different settings. Save and reopen.
+  - Expected: Each callout retains its own settings. Left and right alignment anchor the appropriate text edge; clicking the painted text still selects its area.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **U447 - Hide only the calculated value**
+  - Steps: Choose Calculation, turn off its visibility and apply. Inspect the area and Details. Turn it back on, then repeat with Name.
+  - Expected: Only the chosen callout disappears. The area, its other callout and its calculated total remain available.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **U448 - Keep a separated value current after editing**
+  - Steps: Record a separated area's value. Change one wall measurement, then Undo and Redo. Save and reopen. For a physical room, also change a source wall's thickness without repairing the retained room.
+  - Expected: A current area's value follows its actual geometry and units. A stale physical room does not display its previous value as current. Callout styles and placement survive the edits and reopening.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **U449 - Align reusable text at its insertion point**
+  - Steps: Create a text-library entry with Left alignment, place it, then change it to Right alignment. Repeat with multiline text, rotate it, save and reopen.
+  - Expected: The insertion point stays fixed while the aligned text extends to the chosen side. Picking follows the painted text, and the saved entry and placed text retain their alignment.
+  - Result: Not tested
+  - Notes: ______________________________
+
 ## Issue report template
 
 - Task ID(s):

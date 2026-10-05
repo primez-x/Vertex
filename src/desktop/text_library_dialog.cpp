@@ -136,6 +136,11 @@ public:
         content->setTabChangesFocus(true);form->addRow(QStringLiteral("Text"),content);
         height=field("textLibraryHeight",QStringLiteral("Text height"));
         font=field("textLibraryFont",QStringLiteral("Font"));
+        alignment=new QComboBox(editor);alignment->setObjectName(QStringLiteral("textLibraryAlignment"));
+        alignment->addItem(QStringLiteral("Left"),QStringLiteral("left"));
+        alignment->addItem(QStringLiteral("Center"),QStringLiteral("center"));
+        alignment->addItem(QStringLiteral("Right"),QStringLiteral("right"));
+        form->addRow(QStringLiteral("Alignment"),alignment);
         color=field("textLibraryColor",QStringLiteral("Color"));color->setPlaceholderText(QStringLiteral("#RRGGBB"));
         auto* emphasis=new QWidget(editor);auto* emphasis_layout=new QHBoxLayout(emphasis);
         emphasis_layout->setContentsMargins(0,0,0,0);
@@ -221,6 +226,8 @@ public:
         height->setText(QString::number(current.style.text_height_metres/(metric ? 1.0 : .3048),'g',12)+(metric ? QStringLiteral(" m") : QStringLiteral(" ft")));
         original_height=height->text();
         font->setText(qtext(current.style.font_family));color->setText(qtext(current.style.stroke_color));
+        alignment->setCurrentIndex(alignment->findData(qtext(current.style.text_alignment)));
+        alignment->setEnabled(!builtin);
         bold->setChecked(current.style.bold);italic->setChecked(current.style.italic);
         for(auto* field:{name,category,height,font,color}) field->setReadOnly(builtin);
         content->setReadOnly(builtin);bold->setEnabled(!builtin);italic->setEnabled(!builtin);
@@ -236,6 +243,7 @@ public:
         if(height->text()!=original_height)
             result.style.text_height_metres=parse_quantity(height->text().toUtf8().toStdString(),metric ? Unit::metre : Unit::foot).metres;
         result.style.font_family=font->text().trimmed().toUtf8().toStdString();
+        result.style.text_alignment=alignment->currentData().toString().toStdString();
         result.style.stroke_color=color->text().trimmed().toStdString();
         result.style.bold=bold->isChecked();result.style.italic=italic->isChecked();
         validate_text_library({1,{result}});return result;
@@ -265,7 +273,7 @@ public:
     QString original_height;
     std::optional<TextLibraryEntry> selected;
     QLineEdit *search{},*name{},*category{},*height{},*font{},*color{};
-    QComboBox* categories{};
+    QComboBox *categories{},*alignment{};
     QListWidget* list{};
     QPlainTextEdit* content{};
     QCheckBox *bold{},*italic{};

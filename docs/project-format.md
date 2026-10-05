@@ -1,4 +1,27 @@
-# Vertex project formats v1 through v44
+# Vertex project formats v1 through v45
+
+## Independent live area callouts and text alignment (v45)
+
+Annotation state version 8 adds `style.text_alignment` (`left`, `center`, or
+`right`) and presentation override roles `area_name` and `area_calculation`.
+Both reference the existing area owner through `target_id`. Each role retains
+its own text style, visibility, model-space anchor offset, optional paper text
+height and rotation. It cannot supply geometry outline or hatch-spacing fields.
+The area name and calculated string are derived at render time; these overrides
+contain presentation only. A hidden callout does not hide its analytical area.
+
+The encoder uses version 8 when a role or noncenter alignment is authored.
+Centered legacy annotations retain their prior schema and appearance. Earlier
+annotation versions reject the new alignment field and role names; version-8
+siblings without an alignment field default to centered. The outer annotation
+entity schema remains version 1. Reusable text-library version 2 retains
+alignment; older centered library records keep their existing wire format.
+
+Native format 45 and extraction 43 are required wherever version-8 annotations
+appear in retained history, including Undo or deleted presentation owners.
+Both native format markers and the portable-package validator recognize this
+reader floor. Older readers must refuse these files before losing callout
+semantics. No SQLite table change is required.
 
 ## Reviewed same-ID physical room repair (v44)
 

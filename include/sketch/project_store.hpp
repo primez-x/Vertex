@@ -138,7 +138,9 @@ public:
     // Source-bound physical rooms require v43 across retained history.
     // Reviewed same-ID physical room repairs and their entity-only derivation
     // carriers require v44, including deleted owners and abandoned history.
-    static constexpr std::uint32_t format_version = 44;
+    // Annotation-v8 alignment and independent live area-callout roles require
+    // v45 anywhere in retained history, including undone/deleted presentation.
+    static constexpr std::uint32_t format_version = 45;
     static constexpr std::uint32_t recovery_format_version = 4;
     [[nodiscard]] static std::uint32_t required_format_version(const DocumentSnapshot& snapshot);
     static constexpr std::uint64_t maximum_file_bytes = 4ULL * 1024ULL * 1024ULL * 1024ULL;

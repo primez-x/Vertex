@@ -30,6 +30,7 @@
 #include <vector>
 
 class QPainter;
+class QPaintDevice;
 class QSvgRenderer;
 class QTouchEvent;
 
@@ -211,7 +212,19 @@ struct CanvasLabel {
     // Wall text with an explicit world angle keeps that authored orientation;
     // automatically derived angles stay upright after named-plan projection.
     bool wall_dimension_manual_rotation{false};
+    // Horizontal text anchor in the label's local axes. Center preserves
+    // historical labels; left/right put the corresponding text edge at position.
+    QString text_alignment{QStringLiteral("center")};
+    // Distinguishes derived presentations sharing one native owner identity.
+    // Selection and viewport membership continue to use id.
+    QString callout_role;
 };
+
+// Padded local pixel bounds before rotation, using only captured rendering
+// values. A worker may supply its own QImage paint device without a widget.
+// Invalid scale, DPI, or an absent device yields an empty rectangle.
+[[nodiscard]] QRectF canvasLabelLayoutBounds(const CanvasLabel& label, QFont font,
+    const QPaintDevice* device, double pixels_per_metre, double dpi_y);
 
 // Exact geometric totals from the candidate document, used only while editing.
 struct CanvasBoundaryPreviewMetrics {
@@ -436,6 +449,10 @@ public:
     // its fixed screen padding. Empty when no drawable selection is retained.
     // Re-query after selection, pan, zoom, or resize to anchor contextual UI.
     [[nodiscard]] std::optional<QRectF> selectionBounds() const;
+    // Padded local pixel bounds at the supplied model scale, before rotation.
+    // Use this for derived label placement so anchors match canvas painting.
+    [[nodiscard]] QRectF labelLayoutBounds(const CanvasLabel& label,
+                                          double pixels_per_metre) const;
     // Actual painted control, including rotation and annotation avoidance.
     [[nodiscard]] std::optional<QPointF> selectionRotationHandlePosition() const;
     void setSelectionControlsVisible(bool visible) { m_selection_controls_visible = visible; update(); }

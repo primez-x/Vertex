@@ -144,6 +144,16 @@ struct LabelLayout {
     QRectF bounds;
 };
 
+bool same_label_presentation(const CanvasLabel& left, const CanvasLabel& right) {
+    return left.id == right.id && left.callout_role == right.callout_role;
+}
+
+int label_text_alignment(const CanvasLabel& label) {
+    if (label.text_alignment == QStringLiteral("left")) return Qt::AlignLeft | Qt::AlignVCenter;
+    if (label.text_alignment == QStringLiteral("right")) return Qt::AlignRight | Qt::AlignVCenter;
+    return Qt::AlignCenter;
+}
+
 LabelLayout label_layout(const CanvasLabel& label, QFont base_font,
                          const QPaintDevice* device, double scale, double dpi) {
     if (!label.font_family.isEmpty() &&
@@ -172,6 +182,8 @@ LabelLayout label_layout(const CanvasLabel& label, QFont base_font,
         ? metrics.boundingRect(QRectF(0, 0, 1e6, 1e6), Qt::AlignLeft | Qt::AlignTop, label.text)
         : metrics.boundingRect(label.text);
     bounds.moveCenter(QPointF(0.0, 0.0));
+    if (label.text_alignment == QStringLiteral("left")) bounds.moveLeft(0.0);
+    else if (label.text_alignment == QStringLiteral("right")) bounds.moveRight(0.0);
     bounds.adjust(-5.0, -3.0, 5.0, 3.0);
     return {base_font, bounds};
 }
@@ -184,6 +196,13 @@ QTransform label_transform(const CanvasLabel& label, QPointF center) {
         transform.rotate(-label.rotation_radians * 180.0 / pi);
     }
     return transform;
+}
+
+CanvasSelectionFrame label_selection_frame(const CanvasLabel& label,
+                                           const QRectF& bounds, double scale) {
+    const auto center = label_transform(label, {}).map(bounds.center());
+    return {{label.position.x + center.x()/scale, label.position.y - center.y()/scale},
+            label.rotation_radians, bounds.width()/scale, bounds.height()/scale};
 }
 
 double distance(Vec2 left, Vec2 right) {
@@ -405,6 +424,13 @@ void append_boundary_strokes(QPainterPath& path, const Boundary& boundary) {
 }
 
 }  // namespace
+
+QRectF canvasLabelLayoutBounds(const CanvasLabel& label, QFont font,
+    const QPaintDevice* device, double pixels_per_metre, double dpi_y) {
+    if (!device || !(pixels_per_metre > 0.0) || !std::isfinite(pixels_per_metre) ||
+        !(dpi_y > 0.0) || !std::isfinite(dpi_y)) return {};
+    return label_layout(label, std::move(font), device, pixels_per_metre, dpi_y).bounds;
+}
 
 PlanCanvas::PlanCanvas(QWidget* parent) : QWidget(parent) {
     setFocusPolicy(Qt::StrongFocus);
@@ -2717,6 +2743,10 @@ std::optional<QRectF> PlanCanvas::selectionBounds() const {
     return selectionFrame(QRectF(rect()));
 }
 
+QRectF PlanCanvas::labelLayoutBounds(const CanvasLabel& label, double pixels_per_metre) const {
+    return canvasLabelLayoutBounds(label, font(), this, pixels_per_metre, logicalDpiY());
+}
+
 std::optional<QPointF> PlanCanvas::selectionRotationHandlePosition() const {
     const QRectF viewport(rect());
     if (!m_selection_controls_visible || !m_selection_rotate_enabled ||
@@ -2856,8 +2886,7 @@ std::optional<CanvasSelectionFrame> PlanCanvas::selectionAxes() const {
     for (const auto& label : positionedLabels(font(), this, m_scale, logicalDpiY(), false)) {
         if (!label.selected || !drawable_label(label) || !std::isfinite(label.rotation_radians)) continue;
         const auto layout = label_layout(label,font(),this,m_scale,logicalDpiY());
-        return CanvasSelectionFrame{label.position,label.rotation_radians,
-            layout.bounds.width()/m_scale,layout.bounds.height()/m_scale};
+        return label_selection_frame(label, layout.bounds, m_scale);
     }
     return std::nullopt;
 }
@@ -2866,16 +2895,16 @@ CanvasLabel PlanCanvas::presentedLabel(const CanvasLabel& label, bool output) co
     auto presented = label;
     if (!output && m_transform_preview_valid) {
         for (const auto& proposed : m_transform_labels_preview)
-            if (proposed.id == label.id) { presented = proposed; break; }
+            if (same_label_presentation(proposed, label)) { presented = proposed; break; }
     }
     if (!output && m_move_preview_valid) {
         for (const auto& proposed : m_move_labels_preview)
-            if (proposed.id == label.id) { presented = proposed; break; }
+            if (same_label_presentation(proposed, label)) { presented = proposed; break; }
     }
     if (!output && m_boundary_vertex_preview_valid) {
         const auto preview_label = std::find_if(m_boundary_vertex_labels_preview.begin(),
             m_boundary_vertex_labels_preview.end(),
-            [&](const CanvasLabel& item) { return item.id == label.id; });
+            [&](const CanvasLabel& item) { return same_label_presentation(item, label); });
         if (preview_label != m_boundary_vertex_labels_preview.end()) presented = *preview_label;
     }
     if (!output && label.selected && m_transform_frame_start && !m_transform_preview_exact && m_move_ids.contains(label.id) &&
@@ -2895,19 +2924,19 @@ const std::vector<CanvasLabel>& PlanCanvas::positionedLabels(
     if (interactive && m_transform_preview_valid) {
         for (const auto& proposed : m_transform_labels_preview)
             if (std::none_of(retained_labels.begin(), retained_labels.end(),
-                [&](const auto& label) { return label.id == proposed.id; }))
+                [&](const auto& label) { return same_label_presentation(label, proposed); }))
                 retained_labels.push_back(proposed);
     }
     if (interactive && m_move_preview_valid) {
         for (const auto& proposed : m_move_labels_preview)
             if (std::none_of(retained_labels.begin(), retained_labels.end(),
-                [&](const auto& label) { return label.id == proposed.id; }))
+                [&](const auto& label) { return same_label_presentation(label, proposed); }))
                 retained_labels.push_back(proposed);
     }
     if (interactive && m_boundary_vertex_preview_valid) {
         for (const auto& proposed:m_boundary_vertex_labels_preview)
             if (std::none_of(retained_labels.begin(),retained_labels.end(),
-                [&](const auto& label){return label.id==proposed.id;}))
+                [&](const auto& label){return same_label_presentation(label, proposed);}))
                 retained_labels.push_back(proposed);
     }
     std::vector<CanvasLabel> labels;
@@ -2937,7 +2966,7 @@ const std::vector<CanvasLabel>& PlanCanvas::positionedLabels(
                   << label.color << label.bold << label.italic << label.fill_color
                   << label.fill_pattern << label.show_background << label.avoid_components
                   << label.plan_only << label.selection_type << label.font_family << label.model_plan
-                  << label.wall_dimension_manual_rotation;
+                  << label.wall_dimension_manual_rotation << label.text_alignment << label.callout_role;
         point_key(label.position);
         signature << label.leader_start.has_value() << label.plan_label_offset.has_value();
         if (label.leader_start) point_key(*label.leader_start);
@@ -3031,7 +3060,8 @@ const std::vector<CanvasLabel>& PlanCanvas::positionedLabels(
         }
     }
     std::stable_sort(automatic_labels.begin(), automatic_labels.end(), [&](auto a, auto b) {
-        return labels[a].id < labels[b].id;
+        if (labels[a].id != labels[b].id) return labels[a].id < labels[b].id;
+        return labels[a].callout_role < labels[b].callout_role;
     });
     // Millimetres converted through the actual paper/device scale, including
     // high-DPI and fitted-sheet output. Padded rotated rectangles are a
@@ -3623,7 +3653,7 @@ bool PlanCanvas::applyBoundaryVertexPreview(std::uint64_t serial,
     }
     for (auto& label : labels) {
         const auto original = std::find_if(m_labels.begin(), m_labels.end(),
-            [&](const CanvasLabel& item) { return item.id == label.id; });
+            [&](const CanvasLabel& item) { return same_label_presentation(item, label); });
         if (original == m_labels.end()) {
             // A repaired area may acquire its first qualified quantity. Only
             // derived plan labels on retained visible owners can be introduced.
@@ -4029,8 +4059,7 @@ void PlanCanvas::drawSelectionDimensions(QPainter& painter, const QRectF& viewpo
     for (const auto& label : positionedLabels(font(), this, m_scale, logicalDpiY(), false)) {
         if (!label.selected || !drawable_label(label) || label.selection_type==QStringLiteral("dimension")) continue;
         const auto layout = label_layout(label,font(),this,m_scale,logicalDpiY());
-        draw({label.position,label.rotation_radians,layout.bounds.width()/m_scale,
-              layout.bounds.height()/m_scale},label.id,true);
+        draw(label_selection_frame(label, layout.bounds, m_scale),label.id,true);
     }
     painter.restore();
 }
@@ -5069,7 +5098,7 @@ bool PlanCanvas::applyEntityTransformPreview(std::uint64_t serial,
             [&](const auto& retained) { return retained.id == proposed.id && retained.selected; });
     for (auto& proposed : m_transform_labels_preview)
         proposed.selected = std::any_of(m_labels.begin(), m_labels.end(),
-            [&](const auto& retained) { return retained.id == proposed.id && retained.selected; });
+            [&](const auto& retained) { return same_label_presentation(retained, proposed) && retained.selected; });
     setCursor(m_transform_preview_valid
         ? m_left_gesture == LeftGesture::selection_rotate ? Qt::CrossCursor : Qt::SizeFDiagCursor
         : Qt::ForbiddenCursor);
@@ -5657,11 +5686,13 @@ void PlanCanvas::drawLabels(QPainter& painter, const QRectF& viewport, double sc
         }
         if (label.leader_start) {
             const auto start = to_screen(*label.leader_start);
-            const auto delta = start-center;
+            const auto transform = label_transform(label, center);
+            const auto local_start = transform.inverted().map(start);
+            const auto delta = local_start-bounds.center();
             const auto factor = std::max(std::abs(delta.x()) / std::max(1.0,bounds.width()*0.5),
                                          std::abs(delta.y()) / std::max(1.0,bounds.height()*0.5));
             if (factor > 1.0) {
-                const auto edge = center + delta / factor;
+                const auto edge = transform.map(bounds.center() + delta / factor);
                 auto color = label.color.isValid() ? label.color :
                     background.lightnessF()>0.5 ? QColor(85,98,115) : QColor(190,195,200);
                 color.setAlpha(160);
@@ -5709,7 +5740,10 @@ void PlanCanvas::drawLabels(QPainter& painter, const QRectF& viewport, double sc
                                                     ? QColor(50, 65, 84)
                                                     : QColor(255, 239, 172));
         painter.setBrush(Qt::NoBrush);
-        painter.drawText(bounds, Qt::AlignCenter, label.text);
+        const auto text_bounds = label.text_alignment == QStringLiteral("left") ||
+                                 label.text_alignment == QStringLiteral("right")
+            ? bounds.adjusted(5.0, 3.0, -5.0, -3.0) : bounds;
+        painter.drawText(text_bounds, label_text_alignment(label), label.text);
         painter.restore();
     }
     painter.restore();
