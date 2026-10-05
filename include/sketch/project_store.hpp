@@ -136,7 +136,9 @@ public:
     // relationship models, requires v38 across every retained revision.
     // Typed saved-callout placement completion requires v41 across retained history.
     // Source-bound physical rooms require v43 across retained history.
-    static constexpr std::uint32_t format_version = 43;
+    // Reviewed same-ID physical room repairs and their entity-only derivation
+    // carriers require v44, including deleted owners and abandoned history.
+    static constexpr std::uint32_t format_version = 44;
     static constexpr std::uint32_t recovery_format_version = 4;
     [[nodiscard]] static std::uint32_t required_format_version(const DocumentSnapshot& snapshot);
     static constexpr std::uint64_t maximum_file_bytes = 4ULL * 1024ULL * 1024ULL * 1024ULL;

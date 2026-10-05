@@ -3,6 +3,7 @@
 #include "sketch/floor_reference.hpp"
 #include "sketch/physical_wall_room.hpp"
 #include "sketch/physical_wall_spaces.hpp"
+#include "sketch/area_type_presets.hpp"
 
 #include "plan_canvas.hpp"
 #include "draft_image_stamp.hpp"
@@ -1833,9 +1834,9 @@ json stored_factor_json(const StoredFactor& factor) {
 }
 
 CalculationProfile default_calculation_profile() {
-    return CalculationProfile{
+    auto profile = CalculationProfile{
         "vertex-default",
-        1,
+        2,
         AreaUnit::square_foot,
         2,
         {{"measurement", ClassificationRule{true, false}},
@@ -1845,6 +1846,11 @@ CalculationProfile default_calculation_profile() {
          {"interior", ClassificationRule{false, false}},
          {"exterior", ClassificationRule{true, false}},
          {"party", ClassificationRule{true, false}}}};
+    for (const auto& preset : area_type_presets)
+        if (!preset.classification.empty())
+            profile.classifications.emplace(std::string(preset.classification),
+                ClassificationRule{preset.building_total, preset.living_total});
+    return profile;
 }
 
 QString symbol_svg_resource_path(const SymbolSvgAsset& asset) {
@@ -21660,6 +21666,112 @@ public:
         return candidate;
     }
 
+    void showPhysicalRoomRepair() {
+        try {
+            const auto selected = selectedEntity();
+            if (!selected || !is_physical_wall_room(*selected) || m_selected_ids.size()!=1)
+                throw std::invalid_argument("Select one physical room in Layers before repairing it.");
+            if (!m_document->is_editable() || m_boundary_session || m_linework_drawing || m_pending_wall_start)
+                throw std::invalid_argument("Finish drawing and use an editable project before repairing a room.");
+            const auto source = authoringSnapshot(); const auto context = captureModalContext();
+            const auto room_id = selected->id; const auto descriptor = decode_physical_wall_room_descriptor(*selected);
+            const auto digest = physical_wall_room_descriptor_digest(*selected);
+            const auto organization = organize_project(source); const auto room_context = organization.drawing_context(room_id);
+            if (!room_context || !room_context->complete()) throw std::invalid_argument("The room's layer needs a resolved building and floor.");
+            QDialog dialog(owner); styleDialog(dialog); dialog.setObjectName(QStringLiteral("physicalRoomRepair"));
+            dialog.setWindowTitle(QStringLiteral("Repair room from walls")); dialog.resize(880,700);
+            auto* layout = new QVBoxLayout(&dialog);
+            auto* help = new QLabel(QStringLiteral("Click inside the intended clear room. Dashed gray shows the previous outline; blue shows current spaces. "
+                "The room keeps its name and classification. Other split pieces remain unassigned."),&dialog);
+            help->setWordWrap(true); layout->addWidget(help);
+            auto* walls = new QComboBox(&dialog); walls->setObjectName(QStringLiteral("physicalRoomRepairSource"));
+            for (const auto& [id,entity] : source.entities()) if (entity.type=="wall" && organization.drawing_context(id)==room_context)
+                walls->addItem(id_from(read_string(entity.properties,"name").value_or(id)),id_from(id));
+            if (!walls->count()) throw std::invalid_argument("No current source walls remain in the room's layer.");
+            const auto original_wall = walls->findData(id_from(descriptor.selected_wall_id));
+            if (original_wall>=0) walls->setCurrentIndex(original_wall);
+            auto* source_row = new QHBoxLayout; source_row->addWidget(new QLabel(QStringLiteral("Source wall"),&dialog));
+            source_row->addWidget(walls,1); layout->addLayout(source_row);
+            auto* preview = new PlanCanvas(&dialog); preview->setObjectName(QStringLiteral("physicalRoomRepairCanvas"));
+            new BoundaryPreviewFit(preview); preview->setMinimumHeight(380); preview->setGridEnabled(false);
+            preview->setSnapEnabled(false); preview->setOverviewMapEnabled(false); preview->setSelectionTransformEnabled(false,false);
+            layout->addWidget(preview,1);
+            auto* status = new QLabel(&dialog); status->setObjectName(QStringLiteral("physicalRoomRepairStatus"));
+            status->setWordWrap(true); status->setTextFormat(Qt::PlainText); layout->addWidget(status);
+            auto* buttons = new QDialogButtonBox(QDialogButtonBox::Apply|QDialogButtonBox::Cancel,&dialog);
+            auto* apply = buttons->button(QDialogButtonBox::Apply); apply->setObjectName(QStringLiteral("physicalRoomRepairApply"));
+            apply->setText(QStringLiteral("Review and apply")); apply->setEnabled(false); layout->addWidget(buttons);
+            std::optional<PhysicalWallSpaces> detection; std::optional<EditBoundaryGeometry> proposal;
+            std::optional<EditBoundaryGeometry> accepted; std::optional<std::size_t> chosen;
+            const auto unchanged = [&] {
+                const auto current=authoringSnapshot();
+                return modalContextUnchanged(context) && m_document->is_editable() && m_selected_ids.size()==1 &&
+                    m_selected_id==id_from(room_id) && current.document_id()==source.document_id() && current.revision()==source.revision() &&
+                    current.entities()==source.entities() && current.assets()==source.assets();
+            };
+            const auto scene = [&] {
+                std::vector<CanvasEntity> entities;
+                CanvasEntity previous{id_from(room_id),QStringLiteral("boundary"),boundary_geometry(decode_identified_boundary_entity(*selected)),0,false};
+                previous.holes=descriptor.holes; previous.stroke_color=QColor(130,143,158); previous.dashed_stroke=true; entities.push_back(std::move(previous));
+                if (detection) for (std::size_t i=0;i<detection->spaces.size();++i) {
+                    const auto& space=detection->spaces[i]; CanvasEntity current{QStringLiteral("candidate:%1").arg(i),QStringLiteral("boundary"),space.boundary,0,false};
+                    current.holes=space.holes; current.stroke_color=QColor(36,107,206);
+                    current.filled=chosen && *chosen==i; current.fill_color=QColor(36,107,206,35); entities.push_back(std::move(current));
+                }
+                preview->setEntities(std::move(entities));
+            };
+            const auto refresh_sources = [&] {
+                detection.reset(); proposal.reset(); chosen.reset(); apply->setEnabled(false);
+                try {
+                    if (!unchanged()) throw std::invalid_argument("The project or selection changed. Close this review and start again.");
+                    detection=detect_physical_wall_spaces(source,walls->currentData().toString().toStdString());
+                    status->setText(detection->spaces.empty()?QStringLiteral("No clear room was found in these source walls."):
+                        QStringLiteral("Click the current clear room to retain this room's identity."));
+                } catch (const std::exception& error) { status->setText(QString::fromUtf8(error.what())); }
+                scene(); preview->fitView();
+            };
+            preview->setPointPlacementRequested([&](Vec2 point) {
+                proposal.reset(); chosen.reset(); apply->setEnabled(false);
+                try {
+                    if (!unchanged() || !detection) throw std::invalid_argument("The room review is no longer current.");
+                    for (std::size_t i=0;i<detection->spaces.size();++i) {
+                        const auto& space=detection->spaces[i];
+                        if (!PlanCanvas::containsAreaPoint(space.boundary,point) || std::any_of(space.holes.begin(),space.holes.end(),
+                            [&](const auto& hole) { return PlanCanvas::containsAreaPoint(hole,point); })) continue;
+                        if (chosen) throw std::invalid_argument("Several spaces contain this point. Choose an unambiguous interior point.");
+                        chosen=i;
+                    }
+                    if (!chosen) throw std::invalid_argument("Click inside a current clear space, outside wall material and holes.");
+                    const auto& space=detection->spaces.at(*chosen);
+                    proposal=boundaryRedefinitionCommand(source,space.boundary,{},nullptr,true);
+                    PhysicalWallRoomRepairIntent intent; intent.selected_wall_id=walls->currentData().toString().toStdString();
+                    intent.interior_witness=point; intent.reviewed_source_lineage=space.source_lineage; intent.expected_descriptor_digest=digest;
+                    proposal->edit.physical_wall_room_repair=std::move(intent);
+                    status->setText(QStringLiteral("Current clear area: %1 · %2 wall-material hole(s). Attached references are reviewed before applying.")
+                        .arg(format_dimension_area(space.area_square_metres,m_metric_units)).arg(space.holes.size()));
+                    apply->setEnabled(true);
+                } catch (const std::exception& error) { proposal.reset(); chosen.reset(); status->setText(QString::fromUtf8(error.what())); }
+                scene();
+            });
+            QObject::connect(walls,&QComboBox::currentIndexChanged,&dialog,[&] { refresh_sources(); });
+            QObject::connect(buttons,&QDialogButtonBox::rejected,&dialog,&QDialog::reject);
+            QObject::connect(apply,&QPushButton::clicked,&dialog,[&] {
+                try {
+                    if (!proposal || !unchanged()) throw std::invalid_argument("The room review changed. Choose the current destination again.");
+                    const auto reviewed=reviewBoundaryRedefinition(source,*proposal);
+                    if (!reviewed || !unchanged()) return;
+                    (void)Document::preview_command(source,*reviewed); accepted=*reviewed; dialog.accept();
+                } catch (const std::exception& error) { status->setText(QString::fromUtf8(error.what())); }
+            });
+            QTimer timer(&dialog); timer.setInterval(100);
+            QObject::connect(&timer,&QTimer::timeout,&dialog,[&] { if (!unchanged()) { proposal.reset(); apply->setEnabled(false);
+                status->setText(QStringLiteral("The project or selection changed. Close this review and start again.")); } }); timer.start();
+            refresh_sources();
+            if (dialog.exec()!=QDialog::Accepted || !accepted || !unchanged()) return;
+            (void)Document::preview_command(source,*accepted); applyDocumentCommand(*accepted); clearError(); refresh();
+        } catch (const std::exception& error) { setError(QStringLiteral("Repair room: %1").arg(QString::fromUtf8(error.what()))); }
+    }
+
     bool redefineSelectedBoundary(const Boundary& boundary, const QString& classification) {
         if (!m_document->is_editable()) {
             setError(QStringLiteral("This document is read-only."));
@@ -27738,6 +27850,7 @@ public:
             {QStringLiteral("Complete bay-window return (B)"), [this] { (void)completeBayWindowReturn(); }},
             {QStringLiteral("Redefine boundary"), [this] { showBoundaryRedefinition(); }},
             {QStringLiteral("Review measured area sources"), [this] { showMeasuredAreaSourceReview(); }},
+            {QStringLiteral("Repair room from walls"), [this] { showPhysicalRoomRepair(); }},
             {QStringLiteral("Detect closed areas from walls or measured lines"), [this] { showAutomaticAreaDetection(); }},
             {QStringLiteral("Measure exterior from walls"), [this] { showWallMeasurementReview(); }},
             {QStringLiteral("Refresh exterior measurement"), [this] { showWallMeasurementReview(true); }},
@@ -29328,6 +29441,10 @@ private:
         review_measured->setObjectName(QStringLiteral("reviewMeasuredAreaSources"));
         owner->addAction(review_measured);more_menu->addAction(review_measured);
         QObject::connect(review_measured,&QAction::triggered,owner,[this]{showMeasuredAreaSourceReview();});
+        auto* repair_room = new QAction(QStringLiteral("Repair room from walls…"),owner);
+        repair_room->setObjectName(QStringLiteral("repairPhysicalWallRoom"));
+        owner->addAction(repair_room); more_menu->addAction(repair_room);
+        QObject::connect(repair_room,&QAction::triggered,owner,[this] { showPhysicalRoomRepair(); });
         m_terrain_action = new QAction(QStringLiteral("Create terrain surface…"), owner);
         m_terrain_action->setObjectName(QStringLiteral("createTerrainSurface"));
         m_architectural_actions = {curved_wall_action, sloped_wall_action, m_view_action, m_remodel_action,
@@ -29625,6 +29742,7 @@ private:
         m_area_class_palette = new AreaClassPalette(library_pages);
         library_pages->addTab(m_area_class_palette, QStringLiteral("Area classes"));
         m_area_class_palette->setArmRequested([this](QString classification) { armAreaClass(classification); });
+        m_area_class_palette->setAddTypesRequested([this] { addMissingAreaTypes(); });
         m_area_class_palette->setCancelRequested([this] { cancelAreaClass(); });
         m_area_class_palette->setDropRequested([this](QString classification,QString target) {
             return applyAreaClass(classification,target);
@@ -36267,6 +36385,11 @@ private:
     }
 
     static QString areaPaletteClassLabel(const QString& key) {
+        if (const auto* preset = area_type_for_classification(key.toStdString()))
+            return QString::fromUtf8(preset->label.data(), static_cast<qsizetype>(preset->label.size()));
+        if (key.startsWith(QStringLiteral("area-type:")))
+            if (const auto* preset = area_type_for_code(key.mid(10).toStdString()))
+                return QString::fromUtf8(preset->label.data(), static_cast<qsizetype>(preset->label.size()));
         if(const auto category=parse_appraisal_category(key.toStdString()))
             return QString::fromStdString(appraisal_category_label(*category));
         auto label=key;label.replace(QLatin1Char('_'),QLatin1Char(' '));
@@ -36305,6 +36428,30 @@ private:
         m_measurementCanvas->setFocus(Qt::ShortcutFocusReason);
     }
 
+    void addMissingAreaTypes() {
+        try {
+            const auto source=authoringSnapshot();
+            if (!m_document->is_editable() || !areaPaletteSourceMatches(source))
+                throw std::invalid_argument("Refresh the current area palette in an editable project first.");
+            const auto context=organize_project(source).drawing_context(m_active_layer_id.toStdString());
+            if (!context || !context->complete()) throw std::invalid_argument("Choose a resolved drawing layer.");
+            auto property=source.entities().at(context->property_id);
+            if (calculation_workflow_name(property.properties)=="appraisal")
+                throw std::invalid_argument("Appraisal drawing types are already available independently of eligibility facts.");
+            const auto profile=read_calculation_profile(property.properties); bool changed=false;
+            auto persisted=property.properties.contains("calculation_profile") ? property.properties.at("calculation_profile") : calculation_profile_json(profile);
+            for (const auto& preset : area_type_presets) if (!preset.classification.empty() &&
+                !profile.classifications.contains(std::string(preset.classification))) {
+                persisted["classifications"][std::string(preset.classification)]={{"building_total",preset.building_total},
+                    {"living_total",preset.living_total},{"appraisal_category","none"}}; changed=true;
+            }
+            if (!changed) return;
+            property.properties["calculation_profile"]=std::move(persisted);
+            const auto command=augmentAuthoredCommand(ApplyEntityChanges{source.revision(),{EntityChange::upsert(property)}, {},"Add drawing types to measurement profile"});
+            (void)Document::preview_command(source,command); applyAuthoredCommand(command); clearError(); refresh();
+        } catch (const std::exception& error) { setError(QStringLiteral("Add drawing types: %1").arg(QString::fromUtf8(error.what()))); }
+    }
+
     void refreshAreaClassPalette() {
         if(!m_area_class_palette)return;
         if(m_armed_area_class && (m_area_class_document.lock()!=m_document || m_area_class_layer!=m_active_layer_id ||
@@ -36315,11 +36462,18 @@ private:
         m_area_palette_layer=m_active_layer_id;m_area_palette_visibility=m_view_filter;
         m_area_palette_metric=m_metric_units;m_area_palette_workspace=m_workspace;m_area_palette_named_view=m_active_named_view;
         m_area_detected_targets.clear();
+        m_area_class_palette->setMissingDrawingTypes(false);
         std::vector<AreaClassEntry> classes;std::vector<AreaClassTarget> targets;
         try {
             const auto organization=organize_project(source);const auto context=organization.drawing_context(m_active_layer_id.toStdString());
             if(!context || !context->complete())throw std::invalid_argument("Choose a drawing layer for area classes.");
             const auto profile=areaPaletteProfile(source,*context);
+            const bool appraisal = calculation_workflow_name(source.entities().at(context->property_id).properties) == "appraisal";
+            m_area_class_palette->setMissingDrawingTypes(!appraisal && std::any_of(area_type_presets.begin(),area_type_presets.end(),
+                [&](const auto& preset) { return !preset.classification.empty() && !profile.classifications.contains(std::string(preset.classification)); }));
+            if (appraisal) for (const auto& preset : area_type_presets)
+                classes.push_back({QStringLiteral("area-type:") + id_from(std::string(preset.code)),
+                    id_from(std::string(preset.label)), QStringLiteral("Drawing types")});
             for(const auto& [key,rule]:profile.classifications) {
                 if(key=="unqualified")continue;
                 classes.push_back({id_from(key),areaPaletteClassLabel(id_from(key)),rule.living_total?QStringLiteral("living"):
@@ -36352,7 +36506,12 @@ private:
                     const auto found = physical_rooms.find(id);
                     class_label = found != physical_rooms.end() && found->second.current
                         ? QStringLiteral("Clear room · %1").arg(format_dimension_area(found->second.area_square_metres, m_metric_units))
-                        : QStringLiteral("Stale room · re-detect from source walls");
+                        : QStringLiteral("Stale room · Tools > Repair room from walls");
+                }
+                if (appraisal && entity.extensions.contains("area_type") && entity.extensions.at("area_type").is_object()) {
+                    const auto code = read_string(entity.extensions.at("area_type"), "code");
+                    if (code) if (const auto* preset = area_type_for_code(*code))
+                        class_label += QStringLiteral(" · %1").arg(id_from(std::string(preset->label)));
                 }
                 targets.push_back({id_from(id),QStringLiteral("%1\n%2").arg(area_name,class_label)});
             }
@@ -36385,7 +36544,10 @@ private:
                         .arg(format_dimension_area(detection.graph.faces[i].area_square_metres,m_metric_units))});
                 }
             }
-            if(m_armed_area_class && !m_armed_area_class->isEmpty() && !profile.classifications.contains(m_armed_area_class->toStdString()))cancelAreaClass();
+            if(m_armed_area_class && !m_armed_area_class->isEmpty() &&
+                !profile.classifications.contains(m_armed_area_class->toStdString()) &&
+                !(appraisal && m_armed_area_class->startsWith(QStringLiteral("area-type:")) &&
+                    area_type_for_code(m_armed_area_class->mid(10).toStdString())))cancelAreaClass();
         } catch(const std::exception& error) {m_area_class_palette->setStatus(QString::fromUtf8(error.what()));}
         m_area_class_palette->setClasses(std::move(classes));m_area_class_palette->setTargets(targets);
     }
@@ -36412,20 +36574,25 @@ private:
             const auto organization=organize_project(source);const auto context=organization.drawing_context(m_active_layer_id.toStdString());
             if(!context || !context->complete())throw std::invalid_argument("Choose a resolved drawing layer.");
             const auto profile=areaPaletteProfile(source,*context);
-            if(!classification.isEmpty() && (!profile.classifications.contains(classification.toStdString()) || classification==QStringLiteral("unqualified")))
+            const bool appraisal_type = calculation_workflow_name(source.entities().at(context->property_id).properties) == "appraisal" &&
+                classification.startsWith(QStringLiteral("area-type:"));
+            const auto* preset = appraisal_type ? area_type_for_code(classification.mid(10).toStdString()) : nullptr;
+            if ((appraisal_type && !preset) || (!appraisal_type && !classification.isEmpty() &&
+                (!profile.classifications.contains(classification.toStdString()) || classification==QStringLiteral("unqualified"))))
                 throw std::invalid_argument("This class is not available in the current calculation profile.");
             ApplyEntityChanges command{source.revision(),{}, {},"Apply area class"};
             if(const auto detected=m_area_detected_targets.find(target);detected!=m_area_detected_targets.end()) {
-                if(classification.isEmpty())throw std::invalid_argument("This detected space has no class to clear.");
+                if(classification.isEmpty() || (preset && preset->classification.empty()))throw std::invalid_argument("This detected space has no class to clear.");
                 const auto captured=detected->second;
+                const auto authored_class = appraisal_type ? std::string("measurement") : classification.toStdString();
                 if (captured.physical) {
-                    command = prepare_physical_wall_rooms(source, captured.stroke.toStdString(), {captured.index}, classification.toStdString());
+                    command = prepare_physical_wall_rooms(source, captured.stroke.toStdString(), {captured.index}, authored_class);
                 } else {
                 const auto detection=detect_measurement_areas(source,captured.stroke.toStdString());
                 if(captured.index>=detection.graph.faces.size() || detection.existing_area_ids[captured.index] || detection.existing_group_ids[captured.index])
                     throw std::invalid_argument("This space now has an owner. Refresh and use its area row.");
                 std::vector<MeasurementAreaChoice> choices(detection.graph.faces.size());
-                choices[captured.index]={MeasurementAreaDisposition::define_area,classification.toStdString()};
+                choices[captured.index]={MeasurementAreaDisposition::define_area,authored_class};
                 command=prepare_measurement_area_definition(source,captured.stroke.toStdString(),choices).command;
                 }
             } else {
@@ -36436,7 +36603,12 @@ private:
                     throw std::invalid_argument("Choose a visible closed area in the current drawing layer.");
                 auto updated=found->second;const auto& property=source.entities().at(context->property_id);
                 const bool appraisal=calculation_workflow_name(property.properties)=="appraisal";
-                if(is_physical_wall_room(updated)) {
+                if (appraisal_type) {
+                    // A drawing label does not replace facts, derived categories,
+                    // measurement classifications or the actual floor assignment.
+                    if (preset->classification.empty()) updated.extensions.erase("area_type");
+                    else updated.extensions["area_type"] = {{"version",1},{"code",std::string(preset->code)}};
+                } else if(is_physical_wall_room(updated)) {
                     if (classification.isEmpty()) { updated.properties.erase("classification"); updated.properties.erase("measurement_classification"); }
                     else { updated.properties["classification"] = classification.toStdString(); updated.properties["measurement_classification"] = classification.toStdString(); }
                 } else if(appraisal) {
@@ -36460,6 +36632,11 @@ private:
                 }
                 if(updated!=found->second)command.entity_changes.push_back(EntityChange::upsert(std::move(updated)));
             }
+            if (appraisal_type && m_area_detected_targets.contains(target))
+                for (auto& change : command.entity_changes)
+                    if (change.kind == EntityChangeKind::upsert && is_closed_boundary_entity(change.entity.type) &&
+                        !source.entities().contains(change.entity.id))
+                        change.entity.extensions["area_type"] = {{"version",1},{"code",std::string(preset->code)}};
             if(!command.entity_changes.empty()) {
                 command=std::get<ApplyEntityChanges>(augmentAuthoredCommand(command));
                 (void)Document::preview_command(source,command);applyAuthoredCommand(command);refresh();

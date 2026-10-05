@@ -11,6 +11,8 @@
 #include "sketch/measurement_area_graph.hpp"
 #include "sketch/measurement_linework.hpp"
 #include "sketch/measurement_linework_source.hpp"
+#include "sketch/physical_wall_room.hpp"
+#include "sketch/physical_wall_spaces.hpp"
 #include "sketch/sheet_view_entity_codec.hpp"
 #include "sketch/annotation_entity_codec.hpp"
 #include "support/noninteractive_errors.hpp"
@@ -3384,6 +3386,45 @@ void test_styled_dimension_checkpoint_archive_roundtrip() {
     }
 }
 
+void test_reviewed_physical_room_repair_floor_and_downgrade() {
+    const auto room_wall=[](const char* id,sketch::Vec2 a,sketch::Vec2 b) {
+        return entity(id,"wall",{{"baseline",{{"start",{a.x,a.y}},{"end",{b.x,b.y}},{"sweep_radians",0}}},
+            {"thickness_m",.2},{"height_m",3},{"elevation_m",0},{"layer_id","layer"}});
+    };
+    auto document=Document::create({entity("property","property"),entity("building","building",{{"property_id","property"}}),
+        entity("floor","floor",{{"building_id","building"}}),entity("layer","layer",{{"floor_id","floor"}}),
+        room_wall("bottom",{0,0},{4,0}),room_wall("right",{4,0},{4,3}),room_wall("top",{4,3},{0,3}),room_wall("left",{0,3},{0,0})});
+    const auto creation=sketch::prepare_physical_wall_rooms(document.snapshot(),"bottom",{0},"office");
+    const auto id=creation.entity_changes.front().entity.id;document.apply(creation);
+    auto changed=document.snapshot().entities().at("bottom");changed.properties["thickness_m"]=.4;
+    document.apply(ApplyEntityChanges{document.revision(),{EntityChange::upsert(changed)}, {},"Change physical sources"});
+    const auto source=document.snapshot();const auto detected=sketch::detect_physical_wall_spaces(source,"bottom");
+    sketch::LegacyBoundaryIdentityOptions identities;
+    for (std::size_t i=0;i<detected.spaces.front().boundary.size();++i) {
+        identities.segment_ids.push_back("repair-edge-"+sketch::make_stable_id());
+        identities.vertex_ids.push_back("repair-vertex-"+sketch::make_stable_id());
+    }
+    const auto repair=sketch::prepare_physical_wall_room_repair(source,id,"bottom",{2,1.5},detected.spaces.front().source_lineage,
+        sketch::physical_wall_room_descriptor_digest(source.entities().at(id)),identities,{});
+    document.apply(repair);
+    for (const unsigned carrier:{0U,1U,2U}) {
+        auto variant=Document::fork(document.snapshot());
+        if (carrier==1) {
+            const auto retained=variant.snapshot();
+            std::vector<Entity> entities;for (const auto& [key,value]:retained.entities()) {(void)key;entities.push_back(value);}
+            variant=Document::create(entities);
+        } else if (carrier==2) variant.apply(ApplyEntityChanges{variant.revision(),{EntityChange::erase(id)}, {},"Delete repaired room"});
+        require(ProjectStore::required_format_version(variant.snapshot())==44,"retained or entity-only physical room repair needs native44");
+        TempDirectory temp;const auto path=temp.path/"repair.bldproj";
+        (void)ProjectStore::save(path,variant.snapshot());
+        require(ProjectStore::load(path).document.snapshot().entities()==variant.snapshot().entities(),"native44 repaired room should reopen exactly");
+        execute_sql(path,"PRAGMA user_version=43; UPDATE metadata SET value='43' WHERE key='format_version'");
+        rewrite_logical_digest(path);
+        require_error([&]{(void)ProjectStore::load(path);},StorageErrorCode::unsupported_format,
+            "recomputed digest cannot downgrade direct, nested or deleted physical repair history below native44");
+    }
+}
+
 void test_native_room_topology_is_validated_on_restore() {
     TempDirectory temp;
     const auto path = temp.path / "room.bldproj";
@@ -3430,6 +3471,7 @@ int main() {
         test_physical_arc_length_history_requires_v12();
         test_direct_curve_length_history_requires_v13();
         test_native_room_topology_is_validated_on_restore();
+        test_reviewed_physical_room_repair_floor_and_downgrade();
         test_styled_dimension_checkpoint_archive_roundtrip();
         test_save_reopen_preserves_exact_revision_history_and_assets();
         test_existing_destination_requires_fingerprint_and_creates_backup();

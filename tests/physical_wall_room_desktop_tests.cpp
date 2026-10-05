@@ -13,6 +13,11 @@
 #include <QListWidget>
 #include <QMouseEvent>
 #include <QKeyEvent>
+#include <QAction>
+#include <QDialog>
+#include <QDialogButtonBox>
+#include <QPushButton>
+#include <QTimer>
 #include <QStandardPaths>
 #include <QTemporaryDir>
 
@@ -130,6 +135,22 @@ void capture(MainWindow& window, const char* name) {
     require(QDir().mkpath(directory) && window.grab().save(QDir(directory).filePath(QString::fromLatin1(name))),
             "capture actual native physical room workspace");
 }
+void review_room(MainWindow& window,const std::function<void(QDialog&)>& interaction) {
+    auto* action=child<QAction>(window,"repairPhysicalWallRoom"); std::exception_ptr failure;
+    QTimer watchdog; watchdog.setSingleShot(true);
+    QObject::connect(&watchdog,&QTimer::timeout,&window,[&] {
+        auto* dialog=dynamic_cast<QDialog*>(QApplication::activeModalWidget());
+        const auto* status=dialog?dialog->findChild<QLabel*>("physicalRoomRepairStatus"):nullptr;
+        failure=std::make_exception_ptr(std::runtime_error("Repair review did not close: "+(status?status->text().toStdString():std::string("no modal"))));
+        if (dialog) dialog->reject();
+    });
+    QTimer::singleShot(0,&window,[&] {
+        auto* dialog=dynamic_cast<QDialog*>(QApplication::activeModalWidget());
+        try { require(dialog && dialog->objectName()=="physicalRoomRepair","actual native room repair dialog opens"); interaction(*dialog); }
+        catch (...) { failure=std::current_exception(); if (dialog) dialog->reject(); }
+    });
+    watchdog.start(4000); action->trigger(); watchdog.stop(); if (failure) std::rethrow_exception(failure);
+}
 void workflow() {
     QTemporaryDir files;
     require(files.isValid(), "physical room fixture has temporary storage");
@@ -149,7 +170,9 @@ void workflow() {
             "exterior boundary has explicit qualifying declarations");
     const auto exterior_before = window.document().snapshot().entities().at(exterior.toStdString());
     const auto gla_before = child<QLabel>(window, "appraisalGlaTotal")->text();
+    const auto property_gla_before = child<QLabel>(window, "appraisalDetailsGla")->text();
     require(gla_before.contains("25.00"), "independent declared exterior owner reports 25 square metres GLA");
+    require(property_gla_before.contains("25.00"),"persistent property Details also report the qualified GLA");
 
     require(window.selectEntity("bottom"), "select real physical wall for room discovery");
     const auto before = window.document().snapshot();
@@ -253,6 +276,44 @@ void workflow() {
                 [&](const auto& diagnostic) { return diagnostic.find(id.toStdString()) != std::string::npos; }),
             "stale room schedule suppresses old numeric row and reports source diagnostic");
     rejects_entity_only_dimension(window.document().snapshot().entities().at(id.toStdString()));
+    const auto stale_source=window.document().snapshot();
+    review_room(window,[&](QDialog& dialog) {
+        auto* preview=dynamic_cast<PlanCanvas*>(dialog.findChild<QWidget*>("physicalRoomRepairCanvas"));
+        auto* apply=dialog.findChild<QPushButton*>("physicalRoomRepairApply");
+        require(preview && apply && !apply->isEnabled(),"repair has a real preview and requires a picked interior");
+        click(*preview,{2,1}); require(!apply->isEnabled(),"wall-material hole cannot become a repair destination");
+        click(*preview,{2,2}); require(apply->isEnabled(),"actual canvas click chooses current room");
+        auto* buttons=dialog.findChild<QDialogButtonBox*>(); require(buttons,"repair has cancellation controls");
+        buttons->button(QDialogButtonBox::Cancel)->click();
+    });
+    require(window.document().snapshot().entities()==stale_source.entities() && window.document().revision()==stale_source.revision(),
+        "cancel repair leaves exact stale source and revision untouched");
+    review_room(window,[&](QDialog& dialog) {
+        auto* preview=dynamic_cast<PlanCanvas*>(dialog.findChild<QWidget*>("physicalRoomRepairCanvas"));
+        auto* apply=dialog.findChild<QPushButton*>("physicalRoomRepairApply"); require(preview && apply,"repair controls exist");
+        click(*preview,{2,2}); require(apply->isEnabled(),"repair destination selected");
+        const auto directory=qEnvironmentVariable("VERTEX_TEST_CAPTURE_DIR");
+        if (!directory.isEmpty()) require(dialog.grab().save(QDir(directory).filePath("physical-room-repair-preview.png")),"actual repair preview capture saves");
+        apply->click();
+    });
+    const auto repaired=window.document().snapshot();
+    require(repaired.revision()==stale_source.revision()+1 && repaired.entities().at(id.toStdString()).properties.at("classification")==
+        stale_source.entities().at(id.toStdString()).properties.at("classification"),
+        "repair retains the room identity and class in one revision");
+    const auto repaired_check=physical_wall_room_checks(repaired).at(id.toStdString());
+    require(repaired_check.current && repaired_check.holes.size()==1,"repair derives current physical room and hole"); assert_near(repaired_check.area_square_metres,9.86);
+    if (repaired.entities().at(exterior.toStdString())!=exterior_before || child<QLabel>(window,"appraisalDetailsGla")->text()!=property_gla_before)
+        throw std::runtime_error("room repair cannot change exterior appraisal owner or GLA: owner diff="+
+            nlohmann::json::diff(exterior_before.properties,repaired.entities().at(exterior.toStdString()).properties).dump()+
+            "; original GLA="+property_gla_before.toStdString()+"; current GLA="+child<QLabel>(window,"appraisalDetailsGla")->text().toStdString()+
+            "; error="+window.lastError().toStdString());
+    require(window.undoCommand() && window.document().snapshot().entities()==stale_source.entities(),"repair Undo restores retained stale evidence");
+    require(window.redoCommand() && window.document().snapshot().entities()==repaired.entities(),"repair Redo restores exact reviewed destination");
+    require(window.saveProjectAs(files.filePath("repaired-room.bldproj")) && window.openProject(files.filePath("repaired-room.bldproj")) && window.selectEntity(id),
+        "native repaired room saves and reopens");
+    require(window.document().snapshot().entities()==repaired.entities() && physical_wall_room_checks(window.document().snapshot()).at(id.toStdString()).current,
+        "reopened repair replays source authority and retains identity");
+    require(window.undoCommand() && window.document().snapshot().entities()==stale_source.entities(),"reopened repair Undo restores prior source evidence");
     require(window.undoCommand() && physical_wall_room_checks(window.document().snapshot()).at(id.toStdString()).current &&
             geometry(drawing, id) && label(drawing, id).contains("10.24 m²"),
             "Undo source edit repairs room projection and derived area");

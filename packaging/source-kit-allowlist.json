@@ -2839,6 +2839,10 @@
     },
     {
       "category": "docs",
+      "path": "docs/verification/physical-room-reviewed-repair-2026-10-04.md"
+    },
+    {
+      "category": "docs",
       "path": "docs/verification/pinc-floor-reference-2026-10-04.md"
     },
     {
@@ -3040,6 +3044,10 @@
     {
       "category": "source",
       "path": "include/sketch/area_subtraction.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/area_type_presets.hpp"
     },
     {
       "category": "source",
@@ -5172,6 +5180,10 @@
     {
       "category": "source",
       "path": "tests/physical_wall_room_desktop_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/physical_wall_room_repair_tests.cpp"
     },
     {
       "category": "source",

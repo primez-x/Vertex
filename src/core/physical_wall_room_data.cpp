@@ -1,9 +1,15 @@
 #include "sketch/physical_wall_room_data.hpp"
+#include "sketch/boundary_entity.hpp"
+#include "sketch/model_phases.hpp"
+#include "sketch/physical_wall_spaces.hpp"
+#include "sketch/project_organization.hpp"
 
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <initializer_list>
+#include <set>
+#include <span>
 #include <stdexcept>
 #include <utility>
 
@@ -105,5 +111,82 @@ Json encode_physical_wall_room_descriptor(const PhysicalWallRoomDescriptor& desc
         {"source_lineage",descriptor.source_lineage},{"holes",std::move(holes)}};
     Entity owner{"physical-room-validation","room_boundary",Json::object(),false,{{"physical_wall_room",value}}};
     (void)decode_physical_wall_room_descriptor(owner); return value;
+}
+
+std::string physical_wall_room_descriptor_digest(const Entity& entity) {
+    (void)decode_physical_wall_room_descriptor(entity);
+    const auto encoded=entity.extensions.at("physical_wall_room").dump();
+    return sha256_hex(std::as_bytes(std::span<const char>{encoded.data(),encoded.size()}));
+}
+
+PhysicalWallRoomDescriptor validate_physical_wall_room_repair(
+    const std::map<std::string,Entity,std::less<>>& source,const BoundaryGeometryEdit& edit) {
+    validate_boundary_geometry_edit(edit);
+    if (!edit.physical_wall_room_repair) invalid("repair authority is missing");
+    const auto found=source.find(edit.boundary_id);
+    if (found==source.end() || !is_physical_wall_room(found->second)) invalid("repair requires a retained physical room owner");
+    const auto& original=found->second;
+    const auto& repair=*edit.physical_wall_room_repair;
+    if (physical_wall_room_descriptor_digest(original)!=repair.expected_descriptor_digest)
+        invalid("retained descriptor changed after review");
+    std::set<std::string,std::less<>> inactive;
+    for (const auto& [id,entity]:source) {
+        (void)id;
+        if (entity.type!="model_phases") continue;
+        const auto phases=ModelPhases::from_json(entity.properties.at("model"));
+        const auto active=phases.active_state();
+        for (const auto& member:phases.entity_ids())
+            if (!active.contains(member) || active.at(member)==ModelPhase::demolished) inactive.insert(member);
+    }
+    if (inactive.contains(original.id)) invalid("room owner is inactive in the semantic phase");
+    const auto detection=detect_physical_wall_spaces(source,repair.selected_wall_id);
+    const auto organization=organize_project(source);
+    const auto context=organization.drawing_context(original.id);
+    if (!context || !context->complete() || *context!=detection.context)
+        invalid("reviewed destination differs from the retained room drawing context");
+    const PhysicalWallSpace* selected=nullptr;
+    for (const auto& space:detection.spaces) if (space.source_lineage==repair.reviewed_source_lineage) {
+        if (selected) invalid("reviewed lineage ambiguously identifies multiple destinations");
+        selected=&space;
+    }
+    if (!selected) invalid("reviewed destination lineage is no longer current");
+    // A small analytical probe makes the existing strict containment kernel
+    // prove interior membership, including all inline holes and its local
+    // metre envelope. It never establishes room identity or changes sources.
+    constexpr double radius=8*default_geometry_tolerance_metres;
+    const auto p=repair.interior_witness;
+    const Boundary probe{{{p.x-radius,p.y-radius},{p.x+radius,p.y-radius},0},
+        {{p.x+radius,p.y-radius},{p.x,p.y+radius},0},{{p.x,p.y+radius},{p.x-radius,p.y-radius},0}};
+    auto holes=selected->holes;holes.push_back(probe);
+    if (const auto error=validate_boundary_holes(selected->boundary,holes))
+        invalid("reviewed witness is not strictly inside the chosen clear component: "+*error);
+    const auto replacement=decode_identified_boundary_entity(Entity{original.id,original.type,
+        {{"boundary_model_version",1},{"segments",edit.replacement_segments}}});
+    const auto exact_boundary=[](const Boundary& a,const Boundary& b) {
+        return a.size()==b.size() && std::equal(a.begin(),a.end(),b.begin(),[](const Segment& x,const Segment& y) {
+            return x.start.x==y.start.x && x.start.y==y.start.y && x.end.x==y.end.x && x.end.y==y.end.y && x.sweep_radians==y.sweep_radians;
+        });
+    };
+    if (!exact_boundary(boundary_geometry(replacement),selected->boundary))
+        invalid("replacement outer differs from independently detected physical clear geometry");
+    std::size_t room_count=0;
+    for (const auto& [id,entity]:source) {
+        if (id==original.id || !is_physical_wall_room(entity) || inactive.contains(id)) continue;
+        if (organization.drawing_context(id)!=context) continue;
+        if (++room_count>2048) invalid("destination ownership check exceeds the room budget");
+        const auto descriptor=decode_physical_wall_room_descriptor(entity);
+        if (descriptor.source_lineage!=selected->source_lineage) continue;
+        if (exact_boundary(boundary_geometry(decode_identified_boundary_entity(entity)),selected->boundary) &&
+            descriptor.holes.size()==selected->holes.size() &&
+            std::equal(descriptor.holes.begin(),descriptor.holes.end(),selected->holes.begin(),exact_boundary))
+            invalid("reviewed clear destination is already assigned to another current room: "+id);
+    }
+    for (const auto& [id,entity]:source) {
+        if (entity.type=="dimension" && ((entity.properties.contains("boundary_id") && entity.properties.at("boundary_id")==original.id) ||
+            (entity.properties.contains("target") && entity.properties.at("target").is_object() &&
+             entity.properties.at("target").value("entity_id",std::string{})==original.id)))
+            invalid("source-bound room dimensions require snapshot-aware resolution before repair: "+id);
+    }
+    return {repair.selected_wall_id,selected->source_lineage,selected->holes};
 }
 } // namespace sketch

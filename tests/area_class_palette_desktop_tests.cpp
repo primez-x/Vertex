@@ -2,6 +2,8 @@
 #include "sketch/desktop/area_class_palette.hpp"
 #include "sketch/boundary_entity.hpp"
 #include "sketch/measurement_linework.hpp"
+#include "sketch/area_type_presets.hpp"
+#include "sketch/appraisal_document.hpp"
 #include "../src/desktop/plan_canvas.hpp"
 #include "support/noninteractive_errors.hpp"
 #include <QApplication>
@@ -63,10 +65,16 @@ void platformPointer(QWidget& widget,QEvent::Type type,QPoint point,
         buttons,button,type,Qt::NoModifier,timestamp+=100);
     QApplication::processEvents();
 }
+QListWidgetItem* classItem(QListWidget& classes, const QString& key) {
+    for (int i = 0; i < classes.count(); ++i)
+        if (classes.item(i)->data(Qt::UserRole).toString() == key) return classes.item(i);
+    return nullptr;
+}
 void dragVisibleClass(QListWidget& classes,PlanCanvas& canvas,QPoint target) {
-    require(classes.isVisible()&&canvas.isVisible()&&classes.count()==1,"class drag uses visible filtered palette and canvas");
-    const auto start=classes.visualItemRect(classes.item(0)).center();
-    require(classes.itemAt(start)==classes.item(0),"class pointer begins on the intended item");
+    auto* intended = classItem(classes, QStringLiteral("garage"));
+    require(classes.isVisible()&&canvas.isVisible()&&intended,"class drag uses visible filtered palette and canvas");
+    const auto start=classes.visualItemRect(intended).center();
+    require(classes.itemAt(start)==intended,"class pointer begins on the intended item");
     QTimer movement;movement.setSingleShot(true);
     QObject::connect(&movement,&QTimer::timeout,&canvas,[&] {
         platformPointer(canvas,QEvent::MouseMove,target,Qt::NoButton,Qt::LeftButton);
@@ -75,7 +83,7 @@ void dragVisibleClass(QListWidget& classes,PlanCanvas& canvas,QPoint target) {
     QTimer watchdog;watchdog.setSingleShot(true);
     QObject::connect(&watchdog,&QTimer::timeout,[]{QDrag::cancel();});
     platformPointer(*classes.viewport(),QEvent::MouseButtonPress,start,Qt::LeftButton,Qt::LeftButton);
-    require(classes.item(0)->isSelected(),"platform pointer selects the intended class before dragging");
+    require(intended->isSelected(),"platform pointer selects the intended class before dragging");
     platformPointer(*classes.viewport(),QEvent::MouseMove,start+QPoint(1,0),Qt::NoButton,Qt::LeftButton);
     movement.start(100);watchdog.start(3000);
     // This enters the actual ClassList::startDrag / Qt platform drag loop.
@@ -126,8 +134,8 @@ void workflow() {
         window.document().apply(ApplyEntityChanges{before_profile_change.revision(),{EntityChange::upsert(property)}, {},"fixture profile change"});break;
     }
     require(window.selectEntity(first),"refresh changed profile");search.setText("garage");
-    require(list.count()==0,"palette removes class deleted from current profile");
-    require(window.undoCommand(),"restore configured fixture profile");require(list.count()==1,"profile Undo refreshes classes");search.clear();
+    require(!classItem(list,"garage"),"palette removes class deleted from current profile without removing detached garage");
+    require(window.undoCommand(),"restore configured fixture profile");require(classItem(list,"garage"),"profile Undo refreshes classes");search.clear();
     search.setText("garage");
     dragVisibleClass(list,canvas,pixel(canvas,{1,1}).toPoint());search.clear();
     auto changed=window.document().snapshot();auto expected=source.entities().at(first.toStdString());
@@ -145,9 +153,10 @@ void workflow() {
     cached_rows.setCurrentItem(areaRow(cached_rows,first));
     require(window.selectEntity(second)&&cached_rows.currentItem()&&cached_rows.currentItem()->data(Qt::UserRole).toString()==first,
         "selection-only inspector refresh preserves the unchanged area list and its selection");
-    search.setText("garage");require(list.count()==1,"unique garage entry");click(*list.viewport(),list.visualItemRect(list.item(0)).center());
+    search.setText("garage");auto* garage_item=classItem(list,"garage");require(garage_item,"garage entry exists among garage types");
+    click(*list.viewport(),list.visualItemRect(garage_item).center());
     capture(window,"area-class-palette-armed.png");
-    const auto source_mime=std::unique_ptr<QMimeData>(list.model()->mimeData({list.model()->index(0,0)}));
+    const auto source_mime=std::unique_ptr<QMimeData>(list.model()->mimeData({list.model()->index(list.row(garage_item),0)}));
     require(source_mime && source_mime->hasFormat("application/x-vertex-area-class") &&
         source_mime->data("application/x-vertex-area-class").contains("garage"),"actual palette model produces external class drag");
     const auto before_pan=window.document().snapshot();const auto before_center=canvas.viewCenter();
@@ -311,6 +320,85 @@ void appraisal_authority() {
     require(row&&row->text().contains("Excluded")&&!row->text().contains("above_grade_finished")&&row->text().contains("facts"),
         "qualified exclusion replaces conflicting stored category in palette row");
 }
+void named_area_types() {
+    QTemporaryDir files; MainWindow window({}, nullptr, files.filePath("types-text.json"));
+    window.setAttribute(Qt::WA_DontShowOnScreen); window.resize(1200,900); window.show(); QApplication::processEvents();
+    const Boundary square{{{0,0},{2,0}},{{2,0},{2,2}},{{2,2},{0,2}},{{0,2},{0,0}}};
+    const auto area = window.createBoundary(square,"living"); require(!area.isEmpty(),"type fixture created");
+    auto& classes = child<QListWidget>(window,"areaClassItems");
+    auto& rows = child<QListWidget>(window,"areaClassTargets");
+    auto& canvas = *dynamic_cast<PlanCanvas*>(&child<QWidget>(window,"measurementPlanCanvas"));
+    canvas.setOverviewMapEnabled(false); canvas.fitView();
+    const QStringList expected_labels{"First Floor","Second Floor","Third Floor","Fourth Floor","Gross Building Area",
+        "Finished Basement","Unfinished Basement","Garage","Detached Garage","Accessory Dwelling / ADU",
+        "Shed / Outbuilding","Carport","Porch","Patio","Wood Deck","Balcony","Storage",
+        "Low Ceiling / Non-GLA","Open to Below","Non-Calculated Area","Subject Site"};
+    for (const auto& label : expected_labels) require(classes.findItems(label,Qt::MatchFixedString).size()==1,"named type appears once in a new measurement project");
+    require(classItem(classes,{}),"measurement clear choice is available");
+    const auto initial = window.document().snapshot();
+    for (const auto& preset : area_type_presets) {
+        const auto key = QString::fromUtf8(preset.classification.data(),static_cast<qsizetype>(preset.classification.size()));
+        require(drop(canvas,pixel(canvas,{1,1}),key),"each named measurement type applies");
+        const auto changed = window.document().snapshot(); auto expected = initial.entities().at(area.toStdString());
+        if (key.isEmpty()) { expected.properties.erase("classification"); expected.properties.erase("measurement_classification"); }
+        else { expected.properties["classification"]=key.toStdString(); expected.properties["measurement_classification"]=key.toStdString(); }
+        require(changed.entities().at(area.toStdString())==expected,"type changes only the chosen classification; geometry and context remain exact");
+        require(window.undoCommand() && window.document().snapshot().entities()==initial.entities(),"each measurement type has one-step Undo");
+    }
+    const auto before_custom=window.document().snapshot(); std::string property_id;
+    for (const auto& [id,entity] : before_custom.entities()) if (entity.type=="property") {
+        property_id=id; auto property=entity; auto& profile=property.properties["calculation_profile"];
+        profile["classifications"].erase("first_floor");
+        profile["classifications"]["garage"]={{"building_total",false},{"living_total",false},{"appraisal_category","none"}};
+        profile["retained_note"]="custom user rule";
+        window.document().apply(ApplyEntityChanges{before_custom.revision(),{EntityChange::upsert(property)}, {},"type fixture custom profile"}); break;
+    }
+    require(window.selectEntity(area),"refresh old customized profile");
+    const auto custom=window.document().snapshot(); auto& add_types=child<QPushButton>(window,"areaClassAddTypes");
+    require(!classItem(classes,"first_floor") && !add_types.isHidden(),"old profile offers explicit addition instead of silently inserting presets");
+    add_types.click(); const auto enabled=window.document().snapshot();
+    auto expected_property=custom.entities().at(property_id);
+    expected_property.properties["calculation_profile"]["classifications"]["first_floor"]={{"building_total",true},{"living_total",true},{"appraisal_category","none"}};
+    require(enabled.entities().at(property_id)==expected_property && add_types.isHidden(),"add types fills only the missing rule and preserves custom flags and unknown profile metadata");
+    require(window.undoCommand() && window.document().snapshot().entities()==custom.entities(),"add types has one-step Undo");
+    require(window.undoCommand() && window.document().snapshot().entities()==before_custom.entities(),"custom fixture returns to initial profile");
+    std::vector<EntityChange> changes;
+    const auto measurement_source=window.document().snapshot();
+    for (const auto& [id,entity] : measurement_source.entities()) if (entity.type=="property") {
+        property_id=id; auto property=entity; property.properties["calculation_workflow"]="appraisal";
+        property.properties["appraisal_policy"]={{"policy_kind","residential_declared"},{"version",1},
+            {"property_kind","detached_single_family"},{"measurement_basis","exterior"}};
+        changes.push_back(EntityChange::upsert(property));
+    }
+    window.document().apply(ApplyEntityChanges{window.document().snapshot().revision(),changes,{},"type fixture appraisal"});
+    require(window.selectEntity(area),"refresh appraisal types");
+    const auto appraisal_source=window.document().snapshot();
+    const auto original_report=build_appraisal_document_report(appraisal_source,property_id);
+    require(!original_report.qualified && !original_report.calculation,"incomplete fixture cannot produce GLA");
+    for (const auto& preset : area_type_presets) {
+        const auto token = QStringLiteral("area-type:")+QString::fromUtf8(preset.code.data(),static_cast<qsizetype>(preset.code.size()));
+        require(classItem(classes,token),"all 22 drawing types are accessible in appraisal mode");
+        if (preset.classification.empty()) continue; // Clear is checked against a retained type below.
+        require(drop(canvas,pixel(canvas,{1,1}),token),"appraisal drawing type applies");
+        const auto typed=window.document().snapshot(); auto expected=appraisal_source.entities().at(area.toStdString());
+        expected.extensions["area_type"]={{"version",1},{"code",std::string(preset.code)}};
+        require(typed.entities().at(area.toStdString())==expected,"appraisal type is descriptive and preserves facts/classification/geometry/floor");
+        const auto report=build_appraisal_document_report(typed,property_id);
+        require(!report.qualified && !report.calculation && report.issues==original_report.issues,"floor or GLA preset cannot manufacture eligibility or totals");
+        require(drop(canvas,pixel(canvas,{1,1}),QStringLiteral("area-type:UND")),"drawing type clear applies");
+        require(window.document().snapshot().entities()==appraisal_source.entities(),"type clear preserves every appraisal input");
+        require(window.undoCommand() && window.document().snapshot().entities()==typed.entities(),"type clear Undo restores only the drawing type");
+        require(window.undoCommand() && window.document().snapshot().entities()==appraisal_source.entities(),"type assignment Undo restores exact source");
+    }
+    require(!drop(canvas,pixel(canvas,{1,1}),QStringLiteral("area-type:UNKNOWN")),"unknown preset refuses");
+    require(drop(canvas,pixel(canvas,{1,1}),QStringLiteral("area-type:BSMT-F")),"retained type fixture applies");
+    auto* row=areaRow(rows,area); require(row && row->text().contains("Finished Basement") && row->text().contains("Unqualified"),"type label and qualification both visible");
+    child<QTabWidget>(window,"sidebarTabs").setCurrentIndex(1); child<QTabWidget>(window,"libraryPages").setCurrentIndex(1);
+    capture(window,"area-types-appraisal.png");
+    const auto retained=window.document().snapshot(); const auto path=files.filePath("types.bldproj");
+    require(window.saveProjectAs(path) && window.createNewProject(),"type project saves");
+    require(window.openProject(path) && window.document().snapshot().entities()==retained.entities(),"type identity and all appraisal inputs reopen exactly");
+}
 void stale_sources() {
     QTemporaryDir files;MainWindow seed({},nullptr,files.filePath("seed.json"));
     const Boundary square{{{0,0},{2,0}},{{2,0},{2,2}},{{2,2},{0,2}},{{0,2},{0,0}}};
@@ -355,6 +443,6 @@ int main(int argc,char** argv) {
     try {
         require(QFontDatabase::addApplicationFont(QStringLiteral(":/fonts/Inter.ttf"))>=0,"bundled Inter loads for actual palette captures");
         app.setFont(QFont(QStringLiteral("Inter"),10));
-        workflow();detected_spaces();appraisal_authority();stale_sources();std::cout<<"area_class_palette_desktop_tests passed\n";return 0;}
+        workflow();detected_spaces();appraisal_authority();named_area_types();stale_sources();std::cout<<"area_class_palette_desktop_tests passed\n";return 0;}
     catch(const std::exception& error) {std::cerr<<"area_class_palette_desktop_tests: "<<error.what()<<'\n';return 1;}
 }

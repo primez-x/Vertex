@@ -1,4 +1,5 @@
 #include "sketch/boundary_integrity.hpp"
+#include "sketch/physical_wall_room_data.hpp"
 #include "sketch/boundary_entity.hpp"
 #include "sketch/boundary_dimension.hpp"
 #include "sketch/boundary_receipt.hpp"
@@ -728,6 +729,12 @@ static std::map<std::string, Entity, std::less<>> edited_boundary_entities_impl(
         throw std::invalid_argument(*unsupported);
     const auto edited = batch ? apply_vertex_batch(decode_identified_boundary_entity(original), *batch)
                               : apply_geometry_edit(decode_identified_boundary_entity(original), edit);
+    std::optional<PhysicalWallRoomDescriptor> repaired_room;
+    if (edit.physical_wall_room_repair) {
+        if (batch) throw std::invalid_argument("Physical room repair cannot be batched with other geometry edits");
+        repaired_room=validate_physical_wall_room_repair(source,edit);
+        validate_retained_replacement_deductions(source,original,boundary_geometry(edited));
+    }
     if (edit.replacement_linework_sources) {
         if (batch) throw std::invalid_argument("Measured-line source replacement cannot be a vertex batch");
         validate_replacement_linework_face(source, original, edited, edit);
@@ -762,6 +769,7 @@ static std::map<std::string, Entity, std::less<>> edited_boundary_entities_impl(
         edited == decode_identified_boundary_entity(original)) return source;
 
     auto metadata = original;
+    if (repaired_room) metadata.extensions["physical_wall_room"]=encode_physical_wall_room_descriptor(*repaired_room);
     if (edit.replacement_linework_sources)
         metadata.extensions["measurement_linework_sources"] = *edit.replacement_linework_sources;
     if (replacement_source) metadata.properties["wall_measurement_source"] = replacement_source->source;
@@ -1206,11 +1214,19 @@ std::optional<std::string> validate_boundary_integrity(
                 // without requiring historical walls to remain in today's map.
                 std::vector<std::string> reviewed_sources;
                 std::optional<nlohmann::json> reviewed_linework;
+                std::optional<PhysicalWallRoomRepairIntent> reviewed_room;
                 for (const auto& operation : entity.extensions.at("boundary_geometry_derivation").at("operations")) {
                     if (operation.at("kind") != "geometry_edit") continue;
                     const auto edit = decode_boundary_geometry_edit(operation.at("value"));
                     if (!edit.replacement_wall_source_ids.empty()) reviewed_sources = edit.replacement_wall_source_ids;
                     if (edit.replacement_linework_sources) reviewed_linework = edit.replacement_linework_sources;
+                    if (edit.physical_wall_room_repair) reviewed_room=edit.physical_wall_room_repair;
+                }
+                if (reviewed_room) {
+                    const auto descriptor=decode_physical_wall_room_descriptor(entity);
+                    if (descriptor.selected_wall_id!=reviewed_room->selected_wall_id ||
+                        descriptor.source_lineage!=reviewed_room->reviewed_source_lineage)
+                        throw std::invalid_argument("Boundary " + id + ": physical room source differs from its retained reviewed repair proof");
                 }
                 if (!reviewed_sources.empty()) {
                     auto actual_sources = exterior_wall_measurement_source_ids(entity);

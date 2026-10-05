@@ -1,8 +1,10 @@
 # Physical room repair: next implementation
 
-Status: geometry dependency prerequisite implemented and verified; typed repair
-and its desktop workflow remain unimplemented. The installed creation/stale
-checkpoint does not implement repair. This work remains part of PINC-002 and the unified release
+Status: geometry prerequisite and explicit reviewed same-ID repair implemented
+and verified. The desktop workflow supports destination picking, reference review,
+cancel/apply, Undo/Redo and native reopening. Installation evidence is recorded
+separately. Automatic correspondence, multi-room dispositions and snapshot-aware
+physical-room dimensions remain open. This work remains part of PINC-002 and the unified release
 scope, not a separate product or reduced acceptance gate.
 
 ## Outcome
@@ -49,6 +51,10 @@ that adapter. All three standalone geometry test executables link without
 Document, and 12 affected native checks pass. See the
 [extraction evidence](../verification/physical-room-repair-extraction-2026-10-04.md).
 No repair authority or project-format floor changed in this checkpoint.
+
+The subsequent [typed repair evidence](../verification/physical-room-reviewed-repair-2026-10-04.md)
+records the implemented exclusive dialect-7 authority, native44/extraction42
+reader floors and desktop workflow. It does not establish full lifecycle parity.
 
 ## Typed authority
 

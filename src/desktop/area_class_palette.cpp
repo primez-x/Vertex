@@ -59,7 +59,10 @@ AreaClassPalette::AreaClassPalette(QWidget* parent):QWidget(parent) {
     classes_=new ClassList(this);classes_->setObjectName(QStringLiteral("areaClassItems"));classes_->setAccessibleName(QStringLiteral("Drag an area class or click to apply repeatedly"));
     classes_->setDragEnabled(true);classes_->setDragDropMode(QAbstractItemView::DragOnly);classes_->setAcceptDrops(false);layout->addWidget(classes_,2);
     auto* actions=new QHBoxLayout;auto* clear=new QPushButton(QStringLiteral("Clear class"),this);clear->setObjectName(QStringLiteral("areaClassClear"));
-    auto* cancel=new QPushButton(QStringLiteral("Cancel"),this);cancel->setObjectName(QStringLiteral("areaClassCancel"));actions->addWidget(clear);actions->addWidget(cancel);layout->addLayout(actions);
+    auto* cancel=new QPushButton(QStringLiteral("Cancel"),this);cancel->setObjectName(QStringLiteral("areaClassCancel"));actions->addWidget(clear);actions->addWidget(cancel);
+    add_types_=new QPushButton(QStringLiteral("Add types"),this);add_types_->setObjectName(QStringLiteral("areaClassAddTypes"));
+    add_types_->setToolTip(QStringLiteral("Add missing drawing types to this measurement profile. Existing rules are preserved."));
+    add_types_->hide(); actions->addWidget(add_types_); layout->addLayout(actions);
     status_=new QLabel(this);status_->setObjectName(QStringLiteral("areaClassStatus"));status_->setWordWrap(true);status_->setMinimumWidth(0);layout->addWidget(status_);
     targets_=new TargetList(this);targets_->setObjectName(QStringLiteral("areaClassTargets"));targets_->setAccessibleName(QStringLiteral("Drop an area class onto an area"));
     targets_->setWordWrap(true);targets_->setTextElideMode(Qt::ElideNone);
@@ -70,6 +73,7 @@ AreaClassPalette::AreaClassPalette(QWidget* parent):QWidget(parent) {
     QObject::connect(classes_,&QListWidget::itemActivated,this,[this](QListWidgetItem* item){if(arm_requested_)arm_requested_(item->data(Qt::UserRole).toString());});
     QObject::connect(clear,&QPushButton::clicked,this,[this]{if(arm_requested_)arm_requested_({});});
     QObject::connect(cancel,&QPushButton::clicked,this,[this]{if(cancel_requested_)cancel_requested_();});setArmedClass({});
+    QObject::connect(add_types_,&QPushButton::clicked,this,[this]{if(add_types_requested_)add_types_requested_();});
 }
 void AreaClassPalette::setClasses(std::vector<AreaClassEntry> entries) {
     entries_=std::move(entries);const auto previous=category_->currentData();const QSignalBlocker blocker(category_);
@@ -82,7 +86,9 @@ void AreaClassPalette::filter() {
     const auto query=search_->text().trimmed();const auto category=category_->currentData().toString();classes_->clear();
     for(const auto& entry:entries_)if((category.isEmpty() || entry.category==category) &&
         (query.isEmpty() || entry.label.contains(query,Qt::CaseInsensitive) || entry.key.contains(query,Qt::CaseInsensitive))) {
-        auto* item=new QListWidgetItem(entry.label,classes_);item->setData(Qt::UserRole,entry.key);item->setToolTip(entry.category);
+        auto* item=new QListWidgetItem(entry.label,classes_);item->setData(Qt::UserRole,entry.key);
+        item->setToolTip(entry.key.startsWith(QStringLiteral("area-type:"))
+            ? QStringLiteral("Drawing type only. Does not change appraisal facts, totals, or the assigned floor.") : entry.category);
     }
 }
 void AreaClassPalette::setTargets(const std::vector<AreaClassTarget>& targets) {
@@ -97,5 +103,7 @@ void AreaClassPalette::setArmedClass(std::optional<QString> classification) {
 void AreaClassPalette::setStatus(const QString& message) {status_->setText(message);}
 void AreaClassPalette::setArmRequested(std::function<void(QString)> callback) {arm_requested_=std::move(callback);}
 void AreaClassPalette::setCancelRequested(std::function<void()> callback) {cancel_requested_=std::move(callback);}
+void AreaClassPalette::setAddTypesRequested(std::function<void()> callback) {add_types_requested_=std::move(callback);}
+void AreaClassPalette::setMissingDrawingTypes(bool missing) {add_types_->setVisible(missing);}
 void AreaClassPalette::setDropRequested(std::function<bool(QString,QString)> callback) {static_cast<TargetList*>(targets_)->dropped=std::move(callback);}
 } // namespace sketch::desktop

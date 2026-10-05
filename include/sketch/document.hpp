@@ -133,6 +133,8 @@ struct TransformBoundaries {
 struct EditBoundaryGeometry {
     Revision expected_revision = 0;
     BoundaryGeometryEdit edit;
+    // A physical-wall room repair is admitted only in this same-ID typed
+    // command, independently rederived from the preceding entity state.
 };
 
 struct ConstraintWallGeometryEdit {

@@ -1567,12 +1567,22 @@ Asset Asset::create(std::string media_type, std::vector<std::byte> bytes,
 
 void validate_physical_room_source_transition(
     const std::map<std::string, Entity, std::less<>>& before,
-    const std::map<std::string, Entity, std::less<>>& after) {
+    const std::map<std::string, Entity, std::less<>>& after,
+    const BoundaryGeometryEdit* reviewed_edit=nullptr) {
+    if (reviewed_edit && reviewed_edit->physical_wall_room_repair) {
+        const auto descriptor=validate_physical_wall_room_repair(before,*reviewed_edit);
+        const auto replacement=after.find(reviewed_edit->boundary_id);
+        if (replacement==after.end() || !is_physical_wall_room(replacement->second) ||
+            replacement->second.extensions.at("physical_wall_room")!=encode_physical_wall_room_descriptor(descriptor) ||
+            replacement->second.properties.at("segments")!=reviewed_edit->replacement_segments)
+            document_error(DocumentErrorCode::invalid_entity,"Physical room repair differs from its independently verified destination");
+    }
     for (const auto& [id, entity] : before) {
         if (!is_physical_wall_room(entity)) continue;
         if (entity.extensions.at("physical_wall_room").at("version") != 1) continue;
         const auto replacement = after.find(id);
         if (replacement == after.end()) continue;
+        if (reviewed_edit && reviewed_edit->physical_wall_room_repair && reviewed_edit->boundary_id==id) continue;
         if (!is_physical_wall_room(replacement->second) ||
             entity.extensions.at("physical_wall_room") !=
                 replacement->second.extensions.at("physical_wall_room"))
@@ -3193,6 +3203,9 @@ nlohmann::json command_to_json(const Command& command) {
             }
             return encoded;
         } else if constexpr (std::is_same_v<T, ApplyBoundaryConstraintChanges>) {
+            if (std::any_of(typed.boundary_edits.begin(),typed.boundary_edits.end(),[](const auto& edit){return edit.physical_wall_room_repair.has_value();}) ||
+                std::any_of(typed.exterior_source_edits.begin(),typed.exterior_source_edits.end(),[](const auto& edit){return edit.physical_wall_room_repair.has_value();}))
+                document_error(DocumentErrorCode::invalid_entity,"Physical room repair requires its exclusive same-ID boundary command");
             try { validate_dimension_placement_intent(typed, false); validate_rigid_group_intent(typed, false); }
             catch (const std::exception& error) { document_error(DocumentErrorCode::invalid_entity, error.what()); }
             if(typed.wall_split) {
@@ -4171,7 +4184,8 @@ Revision Document::apply(const Command& command) {
             // Source-bound rooms cannot borrow an ordinary metadata edit to
             // detach their holes or their physical-wall evidence. Deletion is
             // explicit; supported source refresh will need typed authority.
-            validate_physical_room_source_transition(current.entities, next.entities);
+            validate_physical_room_source_transition(current.entities, next.entities,
+                next.boundary_geometry_edit ? &*next.boundary_geometry_edit : nullptr);
             history_.push_back(std::move(next));
             boundary_identity_history_ = std::move(next_identity_history);
             head_revision_ = history_.back().revision;
@@ -4427,7 +4441,8 @@ Document Document::restore(DocumentSnapshot snapshot) {
         // An exact, validated history navigation may undo an identity upgrade.
         // Ordinary Apply records must never masquerade as that downgrade.
         if (!record.source_revision.has_value()) {
-            validate_physical_room_source_transition(previous.entities, record.entities);
+            validate_physical_room_source_transition(previous.entities, record.entities,
+                record.boundary_geometry_edit ? &*record.boundary_geometry_edit : nullptr);
             if (record.boundary_transforms) {
                 const auto& proof = *record.boundary_transforms;
                 const auto action = proof.message.empty() ? "Transform boundaries" : proof.message;

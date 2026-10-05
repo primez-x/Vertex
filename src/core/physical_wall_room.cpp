@@ -237,4 +237,36 @@ ApplyEntityChanges prepare_physical_wall_rooms(const DocumentSnapshot& source,st
     }
     return command;
 }
+EditBoundaryGeometry prepare_physical_wall_room_repair(const DocumentSnapshot& source,
+    std::string_view room_id,std::string_view selected_wall_id,Vec2 interior_witness,
+    const Json& reviewed_source_lineage,std::string expected_descriptor_digest,
+    const LegacyBoundaryIdentityOptions& fresh_ids,const PhysicalWallRoomRepairReferences& references) {
+    if (!source.is_editable()) invalid("captured document is read-only");
+    const auto owner=source.entities().find(room_id);
+    if (owner==source.entities().end() || !is_physical_wall_room(owner->second))
+        invalid("repair requires a retained source-bound room");
+    const auto detection=detect_physical_wall_spaces(source,selected_wall_id);
+    const auto& destination=matching_space(detection,reviewed_source_lineage);
+    if (fresh_ids.segment_ids.size()!=destination.boundary.size() || fresh_ids.vertex_ids.size()!=destination.boundary.size())
+        invalid("repair requires an explicit fresh segment and vertex identity for every destination edge");
+    IdentifiedBoundary replacement{std::string(room_id),owner->second.type,{}};
+    for (std::size_t i=0;i<destination.boundary.size();++i)
+        replacement.segments.push_back({fresh_ids.segment_ids[i],fresh_ids.vertex_ids[i],
+            fresh_ids.vertex_ids[(i+1)%destination.boundary.size()],destination.boundary[i]});
+    BoundaryGeometryEdit edit;
+    edit.boundary_id=std::string(room_id);edit.target_id=edit.boundary_id;
+    edit.kind=BoundaryGeometryEditKind::redefine_boundary;edit.fresh_topology=true;
+    edit.replacement_segments=encode_identified_boundary_entity(replacement).properties.at("segments");
+    edit.replacement_child_mapping=references.child_mapping;
+    edit.replacement_removed_reference_ids=references.removed_reference_ids;
+    edit.replacement_dimension_ids=references.replacement_dimension_ids;
+    edit.allow_automatic_angle_removal=references.allow_automatic_angle_removal;
+    edit.physical_wall_room_repair=PhysicalWallRoomRepairIntent{std::string(selected_wall_id),interior_witness,
+        reviewed_source_lineage,std::move(expected_descriptor_digest)};
+    EditBoundaryGeometry command{source.revision(),std::move(edit)};
+    // Preparation validates actual dependency decisions and lifetime admission
+    // through the same guarded command that Apply will independently replay.
+    (void)Document::preview_command(source,Command{command});
+    return command;
+}
 } // namespace sketch

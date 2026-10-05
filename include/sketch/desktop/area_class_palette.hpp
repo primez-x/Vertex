@@ -10,6 +10,7 @@ class QComboBox;
 class QLabel;
 class QLineEdit;
 class QListWidget;
+class QPushButton;
 namespace sketch::desktop {
 inline constexpr const char* area_class_mime_type="application/x-vertex-area-class";
 [[nodiscard]] QByteArray encode_area_class_drag(const QString& classification);
@@ -27,11 +28,15 @@ public:
     void setArmRequested(std::function<void(QString)> callback);
     void setCancelRequested(std::function<void()> callback);
     void setDropRequested(std::function<bool(QString,QString)> callback);
+    void setAddTypesRequested(std::function<void()> callback);
+    void setMissingDrawingTypes(bool missing);
 private:
     void filter();
     std::vector<AreaClassEntry> entries_;
     QLineEdit* search_{};QComboBox* category_{};QListWidget *classes_{},*targets_{};QLabel* status_{};
     std::function<void(QString)> arm_requested_;
     std::function<void()> cancel_requested_;
+    std::function<void()> add_types_requested_;
+    QPushButton* add_types_{};
 };
 } // namespace sketch::desktop

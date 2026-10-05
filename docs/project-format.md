@@ -1,4 +1,34 @@
-# Vertex project formats v1 through v43
+# Vertex project formats v1 through v44
+
+## Reviewed same-ID physical room repair (v44)
+
+Boundary geometry edit dialect 7 adds `physical_wall_room_repair`: a selected
+current wall ID, finite strictly interior witness, exact reviewed detector
+lineage and SHA-256 of the retained physical-room descriptor. It is an exclusive
+fresh-topology boundary redefinition: no unrelated source lane, authoring data or
+classification override is allowed. Fresh child identities and explicit existing
+reference mapping/removal contracts remain required.
+
+Document apply and retained-history restore independently detect the destination
+from the preceding entity map. They verify context, phase, old descriptor digest,
+exact outer geometry, current lineage, strict interior membership and destination
+ownership. Holes are regenerated from that source; they are not supplied by a
+caller. Only the verified same-ID edit can replace a retained room's marker and
+outline. Name, classification and unrelated metadata remain intact; previous
+evidence remains in history. Undo and Redo navigate that validated history.
+
+This is explicit reviewed reassignment, not automatic cell correspondence. A
+split assigns only the chosen space; other pieces remain unclassified. A merge
+does not acquire other rooms' metadata, and other affected owners remain stale.
+Automatic correspondence and atomic multi-room dispositions remain open.
+Entity-only dimensions on physical rooms remain refused until their
+snapshot-aware resolution is implemented.
+
+Retained dialect-7 repair intent requires native format 44 / extraction 42,
+including a deleted owner, retained history or an entity-only geometry-derivation
+carrier. Unsupported older readers must refuse before accepting the history.
+An entity-only derivation carrier preserves the higher reader floor; it does not
+by itself verify live source authority. Current room queries still rederive it.
 
 ## Source-bound clear rooms (v43)
 
@@ -19,7 +49,7 @@ these room owners do not enter exterior GLA.
 The marker in any retained revision requires native format 43 / extraction 41,
 including after deletion. No new command-envelope version is needed for this
 creation/stale checkpoint. Historical centerline rooms are not automatically
-converted. Typed same-ID refresh remains a separate required implementation.
+converted. The reviewed same-ID repair dialect is documented above.
 
 IFC source carriers exceeding the legacy small-text limit use private
 `Pset_VertexExchange_v2`: one owner, a count/byte/SHA-256 manifest and ordered

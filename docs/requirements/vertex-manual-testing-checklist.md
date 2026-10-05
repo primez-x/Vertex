@@ -2673,13 +2673,43 @@ drawing; switching modes does not change existing geometry.
 
 - [ ] **U437 — See when a physical room's source has changed**
   - Steps: Create a physical room, record its area, then change a source wall's thickness. Select the retained room in Layers, open Details, and inspect its canvas label and schedule. Undo the wall change.
-  - Expected: The changed room is marked stale; its previous numeric area is withheld from the canvas, Details and schedule. Undo restores the current room and its original area. Same-ID source repair is still a documented gap in this build.
+  - Expected: The changed room is marked stale; its previous numeric area is withheld from the canvas, Details and schedule. Undo restores the current room and its original area. Use U439 to test explicit source repair.
   - Result: Not tested
   - Notes: ______________________________
 
 - [ ] **U438 — Save and reopen a classified room with a hole**
   - Steps: Create and name a physical room containing an isolated wall obstacle. Choose its classification, save, close the project, then reopen it. Select the room and inspect its name, classification, fill and Details.
   - Expected: The same room, hole, classification and clear area return. The hole remains excluded from room fill and quantities.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **U439 — Repair a room after changing wall thickness**
+  - Steps: Start with the metric room and interior obstacle in U434. Change the bottom exterior wall thickness from 0.2 m to 0.4 m. Select the stale room in Layers and use **Tools > Repair room from walls**. Try clicking inside the obstacle, then inside clear room space. Cancel once; reopen the review, choose the clear space and use **Review and apply**. Undo/Redo, save and reopen.
+  - Expected: The obstacle cannot be chosen. Cancel changes nothing. Apply retains the room's name and classification, rederives its hole and reports 9.86 m² clear area. Undo restores the prior stale room; Redo restores the repaired one. Reopening retains the repaired room and history. Independent exterior appraisal GLA stays unchanged.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **U440 — Choose which split room keeps its name**
+  - Steps: Create and name one physical room. Add a partition across it. Select the stale room in Layers, open **Repair room from walls**, and click the intended side. Cancel once, then apply. Inspect both sides and Undo.
+  - Expected: Only the explicitly chosen space keeps the old room's name and classification. The other space is available to classify separately. The application does not guess which side owns the old facts. Cancel changes nothing; Undo restores the retained stale room.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **U441 — Apply each named drawing type**
+  - Steps: Create a new measurement project and draw a closed area. Open **Library > Area classes**. Search and apply First, Second, Third and Fourth Floor; Gross Building Area; both Basement types; Garage; Detached Garage; ADU; Outbuilding; Carport; Porch; Patio; Wood Deck; Balcony; Storage; Low Ceiling; Open to Below; Non-Calculated Area; Subject Site; and Clear. Try Undo after each.
+  - Expected: Every named choice is available. Classification changes without moving the outline or changing its actual layer/floor assignment. Clear removes the classification. Undo restores the previous choice. Generic measurement totals follow the configured rules; these names do not establish appraisal eligibility.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **U442 — Add the drawing types to an older project**
+  - Steps: Open an older measurement project whose Area classes list lacks some named types. Record a custom classification rule in **Calculation profile**. In **Library > Area classes**, click **Add types**, inspect the list and your existing rule, then Undo.
+  - Expected: Missing types appear. Existing rules are preserved. The button disappears when no types are missing. One Undo restores the previous profile and list.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **U443 — Keep an appraisal drawing type separate from GLA facts**
+  - Steps: Open an appraisal project and record its current GLA or missing-facts explanation in Details. Apply a named type such as Finished Basement from **Library > Area classes > Drawing types** to an area. Inspect its row and Details, then apply Undefined / Clear.
+  - Expected: The descriptive type appears alongside its qualification. Actual appraisal facts, floor assignment and GLA stay unchanged. A named type alone cannot qualify an area. Clear removes the descriptive type while retaining its appraisal facts.
   - Result: Not tested
   - Notes: ______________________________
 

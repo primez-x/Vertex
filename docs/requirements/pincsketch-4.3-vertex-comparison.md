@@ -72,6 +72,16 @@ state. Three lower-layer targets link without Document and 12 affected checks
 pass. It changes no user command or installed build: reviewed same-ID repair
 and complete room lifecycle handling remain open.
 
+The [reviewed room-repair checkpoint](../verification/physical-room-reviewed-repair-2026-10-04.md)
+adds an explicit same-ID destination review with Cancel/Apply, reference
+decisions, rederived holes and retained-history validation. It also makes all
+22 named drawing choices available, with an explicit addition action for older
+measurement profiles. In appraisal mode those choices remain descriptive and
+do not replace fact-derived eligibility. Fifteen affected checks have passing
+outcomes. Automatic room correspondence, atomic multi-room dispositions,
+physical-room dimensions and complete appraisal-preset fact-review shortcuts
+remain gaps; this is not full PINC-002/012 or production certification.
+
 The subsequent [sketch output checkpoint](../verification/pinc-sketch-output-2026-10-04.md)
 adds PINC-005/006. It measures painted vector primitives and finished text replay,
 including symbol artwork, rather than cropping to object anchor positions.
