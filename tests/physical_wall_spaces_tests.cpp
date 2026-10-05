@@ -81,6 +81,21 @@ void rectangles_and_overlapping_material() {
     const auto bounds=boundary_bounds(ordinary.spaces[0].boundary);
     assert_near(bounds.minimum.x,0.1,"left clear wall face incorrect");
     assert_near(bounds.maximum.y,2.9,"top clear wall face incorrect");
+    const auto source_document=Document::create(entities(rectangle()));
+    const auto captured=source_document.snapshot();
+    const auto from_snapshot=detect_physical_wall_spaces(captured,"bottom");
+    const auto from_map=detect_physical_wall_spaces(captured.entities(),"bottom");
+    require(from_map.context==from_snapshot.context && from_map.spaces.size()==from_snapshot.spaces.size(),
+        "retained entity-map reconstruction must match snapshot admission");
+    for (std::size_t i=0;i<from_map.spaces.size();++i) {
+        const auto& a=from_map.spaces[i]; const auto& b=from_snapshot.spaces[i];
+        require(a.source_lineage==b.source_lineage && a.boundary.size()==b.boundary.size() &&
+            a.holes.size()==b.holes.size() && a.area_square_metres==b.area_square_metres,
+            "entity-map and snapshot consumers must retain identical evidence and quantities");
+        for (std::size_t edge=0;edge<a.boundary.size();++edge)
+            require(segment_json(a.boundary[edge])==segment_json(b.boundary[edge]),
+                "shared source adapter must retain exact analytical geometry");
+    }
     auto unequal=rectangle();
     unequal[0].thickness=0.2; unequal[1].thickness=0.4;
     unequal[2].thickness=0.6; unequal[3].thickness=0.8;

@@ -1,7 +1,8 @@
 # Physical room repair: next implementation
 
-Status: design discovery only. The installed creation/stale checkpoint does not
-implement this plan. This work remains part of PINC-002 and the unified release
+Status: geometry dependency prerequisite implemented and verified; typed repair
+and its desktop workflow remain unimplemented. The installed creation/stale
+checkpoint does not implement repair. This work remains part of PINC-002 and the unified release
 scope, not a separate product or reduced acceptance gate.
 
 ## Outcome
@@ -40,6 +41,14 @@ geometry-capable binaries require the native geometry runtime. Verify actual
 supported configuration dependencies before changing CMake. A kernel-only link
 check must prove no hidden Document dependency. Do not use caller-installed
 validator callbacks or duplicate the geometry algorithm.
+
+The prerequisite is now implemented. Closed-boundary detection and assembly,
+wall-plan contact geometry and physical clear-space subtraction have lower-layer
+targets. The entity-map source adapter is compiled into Document; Snapshot calls
+that adapter. All three standalone geometry test executables link without
+Document, and 12 affected native checks pass. See the
+[extraction evidence](../verification/physical-room-repair-extraction-2026-10-04.md).
+No repair authority or project-format floor changed in this checkpoint.
 
 ## Typed authority
 

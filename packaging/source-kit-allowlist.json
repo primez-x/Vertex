@@ -2835,6 +2835,10 @@
     },
     {
       "category": "docs",
+      "path": "docs/verification/physical-room-repair-extraction-2026-10-04.md"
+    },
+    {
+      "category": "docs",
       "path": "docs/verification/pinc-floor-reference-2026-10-04.md"
     },
     {
@@ -3135,6 +3139,10 @@
     },
     {
       "category": "source",
+      "path": "include/sketch/closed_boundary_detection.hpp"
+    },
+    {
+      "category": "source",
       "path": "include/sketch/constraint_authoring.hpp"
     },
     {
@@ -3359,6 +3367,10 @@
     },
     {
       "category": "source",
+      "path": "include/sketch/physical_clear_kernel.hpp"
+    },
+    {
+      "category": "source",
       "path": "include/sketch/physical_wall_room.hpp"
     },
     {
@@ -3524,6 +3536,10 @@
     {
       "category": "source",
       "path": "include/sketch/wall_plan_junctions.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/wall_plan_network.hpp"
     },
     {
       "category": "source",
@@ -4003,6 +4019,10 @@
     },
     {
       "category": "source",
+      "path": "src/core/closed_boundary_detection.cpp"
+    },
+    {
+      "category": "source",
       "path": "src/core/constraint_authoring.cpp"
     },
     {
@@ -4151,11 +4171,19 @@
     },
     {
       "category": "source",
+      "path": "src/core/physical_clear_kernel.cpp"
+    },
+    {
+      "category": "source",
       "path": "src/core/physical_wall_room.cpp"
     },
     {
       "category": "source",
       "path": "src/core/physical_wall_room_data.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/physical_wall_space_source.cpp"
     },
     {
       "category": "source",
@@ -4304,6 +4332,10 @@
     {
       "category": "source",
       "path": "src/core/wall_plan_junctions.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/wall_plan_network.cpp"
     },
     {
       "category": "source",
@@ -4712,6 +4744,10 @@
     {
       "category": "source",
       "path": "tests/calculation_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/closed_boundary_detection_tests.cpp"
     },
     {
       "category": "source",
@@ -5128,6 +5164,10 @@
     {
       "category": "source",
       "path": "tests/phase_subtraction_history_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/physical_clear_kernel_tests.cpp"
     },
     {
       "category": "source",
@@ -5572,6 +5612,10 @@
     {
       "category": "source",
       "path": "tests/wall_plan_junctions_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/wall_plan_network_tests.cpp"
     },
     {
       "category": "source",

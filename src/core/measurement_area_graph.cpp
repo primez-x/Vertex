@@ -1,5 +1,5 @@
 #include "sketch/measurement_area_graph.hpp"
-#include "sketch/geometry_operations.hpp"
+#include "sketch/closed_boundary_detection.hpp"
 
 #include <algorithm>
 #include <cmath>

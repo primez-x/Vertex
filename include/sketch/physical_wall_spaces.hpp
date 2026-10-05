@@ -40,4 +40,11 @@ struct PhysicalWallSpaces {
 [[nodiscard]] PhysicalWallSpaces detect_physical_wall_spaces(
     const DocumentSnapshot& document, std::string_view selected_wall_id);
 
+// The same source admission and reconstruction for an immutable retained
+// revision. Shared by snapshot discovery and document repair/history validation;
+// enclosing document state must already satisfy its semantic admission rules.
+[[nodiscard]] PhysicalWallSpaces detect_physical_wall_spaces(
+    const std::map<std::string, Entity, std::less<>>& entities,
+    std::string_view selected_wall_id);
+
 } // namespace sketch

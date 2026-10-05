@@ -66,6 +66,12 @@ Source changes explicitly make retained rooms stale; same-ID repair and complete
 22-entry preset mapping remain gaps. This does not establish PINC-002 completion
 or full lifecycle/production qualification.
 
+The [room-repair extraction checkpoint](../verification/physical-room-repair-extraction-2026-10-04.md)
+makes the same geometry and source admission callable from retained revision
+state. Three lower-layer targets link without Document and 12 affected checks
+pass. It changes no user command or installed build: reviewed same-ID repair
+and complete room lifecycle handling remain open.
+
 The subsequent [sketch output checkpoint](../verification/pinc-sketch-output-2026-10-04.md)
 adds PINC-005/006. It measures painted vector primitives and finished text replay,
 including symbol artwork, rather than cropping to object anchor positions.
