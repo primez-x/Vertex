@@ -1779,6 +1779,10 @@
     },
     {
       "category": "docs",
+      "path": "docs/plans/2026-10-04-pinc-project-import.md"
+    },
+    {
+      "category": "docs",
       "path": "docs/plans/2026-10-04-pinc-sketch-output-adoption.md"
     },
     {
@@ -2847,6 +2851,10 @@
     },
     {
       "category": "docs",
+      "path": "docs/verification/pinc-import-foundation-2026-10-04.md"
+    },
+    {
+      "category": "docs",
       "path": "docs/verification/pinc-physical-wall-rooms-2026-10-04.md"
     },
     {
@@ -3388,6 +3396,14 @@
     {
       "category": "source",
       "path": "include/sketch/physical_wall_spaces.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/pinc_import_candidate_codec.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/pinc_project_import.hpp"
     },
     {
       "category": "source",
@@ -4199,6 +4215,14 @@
     },
     {
       "category": "source",
+      "path": "src/core/pinc_import_candidate_codec.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/pinc_project_import.cpp"
+    },
+    {
+      "category": "source",
       "path": "src/core/product_scope.cpp"
     },
     {
@@ -4476,6 +4500,14 @@
     {
       "category": "source",
       "path": "src/desktop/main_window.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/desktop/pinc_import_worker.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/desktop/pinc_import_worker.hpp"
     },
     {
       "category": "source",
@@ -5192,6 +5224,18 @@
     {
       "category": "source",
       "path": "tests/physical_wall_spaces_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/pinc_import_candidate_codec_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/pinc_import_worker_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/pinc_project_import_tests.cpp"
     },
     {
       "category": "source",

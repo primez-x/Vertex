@@ -6,6 +6,7 @@
 #include <QString>
 #include <QRectF>
 #include <functional>
+#include <span>
 #include <vector>
 
 namespace sketch::desktop {
@@ -32,6 +33,13 @@ struct DecodedReference {
     QString source_text;
     std::vector<ReferenceTextRun> text_runs;
 };
+
+// Validate an already sandbox-decoded pixel frame. No encoded image decoder is
+// called. Callers transporting frames in another protocol must first attest
+// the outer worker controls and bound aggregate frames before this allocation.
+[[nodiscard]] DecodedReference validateReferencePixelFrame(
+    std::span<const std::byte> output, const QByteArray& source,
+    const QString& suffix, int page_index = 0);
 
 // Test seam for the broker boundary. Desktop entry points always use the
 // production overload below, which resolves only the bundled executable.

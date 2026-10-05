@@ -14,6 +14,13 @@ drawing choices are now implemented, while automatic room correspondence,
 multi-room dispositions, physical-room dimensions and complete appraisal-preset
 fact-review shortcuts remain open. This does not establish full parity.
 
+The [Pinc importer foundation](../verification/pinc-import-foundation-2026-10-04.md)
+now parses known modern and legacy projects and transports validated image
+pixels through a separate worker protocol. Four focused native checks pass,
+including the existing reference importer. This is an internal checkpoint:
+native document admission, fidelity review, import UI and installed import
+qualification remain open, and the Desktop build does not yet import `.pinc`.
+
 ## Matching capabilities and actual differences
 
 | Workflow | Vertex implementation/access | Comparison and required action |
@@ -26,9 +33,9 @@ fact-review shortcuts remain open. This does not establish full parity.
 | Auto-close, point-of-beginning guidance, cancel/finish | Canvas/drawing input; `autoCloseDrawing`, drawing-session commands | Present. Keyboard J/along-wall offset/walk differs and remains a gap below. |
 | Curves and editing dimensions/nodes | Source-derived arc authoring and inverse editing; wall/boundary quick properties and handles | Present and broader analytical constructions. Pinc wheel-bowing a tentative wall is a distinct shortcut; add it without making zoom ambiguous. |
 | Panning, pointer zoom, fit | Unified drag, middle/right drag, wheel, status controls | Present. Preserve the user's requested Vertex gesture rules. Pinc has no explicit application right-click action in the inspected handlers. |
-| Double-click edit, moving labels/dimensions, rotation/mirroring/nudges | Quick properties; selection transforms; typed dimension placement | Present. Pinc's symbol double-click rotation conflicts with the user's requested quick-properties behavior; retain quick properties with accessible rotation controls. |
+| Double-click edit, moving labels/dimensions, rotation/mirroring/nudges | Quick properties; selection transforms; typed dimension placement | These controls exist. Area name and calculation currently share one callout; independent anchors, size and visibility remain gaps (PIN-037/073/074). Pinc's symbol double-click rotation conflicts with the user's requested quick-properties behavior; retain quick properties with accessible rotation controls. |
 | Fence rectangle and connected layout grouping | Ctrl marquee/multiselect; container organization; group transforms/copy | Selection and grouping exist. Batch style controls and some mixed transforms remain incomplete. Pinc's bbox/centroid fence rules are not exact containment semantics. |
-| Area fill/color/opacity/hatches, label position, wall/dimension styles | Area appearance, text/dimension properties; shared scene renderer | Present individually. Exterior-only/shared-edge automatic styling and batch presentation remain gaps. |
+| Area fill/color/opacity/hatches, label position, wall/dimension styles | Area appearance, text/dimension properties; shared scene renderer | Individual appearance controls exist. Separate name/calculation callouts, imported text alignment, exterior-only/shared-edge automatic styling and batch presentation remain gaps. |
 | Symbol categories/search/click and drag placement; real dimensions/rotation/mirror | Left Library; pinned SVG catalog; hosted opening authoring | Present. Names/counts do not prove every Pinc counterpart exists or is equally useful. Audit each of the inventory's 80 named kinds for semantic counterpart, artwork and default size; add missing kinds. Do not pad catalog counts with aliases. |
 | Door/opening hosting, width, hinge and swing | Walls & openings; hosted opening properties | Present. Preserve actual hosted geometry rather than treating doors/windows solely as decoration. Reattachment and every door variant need direct workflow comparison. |
 | Reusable labels, custom text, user-saved templates and search | Text library command; `text_library_dialog.cpp`, local template store | Present. Pinc saves reusable text, not searches; do not invent a saved-search gap. Compare its inline label retrieval against Vertex's dialog workflow. |
@@ -116,7 +123,7 @@ for actual qualification and remaining limits.
 | PINC-007 | Classification/area outline style applies to true exterior edges; shared separators have a neutral thin default | Adjacent house/garage, partial overlap, curves and holes; screen/PDF agreement; user overrides preserved; geometry/calculation unchanged. |
 | PINC-008 | Bulk presentation edit for a selected fence/group's walls, dimensions and text | Heterogeneous selection, retain unrelated values/metadata, one atomic revision, cancellation, Undo and reopen. |
 | PINC-009 | Fast J/corner jump, typed travel, along-wall starting offset and pen-up wall walk | Physical keyboard and pointer tests; pen state/preview/cancel; separate walls versus measurement mode; exact stored distance. |
-| PINC-010 | Useful tentative-curve adjustment shortcut and direct reusable-label access | Modifier/gesture conflicts resolved against Vertex's unified input; preview/commit/cancel and no accidental geometry changes. |
+| PINC-010 | Useful tentative-curve adjustment shortcut, direct reusable-label access and independently editable area-name/calculation callouts | Modifier/gesture conflicts resolved against Vertex's unified input; separate label anchors, size, color and visibility; text alignment; preview/commit/cancel and no accidental geometry changes. |
 | PINC-011 | Pinc `.pinc` import, including known version-2 conversion | Representative files/fixtures; geometry/arcs, classification, labels, symbol size/rotation/hosting, pages, style and references; report any loss and preserve original. |
 | PINC-012 | Complete semantic counterparts for all 80 Pinc named symbol kinds and 22 area-type entries | [Per-entry symbol crosswalk](pincsketch-symbol-coverage.md), artwork/default-size/placement comparison, no alias-count substitution; map classifications to explicit Vertex facts rather than preset-driven GLA certification. |
 | PINC-013 | Qualify equivalent drawing/edit/layout/history/output workflows against all 134 inventory operations | Actual paired scenarios and practical checklist outcomes; differences judged by useful behavior, not copied menus or unchecked source claims. |

@@ -28,7 +28,7 @@ QString mimeFor(const QString& suffix) {
 DecodedReference decodeReferenceBytes(const QByteArray& source, const QString& suffix,
                                       int page_index, WindowsImportWorkerOptions options,
                                       const ReferenceBroker& broker) {
-    const auto mime = mimeFor(suffix);
+    (void)mimeFor(suffix);
     if (source.isEmpty() || source.size() > referenceInputLimit)
         throw std::invalid_argument("Reference files must contain between 1 byte and 64 MiB.");
     if (page_index < 0 || page_index >= static_cast<int>(referencePageLimit) ||
@@ -53,7 +53,18 @@ DecodedReference decodeReferenceBytes(const QByteArray& source, const QString& s
             "the Windows sandbox must be available. No source file was decoded in the desktop.")
             .arg(codes.isEmpty() ? QStringLiteral("worker_not_attested") : codes.join(',')).toStdString());
     }
-    const auto& output = report.output;
+    return validateReferencePixelFrame(report.output, source, suffix, page_index);
+}
+
+DecodedReference validateReferencePixelFrame(std::span<const std::byte> output,
+                                             const QByteArray& source,
+                                             const QString& suffix, int page_index) {
+    const auto mime = mimeFor(suffix);
+    if (source.isEmpty() || source.size() > referenceInputLimit)
+        throw std::invalid_argument("Reference files must contain between 1 byte and 64 MiB.");
+    if (page_index < 0 || page_index >= static_cast<int>(referencePageLimit) ||
+        (suffix != "pdf" && page_index != 0))
+        throw std::invalid_argument("The selected reference page does not exist.");
     if (output.size() < referenceHeaderSize || std::memcmp(output.data(), "PSIR0002", 8) != 0)
         throw std::runtime_error("The isolated import worker returned an invalid response.");
     const auto* data = reinterpret_cast<const uchar*>(output.data());
@@ -104,7 +115,10 @@ DecodedReference decodeReferenceBytes(const QByteArray& source, const QString& s
                  static_cast<int>(width * 4), QImage::Format_RGBA8888);
     image = image.copy();
     if (image.isNull()) throw std::runtime_error("The reference preview could not be allocated.");
-    return {source, mime, std::move(image), static_cast<int>(pages), source_text, std::move(runs)};
+    // A nested transport may pass QByteArray::fromRawData. Retain owned source
+    // bytes rather than an alias into that transport's temporary storage.
+    return {QByteArray(source.constData(), source.size()), mime, std::move(image),
+            static_cast<int>(pages), source_text, std::move(runs)};
 }
 
 DecodedReference decodeReferenceFile(const QString& path, int page_index) {

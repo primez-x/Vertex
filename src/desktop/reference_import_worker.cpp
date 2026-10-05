@@ -1,4 +1,5 @@
 #include "reference_import.hpp"
+#include "pinc_import_worker.hpp"
 #include "cad_library_bridge.hpp"
 #include "sketch/project_import_worker.hpp"
 #include "sketch/dxf_project_exchange.hpp"
@@ -14,6 +15,7 @@
 #include <bit>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <limits>
 #ifdef _WIN32
 #include <fcntl.h>
@@ -127,7 +129,8 @@ struct ComScope {
     }
 };
 
-QImage decode_tiff_wic(const QByteArray& input) {
+QImage decode_tiff_wic(const QByteArray& input,
+    std::uint64_t max_pixels = 4096ULL * 4096) {
     if (input.isEmpty() || static_cast<quint64>(input.size()) > (std::numeric_limits<DWORD>::max)())
         return {};
     ComScope com;
@@ -147,6 +150,9 @@ QImage decode_tiff_wic(const QByteArray& input) {
     if (FAILED(factory->CreateDecoderFromStream(stream.Get(), nullptr,
                                                  WICDecodeMetadataCacheOnLoad, &decoder)))
         return {};
+    GUID container{};
+    if (FAILED(decoder->GetContainerFormat(&container)) || container != GUID_ContainerFormatTiff)
+        return {};
     UINT frame_count = 0;
     if (FAILED(decoder->GetFrameCount(&frame_count)) || frame_count == 0) return {};
     Microsoft::WRL::ComPtr<IWICBitmapFrameDecode> frame;
@@ -155,7 +161,8 @@ QImage decode_tiff_wic(const QByteArray& input) {
     UINT height = 0;
     if (FAILED(frame->GetSize(&width, &height)) || width == 0 || height == 0 ||
         width > static_cast<UINT>(sketch::desktop::referenceDimensionLimit) ||
-        height > static_cast<UINT>(sketch::desktop::referenceDimensionLimit))
+        height > static_cast<UINT>(sketch::desktop::referenceDimensionLimit) ||
+        static_cast<std::uint64_t>(width) * height > max_pixels)
         return {};
     Microsoft::WRL::ComPtr<IWICFormatConverter> converter;
     if (FAILED(factory->CreateFormatConverter(&converter)) ||
@@ -173,6 +180,30 @@ QImage decode_tiff_wic(const QByteArray& input) {
     return image;
 }
 #endif
+
+QImage decode_raster_image(const QByteArray& input, QByteArray format,
+    std::uint64_t max_pixels = 4096ULL * 4096) {
+    if (format == "jpg") format = "jpeg";
+    if (format == "tif" || format == "tiff") {
+#ifdef _WIN32
+        return decode_tiff_wic(input, max_pixels);
+#else
+        return {};
+#endif
+    }
+    if (format != "png" && format != "jpeg" && format != "bmp") return {};
+    QBuffer buffer;
+    buffer.setData(input);
+    if (!buffer.open(QIODevice::ReadOnly)) return {};
+    QImageReader::setAllocationLimit(128);
+    QImageReader reader(&buffer, format);
+    reader.setDecideFormatFromContent(false);
+    const auto size = reader.size();
+    if (!size.isValid() || size.width() > sketch::desktop::referenceDimensionLimit ||
+        size.height() > sketch::desktop::referenceDimensionLimit ||
+        static_cast<std::uint64_t>(size.width()) * size.height() > max_pixels) return {};
+    return reader.read();
+}
 
 } // namespace
 
@@ -200,6 +231,54 @@ int main(int argc, char** argv) {
         }
     }
     if (input.isEmpty()) return 3;
+    if (args[1] == "pinc") {
+        if (page != 0) return 2;
+        try {
+            auto project = sketch::parse_pinc_project(std::span(
+                reinterpret_cast<const std::byte*>(input.constData()), static_cast<std::size_t>(input.size())));
+            std::vector<sketch::desktop::PincRasterFrame> frames;
+            std::uint64_t used_pixels = 0, source_bytes = 0;
+            for (std::size_t index = 0; index < project.pages.size(); ++index) {
+                const auto& descriptor = project.pages[index].underlay;
+                if (!descriptor || !descriptor->supported_raster_descriptor) continue;
+                try {
+                    const auto source = sketch::desktop::pincUnderlaySourceBytes(*descriptor);
+                    const auto count = static_cast<std::uint64_t>(source.size());
+                    if (count > sketch::desktop::pincImageSourceLimit - source_bytes)
+                        throw std::invalid_argument("Underlay source budget exceeded");
+                    source_bytes += count;
+                    auto image = decode_raster_image(source, sketch::desktop::pincUnderlaySuffix(*descriptor).toLatin1(),
+                        sketch::desktop::pincDecodedPixelLimit - used_pixels);
+                    if (image.isNull()) throw std::invalid_argument("Underlay decoding failed");
+                    const auto pixels = static_cast<std::uint64_t>(image.width()) * image.height();
+                    if (pixels > sketch::desktop::pincDecodedPixelLimit - used_pixels)
+                        throw std::invalid_argument("Underlay pixel budget exceeded");
+                    image = image.convertToFormat(QImage::Format_RGBA8888);
+                    if (image.isNull()) throw std::invalid_argument("Underlay conversion failed");
+                    sketch::desktop::PincRasterFrame frame;
+                    frame.page_index = index; frame.source = source;
+                    frame.pixel_frame.resize(static_cast<std::size_t>(32 + pixels * 4));
+                    auto* header = reinterpret_cast<uchar*>(frame.pixel_frame.data());
+                    std::memcpy(header, "PSIR0002", 8);
+                    qToLittleEndian<quint32>(static_cast<quint32>(image.width()), header + 8);
+                    qToLittleEndian<quint32>(static_cast<quint32>(image.height()), header + 12);
+                    qToLittleEndian<quint32>(1, header + 16);
+                    const auto row_bytes = static_cast<std::size_t>(image.width()) * 4;
+                    for (int row = 0; row < image.height(); ++row)
+                        std::memcpy(header + 32 + static_cast<std::size_t>(row) * row_bytes,
+                                    image.constScanLine(row), row_bytes);
+                    used_pixels += pixels;
+                    frames.push_back(std::move(frame));
+                } catch (const std::exception&) {
+                    project.diagnostics.push_back({descriptor->source_pointer, "underlay_decode_failed",
+                        "Underlay could not be decoded within supported image budgets; original content is retained."});
+                }
+            }
+            const auto output = sketch::desktop::encodePincWorkerReply(project, frames);
+            if (std::fwrite(output.data(), 1, output.size(), stdout) != output.size()) return 5;
+            return std::fflush(stdout) == 0 ? 0 : 5;
+        } catch (...) { return 4; }
+    }
     if (args[1] == "dxf" || args[1] == "ifc") {
         if (page != 0) return 2;
         try {
@@ -300,23 +379,9 @@ int main(int argc, char** argv) {
     } else {
         if (page != 0) return 2;
         auto format = args[1].toLatin1();
-        if (format == "jpg") format = "jpeg";
-        if (format == "tif" || format == "tiff") {
-#ifdef _WIN32
-            image = decode_tiff_wic(input);
-#else
-            return 4;
-#endif
-        } else {
-            if (format != "png" && format != "jpeg" && format != "bmp") return 2;
-            QImageReader::setAllocationLimit(128);
-            QImageReader reader(&buffer, format);
-            reader.setDecideFormatFromContent(false);
-            const auto size = reader.size();
-            if (!size.isValid() || size.width() > sketch::desktop::referenceDimensionLimit ||
-                size.height() > sketch::desktop::referenceDimensionLimit) return 4;
-            image = reader.read();
-        }
+        if (format != "png" && format != "jpg" && format != "jpeg" &&
+            format != "bmp" && format != "tif" && format != "tiff") return 2;
+        image = decode_raster_image(input, format);
     }
     if (image.isNull() || image.width() > sketch::desktop::referenceDimensionLimit ||
         image.height() > sketch::desktop::referenceDimensionLimit) return 4;

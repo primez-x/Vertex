@@ -81,6 +81,18 @@ int main(int argc, char** argv) {
         const auto decoded = decodeReferenceBytes("source", "png", 0, {}, broker);
         require(calls == 1 && decoded.image.pixelColor(0, 0) == QColor(10, 20, 30) &&
                 decoded.page_count == 1, "caller must accept only validated worker pixels");
+        auto embedded = successfulReply();
+        char nested_source[]{'s','o','u','r','c','e'};
+        const auto embedded_image = validateReferencePixelFrame(embedded.output,
+            QByteArray::fromRawData(nested_source, sizeof(nested_source)), "png");
+        nested_source[0] = 'x';
+        embedded.output[32] = std::byte{99};
+        require(embedded_image.image.pixelColor(0, 0) == QColor(10, 20, 30) &&
+                embedded_image.source == "source" && embedded_image.mime == "image/png",
+                "nested pixel frames must own their copy and preserve original bytes");
+        embedded.output.pop_back();
+        rejects([&] { (void)validateReferencePixelFrame(embedded.output, "source", "png"); });
+        rejects([&] { (void)validateReferencePixelFrame(successfulReply().output, {}, "png"); });
         response.network_denial_verified = false;
         rejects([&] { (void)decodeReferenceBytes("source", "png", 0, {}, broker); });
         response = successfulReply();
