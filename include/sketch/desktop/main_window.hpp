@@ -662,6 +662,12 @@ public:
     // available. Returns true when the selected copy was opened.
     [[nodiscard]] bool offerStartupRecovery();
     [[nodiscard]] bool exportDraftPdf(const QString& path);
+    // Tight vector crop of the current visible committed canvas. References,
+    // grids, selection and drawing previews are excluded; sheet output remains
+    // separate. This composition does not assert architectural print scale.
+    [[nodiscard]] bool exportSketchPdf(const QString& path);
+    // Local, nonprinting presentation state; does not dirty project history.
+    void setSketchCompositionGuideEnabled(bool enabled);
     // Exports every persisted drawing sheet as one ordered multipage PDF.
     [[nodiscard]] bool exportDrawingSetPdf(const QString& path);
     // Complete revision-bound calculation audit; valid unqualified measurements

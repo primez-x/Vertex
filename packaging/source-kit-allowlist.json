@@ -1763,6 +1763,10 @@
     },
     {
       "category": "docs",
+      "path": "docs/plans/2026-10-04-pinc-sketch-output-adoption.md"
+    },
+    {
+      "category": "docs",
       "path": "docs/plans/2026-10-04-source-derived-arc-reconstruction.md"
     },
     {
@@ -2812,6 +2816,10 @@
     {
       "category": "docs",
       "path": "docs/verification/physical-curve-length-2026-09-30.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/verification/pinc-sketch-output-2026-10-04.md"
     },
     {
       "category": "docs",
@@ -4395,6 +4403,22 @@
     },
     {
       "category": "source",
+      "path": "src/desktop/sketch_content_bounds.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/desktop/sketch_content_bounds.hpp"
+    },
+    {
+      "category": "source",
+      "path": "src/desktop/sketch_pdf_output.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/desktop/sketch_pdf_output.hpp"
+    },
+    {
+      "category": "source",
       "path": "src/desktop/symbol_svg_palette.cpp"
     },
     {
@@ -5188,6 +5212,14 @@
     {
       "category": "source",
       "path": "tests/sheet_view_model_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/sketch_content_output_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/sketch_pdf_desktop_tests.cpp"
     },
     {
       "category": "source",

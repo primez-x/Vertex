@@ -1,5 +1,20 @@
 # Implementation status
 
+## Pinc sketch composition and vector output (2026-10-04)
+
+Tools > Export sketch PDF produces a tightly cropped vector PDF from visible
+committed drawing content, with 2 mm padding. Tools > Sketch composition guide
+shows the same crop on the canvas. Both are independent of navigation zoom and
+exclude grids, tracing images, selection and pending drawing. The guide does not
+change the project or imply a certified print scale. Existing sheet, print and
+appraisal report routes remain available.
+
+The [checkpoint evidence](verification/pinc-sketch-output-2026-10-04.md) records
+actual PDF and renderer checks. Previous-floor ghost references, Pinc import,
+keyboard shortcuts, batch/exterior styling and complete preset/symbol mappings
+remain required. This build does not satisfy full Pinc or Apex parity or the
+unified production release gate.
+
 ## PincSketch comparison and drawing/appraisal adoption (2026-10-04)
 
 The supplied package was inventoried from its embedded HTML: 134 practical
@@ -23,7 +38,7 @@ uses native format 42 and extraction 40. A hard-connected component spanning
 both operation lanes is still refused and remains required work.
 
 [Verification and remaining limits](verification/mixed-selection-and-pinc-adoption-2026-10-04.md)
-are explicit. Previous-page references, report composition/crop, Pinc import,
+are explicit. At that checkpoint, previous-page references, report composition/crop, Pinc import,
 keyboard conveniences, batch/exterior styling and all preset/variant mappings
 remain open. This is an internal build, not full Pinc or Apex parity or
 production acceptance. Earlier dated entries below describe their own builds.

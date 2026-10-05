@@ -30,7 +30,7 @@ labels are recorded rather than silently reconciled.
 | GLA, categories, gross/net/deductions/perimeter and print report | Details > Setup/Edit facts/Full report; appraisal document core | Present and based on recorded grade/finish/access/ceiling/identity evidence. Pinc sums category flags. Never adopt an area preset as automatic proof of ANSI eligibility. |
 | Live GLA while drawing | New compact `appraisalGlaShortcut` in status bar; same current Details report | Implemented in this change; native verification recorded separately. Click opens Details. Unqualified totals are withheld; unconfigured projects do not get a fabricated zero placeholder. |
 | Short geometric calculation arithmetic | Details and printed audit use `derive_area_arithmetic` through one shared formatter | Added rectangle/strip multiplication, triangle base/height and signed chord/arc derivation, reconciled to current gross. Native known-answer, concave/major-arc, reversed-winding and fractional ANSI-rounding checks pass. |
-| Portrait report guide and appraisal-ready cropped PDF | Fixed A4 appraisal report; vector sheet/draft export | Missing canvas composition guide and dedicated tight content-only output. Pinc Print-Ready PDF is raster, not vector; adopt its useful crop workflow using Vertex's vector renderer. |
+| Portrait report guide and appraisal-ready cropped PDF | Tools > Sketch composition guide; Tools > Export sketch PDF; regular sheet/report output retained | Added an optional guide showing the actual content crop and a dedicated vector PDF with 2 mm padding. Navigation, grid, tracing images and interaction overlays are excluded. This crop is not a certified architectural scale. Pinc's useful crop workflow is retained without manufacturing a raster screenshot. |
 | Stroke widths independent of screen zoom | Shared scene/output renderer and symbol palette | Present architecture; qualify actual symbols at varied zoom/output scales. Source inventory alone cannot certify output. |
 | Legacy Pinc version-2 opening | No Pinc adapter | Missing if migrating the supplied tool's files. Add an isolated importer with explicit unsupported-content reporting and preserved originals. It does not replace Apex compatibility. |
 
@@ -48,6 +48,12 @@ active calculation profile and detects measurement-linework spaces; physical-wal
 space detection and all 22 Pinc preset mappings remain unfinished. Added artwork
 has been rendered and checked as bundled resources; that does not certify every
 Pinc symbol's default size, hosting or editing behavior.
+
+The subsequent [sketch output checkpoint](../verification/pinc-sketch-output-2026-10-04.md)
+adds PINC-005/006. It measures painted vector primitives and finished text replay,
+including symbol artwork, rather than cropping to object anchor positions.
+The other additional requirements remain open unless their individual evidence
+is recorded; neither checkpoint establishes full parity.
 
 | ID | Required result | Evidence needed |
 | --- | --- | --- |

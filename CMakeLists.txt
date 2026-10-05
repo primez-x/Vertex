@@ -772,7 +772,7 @@ if(SKETCH_BUILD_DESKTOP)
     src/visualization/native_geometry_preparation.cpp)
   target_include_directories(sketch_visualization PUBLIC include)
   target_link_libraries(sketch_visualization PUBLIC sketch_architecture sketch_building_entities sketch_document sketch_project_organization sketch_project_visibility sketch_architectural_workflow_contract Qt6::Widgets TKService TKV3d TKOpenGl TKMesh)
-  add_library(sketch_plan_canvas src/desktop/plan_canvas.cpp src/desktop/symbol_svg_palette.cpp src/desktop/area_class_drag.cpp)
+  add_library(sketch_plan_canvas src/desktop/plan_canvas.cpp src/desktop/sketch_content_bounds.cpp src/desktop/symbol_svg_palette.cpp src/desktop/area_class_drag.cpp)
   target_include_directories(sketch_plan_canvas PUBLIC include PRIVATE src/desktop)
   target_link_libraries(sketch_plan_canvas PUBLIC Qt6::Widgets Qt6::Svg sketch_precision
     sketch_reference_grid sketch_hosted_opening_geometry sketch_annotation_catalog)
@@ -785,7 +785,7 @@ if(SKETCH_BUILD_DESKTOP)
   if(MSVC)
     target_compile_options(sketch_sheet_layout PRIVATE /W4 /permissive- /utf-8)
   endif()
-  add_library(sketch_desktop src/desktop/main_window.cpp
+  add_library(sketch_desktop src/desktop/main_window.cpp src/desktop/sketch_pdf_output.cpp
     src/desktop/building_object_dialog.cpp src/desktop/hosted_opening_dialog.cpp src/desktop/constraint_dialog.cpp
     src/desktop/constraint_preview_canvas.cpp src/desktop/text_library_dialog.cpp
     src/desktop/appraisal_report_dialog.cpp src/desktop/appraisal_details_panel.cpp
@@ -1103,6 +1103,19 @@ if(SKETCH_BUILD_DESKTOP)
       PREFIX "/fonts" BASE assets/fonts FILES assets/fonts/Inter.ttf)
     add_executable(appraisal_details_panel_tests tests/appraisal_details_panel_tests.cpp)
     add_executable(area_class_palette_desktop_tests tests/area_class_palette_desktop_tests.cpp)
+    add_executable(sketch_content_output_tests tests/sketch_content_output_tests.cpp)
+    target_link_libraries(sketch_content_output_tests PRIVATE sketch_plan_canvas)
+    qt_add_resources(sketch_content_output_tests sketch_content_test_fonts
+      PREFIX "/fonts" BASE assets/fonts FILES assets/fonts/Inter.ttf)
+    add_test(NAME sketch_content_output COMMAND sketch_content_output_tests)
+    add_executable(sketch_pdf_desktop_tests tests/sketch_pdf_desktop_tests.cpp)
+    target_link_libraries(sketch_pdf_desktop_tests PRIVATE sketch_desktop)
+    qt_add_resources(sketch_pdf_desktop_tests sketch_pdf_test_fonts
+      PREFIX "/fonts" BASE assets/fonts FILES assets/fonts/Inter.ttf)
+    add_test(NAME sketch_pdf_desktop COMMAND sketch_pdf_desktop_tests)
+    set_tests_properties(sketch_content_output sketch_pdf_desktop PROPERTIES
+      ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_PLUGIN_PATH=${SKETCH_QT_PREFIX}/plugins"
+      ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${SKETCH_QT_BIN};PATH=path_list_prepend:${CMAKE_SOURCE_DIR}/.deps/native/x64-windows/$<IF:$<CONFIG:Debug>,debug/bin,bin>")
     target_link_libraries(area_class_palette_desktop_tests PRIVATE sketch_desktop sketch_sqlite sketch_exchange)
     qt_add_resources(area_class_palette_desktop_tests area_class_palette_test_fonts
       PREFIX "/fonts" BASE assets/fonts FILES assets/fonts/Inter.ttf)

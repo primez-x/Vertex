@@ -8,9 +8,11 @@
 #include <QColor>
 #include <QByteArray>
 #include <QEvent>
+#include <QFont>
 #include <QHash>
 #include <QImage>
 #include <QMouseEvent>
+#include <QPicture>
 #include <QRectF>
 #include <QSharedPointer>
 #include <QString>
@@ -19,6 +21,7 @@
 #include <QWidget>
 
 #include <functional>
+#include <limits>
 #include <array>
 #include <cstdint>
 #include <optional>
@@ -296,6 +299,20 @@ struct DrawingWitness {
     QString command_text;
 };
 
+inline constexpr double sketch_content_padding_mm = 2.0;
+
+// Vector commands in a stable, drawing-local coordinate system. ink_bounds
+// comes from explicit painted-primitive measurements, not QPicture's own
+// bounds or model anchors. Replay on
+// a device with the picture's logical DPI to preserve paper fonts and strokes.
+struct CanvasSketchContentRecording {
+    QPicture picture;
+    QRectF ink_bounds;
+    Vec2 model_center{};
+    double model_scale{};
+    double pixels_per_mm{};
+};
+
 class PlanCanvas final : public QWidget {
 public:
     explicit PlanCanvas(QWidget* parent = nullptr);
@@ -390,6 +407,16 @@ public:
     void renderSceneAt(QPainter& painter, const QRectF& viewport, double scale,
                        Vec2 view_center, QColor background,
                        std::optional<double> paper_pixels_per_mm = std::nullopt) const;
+    // Separate tight-output contract: committed vectors/labels only, with no
+    // canvas surface, references, grids or interaction overlays. The fixed
+    // default scale is presentation sizing, independent of interactive zoom.
+    [[nodiscard]] std::optional<CanvasSketchContentRecording> recordSketchContent(
+        double model_scale = 80.0, QString* diagnostic = nullptr) const;
+    void setSketchCompositionGuideEnabled(bool enabled);
+    [[nodiscard]] bool sketchCompositionGuideEnabled() const noexcept {
+        return m_sketch_composition_guide_enabled;
+    }
+    [[nodiscard]] std::optional<QRectF> sketchCompositionGuideRect() const;
     [[nodiscard]] Vec2 contentCenter() const noexcept;
     // Interactive selection frame in widget-local logical pixels, including
     // its fixed screen padding. Empty when no drawable selection is retained.
@@ -588,7 +615,7 @@ private:
     [[nodiscard]] CanvasLabel presentedLabel(const CanvasLabel& label, bool output) const;
     [[nodiscard]] const std::vector<CanvasLabel>& positionedLabels(
         const QFont& base_font, const QPaintDevice* device, double scale,
-        double dpi, bool output) const;
+        double dpi, bool output, bool content_only = false, Vec2 layout_origin = {}) const;
     [[nodiscard]] std::vector<QRectF> selectionAnnotationFootprints(
         const QRectF& viewport, const QFont& base_font) const;
     [[nodiscard]] QTransform selectionControlTransform(const QRectF& viewport) const;
@@ -674,13 +701,15 @@ private:
     void drawLabels(QPainter& painter, const QRectF& viewport, double scale,
                     Vec2 view_center, bool output, QColor background,
                     std::optional<double> paper_pixels_per_mm,
-                    std::vector<QRectF>* annotation_footprints = nullptr) const;
+                    std::vector<QRectF>* annotation_footprints = nullptr,
+                    bool content_only = false) const;
     void drawReference(QPainter& painter, const CanvasReference& reference) const;
     void renderSceneWithTransform(QPainter& painter, const QRectF& viewport,
                                   bool fit_to_content, QColor background,
                                   std::optional<double> explicit_scale,
                                   std::optional<Vec2> explicit_center,
-                                  std::optional<double> paper_pixels_per_mm = std::nullopt) const;
+                                  std::optional<double> paper_pixels_per_mm = std::nullopt,
+                                  bool content_only = false) const;
 
     std::vector<CanvasEntity> m_entities;
     std::vector<CanvasLabel> m_labels;
@@ -689,7 +718,12 @@ private:
         std::vector<CanvasLabel> labels;
     };
     // Keep interactive picking warm while a separate output device is used.
-    mutable std::array<LabelPlacementCache, 2> m_label_placement_cache;
+    mutable std::array<LabelPlacementCache, 3> m_label_placement_cache;
+    bool m_sketch_composition_guide_enabled{};
+    std::uint64_t m_sketch_content_revision{};
+    mutable std::uint64_t m_sketch_guide_revision{std::numeric_limits<std::uint64_t>::max()};
+    mutable QFont m_sketch_guide_font;
+    mutable std::optional<CanvasSketchContentRecording> m_sketch_guide_recording;
     std::vector<CanvasReference> m_references;
     std::vector<CanvasReferenceGrid> m_reference_grids;
     mutable QHash<QString, QSharedPointer<QSvgRenderer>> m_svg_renderers;

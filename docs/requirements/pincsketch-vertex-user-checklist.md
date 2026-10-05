@@ -137,7 +137,7 @@ be at least equivalent; a vector PDF is acceptable in place of a raster PDF.
 - [ ] **PIN-103** — Delete a page while retaining at least one page.
 - [ ] **PIN-104** — Navigate pages with the list or previous/next controls.
 - [ ] **PIN-105** — Ghost the previous page behind the current one.
-- [ ] **PIN-106** — Show/hide a portrait report composition guide.
+- [ ] **PIN-106** — Show/hide the report composition guide. In Vertex use Tools > Sketch composition guide; its dashed frame shows the actual sketch PDF crop, rather than a fixed portrait sheet.
 - [ ] **PIN-107** — Load a raster image behind the drawing for tracing.
 - [ ] **PIN-108** — Set reference-image width and opacity.
 - [ ] **PIN-109** — Clear a reference image.
@@ -167,5 +167,5 @@ be at least equivalent; a vector PDF is acceptable in place of a raster PDF.
 - [ ] **PIN-130** — Include drawing, class/code, area, perimeter and GLA in the printed report.
 - [ ] **PIN-131** — Include compact per-area calculation explanations in the report.
 - [ ] **PIN-132** — Show page GLA and aggregate project GLA on multipage reports.
-- [ ] **PIN-133** — Export a tightly cropped sketch PDF and inspect its outlines at high magnification.
+- [ ] **PIN-133** — Use Tools > Export sketch PDF; open the PDF and inspect its outlines and text at high magnification. Check that tracing images, grid and selection controls are absent.
 - [ ] **PIN-134** — Keep symbol export stroke widths independent of workstation zoom.

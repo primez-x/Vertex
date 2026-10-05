@@ -3,6 +3,7 @@
 
 #include "plan_canvas.hpp"
 #include "draft_image_stamp.hpp"
+#include "sketch_pdf_output.hpp"
 #include "reference_import.hpp"
 
 #include "sketch/architecture.hpp"
@@ -23625,6 +23626,112 @@ public:
         }
     }
 
+    bool exportSketchPdf(const QString& path) {
+        if (path.trimmed().isEmpty()) {
+            setError(QStringLiteral("Choose a sketch PDF destination."));
+            return false;
+        }
+        refreshOutput();
+        if (!m_plan_geometry_error.isEmpty()) {
+            setError(QStringLiteral("Sketch PDF export blocked: %1").arg(m_plan_geometry_error));
+            return false;
+        }
+        try {
+            auto* canvas = outputCanvas();
+            if (!canvas) {
+                setError(QStringLiteral("The drawing canvas is unavailable."));
+                return false;
+            }
+            const auto snapshot = m_document->snapshot();
+            QString diagnostic;
+            auto recording = canvas->recordSketchContent(80.0, &diagnostic);
+            if (!recording) {
+                setError(QStringLiteral("Sketch PDF export blocked: %1").arg(diagnostic));
+                return false;
+            }
+            const auto bounds = recording->ink_bounds;
+            const auto model_center = recording->model_center;
+            const auto pixels_per_mm = recording->pixels_per_mm;
+            const auto model_scale = recording->model_scale;
+            const auto pdf_bytes = make_sketch_pdf(std::move(*recording), &diagnostic);
+            if (pdf_bytes.isEmpty()) {
+                setError(QStringLiteral("Sketch PDF export failed: %1").arg(diagnostic));
+                return false;
+            }
+            auto inputs = outputFingerprintInputs(snapshot, false);
+            std::set<std::string> entity_ids, label_ids;
+            for (const auto& entity : canvas->entities()) entity_ids.insert(entity.id.toStdString());
+            for (const auto& label : canvas->labels()) label_ids.insert(label.id.toStdString());
+            // This output is the current visible canvas, not the selected
+            // sheet graph. Bind its actual projection and fixed composition.
+            const json descriptor{
+                {"kind", "content-only-vector-sketch"}, {"version", 1},
+                {"workspace", m_workspace == Workspace::measurement ? "measurement" : "architectural"},
+                {"active_layer_id", m_active_layer_id.toStdString()},
+                {"architectural_view", architectural_view_name(m_architectural_view_kind)},
+                {"named_view_id", m_active_named_view.toStdString()},
+                {"named_view_owner_id", m_active_named_view_owner.toStdString()},
+                {"entity_ids", entity_ids}, {"label_ids", label_ids},
+                {"ink_bounds_px", {bounds.x(), bounds.y(), bounds.width(), bounds.height()}},
+                {"model_center_m", {model_center.x, model_center.y}},
+                {"pixels_per_metre", model_scale}, {"pixels_per_mm", pixels_per_mm},
+                {"padding_mm", sketch_content_padding_mm}, {"architectural_scale_certified", false}
+            };
+            inputs.views.resources.push_back(fingerprint_resource(
+                "sketch-content-composition", descriptor.dump(),
+                json{{"renderer", "PlanCanvas"}, {"descriptor_version", 1}}));
+            const auto fingerprint = make_output_fingerprint(snapshot, inputs);
+            const auto payload = json{
+                {"schema", "vertex.output-fingerprint.v1"}, {"output_kind", "sketch-pdf"},
+                {"output_file", QFileInfo(path).fileName().toStdString()},
+                {"output_sha256", QCryptographicHash::hash(pdf_bytes, QCryptographicHash::Sha256).toHex().toStdString()},
+                {"composition", descriptor}, {"fingerprint", serialize_output_fingerprint(fingerprint)}
+            }.dump(2);
+            QSaveFile destination(path);
+            destination.setDirectWriteFallback(false);
+            if (!destination.open(QIODevice::WriteOnly) ||
+                destination.write(pdf_bytes) != pdf_bytes.size() || !destination.flush() ||
+                destination.error() != QFileDevice::NoError) {
+                setError(QStringLiteral("Sketch PDF could not stage the destination: %1")
+                    .arg(destination.errorString()));
+                return false;
+            }
+            QSaveFile sidecar(path + QStringLiteral(".fingerprint.json"));
+            sidecar.setDirectWriteFallback(false);
+            if (!sidecar.open(QIODevice::WriteOnly) ||
+                sidecar.write(QByteArray::fromStdString(payload)) != static_cast<qint64>(payload.size()) ||
+                !sidecar.flush() || sidecar.error() != QFileDevice::NoError) {
+                setError(QStringLiteral("Sketch PDF fingerprint could not be staged beside the output."));
+                return false;
+            }
+            if (!destination.commit()) {
+                setError(QStringLiteral("Sketch PDF could not save the destination: %1")
+                    .arg(destination.errorString()));
+                return false;
+            }
+            if (!sidecar.commit()) {
+                setError(QStringLiteral("Sketch PDF was saved, but its fingerprint could not be committed: %1")
+                    .arg(sidecar.errorString()));
+                return false;
+            }
+            clearError();
+            owner->statusBar()->showMessage(QStringLiteral("Sketch PDF exported."), 5000);
+            return true;
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Sketch PDF export failed: %1").arg(QString::fromUtf8(error.what())));
+            return false;
+        }
+    }
+
+    void setSketchCompositionGuideEnabled(bool enabled) {
+        if (m_measurementCanvas) m_measurementCanvas->setSketchCompositionGuideEnabled(enabled);
+        if (m_architecturalCanvas) m_architecturalCanvas->setSketchCompositionGuideEnabled(enabled);
+        if (auto* action = owner->findChild<QAction*>(QStringLiteral("sketchCompositionGuide"))) {
+            const QSignalBlocker blocker(action);
+            action->setChecked(enabled);
+        }
+    }
+
     bool exportDraftPdf(const QString& path) {
         refreshOutput();
         if (!m_plan_geometry_error.isEmpty()) {
@@ -27716,6 +27823,11 @@ public:
             {QStringLiteral("Dark theme"), [this] { applyTheme(WorkspaceTheme::dark); }},
             {QStringLiteral("High contrast theme"), [this] { applyTheme(WorkspaceTheme::high_contrast); }},
             {QStringLiteral("Export selected sheet PDF"), [this] { exportFromDialog(); }},
+            {QStringLiteral("Export sketch PDF"), [this] { exportSketchFromDialog(); }},
+            {QStringLiteral("Toggle sketch composition guide"), [this] {
+                const auto* canvas = outputCanvas();
+                setSketchCompositionGuideEnabled(!canvas || !canvas->sketchCompositionGuideEnabled());
+            }},
             {QStringLiteral("Export drawing set PDF"), [this] { exportDrawingSetFromDialog(); }},
             {QStringLiteral("Export draft SVG"), [this] {
                 const auto selected = QFileDialog::getSaveFileName(
@@ -29033,6 +29145,17 @@ private:
             "Create a straight wall with a signed linear rise or fall at its top"));
         QObject::connect(sloped_wall_action, &QAction::triggered, owner,
                          [this] { setTool(CanvasTool::sloped_wall); });
+        auto* sketch_pdf_action = more_menu->addAction(QStringLiteral("Export sketch PDF…"));
+        sketch_pdf_action->setObjectName(QStringLiteral("exportSketchPdf"));
+        sketch_pdf_action->setToolTip(QStringLiteral("Export visible drawing content with a tight vector crop for inserting into a report"));
+        QObject::connect(sketch_pdf_action, &QAction::triggered, owner,
+                         [this] { exportSketchFromDialog(); });
+        auto* sketch_guide_action = more_menu->addAction(QStringLiteral("Sketch composition guide"));
+        sketch_guide_action->setObjectName(QStringLiteral("sketchCompositionGuide"));
+        sketch_guide_action->setCheckable(true);
+        sketch_guide_action->setToolTip(QStringLiteral("Show the sketch PDF crop on the canvas; composition only, not an architectural print scale"));
+        QObject::connect(sketch_guide_action, &QAction::toggled, owner,
+                         [this](bool enabled) { setSketchCompositionGuideEnabled(enabled); });
         auto* export_image_action = more_menu->addAction(QStringLiteral("Export draft image…"));
         export_image_action->setObjectName(QStringLiteral("exportDraftImage"));
         QObject::connect(export_image_action, &QAction::triggered, owner,
@@ -39158,6 +39281,12 @@ private:
         }
     }
 
+    void exportSketchFromDialog() {
+        const auto selected = QFileDialog::getSaveFileName(
+            owner, QStringLiteral("Export sketch PDF"), {}, QStringLiteral("PDF document (*.pdf)"));
+        if (!selected.isEmpty()) exportSketchPdf(selected);
+    }
+
     void exportFromDialog() {
         const auto selected = QFileDialog::getSaveFileName(
             owner, QStringLiteral("Export selected sheet PDF"), {}, QStringLiteral("PDF document (*.pdf)"));
@@ -40383,6 +40512,14 @@ bool MainWindow::saveProjectAs(const QString& path) {
 
 bool MainWindow::exportDraftPdf(const QString& path) {
     return m_impl->exportDraftPdf(path);
+}
+
+bool MainWindow::exportSketchPdf(const QString& path) {
+    return m_impl->exportSketchPdf(path);
+}
+
+void MainWindow::setSketchCompositionGuideEnabled(bool enabled) {
+    m_impl->setSketchCompositionGuideEnabled(enabled);
 }
 
 bool MainWindow::editSelectedAppraisalFacts(const QString& declarations_json,

@@ -1,4 +1,5 @@
 #include "plan_canvas.hpp"
+#include "sketch_content_bounds.hpp"
 #include "sketch/hosted_opening_geometry.hpp"
 #include "sketch/desktop/symbol_svg_palette.hpp"
 #include "sketch/desktop/area_class_palette.hpp"
@@ -431,6 +432,7 @@ void PlanCanvas::setEntities(std::vector<CanvasEntity> entities) {
     }
     resetTouchInput();
     m_entities = std::move(entities);
+    ++m_sketch_content_revision;
     if (m_last_mouse_position) updatePointerCursor(*m_last_mouse_position);
     update();
 }
@@ -512,6 +514,7 @@ void PlanCanvas::setOverviewMapEnabled(bool enabled) {
 void PlanCanvas::setMetricUnits(bool metric) {
     if (m_metric_units == metric) return;
     m_metric_units = metric;
+    ++m_sketch_content_revision;
     if (m_last_mouse_position) updateCursor(*m_last_mouse_position);
     update();
 }
@@ -592,6 +595,7 @@ void PlanCanvas::setLabels(std::vector<CanvasLabel> labels) {
     // are not independent annotations with their own transform controls.
     for (auto& label : labels) if (label.plan_only) label.selected = false;
     m_labels = std::move(labels);
+    ++m_sketch_content_revision;
     if (m_last_mouse_position) updatePointerCursor(*m_last_mouse_position);
     update();
 }
@@ -861,6 +865,195 @@ void PlanCanvas::renderSceneAt(QPainter& painter, const QRectF& viewport, double
                              paper_pixels_per_mm);
 }
 
+std::optional<CanvasSketchContentRecording> PlanCanvas::recordSketchContent(
+    double model_scale, QString* diagnostic) const {
+    if (diagnostic) diagnostic->clear();
+    const auto reject = [&](const QString& reason) -> std::optional<CanvasSketchContentRecording> {
+        if (diagnostic) *diagnostic = reason;
+        return std::nullopt;
+    };
+    if (!std::isfinite(model_scale) || model_scale < minimum_scale || model_scale > maximum_scale)
+        return reject(tr("The Sketch output scale is outside the supported range."));
+
+    // QPicture stores integer device bounds. Preflight before recording to
+    // prevent overflow from becoming a plausible but silently clipped crop.
+    constexpr double maximum_coordinate = 1'000'000.0;
+    Vec2 minimum{std::numeric_limits<double>::max(), std::numeric_limits<double>::max()};
+    Vec2 maximum{std::numeric_limits<double>::lowest(), std::numeric_limits<double>::lowest()};
+    bool has_content = false;
+    const auto include = [&](Vec2 point) {
+        if (!std::isfinite(point.x) || !std::isfinite(point.y))
+            throw std::invalid_argument("nonfinite content coordinate");
+        minimum.x = std::min(minimum.x, point.x); minimum.y = std::min(minimum.y, point.y);
+        maximum.x = std::max(maximum.x, point.x); maximum.y = std::max(maximum.y, point.y);
+        has_content = true;
+    };
+    const auto finite_rect = [](QRectF rect) {
+        return std::isfinite(rect.left()) && std::isfinite(rect.top()) &&
+               std::isfinite(rect.right()) && std::isfinite(rect.bottom());
+    };
+    const auto include_boundary = [&](const Boundary& boundary) {
+        for (const auto& segment : boundary) {
+            const auto bounds = segment_bounds(segment);
+            include(bounds.minimum); include(bounds.maximum);
+        }
+    };
+    CanvasSketchContentRecording recording;
+    recording.model_scale = model_scale;
+    recording.pixels_per_mm = recording.picture.logicalDpiX() / 25.4;
+    if (recording.picture.logicalDpiX() != recording.picture.logicalDpiY() ||
+        !std::isfinite(recording.pixels_per_mm) || recording.pixels_per_mm <= 0)
+        return reject(tr("The Sketch recorder has unsupported device resolution."));
+    try {
+        for (const auto& entity : m_entities) {
+            if (!std::isfinite(entity.thickness_metres) ||
+                !std::isfinite(entity.stroke_width_metres) ||
+                !std::isfinite(entity.output_stroke_width_mm) || !std::isfinite(entity.hatch_scale))
+                throw std::invalid_argument("nonfinite entity presentation");
+            const auto stroke_extent = std::max({0.0, entity.thickness_metres * model_scale,
+                entity.stroke_width_metres * model_scale,
+                entity.output_stroke_width_mm * recording.pixels_per_mm});
+            if (!std::isfinite(stroke_extent) || stroke_extent > maximum_coordinate)
+                return reject(tr("The Sketch line weight exceeds the supported output bounds."));
+            include_boundary(entity.segments);
+            if (entity.stroke_segments) include_boundary(*entity.stroke_segments);
+            for (const auto& hole : entity.holes) include_boundary(hole);
+            if (entity.svg_symbol) {
+                const auto& symbol = *entity.svg_symbol;
+                if (!finite_rect(symbol.view_box) || !finite_rect(symbol.footprint_view_box) ||
+                    symbol.view_box.width() <= 0 || symbol.view_box.height() <= 0 ||
+                    symbol.footprint_view_box.width() <= 0 || symbol.footprint_view_box.height() <= 0 ||
+                    !std::isfinite(symbol.rotation_radians) || !std::isfinite(symbol.width_metres) ||
+                    !std::isfinite(symbol.depth_metres) || symbol.width_metres <= 0 || symbol.depth_metres <= 0)
+                    throw std::invalid_argument("invalid symbol presentation");
+                include(symbol.position);
+                QTransform transform;
+                transform.rotate(symbol.rotation_radians * 180 / pi);
+                transform.scale((symbol.flip_horizontal ? -1.0 : 1.0) *
+                                    symbol.width_metres / symbol.footprint_view_box.width(),
+                                (symbol.flip_vertical ? 1.0 : -1.0) *
+                                    symbol.depth_metres / symbol.footprint_view_box.height());
+                transform.translate(-symbol.footprint_view_box.center().x(),
+                                    -symbol.footprint_view_box.center().y());
+                const auto footprint = transform.mapRect(symbol.view_box);
+                if (!finite_rect(footprint)) throw std::invalid_argument("overflowing symbol footprint");
+                include({symbol.position.x + footprint.left(), symbol.position.y + footprint.top()});
+                include({symbol.position.x + footprint.right(), symbol.position.y + footprint.bottom()});
+            }
+        }
+        for (const auto& label : m_labels) {
+            if (label.text.isEmpty()) continue;
+            if (!std::isfinite(label.rotation_radians) || !std::isfinite(label.scale) ||
+                !std::isfinite(label.text_height_metres) || !std::isfinite(label.paper_height_mm))
+                throw std::invalid_argument("nonfinite label presentation");
+            if (label.paper_height_mm * recording.pixels_per_mm > 10'000)
+                return reject(tr("The Sketch font size exceeds the supported output bounds."));
+            const auto model_font_pixels = (label.text_height_metres > 0 ? label.text_height_metres : .15) *
+                (label.scale > 0 ? label.scale : 1) * model_scale;
+            if (!std::isfinite(model_font_pixels) || model_font_pixels > 10'000)
+                return reject(tr("The Sketch model font size exceeds the supported output bounds."));
+            include(label.position);
+            if (label.leader_start) include(*label.leader_start);
+            if (label.plan_label_offset) include(label.position + *label.plan_label_offset);
+            if (label.automatic_linear_placement) {
+                const auto& placement = *label.automatic_linear_placement;
+                include_boundary({placement.anchor});
+                if (!std::isfinite(placement.outward_normal.x) || !std::isfinite(placement.outward_normal.y) ||
+                    !std::isfinite(placement.clearance_metres))
+                    throw std::invalid_argument("nonfinite label placement");
+            }
+        }
+    } catch (const std::exception&) {
+        return reject(tr("The committed Sketch contains invalid or unrepresentable drawing geometry."));
+    }
+    if (!has_content) return reject(tr("The Sketch has no committed drawing content to export."));
+    recording.model_center = {std::midpoint(minimum.x, maximum.x), std::midpoint(minimum.y, maximum.y)};
+    const auto bounded_point = [&](Vec2 point) {
+        const auto x = (point.x - recording.model_center.x) * model_scale;
+        const auto y = (point.y - recording.model_center.y) * model_scale;
+        return std::isfinite(x) && std::isfinite(y) &&
+               std::abs(x) <= maximum_coordinate / 2 && std::abs(y) <= maximum_coordinate / 2;
+    };
+    if (!bounded_point(minimum) || !bounded_point(maximum))
+        return reject(tr("The Sketch drawing exceeds the supported output bounds."));
+
+    // Include placed font geometry in preflight; the recorder below remains
+    // authoritative for the final crop (including SVG strokes and callouts).
+    auto output_font = font();
+    output_font.setFeature("calt", 0); output_font.setFeature("case", 0);
+    for (const auto& label : positionedLabels(font(), &recording.picture, model_scale,
+        recording.picture.logicalDpiY(), true, true, recording.model_center)) {
+        if (!drawable_label(label)) continue;
+        const auto layout = label_layout(label, output_font, &recording.picture,
+                                         model_scale, recording.picture.logicalDpiY());
+        const auto point = label.position - recording.model_center;
+        const auto rect = label_transform(label, {point.x * model_scale, -point.y * model_scale})
+            .mapRect(layout.bounds);
+        if (!finite_rect(rect) || std::max({std::abs(rect.left()), std::abs(rect.right()),
+                std::abs(rect.top()), std::abs(rect.bottom())}) > maximum_coordinate)
+            return reject(tr("The Sketch annotations exceed the supported output bounds."));
+    }
+    SketchContentBoundsDevice device(recording.picture);
+    QPainter painter;
+    if (!painter.begin(&device)) return reject(tr("The Sketch vector recorder could not start."));
+    painter.setFont(font());
+    // A tiny positive viewport supplies an origin only. Content-only mode
+    // never paints it or clips to it, so it cannot extend the recorded crop.
+    renderSceneWithTransform(painter, QRectF(-.5, -.5, 1, 1), false, Qt::white,
+        model_scale, recording.model_center, recording.pixels_per_mm, true);
+    if (!painter.end()) return reject(tr("The Sketch vector recording could not finish."));
+    if (!device.valid()) return reject(tr("The painted Sketch contains unrepresentable drawing geometry."));
+    // QPicture reconstructs text runs during replay. Measure that exact
+    // finished command stream at its output DPI, including fallback/italic
+    // glyph positions, rather than assuming the initial shaped run's bounds
+    // equal the PDF replay. Keep the original picture as output authority.
+    QPicture measurement_sink;
+    SketchContentBoundsDevice replay_device(measurement_sink);
+    QPainter replay;
+    if (!replay.begin(&replay_device))
+        return reject(tr("The Sketch output bounds recorder could not start."));
+    const bool replayed = recording.picture.play(&replay);
+    const bool finished = replay.end();
+    if (!replayed || !finished || !replay_device.valid())
+        return reject(tr("The Sketch output bounds could not be measured."));
+    const auto ink_bounds = replay_device.inkBounds();
+    if (!ink_bounds || ink_bounds->isEmpty())
+        return reject(tr("The Sketch has no painted committed drawing content to export."));
+    recording.ink_bounds = *ink_bounds;
+    if (!finite_rect(recording.ink_bounds) || std::max({std::abs(recording.ink_bounds.left()),
+            std::abs(recording.ink_bounds.right()), std::abs(recording.ink_bounds.top()),
+            std::abs(recording.ink_bounds.bottom()), recording.ink_bounds.width(),
+            recording.ink_bounds.height()}) > maximum_coordinate)
+        return reject(tr("The painted Sketch exceeds the supported output bounds."));
+    recording.picture.setBoundingRect(recording.ink_bounds.toAlignedRect());
+    return recording;
+}
+
+void PlanCanvas::setSketchCompositionGuideEnabled(bool enabled) {
+    if (m_sketch_composition_guide_enabled == enabled) return;
+    m_sketch_composition_guide_enabled = enabled;
+    update();
+}
+
+std::optional<QRectF> PlanCanvas::sketchCompositionGuideRect() const {
+    if (!m_sketch_composition_guide_enabled) return std::nullopt;
+    if (m_sketch_guide_revision != m_sketch_content_revision || m_sketch_guide_font != font()) {
+        m_sketch_guide_recording = recordSketchContent();
+        m_sketch_guide_revision = m_sketch_content_revision;
+        m_sketch_guide_font = font();
+    }
+    if (!m_sketch_guide_recording) return std::nullopt;
+    const auto& recording = *m_sketch_guide_recording;
+    const auto padding = sketch_content_padding_mm * recording.pixels_per_mm;
+    const auto bounds = recording.ink_bounds.adjusted(-padding, -padding, padding, padding);
+    const auto to_model = [&](QPointF point) {
+        return Vec2{recording.model_center.x + point.x() / recording.model_scale,
+                    recording.model_center.y - point.y() / recording.model_scale};
+    };
+    return QRectF(toScreen(to_model(bounds.topLeft()), rect()),
+                  toScreen(to_model(bounds.bottomRight()), rect())).normalized();
+}
+
 Vec2 PlanCanvas::contentCenter() const noexcept {
     const auto bounds = contentBounds();
     return bounds ? Vec2{std::midpoint(bounds->first.x, bounds->second.x),
@@ -871,7 +1064,8 @@ void PlanCanvas::renderSceneWithTransform(QPainter& painter, const QRectF& viewp
                                           bool fit_to_content, QColor background,
                                           std::optional<double> explicit_scale,
                                           std::optional<Vec2> explicit_center,
-                                          std::optional<double> paper_pixels_per_mm) const {
+                                          std::optional<double> paper_pixels_per_mm,
+                                          bool content_only) const {
     if (viewport.width() <= 0.0 || viewport.height() <= 0.0) {
         return;
     }
@@ -896,12 +1090,15 @@ void PlanCanvas::renderSceneWithTransform(QPainter& painter, const QRectF& viewp
     }
     painter.save();
     painter.setRenderHint(QPainter::Antialiasing, true);
-    painter.fillRect(viewport, background);
+    if (!content_only) painter.fillRect(viewport, background);
     painter.translate(viewport.center());
     painter.scale(scale, -scale);
-    painter.translate(-view_center.x, -view_center.y);
+    // Tight output subtracts the origin from primitive coordinates before
+    // scaling, avoiding cancellation from large survey/world coordinates.
+    if (!content_only) painter.translate(-view_center.x, -view_center.y);
 
     for (const auto& reference : m_references) {
+        if (content_only) break;
         if (!reference.visible) continue;
         if (!output && m_move_preview_delta &&
             (!m_move_preview_exact || m_move_preview_valid) && m_move_ids.contains(reference.id)) {
@@ -927,7 +1124,7 @@ void PlanCanvas::renderSceneWithTransform(QPainter& painter, const QRectF& viewp
     if (m_grid_enabled && !output) {
         drawGrid(painter, viewport, scale, view_center);
     }
-    drawReferenceGrids(painter);
+    if (!content_only) drawReferenceGrids(painter);
     std::vector<const CanvasEntity*> painted_entities;
     painted_entities.reserve(m_entities.size());
     for (const auto& entity : m_entities) painted_entities.push_back(&entity);
@@ -959,7 +1156,20 @@ void PlanCanvas::renderSceneWithTransform(QPainter& painter, const QRectF& viewp
     }
     for (const auto* painted_entity : painted_entities) {
         const auto& entity=*painted_entity;
-        if (!output && &interactiveEntity(entity) != &entity) {
+        if (content_only) {
+            auto local = entity;
+            const auto localize = [&](Boundary& boundary) {
+                for (auto& segment : boundary) {
+                    segment.start = segment.start - view_center;
+                    segment.end = segment.end - view_center;
+                }
+            };
+            localize(local.segments);
+            if (local.stroke_segments) localize(*local.stroke_segments);
+            for (auto& hole : local.holes) localize(hole);
+            if (local.svg_symbol) local.svg_symbol->position = local.svg_symbol->position - view_center;
+            drawEntity(painter, local, true, background, paper_pixels_per_mm);
+        } else if (!output && &interactiveEntity(entity) != &entity) {
             drawEntity(painter, interactiveEntity(entity), false, background, paper_pixels_per_mm);
         } else if (!output && !m_boundary_vertex_preview_requested &&
             m_vertex_move_handle && m_vertex_move_preview &&
@@ -1165,15 +1375,16 @@ void PlanCanvas::renderSceneWithTransform(QPainter& painter, const QRectF& viewp
         painter.restore();
     }
 
-    drawReferenceGridLabels(painter, viewport, scale, view_center, output, background,
-                            paper_pixels_per_mm);
+    if (!content_only)
+        drawReferenceGridLabels(painter, viewport, scale, view_center, output, background,
+                                paper_pixels_per_mm);
 
     // Committed labels use the same model-to-screen mapping as the current
     // scene, including fit-to-content output. Drawing after restoring the
     // world transform keeps text upright and readable at its device scale.
     std::vector<QRectF> annotation_footprints;
     drawLabels(painter, viewport, scale, view_center, output, background,
-               paper_pixels_per_mm, output ? nullptr : &annotation_footprints);
+               paper_pixels_per_mm, output ? nullptr : &annotation_footprints, content_only);
 
     if (!output) {
         if (m_grid_enabled) {
@@ -2628,8 +2839,8 @@ CanvasLabel PlanCanvas::presentedLabel(const CanvasLabel& label, bool output) co
 
 const std::vector<CanvasLabel>& PlanCanvas::positionedLabels(
     const QFont& base_font, const QPaintDevice* device, double scale,
-    double dpi, bool output) const {
-    auto& cache = m_label_placement_cache[output ? 1 : 0];
+    double dpi, bool output, bool content_only, Vec2 layout_origin) const {
+    auto& cache = m_label_placement_cache[content_only ? 2 : output ? 1 : 0];
     auto retained_labels=m_labels;
     if (!output && m_transform_preview_valid) {
         for (const auto& proposed : m_transform_labels_preview)
@@ -2653,7 +2864,8 @@ const std::vector<CanvasLabel>& PlanCanvas::positionedLabels(
     labels.reserve(retained_labels.size());
     QByteArray key;
     QDataStream signature(&key, QIODevice::WriteOnly);
-    signature << base_font << font() << scale << dpi << output << quint64(retained_labels.size())
+    signature << base_font << font() << scale << dpi << output << content_only
+              << layout_origin.x << layout_origin.y << quint64(retained_labels.size())
               << device->logicalDpiX() << device->logicalDpiY()
               << device->devicePixelRatioF() << device->devType();
     const auto point_key = [&](Vec2 p) { signature << p.x << p.y; };
@@ -2691,8 +2903,9 @@ const std::vector<CanvasLabel>& PlanCanvas::positionedLabels(
         labels.push_back(std::move(label));
     }
     // Reference-grid callouts are rendered labels too, with their own font.
-    signature << quint64(m_reference_grids.size());
+    signature << quint64(content_only ? 0 : m_reference_grids.size());
     for (const auto& grid : m_reference_grids) {
+        if (content_only) break;
         signature << grid.id << grid.visible << grid.x_label << grid.y_label;
         signature << quint64(grid.lines.size());
         for (const auto& line : grid.lines) {
@@ -2708,7 +2921,9 @@ const std::vector<CanvasLabel>& PlanCanvas::positionedLabels(
         cache.labels = std::move(labels);
         return cache.labels;
     }
-    const auto model_screen = [&](Vec2 p) { return QPointF(p.x * scale, -p.y * scale); };
+    const auto model_screen = [&](Vec2 p) {
+        return QPointF((p.x - layout_origin.x) * scale, -(p.y - layout_origin.y) * scale);
+    };
     std::vector<QRectF> footprints(labels.size());
     std::vector<QRectF> obstacles;
     std::vector<std::size_t> automatic_labels;
@@ -2751,6 +2966,7 @@ const std::vector<CanvasLabel>& PlanCanvas::positionedLabels(
     grid_font.setWeight(QFont::DemiBold);
     const QFontMetricsF grid_metrics(grid_font, device);
     for (const auto& grid : m_reference_grids) {
+        if (content_only) break;
         if (!grid.visible) continue;
         for (const auto& line : grid.lines) {
             const auto& prefix = line.axis == ReferenceGridAxis::x ? grid.x_label : grid.y_label;
@@ -3802,6 +4018,15 @@ void PlanCanvas::paintEvent(QPaintEvent* event) {
     {
         QPainter painter(this);
         renderScene(painter, QRectF(rect()));
+        if (const auto frame = sketchCompositionGuideRect()) {
+            painter.save();
+            painter.setClipRect(rect());
+            painter.setPen(QPen(m_canvas_background.lightnessF() > .5
+                ? QColor(117, 133, 156, 190) : QColor(173, 188, 208, 190), 1.0, Qt::DashLine));
+            painter.setBrush(Qt::NoBrush);
+            painter.drawRect(*frame);
+            painter.restore();
+        }
         if (m_selection_start && m_selection_dragging) {
             painter.setPen(QPen(QColor(37, 99, 235), 1.5, Qt::DashLine));
             painter.setBrush(QColor(37, 99, 235, 38));
@@ -5324,7 +5549,8 @@ void PlanCanvas::drawSegment(QPainter& painter, const Segment& segment) const {
 void PlanCanvas::drawLabels(QPainter& painter, const QRectF& viewport, double scale,
                             Vec2 view_center, bool output, QColor background,
                             std::optional<double> paper_pixels_per_mm,
-                            std::vector<QRectF>* annotation_footprints) const {
+                            std::vector<QRectF>* annotation_footprints,
+                            bool content_only) const {
     if (!(scale > 0.0) || !std::isfinite(scale)) {
         return;
     }
@@ -5344,7 +5570,8 @@ void PlanCanvas::drawLabels(QPainter& painter, const QRectF& viewport, double sc
         // differ from device DPI. Model scale remains independent of this.
         dpi = *paper_pixels_per_mm * 25.4;
     }
-    for (const auto& label : positionedLabels(legacy_font, metrics_device, scale, dpi, output)) {
+    for (const auto& label : positionedLabels(legacy_font, metrics_device, scale, dpi, output,
+                                            content_only, content_only ? view_center : Vec2{})) {
         if (!drawable_label(label)) continue;
         const auto paper = std::isfinite(label.paper_height_mm) && label.paper_height_mm > 0.0;
         auto base_font = paper ? font() : legacy_font;
