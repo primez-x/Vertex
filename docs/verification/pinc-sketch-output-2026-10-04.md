@@ -48,8 +48,32 @@ PDF export, boundary canvas, SVG symbols and wall dimensions. Root inspected the
 final canvas-guide and rendered-PDF captures: the crop contains the room, area
 dimension, sofa, floor annotation and rotated text without interaction overlays.
 Captures and diagnostic logs remain under
-`artifacts/pinc-sketch-output-20261004` locally. Package and installed-runtime
-results are recorded after their commands finish.
+`artifacts/pinc-sketch-output-20261004` locally. Terminal package and
+installed-runtime results are recorded below.
+
+## Delivered internal build
+
+Implementation commit `0b8443d074105cc852a6ad9fa8b461e82c62f500` was pushed and
+the exact remote ref verified. Independent review approved this increment with
+the documented paired-file limitation. The offline package
+`artifacts/packages/vertex-offline-20261004-sketch-output` contains 4,076 files:
+1,424 source-kit files and 2,645 runtime files, plus package control files.
+Source-kit allowlist and requirement-contract checks pass.
+
+Installation at `artifacts/installed/vertex-20261004-sketch-output` finished with
+exit 0. The installed application SHA-256 is
+`661d497f85310bfd7c3910d7db5d7170e9bdbc079465c4e3bc63c5d5823a0f2b`,
+matching the verified build and runtime report. All six installed source/reopen
+samples pass for measurement, residential architecture and light-commercial
+architecture with developer dependency paths removed. These samples also import
+an actual PNG through the normal installed decoder and reopen its saved asset;
+they are separate from the direct-asset PDF fixture described above.
+
+The Desktop Vertex shortcut was updated and read back to confirm this exact
+installed executable. The previous installation was preserved. `delivery.json`,
+installer logs, the installed runtime report and capture hashes retain local
+evidence. These observations are developer-host checks, not clean-machine,
+network-denied or full production qualification.
 
 ## Remaining work
 
