@@ -67,6 +67,28 @@ or the overall replacement release.
 The user checklist adds U444-U449 as observable actions; their user outcomes
 remain **Not tested**.
 
+## Installed checkpoint
+
+Implementation commit `03d2b52460b1360ad01cc8f9b125a6c857111bda` was committed,
+pushed and checked against the remote main reference. All six bundle stages and
+the bundled installer exited successfully. The bundle
+`artifacts/packages/vertex-offline-20261005-area-callouts` contains 4,131 files,
+including 1,479 source-kit files and 2,645 runtime files. The new installation is
+`artifacts/installed/vertex-20261005-area-callouts`.
+
+Six installed-runtime samples passed with a private test profile and a system-only
+PATH. The installed executable's SHA-256 matches the Release executable:
+`91ec286bed75ffc8750b817a90e048ff986bcf84732926e429204b67f5a89f7b`.
+The Desktop Vertex shortcut was updated and its target read back. The preceding
+room-repair installation remains preserved. No existing user process was closed.
+
+The installed report is in
+`artifacts/area-callouts-20261004/installed-runtime/run-20261005-003253-969881b1/report.json`;
+the delivery record is `artifacts/area-callouts-20261004/delivery.json`.
+These samples exercise installed runtime/persistence and are not a complete
+installed callout interaction audit. They do not establish clean-machine,
+network-denied installation/use, printer or full production qualification.
+
 ## Limits
 
 Focused native checks do not certify the full 134-operation Pinc comparison,

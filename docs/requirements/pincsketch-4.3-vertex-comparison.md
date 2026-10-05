@@ -7,12 +7,15 @@ Source presence is not runtime qualification. PincSketch's own QA report leaves
 4.3 mouse-level rendering unverified. Its 4.2 title/project format and 4.3 package
 labels are recorded rather than silently reconciled.
 
-The current installed checkpoint is `vertex-20261004-room-repair`; the Desktop
+The current installed checkpoint is `vertex-20261005-area-callouts`; the Desktop
 Vertex shortcut points to its verified executable. The chronological checkpoints
 below retain their original limits. Reviewed same-ID room repair and all 22 named
 drawing choices are now implemented, while automatic room correspondence,
 multi-room dispositions, physical-room dimensions and complete appraisal-preset
 fact-review shortcuts remain open. This does not establish full parity.
+Independent name/calculation callouts and text alignment are included in this
+installed checkpoint. Eleven affected native checks and six installed-runtime
+samples passed; these are bounded checks, not complete user workflow certification.
 
 The [Pinc importer foundation](../verification/pinc-import-foundation-2026-10-04.md)
 now parses known modern and legacy projects and transports validated image
