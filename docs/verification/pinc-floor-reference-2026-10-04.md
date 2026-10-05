@@ -81,6 +81,31 @@ final-desktop records. Root inspected both final theme captures; the source
 floor, annotations and dimensions appear as faded reference ink, while the
 destination selection and controls remain clear.
 
+## Delivered internal build
+
+Implementation commit `ffb12fffde18ceb1f5c5387e4a1ef677574718be` was pushed and
+the exact remote ref verified. Source-kit allowlist and requirement-contract
+checks pass. The offline bundle
+`artifacts/packages/vertex-offline-20261004-floor-reference` contains 4,083 files,
+including 1,431 source-kit files and 2,645 runtime files. Its source-kit snapshot
+corresponds to that implementation commit; this subsequent delivery record is
+documentation evidence, not another application change.
+
+Installation at `artifacts/installed/vertex-20261004-floor-reference` finished
+with exit 0. All six installed source/reopen samples passed for measurement,
+residential architecture and light-commercial architecture with developer
+dependency paths removed, including the normal installed PNG importer and
+saved-asset reopen. These broad samples complement the focused floor-reference
+desktop tests; they do not individually exercise every tracing control.
+
+The installed application SHA-256 is
+`82946efcfa1bd7853a78ee67cb9053c1d7622a4366ba6ced7af98ed6c03b0ac5`.
+The Desktop Vertex shortcut was updated and read back to confirm that exact
+executable, matching the verified build. The previous installation is preserved.
+Local `delivery.json`, terminal job logs, the installed runtime report and
+reviewed capture hashes retain evidence. This is developer-host verification,
+not a production or clean-machine offline certification.
+
 ## Remaining limits
 
 This is world-XY floor tracing in the 2D measurement surface. It is not arbitrary
