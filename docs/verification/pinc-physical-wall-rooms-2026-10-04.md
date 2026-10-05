@@ -84,11 +84,32 @@ The canonical query bounds owners, detector contexts, geometry and aggregate
 cache charge. IFC reconstruction also bounds chunks, bytes and aggregate copied
 metadata. Stored claimed area is never a calculation authority.
 
-The installed `vertex-20261004-floor-reference` application and Desktop shortcut
-are unchanged. The current Release executable is in `build/windows-release/vertex.exe`;
-it depends on the developer build runtime until packaged. No new installer,
-clean-machine/network-denied installation, physical printer, native Apex migration,
-full IFC interoperability or user-observed resolution is claimed.
+Implementation commit `1f4e180df3aae39cd0804d520fc283389c7bad0b` was pushed,
+and root verified the exact remote ref. Source-kit completeness and the three
+focused Python contract suites pass: 14 package-validator, 13 source-manifest
+and 3 allowlist-generator cases. The source kit contains 1,444 tracked files.
+
+The offline bundle `artifacts/packages/vertex-offline-20261004-physical-rooms`
+contains 4,096 files, including 2,645 runtime files. Its source-kit snapshot is
+the implementation commit above; subsequent delivery documentation and manual
+checklist additions are separate from those packaged bytes. All six packaging
+stages exited 0, and inspection reported no unresolved component imports.
+
+Installation at `artifacts/installed/vertex-20261004-physical-rooms` exited 0.
+All six installed source/reopen samples passed for measurement, residential
+architecture and light-commercial architecture, with developer dependency paths
+removed. Those samples complement the focused physical-room desktop checks;
+they do not individually exercise every new room command. The installed runtime
+report is under `installed-runtime/run-20261004-204845-73043311/report.json` in
+the local evidence directory above.
+
+The installed executable SHA-256 is
+`9eea4dd2567f74a9fb1c5c26cf39c3ecdc0ae6935fd9d527c8d50675c331b660`.
+Root verified it matches the Release build, updated the Desktop Vertex shortcut,
+and read back its exact target. The previous floor-reference installation is
+preserved. No clean-machine/network-denied installation, physical printer,
+native Apex migration, full IFC interoperability or user-observed resolution is
+claimed by this developer-host checkpoint.
 
 Remaining work includes same-ID source repair, proven split/merge and rigid
 correspondence, source-bound annotations, full 22-entry palette mapping, all 80

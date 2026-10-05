@@ -2645,6 +2645,44 @@ drawing; switching modes does not change existing geometry.
   - Result: Not tested
   - Notes: ______________________________
 
+## Rooms measured from physical walls
+
+- [ ] **U433 — Create and classify a room inside drawn walls**
+  - Steps: Draw four connected walls to make a closed room. Select one wall and use **Create room boundary from selected geometry** in Commands. Open **Library > Area classes**, choose a classification and apply it to the detected space or its row. Select the room and open **Details**.
+  - Expected: A named room follows the clear inside faces of the walls. Its area excludes wall thickness. Applying a classification changes the room's classification without moving walls. Repeating room creation does not create a duplicate current room.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **U434 — Exclude an interior wall from clear room area**
+  - Steps: In a metric test project, draw a 4 m by 3 m rectangle using wall baselines and 0.2 m wall thickness. Add an isolated 2 m long, 0.2 m thick wall entirely inside. Detect and create the room, then select it and open **Details**.
+  - Expected: Outer clear area is 10.64 m², the interior wall deducts 0.40 m², and net clear room area is 10.24 m². The room fill excludes the interior wall footprint.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **U435 — Keep room classification separate from appraisal GLA**
+  - Steps: In a test project with an exterior measurement and its required appraisal facts already entered, record the GLA total. Create and classify a physical room inside the walls. Change the room's classification and inspect GLA again.
+  - Expected: Room creation and classification do not add the room area a second time to exterior GLA or invent eligibility facts. Details distinguishes room clear area from the appraisal total.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **U436 — Select an outlined room without blocking its furniture**
+  - Steps: Create an outlined physical room with an interior wall obstacle. Place a sofa inside. Click an empty part of the clear room interior, then click the sofa. Deselect, then click inside the obstacle's footprint away from an actual wall line.
+  - Expected: The room can be selected from its clear interior without precisely clicking an outline. Clicking the sofa selects the sofa. The excluded hole does not count as room material.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **U437 — See when a physical room's source has changed**
+  - Steps: Create a physical room, record its area, then change a source wall's thickness. Select the retained room in Layers, open Details, and inspect its canvas label and schedule. Undo the wall change.
+  - Expected: The changed room is marked stale; its previous numeric area is withheld from the canvas, Details and schedule. Undo restores the current room and its original area. Same-ID source repair is still a documented gap in this build.
+  - Result: Not tested
+  - Notes: ______________________________
+
+- [ ] **U438 — Save and reopen a classified room with a hole**
+  - Steps: Create and name a physical room containing an isolated wall obstacle. Choose its classification, save, close the project, then reopen it. Select the room and inspect its name, classification, fill and Details.
+  - Expected: The same room, hole, classification and clear area return. The hole remains excluded from room fill and quantities.
+  - Result: Not tested
+  - Notes: ______________________________
+
 ## Issue report template
 
 - Task ID(s):

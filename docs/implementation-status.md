@@ -14,8 +14,11 @@ creation, classification, hole-aware selection, furniture picking, Undo/Redo,
 save/reopen and output. The [checkpoint evidence](verification/pinc-physical-wall-rooms-2026-10-04.md)
 records the actual builds, checks and captures. Source edits currently mark rooms
 stale and withhold outdated quantities. Same-ID source repair, all 22 preset
-mappings and complete Pinc/Apex qualification remain required. The previously
-installed floor-reference build is unchanged; this is a source/build checkpoint.
+mappings and complete Pinc/Apex qualification remain required. The new offline
+bundle and installation are `vertex-offline-20261004-physical-rooms` and
+`vertex-20261004-physical-rooms`. All six installed source/reopen samples pass;
+the Desktop Vertex shortcut now points to this installation. This is an internal
+build with developer-host evidence, not production acceptance.
 
 ## Physical wall clear-space engine (2026-10-04)
 
