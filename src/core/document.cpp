@@ -1,4 +1,5 @@
 #include "sketch/document.hpp"
+#include "sketch/physical_wall_room_data.hpp"
 #include "sketch/document_wall.hpp"
 #include "sketch/door_operation.hpp"
 #include "sketch/opening_assembly.hpp"
@@ -342,6 +343,12 @@ void validate_entity(const Entity& entity) {
         }
     }
     if (entity.type == "room") validate_room_volume(entity);
+    if (entity.extensions.contains("physical_wall_room")) {
+        try { (void)validate_physical_wall_room_descriptor(entity); }
+        catch (const std::exception& error) {
+            document_error(DocumentErrorCode::invalid_entity, error.what());
+        }
+    }
     (void)stair_connection_reference(entity);
     if (entity.properties.contains("vertical_level_binding")) {
         if (entity.type != "floor") {
@@ -1306,6 +1313,11 @@ std::optional<std::string> validate_state(const std::map<std::string, Entity, st
             "Invalid combined room relationship graph: " + std::string(error.what()));
     }
     std::optional<std::string> unsupported_boundary = std::move(unsupported_relationship);
+    for (const auto& [id, entity] : entities) {
+        if (!entity.extensions.contains("physical_wall_room")) continue;
+        if (const auto unsupported = validate_physical_wall_room_descriptor(entity))
+            unsupported_boundary = *unsupported + ": " + id;
+    }
     for(const auto& [id,entity]:entities)
         if(entity.type=="wall" && entity.extensions.contains("wall_split_archive") &&
             entity.extensions.at("wall_split_archive").at("version")!=1)
@@ -1551,6 +1563,26 @@ Asset Asset::create(std::string id, std::string media_type, std::vector<std::byt
 Asset Asset::create(std::string media_type, std::vector<std::byte> bytes,
                     nlohmann::json metadata) {
     return create(make_stable_id(), std::move(media_type), std::move(bytes), std::move(metadata));
+}
+
+void validate_physical_room_source_transition(
+    const std::map<std::string, Entity, std::less<>>& before,
+    const std::map<std::string, Entity, std::less<>>& after) {
+    for (const auto& [id, entity] : before) {
+        if (!is_physical_wall_room(entity)) continue;
+        if (entity.extensions.at("physical_wall_room").at("version") != 1) continue;
+        const auto replacement = after.find(id);
+        if (replacement == after.end()) continue;
+        if (!is_physical_wall_room(replacement->second) ||
+            entity.extensions.at("physical_wall_room") !=
+                replacement->second.extensions.at("physical_wall_room"))
+            document_error(DocumentErrorCode::invalid_entity,
+                "Physical room source evidence cannot be removed or replaced by a generic edit");
+        if (decode_identified_boundary_entity(entity) !=
+            decode_identified_boundary_entity(replacement->second))
+            document_error(DocumentErrorCode::invalid_entity,
+                "Edit a source-bound room through its physical walls; its independent outline is read-only");
+    }
 }
 
 static bool has_supplemental_source_completion(const ApplyBoundaryConstraintChanges& command) {
@@ -4136,6 +4168,10 @@ Revision Document::apply(const Command& command) {
                 next.name = typed_command.name;
             }
 
+            // Source-bound rooms cannot borrow an ordinary metadata edit to
+            // detach their holes or their physical-wall evidence. Deletion is
+            // explicit; supported source refresh will need typed authority.
+            validate_physical_room_source_transition(current.entities, next.entities);
             history_.push_back(std::move(next));
             boundary_identity_history_ = std::move(next_identity_history);
             head_revision_ = history_.back().revision;
@@ -4391,6 +4427,7 @@ Document Document::restore(DocumentSnapshot snapshot) {
         // An exact, validated history navigation may undo an identity upgrade.
         // Ordinary Apply records must never masquerade as that downgrade.
         if (!record.source_revision.has_value()) {
+            validate_physical_room_source_transition(previous.entities, record.entities);
             if (record.boundary_transforms) {
                 const auto& proof = *record.boundary_transforms;
                 const auto action = proof.message.empty() ? "Transform boundaries" : proof.message;

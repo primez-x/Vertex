@@ -611,6 +611,11 @@ IdentifiedBoundary resolve_dimension_geometry_owner(const Entity& entity) {
 BoundaryDimensionResolution resolve_boundary_dimension(const BoundaryDimension& dimension,
                                                         const Entity& boundary_entity) {
     validate_model(dimension);
+    // This Entity-only resolver has no live wall snapshot. It cannot certify
+    // clear-room geometry or its holes after a physical source edit.
+    if (boundary_entity.type == "room_boundary" &&
+        boundary_entity.extensions.contains("physical_wall_room"))
+        invalid("Source-bound room dimensions require current physical-room geometry; use the room quantity in Details");
     if (boundary_entity.id != dimension.boundary_id) {
         invalid("dimension source boundary id does not match target entity id");
     }

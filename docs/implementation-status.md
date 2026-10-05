@@ -1,5 +1,22 @@
 # Implementation status
 
+## Source-bound physical rooms (2026-10-04)
+
+The area-class palette and wall-based room commands now create clear-space room
+boundaries from actual wall thickness, retaining analytical holes and source
+evidence. Selecting a room exposes outer area, hole deductions, net area and
+current/stale status in Details. Canvas labels, schedules and supported exchange
+footprints use the same current clear-space geometry. Rooms remain separate
+from exterior appraisal GLA; assigning a room name does not supply ANSI facts.
+
+Twelve relevant native checks have passing outcomes, including real desktop
+creation, classification, hole-aware selection, furniture picking, Undo/Redo,
+save/reopen and output. The [checkpoint evidence](verification/pinc-physical-wall-rooms-2026-10-04.md)
+records the actual builds, checks and captures. Source edits currently mark rooms
+stale and withhold outdated quantities. Same-ID source repair, all 22 preset
+mappings and complete Pinc/Apex qualification remain required. The previously
+installed floor-reference build is unchanged; this is a source/build checkpoint.
+
 ## Physical wall clear-space engine (2026-10-04)
 
 A new analytical detector resolves active physical walls and subtracts their

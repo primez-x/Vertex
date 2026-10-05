@@ -110,6 +110,9 @@ GeometryCollection snapshot_geometry(const DocumentSnapshot& source,
                 validate_room_relationship_wall_path(path);
                 result.records.push_back({reference.id,reference.kind,std::move(path)});
             } else {
+                if (found->second.type == "room_boundary" &&
+                    found->second.extensions.contains("physical_wall_room"))
+                    throw std::invalid_argument("Source-bound physical rooms must be edited through their source walls, not relationship outline propagation");
                 result.records.push_back({reference.id, reference.kind,
                                           boundary_geometry(decode_identified_boundary_entity(
                                               found->second))});

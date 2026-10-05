@@ -57,6 +57,15 @@ the palette's physical-room source consumer and persisted assignment workflow
 remain unfinished. It does not change the installed build or establish PINC-002
 completion.
 
+The [physical-room consumer checkpoint](../verification/pinc-physical-wall-rooms-2026-10-04.md)
+connects that geometry to the palette and wall-based room commands, retained
+classifications, Details, canvas, schedules and supported exchange footprints.
+Clear room area excludes physical wall material and holes, while exterior
+appraisal GLA remains separate. Twelve relevant checks have passing outcomes.
+Source changes explicitly make retained rooms stale; same-ID repair and complete
+22-entry preset mapping remain gaps. This does not establish PINC-002 completion
+or full lifecycle/production qualification.
+
 The subsequent [sketch output checkpoint](../verification/pinc-sketch-output-2026-10-04.md)
 adds PINC-005/006. It measures painted vector primitives and finished text replay,
 including symbol artwork, rather than cropping to object anchor positions.

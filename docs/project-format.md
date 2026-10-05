@@ -1,4 +1,32 @@
-# Vertex project formats v1 through v42
+# Vertex project formats v1 through v43
+
+## Source-bound clear rooms (v43)
+
+An identified `room_boundary` can carry `extensions.physical_wall_room`.
+Its four fields are `version` (1), `selected_wall_id`, `source_lineage` and
+`holes`. Version 1 requires a detector-produced version-one lineage, a valid selected wall ID, and
+bounded analytical holes encoded as segment arrays with `[x,y]` start/end points
+and signed `sweep_radians`. Exact adjacent endpoints are required. The outer
+identified boundary remains the owner's authoritative retained topology.
+
+The canonical query rebuilds the complete source context/elevation/semantic phase
+and checks exact outer, holes and lineage before exposing clear room area.
+Unknown positive descriptor versions are retained read-only. Stale evidence has
+no current quantity. Generic edits cannot strip or replace the descriptor or
+independently move the outer. Classification is separate from appraisal facts;
+these room owners do not enter exterior GLA.
+
+The marker in any retained revision requires native format 43 / extraction 41,
+including after deletion. No new command-envelope version is needed for this
+creation/stale checkpoint. Historical centerline rooms are not automatically
+converted. Typed same-ID refresh remains a separate required implementation.
+
+IFC source carriers exceeding the legacy small-text limit use private
+`Pset_VertexExchange_v2`: one owner, a count/byte/SHA-256 manifest and ordered
+text chunks. Reconstruction is bounded and checksum-verified; imported carriers
+retain opaque native evidence through repeated exchange without activating a
+physical room. Supported flat footprint loops and source retention are distinct
+from IFC semantic room or full architectural interoperability certification.
 
 ## Optional linked floor tracing
 

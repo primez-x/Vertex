@@ -2724,6 +2724,11 @@ void test_selected_boundary_is_the_move_hit_target() {
             Segment{{1.0, 1.0}, {-1.0, 1.0}, 0.0},
             Segment{{-1.0, 1.0}, {-1.0, -1.0}, 0.0},
         }};
+    // The empty click is genuinely outside the area's material, while still
+    // inside its selection frame. Outline-only interiors are now selectable.
+    room.holes = {Boundary{
+        {{-.8,-.2},{-.45,-.2},0}, {{-.45,-.2},{-.45,.2},0},
+        {{-.45,.2},{-.8,.2},0}, {{-.8,.2},{-.8,-.2},0}}};
     CanvasEntity overlapping{
         QStringLiteral("overlap"), QStringLiteral("wall"),
         Boundary{Segment{{-0.2, 0.0}, {0.2, 0.0}, 0.0}}};

@@ -4802,6 +4802,8 @@ bool PlanCanvas::matchesSelectionFilter(const QString& id) const {
 QString PlanCanvas::hitTest(QPointF point, bool filtered) const {
     constexpr double hit_pixels = 9.0;
     QString result;
+    QString interior_area;
+    const auto model_point = toModel(point, rect());
     auto best = std::numeric_limits<double>::max();
     for (const auto& entity : m_entities) {
         if (filtered && !matchesSelectionType(entity.type)) continue;
@@ -4851,10 +4853,16 @@ QString PlanCanvas::hitTest(QPointF point, bool filtered) const {
                 model_to_screen.scale(m_scale, -m_scale);
                 model_to_screen.translate(-m_view_center.x, -m_view_center.y);
                 if (model_to_screen.map(*fill).contains(point)) {
-                    best = 0.0;
-                    result = entity.id;
+                    if (entity.type == QStringLiteral("boundary") || entity.type == QStringLiteral("measurement_boundary") ||
+                        entity.type == QStringLiteral("room_boundary")) interior_area = entity.id;
+                    else { best = 0.0; result = entity.id; }
                 }
             }
+        }
+        if (!entity.filled && (entity.type == QStringLiteral("boundary") ||
+            entity.type == QStringLiteral("measurement_boundary") || entity.type == QStringLiteral("room_boundary"))) {
+            if (const auto area = closed_entity_path(entity); area && area->contains(QPointF(model_point.x,model_point.y)))
+                interior_area = entity.id;
         }
         // Plan components are picked by their complete painted footprint, not
         // only by a thin stroke. This keeps an empty-looking seat cushion or
@@ -4865,6 +4873,9 @@ QString PlanCanvas::hitTest(QPointF point, bool filtered) const {
             result = entity.id;
         }
     }
+    // Area interiors are selectable even with outline-only styling. Their
+    // regions remain behind component footprints and nearby actual strokes.
+    if (!interior_area.isEmpty() && best > hit_pixels) { result = interior_area; best = 0.0; }
     // Measure the same font and padded rotated rectangle as interactive paint.
     // Retain the geometry selection tolerance outside that painted rectangle.
     for (const auto& label : positionedLabels(font(), this, m_scale, logicalDpiY(), false)) {

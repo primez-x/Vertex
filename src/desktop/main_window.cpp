@@ -1,6 +1,8 @@
 #include "sketch/desktop/main_window.hpp"
 #include "sketch/constraint_wall_edit.hpp"
 #include "sketch/floor_reference.hpp"
+#include "sketch/physical_wall_room.hpp"
+#include "sketch/physical_wall_spaces.hpp"
 
 #include "plan_canvas.hpp"
 #include "draft_image_stamp.hpp"
@@ -14320,13 +14322,25 @@ public:
             setError(QStringLiteral("Choose the selected boundary's drawing layer before creating its room volume."));
             return {};
         }
-        const auto boundary = read_boundary(entity->properties);
+        auto boundary = read_boundary(entity->properties);
+        std::vector<Boundary> holes;
+        if (is_physical_wall_room(*entity)) {
+            const auto rooms = physical_wall_room_checks(authoringSnapshot());
+            const auto found = rooms.find(entity->id);
+            if (found == rooms.end() || !found->second.current) {
+                setError(found == rooms.end() ? QStringLiteral("Physical room geometry is unavailable.")
+                    : QString::fromStdString(found->second.diagnostic));
+                return {};
+            }
+            boundary = found->second.boundary;
+            holes = found->second.holes;
+        }
         if (boundary.empty()) {
             setError(QStringLiteral("The selected boundary has no valid segments."));
             return {};
         }
         return createRoomVolumeFromBoundary(boundary, height_expression,
-                                            elevation_expression, {}, revision);
+                                            elevation_expression, std::move(holes), revision);
     }
 
     QString createRoomVolumeFromBoundary(
@@ -14472,73 +14486,43 @@ public:
             if (!selected.has_value()) {
                 throw std::invalid_argument("Select existing walls or a closed boundary first.");
             }
+            if (is_physical_wall_room(*selected)) {
+                const auto checks = physical_wall_room_checks(authoringSnapshot());
+                const auto found = checks.find(selected->id);
+                if (found == checks.end() || !found->second.current)
+                    throw std::invalid_argument("The selected physical room is stale; re-detect its sources.");
+                return id_from(selected->id);
+            }
             Boundary boundary;
             if (is_closed_boundary_entity(selected->type)) {
                 boundary = read_boundary(selected->properties);
             } else if (selected->type == "wall") {
-                const auto floor_id = read_string(selected->properties, "floor_id");
-                const auto layer_id = read_string(selected->properties, "layer_id");
-                if (!floor_id.has_value() || !layer_id.has_value()) {
-                    throw std::invalid_argument("The selected wall has no floor or layer context.");
+                const auto source = authoringSnapshot();
+                const auto detection = detect_physical_wall_spaces(source, selected->id);
+                std::vector<std::size_t> adjacent;
+                for (std::size_t i = 0; i < detection.spaces.size(); ++i) {
+                    const auto& face = detection.graph.faces.at(detection.spaces[i].baseline_face_index);
+                    bool uses_selected = false;
+                    for (const auto& edge : face.edge_uses)
+                        for (const auto& use : detection.graph.edges.at(edge.edge_index).source_uses)
+                            uses_selected = uses_selected || use.owner_id == selected->id;
+                    if (uses_selected) adjacent.push_back(i);
                 }
-                const auto selected_segment = read_required_segment(selected->properties, "baseline");
-                if (!selected_segment.has_value()) {
-                    throw std::invalid_argument("The selected wall has no valid analytical baseline.");
+                if (adjacent.size() != 1)
+                    throw std::invalid_argument("This wall borders several or no clear rooms. Apply a room class to the intended detected space in the area palette.");
+                const auto command = prepare_physical_wall_rooms(source, selected->id, adjacent, classification.toStdString());
+                if (!command.entity_changes.empty()) {
+                    const auto id = id_from(command.entity_changes.front().entity.id);
+                    (void)Document::preview_command(source, command);
+                    applyDocumentCommand(command); m_selected_id = id; clearError(); refresh(); return id;
                 }
-                struct Candidate {
-                    std::string id;
-                    Segment segment;
-                };
-                std::vector<Candidate> candidates;
-                std::size_t selected_index = 0;
-                const auto snapshot = m_document->snapshot();
-                for (const auto& [id, entity] : snapshot.entities()) {
-                    if (entity.type != "wall" ||
-                        read_string(entity.properties, "floor_id") != floor_id ||
-                        read_string(entity.properties, "layer_id") != layer_id) {
-                        continue;
-                    }
-                    const auto baseline = read_required_segment(entity.properties, "baseline");
-                    if (!baseline.has_value()) continue;
-                    if (entity.id == selected->id) selected_index = candidates.size();
-                    candidates.push_back({id, *baseline});
+                const auto checks = physical_wall_room_checks(source);
+                for (const auto& [id, check] : checks) {
+                    if (!check.current) continue;
+                    const auto descriptor = decode_physical_wall_room_descriptor(source.entities().at(id));
+                    if (descriptor.source_lineage == detection.spaces[adjacent.front()].source_lineage) return id_from(id);
                 }
-                if (candidates.empty() || selected_index >= candidates.size() ||
-                    candidates[selected_index].id != selected->id) {
-                    throw std::invalid_argument("The selected wall is not part of the current drawing context.");
-                }
-                const auto touches = [](const Segment& left, const Segment& right) {
-                    const auto same_point = [](Vec2 a, Vec2 b) {
-                        return a.x == b.x && a.y == b.y;
-                    };
-                    return same_point(left.start, right.start) ||
-                           same_point(left.start, right.end) ||
-                           same_point(left.end, right.start) ||
-                           same_point(left.end, right.end);
-                };
-                std::vector<bool> included(candidates.size(), false);
-                std::vector<std::size_t> component;
-                component.reserve(candidates.size());
-                included[selected_index] = true;
-                component.push_back(selected_index);
-                for (std::size_t cursor = 0; cursor < component.size(); ++cursor) {
-                    const auto source_index = component[cursor];
-                    for (std::size_t index = 0; index < candidates.size(); ++index) {
-                        if (!included[index] && touches(candidates[source_index].segment,
-                                                        candidates[index].segment)) {
-                            included[index] = true;
-                            component.push_back(index);
-                        }
-                    }
-                }
-                std::vector<Segment> segments;
-                segments.reserve(component.size());
-                std::size_t component_seed = 0;
-                for (std::size_t index = 0; index < component.size(); ++index) {
-                    segments.push_back(candidates[component[index]].segment);
-                    if (component[index] == selected_index) component_seed = index;
-                }
-                boundary = assemble_boundary_from_segments(segments, component_seed);
+                throw std::invalid_argument("Current room ownership could not be resolved.");
             } else {
                 throw std::invalid_argument(
                     "Select existing walls or a closed boundary before creating a room.");
@@ -15771,77 +15755,28 @@ public:
             if (!selected.has_value() || selected->type != "wall") {
                 throw std::invalid_argument("Select a wall in the floor and layer to inspect.");
             }
-            const auto floor_id = read_string(selected->properties, "floor_id");
-            const auto layer_id = read_string(selected->properties, "layer_id");
-            if (!floor_id.has_value() || !layer_id.has_value() || floor_id->empty() || layer_id->empty()) {
-                throw std::invalid_argument("The selected wall has no floor or layer context.");
-            }
             const auto name = classification.trimmed();
             if (name.isEmpty()) throw std::invalid_argument("Room classification cannot be empty.");
-
             const auto source = authoringSnapshot();
-            const auto organization = organize_project(source);
-            const auto context = organization.drawing_context(*layer_id);
-            if (!context.has_value() || context->floor_id != *floor_id) {
-                throw std::invalid_argument("The selected wall has no resolved drawing context.");
-            }
-            std::vector<Segment> segments;
-            for (const auto& [id, entity] : source.entities()) {
-                (void)id;
-                if (entity.type != "wall" ||
-                    read_string(entity.properties, "floor_id") != floor_id ||
-                    read_string(entity.properties, "layer_id") != layer_id) {
-                    continue;
-                }
-                const auto baseline = read_required_segment(entity.properties, "baseline");
-                if (!baseline.has_value()) {
-                    throw std::invalid_argument("A wall in the selected drawing context has no valid baseline.");
-                }
-                segments.push_back(*baseline);
-            }
-            const auto faces = detect_closed_boundaries(segments);
-            if (faces.empty()) {
-                throw std::invalid_argument("No closed area was found in the selected wall graph.");
-            }
-
+            const auto detection = detect_physical_wall_spaces(source, selected->id);
+            if (detection.spaces.empty()) throw std::invalid_argument("No clear room was found in the selected wall context.");
+            std::vector<std::size_t> indices;
+            for (std::size_t i = 0; i < detection.spaces.size(); ++i) indices.push_back(i);
+            const auto command = prepare_physical_wall_rooms(source, selected->id, indices, name.toStdString());
             QStringList created_ids;
-            std::vector<EntityChange> changes;
-            changes.reserve(faces.size());
-            for (const auto& face : faces) {
-                const auto area = std::abs(signed_area(face));
-                if (!std::isfinite(area) || area <= default_geometry_tolerance_metres) {
-                    throw std::invalid_argument("Detected area is not measurable.");
-                }
-                const auto entity_id = new_id("room-boundary");
-                auto entity = Entity{entity_id,
-                                     "room_boundary",
-                                     json{{"property_id", context->property_id},
-                                          {"building_id", context->building_id},
-                                          {"floor_id", context->floor_id},
-                                          {"layer_id", context->layer_id},
-                                          {"segments", boundary_json(face)},
-                                          {"boundary", boundary_json(face)},
-                                          {"name", name.toStdString()},
-                                          {"classification", name.toStdString()},
-                                          {"area_m2", area},
-                                          {"factor", 1.0},
-                                          {"factor_expression", "1"},
-                                          {"factor_numerator", 1},
-                                          {"factor_denominator", 1}},
-                                     false,
-                                     json::object()};
-                const auto auxiliary = entity.properties.at("boundary");
-                entity.properties.erase("boundary");
-                entity = upgrade_legacy_boundary_entity(entity);
-                entity.properties["boundary"] = auxiliary;
-                created_ids.push_back(id_from(entity_id));
-                changes.push_back(EntityChange::upsert(std::move(entity)));
+            for (const auto& change : command.entity_changes)
+                if (change.kind == EntityChangeKind::upsert && is_physical_wall_room(change.entity))
+                    created_ids.push_back(id_from(change.entity.id));
+            if (!command.entity_changes.empty()) {
+                (void)Document::preview_command(source, command);
+                applyDocumentCommand(command);
+                if (!created_ids.empty()) m_selected_id = created_ids.front();
+            } else {
+                const auto checks = physical_wall_room_checks(source);
+                for (const auto& [id, check] : checks)
+                    if (check.current && organize_project(source).drawing_context(id) == detection.context)
+                        created_ids.push_back(id_from(id));
             }
-            const ApplyEntityChanges command{source.revision(), std::move(changes), {},
-                                             "Detect room boundaries"};
-            (void)Document::preview_command(source, command);
-            applyDocumentCommand(command);
-            m_selected_id = created_ids.front();
             clearError();
             refresh();
             return created_ids;
@@ -21768,7 +21703,8 @@ public:
         if (is_closed_boundary_entity(entity->type)) {
             const auto property = propertyEntity();
             appraisal_area = property.has_value() &&
-                calculation_workflow_name(property->properties) == "appraisal";
+                calculation_workflow_name(property->properties) == "appraisal" &&
+                !is_physical_wall_room(*entity);
             if (appraisal_area) {
                 const auto snapshot = authoringSnapshot();
                 const auto property_entity = snapshot.entities().find(property->id);
@@ -22176,6 +22112,8 @@ public:
                 if (found == entities.end() || !is_closed_boundary_entity(found->second.type)) {
                     throw std::invalid_argument("Deduction boundary " + id + " is unavailable.");
                 }
+                if (is_physical_wall_room(found->second))
+                    throw std::invalid_argument("Use a measured boundary for deductions; physical room quantities include their own wall islands.");
                 const auto candidate_floor = read_string(found->second.properties, "floor_id");
                 if (!candidate_floor.has_value() || *candidate_floor != *floor_id) {
                     throw std::invalid_argument("Deduction boundaries must be on the active floor.");
@@ -31784,6 +31722,8 @@ private:
     }
 
     struct PlanSceneCaches {
+        std::string physical_room_source_key;
+        std::map<std::string,PhysicalWallRoomCheck,std::less<>> physical_rooms;
         std::map<std::string, std::pair<std::string, Boundary>> projections;
         std::map<std::string, std::pair<std::string, QString>, std::less<>> slab_validation;
     };
@@ -31899,6 +31839,12 @@ private:
             }
             result.diagnostics += message;
         };
+        const auto physical_room_key = entity_map_digest(snapshot.entities());
+        if (caches.physical_room_source_key != physical_room_key) {
+            caches.physical_rooms = physical_wall_room_checks(snapshot);
+            caches.physical_room_source_key = physical_room_key;
+        }
+        const auto& physical_rooms = caches.physical_rooms;
         std::map<std::string,PresentationOverride,std::less<>> wall_presentations;
         try {wall_presentations=wall_dimension_presentations(snapshot.entities());}
         catch(const std::exception& error) {
@@ -32336,7 +32282,16 @@ private:
                 }
                 segments = room.boundary;
             } else {
-                segments = read_boundary(entity.properties);
+                if (is_physical_wall_room(entity)) {
+                    const auto room = physical_rooms.find(id);
+                    if (room == physical_rooms.end() || !room->second.current) {
+                        append_geometry_error(QStringLiteral("Room %1: %2").arg(id_from(id),
+                            room == physical_rooms.end() ? QStringLiteral("physical source unavailable")
+                                : QString::fromStdString(room->second.diagnostic)));
+                        continue;
+                    }
+                    segments = room->second.boundary;
+                } else segments = read_boundary(entity.properties);
                 if (segments.empty()) {
                     append_geometry_error(QStringLiteral("%1 %2: no valid boundary segments")
                                               .arg(QString::fromStdString(entity.type), id_from(id)));
@@ -32355,6 +32310,8 @@ private:
                                        segments,
                                        read_number(geometry_entity.properties, "thickness_m", 0.08),
                                        id_from(id) == options.selected_id};
+            if (is_physical_wall_room(entity))
+                canvas_entity.holes = physical_rooms.at(id).holes;
             if (entity.type == "room") {
                 RoomVolume room;
                 std::string room_error;
@@ -32373,7 +32330,7 @@ private:
                     ? 0.7 : 1.0;
                 canvas_entity.filled = presentation.filled;
                 canvas_entity.output_stroke_width_mm = 0.34;
-                if (canvas_entity.selected && (options.interactive && snapshot.is_editable()) &&
+                if (!is_physical_wall_room(entity) && canvas_entity.selected && (options.interactive && snapshot.is_editable()) &&
                     inspect_boundary_entity_version(entity).format ==
                         BoundaryEntityFormat::identified_v1) {
                     const auto identified = decode_identified_boundary_entity(entity);
@@ -32386,6 +32343,10 @@ private:
                 }
 
                 auto label_text = plan_area_label(geometry_entity);
+                if (is_physical_wall_room(entity)) {
+                    if (!label_text.isEmpty()) label_text += QLatin1Char('\n');
+                    label_text += format_dimension_area(physical_rooms.at(id).area_square_metres, options.metric_units);
+                }
                 if (const auto value = appraisal_area_values.find(id); value != appraisal_area_values.end()) {
                     if (!label_text.isEmpty()) label_text += QLatin1Char('\n');
                     label_text += value->second;
@@ -32719,6 +32680,8 @@ private:
             if (label_owner == all_geometry.end() || label_owner->segments.empty()) continue;
             const auto footprint=plan_area_label_footprint(label,options.label_font,options.label_device);
             auto obstacles = component_bounds;
+            for (const auto& hole : label_owner->holes)
+                obstacles.push_back(boundary_bounds(hole));
             obstacles.insert(obstacles.end(),placed_area_label_bounds.begin(),placed_area_label_bounds.end());
             if (appraisal_area_values.contains(label.id.toStdString())) {
                 // A net area label belongs in the parent's remaining footprint,
@@ -34691,6 +34654,29 @@ private:
 
         try {
             const auto& entities = snapshot.entities();
+            if (is_physical_wall_room(*selected)) {
+                const auto rooms = physical_wall_room_checks(snapshot);
+                const auto found = rooms.find(selected->id);
+                if (found == rooms.end() || !found->second.current)
+                    throw std::invalid_argument(found == rooms.end()
+                        ? "Physical room geometry is unavailable" : found->second.diagnostic);
+                const auto& room = found->second;
+                clear_values();
+                m_calculation_base_value->setText(format_dimension_area(std::abs(signed_area(room.boundary)), m_metric_units));
+                m_calculation_net_value->setText(format_dimension_area(room.area_square_metres, m_metric_units));
+                m_calculation_perimeter_value->setText(format_length(perimeter(room.boundary), m_metric_units));
+                m_calculation_deductions_list->clear();
+                for (std::size_t i = 0; i < room.holes.size(); ++i)
+                    new QListWidgetItem(QStringLiteral("Wall island / nested space %1 · %2").arg(i + 1)
+                        .arg(format_dimension_area(std::abs(signed_area(room.holes[i])), m_metric_units)), m_calculation_deductions_list);
+                m_edit_deductions_button->setEnabled(false);
+                m_factor_edit->setEnabled(false);
+                m_include_building_check->setVisible(false);
+                m_include_living_check->setVisible(false);
+                m_calculation_status->setText(QStringLiteral("Clear room area · inside wall faces · separate from exterior appraisal totals"));
+                set_status_style(false);
+                return;
+            }
             // View filters are presentation-only and must never change area
             // totals.  The active design phase is semantic, however: a
             // demolished boundary cannot contribute to a selected total, and
@@ -34716,6 +34702,7 @@ private:
             std::set<std::string, std::less<>> building_referenced_deductions;
             for (const auto& [id, entity] : entities) {
                 if (!is_closed_boundary_entity(entity.type)) continue;
+                if (is_physical_wall_room(entity)) continue;
                 if (declared_ansi) continue; // Core validates the complete nested dependency graph.
                 if (declared && entity.type == "room_boundary") continue;
                 if (!phase_visible_ids.contains(id)) continue;
@@ -34752,6 +34739,8 @@ private:
                         throw std::invalid_argument("Boundary " + parent_id +
                                                     " references an unavailable deduction " + deduction_id);
                     }
+                    if (is_physical_wall_room(deduction->second))
+                        throw std::invalid_argument("Physical rooms cannot stand in for measured deduction boundaries");
                     if (!phase_visible_ids.contains(deduction_id)) {
                         throw std::invalid_argument("Boundary " + parent_id +
                                                     " references deduction " + deduction_id +
@@ -34798,6 +34787,7 @@ private:
                     continue;
                 }
                 // Building diagnostics share Details/PDF's authoritative projection.
+                if (is_physical_wall_room(entity)) continue;
                 // Site inspection remains independent of appraisal qualification.
                 if (declared_ansi && area_scope_name(entity.properties) != "site") continue;
                 if (declared && entity.type == "room_boundary") continue;
@@ -36338,10 +36328,12 @@ private:
             classes.push_back({{},QStringLiteral("Clear class"),QStringLiteral("other")});
             const auto visible=visible_project_entities_with_phase(source,m_view_filter);
             const auto appraisal_projection=appraisal_plan_area_projection(source,m_metric_units);
-            QString stroke;unsigned area_number=0;
+            QString stroke, physical_wall;unsigned area_number=0;
+            const auto physical_rooms = physical_wall_room_checks(source);
             for(const auto& [id,entity]:source.entities()) {
                 if(!visible.contains(id) || organization.drawing_context(id)!=context)continue;
                 if(entity.type=="measurement_linework" && stroke.isEmpty())stroke=id_from(id);
+                if(entity.type=="wall" && physical_wall.isEmpty())physical_wall=id_from(id);
                 if(!is_closed_boundary_entity(entity.type))continue;
                 ++area_number;
                 QString class_label;
@@ -36356,7 +36348,31 @@ private:
                 }
                 const auto name=read_string(entity.properties,"name");
                 const auto area_name=name&&!name->empty()?id_from(*name):QStringLiteral("Area %1").arg(area_number);
+                if (is_physical_wall_room(entity)) {
+                    const auto found = physical_rooms.find(id);
+                    class_label = found != physical_rooms.end() && found->second.current
+                        ? QStringLiteral("Clear room · %1").arg(format_dimension_area(found->second.area_square_metres, m_metric_units))
+                        : QStringLiteral("Stale room · re-detect from source walls");
+                }
                 targets.push_back({id_from(id),QStringLiteral("%1\n%2").arg(area_name,class_label)});
+            }
+            if (!physical_wall.isEmpty()) {
+                const auto detection = detect_physical_wall_spaces(source, physical_wall.toStdString());
+                for (std::size_t i = 0; i < detection.spaces.size(); ++i) {
+                    const auto& space = detection.spaces[i];
+                    bool owned = false;
+                    for (const auto& [id, check] : physical_rooms) {
+                        if (!check.current) continue;
+                        const auto descriptor = decode_physical_wall_room_descriptor(source.entities().at(id));
+                        if (descriptor.source_lineage == space.source_lineage) { owned = true; break; }
+                    }
+                    if (owned) continue;
+                    auto token = QStringLiteral("detected-room:%1").arg(i);
+                    while (source.entities().contains(token.toStdString())) token.prepend(QLatin1Char(':'));
+                    m_area_detected_targets.emplace(token, PaletteDetectedTarget{physical_wall, i, space.boundary, true, space.holes});
+                    targets.push_back({token, QStringLiteral("Clear room %1 · %2").arg(i + 1)
+                        .arg(format_dimension_area(space.area_square_metres, m_metric_units))});
+                }
             }
             if(!stroke.isEmpty()) {
                 const auto detection=detect_measurement_areas(source,stroke.toStdString());
@@ -36402,12 +36418,16 @@ private:
             if(const auto detected=m_area_detected_targets.find(target);detected!=m_area_detected_targets.end()) {
                 if(classification.isEmpty())throw std::invalid_argument("This detected space has no class to clear.");
                 const auto captured=detected->second;
+                if (captured.physical) {
+                    command = prepare_physical_wall_rooms(source, captured.stroke.toStdString(), {captured.index}, classification.toStdString());
+                } else {
                 const auto detection=detect_measurement_areas(source,captured.stroke.toStdString());
                 if(captured.index>=detection.graph.faces.size() || detection.existing_area_ids[captured.index] || detection.existing_group_ids[captured.index])
                     throw std::invalid_argument("This space now has an owner. Refresh and use its area row.");
                 std::vector<MeasurementAreaChoice> choices(detection.graph.faces.size());
                 choices[captured.index]={MeasurementAreaDisposition::define_area,classification.toStdString()};
                 command=prepare_measurement_area_definition(source,captured.stroke.toStdString(),choices).command;
+                }
             } else {
                 const auto found=source.entities().find(target.toStdString());
                 if(found==source.entities().end() || !is_closed_boundary_entity(found->second.type) ||
@@ -36416,7 +36436,10 @@ private:
                     throw std::invalid_argument("Choose a visible closed area in the current drawing layer.");
                 auto updated=found->second;const auto& property=source.entities().at(context->property_id);
                 const bool appraisal=calculation_workflow_name(property.properties)=="appraisal";
-                if(appraisal) {
+                if(is_physical_wall_room(updated)) {
+                    if (classification.isEmpty()) { updated.properties.erase("classification"); updated.properties.erase("measurement_classification"); }
+                    else { updated.properties["classification"] = classification.toStdString(); updated.properties["measurement_classification"] = classification.toStdString(); }
+                } else if(appraisal) {
                     if(appraisal_area_has_derived_category_authority(source,property,updated))
                         throw std::invalid_argument("This appraisal category is derived from facts. Edit its appraisal facts in Details.");
                     if(!classification.isEmpty()) {
@@ -36459,11 +36482,34 @@ private:
         }
         refreshAreaClassPalette();
         const auto ids=m_measurementCanvas->areaIdsAt(point);
+        QStringList room_targets;
+        for (const auto& id : ids) {
+            const auto entity = source.entities().find(id.toStdString());
+            if (entity != source.entities().end() && is_physical_wall_room(entity->second))
+                room_targets.push_back(id);
+        }
+        for (const auto& [token, target] : m_area_detected_targets) {
+            if (!target.physical || !PlanCanvas::containsAreaPoint(target.boundary, point)) continue;
+            if (std::any_of(target.holes.begin(), target.holes.end(), [&](const auto& hole) {
+                return PlanCanvas::containsAreaPoint(hole, point);
+            })) continue;
+            room_targets.push_back(token);
+        }
+        if (room_targets.size() == 1) return applyAreaClass(classification, room_targets.front());
+        if (room_targets.size() > 1) {
+            setError(QStringLiteral("Several clear rooms contain this point. Choose the intended room row."));
+            return false;
+        }
         if(ids.size()==1)return applyAreaClass(classification,ids.front());
         if(ids.size()>1) {setError(QStringLiteral("Several areas contain this point. Drop onto the intended area row."));return false;}
         QStringList targets;
-        for(const auto& [token,target]:m_area_detected_targets)
-            if(PlanCanvas::containsAreaPoint(target.boundary,point))targets.push_back(token);
+        for(const auto& [token,target]:m_area_detected_targets) {
+            if (!PlanCanvas::containsAreaPoint(target.boundary, point)) continue;
+            if (std::any_of(target.holes.begin(), target.holes.end(), [&](const auto& hole) {
+                return PlanCanvas::containsAreaPoint(hole, point);
+            })) continue;
+            targets.push_back(token);
+        }
         if(targets.size()==1)return applyAreaClass(classification,targets.front());
         const auto message=targets.isEmpty()?QStringLiteral("Drop onto a closed area or a detected space in the current layer."):
             QStringLiteral("Several detected outlines contain this point. Drop onto the intended area row.");
@@ -39841,7 +39887,7 @@ private:
     std::weak_ptr<Document> m_area_canvas_document;
     QString m_area_canvas_layer;
     ProjectViewFilter m_area_canvas_visibility;
-    struct PaletteDetectedTarget {QString stroke;std::size_t index{};Boundary boundary;};
+    struct PaletteDetectedTarget {QString stroke;std::size_t index{};Boundary boundary;bool physical{};std::vector<Boundary> holes;};
     std::map<QString,PaletteDetectedTarget> m_area_detected_targets;
     std::optional<Vec2> m_pending_wall_start;
     std::optional<DrawingAlignmentProposal> m_drawing_alignment;

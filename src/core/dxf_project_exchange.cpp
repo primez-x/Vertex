@@ -10,6 +10,9 @@
 #include "sketch/door_operation.hpp"
 #include "sketch/opening_assembly.hpp"
 #include "sketch/hosted_opening_plan.hpp"
+#ifdef SKETCH_PHYSICAL_ROOMS
+#include "sketch/physical_wall_room.hpp"
+#endif
 #ifdef SKETCH_DXF_NATIVE_GEOMETRY
 #include "sketch/architecture.hpp"
 #endif
@@ -1195,8 +1198,27 @@ DxfProjectExportResult export_project_dxf(const DocumentSnapshot& document,
                                           const DxfExchangeLimits& limits) {
     DxfProjectExportResult result;
     result.drawing.insertion_units = 6; // SI metres are authoritative in the project model.
+#ifdef SKETCH_PHYSICAL_ROOMS
+    const auto physical_rooms = physical_wall_room_checks(document);
+#endif
     for (const auto& [id, entity] : document.entities()) {
-        (void)id;
+        if (entity.type == "room_boundary" && entity.extensions.contains("physical_wall_room")) {
+#ifdef SKETCH_PHYSICAL_ROOMS
+            const auto found = physical_rooms.find(id);
+            if (found == physical_rooms.end() || !found->second.current) {
+                diagnostic(result.diagnostics, id, entity.type, "physical_room_source_stale");
+                continue;
+            }
+            const auto layer = layer_for(document, entity, result.diagnostics);
+            add_boundary_as_dxf(result.drawing, found->second.boundary, layer, result.diagnostics, id, entity.type);
+            for (const auto& hole : found->second.holes)
+                add_boundary_as_dxf(result.drawing, hole, layer, result.diagnostics, id, entity.type);
+            diagnostic(result.diagnostics, id, entity.type, "physical_room_source_evidence_not_representable");
+#else
+            diagnostic(result.diagnostics, id, entity.type, "physical_room_runtime_unavailable");
+#endif
+            continue;
+        }
         export_native_entity(document, entity, result);
     }
     // Validate the complete mapped drawing before returning it. The caller can

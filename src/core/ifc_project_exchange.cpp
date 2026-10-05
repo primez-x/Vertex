@@ -1,4 +1,5 @@
 #include "sketch/ifc_project_exchange.hpp"
+#include "sketch/physical_wall_room.hpp"
 
 #include "sketch/boundary_entity.hpp"
 #include "sketch/wall_semantics.hpp"
@@ -560,6 +561,33 @@ void retain_properties(const Entity& entity, int product_id, ExportContext& cont
                        std::vector<IfcProjectDiagnostic>& diagnostics) {
     const auto payload = entity.properties.dump(-1, ' ', true);
     if (payload.size() > context.limits.max_string_bytes / 2) {
+        const auto native=entity.properties.find("native_entity");
+        const bool retained_room=native!=entity.properties.end() && native->is_object() &&
+            native->value("type",std::string{})=="room_boundary" && native->contains("extensions") &&
+            native->at("extensions").is_object() && native->at("extensions").contains("physical_wall_room");
+        if (((entity.type == "room_boundary" && entity.extensions.contains("physical_wall_room")) || retained_room) &&
+            context.limits.max_string_bytes >= 512 && payload.size() <= 8*1024*1024) {
+            const auto chunk_size = context.limits.max_string_bytes / 2;
+            const auto chunks = (payload.size() + chunk_size - 1) / chunk_size;
+            if (chunks <= 4096) {
+                const Json manifest{{"version",1},{"chunks",chunks},{"bytes",payload.size()},
+                    {"sha256",sha256_hex(std::as_bytes(std::span(payload.data(),payload.size())))}};
+                const auto header = context.builder.add("IFCPROPERTYSINGLEVALUE",
+                    "'MetadataManifest',$,IFCTEXT(" + step_string(manifest.dump(),context.limits) + "),$");
+                std::string property_ids = ref(header);
+                for (std::size_t i = 0; i < chunks; ++i) {
+                    const auto property = context.builder.add("IFCPROPERTYSINGLEVALUE",
+                        step_string("PropertiesChunk:"+std::to_string(i),context.limits)+",$,IFCTEXT(" +
+                        step_string(std::string_view(payload).substr(i*chunk_size,chunk_size),context.limits) + "),$");
+                    property_ids += ',' + ref(property);
+                }
+                const auto pset = context.builder.add("IFCPROPERTYSET",
+                    context.root("properties:"+entity.id,"Pset_VertexExchange_v2") + ",("+property_ids+")");
+                context.builder.add("IFCRELDEFINESBYPROPERTIES",
+                    context.root("property-link:"+entity.id,"") + ",("+ref(product_id)+"),"+ref(pset));
+                return;
+            }
+        }
         add_diagnostic(diagnostics, entity.id, entity.type, "vertex_properties_not_exported");
         return;
     }
@@ -861,10 +889,12 @@ bool export_curved_native(const DocumentSnapshot& document, const Entity& entity
 #endif
 
 void export_product(const DocumentSnapshot& document, const Entity& entity,
-                    ExportContext& context, std::vector<IfcProjectDiagnostic>& diagnostics) {
+                    ExportContext& context, std::vector<IfcProjectDiagnostic>& diagnostics,
+                    const PhysicalWallRoomCheck* physical_room = nullptr) {
     const auto& type = entity.type;
     std::string product_type;
     Boundary boundary;
+    std::vector<Boundary> physical_holes;
     bool closed = false;
     bool use_solid = false;
     double depth = 0.0;
@@ -933,12 +963,18 @@ void export_product(const DocumentSnapshot& document, const Entity& entity,
             !entity.properties.at("holes").empty())
             add_diagnostic(diagnostics, entity.id, type, "slab_holes_not_exported");
     } else if (type == "boundary" || type == "measurement_boundary" || type == "room_boundary") {
-        const auto decoded = read_boundary(entity);
+        const bool source_bound = type == "room_boundary" && entity.extensions.contains("physical_wall_room");
+        if (source_bound && (!physical_room || !physical_room->current)) {
+            add_diagnostic(diagnostics, entity.id, type, "physical_room_source_stale_or_runtime_unavailable");
+            return;
+        }
+        const auto decoded = source_bound ? std::optional<Boundary>{physical_room->boundary} : read_boundary(entity);
         if (!decoded) {
             add_diagnostic(diagnostics, entity.id, type, "boundary_not_representable");
             return;
         }
         boundary = *decoded;
+        if (source_bound) physical_holes = physical_room->holes;
         product_type = "IFCBUILDINGELEMENTPROXY";
     } else if (type == "opening") {
         if (!entity.properties.is_object()) {
@@ -1066,7 +1102,17 @@ void export_product(const DocumentSnapshot& document, const Entity& entity,
         return;
     }
     closed = linear_closed;
-    const auto polyline_points = [&] {
+    std::vector<std::vector<Vec2>> hole_points;
+    for (const auto& hole : physical_holes) {
+        bool hole_closed = false;
+        auto points = linear_points(hole, hole_closed);
+        if (points.empty() || !hole_closed) {
+            add_diagnostic(diagnostics, entity.id, type, "physical_room_curved_holes_not_representable");
+            return;
+        }
+        hole_points.push_back(std::move(points));
+    }
+    const auto make_polyline = [&](const std::vector<Vec2>& points) {
         std::vector<int> ids;
         ids.reserve(points.size());
         for (const auto point : points) {
@@ -1082,7 +1128,8 @@ void export_product(const DocumentSnapshot& document, const Entity& entity,
         }
         args += ')';
         return context.builder.add("IFCPOLYLINE", std::move(args));
-    }();
+    };
+    const auto polyline_points = make_polyline(points);
 
     int shape{};
     if (use_solid && closed) {
@@ -1094,8 +1141,10 @@ void export_product(const DocumentSnapshot& document, const Entity& entity,
         shape = context.builder.add("IFCSHAPEREPRESENTATION",
             ref(context.representation_context) + ",'Body','SweptSolid',(" + ref(solid) + ")");
     } else {
+        std::string footprint_items = ref(polyline_points);
+        for (const auto& points : hole_points) footprint_items += ',' + ref(make_polyline(points));
         shape = context.builder.add("IFCSHAPEREPRESENTATION",
-            ref(context.representation_context) + ",'Footprint','Curve3D',(" + ref(polyline_points) + ")");
+            ref(context.representation_context) + ",'Footprint','Curve3D',(" + footprint_items + ")");
     }
     const auto product_shape = context.builder.add("IFCPRODUCTDEFINITIONSHAPE",
         "$,$,(" + ref(shape) + ")");
@@ -1447,6 +1496,7 @@ std::string product_string(const StepRecord& record, std::size_t index,
 std::map<int, Json> vertex_properties(const ParsedStep& parsed, std::size_t& count,
                                        const IfcExchangeLimits& limits, std::set<int>& retained_records) {
     std::map<int, Json> result;
+    std::size_t retained_charge=0;
     for (const auto& relation : parsed.records) {
         if (relation.type != "IFCRELDEFINESBYPROPERTIES") continue;
         const auto fields = split_top_level(relation.args, count, limits);
@@ -1458,27 +1508,66 @@ std::map<int, Json> vertex_properties(const ParsedStep& parsed, std::size_t& cou
         if (pset->type != "IFCPROPERTYSET") continue;
         const auto pset_fields = split_top_level(pset->args, count, limits);
         require(pset_fields.size() == 5);
-        if (decode_string(pset_fields[2], limits) != "Pset_VertexExchange_v1") continue;
+        const auto dialect = decode_string(pset_fields[2], limits);
+        if (dialect != "Pset_VertexExchange_v1" && dialect != "Pset_VertexExchange_v2") continue;
+        const auto targets=list_references(fields[4],count,limits);
+        // Version two is our single-owner source carrier, never a replicated
+        // arbitrary attachment across a caller-controlled product list.
+        require(!targets.empty() && (dialect!="Pset_VertexExchange_v2" || targets.size()==1));
         const auto properties = list_references(pset_fields[4], count, limits);
-        require(properties.size() == 1);
-        const auto* property = find_record(parsed, properties.front());
-        require(property && property->type == "IFCPROPERTYSINGLEVALUE");
-        const auto property_fields = split_top_level(property->args, count, limits);
-        require(property_fields.size() == 4 && decode_string(property_fields[0], limits) == "Properties");
-        const auto value = trim(property_fields[2]);
-        require(value.starts_with("IFCTEXT(") && value.back() == ')');
-        const auto payload = decode_string(value.substr(8, value.size() - 9), limits);
+        const auto property_text = [&](int id, const std::string& expected_name) {
+            const auto* property = find_record(parsed,id);
+            require(property && property->type == "IFCPROPERTYSINGLEVALUE");
+            const auto fields = split_top_level(property->args,count,limits);
+            require(fields.size()==4 && decode_string(fields[0],limits)==expected_name);
+            const auto value=trim(fields[2]);
+            require(value.starts_with("IFCTEXT(") && value.back()==')');
+            return decode_string(value.substr(8,value.size()-9),limits);
+        };
+        std::string payload;
+        if (dialect == "Pset_VertexExchange_v1") {
+            require(properties.size()==1);
+            payload=property_text(properties.front(),"Properties");
+        } else {
+            require(properties.size()>=2 && properties.size()<=4097);
+            const auto manifest=Json::parse(property_text(properties.front(),"MetadataManifest"),
+                [&](int depth,Json::parse_event_t,Json&){ require(depth<=32); return true; },false);
+            require(manifest.is_object() && manifest.size()==4 && manifest.contains("version") && manifest.at("version")==1 &&
+                manifest.contains("chunks") && manifest.at("chunks").is_number_unsigned() &&
+                manifest.contains("bytes") && manifest.at("bytes").is_number_unsigned() &&
+                manifest.contains("sha256") && manifest.at("sha256").is_string());
+            const auto bytes=manifest.at("bytes").get<std::size_t>();
+            require(manifest.at("chunks").get<std::size_t>()==properties.size()-1 && bytes<=8*1024*1024 && bytes<=limits.max_bytes);
+            payload.reserve(bytes);
+            for (std::size_t i=1;i<properties.size();++i) {
+                auto chunk=property_text(properties[i],"PropertiesChunk:"+std::to_string(i-1));
+                require(chunk.size()<=bytes-payload.size()); payload+=chunk;
+            }
+            require(payload.size()==bytes && sha256_hex(std::as_bytes(std::span(payload.data(),payload.size())))==manifest.at("sha256").get<std::string>());
+        }
         // Bound JSON nesting independently of the STEP byte limits.
         const auto metadata = Json::parse(payload, [&](int depth, Json::parse_event_t, Json&) {
             require(depth <= 32); return true;
         }, false);
         require(metadata.is_object());
-        for (const auto id : list_references(fields[4], count, limits)) {
+        constexpr std::size_t maximum_retained_charge=64*1024*1024;
+        std::size_t charge=0;
+        const auto add_charge=[&](std::size_t bytes) { require(bytes<=maximum_retained_charge-charge); charge+=bytes; };
+        const auto charge_json=[&](const auto& self,const Json& value)->void {
+            add_charge(128);
+            if (value.is_string()) add_charge(value.get_ref<const std::string&>().size());
+            else if (value.is_object()) for (auto i=value.begin();i!=value.end();++i) { add_charge(i.key().size()+128); self(self,i.value()); }
+            else if (value.is_array()) for (const auto& member:value) self(self,member);
+        };
+        charge_json(charge_json,metadata);
+        require(targets.size()<=(maximum_retained_charge-retained_charge)/charge);
+        retained_charge+=targets.size()*charge;
+        for (const auto id : targets) {
             require(find_record(parsed, id) && result.emplace(id, metadata).second);
         }
         retained_records.insert(relation.id);
         retained_records.insert(pset->id);
-        retained_records.insert(property->id);
+        for (const auto id : properties) retained_records.insert(id);
     }
     return result;
 }
@@ -1685,9 +1774,20 @@ IfcProjectExportResult export_project_ifc(const DocumentSnapshot& document,
     validate_limits(limits);
     IfcProjectExportResult result;
     ExportContext context(limits);
+#ifdef SKETCH_PHYSICAL_ROOMS
+    const auto physical_rooms = physical_wall_room_checks(document);
+#endif
     for (const auto& [id, entity] : document.entities()) {
         const auto resolved = resolve_vertical_placement(document, entity);
-        export_product(document, resolved, context, result.diagnostics);
+        const PhysicalWallRoomCheck* physical_room = nullptr;
+#ifdef SKETCH_PHYSICAL_ROOMS
+        if (const auto found = physical_rooms.find(id); found != physical_rooms.end()) physical_room = &found->second;
+#endif
+        export_product(document, resolved, context, result.diagnostics, physical_room);
+        // Retain the native source descriptor as well as the interoperable
+        // footprint, including when stale geometry is withheld.
+        if (entity.type == "room_boundary" && entity.extensions.contains("physical_wall_room") && context.product_ids.contains(id))
+            export_native_reference(entity, context, result.diagnostics);
         if (!context.product_ids.contains(id) &&
             (entity.required || (!result.diagnostics.empty() && result.diagnostics.back().source_id == id) ||
              entity.type == "wall" || entity.type == "slab" ||

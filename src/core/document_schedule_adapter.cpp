@@ -4,6 +4,9 @@
 #include "sketch/assembly_model.hpp"
 #include "sketch/door_operation.hpp"
 #include "sketch/opening_assembly.hpp"
+#ifdef SKETCH_PHYSICAL_ROOMS
+#include "sketch/physical_wall_room.hpp"
+#endif
 
 #include <algorithm>
 #include <cmath>
@@ -365,11 +368,42 @@ DocumentScheduleProjection project_schedules(
     result.snapshot.revision = document.revision();
     std::vector<ScheduleRecord> records;
     std::map<std::string, AssemblyModel> catalogs;
+#ifdef SKETCH_PHYSICAL_ROOMS
+    const auto physical_rooms = physical_wall_room_checks(document);
+#endif
     for (const auto& [id, entity] : document.entities()) {
         if (visible_entity_ids && !visible_entity_ids->contains(id)) continue;
         if (entity.type == "opening") add_opening(entity, records, result.diagnostics);
-        else if (entity.type == "room" || entity.type == "room_boundary")
-            add_room(entity, records, result.diagnostics);
+        else if (entity.type == "room" || entity.type == "room_boundary") {
+            if (entity.type == "room_boundary" && entity.extensions.contains("physical_wall_room")) {
+#ifdef SKETCH_PHYSICAL_ROOMS
+                const auto found = physical_rooms.find(id);
+                if (found == physical_rooms.end() || !found->second.current) {
+                    diagnostic(result.diagnostics, entity, found == physical_rooms.end()
+                        ? "Physical room geometry is unavailable" : found->second.diagnostic);
+                    continue;
+                }
+                // The existing schedule adapter accepts exact plan geometry.
+                // Never feed it a stale auxiliary boundary or claimed area_m2.
+                auto projected = entity;
+                const auto encoded = [](const Boundary& boundary) {
+                    Json result = Json::array();
+                    for (const auto& edge : boundary) result.push_back({
+                        {"start", {edge.start.x, edge.start.y}}, {"end", {edge.end.x, edge.end.y}},
+                        {"sweep_radians", edge.sweep_radians}});
+                    return result;
+                };
+                projected.properties["boundary"] = encoded(found->second.boundary);
+                projected.properties["holes"] = Json::array();
+                for (const auto& hole : found->second.holes)
+                    projected.properties["holes"].push_back(encoded(hole));
+                projected.properties.erase("area_m2");
+                add_room(projected, records, result.diagnostics);
+#else
+                diagnostic(result.diagnostics, entity, "Physical room quantities require the architectural geometry runtime");
+#endif
+            } else add_room(entity, records, result.diagnostics);
+        }
         add_material(entity, document, catalogs, records, result.diagnostics);
     }
     try {

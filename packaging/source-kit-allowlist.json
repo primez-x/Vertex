@@ -1767,6 +1767,10 @@
     },
     {
       "category": "docs",
+      "path": "docs/plans/2026-10-04-physical-wall-room-consumers.md"
+    },
+    {
+      "category": "docs",
       "path": "docs/plans/2026-10-04-physical-wall-space-classification.md"
     },
     {
@@ -2831,6 +2835,10 @@
     },
     {
       "category": "docs",
+      "path": "docs/verification/pinc-physical-wall-rooms-2026-10-04.md"
+    },
+    {
+      "category": "docs",
       "path": "docs/verification/pinc-physical-wall-spaces-2026-10-04.md"
     },
     {
@@ -3344,6 +3352,14 @@
     {
       "category": "source",
       "path": "include/sketch/performance_workload.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/physical_wall_room.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/physical_wall_room_data.hpp"
     },
     {
       "category": "source",
@@ -4128,6 +4144,14 @@
     {
       "category": "source",
       "path": "src/core/performance_workload_main.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/physical_wall_room.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/physical_wall_room_data.cpp"
     },
     {
       "category": "source",
@@ -5100,6 +5124,14 @@
     {
       "category": "source",
       "path": "tests/phase_subtraction_history_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/physical_wall_room_desktop_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/physical_wall_room_tests.cpp"
     },
     {
       "category": "source",

@@ -245,7 +245,8 @@ add_library(sketch_document src/core/document.cpp src/core/document_digest.cpp s
   src/core/boundary_geometry_edit.cpp src/core/constraint_wall_edit.cpp src/core/wall_split.cpp
   src/core/boundary_dimension.cpp src/core/sheet_view_entity_codec.cpp
   src/core/annotation_entity_codec.cpp src/core/georeferencing_entity_codec.cpp
-  src/core/vertical_level_document_adapter.cpp src/core/project_organization.cpp src/core/survey_source_version.cpp)
+  src/core/vertical_level_document_adapter.cpp src/core/project_organization.cpp src/core/survey_source_version.cpp
+  src/core/physical_wall_room_data.cpp)
 target_include_directories(sketch_document PUBLIC include)
 target_link_libraries(sketch_document PUBLIC sketch_json PRIVATE sketch_wall_semantics sketch_roof_join_semantics sketch_boundary_receipts
   sketch_slab_semantics sketch_sheet_view_model sketch_annotation_catalog sketch_assembly_model sketch_model_phases
@@ -346,6 +347,13 @@ if(SKETCH_BUILD_ARCHITECTURE OR SKETCH_BUILD_DESKTOP)
   target_link_libraries(sketch_physical_wall_spaces PUBLIC
     sketch_measurement_area_graph sketch_project_organization
     PRIVATE sketch_document_wall sketch_architecture sketch_model_phases)
+  add_library(sketch_physical_wall_room src/core/physical_wall_room.cpp)
+  target_include_directories(sketch_physical_wall_room PUBLIC include)
+  target_link_libraries(sketch_physical_wall_room PUBLIC sketch_physical_wall_spaces)
+  target_link_libraries(sketch_dxf_project_exchange PUBLIC sketch_physical_wall_room)
+  target_compile_definitions(sketch_dxf_project_exchange PRIVATE SKETCH_PHYSICAL_ROOMS=1)
+  target_link_libraries(sketch_ifc_project_exchange PUBLIC sketch_physical_wall_room)
+  target_compile_definitions(sketch_ifc_project_exchange PRIVATE SKETCH_PHYSICAL_ROOMS=1)
   if(MSVC)
     target_compile_options(sketch_physical_wall_spaces PRIVATE /W4 /permissive- /utf-8)
   endif()
@@ -353,6 +361,11 @@ if(SKETCH_BUILD_ARCHITECTURE OR SKETCH_BUILD_DESKTOP)
     add_executable(physical_wall_spaces_tests tests/physical_wall_spaces_tests.cpp)
     target_link_libraries(physical_wall_spaces_tests PRIVATE sketch_physical_wall_spaces)
     add_test(NAME physical_wall_spaces COMMAND physical_wall_spaces_tests)
+    add_executable(physical_wall_room_tests tests/physical_wall_room_tests.cpp)
+    target_link_libraries(physical_wall_room_tests PRIVATE sketch_physical_wall_room sketch_storage sketch_dxf_project_exchange sketch_ifc_project_exchange)
+    add_test(NAME physical_wall_room COMMAND physical_wall_room_tests)
+    set_tests_properties(physical_wall_room PROPERTIES ENVIRONMENT_MODIFICATION
+      "PATH=path_list_prepend:${CMAKE_SOURCE_DIR}/.deps/native/x64-windows/$<IF:$<CONFIG:Debug>,debug/bin,bin>")
     set_tests_properties(physical_wall_spaces PROPERTIES ENVIRONMENT_MODIFICATION
       "PATH=path_list_prepend:${CMAKE_SOURCE_DIR}/.deps/native/x64-windows/$<IF:$<CONFIG:Debug>,debug/bin,bin>")
   endif()
@@ -418,6 +431,10 @@ add_library(sketch_document_schedule_adapter src/core/document_schedule_adapter.
 target_include_directories(sketch_document_schedule_adapter PUBLIC include)
 target_link_libraries(sketch_document_schedule_adapter PUBLIC sketch_schedule_model sketch_document sketch_precision)
 target_link_libraries(sketch_document_schedule_adapter PUBLIC sketch_door_operation)
+if(SKETCH_BUILD_ARCHITECTURE OR SKETCH_BUILD_DESKTOP)
+  target_link_libraries(sketch_document_schedule_adapter PUBLIC sketch_physical_wall_room)
+  target_compile_definitions(sketch_document_schedule_adapter PRIVATE SKETCH_PHYSICAL_ROOMS=1)
+endif()
 add_library(sketch_boundary_receipts src/core/boundary_receipt.cpp)
 target_link_libraries(sketch_boundary_receipts PUBLIC sketch_precision sketch_json)
 add_library(sketch_measurement_linework src/core/measurement_linework.cpp)
@@ -832,6 +849,7 @@ if(SKETCH_BUILD_DESKTOP)
   target_link_libraries(sketch_desktop PUBLIC sketch_survey_boundary_update)
   target_link_libraries(sketch_desktop PUBLIC sketch_measurement_linework sketch_measurement_area_graph)
   target_link_libraries(sketch_desktop PUBLIC sketch_measurement_area_definition)
+  target_link_libraries(sketch_desktop PUBLIC sketch_physical_wall_room)
   target_link_libraries(sketch_desktop PUBLIC sketch_plan_axis_resize)
   target_link_libraries(sketch_desktop PUBLIC sketch_hosted_opening_resize)
   add_dependencies(sketch_desktop vertex-import-worker)
@@ -1138,6 +1156,15 @@ if(SKETCH_BUILD_DESKTOP)
     qt_add_resources(floor_reference_desktop_tests floor_reference_desktop_fonts
       PREFIX "/fonts" BASE assets/fonts FILES assets/fonts/Inter.ttf)
     add_test(NAME floor_reference_desktop COMMAND floor_reference_desktop_tests)
+    add_executable(physical_wall_room_desktop_tests tests/physical_wall_room_desktop_tests.cpp)
+    target_include_directories(physical_wall_room_desktop_tests PRIVATE src/desktop)
+    target_link_libraries(physical_wall_room_desktop_tests PRIVATE sketch_desktop)
+    qt_add_resources(physical_wall_room_desktop_tests physical_room_desktop_fonts
+      PREFIX "/fonts" BASE assets/fonts FILES assets/fonts/Inter.ttf)
+    add_test(NAME physical_wall_room_desktop COMMAND physical_wall_room_desktop_tests)
+    set_tests_properties(physical_wall_room_desktop PROPERTIES
+      ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_PLUGIN_PATH=${SKETCH_QT_PREFIX}/plugins"
+      ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${SKETCH_QT_BIN};PATH=path_list_prepend:${CMAKE_SOURCE_DIR}/.deps/native/x64-windows/$<IF:$<CONFIG:Debug>,debug/bin,bin>")
     target_link_libraries(floor_reference_canvas_tests PRIVATE sketch_plan_canvas)
     qt_add_resources(floor_reference_canvas_tests floor_reference_canvas_fonts
       PREFIX "/fonts" BASE assets/fonts FILES assets/fonts/Inter.ttf)
