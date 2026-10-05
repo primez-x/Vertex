@@ -41,6 +41,9 @@ Qt pixel transport and established safe preview creation for underlays.
   decoded aspect ratio and preserve the required vertical image transform.
 - Existing DXF/IFC `PSIP0001` remains strict. No generic extension of its entity
   allowlist or promotion of opaque Pinc fields into native reserved metadata.
+- Display source names, text, pointers and diagnostics as plain text in review
+  and error controls. Source strings must not become rich-text image or link
+  markup in the desktop.
 - The native save path starts unset. Native Save As cannot overwrite `.pinc`.
 - Root owns CMake, broker/desktop integration, generators, native verification,
   installation and Git. Source writers freeze before every native job.
@@ -66,6 +69,9 @@ Qt pixel transport and established safe preview creation for underlays.
   contexts, ordered restricted views/sheets, exact measured-line receipts,
   source-derived areas, labels, symbol mapping and visual wall associations.
   Preserve every unsupported item and its source pointer in the fidelity report.
+  The geometry-only substep has a separate
+  [checkpoint record](../verification/pinc-native-geometry-admission-2026-10-04.md).
+  It does not satisfy the complete admission or user-visible import requirement.
 - [ ] Root: add native import access and review UI, current-state/dirty-transition
   guards, cancellation and atomic publication. Preserve exact original source
   and image bytes; use native Save As after import.

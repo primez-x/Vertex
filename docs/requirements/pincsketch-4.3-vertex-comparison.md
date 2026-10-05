@@ -21,6 +21,14 @@ including the existing reference importer. This is an internal checkpoint:
 native document admission, fidelity review, import UI and installed import
 qualification remain open, and the Desktop build does not yet import `.pinc`.
 
+The subsequent [native geometry admission checkpoint](../verification/pinc-native-geometry-admission-2026-10-04.md)
+converts detached straight/curved sources into editable native measurement
+strokes on reviewed page layers. Its focused native check passes, including
+shared-wall intervals, legacy attached-room correspondence and typed arc
+editing with Undo/Redo. Area ownership and classification publication,
+presentation, fidelity review, the import command and installed qualification
+remain open. This checkpoint does not change the installed Desktop build.
+
 ## Matching capabilities and actual differences
 
 | Workflow | Vertex implementation/access | Comparison and required action |

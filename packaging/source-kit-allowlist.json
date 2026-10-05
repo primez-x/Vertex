@@ -2855,6 +2855,10 @@
     },
     {
       "category": "docs",
+      "path": "docs/verification/pinc-native-geometry-admission-2026-10-04.md"
+    },
+    {
+      "category": "docs",
       "path": "docs/verification/pinc-physical-wall-rooms-2026-10-04.md"
     },
     {
@@ -3396,6 +3400,10 @@
     {
       "category": "source",
       "path": "include/sketch/physical_wall_spaces.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/pinc_geometry_admission.hpp"
     },
     {
       "category": "source",
@@ -4212,6 +4220,10 @@
     {
       "category": "source",
       "path": "src/core/physical_wall_spaces.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/pinc_geometry_admission.cpp"
     },
     {
       "category": "source",
@@ -5224,6 +5236,10 @@
     {
       "category": "source",
       "path": "tests/physical_wall_spaces_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/pinc_geometry_admission_tests.cpp"
     },
     {
       "category": "source",
