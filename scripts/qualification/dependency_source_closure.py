@@ -20,7 +20,9 @@ import tempfile
 from urllib.parse import urlparse
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 import stage_ifc_sdk_sources as safe
+import native_source_inputs as native
 
 MAX_FILE = 1024 * 1024 * 1024
 MAX_FILES = 4096
@@ -202,6 +204,23 @@ def cached_source(cache, url, checksum, algorithm="sha512", **extra):
             "local_files": matches, **extra}
 
 
+def native_cached_source(root, cache, url, checksum, owner, mapping, *, frozen, **extra):
+    """Resolve a native parent's preferred archive only from its delivered kit."""
+    if not frozen:
+        return cached_source(cache, url, checksum, "sha256", **extra)
+    result = cached_source([], url, checksum, "sha256", **extra)
+    records = []
+    for (component_id, original, role), entry in mapping.items():
+        if (component_id == owner and role == "native_preferred_source"
+                and entry["sha256"] == checksum and url in entry["source_urls"]):
+            records.append(bound_component_record(root, owner, {
+                "path": original, "sha256": checksum, "bytes": entry["bytes"]},
+                mapping, ("native_preferred_source",), required=True))
+    result["local_files"] = sorted(records, key=lambda row: row["path"])
+    result["status"] = "exact_local_source_present" if records else "missing_source"
+    return result
+
+
 def notice_record(root, record):
     result = file_record(root, record["path"], record["sha256"])
     data = safe.read_bounded(checked_path(root, record["path"]), 32 * 1024 * 1024)
@@ -367,6 +386,48 @@ def dependency_bundle_sources(root, bundle_root, manifest, by_path, document, in
                 mapping[(owner, original, "source")] = {
                     "path": bundle_root + "/" + DEPENDENCY_KIT_PREFIX + "/" + location,
                     "sha256": receipt["sha256"], "kind": kind}
+        native_descriptor = component_index[owner].get("native_source_inputs")
+        if native_descriptor is not None:
+            for source in component_index[owner]["sources"]:
+                for receipt in source["local_files"]:
+                    original = safe.relative_path(receipt["source_path"])
+                    location = "inputs/" + original
+                    entry = files.get(location)
+                    require(receipt["payload_path"] == location and entry is not None
+                            and owner in entry["component_ids"] and "source" in entry["roles"]
+                            and entry["sha256"] == receipt["sha256"] and entry["bytes"] == receipt["bytes"]
+                            and receipt.get("kind", "file") == "file",
+                            "native preferred source has unbound frozen ownership")
+                    key = (owner, original, "native_preferred_source")
+                    selected = mapping.setdefault(key, {
+                        "path": bundle_root + "/" + DEPENDENCY_KIT_PREFIX + "/" + location,
+                        "sha256": receipt["sha256"], "bytes": receipt["bytes"], "kind": "file", "source_urls": []})
+                    if source["url"] not in selected["source_urls"]:
+                        selected["source_urls"].append(source["url"])
+            for consumed in native_descriptor["consumed_inputs"]:
+                original = safe.relative_path(consumed["source_path"])
+                location = "inputs/" + original
+                entry = files.get(location)
+                require(entry is not None and owner in entry["component_ids"]
+                        and "native_consumed" in entry["roles"] and entry["sha256"] == consumed["sha256"]
+                        and entry["bytes"] == consumed["bytes"], "native input has unbound frozen ownership")
+                mapping[(owner, original, "native_consumed")] = {
+                    "path": bundle_root + "/" + DEPENDENCY_KIT_PREFIX + "/" + location,
+                    "sha256": consumed["sha256"], "bytes": consumed["bytes"], "kind": "file"}
+            for key in ("binary_archive", "provenance"):
+                receipt = component_index[owner].get(key)
+                require(isinstance(receipt, dict) and {"source_path", "sha256", "bytes", "payload_path"} <= set(receipt),
+                        "native parent receipt missing")
+                original = safe.relative_path(receipt["source_path"])
+                location = "inputs/" + original
+                entry = files.get(location)
+                require(receipt["payload_path"] == location and entry is not None
+                        and owner in entry["component_ids"] and key in entry["roles"]
+                        and entry["sha256"] == receipt["sha256"] and entry["bytes"] == receipt["bytes"],
+                        "native parent receipt has unbound frozen ownership")
+                mapping[(owner, original, "native_parent")] = {
+                    "path": bundle_root + "/" + DEPENDENCY_KIT_PREFIX + "/" + location,
+                    "sha256": receipt["sha256"], "bytes": receipt["bytes"], "kind": "file"}
 
 
 def frozen_bundle_binding(root, bundle_root, inventory_receipt, document):
@@ -540,7 +601,8 @@ def controlled_runtime_sources(root, component_id, source, mapping, *, frozen=Fa
     return sources, assets, provenance, selection
 
 
-def audit(root: Path, inventory_path: str, *, build_receipts=(), metadata_path=None, cache_dirs=DEFAULT_CACHE_DIRS, bundle_root=None) -> dict:
+def audit(root: Path, inventory_path: str, *, build_receipts=(), metadata_path=None, cache_dirs=DEFAULT_CACHE_DIRS,
+          bundle_root=None, native_source_inputs=None) -> dict:
     root = root.absolute()
     safe.no_links(root)
     document, inventory_receipt = json_input(root, inventory_path)
@@ -581,6 +643,20 @@ def audit(root: Path, inventory_path: str, *, build_receipts=(), metadata_path=N
     result = []
     component_records = []
     controlled_trees = []
+    native_entries = {}
+    if native_source_inputs is not None:
+        native_envelope, native_envelope_receipt = json_input(root, native_source_inputs)
+        native_entries = native.envelope(native_envelope, identifiers)
+        component_records.append(native_envelope_receipt)
+    elif bundle and checked_path(root, bundle_root + "/" + DEPENDENCY_KIT_PREFIX + "/dependency-source-kit-manifest.json").is_file():
+        delivered, _ = json_input(root, bundle_root + "/" + DEPENDENCY_KIT_PREFIX + "/dependency-source-kit-manifest.json")
+        for row in delivered["components"]:
+            value = row.get("native_source_inputs")
+            if value is not None:
+                declared = value["input_receipt"]
+                native_entries[row["id"]] = {"evidence_kind": value["evidence_kind"], "input_receipt": {
+                    "path": declared["source_path"], "sha256": declared["sha256"], "bytes": declared["bytes"]}}
+    selected_native_targets = native.targets(document, runtime_files) if native_entries else {}
     for component in sorted(components, key=lambda item: item["id"]):
         source = component["package"]["source"]
         require(isinstance(source, dict) and isinstance(source.get("kind"), str), "invalid component source")
@@ -685,23 +761,81 @@ def audit(root: Path, inventory_path: str, *, build_receipts=(), metadata_path=N
                 item["remaining"].append("controlled_runtime_corresponding_source_paths_not_declared")
             item["remaining"].append("controlled_runtime_transitive_source_closure_not_qualified")
         elif kind == "locked-archive":
-            item["binary_archive"] = file_record(root, source["archive_path"], source["archive_sha256"])
-            item["provenance"] = file_record(root, source["lock_path"], source["lock_sha256"])
+            if component["id"] in native_entries:
+                item["binary_archive"] = bound_component_record(root, component["id"], {
+                    "path": source["archive_path"], "sha256": source["archive_sha256"]}, mapping,
+                    ("native_parent",), required=bool(bundle))
+                item["provenance"] = bound_component_record(root, component["id"], {
+                    "path": source["lock_path"], "sha256": source["lock_sha256"]}, mapping,
+                    ("native_parent",), required=bool(bundle))
+                component_records.extend([item["binary_archive"], item["provenance"]])
+            else:
+                item["binary_archive"] = file_record(root, source["archive_path"], source["archive_sha256"])
+                item["provenance"] = file_record(root, source["lock_path"], source["lock_sha256"])
             key = (component["package"]["name"].lower().replace("_", "-"), component["package"]["version"])
             upstream = metadata.get(key)
             if upstream:
                 item["upstream_metadata"] = upstream
                 for archive in upstream.get("source_distributions", []):
-                    item["sources"].append(cached_source(cache, archive["url"], archive["sha256"], "sha256", provenance=metadata_receipt))
+                    if component["id"] in native_entries:
+                        item["sources"].append(native_cached_source(
+                            root, cache, archive["url"], archive["sha256"], component["id"], mapping,
+                            frozen=bool(bundle), provenance=metadata_receipt))
+                    else:
+                        item["sources"].append(cached_source(cache, archive["url"], archive["sha256"], "sha256", provenance=metadata_receipt))
             if component["id"] == "cad-cpython":
-                lock, _ = json_input(root, source["lock_path"], source["lock_sha256"])
+                lock, _ = json_input(root, item["provenance"]["path"], source["lock_sha256"])
                 for asset in lock["assets"]:
                     if asset["name"] == "CPython source" and asset["version"] == component["package"]["version"]:
-                        item["sources"].append(cached_source(cache, asset["url"], asset["sha256"], "sha256", provenance=item["provenance"]))
-            item["remaining"].append("wheel_or_interpreter_embedded_native_source_and_build_binding_pending")
+                        if component["id"] in native_entries:
+                            item["sources"].append(native_cached_source(
+                                root, cache, asset["url"], asset["sha256"], component["id"], mapping,
+                                frozen=bool(bundle), provenance=item["provenance"]))
+                        else:
+                            item["sources"].append(cached_source(cache, asset["url"], asset["sha256"], "sha256", provenance=item["provenance"]))
+            if component["id"] not in native_entries:
+                item["remaining"].append("wheel_or_interpreter_embedded_native_source_and_build_binding_pending")
         elif kind == "redistributable":
             item["source_status"] = "redistributable_rights_review"
             item["remaining"].append("exact_distributor_eligibility_and_redistributable_terms_pending")
+        if component["id"] in native_entries:
+            native_entry = native_entries[component["id"]]
+            native.applicability(native_entry["evidence_kind"], component["id"], document,
+                                 selected_native_targets.get(component["id"], []))
+            relocated = {}
+            def resolve_native(row, role):
+                record = bound_component_record(root, component["id"], row, mapping, ("native_consumed",),
+                                                required=bool(bundle))
+                relocated[row["path"]] = {**record, **({"sha512": row["sha512"]} if "sha512" in row else {})}
+                return checked_path(root, record["path"])
+            native_reader = native.Reader(resolve_native)
+            contribution = native.normalize(native_entry["evidence_kind"], component["id"],
+                                            native_entry["input_receipt"], native_reader,
+                                            selected_native_targets.get(component["id"], []))
+            native.applicability(native_entry["evidence_kind"], component["id"], document,
+                                 selected_native_targets.get(component["id"], []), contribution["target_bindings"])
+            def relocate(value):
+                if isinstance(value, list):
+                    return [relocate(child) for child in value]
+                if not isinstance(value, dict):
+                    return value
+                if {"path", "sha256", "bytes"} <= set(value) and value["path"] in relocated:
+                    return {**value, **relocated[value["path"]]}
+                return {key: relocate(child) for key, child in value.items()}
+            for key in ("sources", "notices", "artifacts"):
+                for row in relocate(contribution[key]):
+                    if row not in item[key]:
+                        item[key].append(row)
+            require(item["recipe"] is None, "native recipe cannot overwrite an existing recipe")
+            item["recipe"] = relocate(contribution["recipe"])
+            item["remaining"].extend(value for value in contribution["remaining"] if value not in item["remaining"])
+            item["native_source_inputs"] = relocate(native.descriptor(
+                native_entry["evidence_kind"], native_entry["input_receipt"], contribution, native_reader.consumed))
+            # Keep identity metadata raw; only explicit input receipts relocate.
+            item["native_source_inputs"]["dependency_dispositions"] = contribution["dependency_dispositions"]
+            item["native_source_inputs"]["target_bindings"] = contribution["target_bindings"]
+            component_records.extend(relocated.values())
+            native_reader.verify()
         if item["sources"]:
             item["source_status"] = "exact_local_source_present" if all(value["status"] == "exact_local_source_present" for value in item["sources"]) else "missing_source"
         if item["source_status"] == "missing_source":
@@ -766,11 +900,13 @@ def main():
     parser.add_argument("--build-receipt", action="append", default=[], help="Exact workspace-relative build/cache receipt; hashes only.")
     parser.add_argument("--upstream-metadata", help="Workspace-relative official PyPI metadata receipt; no network request runs.")
     parser.add_argument("--cache-dir", action="append", help="Workspace-relative source archive cache; never executed/extracted.")
+    parser.add_argument("--native-source-inputs", help="Explicit workspace-relative schema 1 index of typed original native evidence.")
     parser.add_argument("--output", type=Path, help="Optional explicit report path; its parent must exist.")
     args = parser.parse_args()
     try:
         report = audit(args.workspace, args.inventory, build_receipts=args.build_receipt,
-                       metadata_path=args.upstream_metadata, cache_dirs=args.cache_dir or DEFAULT_CACHE_DIRS, bundle_root=args.bundle_root)
+                       metadata_path=args.upstream_metadata, cache_dirs=args.cache_dir or DEFAULT_CACHE_DIRS,
+                       bundle_root=args.bundle_root, native_source_inputs=args.native_source_inputs)
         if args.output:
             publish(args.output.absolute(), report)
         print(json.dumps({"summary": report["summary"], "corresponding_source_qualified": False,

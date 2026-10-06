@@ -5,7 +5,66 @@ latest instruction; it does not restore per-turn builds or packages.
 The binding execution plan is [plan.md](plan.md). No production acceptance is
 claimed by this record.
 
-## Current source batch
+## Current delivery state
+
+The checked human-test package is `artifacts/packages/vertex-candidate`, with
+its installation at `artifacts/installed/candidate/bin/vertex.exe`. The desktop
+Vertex shortcut targets that executable. The cutover completed on October 6,
+2026 after exact package/runtime checks and interruption/recovery probes.
+The preceding candidate is preserved at the stable rollback paths; the
+original rollback is retained separately. No previous checkpoint was deleted.
+
+The package binds source commit `3ff0431e1d389dbd8955e308ebf16a9a094c7855`.
+Its application SHA-256 is
+`9a7083efb4a8f52c55b6054ca473249747a327fca0de78ed176e3e8716ecd569`;
+runtime-manifest SHA-256 is
+`7a2194425597a087766b5424c71ac3c5281ca4bbd33cda5812c0d4054096fc64`.
+After promotion, six source/save/reopen processes passed at the final path,
+including the normal PNG reference decoder, persisted reference assets and
+stable project/2D/native-3D output hashes. This is developer-machine evidence;
+clean-machine, network-denied, hardware and human acceptance remain open.
+
+The current source-delivery batch adds explicit CPython SPDX, GEOS recipe and
+OpenBLAS wheel/recipe evidence. Original publisher metadata, parent archive
+identity, selected archive members, source/notice bytes and historical recipe
+inputs are checked. Frozen replay resolves the delivered copies, including
+preferred source archives, when originals are absent or changed. The source
+audit retains unresolved dependency, authentication, build and rights facts;
+it does not turn source availability into distribution qualification.
+
+The first actual native-input audit found 49 exact-source owners, two recorded
+distributed assets and one CRT rights-review owner among 52 components and 127
+binaries, with zero missing top-level source owners. Subsequent independent
+review corrections require fresh audit/composition before a new source handoff.
+The promoted package remains bound to its earlier source kit while those
+delivery corrections are completed.
+
+The corrected real-input audit again passes the same 52-owner/127-binary
+inventory with zero missing top-level source owners. Independent review's
+remaining member-mapping gap is also corrected: shortened wheel paths cannot
+substitute for the exact normalized archive member. The affected checks pass
+191 cases, followed by 97 checks for the member-binding correction. A new
+composition will replay these checks against the preserved inputs before
+publication. Qualification flags remain false.
+
+The delivered application source kit now compiles in a separate persistent
+trial build with the existing prepared SDKs: configuration and the desktop,
+CLI and import-worker targets passed. All 1,565 delivered source files were
+verified before and after. The first configure attempt exposed PlaneGCS's
+explicit dependency-prefix requirement; the corrected command and failed
+evidence are retained, and the handoff instructions now include that setting.
+No dependency bootstrap or download command was invoked. Host networking was
+not denied, dependencies were not rebuilt from source, and the result does not
+close the clean offline rebuild gate.
+
+A restricted-process discriminator reproduces the save route's volume-root
+query denial (Windows error 5), while a checked ordinary parent-directory
+handle returns NTFS under the same zero-capability profile. Task-owned Global
+and Local mutex creation also succeeds. This supports a narrow handle-based
+filesystem query correction; the actual changed application save/reopen route
+still requires verification. No installed ACL, profile or firewall was changed.
+
+## Recorded implementation history
 
 - D00 relocation: source copy and equivalence complete. Git refs/status/HEAD,
   tracked and untracked content hashes, and 219,440 file sizes matched. Private
@@ -121,13 +180,14 @@ claimed by this record.
 
 ## Next actions, in order
 
-1. Finish the current desktop integration check and record/push the reviewed
-   source checkpoint, preserving the installed candidate and failed receipts.
-2. Refresh the selected-runtime inspection and inventory, bind the application
-   and dependency source kits, stage and verify one coherent candidate, and
-   exercise its actual installation and isolated worker. Keep the existing
-   installation until the replacement passes those checks.
-3. Continue D01 acquisition, D02 qualification and the remaining production
+1. Finish and push the reviewed native-source evidence batch, then bind its
+   helpers and exact inputs into one coherent delivered source handoff.
+2. Correct the restricted save route's filesystem query without weakening
+   identity/durability guards, then check its actual save/reopen workflow.
+   Keep the stable installed candidate available throughout.
+3. Bind applicable completed verification receipts into the delivery registry;
+   complete the remaining locally actionable integrated behavior checks.
+4. Continue D01 acquisition, D02 qualification and the remaining production
    gates. Candidate integrity and developer-machine checks do not substitute
    for clean offline installation, hardware or human acceptance.
 
@@ -433,7 +493,7 @@ the diagnosed Qt/Python `slots` macro collision; Build-04 contains its fix.
 
 ## Identified human-test candidate
 
-The next frozen candidate is staged at artifacts/packages/vertex-candidate.pending
+The promoted candidate is at artifacts/packages/vertex-candidate
 from source commit 3ff0431e1d389dbd8955e308ebf16a9a094c7855. The built-in Windows
 PowerShell 5.1 verifier passed all 25,735 declared files. The complete handoff
 audit and delivered source-receipt replay also passed. Installation passed with
@@ -441,8 +501,8 @@ the same built-in shell and all 5,106 runtime files. Six installed source/save/
 reopen processes passed across both workspaces and both architectural markets,
 including normal PNG decoding, persisted references and matching project,
 2D-capture and native-3D hashes. The independently launched packaged CAD worker
-passed against the installed immutable runtime. The existing candidate below
-remains active until the checked directory cutover.
+passed against the installed immutable runtime. The checked directory cutover
+is complete; the prior candidate below is the preserved rollback checkpoint.
 
 The separate private main-application network-policy experiment confirmed the
 existing AppContainer profile/current user, absent loopback exemption, exact
@@ -475,10 +535,10 @@ creating tooling. The baseline fixture substitutes only its repository root so
 it uses the same prepared SDK. This establishes SDK preflight behavior, not a
 full offline dependency-source rebuild.
 
-One package is at artifacts/packages/vertex-candidate; its verified installation
-is artifacts/installed/candidate. Run bin/vertex.exe from that installation.
-The previous installation and one complete stable rollback remain available.
-The existing desktop shortcut still points to the previous build.
+### Previous human-test checkpoint
+
+The following identities describe the preceding candidate, now preserved at
+`artifacts/packages/vertex-rollback` and `artifacts/installed/rollback`.
 
 - Product/source-kit commit: 387ab41b271a23e0dedb8015a175c77343be4eb9.
 - Runtime manifest SHA-256:

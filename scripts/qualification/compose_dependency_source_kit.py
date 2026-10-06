@@ -26,6 +26,7 @@ from urllib.parse import urlparse
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import dependency_source_closure as closure
+import native_source_inputs as native
 
 _SOURCE_KIT_SPEC = importlib.util.spec_from_file_location(
     "vertex_source_kit_for_dependency_payload", Path(__file__).resolve().parent.parent / "source_kit_manifest.py")
@@ -146,6 +147,56 @@ class Composer:
         self.total = 0
         self.input_total = 0
         self.records = 0
+        self.native_binding = None
+        self.native_targets = None
+        self.native_inventory = None
+
+    def resolve_record(self, row, owner, role):
+        self.record(row, owner, role)
+        return closure.checked_path(self.root, row["path"])
+
+    def native_component(self, item):
+        descriptor = item["native_source_inputs"]
+        fields(descriptor, {"evidence_kind", "input_receipt", "contribution_sha256", "dependency_dispositions",
+                            "target_bindings", "consumed_inputs"},
+               {"evidence_kind", "input_receipt", "contribution_sha256", "dependency_dispositions",
+                "target_bindings", "consumed_inputs"})
+        require(self.native_binding is not None, "native source evidence requires candidate binding")
+        owner = item["id"]
+        if self.native_targets is None:
+            binding_reader = native.Reader(lambda row, role: self.resolve_record(row, None, role))
+            inventory = binding_reader.json(native.original(self.native_binding["inventory"]), "inventory")
+            self.native_inventory = inventory
+            self.native_targets = native.targets(inventory, native.original(self.native_binding["binaries"]))
+            binding_reader.verify()
+        package = native.applicability(descriptor["evidence_kind"], owner, self.native_inventory,
+                                       self.native_targets.get(owner, []))
+        require(package == item["package"] and item["declared_source_kind"] == "locked-archive",
+                "native parent report package/source differs from inventory")
+        consumed = table(descriptor["consumed_inputs"], limit=4096)
+        locations = {row.get("inventory_path", row["path"]): row for row in consumed}
+        def resolve(row, role):
+            bound = locations.get(row["path"])
+            require(bound is not None and native.original(bound) == row,
+                    "native consumed input is missing or changed")
+            return self.resolve_record(bound, owner, role)
+        reader = native.Reader(resolve)
+        contribution = native.normalize(descriptor["evidence_kind"], owner,
+                                        native.original(descriptor["input_receipt"]), reader,
+                                        self.native_targets.get(owner, []))
+        native.applicability(descriptor["evidence_kind"], owner, self.native_inventory,
+                             self.native_targets.get(owner, []), contribution["target_bindings"])
+        expected = native.descriptor(descriptor["evidence_kind"], native.original(descriptor["input_receipt"]),
+                                     contribution, reader.consumed)
+        require(native.original(descriptor) == expected, "native source descriptor differs from original evidence")
+        native.validate_contribution(item, contribution)
+        reader.verify()
+        result = dict(expected)
+        result["input_receipt"] = self.record(descriptor["input_receipt"], owner, "native_input")
+        # These receipts are explicit portable mappings for the next replay.
+        result["consumed_inputs"] = [self.record(locations[row["path"]], owner, "native_consumed")
+                                     for row in expected["consumed_inputs"]]
+        return result
 
     def record(self, row, owner, role, *, copy=True, project=False, extra=()):
         fields(row, {"path", "sha256", "sha512", "bytes", "inventory_path", "kind", *extra}, ("path", "sha256"))
@@ -286,7 +337,7 @@ class Composer:
     def component(self, item):
         fields(item, {"id", "package", "declared_source_kind", "sources", "notices", "assets", "artifacts",
                       "source_status", "recipe", "remaining", "licensing_clearance", "corresponding_source_qualified",
-                      "provenance", "configuration", "upstream_asset", "binary_archive", "upstream_metadata"},
+                      "provenance", "configuration", "upstream_asset", "binary_archive", "upstream_metadata", "native_source_inputs"},
                ("id", "package", "declared_source_kind", "sources", "notices", "assets", "artifacts", "source_status", "recipe", "remaining"))
         owner = item["id"]
         require(item["declared_source_kind"] in SOURCE_KINDS and item["source_status"] in SOURCE_STATUSES, "unknown component source kind/status")
@@ -296,6 +347,8 @@ class Composer:
         result = {"id": owner, "package": {k: text(v) for k, v in package.items()},
                   "declared_source_kind": item["declared_source_kind"], "source_status": item["source_status"],
                   "remaining": strings(item["remaining"]), "licensing_clearance": False, "corresponding_source_qualified": False}
+        if "native_source_inputs" in item:
+            result["native_source_inputs"] = self.native_component(item)
         project = owner in {"vertex", "cli"} and item["declared_source_kind"] == "workspace"
         require(isinstance(item["sources"], list) and len(item["sources"]) <= 512, "invalid source table")
         result["sources"] = [self.source(source, owner, project, item["declared_source_kind"] == "workspace") for source in item["sources"]]
@@ -350,6 +403,7 @@ class Composer:
     def binding(self, binding, owners):
         fields(binding, {"inventory", "component_manifest", "runtime", "binaries", "build_receipts", "upstream_metadata", "offline_bundle"},
                ("inventory", "component_manifest", "runtime", "binaries", "build_receipts", "upstream_metadata", "offline_bundle"))
+        self.native_binding = binding
         result = {key: self.record(binding[key], None, key) for key in ("inventory", "component_manifest", "runtime")}
         result["binaries"] = []
         for row in table(binding["binaries"]):

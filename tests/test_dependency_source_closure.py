@@ -83,6 +83,80 @@ class SourceClosureTests(unittest.TestCase):
     def run_audit(self, **kwargs):
         return audit.audit(self.root, "inventory.json", cache_dirs=("cache",), **kwargs)
 
+    def locked_cpython_native_fixture(self):
+        owner, evidence_kind = "cad-cpython", "cpython_spdx"
+        name, version, filename, _ = audit.native.PARENT_PROFILES[evidence_kind]
+        archive_path = "cache/" + filename
+        self.write(archive_path, b"synthetic whole parent archive for receipt-binding test")
+        archive_sha256 = self.sha(archive_path)
+        lock_path = "receipts/cpython-lock.json"
+        source_archive_sha256 = hashlib.sha256(b"synthetic CPython source archive").hexdigest()
+        self.write_json(lock_path, {"assets": [{"name": "CPython source", "version": version,
+                                                  "url": "https://example.invalid/cpython-source.tar.xz",
+                                                  "sha256": source_archive_sha256}]})
+        component = self.inventory["components"][0]
+        component["id"] = owner
+        component["package"].update(name=name, version=version, license="PSF-2.0")
+        component["package"]["source"] = {
+            "kind": "locked-archive", "archive_path": archive_path, "archive_filename": filename,
+            "archive_sha256": archive_sha256, "archive_members": {"candidate/python313.dll": "python313.dll"},
+            "licensing_clearance": False, "source_closure_qualified": False,
+            "lock_path": lock_path, "lock_sha256": self.sha(lock_path)}
+        component["destinations"] = {"python313.dll": "bin/python/python313.dll"}
+        self.write("candidate/python313.dll", b"synthetic embedded Python binary")
+        binary = self.record("candidate/python313.dll")
+        self.inventory["binaries"] = [{"component_id": owner, "name": "python313.dll",
+                                        "path": binary["path"], "destination": "bin/python/python313.dll",
+                                        "sha256": binary["sha256"]}]
+        self.write_json("inventory.json", self.inventory)
+
+        def receipt(path):
+            row = self.record(path)
+            return {**row, "bytes": (self.root / path).stat().st_size}
+
+        self.write("cache/cpython-source.tar.xz", b"synthetic CPython source archive")
+        self.write("inputs/cpython-build.txt", b"python configure --enable-shared\n")
+        self.write("inputs/cpython-wheel-metadata.json", b'{"tag":"cp313"}\n')
+        input_records = {
+            "source": receipt("cache/cpython-source.tar.xz"),
+            "notice": receipt("notices/dependency.txt"),
+            "recipe": receipt("inputs/cpython-build.txt"),
+            "artifact": receipt("inputs/cpython-wheel-metadata.json"),
+        }
+        self.write_json("native/cpython-profile.json", {"inputs": input_records})
+        profile_receipt = receipt("native/cpython-profile.json")
+        self.write_json("native/cpython-envelope.json", {"schema_version": 1, "entries": [{
+            "component_id": owner, "evidence_kind": evidence_kind, "input_receipt": profile_receipt}]})
+        return {"owner": owner, "evidence_kind": evidence_kind, "filename": filename,
+                "archive_path": archive_path, "archive_sha256": archive_sha256,
+                "lock_path": lock_path, "lock_sha256": self.sha(lock_path),
+                "envelope": "native/cpython-envelope.json"}
+
+    def synthetic_native_normalize(self, kind, owner, input_receipt, reader, selected_targets):
+        require = audit.native.require
+        require((kind, owner) == ("cpython_spdx", "cad-cpython"), "unexpected synthetic native profile")
+        profile = reader.json(input_receipt, "native_input")
+        consumed = {}
+        for name, role in (("source", "source"), ("notice", "notice"),
+                           ("recipe", "recipe"), ("artifact", "metadata")):
+            consumed[name] = reader.record(profile["inputs"][name], role)
+        source, notice = consumed["source"], consumed["notice"]
+        recipe, artifact = consumed["recipe"], consumed["artifact"]
+        member = "python313.dll"
+        return {"sources": [{"url": "https://example.invalid/cpython-source.tar.xz",
+                              "status": "exact_local_source_present", "local_files": [source]}],
+                "notices": [{**notice, "content_role": "notice_text_present_review_required"}],
+                "artifacts": [artifact],
+                "recipe": {"status": "exact_local_recipe_present", "files": [recipe],
+                           "recipe_options": ["--enable-shared"],
+                           "options_role": "observed recipe; build remains unqualified"},
+                "remaining": ["native_source_derivation_not_qualified"],
+                "dependency_dispositions": [{"component_id": owner,
+                                              "relevance": "unresolved_candidate_exclusion",
+                                              "candidate_exclusion_qualified": False}],
+                "target_bindings": [{"target": dict(target), "member": member,
+                                     "byte_identity_verified": False} for target in selected_targets]}
+
     def qt_configuration_fixture(self, configuration):
         config_path = "qt/prefix/mkspecs/qconfig.pri"
         self.write(config_path, configuration.encode("utf-8"))
@@ -459,7 +533,9 @@ class SourceClosureTests(unittest.TestCase):
         portable = {"schema_version": 1, "source_inventory": self.record("inventory.json"), "files": []}
         rows = []
         component = self.inventory["components"][0]
-        inputs = [("binary", self.inventory["binaries"][0]["path"], "bin/app.dll")]
+        owner = component["id"]
+        binary = self.inventory["binaries"][0]
+        inputs = [("binary", binary["path"], binary["destination"])]
         inputs += [("notice", entry["path"], f"licenses/notice-{index}.txt")
                    for index, entry in enumerate(component["notices"])]
         inputs += [("asset", entry["path"], f"assets/asset-{index}.bin")
@@ -467,9 +543,9 @@ class SourceClosureTests(unittest.TestCase):
         for kind, original, destination in inputs:
             self.write("bundle/" + destination, (self.root / original).read_bytes())
             record = {"path": destination, "sha256": self.sha("bundle/" + destination),
-                      "component_id": "dependency", "kind": kind, "install": True}
+                      "component_id": owner, "kind": kind, "install": True}
             rows.append(record)
-            portable["files"].append({**record, "source": original, "inventory_entry": "dependency"})
+            portable["files"].append({**record, "source": original, "inventory_entry": owner})
         for source in sources:
             self.write("bundle/source-kit/" + source, (self.root / source).read_bytes())
             rows.append({"path": "source-kit/" + source, "sha256": self.sha(source),
@@ -493,7 +569,7 @@ class SourceClosureTests(unittest.TestCase):
         next(row for row in manifest["files"] if row["kind"] == "portable-package-manifest")["sha256"] = self.sha("bundle/metadata/portable.json")
         self.write_json("bundle/offline-bundle-manifest.json", manifest)
 
-    def dependency_bundle_fixture(self):
+    def dependency_bundle_fixture(self, *, native_source_inputs=None):
         manifest, portable = self.frozen_bundle()
         tree = self.declared_tree_fixture()
         self.write("sdk/file.hpp", b"editable standalone source")
@@ -515,7 +591,7 @@ class SourceClosureTests(unittest.TestCase):
         self.write("bundle/source-kit/sdk/file.hpp", (self.root / "sdk/file.hpp").read_bytes())
         next(row for row in manifest["files"] if row["path"] == "source-kit.json")["sha256"] = self.sha("bundle/source-kit.json")
         manifest["source_kit"]["sha256"] = self.sha("bundle/source-kit.json")
-        report = self.run_audit()
+        report = self.run_audit(native_source_inputs=native_source_inputs)
         self.write_json("source-report.json", report)
         kit = composer.compose(self.root, "source-report.json", "dependency-kit",
                                source_kit_manifest="selected-source-kit.json")
@@ -537,6 +613,42 @@ class SourceClosureTests(unittest.TestCase):
         manifest["files"] = [entry for entry in manifest["files"] if entry["path"] != relative] + [row]
         manifest["dependency_source_kit"] = {key: row[key] for key in ("path", "sha256", "size")}
         self.rewrite_mapping(manifest, portable)
+
+    def test_frozen_native_parent_archive_and_cpython_lock_use_delivered_copy(self):
+        fixture = self.locked_cpython_native_fixture()
+        name, version, filename, _ = audit.native.PARENT_PROFILES[fixture["evidence_kind"]]
+        synthetic_profile = (name, version, filename, fixture["archive_sha256"])
+        with mock.patch.dict(audit.native.PARENT_PROFILES,
+                             {fixture["evidence_kind"]: synthetic_profile}), \
+                mock.patch.object(audit.native, "normalize", side_effect=self.synthetic_native_normalize):
+            manifest, portable, kit = self.dependency_bundle_fixture(
+                native_source_inputs=fixture["envelope"])
+            native_component = next(row for row in kit["components"] if row["id"] == fixture["owner"])
+            self.assertEqual(native_component["binary_archive"]["source_path"], fixture["archive_path"])
+            self.assertEqual(native_component["provenance"]["source_path"], fixture["lock_path"])
+            for expected, role in ((fixture["archive_path"], "binary_archive"),
+                                   (fixture["lock_path"], "provenance")):
+                row = next(row for row in kit["files"] if row["source_path"] == expected)
+                self.assertIn(role, row["roles"])
+
+            # The frozen source kit already contains both bound parent inputs.
+            (self.root / fixture["archive_path"]).unlink()
+            (self.root / "cache/cpython-source.tar.xz").unlink()
+            self.write(fixture["lock_path"], b"changed original lock; frozen copy remains intact")
+            result = self.run_audit(bundle_root="bundle")
+
+        component = next(row for row in result["components"] if row["id"] == fixture["owner"])
+        delivered_prefix = "bundle/" + audit.DEPENDENCY_KIT_PREFIX + "/inputs/"
+        self.assertTrue(component["binary_archive"]["path"].startswith(delivered_prefix))
+        self.assertTrue(component["provenance"]["path"].startswith(delivered_prefix))
+        self.assertEqual(component["binary_archive"]["sha256"], fixture["archive_sha256"])
+        self.assertEqual(component["provenance"]["sha256"], fixture["lock_sha256"])
+        self.assertEqual(component["source_status"], "exact_local_source_present")
+        self.assertTrue(all(row["status"] == "exact_local_source_present" for row in component["sources"]))
+        self.assertTrue(all(file["path"].startswith(delivered_prefix)
+                            for row in component["sources"] for file in row["local_files"]))
+        self.assertFalse(result["licensing_clearance"])
+        self.assertFalse(result["corresponding_source_qualified"])
 
     def test_delivered_sdk_tree_and_file_ignore_changed_live_sdk(self):
         self.dependency_bundle_fixture()

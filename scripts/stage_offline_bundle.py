@@ -340,6 +340,11 @@ def _validate_dependency_payload(payload_root: pathlib.Path, source_kit: Mapping
         return result
 
     class ReceiptValidator(helper.Composer):
+        def resolve_record(self, row, owner, role):
+            record = self.record(row, owner, role)
+            _require("payload_path" in record, "native replay requires a copied input")
+            return closure.checked_path(payload_root, record["payload_path"])
+
         def record(self, row, owner, role, *, copy=True, project=False, extra=()):
             nonlocal record_count
             helper.fields(row, {"path", "sha256", "sha512", "bytes", "kind", *extra}, ("path", "sha256"))

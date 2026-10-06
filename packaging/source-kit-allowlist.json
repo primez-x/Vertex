@@ -3971,6 +3971,18 @@
     },
     {
       "category": "source",
+      "path": "scripts/qualification/native_cpython_source_inputs.py"
+    },
+    {
+      "category": "source",
+      "path": "scripts/qualification/native_source_inputs.py"
+    },
+    {
+      "category": "source",
+      "path": "scripts/qualification/native_wheel_source_inputs.py"
+    },
+    {
+      "category": "source",
       "path": "scripts/rebuild_ifc_boost_thread.py"
     },
     {
@@ -5887,7 +5899,23 @@
     },
     {
       "category": "source",
+      "path": "tests/test_native_cpython_source_inputs.py"
+    },
+    {
+      "category": "source",
       "path": "tests/test_native_process_guard.ps1"
+    },
+    {
+      "category": "source",
+      "path": "tests/test_native_source_inputs.py"
+    },
+    {
+      "category": "source",
+      "path": "tests/test_native_source_payload.py"
+    },
+    {
+      "category": "source",
+      "path": "tests/test_native_wheel_source_inputs.py"
     },
     {
       "category": "source",

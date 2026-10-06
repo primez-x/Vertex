@@ -136,3 +136,79 @@ maps delivered SDK source directories through their checked dependency manifest;
 it does not substitute writable developer headers for source inputs carried in
 that bundle. Source, redistribution and offline-rebuild qualification remain
 separate from a successful copy or audit.
+
+## Embedded native source evidence
+
+The source-closure auditor accepts an optional `--native-source-inputs` JSON
+file. Its closed version-1 envelope contains `schema_version` and `entries`;
+each entry contains exactly `component_id`, `evidence_kind` and `input_receipt`.
+A receipt contains a canonical workspace-relative `path`, original SHA-256
+and integer `bytes`. The supported owner/profile pairs are:
+
+| Component | Evidence kind | Selected parent |
+| --- | --- | --- |
+| `cad-cpython` | `cpython_spdx` | CPython 3.13.15 Windows x64 embedded archive |
+| `cad-shapely` | `geos_recipe` | Shapely 2.1.2 CPython 3.13 Windows x64 wheel |
+| `cad-numpy` | `openblas_wheel_recipe` | NumPy 2.5.3 CPython 3.13 Windows x64 wheel |
+
+`native_source_inputs.py` reads through an explicit resolver. It hashes ordinary
+files, parses bounded original metadata and reads selected ZIP/tar members
+without extracting or executing them. It refuses unsafe/ambiguous member names,
+links, nonordinary selected members, oversized content, duplicate JSON fields
+and changed receipts. Profile applicability binds the original distribution
+inventory's package/version, locked parent archive and selected member mapping;
+binary SHA-256 and size tuples remain tied to the authoritative destinations.
+
+The CPython profile retains all 14 original dependency identities and their
+distinct dispositions. Available standalone archives and vendored source
+members carry exact original-byte receipts. An unavailable or unproven
+dependency remains visible. GEOS and OpenBLAS profiles bind original wheel,
+source, recipe, notice and metadata receipts. OpenBLAS source and recipe blobs
+are replayed against the original pinned Git trees, including the recorded
+submodule identity. Publisher JSON bytes are pinned before their fields are
+interpreted; a rehashed replacement cannot substitute for those originals.
+
+Composition copies every consumed native input and records its owner and role.
+Portable replay requires those delivered receipts, recomputes the contribution
+and checks that derived sources, notices, recipe inputs and unresolved facts
+remain present. The frozen audit also resolves native parent archives, lock
+receipts and preferred source archives from the delivered kit. Missing or
+changed development-cache files cannot replace that bound payload. Other
+source-audit inputs have their own documented resolution contracts; this does
+not establish that the entire dependency build is workspace-independent.
+
+These are source availability and byte-identity checks. They do not authenticate
+publisher signatures, establish binary derivation, resolve compiler/runtime
+redistribution terms or certify a complete offline dependency rebuild. The
+corresponding qualification flags remain false until those obligations pass.
+
+## Rebuilding the application with prepared SDKs
+
+An application-source rebuild can use SDKs held outside `source-kit/`. Configure
+a separate persistent build directory and pass the prepared roots explicitly:
+
+```powershell
+cmake -S ./source-kit -B ./application-rebuild -G Ninja `
+  -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF `
+  -DSKETCH_BUILD_DESKTOP=ON -DSKETCH_BUILD_ARCHITECTURE=ON `
+  '-DCMAKE_PREFIX_PATH=C:/SDK/Qt/6.8.3/msvc2022_64;C:/SDK/native/x64-windows' `
+  -D_sketch_native_prefix=C:/SDK/native/x64-windows `
+  -DSKETCH_DEPS_DIR=C:/SDK/source-dependencies `
+  -DVERTEX_CAD_RUNTIME_ROOT=C:/SDK/selected-cad-runtime `
+  -DFETCHCONTENT_FULLY_DISCONNECTED=ON `
+  -DFETCHCONTENT_UPDATES_DISCONNECTED=ON
+cmake --build ./application-rebuild --target vertex vertex-cli --parallel 8
+```
+
+Run from the documented x64 MSVC compiler environment with CMake/Ninja available.
+The source-dependency root must contain the pinned SQLite amalgamation and
+nlohmann JSON headers. PlaneGCS uses its explicit `_sketch_native_prefix` cache
+setting for Eigen/Boost rather than an ambient SDK search. The selected CAD
+SDK must include its development headers/import library and verified manifest;
+an installed runtime alone is insufficient. Configuration and staging verify
+that selection without importing its executable payload.
+
+No bootstrap command is part of this procedure. It rebuilds the application
+and its shipped source components with prepared dependencies. A full clean,
+network-denied rebuild of those dependencies from the delivered source kit
+remains a separate production gate.
