@@ -1208,6 +1208,11 @@ def _prepare_component(root: pathlib.Path, component: dict[str, Any]) -> dict[st
     if source_kind in {"locked-archive", "controlled-runtime"}:
         component_payload["source_inputs"] = [
             row for row in source_payload["source_paths"] if row["path"] in component["source"]["paths"]]
+        if source_kind == "controlled-runtime":
+            # The selected-stage identity is a shipped metadata asset, separate
+            # from the stage's source files. Admit only the verified selection;
+            # build logs and other provenance artifacts are not portable inputs.
+            component_payload["source_inputs"].append({**source_payload["selection"], "kind": "file"})
     return {
         "manifest": component,
         "payload": component_payload,

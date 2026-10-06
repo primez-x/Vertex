@@ -113,6 +113,31 @@ class ControlledSourceValidationTests(unittest.TestCase):
             row = {"path": "source", "kind": "directory", "sha256": inventory._tree_sha256(source)}
             self.assertEqual(inventory._describe_controlled_source(root, row), row)
 
+    def test_controlled_selection_is_a_portable_input_but_other_receipts_are_not(self):
+        component = self.fixture()
+        component.update(kind="runtime", package={"name": "IfcOpenShell", "version": "source-fixture",
+                                                   "license": "LGPL-3.0-or-later"})
+        selection = {"path": component["source"]["selection_path"], "sha256": "b" * 64, "bytes": 478}
+        module = {"path": component["source"]["paths"][0], "kind": "file", "sha256": "a" * 64}
+        private_receipt = {"path": "build/private-build.log", "sha256": "f" * 64}
+        public = {"kind": "controlled-runtime", "source_paths": [module], "selection": selection}
+        with mock.patch.object(inventory, "_controlled_runtime_context", return_value=(public, {})), \
+                mock.patch.object(inventory, "_describe_notices", return_value=[]), \
+                mock.patch.object(inventory, "_describe_artifacts", return_value=[selection, private_receipt]):
+            prepared = inventory._prepare_component(pathlib.Path("."), component)["payload"]
+        self.assertEqual(prepared["source_inputs"], [module, {**selection, "kind": "file"}])
+        self.assertEqual(prepared["package"]["source"]["source_paths"], [module])
+        self.assertEqual(prepared["artifacts"], [selection, private_receipt])
+        spec = importlib.util.spec_from_file_location("controlled_portable_stager",
+                                                    ROOT / "scripts/stage_portable_package.py")
+        portable = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(portable)
+        sources, notices = portable._inventory_file_records({"components": [prepared]},
+                                                           {prepared["id"]: prepared})
+        self.assertEqual(sources[(prepared["id"], selection["path"].casefold())], selection["sha256"])
+        self.assertNotIn((prepared["id"], private_receipt["path"].casefold()), sources)
+        self.assertEqual(notices, {})
+
     def test_controlled_preferred_source_rejects_hardlinks(self):
         with tempfile.TemporaryDirectory() as directory:
             root = pathlib.Path(directory)

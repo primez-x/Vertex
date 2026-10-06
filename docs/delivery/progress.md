@@ -421,6 +421,15 @@ the diagnosed Qt/Python `slots` macro collision; Build-04 contains its fix.
   19,056 physical files, 1,703,723,555 bytes and 52 components. Its original
   receipts remain preserved. Later source changes require fresh binding before
   staging; the old composition is not described as the current candidate.
+- Actual selected-runtime staging caught a missing portable-input binding for
+  the verified CAD selection receipt. The inventory now exposes that exact
+  selection as metadata without admitting arbitrary provenance artifacts or
+  changing the selected native payload. The new regression first reproduced
+  the omission; `vertex-controlled-selection-portable-green-01` passes all
+  39 inventory checks and `vertex-controlled-selection-portable-affected-01`
+  passes all nine portable-staging checks. The failed staging receipt is
+  retained; actual corrected package verification and installation remain
+  required before replacing the human-test candidate.
 
 ## Identified human-test candidate
 
