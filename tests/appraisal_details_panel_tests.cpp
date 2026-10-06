@@ -561,6 +561,39 @@ void ansi_fractional_components_preserve_unrounded_gross() {
     }
 }
 
+void editable_reporting_contract_matches_details() {
+    auto entities=fixture();
+    auto& policy=entities.front().properties["appraisal_policy"];
+    policy["policy_kind"]="ansi_z765_2021";
+    policy["ansi"]={{"interior_inspected",true},{"direct_measurement",true},{"acquisition_increment","inch"}};
+    entities[2].properties["appraisal_facts"]["ansi"]={{"any_part_below_grade",false}};
+    auto& facts=entities.back().properties["appraisal_facts"];facts.erase("ceiling_eligibility");
+    facts["ansi"]={{"year_round_suitable",true},{"finish_matches_dwelling",true},{"dwelling_identity","primary"},
+        {"ceiling",{{"kind","flat"},{"minimum_height_m",2.1336}}}};
+    entities.front().properties["appraisal_reporting"]=sketch::appraisal_reporting_json(
+        sketch::AppraisalReportingSettings{sketch::AppraisalReportingContract::uad_3_6,true});
+    sketch::AppraisalAreaReportingFacts rooms;
+    rooms.source_geometry_sha256=sketch::appraisal_reporting_source_digest(sketch::Document::create(entities).snapshot(),"a");
+    rooms.rooms={{"declared-bedroom",sketch::AppraisalRoomUse::bedroom,true},
+        {"declared-half-bath",sketch::AppraisalRoomUse::bathroom_half,false}};
+    entities.back().properties["appraisal_reporting"]=sketch::appraisal_reporting_json(rooms);
+    auto document=sketch::Document::create(entities);AppraisalDetailsPanel panel;
+    bool requested=false;
+    panel.setReportingRequested([&](const QString& property,sketch::Revision revision){requested=property=="p" && revision==document.revision();});
+    panel.setDocument(document.snapshot(),"p",true);
+    const auto totals=label(panel,"appraisalDetailsTotals");
+    require(totals.contains("UAD 3.6 reporting") && totals.contains("Primary all-grade room counts") &&
+        totals.contains("1 bedrooms; 0 full / 1 half bathrooms") && totals.contains("100 sq ft"),
+        "Actual Details shows the same explicit counts and whole-square-foot projection as the report");
+    button(panel,"appraisalDetailsReporting")->click();
+    require(requested,"Reporting action identifies the actual property and immutable source revision");
+    auto source=document.snapshot();auto changed=source.entities().at("a");changed.properties["boundary"]=square(0,0,6.096);
+    document.apply(sketch::ApplyEntityChanges{source.revision(),{sketch::EntityChange::upsert(changed)},{},"reporting stale geometry fixture"});
+    panel.setDocument(document.snapshot(),"p",true);
+    require(label(panel,"appraisalDetailsTotals").contains("Withheld") && label(panel,"appraisalDetailsTotals").contains("stale"),
+        "Source changes withhold visible projected fields and request reconfirmation");
+}
+
 void native_stale_context_withholds_actions_and_totals() {
     QTemporaryDir directory;require(directory.isValid(),"isolated stale-context fixture directory");
     auto document=std::make_shared<sketch::Document>(sketch::Document::create(fixture()));
@@ -593,7 +626,7 @@ int main(int argc,char** argv) {
         require(QFontDatabase::addApplicationFont(QStringLiteral(":/fonts/Inter.ttf"))>=0,"bundled Inter font loads for native Details capture");
         app.setFont(QFont(QStringLiteral("Inter"),10));
         narrow_details_keeps_dimensions_and_full_sources_readable();ansi_ceiling_height_uses_declared_acquisition_precision();ansi_canonical_units_declarations_and_curve_dimensions();qualified_units_refresh_and_callbacks();undeclared_and_invalid_measurements();
-        categories_floors_deductions_and_phase();stale_wall_sources();native_main_window_details();live_gla_shortcut_matches_authoritative_details();area_arithmetic_is_shared_with_printed_report();signed_curve_arithmetic_is_shared_with_printed_report();ansi_fractional_components_preserve_unrounded_gross();native_stale_context_withholds_actions_and_totals();
+        categories_floors_deductions_and_phase();stale_wall_sources();native_main_window_details();live_gla_shortcut_matches_authoritative_details();area_arithmetic_is_shared_with_printed_report();signed_curve_arithmetic_is_shared_with_printed_report();ansi_fractional_components_preserve_unrounded_gross();editable_reporting_contract_matches_details();native_stale_context_withholds_actions_and_totals();
         std::cout<<"appraisal_details_panel_tests passed\n";return 0;
     } catch(const std::exception& failure) {std::cerr<<"appraisal_details_panel_tests: "<<failure.what()<<'\n';return 1;}
 }

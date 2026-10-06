@@ -5,6 +5,7 @@
 #include <QSize>
 
 #include <cstddef>
+#include <array>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -75,10 +76,19 @@ public:
     // exported image alone cannot detect a stale native OpenGL viewport.
     [[nodiscard]] std::optional<QSize> nativeRenderSizePixels() const noexcept;
 
-    // Callbacks receive stable semantic entity IDs. onError also receives
-    // pending-geometry messages when the viewport cannot claim an authoritative
-    // representation of the complete snapshot. Exceptions from onError are
-    // contained so observers cannot interrupt preparation or replace diagnostics.
+    enum class TransformControl { translation, rotation, scale };
+    // Native picker diagnostic in Qt logical pixels; changes only hover state.
+    [[nodiscard]] std::optional<TransformControl> transformControlAt(const QPointF& point);
+    // Actual derived presentation's 3x4 local transform, row-major. These
+    // diagnostics do not change the authoritative document or preview state.
+    [[nodiscard]] std::optional<std::array<double, 12>> nativePresentationTransform(
+        const QString& entity_id) const;
+
+    // Callbacks receive stable semantic entity IDs. onError receives unavailable,
+    // incomplete or failed geometry diagnostics and operation/export failures.
+    // Transient preparation progress uses onGeometryStatusChanged instead.
+    // Exceptions from status/error observers are contained so they cannot
+    // interrupt preparation or replace diagnostics.
     std::function<void(QString)> onEntitySelected;
     // Stationary plain-left double-click release on a visible selectable entity.
     // Receives its stable semantic ID after selection; never requests translation.
@@ -97,6 +107,10 @@ public:
     // by global Qt logical pixels. Hit selection is notified before the menu.
     std::function<void(QString, QPoint)> onContextMenuRequested;
     std::function<void(QString)> onError;
+    // Geometry status for the viewport banner: preparation progress, terminal
+    // geometry diagnostics, or empty when preparation/publication succeeds.
+    // A progress notification is not an authoring or operation error.
+    std::function<void(QString)> onGeometryStatusChanged;
 
     void setEntitySelectedCallback(std::function<void(QString)> callback);
     void setEntityEditRequestedCallback(std::function<void(QString)> callback);
@@ -105,6 +119,7 @@ public:
     void setEntityTransformRequestedCallback(
         std::function<void(QString, double, double, double, double, double)> callback);
     void setErrorCallback(std::function<void(QString)> callback);
+    void setGeometryStatusChangedCallback(std::function<void(QString)> callback);
     // Arm one plain left drag of the supplied visible architectural entity.
     // Ctrl+left and middle always pan; right always orbits or opens context actions.
     [[nodiscard]] bool beginMove(const QString& entity_id);

@@ -4,11 +4,73 @@
 #include "sketch/document.hpp"
 
 #include <optional>
+#include <map>
 #include <set>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace sketch {
+
+enum class AppraisalReportingContract { legacy_uad_2_6, uad_3_6 };
+enum class AppraisalRoomUse { bedroom, bathroom_full, bathroom_half, other };
+struct AppraisalReportingSettings {
+    AppraisalReportingContract contract{AppraisalReportingContract::uad_3_6};
+    bool room_inventory_complete{}; // User assertion, never a geometry proof.
+};
+struct AppraisalRoomDeclaration {
+    std::string room_id;
+    AppraisalRoomUse use{AppraisalRoomUse::other};
+    std::optional<bool> legacy_total_room;
+};
+struct AppraisalAreaReportingFacts {
+    // Current geometry, deductions, owner context and appraisal observations.
+    // Persisted V1 field name is retained; reporting/presentation is excluded.
+    std::string source_geometry_sha256;
+    std::optional<bool> contained_within_primary;
+    std::vector<AppraisalRoomDeclaration> rooms;
+};
+struct AppraisalRoomCounts {
+    unsigned total_rooms{}, bedrooms{}, bathrooms_full{}, bathrooms_half{};
+};
+struct AppraisalReportingRoom {
+    std::string room_id, boundary_id, floor_id;
+    AppraisalRoomUse use{};
+    AppraisalAreaCategory category{};
+    DwellingIdentity identity{DwellingIdentity::primary};
+    bool included_in_primary_counts{};
+};
+struct AppraisalReportingEvidence { std::string url, edition, sections; };
+struct AppraisalFormProjection {
+    AppraisalReportingContract contract{};
+    bool configuration_valid{};
+    bool area_fields_available{}, room_counts_available{}, room_summaries_available{};
+    double primary_above_grade_finished_square_metres{};
+    std::map<AppraisalAreaCategory,double> primary_area_fields;
+    // Legacy above-grade counts and UAD 3.6 all-grade primary counts.
+    AppraisalRoomCounts primary_counts, below_grade_counts, noncontinuous_counts, adu_counts;
+    std::vector<AppraisalReportingRoom> rooms;
+    std::vector<std::string> issues;
+    std::vector<AppraisalReportingEvidence> evidence;
+};
+// Strict version-one semantic JSON; absent properties leave old projects in
+// measurement-summary mode. These serializers never infer facts from names.
+[[nodiscard]] nlohmann::json appraisal_reporting_json(const AppraisalReportingSettings& value);
+[[nodiscard]] nlohmann::json appraisal_reporting_json(const AppraisalAreaReportingFacts& value);
+[[nodiscard]] AppraisalReportingSettings parse_appraisal_reporting_settings(const nlohmann::json& value);
+[[nodiscard]] AppraisalAreaReportingFacts parse_appraisal_area_reporting_facts(const nlohmann::json& value);
+[[nodiscard]] std::string appraisal_reporting_source_digest(const DocumentSnapshot& source, const std::string& boundary_id);
+// Root applies these typed changes in one undoable command, after checking the
+// full snapshot fingerprint. The dialog itself never mutates the Document.
+struct AppraisalReportingChanges {
+    Revision revision{};
+    std::string source_document_id, source_snapshot_sha256, property_id;
+    AppraisalReportingSettings settings;
+    std::vector<std::pair<std::string, AppraisalAreaReportingFacts>> areas;
+};
+// The optional mask is semantic design-phase scope, never presentation hiding.
+void validate_appraisal_reporting_changes(const DocumentSnapshot& source, const AppraisalReportingChanges& changes,
+    const std::set<std::string, std::less<>>* visible_entity_ids = nullptr);
 
 struct AppraisalBoundaryStatus {
     std::string boundary_id;
@@ -44,6 +106,7 @@ struct AppraisalDocumentReport {
     std::optional<AnsiMeasurementDeclarations> ansi_measurement;
     std::vector<std::string> policy_evidence;
     std::vector<std::string> policy_limitations;
+    std::optional<AppraisalFormProjection> reporting;
 };
 
 // Declared-v1 eligibility uses the unchanged built-in policy. Its persisted

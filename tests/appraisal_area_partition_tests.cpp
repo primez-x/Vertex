@@ -82,6 +82,41 @@ void overlay_and_policy() {
     refuses(legacy,[&]{(void)prepare_ansi_appraisal_partition_targets(legacy,{{"floor",{"room"}}});},
         "ANSI helper does not widen non-ANSI authoring semantics");
 }
+void typed_limitation_declarations() {
+    const auto declaration=[](const char* kind,const std::string& statement) {
+        return Json{{"kind",kind},{"statement",statement}};
+    };
+    for(const auto& values:std::vector<Json>{Json::array(),Json::array({
+        declaration("interior_not_inspected",""),declaration("based_on_plans"," \t\n"),
+        declaration("direct_measurement_not_possible",std::string(8192,'x'))})}) {
+        auto entities=fixture();
+        entities.front().properties["appraisal_policy"]["ansi"]["limitation_declarations"]=values;
+        const auto source=Document::create(entities).snapshot();
+        require(ansi_appraisal_partition_context(source,"floor"),"typed limitation observations permit ANSI geometry routing");
+        const auto proposed=prepare_ansi_appraisal_partition_targets(source,{{"floor",{"room"}}});
+        auto expected=source.entities().at("floor");expected.properties["deduction_ids"]=Json::array({"room"});
+        require(proposed.size()==1 && proposed.front()==expected,
+            "incomplete typed observations permit geometry preparation without changing policy evidence");
+    }
+    for(const auto& values:std::vector<Json>{nullptr,Json::object(),Json::array({true}),
+        Json::array({Json{{"statement","observed"}}}),Json::array({Json{{"kind","based_on_plans"}}}),
+        Json::array({Json{{"kind",1},{"statement","observed"}}}),
+        Json::array({Json{{"kind","based_on_plans"},{"statement",false}}}),
+        Json::array({Json{{"kind","based_on_plans"},{"statement","observed"},{"extra",true}}}),
+        Json::array({declaration("unknown","observed")}),
+        Json::array({declaration("based_on_plans","first"),declaration("based_on_plans","second")}),
+        Json::array({declaration("based_on_plans",std::string(8193,'x'))}),
+        Json::array({declaration("based_on_plans","1"),declaration("based_on_plans","2"),
+            declaration("based_on_plans","3"),declaration("based_on_plans","4")})}) {
+        auto entities=fixture();
+        entities.front().properties["appraisal_policy"]["ansi"]["limitation_declarations"]=values;
+        const auto source=Document::create(entities).snapshot();
+        refuses(source,[&]{(void)ansi_appraisal_partition_context(source,"floor");},
+            "malformed typed limitation observations refuse ANSI routing");
+        refuses(source,[&]{(void)prepare_ansi_appraisal_partition_targets(source,{{"floor",{"room"}}});},
+            "malformed typed limitation observations refuse geometry preparation atomically");
+    }
+}
 void graph_failures_and_repairs() {
     const auto source=Document::create(fixture()).snapshot();
     for(const auto& assignments:std::vector<std::vector<AppraisalPartitionAssignment>>{
@@ -253,7 +288,7 @@ void exterior_sources() {
 } // namespace
 int main() {
     sketch::testing::noninteractive_errors();
-    try {overlay_and_policy();graph_failures_and_repairs();layerless_saved_boundaries();overlapping_voids_and_shared_descendants();
+    try {overlay_and_policy();typed_limitation_declarations();graph_failures_and_repairs();layerless_saved_boundaries();overlapping_voids_and_shared_descendants();
         stale_and_phase_hidden_sources();exterior_sources();
         std::cout<<"ANSI appraisal partition checks passed\n";return 0;
     } catch(const std::exception& error) { std::cerr<<error.what()<<'\n';return 1; }

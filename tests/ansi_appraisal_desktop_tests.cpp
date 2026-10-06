@@ -3,6 +3,7 @@
 #include "sketch/desktop/appraisal_report_dialog.hpp"
 #include "sketch/appraisal_document.hpp"
 #include "sketch/boundary_entity.hpp"
+#include "sketch/document_digest.hpp"
 #include "sketch/sheet_view_entity_codec.hpp"
 #include "../src/desktop/plan_canvas.hpp"
 #include "support/noninteractive_errors.hpp"
@@ -26,6 +27,7 @@
 #include <QTableWidget>
 #include <QUuid>
 #include <QPushButton>
+#include <QPlainTextEdit>
 #include <QScrollArea>
 #include <QScrollBar>
 #include <QTemporaryDir>
@@ -98,7 +100,7 @@ void boundary_review_precision(bool metric, bool ansi) {
     const auto before_length = ansi ? (metric ? QStringLiteral("10.0 ft (3.048 m)") : QStringLiteral("10.0 ft"))
                                    : QStringLiteral("3.048 m");
     const auto after_length = ansi ? (metric ? QStringLiteral("11.0 ft (3.353 m)") : QStringLiteral("11.0 ft"))
-                                  : QStringLiteral("3.353 m");
+                                  : QStringLiteral("≈ 3.353 m");
     const auto before_area = ansi ? (metric ? QStringLiteral("100 sq ft (9.29 m²)") : QStringLiteral("100 sq ft"))
                                  : QStringLiteral("9.29 m²");
     const auto after_area = ansi ? (metric ? QStringLiteral("105 sq ft (9.75 m²)") : QStringLiteral("105 sq ft"))
@@ -155,7 +157,7 @@ void boundary_review_precision(bool metric, bool ansi) {
             const auto before_perimeter = ansi ? (metric ? QStringLiteral("40.0 ft (12.192 m)") : QStringLiteral("40.0 ft"))
                                               : QStringLiteral("12.192 m");
             const auto after_perimeter = ansi ? (metric ? QStringLiteral("41.0 ft (12.512 m)") : QStringLiteral("41.0 ft"))
-                                             : QStringLiteral("12.512 m");
+                                             : QStringLiteral("≈ 12.512 m");
             require(child<QLabel>(value, "boundaryGeometrySummary").text() ==
                 QStringLiteral("Edge: %1 → %2\nAnalytical boundary area: %3 → %4    Perimeter: %5 → %6")
                     .arg(before_length, after_length, before_area, after_area, before_perimeter, after_perimeter),
@@ -257,6 +259,135 @@ void check_saved_appraisal_sheet(MainWindow& window, const QString& area, const 
         }
     }
 }
+void reporting_and_declaration_lifecycle() {
+    QTemporaryDir fixture; require(fixture.isValid(), "isolated reporting workflow");
+    MainWindow window({}, nullptr, fixture.filePath("text-library.json"));
+    window.setAttribute(Qt::WA_DontShowOnScreen); window.resize(1280, 900); window.show();
+    QApplication::processEvents(); child<QTabWidget>(window, "sidebarTabs").setCurrentIndex(2);
+    const auto setup = [&] { child<QPushButton>(window, "appraisalDetailsSetup").click(); };
+    dialog(window, "appraisalSetupDialog", setup, [&](QDialog& value) {
+        choose(value, "appraisalSetupPolicy", "ansi_z765_2021");
+        choose(value, "appraisalSetupPropertyKind", "detached_single_family");
+        choose(value, "appraisalSetupMeasurementBasis", "exterior");
+        choose(value, "ansiInteriorInspected", "yes"); choose(value, "ansiDirectMeasurement", "yes");
+        choose(value, "ansiAcquisitionIncrement", "inch");
+        require(child<QPlainTextEdit>(value, "ansiPlansDeclaration").isHidden(),
+            "ordinary inspected exterior setup has no irrelevant declaration field");
+        child<QDialogButtonBox>(value, "appraisalSetupButtons").button(QDialogButtonBox::Save)->click();
+        require(value.result() == QDialog::Accepted, "ordinary ANSI setup saves");
+    });
+    const sketch::Boundary shape{{{0,0},{3.048,0},0},{{3.048,0},{3.048,3.048},0},
+        {{3.048,3.048},{0,3.048},0},{{0,3.048},{0,0},0}};
+    const auto area = window.createBoundary(shape); require(!area.isEmpty(), "reporting area authored");
+    dialog(window, "appraisalFactsDialog", [&] { window.showAppraisalFacts(); }, [&](QDialog& value) {
+        choose(value, "ansiAnyPartBelowGrade", "no"); choose(value, "finish", "finished");
+        choose(value, "access", "direct_interior"); choose(value, "area_use", "dwelling");
+        choose(value, "boundary_role", "measured_area"); choose(value, "ansiYearRoundSuitable", "yes");
+        choose(value, "ansiFinishMatchesDwelling", "yes"); choose(value, "ansiDwellingIdentity", "primary");
+        choose(value, "ansiCeilingKind", "flat"); child<QLineEdit>(value, "ansiMinimumHeight").setText("8 ft");
+        child<QDialogButtonBox>(value, "appraisalFactsButtons").button(QDialogButtonBox::Save)->click();
+        require(value.result() == QDialog::Accepted, "observed primary area facts save");
+    });
+    auto& details = child<sketch::desktop::AppraisalDetailsPanel>(window, "appraisalDetailsPanel");
+    const auto property_id = details.propertyId().toStdString();
+    const auto before_reporting = window.document().snapshot();
+    const auto reporting = [&] { child<QPushButton>(window, "appraisalDetailsReporting").click(); };
+    dialog(window, "appraisalReportingDialog", reporting, [&](QDialog& value) {
+        child<QCheckBox>(value, "appraisalReportingComplete").setChecked(true);
+        child<QCheckBox>(value, "appraisalReportingReconfirm").setChecked(true);
+        auto& rooms = child<QTableWidget>(value, "appraisalReportingRooms");
+        for (const auto& [id, use] : std::vector<std::pair<const char*, sketch::AppraisalRoomUse>>{
+            {"bedroom-1", sketch::AppraisalRoomUse::bedroom}, {"bathroom-1", sketch::AppraisalRoomUse::bathroom_full}}) {
+            child<QPushButton>(value, "appraisalReportingAddRoom").click();
+            const auto row = rooms.rowCount() - 1; rooms.item(row, 0)->setText(QString::fromLatin1(id));
+            auto* kind = qobject_cast<QComboBox*>(rooms.cellWidget(row, 1)); require(kind, "room use is editable");
+            kind->setCurrentIndex(kind->findData(static_cast<int>(use)));
+            auto* total = qobject_cast<QComboBox*>(rooms.cellWidget(row, 2)); require(total, "legacy room membership is editable");
+            total->setCurrentIndex(total->findData(use == sketch::AppraisalRoomUse::bedroom ? 1 : 0));
+        }
+        const auto captures = qEnvironmentVariable("VERTEX_TEST_CAPTURE_DIR");
+        if (!captures.isEmpty()) {
+            QApplication::processEvents();
+            require(QDir().mkpath(captures) && value.grab().save(QDir(captures).filePath("appraisal-reporting-editor.png")),
+                "retain actual source-bound room reporting editor");
+        }
+        child<QPushButton>(value, "appraisalReportingSave").click();
+        require(value.result() == QDialog::Accepted, "reporting commits through actual MainWindow callback");
+    });
+    const auto reported = window.document().snapshot();
+    require(reported.revision() == before_reporting.revision() + 1 && reported.history().size() == before_reporting.history().size() + 1,
+        "property and room declarations are one history command");
+    const auto report = sketch::build_appraisal_document_report(reported, property_id);
+    require(report.qualified && report.reporting && report.reporting->room_counts_available &&
+        report.reporting->primary_counts.bedrooms == 1 && report.reporting->primary_counts.bathrooms_full == 1,
+        "actual reporting editor produces current explicit primary counts");
+    require(child<QLabel>(details, "appraisalDetailsTotals").text().contains("1 bedrooms; 1 full / 0 half bathrooms"),
+        "Details shows the same entered room fields");
+    const auto captures = qEnvironmentVariable("VERTEX_TEST_CAPTURE_DIR");
+    if (!captures.isEmpty()) {
+        QApplication::processEvents();
+        require(QDir().mkpath(captures) && window.grab().save(QDir(captures).filePath("appraisal-reporting-details.png")),
+            "retain actual current room fields in the Details workspace");
+    }
+    require(window.undoCommand() && window.document().snapshot().entities() == before_reporting.entities() &&
+        window.redoCommand() && window.document().snapshot().entities() == reported.entities(), "reporting transaction is reversibly atomic");
+    const auto before_cancel = window.document().snapshot();
+    dialog(window, "appraisalReportingDialog", reporting, [&](QDialog& value) {
+        auto& contract = child<QComboBox>(value, "appraisalReportingContract");
+        contract.setCurrentIndex(contract.findData(static_cast<int>(sketch::AppraisalReportingContract::legacy_uad_2_6)));
+        value.reject();
+    });
+    require(window.document().snapshot().entities() == before_cancel.entities() && window.document().revision() == before_cancel.revision(),
+        "cancelled report contract does not change facts or history");
+    const auto project = fixture.filePath("reporting.bldproj");
+    require(window.saveProjectAs(project) && window.openProject(project) && window.document().snapshot().entities() == reported.entities(),
+        "actual native save/reopen preserves form contract and source-bound room facts");
+    const auto pdf = fixture.filePath("reporting.pdf");
+    require(window.exportAppraisalReportPdf(pdf), "actual reopened report exports to PDF");
+    QPdfDocument document; require(document.load(pdf) == QPdfDocument::Error::None, "report PDF opens independently");
+    QString contents; for (int page = 0; page < document.pageCount(); ++page) contents += document.getAllText(page).text();
+    require(contents.contains("1 bedrooms") && contents.contains("1 full") && contents.contains("UAD 3.6"),
+        "reopened printed report includes entered contract and room counts");
+    dialog(window, "appraisalSetupDialog", setup, [&](QDialog& value) {
+        choose(value, "appraisalSetupMeasurementBasis", "plans");
+        require(!child<QPlainTextEdit>(value, "ansiPlansDeclaration").isHidden(), "plans condition exposes its declaration field");
+        child<QLineEdit>(value, "ansiLimitationsStatement").setText("General measurement notes only.");
+        child<QDialogButtonBox>(value, "appraisalSetupButtons").button(QDialogButtonBox::Save)->click();
+        require(value.result() == QDialog::Accepted, "incomplete observations are saved without being qualified");
+    });
+    require(!sketch::build_appraisal_document_report(window.document().snapshot(), property_id).qualified,
+        "generic notes do not satisfy the required plans declaration");
+    dialog(window, "appraisalSetupDialog", setup, [&](QDialog& value) {
+        child<QPlainTextEdit>(value, "ansiPlansDeclaration").setPlainText("Measurement based on the supplied building plans.");
+        child<QDialogButtonBox>(value, "appraisalSetupButtons").button(QDialogButtonBox::Save)->click();
+        require(value.result() == QDialog::Accepted, "explicit plans declaration is recorded");
+    });
+    const auto declared = window.document().snapshot();
+    const auto declared_report = sketch::build_appraisal_document_report(declared, property_id);
+    require(declared_report.qualified && declared_report.ansi_measurement &&
+        declared_report.ansi_measurement->limitation_declarations.size() == 1 &&
+        sketch::desktop::appraisal_report_html(declared, declared_report, false).contains("supplied building plans"),
+        "typed declaration reaches the current calculation and report");
+    dialog(window, "appraisalReportingDialog", reporting, [&](QDialog& value) {
+        auto replacement = window.document().snapshot();
+        const auto captured_digest = sketch::document_snapshot_digest(replacement);
+        auto& retained = const_cast<std::vector<sketch::RevisionRecord>&>(replacement.history());
+        const auto property_record = std::find_if(retained.begin(), retained.end(), [&](const auto& record) {
+            return record.revision < replacement.revision() && record.entities.contains(property_id);
+        });
+        require(property_record != retained.end(), "fixture contains a retained property snapshot before the current head");
+        property_record->entities.at(property_id).properties["name"] = "Altered retained property history";
+        window.document() = sketch::Document::fork(replacement);
+        const auto replaced = window.document().snapshot();
+        require(replaced.revision() == replacement.revision() && replaced.document_id() == replacement.document_id() &&
+            sketch::document_snapshot_digest(replaced) != captured_digest, "retained source changes while identity and revision stay the same");
+        child<QPushButton>(value, "appraisalReportingSave").click();
+        require(value.result() != QDialog::Accepted && !child<QLabel>(value, "appraisalReportingError").text().isEmpty() &&
+            sketch::document_snapshot_digest(window.document().snapshot()) == sketch::document_snapshot_digest(replaced),
+            "full-source fence refuses retained-history replacement without another command");
+    });
+}
+
 void setup_and_facts() {
     QTemporaryDir fixture; require(fixture.isValid(), "isolated fixture");
     MainWindow window({}, nullptr, fixture.filePath("text-library.json"));
@@ -516,7 +647,10 @@ int main(int argc, char** argv) {
             boundary_review_precision();
             std::cout << "ansi_appraisal_desktop_tests boundary review passed\n"; return 0;
         }
-        boundary_review_precision(); setup_and_facts(); std::cout << "ansi_appraisal_desktop_tests passed\n"; return 0;
+        std::cout << "Boundary review precision\n" << std::flush; boundary_review_precision();
+        std::cout << "Setup and observation lifecycle\n" << std::flush; setup_and_facts();
+        std::cout << "Reporting and declaration lifecycle\n" << std::flush; reporting_and_declaration_lifecycle();
+        std::cout << "ansi_appraisal_desktop_tests passed\n"; return 0;
     }
     catch (const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }
 }

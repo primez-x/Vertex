@@ -5,6 +5,8 @@
 
 #include <QAbstractTextDocumentLayout>
 #include <QComboBox>
+#include <QCheckBox>
+#include <QFormLayout>
 #include <QDialogButtonBox>
 #include <QDir>
 #include <QFileInfo>
@@ -25,6 +27,9 @@
 #include <QTextBrowser>
 #include <QTextDocument>
 #include <QTreeWidget>
+#include <QTableWidget>
+#include <QLineEdit>
+#include <QUuid>
 #include <QVBoxLayout>
 
 #include <algorithm>
@@ -98,7 +103,8 @@ QString measurement_declarations(const AnsiMeasurementDeclarations& value) {
     return row(QStringLiteral("Interior inspected"),boolean(value.interior_inspected))+
         row(QStringLiteral("Direct measurement"),boolean(value.direct_measurement))+
         row(QStringLiteral("Acquisition increment"),value.acquisition_increment?words(acquisition_increment_name(*value.acquisition_increment)):QStringLiteral("Undeclared"))+
-        row(QStringLiteral("Limitations statement"),value.limitations_statement.empty()?QStringLiteral("Undeclared"):text(value.limitations_statement));
+        row(QStringLiteral("Supplemental limitations statement"),value.limitations_statement.empty()?QStringLiteral("Undeclared"):text(value.limitations_statement))+
+        appraisal_ansi_declaration_rows(value);
 }
 QString ansi_facts(const AppraisalFacts& facts,const AppraisalDocumentReport& report,bool metric) {
     if(!facts.ansi)return {};
@@ -191,7 +197,7 @@ QString summary(const DocumentSnapshot& source,const AppraisalDocumentReport& re
     } else {
         html+=ansi(report)?QStringLiteral("<p>Vertex rule checks passed for the declared ANSI Z765-2021 profile. This measurement summary is not a full UAD report or ANSI approval / certification.</p>"):
             QStringLiteral("<p>Qualified under the declared Vertex policy v1. This is not ANSI/BOMA certification.</p>");
-        if(ansi(report))html+=QStringLiteral("<p><b>Primary dwelling GLA: %1</b></p>").arg(area(report.calculation->property.gla().total.square_metres,report,metric).toHtmlEscaped());
+        if(ansi(report))html+=QStringLiteral("<p><b>Primary dwelling above-grade finished area (GLA): %1</b></p>").arg(area(report.calculation->property.gla().total.square_metres,report,metric).toHtmlEscaped());
         html+=QStringLiteral("<table width='100%' border='1' cellspacing='0'><tr><th align='left'>Category</th><th align='right'>Area</th></tr>");
         double total=0.0;
         for (const auto& [kind,bucket]:report.calculation->property.by_category) {
@@ -219,6 +225,7 @@ QString summary(const DocumentSnapshot& source,const AppraisalDocumentReport& re
                 .arg(text(display_area(report.calculation->property.gla().total.square_metres,diagnostic).text));
         }
     }
+    html+=appraisal_form_projection_html(report);
     if(ansi(report)) {
         html+=QStringLiteral("<h3>ANSI profile and unresolved normative validation</h3><p>Profile: %1 v%2. ADU and detached-other identities remain separate from primary dwelling GLA.</p>")
             .arg(text(ansi_appraisal_profile(report.policy->version).id).toHtmlEscaped()).arg(report.policy->version);
@@ -623,5 +630,200 @@ void AppraisalReportDialog::showError(const QString& message){impl_->error->setT
 void AppraisalReportDialog::setRefreshRequested(std::function<void()> callback){impl_->refresh_requested=std::move(callback);}
 void AppraisalReportDialog::setExportRequested(std::function<void(const QString&,Revision)> callback){impl_->export_requested=std::move(callback);}
 void AppraisalReportDialog::setLocateRequested(std::function<void(const QString&,Revision)> callback){impl_->locate_requested=std::move(callback);}
+
+QString appraisal_form_projection_html(const AppraisalDocumentReport& report, bool compact) {
+    if (!report.reporting) return {};
+    const auto& value = *report.reporting;
+    if(!value.configuration_valid) {
+        QString html=QStringLiteral("<h3>Reporting configuration invalid · fields withheld</h3>");
+        for(const auto& issue:value.issues)html+=QStringLiteral("<p>%1</p>").arg(escaped(issue));
+        return html;
+    }
+    const bool legacy = value.contract == AppraisalReportingContract::legacy_uad_2_6;
+    QString html = QStringLiteral("<h3>%1 reporting</h3>")
+        .arg(legacy ? QStringLiteral("Legacy UAD 2.6") : QStringLiteral("UAD 3.6"));
+    auto rows = row(QStringLiteral("Primary above-grade finished area (GLA)"), value.area_fields_available ?
+        text(display_area(value.primary_above_grade_finished_square_metres, ansi_appraisal_profile()).text)+QStringLiteral(" sq ft") : QStringLiteral("Withheld"));
+    for(const auto& [category,amount]:value.primary_area_fields)if(category!=AppraisalAreaCategory::above_grade_finished)
+        rows+=row(words(appraisal_category_name(category)),value.area_fields_available ? text(display_area(amount,ansi_appraisal_profile()).text)+QStringLiteral(" sq ft") : QStringLiteral("Withheld"));
+    const auto counts = [&](const QString& title, const AppraisalRoomCounts& counts, bool total, bool primary) {
+        if (!(primary ? value.room_counts_available : value.room_summaries_available)) return row(title, QStringLiteral("Withheld"));
+        QString amount = QStringLiteral("%1 bedrooms; %2 full / %3 half bathrooms")
+            .arg(counts.bedrooms).arg(counts.bathrooms_full).arg(counts.bathrooms_half);
+        if (total) amount += QStringLiteral("; %1 explicitly declared total rooms").arg(counts.total_rooms);
+        return row(title, amount);
+    };
+    rows += counts(legacy ? QStringLiteral("Primary above-grade room counts") : QStringLiteral("Primary all-grade room counts"), value.primary_counts, legacy, true);
+    rows += counts(QStringLiteral("Primary below-grade room summary"), value.below_grade_counts, false, false);
+    rows += counts(QStringLiteral("Separate noncontinuous room summary"), value.noncontinuous_counts, false, false);
+    rows += counts(QStringLiteral("Combined ADU room summary"), value.adu_counts, false, false);
+    if(compact) {
+        rows.replace(QStringLiteral("<tr><td>"),QStringLiteral("<p><b>"));
+        rows.replace(QStringLiteral("</td><td align='right'>"),QStringLiteral("</b><br>"));
+        rows.replace(QStringLiteral("</td></tr>"),QStringLiteral("</p>"));
+        html+=rows;
+    } else html += QStringLiteral("<table width='100%' border='1' cellspacing='0'>%1</table>").arg(rows);
+    html += legacy ? QStringLiteral("<p>Eligible contained ADU area may combine in the legacy area field. Primary room counts are withheld where legacy room mapping is unresolved; current separate summaries remain available.</p>") :
+        QStringLiteral("<p>Primary room counts include declared bedrooms and bathrooms across grades and finish categories. ADUs remain separate. The combined ADU summary does not replace individual unit fields.</p>");
+    html += QStringLiteral("<p>Room types reflect explicit original-design declarations. A full bathroom has a sink, toilet and tub or shower; a half bathroom has a sink and toilet. Confirmation does not independently verify room geometry or fixtures.</p>");
+    for (const auto& issue : value.issues) html += QStringLiteral("<p><b>%1</b></p>").arg(escaped(issue));
+    if (!compact) {
+        html += QStringLiteral("<h4>Level and declared room detail</h4><table width='100%' border='1' cellspacing='0'><tr><th>Room / source</th><th>Use / level / category</th></tr>");
+        for (const auto& room : value.rooms) {
+            const auto use = room.use == AppraisalRoomUse::bedroom ? "bedroom" : room.use == AppraisalRoomUse::bathroom_full ? "full bathroom" : room.use == AppraisalRoomUse::bathroom_half ? "half bathroom" : "other";
+            html += row(text(room.room_id)+QStringLiteral(" / ")+text(room.boundary_id),
+                QString::fromLatin1(use)+QStringLiteral(" / ")+text(room.floor_id)+QStringLiteral(" / ")+words(appraisal_category_name(room.category))+
+                (room.included_in_primary_counts ? QStringLiteral(" / primary counts") : QStringLiteral(" / separate summary")));
+        }
+        html += QStringLiteral("</table><h4>Public guidance editions reviewed</h4><ul>");
+        for (const auto& source : value.evidence) html += QStringLiteral("<li><a href='%1'>%2</a>: %3</li>").arg(escaped(source.url), escaped(source.edition), escaped(source.sections));
+        html += QStringLiteral("</ul>");
+    }
+    return html;
+}
+
+QString appraisal_ansi_declaration_rows(const AnsiMeasurementDeclarations& value) {
+    QString rows;
+    for(const auto& declaration:value.limitation_declarations) {
+        QString condition;
+        switch(declaration.kind) {
+        case AnsiDeclarationKind::interior_not_inspected:condition=QStringLiteral("Interior not inspected declaration");break;
+        case AnsiDeclarationKind::based_on_plans:condition=QStringLiteral("Based on plans declaration");break;
+        case AnsiDeclarationKind::direct_measurement_not_possible:condition=QStringLiteral("Direct measurement not possible declaration");break;
+        }
+        rows+=row(condition,text(declaration.statement));
+    }
+    if(!value.limitation_declarations.empty())rows+=row(QStringLiteral("Declaration verification"),QStringLiteral("Presence and conditions checked; prescribed publisher wording remains unverified."));
+    return rows;
+}
+
+struct AppraisalReportingDialog::Impl {
+    DocumentSnapshot source;
+    AppraisalDocumentReport report;
+    AppraisalReportingChanges changes;
+    std::optional<std::set<std::string, std::less<>>> semantic_visibility;
+    QComboBox *contract{}, *area{}, *containment{};
+    QCheckBox *complete{}, *confirmed{};
+    QTableWidget* rooms{};
+    QFormLayout* declaration_form{};
+    QLabel *error{}, *source_note{};
+    QPushButton* save{};
+    std::map<std::string, AppraisalAreaReportingFacts> declarations;
+    QString current;
+    std::function<bool(const AppraisalReportingChanges&, QString&)> apply;
+    void update_fields() {
+        declaration_form->setRowVisible(containment, containment->isEnabled());
+        rooms->setColumnHidden(2, contract->currentData().toInt() !=
+            static_cast<int>(AppraisalReportingContract::legacy_uad_2_6));
+    }
+    Impl(const DocumentSnapshot& s, const AppraisalDocumentReport& r,
+        const std::set<std::string, std::less<>>* visible) : source(s), report(r) {
+        if (visible) semantic_visibility = *visible;
+        changes.revision=s.revision(); changes.source_document_id=s.document_id();
+        changes.source_snapshot_sha256=document_snapshot_digest(s); changes.property_id=r.property_id;
+    }
+    QComboBox* choice(QWidget* parent, bool use = false) {
+        auto* result = new QComboBox(parent);
+        if (use) {
+            result->addItem(QStringLiteral("Other room"), static_cast<int>(AppraisalRoomUse::other));
+            result->addItem(QStringLiteral("Bedroom"), static_cast<int>(AppraisalRoomUse::bedroom));
+            result->addItem(QStringLiteral("Full bathroom (declared)"), static_cast<int>(AppraisalRoomUse::bathroom_full));
+            result->addItem(QStringLiteral("Half bathroom (declared)"), static_cast<int>(AppraisalRoomUse::bathroom_half));
+        } else {
+            result->addItem(QStringLiteral("Unknown"), -1); result->addItem(QStringLiteral("No"), 0); result->addItem(QStringLiteral("Yes"), 1);
+        }
+        return result;
+    }
+    void add(const AppraisalRoomDeclaration& room) {
+        const auto index=rooms->rowCount(); rooms->insertRow(index);
+        rooms->setItem(index,0,new QTableWidgetItem(text(room.room_id)));
+        auto* use=choice(rooms,true); use->setCurrentIndex(use->findData(static_cast<int>(room.use))); rooms->setCellWidget(index,1,use);
+        auto* total=choice(rooms); total->setCurrentIndex(total->findData(room.legacy_total_room ? (*room.legacy_total_room ? 1 : 0) : -1)); rooms->setCellWidget(index,2,total);
+    }
+    void retain() {
+        if (current.isEmpty()) return;
+        auto& value=declarations.at(current.toStdString()); value.rooms.clear();
+        const int contained=containment->currentData().toInt();
+        value.contained_within_primary=contained<0 ? std::optional<bool>{} : std::optional<bool>{contained==1};
+        if (confirmed->isChecked()) value.source_geometry_sha256=appraisal_reporting_source_digest(source,current.toStdString());
+        for (int row=0;row<rooms->rowCount();++row) {
+            const auto* id=rooms->item(row,0);
+            const auto* use=static_cast<QComboBox*>(rooms->cellWidget(row,1));
+            const auto* total=static_cast<QComboBox*>(rooms->cellWidget(row,2));
+            const int included=total->currentData().toInt();
+            value.rooms.push_back({id ? id->text().toStdString() : std::string{}, static_cast<AppraisalRoomUse>(use->currentData().toInt()),
+                included<0 ? std::optional<bool>{} : std::optional<bool>{included==1}});
+        }
+    }
+    void select() {
+        try { retain(); } catch (const std::exception& failure) { error->setText(text(failure.what())); }
+        current=area->currentData().toString(); rooms->setRowCount(0); confirmed->setChecked(false);
+        if (current.isEmpty()) return;
+        const auto& value=declarations.at(current.toStdString());
+        const auto boundary=std::find_if(report.boundaries.begin(),report.boundaries.end(),[&](const auto& item){return item.boundary_id==current.toStdString();});
+        containment->setEnabled(boundary!=report.boundaries.end() && boundary->facts && boundary->facts->ansi &&
+            boundary->facts->ansi->dwelling_identity==DwellingIdentity::attached_adu);
+        containment->setCurrentIndex(containment->findData(value.contained_within_primary ? (*value.contained_within_primary ? 1 : 0) : -1));
+        update_fields();
+        for (const auto& room:value.rooms) add(room);
+        try {
+            const bool valid=value.source_geometry_sha256==appraisal_reporting_source_digest(source,current.toStdString());
+            source_note->setText(valid ? QStringLiteral("Declarations match the current measurements and appraisal observations.") : QStringLiteral("Review and reconfirm these rooms against the current measurements and appraisal observations."));
+        } catch (const std::exception& failure) { source_note->setText(text(failure.what())); }
+    }
+};
+AppraisalReportingDialog::AppraisalReportingDialog(const DocumentSnapshot& source,const AppraisalDocumentReport& report,QWidget* parent,
+    const std::set<std::string, std::less<>>* visible_entity_ids)
+    : QDialog(parent),impl_(std::make_unique<Impl>(source,report,visible_entity_ids)) {
+    check_revision(source,report);
+    setObjectName(QStringLiteral("appraisalReportingDialog")); setWindowTitle(QStringLiteral("Appraisal reporting and rooms")); resize(780,590);
+    auto& p=*impl_; auto* layout=new QVBoxLayout(this);
+    auto* intro=new QLabel(QStringLiteral("Declare rooms by their original design. Full bathroom: sink, toilet and tub or shower. Half bathroom: sink and toilet. Room counts use these declarations; placed fixture symbols do not verify them."),this); intro->setWordWrap(true);layout->addWidget(intro);
+    auto* form=new QFormLayout;p.declaration_form=form;
+    p.contract=new QComboBox(this);p.contract->setObjectName(QStringLiteral("appraisalReportingContract"));
+    p.contract->addItem(QStringLiteral("Legacy UAD 2.6"),static_cast<int>(AppraisalReportingContract::legacy_uad_2_6));
+    p.contract->addItem(QStringLiteral("UAD 3.6"),static_cast<int>(AppraisalReportingContract::uad_3_6));
+    form->addRow(QStringLiteral("Reporting contract"),p.contract);
+    p.complete=new QCheckBox(QStringLiteral("I have declared the complete room inventory for these measurements"),this);p.complete->setObjectName(QStringLiteral("appraisalReportingComplete"));form->addRow(p.complete);
+    p.area=new QComboBox(this);p.area->setObjectName(QStringLiteral("appraisalReportingArea"));form->addRow(QStringLiteral("Measured area"),p.area);
+    p.containment=p.choice(this);p.containment->setObjectName(QStringLiteral("appraisalReportingContained"));form->addRow(QStringLiteral("ADU contained within / part of primary dwelling"),p.containment);
+    layout->addLayout(form);
+    p.source_note=new QLabel(this);p.source_note->setWordWrap(true);layout->addWidget(p.source_note);
+    p.confirmed=new QCheckBox(QStringLiteral("Confirm these rooms and ADU facts against the current measurements and observations"),this);p.confirmed->setObjectName(QStringLiteral("appraisalReportingReconfirm"));layout->addWidget(p.confirmed);
+    p.rooms=new QTableWidget(0,3,this);p.rooms->setObjectName(QStringLiteral("appraisalReportingRooms"));
+    p.rooms->setHorizontalHeaderLabels({QStringLiteral("Room identifier"),QStringLiteral("Original room type"),QStringLiteral("Legacy Total Rooms member")});p.rooms->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);layout->addWidget(p.rooms);
+    auto* room_actions=new QHBoxLayout;auto* add=new QPushButton(QStringLiteral("Add room"),this);add->setObjectName(QStringLiteral("appraisalReportingAddRoom"));auto* remove=new QPushButton(QStringLiteral("Remove selected room"),this);room_actions->addWidget(add);room_actions->addWidget(remove);room_actions->addStretch();layout->addLayout(room_actions);
+    p.error=new QLabel(this);p.error->setObjectName(QStringLiteral("appraisalReportingError"));p.error->setWordWrap(true);layout->addWidget(p.error);
+    auto* buttons=new QDialogButtonBox(QDialogButtonBox::Save|QDialogButtonBox::Cancel,this);p.save=buttons->button(QDialogButtonBox::Save);p.save->setObjectName(QStringLiteral("appraisalReportingSave"));p.save->setEnabled(false);layout->addWidget(buttons);
+    const auto& property=source.entities().at(report.property_id);
+    try {if(property.properties.contains("appraisal_reporting"))p.changes.settings=parse_appraisal_reporting_settings(property.properties.at("appraisal_reporting"));}
+    catch(const std::exception& failure){p.error->setText(text(failure.what()));}
+    p.contract->setCurrentIndex(p.contract->findData(static_cast<int>(p.changes.settings.contract)));p.complete->setChecked(p.changes.settings.room_inventory_complete);
+    for(const auto& boundary:report.boundaries) if(!boundary.exclusion && boundary.facts && boundary.facts->use==AreaUse::dwelling) {
+        const auto& item=source.entities().at(boundary.boundary_id);AppraisalAreaReportingFacts value;
+        try{if(item.properties.contains("appraisal_reporting"))value=parse_appraisal_area_reporting_facts(item.properties.at("appraisal_reporting"));}
+        catch(const std::exception& failure){p.error->setText(text(failure.what()));}
+        p.declarations.emplace(boundary.boundary_id,std::move(value));
+        const auto floor_id = item.properties.value("floor_id", std::string{});
+        auto area_name = item.properties.value("name", std::string{});
+        const auto display_name = area_name.empty() || area_name == boundary.boundary_id
+            ? QStringLiteral("Measured area %1").arg(p.area->count() + 1) : text(area_name);
+        p.area->addItem(name(source,floor_id)+QStringLiteral(" / ")+display_name,text(boundary.boundary_id));
+    }
+    connect(p.area,&QComboBox::currentIndexChanged,this,[this]{impl_->select();});
+    connect(p.contract,&QComboBox::currentIndexChanged,this,[this]{impl_->update_fields();});
+    connect(add,&QPushButton::clicked,this,[this]{impl_->add({QUuid::createUuid().toString(QUuid::WithoutBraces).toStdString(),AppraisalRoomUse::other,{}});});
+    connect(remove,&QPushButton::clicked,this,[this]{if(impl_->rooms->currentRow()>=0)impl_->rooms->removeRow(impl_->rooms->currentRow());});
+    connect(buttons,&QDialogButtonBox::rejected,this,&QDialog::reject);
+    connect(buttons,&QDialogButtonBox::accepted,this,[this]{auto& p=*impl_;try{
+        p.retain();p.changes.settings={static_cast<AppraisalReportingContract>(p.contract->currentData().toInt()),p.complete->isChecked()};p.changes.areas.clear();
+        for(const auto& declaration:p.declarations)p.changes.areas.push_back(declaration);
+        validate_appraisal_reporting_changes(p.source,p.changes,p.semantic_visibility ? &*p.semantic_visibility : nullptr);QString error;
+        if(!p.apply || !p.apply(p.changes,error)){p.error->setText(error.isEmpty()?QStringLiteral("Reporting changes could not be applied."):error);return;}accept();
+    }catch(const std::exception& failure){p.error->setText(text(failure.what()));}});
+    p.select();
+}
+AppraisalReportingDialog::~AppraisalReportingDialog()=default;
+void AppraisalReportingDialog::setApplyRequested(std::function<bool(const AppraisalReportingChanges&,QString&)> callback){impl_->apply=std::move(callback);impl_->save->setEnabled(bool(impl_->apply));}
 
 } // namespace sketch::desktop

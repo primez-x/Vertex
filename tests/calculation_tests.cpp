@@ -191,10 +191,14 @@ void ansi_policy_tests() {
         "Year-round unsuitability cannot inflate finished area");
     facts.ansi->year_round_suitable = true;
     facts.measurement_basis = MeasurementBasis::plans;
-    check(!qualified(facts).qualified, "Plans require a limitations statement");
+    check(!qualified(facts).qualified, "Plans require a typed limitations declaration");
     facts.ansi->measurement.limitations_statement = "Measurements supplied from building plans; interior not inspected.";
-    check(qualified(facts).qualified, "Plans can carry limitations without guessed measurements");
+    check(!qualified(facts).qualified, "Supplemental prose cannot substitute for a typed plans declaration");
+    facts.ansi->measurement.limitation_declarations.push_back(
+        {AnsiDeclarationKind::based_on_plans, "User-entered limitation text."});
+    check(qualified(facts).qualified, "Plans can carry a typed declaration without guessed measurements");
     facts.measurement_basis = MeasurementBasis::exterior;
+    facts.ansi->measurement.limitation_declarations.clear();
     for (const auto kind : {PropertyKind::apartment_unit, PropertyKind::multifamily, PropertyKind::light_commercial}) {
         facts.property_kind = kind;
         check(!qualified(facts).qualified, "ANSI unsupported property designs are rejected");
@@ -247,6 +251,122 @@ void ansi_policy_tests() {
     second.boundary = rectangle(2, 0, 1, 0.451 * 0.09290304);
     const auto totals = calculate_appraisal_areas({first, second}, profile);
     check(totals.property.gla().total.display.text == "1", "ANSI totals round once after summing unrounded physical areas");
+}
+
+void ansi_typed_limitation_declaration_tests() {
+    using namespace sketch;
+    const AppraisalPolicy policy{AppraisalPolicyKind::ansi_z765_2021, 1};
+    const auto area = room("declarations", rectangle(0, 0, 10, 10));
+    AppraisalFacts ordinary{PropertyKind::detached_single_family, MeasurementBasis::exterior,
+        GradeStatus::above, FinishStatus::finished, AccessStatus::direct_interior,
+        CeilingEligibility::unknown, AreaUse::dwelling, BoundaryRole::measured_area};
+    AnsiAppraisalFacts ordinary_ansi;
+    ordinary_ansi.measurement = {true, true, AcquisitionIncrement::inch, ""};
+    ordinary_ansi.any_part_below_grade = false;
+    ordinary_ansi.year_round_suitable = true;
+    ordinary_ansi.finish_matches_dwelling = true;
+    ordinary_ansi.dwelling_identity = DwellingIdentity::primary;
+    ordinary_ansi.ceiling.kind = CeilingKind::flat;
+    ordinary_ansi.ceiling.minimum_height_m = 2.1336;
+    ordinary.ansi = ordinary_ansi;
+
+    const auto has_issue = [](const AppraisalQualification& result, std::string_view code) {
+        return std::any_of(result.issues.begin(), result.issues.end(),
+            [&](const QualificationIssue& issue) { return issue.code == code; });
+    };
+    const auto evaluate = [&](const AppraisalFacts& facts) {
+        return qualify_appraisal_area(area, facts, policy);
+    };
+    const std::vector<AnsiDeclarationKind> none;
+    check(required_ansi_declarations(MeasurementBasis::exterior, ordinary.ansi->measurement) == none,
+          "Inspected direct exterior measurements have no conditional ANSI declarations");
+    check(evaluate(ordinary).qualified,
+          "Ordinary inspected direct exterior measurements remain usable without limitations declarations");
+
+    struct TriggerCase {
+        MeasurementBasis basis;
+        bool interior_inspected;
+        bool direct_measurement;
+        AnsiDeclarationKind kind;
+    };
+    const std::vector<TriggerCase> cases{
+        {MeasurementBasis::exterior, false, true, AnsiDeclarationKind::interior_not_inspected},
+        {MeasurementBasis::plans, true, true, AnsiDeclarationKind::based_on_plans},
+        {MeasurementBasis::exterior, true, false, AnsiDeclarationKind::direct_measurement_not_possible},
+    };
+    for (const auto& item : cases) {
+        auto facts = ordinary;
+        facts.measurement_basis = item.basis;
+        facts.ansi->measurement.interior_inspected = item.interior_inspected;
+        facts.ansi->measurement.direct_measurement = item.direct_measurement;
+        const std::vector<AnsiDeclarationKind> expected{item.kind};
+        check(required_ansi_declarations(facts.measurement_basis, facts.ansi->measurement) == expected,
+              "Each explicit ANSI limitation fact derives its matching declaration trigger");
+        const auto missing = evaluate(facts);
+        check(!missing.qualified && has_issue(missing, "ansi_limitation_declaration_missing"),
+              "An applicable typed ANSI limitation declaration is required");
+        facts.ansi->measurement.limitation_declarations.push_back({item.kind, "Declared limitation."});
+        check(evaluate(facts).qualified,
+              "One nonblank typed declaration satisfies each individual ANSI limitation trigger");
+    }
+
+    auto all_triggers = ordinary;
+    all_triggers.measurement_basis = MeasurementBasis::plans;
+    all_triggers.ansi->measurement.interior_inspected = false;
+    all_triggers.ansi->measurement.direct_measurement = false;
+    const std::vector<AnsiDeclarationKind> all_expected{
+        AnsiDeclarationKind::interior_not_inspected,
+        AnsiDeclarationKind::based_on_plans,
+        AnsiDeclarationKind::direct_measurement_not_possible};
+    for (const auto kind : all_expected)
+        check(parse_ansi_declaration_kind(ansi_declaration_kind_name(kind)) == kind,
+              "Typed ANSI declaration persistence tokens round trip");
+    check(!parse_ansi_declaration_kind("based_on_plan") && !parse_ansi_declaration_kind(""),
+          "Unknown typed declaration tokens do not select an arbitrary declaration");
+    rejected([] { (void)ansi_declaration_kind_name(static_cast<AnsiDeclarationKind>(999)); });
+    check(required_ansi_declarations(all_triggers.measurement_basis, all_triggers.ansi->measurement) == all_expected,
+          "Combined explicit facts derive every applicable declaration in stable enum order");
+    all_triggers.ansi->measurement.limitations_statement = "Supplemental, preserved explanation.";
+    for (const auto kind : all_expected)
+        all_triggers.ansi->measurement.limitation_declarations.push_back({kind, "Declared limitation."});
+    const auto all_result = evaluate(all_triggers);
+    check(all_result.qualified, "All three typed declarations satisfy all three explicit triggers");
+    check(std::any_of(all_result.rule_notes.begin(), all_result.rule_notes.end(), [](const std::string& note) {
+              return note.find("presence-checked") != std::string::npos &&
+                     note.find("wording") != std::string::npos;
+          }), "Qualification notes that typed declaration presence does not verify prescribed wording");
+
+    for (const std::string whitespace : {"", " \t\r\n\f\v"}) {
+        auto invalid = all_triggers;
+        invalid.ansi->measurement.limitation_declarations.clear();
+        for (const auto kind : all_expected)
+            invalid.ansi->measurement.limitation_declarations.push_back({kind, whitespace});
+        const auto result = evaluate(invalid);
+        check(!result.qualified && has_issue(result, "ansi_limitation_declaration_statement_missing"),
+              "Empty or whitespace-only typed declaration text is rejected for every trigger");
+    }
+
+    auto duplicate = ordinary;
+    duplicate.ansi->measurement.interior_inspected = false;
+    duplicate.ansi->measurement.limitation_declarations = {
+        {AnsiDeclarationKind::interior_not_inspected, "First declaration."},
+        {AnsiDeclarationKind::interior_not_inspected, "Duplicate declaration."}};
+    const auto duplicate_result = evaluate(duplicate);
+    check(!duplicate_result.qualified && has_issue(duplicate_result, "ansi_limitation_declaration_duplicate"),
+          "Duplicate declarations for one trigger are rejected");
+
+    auto inapplicable = ordinary;
+    inapplicable.ansi->measurement.limitation_declarations = {
+        {AnsiDeclarationKind::direct_measurement_not_possible, "Not applicable."}};
+    const auto inapplicable_result = evaluate(inapplicable);
+    check(!inapplicable_result.qualified &&
+              has_issue(inapplicable_result, "ansi_limitation_declaration_inapplicable"),
+          "A declaration inconsistent with observed facts is rejected");
+
+    auto unknown = ordinary;
+    unknown.ansi->measurement.limitation_declarations = {
+        {static_cast<AnsiDeclarationKind>(999), "Unknown declaration."}};
+    rejected([&] { (void)evaluate(unknown); });
 }
 
 void ansi_v2_sloped_tests() {
@@ -655,6 +775,7 @@ int main() {
         using namespace sketch;
         appraisal_tests();
         ansi_policy_tests();
+        ansi_typed_limitation_declaration_tests();
         ansi_v2_sloped_tests();
         ansi_ceiling_rounding_helper_tests();
         ansi_flat_ceiling_acquisition_tests();

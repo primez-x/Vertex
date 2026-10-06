@@ -52,14 +52,23 @@ int main(int argc, char** argv) {
         check(!view.isGeometryPrepared(), "an unrequested view is not prepared");
         check(!view.lastPublicationMetrics(), "an unrequested view has no native publication measurements");
         int requests = 0;
-        view.setErrorCallback([&](const QString& message) {
+        view.setGeometryStatusChangedCallback([&](const QString& message) {
             if (message.startsWith(QStringLiteral("Preparing 3D geometry"))) ++requests;
+        });
+        QString reported_error;
+        int error_reports = 0;
+        view.setErrorCallback([&](const QString& message) {
+            reported_error = message;
+            ++error_reports;
         });
         auto document = wall_document();
         const auto first = document.snapshot();
         {
             NativeModelView throwing_observer;
             throwing_observer.setAttribute(Qt::WA_DontShowOnScreen, true);
+            throwing_observer.setGeometryStatusChangedCallback([](const QString&) {
+                throw std::runtime_error("status observer must not own geometry state");
+            });
             throwing_observer.setErrorCallback([](const QString&) {
                 throw std::runtime_error("observer failure must not own geometry state");
             });
@@ -94,6 +103,8 @@ int main(int argc, char** argv) {
         view.setSnapshot(first);
         check(view.isGeometryPending() && !view.isGeometryPrepared(),
               "a new wall request must await real preparation");
+        check(error_reports == 0 && reported_error.isEmpty(),
+              "transient preparation progress must not be reported as an operation error");
         auto* preparation_label = view.findChild<QLabel*>();
         check(preparation_label && !preparation_label->isHidden(),
               "pending preparation must expose its compact status banner");
@@ -110,12 +121,16 @@ int main(int argc, char** argv) {
         check(!view.isVisible() && !view.isReady(),
               "semantic preparation must not require or create a visible native view");
         check(view.lastError().isEmpty(), "completed hidden geometry must clear pending status");
+        check(error_reports == 0,
+              "successful semantic preparation must leave the shell error observer untouched");
         view.setSnapshot(document.snapshot());
         check(requests == 1 && view.isGeometryPrepared() && !view.isGeometryPending(),
               "an unchanged completed snapshot must retain preparation");
         check(!view.exportViewImage(QString()), "a prepared hidden view cannot export a framebuffer");
         check(view.isGeometryPrepared(), "an export error must not invalidate semantic geometry");
         const auto export_error = view.lastError();
+        check(error_reports == 1 && reported_error == export_error,
+              "export readiness failure must still notify the operation error observer");
         view.pollGeometryPreparation();
         check(view.lastError() == export_error, "polling must preserve an existing operation error");
 
@@ -172,6 +187,9 @@ int main(int argc, char** argv) {
         check(!view.isGeometryPrepared() && !view.isReady() && !view.lastError().isEmpty(),
               "invalid fork must fail preparation instead of retaining its valid sibling");
         const auto fork_failure = view.lastError();
+        check(reported_error == fork_failure &&
+              reported_error.startsWith(QStringLiteral("3D geometry is incomplete:")),
+              "incomplete geometry must still notify the error observer with its real diagnostic");
         const auto fork_failed_requests = requests;
         view.setSnapshot(fork_invalid.snapshot());
         check(requests == fork_failed_requests && !view.isGeometryPending() &&
@@ -268,6 +286,8 @@ int main(int argc, char** argv) {
         const auto native_error = view.lastError();
         check(native_error.contains(QStringLiteral("Native OCCT 3D view unavailable")),
               "offscreen initialization must report a native-view error");
+        check(reported_error == native_error,
+              "native initialization failure must still notify the error observer");
         view.setSnapshot(first);
         await_preparation(view);
         check(view.isGeometryPrepared() && !view.isReady() && view.lastError() == native_error,

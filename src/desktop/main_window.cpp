@@ -2174,7 +2174,22 @@ void save_appraisal_observation(json& target, const char* key, QComboBox* box) {
 
 struct AnsiMeasurementControls {
     QGroupBox* group{}; QComboBox* inspected{}; QComboBox* direct{};
-    QComboBox* increment{}; QLineEdit* limitations{};
+    QComboBox* increment{}; QComboBox* basis{}; QLineEdit* limitations{};
+    std::array<QPlainTextEdit*, 3> declarations{};
+    MeasurementBasis original_basis{MeasurementBasis::unknown};
+    static constexpr std::array<AnsiDeclarationKind, 3> declaration_kinds{
+        AnsiDeclarationKind::interior_not_inspected, AnsiDeclarationKind::based_on_plans,
+        AnsiDeclarationKind::direct_measurement_not_possible};
+    std::vector<AnsiDeclarationKind> required() const {
+        AnsiMeasurementDeclarations observation;
+        if (!inspected->currentData().toString().isEmpty())
+            observation.interior_inspected = inspected->currentData().toString() == QStringLiteral("yes");
+        if (!direct->currentData().toString().isEmpty())
+            observation.direct_measurement = direct->currentData().toString() == QStringLiteral("yes");
+        const auto current_basis = basis ?
+            parse_measurement_basis(basis->currentData().toString().toStdString()).value_or(MeasurementBasis::unknown) : original_basis;
+        return required_ansi_declarations(current_basis, observation);
+    }
     void save(json& policy) const {
         auto evidence = policy.value("ansi", json::object());
         save_appraisal_observation(evidence, "interior_inspected", inspected);
@@ -2183,12 +2198,23 @@ struct AnsiMeasurementControls {
         if (!increment->currentData().toString().isEmpty())
             evidence["acquisition_increment"] = increment->currentData().toString().toStdString();
         evidence["limitations_statement"] = limitations->text().trimmed().toStdString();
+        evidence["limitation_declarations"] = json::array();
+        const auto conditions = required();
+        for (std::size_t index = 0; index < declarations.size(); ++index)
+            if (std::find(conditions.begin(), conditions.end(), declaration_kinds[index]) != conditions.end())
+                evidence["limitation_declarations"].push_back({
+                    {"kind", ansi_declaration_kind_name(declaration_kinds[index])},
+                    {"statement", declarations[index]->toPlainText().trimmed().toStdString()}});
         policy["ansi"] = std::move(evidence);
     }
 };
 
-AnsiMeasurementControls ansi_measurement_controls(QWidget* parent, QVBoxLayout& layout, const json& policy) {
+AnsiMeasurementControls ansi_measurement_controls(QWidget* parent, QVBoxLayout& layout, const json& policy,
+                                                  QComboBox* basis = nullptr) {
     AnsiMeasurementControls controls;
+    controls.basis = basis;
+    if (policy.contains("measurement_basis") && policy.at("measurement_basis").is_string())
+        controls.original_basis = parse_measurement_basis(policy.at("measurement_basis").get<std::string>()).value_or(MeasurementBasis::unknown);
     controls.group = new QGroupBox(QStringLiteral("ANSI measurement evidence"), parent);
     controls.group->setObjectName(QStringLiteral("ansiMeasurementEvidence"));
     auto* form = new QFormLayout(controls.group);
@@ -2205,8 +2231,37 @@ AnsiMeasurementControls ansi_measurement_controls(QWidget* parent, QVBoxLayout& 
     controls.limitations = new QLineEdit(controls.group); controls.limitations->setObjectName(QStringLiteral("ansiLimitationsStatement"));
     if (evidence.is_object() && evidence.contains("limitations_statement") && evidence.at("limitations_statement").is_string())
         controls.limitations->setText(QString::fromStdString(evidence.at("limitations_statement").get<std::string>()));
-    controls.limitations->setPlaceholderText(QStringLiteral("Describe inspection or measurement limitations"));
-    form->addRow(QStringLiteral("Limitations"), controls.limitations); layout.addWidget(controls.group);
+    controls.limitations->setPlaceholderText(QStringLiteral("Additional measurement notes"));
+    form->addRow(QStringLiteral("Notes"), controls.limitations);
+    const std::array<QString, 3> labels{
+        QStringLiteral("Uninspected interior declaration"), QStringLiteral("Plans measurement declaration"),
+        QStringLiteral("Indirect measurement declaration")};
+    const std::array<const char*, 3> names{
+        "ansiUninspectedDeclaration", "ansiPlansDeclaration", "ansiIndirectDeclaration"};
+    for (std::size_t index = 0; index < controls.declarations.size(); ++index) {
+        auto* statement = new QPlainTextEdit(controls.group);
+        statement->setObjectName(QString::fromLatin1(names[index]));
+        statement->setMaximumHeight(76);
+        statement->setPlaceholderText(QStringLiteral("Enter the applicable declaration text"));
+        if (evidence.contains("limitation_declarations") && evidence.at("limitation_declarations").is_array())
+            for (const auto& recorded : evidence.at("limitation_declarations"))
+                if (recorded.is_object() && recorded.value("kind", json()) == std::string(ansi_declaration_kind_name(controls.declaration_kinds[index])) &&
+                    recorded.contains("statement") && recorded.at("statement").is_string())
+                    statement->setPlainText(QString::fromStdString(recorded.at("statement").get<std::string>()));
+        form->addRow(labels[index], statement);
+        controls.declarations[index] = statement;
+    }
+    const auto update_declarations = [controls, form] {
+        const auto conditions = controls.required();
+        for (std::size_t index = 0; index < controls.declarations.size(); ++index)
+            form->setRowVisible(controls.declarations[index],
+                std::find(conditions.begin(), conditions.end(), controls.declaration_kinds[index]) != conditions.end());
+    };
+    QObject::connect(controls.inspected, &QComboBox::currentIndexChanged, controls.group, update_declarations);
+    QObject::connect(controls.direct, &QComboBox::currentIndexChanged, controls.group, update_declarations);
+    if (basis) QObject::connect(basis, &QComboBox::currentIndexChanged, controls.group, update_declarations);
+    update_declarations();
+    layout.addWidget(controls.group);
     return controls;
 }
 
@@ -2273,11 +2328,29 @@ DeclaredAppraisal read_appraisal_declarations(const json& property, const json& 
             return value.at(key).get<std::string>();
         };
         const auto measurement = object(policy, "ansi");
-        appraisal_keys(measurement, {"interior_inspected", "direct_measurement", "acquisition_increment", "limitations_statement"});
+        appraisal_keys(measurement, {"interior_inspected", "direct_measurement", "acquisition_increment", "limitations_statement", "limitation_declarations"});
         boolean(measurement, "interior_inspected", evidence.measurement.interior_inspected);
         boolean(measurement, "direct_measurement", evidence.measurement.direct_measurement);
         optional_token(measurement, "acquisition_increment", parse_acquisition_increment, evidence.measurement.acquisition_increment);
         evidence.measurement.limitations_statement = text(measurement, "limitations_statement");
+        if (measurement.contains("limitation_declarations")) {
+            const auto& declarations = measurement.at("limitation_declarations");
+            if (!declarations.is_array() || declarations.size() > 3)
+                throw std::invalid_argument("limitation_declarations must contain at most three declarations");
+            std::set<AnsiDeclarationKind> kinds;
+            for (const auto& declaration : declarations) {
+                appraisal_keys(declaration, {"kind", "statement"});
+                if (!declaration.contains("kind") || !declaration.contains("statement"))
+                    throw std::invalid_argument("limitation declaration requires kind and statement");
+                const auto kind = parse_ansi_declaration_kind(text(declaration, "kind"));
+                if (!kind || !kinds.insert(*kind).second)
+                    throw std::invalid_argument("limitation declaration kind is unknown or duplicated");
+                const auto statement = text(declaration, "statement");
+                if (statement.size() > 8192)
+                    throw std::invalid_argument("limitation declaration statement is too long");
+                evidence.measurement.limitation_declarations.push_back({*kind, statement});
+            }
+        }
         const auto floor_evidence = object(level, "ansi");
         appraisal_keys(floor_evidence, {"any_part_below_grade"});
         boolean(floor_evidence, "any_part_below_grade", evidence.any_part_below_grade);
@@ -23435,7 +23508,7 @@ public:
         auto* use = combo(QStringLiteral("Area use"), "area_use", facts,
             {"dwelling", "garage", "carport", "porch", "patio", "deck", "commercial_occupiable", "commercial_common", "commercial_service", "other_non_living"});
         auto* role = combo(QStringLiteral("Boundary role"), "boundary_role", facts, {"measured_area", "open_to_below", "stair_footprint", "other_void"});
-        const auto measurement = ansi_measurement_controls(content, *content_layout, policy);
+        const auto measurement = ansi_measurement_controls(content, *content_layout, policy, basis);
         auto* ansi_group = new QGroupBox(QStringLiteral("ANSI floor and area evidence"), content);
         ansi_group->setObjectName(QStringLiteral("ansiAreaEvidence")); content_layout->addWidget(ansi_group);
         auto* ansi_form = new QFormLayout(ansi_group);
@@ -27294,6 +27367,63 @@ public:
         dialog.exec();
     }
 
+    void showAppraisalReporting(const QString& requested_property_id = {}) {
+        try {
+            if (!m_document->is_editable()) throw std::invalid_argument("This document is read-only.");
+            if (m_boundary_session || m_pending_wall_start)
+                throw std::invalid_argument("Finish or cancel the current drawing before editing reporting facts.");
+            const auto context = captureModalContext();
+            const auto source = authoringSnapshot();
+            const auto active_property = propertyEntity();
+            const auto property_id = requested_property_id.isEmpty() ?
+                (active_property ? active_property->id : std::string{}) : requested_property_id.toStdString();
+            const auto property = source.entities().find(property_id);
+            if (property == source.entities().end() || property->second.type != "property")
+                throw std::invalid_argument("Choose a property before editing appraisal reporting.");
+            const auto semantic_visibility = visible_project_entities_with_phase(source, ProjectViewFilter{});
+            const auto report = build_appraisal_document_report(source, property_id,
+                m_metric_units ? AreaUnit::square_metre : AreaUnit::square_foot, &semantic_visibility);
+            if (!report.configured) throw std::invalid_argument("Enable appraisal calculations in Setup first.");
+            AppraisalReportingDialog dialog(source, report, owner, &semantic_visibility);
+            if (owner->testAttribute(Qt::WA_DontShowOnScreen)) dialog.setAttribute(Qt::WA_DontShowOnScreen);
+            styleDialog(dialog);
+            dialog.setApplyRequested([this, context, property_id, semantic_visibility](const AppraisalReportingChanges& changes, QString& error) {
+                try {
+                    if (!modalContextUnchanged(context)) throw std::invalid_argument(lastError().toStdString());
+                    if (!m_document->is_editable() || m_boundary_session || m_pending_wall_start)
+                        throw std::invalid_argument("The document or pending drawing changed. Reopen Reporting.");
+                    if (changes.property_id != property_id)
+                        throw std::invalid_argument("The reporting property changed. Reopen Reporting.");
+                    const auto current = authoringSnapshot();
+                    const auto current_semantic_visibility = visible_project_entities_with_phase(current, ProjectViewFilter{});
+                    if (current_semantic_visibility != semantic_visibility)
+                        throw std::invalid_argument("The design phase changed. Reopen Reporting.");
+                    validate_appraisal_reporting_changes(current, changes, &current_semantic_visibility);
+                    auto property = current.entities().at(property_id);
+                    property.properties["appraisal_reporting"] = appraisal_reporting_json(changes.settings);
+                    ApplyEntityChanges command{current.revision(), {}, {}, "Edit appraisal reporting"};
+                    if (property != current.entities().at(property_id))
+                        command.entity_changes.push_back(EntityChange::upsert(std::move(property)));
+                    for (const auto& [id, facts] : changes.areas) {
+                        auto area = current.entities().at(id);
+                        area.properties["appraisal_reporting"] = appraisal_reporting_json(facts);
+                        if (area != current.entities().at(id))
+                            command.entity_changes.push_back(EntityChange::upsert(std::move(area)));
+                    }
+                    if (!command.entity_changes.empty()) applyDocumentCommand(command);
+                    clearError(); refresh(); return true;
+                } catch (const std::exception& exception) {
+                    error = QString::fromUtf8(exception.what());
+                    setError(QStringLiteral("Appraisal reporting: %1").arg(error));
+                    return false;
+                }
+            });
+            dialog.exec();
+        } catch (const std::exception& exception) {
+            setError(QStringLiteral("Appraisal reporting: %1").arg(QString::fromUtf8(exception.what())));
+        }
+    }
+
     void showAppraisalSetup(const QString& property_id) {
         if (!m_document->is_editable()) { setError(QStringLiteral("This document is read-only.")); return; }
         if (m_boundary_session || m_pending_wall_start) {
@@ -27348,7 +27478,7 @@ public:
             unsigned initial_precision = 2;
             try { initial_precision = appraisal_display_profile(property->properties).decimal_places; } catch (const std::exception&) {}
             precision->setValue(static_cast<int>(initial_precision));form->addRow(QStringLiteral("Area decimal places"),precision);
-            const auto measurement = ansi_measurement_controls(&dialog, *layout, policy);
+            const auto measurement = ansi_measurement_controls(&dialog, *layout, policy, basis);
             auto* rule_version = new QComboBox(&dialog);
             rule_version->setObjectName(QStringLiteral("appraisalSetupRuleVersion"));
             rule_version->addItem(QStringLiteral("V2 — countable finished-room area"), 2);
@@ -31591,6 +31721,9 @@ private:
         });
         m_appraisal_details->setSetupRequested([this](const QString& property) {
             if (m_appraisal_details_revision && appraisalDetailsCurrent(*m_appraisal_details_revision)) showAppraisalSetup(property);
+        });
+        m_appraisal_details->setReportingRequested([this](const QString& property, Revision revision) {
+            if (appraisalDetailsCurrent(revision)) showAppraisalReporting(property);
         });
         m_appraisal_details->setReportRequested([this](const QString& property) {
             if (m_appraisal_details_revision && appraisalDetailsCurrent(*m_appraisal_details_revision) &&
@@ -43567,6 +43700,7 @@ bool MainWindow::editSelectedAppraisalFacts(const QString& declarations_json,
 }
 
 void MainWindow::showAppraisalFacts() { m_impl->showAppraisalFacts(); }
+void MainWindow::showAppraisalReporting(const QString& property_id) { m_impl->showAppraisalReporting(property_id); }
 
 bool MainWindow::exportDrawingSetPdf(const QString& path) {
     return m_impl->exportDrawingSetPdf(path);

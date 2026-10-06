@@ -86,11 +86,23 @@ bool ansi_policy(const Entity& property) {
     supplied_token(*found,"measurement_basis",parse_measurement_basis);
     if(found->contains("ansi")) {
         const auto& declarations=found->at("ansi");
-        keys(declarations,{"interior_inspected","direct_measurement","acquisition_increment","limitations_statement"});
+        keys(declarations,{"interior_inspected","direct_measurement","acquisition_increment","limitations_statement","limitation_declarations"});
         for(const auto* key:{"interior_inspected","direct_measurement"})
             if(declarations.contains(key) && !declarations.at(key).is_boolean())invalid(std::string(key)+" must be boolean");
         supplied_token(declarations,"acquisition_increment",parse_acquisition_increment);
         (void)text(declarations,"limitations_statement");
+        if(declarations.contains("limitation_declarations")) {
+            const auto& values=declarations.at("limitation_declarations");
+            if(!values.is_array() || values.size()>3)invalid("limitation_declarations must be a bounded array");
+            std::set<AnsiDeclarationKind> unique;
+            for(const auto& item:values) {
+                keys(item,{"kind","statement"});
+                const auto kind=parse_ansi_declaration_kind(text(item,"kind"));
+                if(!kind || !unique.insert(*kind).second)invalid("limitation declaration kind is unknown or duplicated");
+                if(!item.contains("statement") || text(item,"statement").size()>8192)
+                    invalid("limitation declaration statement must be a string of at most 8192 bytes");
+            }
+        }
     }
     return true;
 }

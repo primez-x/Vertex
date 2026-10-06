@@ -84,7 +84,8 @@ QString measurement_declarations(const AnsiMeasurementDeclarations& value) {
     return row(QStringLiteral("Interior inspected"),boolean(value.interior_inspected))+
         row(QStringLiteral("Direct measurement"),boolean(value.direct_measurement))+
         row(QStringLiteral("Acquisition increment"),value.acquisition_increment?words(acquisition_increment_name(*value.acquisition_increment)):QStringLiteral("Undeclared"))+
-        row(QStringLiteral("Limitations statement"),value.limitations_statement.empty()?QStringLiteral("Undeclared"):text(value.limitations_statement));
+        row(QStringLiteral("Supplemental limitations statement"),value.limitations_statement.empty()?QStringLiteral("Undeclared"):text(value.limitations_statement))+
+        appraisal_ansi_declaration_rows(value);
 }
 QLabel* label(QWidget* parent,const char* object,const QString& value={}) {
     auto* result=new QLabel(value,parent);result->setObjectName(QString::fromLatin1(object));
@@ -113,9 +114,10 @@ struct AppraisalDetailsPanel::Impl {
     QTreeWidget* areas{};
     QToolButton* provenance_toggle{};
     QPlainTextEdit* provenance{};
-    QPushButton *setup{},*facts{},*full_report{},*locate{},*review_sources{};
+    QPushButton *setup{},*facts{},*full_report{},*locate{},*review_sources{},*reporting_settings{};
     std::function<void(const QString&,Revision)> locate_requested,facts_requested,source_review_requested;
     std::function<void(const QString&)> setup_requested,report_requested;
+    std::function<void(const QString&,Revision)> reporting_requested;
 
     const Entity* entity(const std::string& id) const {
         if(!source)return nullptr;const auto found=source->entities().find(id);
@@ -271,6 +273,7 @@ struct AppraisalDetailsPanel::Impl {
         const QSignalBlocker blocker(areas);areas->clear();
         const bool available=report && source;
         setup->setEnabled(entity(property)!=nullptr);full_report->setEnabled(available);
+        reporting_settings->setEnabled(available && bool(reporting_requested));
         property_name->setText(source && entity(property)?name(*source,property):QStringLiteral("Property details"));
         totals->clear();issues->clear();policy->clear();standards->clear();
         gla->setText(QStringLiteral("Totals unavailable"));
@@ -333,8 +336,9 @@ struct AppraisalDetailsPanel::Impl {
                         .arg(text(display_area(aggregate.gla().total.square_metres,diagnostic).text));
                 }
             }
-            totals->setText(html);
+            totals->setText(html+appraisal_form_projection_html(*report,true));
         }
+        if(!report->qualified && report->reporting)totals->setText(appraisal_form_projection_html(*report,true));
         if(!report->issues.empty()) {
             QString html=QStringLiteral("<b>Issues to resolve</b><ul>");
             for(const auto& issue:report->issues)html+=QStringLiteral("<li>%1</li>").arg(text(issue).toHtmlEscaped());
@@ -379,7 +383,7 @@ AppraisalDetailsPanel::AppraisalDetailsPanel(QWidget* parent):QWidget(parent),im
     auto* layout=new QVBoxLayout(content);layout->setContentsMargins(12,12,12,12);layout->setSpacing(8);
     auto& p=*impl_;p.property_name=label(content,"appraisalDetailsProperty");layout->addWidget(p.property_name);
     p.property_name->setTextFormat(Qt::PlainText);
-    heading(layout,QStringLiteral("Above-grade finished (GLA)"));p.gla=label(content,"appraisalDetailsGla",QStringLiteral("Totals unavailable"));
+    heading(layout,QStringLiteral("Above-grade finished area (GLA)"));p.gla=label(content,"appraisalDetailsGla",QStringLiteral("Totals unavailable"));
     auto total_font=font;total_font.setPointSize(23);total_font.setBold(true);p.gla->setFont(total_font);layout->addWidget(p.gla);
     p.gla->setTextFormat(Qt::PlainText);
     p.status=label(content,"appraisalDetailsStatus");layout->addWidget(p.status);
@@ -387,6 +391,7 @@ AppraisalDetailsPanel::AppraisalDetailsPanel(QWidget* parent):QWidget(parent),im
     auto* actions=new QHBoxLayout;actions->setSpacing(6);
     p.setup=new QPushButton(QStringLiteral("Setup"),content);p.setup->setObjectName(QStringLiteral("appraisalDetailsSetup"));actions->addWidget(p.setup);
     p.full_report=new QPushButton(QStringLiteral("Full report"),content);p.full_report->setObjectName(QStringLiteral("appraisalDetailsReport"));actions->addWidget(p.full_report);layout->addLayout(actions);
+    p.reporting_settings=new QPushButton(QStringLiteral("Reporting and rooms…"),content);p.reporting_settings->setObjectName(QStringLiteral("appraisalDetailsReporting"));layout->addWidget(p.reporting_settings);
     heading(layout,QStringLiteral("Property totals"));p.totals=label(content,"appraisalDetailsTotals");layout->addWidget(p.totals);
     p.issues=label(content,"appraisalDetailsIssues");layout->addWidget(p.issues);
     heading(layout,QStringLiteral("Buildings, floors and areas"));p.areas=new QTreeWidget(content);p.areas->setObjectName(QStringLiteral("appraisalDetailsAreas"));
@@ -422,6 +427,7 @@ AppraisalDetailsPanel::AppraisalDetailsPanel(QWidget* parent):QWidget(parent),im
     connect(p.facts,&QPushButton::clicked,this,[this]{const auto id=impl_->selected();if(impl_->report && !id.isEmpty() && impl_->facts_requested)impl_->facts_requested(id,impl_->report->revision);});
     connect(p.setup,&QPushButton::clicked,this,[this]{if(impl_->setup_requested && impl_->entity(impl_->property))impl_->setup_requested(text(impl_->property));});
     connect(p.full_report,&QPushButton::clicked,this,[this]{if(impl_->report && impl_->report_requested)impl_->report_requested(text(impl_->property));});
+    connect(p.reporting_settings,&QPushButton::clicked,this,[this]{if(impl_->report && impl_->reporting_requested)impl_->reporting_requested(text(impl_->property),impl_->report->revision);});
     connect(p.review_sources,&QPushButton::clicked,this,[this]{const auto id=impl_->selected();if(impl_->report && !id.isEmpty() && impl_->source_review_requested)impl_->source_review_requested(id,impl_->report->revision);});
     p.show_report({});
 }
@@ -447,6 +453,7 @@ void AppraisalDetailsPanel::setLocateRequested(std::function<void(const QString&
 void AppraisalDetailsPanel::setSetupRequested(std::function<void(const QString&)> callback){impl_->setup_requested=std::move(callback);}
 void AppraisalDetailsPanel::setFactsRequested(std::function<void(const QString&,Revision)> callback){impl_->facts_requested=std::move(callback);}
 void AppraisalDetailsPanel::setReportRequested(std::function<void(const QString&)> callback){impl_->report_requested=std::move(callback);}
+void AppraisalDetailsPanel::setReportingRequested(std::function<void(const QString&,Revision)> callback){impl_->reporting_requested=std::move(callback);impl_->reporting_settings->setEnabled(bool(impl_->report) && bool(impl_->reporting_requested));}
 void AppraisalDetailsPanel::setSourceReviewRequested(std::function<void(const QString&,Revision)> callback){impl_->source_review_requested=std::move(callback);}
 
 } // namespace sketch::desktop

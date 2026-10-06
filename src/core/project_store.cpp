@@ -70,6 +70,17 @@ bool has_ansi_appraisal_v2_semantics(const Entity& entity) {
     return ceiling != ansi->end() && ceiling->is_object() && ceiling->contains("complete_room_observed");
 }
 
+bool has_appraisal_reporting_semantics(const Entity& entity) {
+    if (!entity.properties.is_object()) return false;
+    if ((entity.type == "property" || can_recognize_boundary_entity_type(entity.type)) &&
+        entity.properties.contains("appraisal_reporting")) return true;
+    if (entity.type != "property") return false;
+    const auto policy = entity.properties.find("appraisal_policy");
+    if (policy == entity.properties.end() || !policy->is_object()) return false;
+    const auto ansi = policy->find("ansi");
+    return ansi != policy->end() && ansi->is_object() && ansi->contains("limitation_declarations");
+}
+
 bool supported_identified_boundary_model(const Entity& entity) noexcept {
     if (!can_recognize_boundary_entity_type(entity.type) || !entity.properties.is_object()) {
         return false;
@@ -319,6 +330,7 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
                 required = std::max(required, 28U);
             if (has_ansi_appraisal_semantics(entity)) required = std::max(required, 21U);
             if (has_ansi_appraisal_v2_semantics(entity)) required = std::max(required, 32U);
+            if (has_appraisal_reporting_semantics(entity)) required = std::max(required, 56U);
             if(entity.type==kAnnotationEntityType) {
                 if(entity.properties.contains("version") && entity.properties.at("version").is_number_integer() &&
                     entity.properties.at("version")==2)required=std::max(required,46U);
@@ -1809,6 +1821,7 @@ bool verify_sqlite_schema(sqlite3* database, bool allow_recovery = false) {
          sqlite3_column_int(user_version.get(), 0) != 43 &&
          sqlite3_column_int(user_version.get(), 0) != 44 &&
          sqlite3_column_int(user_version.get(), 0) != 45 &&
+         sqlite3_column_int(user_version.get(), 0) != 56 &&
          sqlite3_column_int(user_version.get(), 0) != 55 &&
          sqlite3_column_int(user_version.get(), 0) != 54 &&
          sqlite3_column_int(user_version.get(), 0) != 53 &&
@@ -2030,12 +2043,12 @@ void verify_sqlite_content_integrity(sqlite3* database) {
 DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nullptr,
                                std::string* verified_digest = nullptr) {
     const auto format = required_metadata(database, "format_version");
-    if (format != "55" && format != "54" && format != "53" && format != "52" && format != "51" && format != "50" && format != "49" && format != "48" && format != "47" && format != "46" && format != "1" && format != "2" && format != "3" && format != "5" &&
+    if (format != "56" && format != "55" && format != "54" && format != "53" && format != "52" && format != "51" && format != "50" && format != "49" && format != "48" && format != "47" && format != "46" && format != "1" && format != "2" && format != "3" && format != "5" &&
         format != "6" && format != "7" && format != "8" && format != "9" && format != "10" && format != "11" && format != "12" && format != "13" && format != "14" && format != "15" && format != "16" && format != "17" && format != "18" && format != "19" && format != "20" && format != "21" && format != "22" && format != "23" && format != "24" && format != "25" && format != "26" && format != "27" && format != "28" && format != "29" && format != "30" && format != "31" && format != "32" && format != "33" && format != "34" && format != "35" && format != "36" && format != "37" && format != "38" && format != "39" && format != "40" && format != "41" && format != "42" && format != "43" && format != "44" && format != "45" && !(recovery && format == "4")) {
         storage_error(StorageErrorCode::unsupported_format,
                       "unsupported project format version: " + format);
     }
-    const auto format_number = format == "55" ? 55U : format == "54" ? 54U : format == "53" ? 53U : format == "52" ? 52U : format == "51" ? 51U : format == "50" ? 50U : format == "49" ? 49U : format == "48" ? 48U : format == "47" ? 47U : format == "46" ? 46U : format == "45" ? 45U : format == "44" ? 44U : format == "43" ? 43U : format == "42" ? 42U : format == "41" ? 41U : format == "40" ? 40U : format == "39" ? 39U : format == "38" ? 38U : format == "37" ? 37U : format == "36" ? 36U : format == "35" ? 35U : format == "34" ? 34U : format == "33" ? 33U : format == "32" ? 32U : format == "31" ? 31U : format == "30" ? 30U : format == "29" ? 29U : format == "28" ? 28U : format == "27" ? 27U : format == "26" ? 26U : format == "25" ? 25U : format == "24" ? 24U : format == "23" ? 23U : format == "22" ? 22U : format == "21" ? 21U : format == "20" ? 20U : format == "19" ? 19U : format == "18" ? 18U : format == "17" ? 17U : format == "16" ? 16U : format == "15" ? 15U : format == "14" ? 14U : format == "13" ? 13U : format == "12" ? 12U : format == "11" ? 11U : format == "10" ? 10U : format == "9" ? 9U : format == "8" ? 8U : format == "7" ? 7U : (format == "6" ? 6U :
+    const auto format_number = format == "56" ? 56U : format == "55" ? 55U : format == "54" ? 54U : format == "53" ? 53U : format == "52" ? 52U : format == "51" ? 51U : format == "50" ? 50U : format == "49" ? 49U : format == "48" ? 48U : format == "47" ? 47U : format == "46" ? 46U : format == "45" ? 45U : format == "44" ? 44U : format == "43" ? 43U : format == "42" ? 42U : format == "41" ? 41U : format == "40" ? 40U : format == "39" ? 39U : format == "38" ? 38U : format == "37" ? 37U : format == "36" ? 36U : format == "35" ? 35U : format == "34" ? 34U : format == "33" ? 33U : format == "32" ? 32U : format == "31" ? 31U : format == "30" ? 30U : format == "29" ? 29U : format == "28" ? 28U : format == "27" ? 27U : format == "26" ? 26U : format == "25" ? 25U : format == "24" ? 24U : format == "23" ? 23U : format == "22" ? 22U : format == "21" ? 21U : format == "20" ? 20U : format == "19" ? 19U : format == "18" ? 18U : format == "17" ? 17U : format == "16" ? 16U : format == "15" ? 15U : format == "14" ? 14U : format == "13" ? 13U : format == "12" ? 12U : format == "11" ? 11U : format == "10" ? 10U : format == "9" ? 9U : format == "8" ? 8U : format == "7" ? 7U : (format == "6" ? 6U :
         (format == "5" ? 5U : (format == "4" ? 4U : (format == "3" ? 3U :
         (format == "2" ? 2U : 1U)))));
     Statement format_marker(database, "PRAGMA user_version");
@@ -2307,7 +2320,7 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
 
     const auto required_format = required_format_version_internal(snapshot, format_number < 28);
     if (required_format > format_number) {
-        const auto reason = required_format >= 55 ? "physical wall axis dimensions" : required_format >= 54 ? "owned stair landing railings" : required_format >= 53 ? "exact physical-source translation lineage" : required_format >= 52 ? "owned stair-flight railings" : required_format >= 51 ? "multi-flight stair topology" : required_format >= 50 ? "source-qualified physical-room dimensions" : required_format >= 49 ? "atomic reviewed physical-room dispositions" : required_format >= 48 ? "persistent analytical tangent junctions" : required_format >= 47 ? "joint hard-connected translation" : required_format >= 46 ? "scoped annotations and explicit opacity or patterns" : required_format >= 45 ? "aligned text and independent live area callouts" : required_format >= 44 ? "reviewed physical room repair authority" : required_format >= 43 ? "source-bound physical clear rooms and analytic holes" : required_format >= 42 ? "typed mixed rigid group completion" : required_format >= 41 ? "typed saved-callout placement completion" : required_format >= 40 ? "source-derived exterior segment arc authority or physical line-origin curve provenance" : required_format >= 39 ? "source-derived exterior segment resize authority" : required_format >= 38 ? "logical wall-chain room relationships or future relationship models" : required_format >= 37 ? "wall split authority, physical arc-chain constraints or whole-span dimensions" : required_format >= 36 ? "saved dimensions on measured strokes" : required_format >= 35 ? "persistent measured-stroke constraints or simultaneous endpoint derivation" : required_format >= 34 ? "curved survey source provenance" : required_format >= 33 ? "grouped measured-region source evidence" : required_format >= 32 ? "finished-room appraisal rule v2" : required_format >= 31 ? "typed chord construction input" : required_format >= 30 ? "reviewed measured-area source replacement" : required_format >= 29 ? "measured stroke geometry edit derivations" : required_format >= 28 ? "measurement linework rigid transform or source lineage" : required_format >= 27 ? "verified connected wall rigid transform" : required_format >= 26 ? "compact mixed asset references" : required_format >= 25 ? "SVG symbol palette" : required_format >= 24 ? "saved-view drawing appearance" : required_format >= 23 ? "explicit automatic-angle removal during redraw" : required_format >= 22 ? "coordinated exterior corner edit" : required_format >= 21 ? "ANSI-oriented appraisal policy or measurement evidence" : required_format >= 20 ? "mixed live exterior wall-source completion" : required_format >= 19 ? "live exterior wall-source completion" : required_format >= 18 ? "boundary rigid transform group" : required_format >= 17 ? "explicit fresh-topology redefinition" : required_format >= 16 ? "reviewed exterior wall-source replacement" : required_format >= 15 ? "boundary curvature reconstruction proof" : required_format >= 14 ? "rigid curve-transform construction archive" : required_format >= 13 ? "physical curve-length input or edit proof" : required_format >= 12 ? "physical arc-length constraint" : required_format >= 11 ? "straight wall-only endpoint proof" : required_format >= 10 ? "curved endpoint constraint or wall proof" : required_format >= 9 ? "boundary translation group" : required_format >= 8 ? "boundary constraint changes" : required_format >= 7 ? "boundary geometry edit" :
+        const auto reason = required_format >= 56 ? "form-specific appraisal reporting or typed limitation declarations" : required_format >= 55 ? "physical wall axis dimensions" : required_format >= 54 ? "owned stair landing railings" : required_format >= 53 ? "exact physical-source translation lineage" : required_format >= 52 ? "owned stair-flight railings" : required_format >= 51 ? "multi-flight stair topology" : required_format >= 50 ? "source-qualified physical-room dimensions" : required_format >= 49 ? "atomic reviewed physical-room dispositions" : required_format >= 48 ? "persistent analytical tangent junctions" : required_format >= 47 ? "joint hard-connected translation" : required_format >= 46 ? "scoped annotations and explicit opacity or patterns" : required_format >= 45 ? "aligned text and independent live area callouts" : required_format >= 44 ? "reviewed physical room repair authority" : required_format >= 43 ? "source-bound physical clear rooms and analytic holes" : required_format >= 42 ? "typed mixed rigid group completion" : required_format >= 41 ? "typed saved-callout placement completion" : required_format >= 40 ? "source-derived exterior segment arc authority or physical line-origin curve provenance" : required_format >= 39 ? "source-derived exterior segment resize authority" : required_format >= 38 ? "logical wall-chain room relationships or future relationship models" : required_format >= 37 ? "wall split authority, physical arc-chain constraints or whole-span dimensions" : required_format >= 36 ? "saved dimensions on measured strokes" : required_format >= 35 ? "persistent measured-stroke constraints or simultaneous endpoint derivation" : required_format >= 34 ? "curved survey source provenance" : required_format >= 33 ? "grouped measured-region source evidence" : required_format >= 32 ? "finished-room appraisal rule v2" : required_format >= 31 ? "typed chord construction input" : required_format >= 30 ? "reviewed measured-area source replacement" : required_format >= 29 ? "measured stroke geometry edit derivations" : required_format >= 28 ? "measurement linework rigid transform or source lineage" : required_format >= 27 ? "verified connected wall rigid transform" : required_format >= 26 ? "compact mixed asset references" : required_format >= 25 ? "SVG symbol palette" : required_format >= 24 ? "saved-view drawing appearance" : required_format >= 23 ? "explicit automatic-angle removal during redraw" : required_format >= 22 ? "coordinated exterior corner edit" : required_format >= 21 ? "ANSI-oriented appraisal policy or measurement evidence" : required_format >= 20 ? "mixed live exterior wall-source completion" : required_format >= 19 ? "live exterior wall-source completion" : required_format >= 18 ? "boundary rigid transform group" : required_format >= 17 ? "explicit fresh-topology redefinition" : required_format >= 16 ? "reviewed exterior wall-source replacement" : required_format >= 15 ? "boundary curvature reconstruction proof" : required_format >= 14 ? "rigid curve-transform construction archive" : required_format >= 13 ? "physical curve-length input or edit proof" : required_format >= 12 ? "physical arc-length constraint" : required_format >= 11 ? "straight wall-only endpoint proof" : required_format >= 10 ? "curved endpoint constraint or wall proof" : required_format >= 9 ? "boundary translation group" : required_format >= 8 ? "boundary constraint changes" : required_format >= 7 ? "boundary geometry edit" :
             required_format >= 6 ? "boundary transform" : required_format >= 5 ? "boundary translation" : required_format >= 3 ? "boundary_authoring" :
                             "identified boundary, dimension or boundary draft";
         storage_error(StorageErrorCode::unsupported_format,
@@ -2384,29 +2397,58 @@ void validate_durable_destination(const std::filesystem::path& destination) {
         storage_error(StorageErrorCode::io_error,
                       "cannot resolve project destination volume");
     }
-    std::vector<wchar_t> volume_root(32768, L'\0');
-    if (!GetVolumePathNameW(filesystem_path(parent).c_str(), volume_root.data(),
-                            static_cast<DWORD>(volume_root.size()))) {
+    const auto parent_handle = CreateFileW(
+        filesystem_path(parent).c_str(), FILE_READ_ATTRIBUTES,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+        FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+    if (parent_handle == INVALID_HANDLE_VALUE) {
         storage_error(StorageErrorCode::io_error,
-                      "cannot resolve project destination volume, Windows error " +
+                      "cannot open project parent for filesystem identity, Windows error " +
                           std::to_string(GetLastError()));
     }
-    if (GetDriveTypeW(volume_root.data()) != DRIVE_FIXED) {
-        storage_error(StorageErrorCode::io_error,
-                      "durable project save requires a local fixed disk");
+    try {
+        FILE_ATTRIBUTE_TAG_INFO attributes{};
+        if (!GetFileInformationByHandleEx(parent_handle, FileAttributeTagInfo, &attributes,
+                                           sizeof(attributes)) ||
+            (attributes.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0 ||
+            (attributes.FileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0) {
+            storage_error(StorageErrorCode::io_error,
+                          "project parent identity is unavailable, not a directory, or is a reparse point");
+        }
+
+        // Resolve the volume mount point from this checked directory handle so
+        // the drive-type and filesystem checks describe the same parent object.
+        const auto canonical_parent = final_path_from_handle(parent_handle, "project parent identity");
+        std::vector<wchar_t> volume_root(32768, L'\0');
+        if (!GetVolumePathNameW(canonical_parent.c_str(), volume_root.data(),
+                                static_cast<DWORD>(volume_root.size()))) {
+            storage_error(StorageErrorCode::io_error,
+                          "cannot resolve project destination volume, Windows error " +
+                              std::to_string(GetLastError()));
+        }
+        if (GetDriveTypeW(volume_root.data()) != DRIVE_FIXED) {
+            storage_error(StorageErrorCode::io_error,
+                          "durable project save requires a local fixed disk");
+        }
+
+        std::array<wchar_t, 64> file_system{};
+        if (!GetVolumeInformationByHandleW(parent_handle, nullptr, 0, nullptr, nullptr,
+                                           nullptr, file_system.data(),
+                                           static_cast<DWORD>(file_system.size()))) {
+            storage_error(StorageErrorCode::io_error,
+                          "cannot identify project destination filesystem, Windows error " +
+                              std::to_string(GetLastError()));
+        }
+        if (_wcsicmp(file_system.data(), L"NTFS") != 0 &&
+            _wcsicmp(file_system.data(), L"ReFS") != 0) {
+            storage_error(StorageErrorCode::io_error,
+                          "durable project save requires NTFS or ReFS");
+        }
+    } catch (...) {
+        CloseHandle(parent_handle);
+        throw;
     }
-    std::array<wchar_t, 64> file_system{};
-    if (!GetVolumeInformationW(volume_root.data(), nullptr, 0, nullptr, nullptr, nullptr,
-                               file_system.data(), static_cast<DWORD>(file_system.size()))) {
-        storage_error(StorageErrorCode::io_error,
-                      "cannot identify project destination filesystem, Windows error " +
-                          std::to_string(GetLastError()));
-    }
-    if (_wcsicmp(file_system.data(), L"NTFS") != 0 &&
-        _wcsicmp(file_system.data(), L"ReFS") != 0) {
-        storage_error(StorageErrorCode::io_error,
-                      "durable project save requires NTFS or ReFS");
-    }
+    CloseHandle(parent_handle);
 #else
     (void)destination;
     storage_error(StorageErrorCode::io_error,

@@ -196,7 +196,7 @@ Declarations declarations(const Entity& property, const Entity& floor,
     if (policy.contains("ansi") || level.contains("ansi") || area.contains("ansi") || ansi) {
         AnsiAppraisalFacts evidence;
         const auto measurement = declaration_object(policy, "ansi");
-        exact_keys(measurement, {"interior_inspected", "direct_measurement", "acquisition_increment", "limitations_statement"});
+        exact_keys(measurement, {"interior_inspected", "direct_measurement", "acquisition_increment", "limitations_statement", "limitation_declarations"});
         const auto boolean = [](const Json& object, const char* key, std::optional<bool>& target) {
             if (!object.contains(key)) return;
             if (!object.at(key).is_boolean()) throw std::invalid_argument(std::string(key) + " must be boolean");
@@ -212,6 +212,20 @@ Declarations declarations(const Entity& property, const Entity& floor,
         boolean(measurement, "direct_measurement", evidence.measurement.direct_measurement);
         optional_token(measurement, "acquisition_increment", parse_acquisition_increment, evidence.measurement.acquisition_increment);
         evidence.measurement.limitations_statement = text(measurement, "limitations_statement").value_or("");
+        if (measurement.contains("limitation_declarations")) {
+            const auto& values=measurement.at("limitation_declarations");
+            if (!values.is_array() || values.size()>3) throw std::invalid_argument("limitation_declarations must be a bounded array");
+            std::set<AnsiDeclarationKind> unique;
+            for (const auto& item:values) {
+                exact_keys(item,{"kind","statement"});
+                const auto kind = parse_ansi_declaration_kind(text(item,"kind").value_or(""));
+                if (!kind) throw std::invalid_argument("Unknown ANSI limitation declaration kind");
+                if(!unique.insert(*kind).second)throw std::invalid_argument("Duplicate ANSI limitation declaration kind");
+                const auto statement=text(item,"statement");
+                if(!statement || statement->size()>8192)throw std::invalid_argument("ANSI declaration statement must be a string of at most 8192 bytes");
+                evidence.measurement.limitation_declarations.push_back({*kind,*statement});
+            }
+        }
         const auto floor_evidence = declaration_object(level, "ansi");
         exact_keys(floor_evidence, {"any_part_below_grade"});
         boolean(floor_evidence, "any_part_below_grade", evidence.any_part_below_grade);
@@ -346,6 +360,296 @@ bool belongs_to_other_property(const DocumentSnapshot& document, const Entity& b
 }
 
 } // namespace
+
+namespace {
+void reporting_keys(const Json& value, std::initializer_list<const char*> allowed) {
+    if (!value.is_object()) throw std::invalid_argument("appraisal_reporting must be an object");
+    for (const auto& [key, item] : value.items()) {
+        (void)item;
+        if (std::none_of(allowed.begin(), allowed.end(), [&](const char* name) { return key == name; }))
+            throw std::invalid_argument("Unknown appraisal_reporting field: " + key);
+    }
+    if (!value.contains("version") || !value.at("version").is_number_integer() || value.at("version") != 1)
+        throw std::invalid_argument("Unsupported appraisal_reporting version");
+}
+bool reporting_bool(const Json& value, const char* name) {
+    if (!value.contains(name) || !value.at(name).is_boolean())
+        throw std::invalid_argument(std::string(name) + " must be an explicit boolean");
+    return value.at(name).get<bool>();
+}
+std::string room_use_token(AppraisalRoomUse use) {
+    switch (use) {
+    case AppraisalRoomUse::bedroom: return "bedroom";
+    case AppraisalRoomUse::bathroom_full: return "bathroom_full";
+    case AppraisalRoomUse::bathroom_half: return "bathroom_half";
+    case AppraisalRoomUse::other: return "other";
+    }
+    throw std::invalid_argument("Unsupported room use");
+}
+AppraisalRoomUse room_use(const std::string& token) {
+    for (auto value : {AppraisalRoomUse::bedroom, AppraisalRoomUse::bathroom_full,
+                       AppraisalRoomUse::bathroom_half, AppraisalRoomUse::other})
+        if (room_use_token(value) == token) return value;
+    throw std::invalid_argument("Unsupported declared room use");
+}
+std::string reporting_contract_token(AppraisalReportingContract value) {
+    switch (value) {
+    case AppraisalReportingContract::legacy_uad_2_6: return "legacy_uad_2_6";
+    case AppraisalReportingContract::uad_3_6: return "uad_3_6";
+    }
+    throw std::invalid_argument("Unsupported reporting contract");
+}
+bool digest_text(const std::string& value) {
+    return value.size() == 64 && std::all_of(value.begin(), value.end(), [](char c) {
+        return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f');
+    });
+}
+void add_room(AppraisalRoomCounts& counts, const AppraisalRoomDeclaration& room) {
+    if (room.legacy_total_room == true) ++counts.total_rooms;
+    if (room.use == AppraisalRoomUse::bedroom) ++counts.bedrooms;
+    if (room.use == AppraisalRoomUse::bathroom_full) ++counts.bathrooms_full;
+    if (room.use == AppraisalRoomUse::bathroom_half) ++counts.bathrooms_half;
+}
+AppraisalFormProjection form_projection(const DocumentSnapshot& source,
+    const AppraisalDocumentReport& report, const AppraisalReportingSettings& settings) {
+    AppraisalFormProjection result; result.contract = settings.contract; result.configuration_valid=true;
+    result.evidence = {
+        {"https://singlefamily.fanniemae.com/media/30266/display", "2025-09-04", "FAQ Q16–18; room counts, grade, noncontinuous area"},
+        {"https://selling-guide.fanniemae.com/sel/b4-1.3-05/improvements-section-appraisal-report", "2025-06-04; reviewed 2026-10-06", "Above- and Below-Grade Area(s); Accessory Dwelling Units (legacy)"},
+        {"https://singlefamily.fanniemae.com/media/document/pdf/fannie-mae-selling-guide-supplement-uniform-appraisal-dataset-uad-36-policy", "September 2026; SB4-1.3-05 2026-09-02", "pp94–96; above/below grade, noncontinuous rooms, separate ADUs"},
+        {"https://sf.freddiemac.com/docs/zip/requirements/appendix-f-1-urar-reference-guide.zip", "Joint-GSE Appendix F-1 URAR Reference Guide v1.4", "pp126–134; FID 10.002, 10.023–10.025, 10.033; distinct living units/ADUs, all-grade bedroom/bathroom totals and declared room types"},
+        {"https://sf.freddiemac.com/docs/zip/requirements/appendix-b-1-urar-implementation-guide.zip", "Joint-GSE Appendix B-1 URAR Implementation Guide v1.4", "pp194–195; FID 10.023–10.025, 10.033; bedroom/bathroom counts per unit must match room-type summaries per level"}};
+    result.area_fields_available = report.qualified && report.calculation.has_value() &&
+        report.policy && report.policy->kind == AppraisalPolicyKind::ansi_z765_2021;
+    result.room_counts_available = result.area_fields_available && settings.room_inventory_complete;
+    result.room_summaries_available = result.room_counts_available;
+    if (!result.area_fields_available) result.issues.push_back("Report fields withheld: current qualified ANSI-oriented residential measurements are required.");
+    if (!settings.room_inventory_complete) result.issues.push_back("Room counts withheld: confirm a complete explicitly declared room inventory; this confirmation is not independent geometry verification.");
+    if (report.calculation) {
+        result.primary_above_grade_finished_square_metres = report.calculation->property.gla().total.square_metres;
+        for (auto category : {AppraisalAreaCategory::above_grade_finished, AppraisalAreaCategory::below_grade_finished,
+                AppraisalAreaCategory::above_grade_unfinished, AppraisalAreaCategory::below_grade_unfinished,
+                AppraisalAreaCategory::above_grade_nonstandard_finished, AppraisalAreaCategory::below_grade_nonstandard_finished,
+                AppraisalAreaCategory::noncontinuous_finished})
+            result.primary_area_fields[category]=report.calculation->property.by_category.at(category).total.square_metres;
+    }
+    std::set<std::string> room_ids;
+    for (const auto& boundary : report.boundaries) {
+        if (boundary.exclusion || !boundary.facts || boundary.facts->use != AreaUse::dwelling) continue;
+        const auto& entity = source.entities().at(boundary.boundary_id);
+        const auto stored = entity.properties.find("appraisal_reporting");
+        const auto category = boundary.qualification.derived_category;
+        const auto identity = boundary.facts->ansi && boundary.facts->ansi->dwelling_identity
+            ? *boundary.facts->ansi->dwelling_identity : DwellingIdentity::primary;
+        const bool adu = identity == DwellingIdentity::attached_adu || identity == DwellingIdentity::detached_adu;
+        const bool below = boundary.facts->ansi && boundary.facts->ansi->any_part_below_grade == true;
+        const bool legacy_adu_candidate = settings.contract == AppraisalReportingContract::legacy_uad_2_6 && adu && !below &&
+            (boundary.facts->access == AccessStatus::direct_interior || boundary.facts->access == AccessStatus::through_unfinished) &&
+            (category == AppraisalAreaCategory::adu_above_grade_finished || category == AppraisalAreaCategory::adu_above_grade_nonstandard_finished);
+        if (stored == entity.properties.end()) {
+            result.room_counts_available = false;
+            result.room_summaries_available = false;
+            result.issues.push_back(boundary.boundary_id + ": declare room membership (an explicit empty list is permitted).");
+            if (legacy_adu_candidate) {
+                result.area_fields_available = false;
+                result.issues.push_back(boundary.boundary_id + ": legacy ADU field withheld until contained-within-primary is explicitly declared.");
+            }
+            continue;
+        }
+        try {
+            const auto facts = parse_appraisal_area_reporting_facts(*stored);
+            if (facts.source_geometry_sha256 != appraisal_reporting_source_digest(source, boundary.boundary_id))
+                throw std::invalid_argument("Reporting observations are stale; reconfirm against current source geometry and appraisal observations.");
+            if (identity != DwellingIdentity::attached_adu && facts.contained_within_primary == true)
+                throw std::invalid_argument("Only an attached ADU may be declared contained within the primary dwelling.");
+            if (legacy_adu_candidate) {
+                if (!facts.contained_within_primary) {
+                    result.area_fields_available = false;
+                    result.issues.push_back(boundary.boundary_id + ": legacy ADU containment is unknown; report area field withheld.");
+                } else if (*facts.contained_within_primary && boundary.measurement) {
+                    const auto projected_category=category==AppraisalAreaCategory::adu_above_grade_finished ?
+                        AppraisalAreaCategory::above_grade_finished : AppraisalAreaCategory::above_grade_nonstandard_finished;
+                    result.primary_area_fields[projected_category]+=boundary.measurement->net_square_metres;
+                    if(projected_category==AppraisalAreaCategory::above_grade_finished)
+                        result.primary_above_grade_finished_square_metres += boundary.measurement->net_square_metres;
+                }
+            }
+            for (const auto& room : facts.rooms) {
+                if (!room_ids.insert(room.room_id).second) throw std::invalid_argument("Duplicate room membership: " + room.room_id);
+                if (!category) throw std::invalid_argument("Room membership has no current qualified category.");
+                const bool noncontinuous = *category == AppraisalAreaCategory::noncontinuous_finished;
+                const bool primary = identity == DwellingIdentity::primary && !noncontinuous;
+                const bool finished_primary = *category == AppraisalAreaCategory::above_grade_finished ||
+                    *category == AppraisalAreaCategory::above_grade_nonstandard_finished ||
+                    *category == AppraisalAreaCategory::below_grade_finished ||
+                    *category == AppraisalAreaCategory::below_grade_nonstandard_finished;
+                const bool unfinished_primary = primary && (*category == AppraisalAreaCategory::above_grade_unfinished ||
+                    *category == AppraisalAreaCategory::below_grade_unfinished);
+                const bool uad3 = settings.contract == AppraisalReportingContract::uad_3_6;
+                if (!uad3 && unfinished_primary) {
+                    result.room_counts_available = false;
+                    result.issues.push_back(room.room_id + ": unfinished primary room form treatment is unresolved; primary room counts withheld.");
+                }
+                if (!uad3 && adu && (room.use != AppraisalRoomUse::other || room.legacy_total_room == true)) {
+                    result.room_counts_available = false;
+                    result.issues.push_back(room.room_id + ": ADU room mapping to primary form counts is unresolved; primary room counts withheld. Separate ADU detail remains available.");
+                }
+                // UAD 3.6 totals are per living unit across all grades, with no
+                // finished-only condition. Room use remains an explicit
+                // appraiser declaration, never a name or fixture inference.
+                const bool counted = primary && (finished_primary || (uad3 && unfinished_primary)) && (uad3 || !below);
+                result.rooms.push_back({room.room_id, boundary.boundary_id,
+                    text(entity.properties, "floor_id").value_or(""), room.use, *category, identity, counted});
+                if (settings.contract == AppraisalReportingContract::legacy_uad_2_6 && counted && !room.legacy_total_room) {
+                    result.room_counts_available = false;
+                    result.issues.push_back(room.room_id + ": explicitly declare membership in legacy Total Rooms; use labels do not establish it.");
+                }
+                if (counted) add_room(result.primary_counts, room);
+                if (primary && below) add_room(result.below_grade_counts, room);
+                if (noncontinuous) add_room(result.noncontinuous_counts, room);
+                // This is combined ADU summary detail, not a per-unit URAR
+                // field: the declaration model has no distinct ADU unit IDs.
+                if (adu) add_room(result.adu_counts, room);
+            }
+        } catch (const std::exception& error) {
+            result.area_fields_available = false; result.room_counts_available = false;
+            result.room_summaries_available = false;
+            result.issues.push_back(boundary.boundary_id + ": " + error.what());
+        }
+    }
+    std::sort(result.issues.begin(), result.issues.end());
+    result.issues.erase(std::unique(result.issues.begin(), result.issues.end()), result.issues.end());
+    return result;
+}
+} // namespace
+
+nlohmann::json appraisal_reporting_json(const AppraisalReportingSettings& value) {
+    return {{"version", 1}, {"contract", reporting_contract_token(value.contract)},
+            {"room_inventory_complete", value.room_inventory_complete}};
+}
+nlohmann::json appraisal_reporting_json(const AppraisalAreaReportingFacts& value) {
+    Json result{{"version", 1}, {"source_geometry_sha256", value.source_geometry_sha256}, {"rooms", Json::array()}};
+    if (value.contained_within_primary) result["contained_within_primary"] = *value.contained_within_primary;
+    for (const auto& room : value.rooms) {
+        Json item{{"room_id", room.room_id}, {"use", room_use_token(room.use)}};
+        if (room.legacy_total_room) item["legacy_total_room"] = *room.legacy_total_room;
+        result["rooms"].push_back(std::move(item));
+    }
+    (void)parse_appraisal_area_reporting_facts(result);
+    return result;
+}
+AppraisalReportingSettings parse_appraisal_reporting_settings(const Json& value) {
+    reporting_keys(value, {"version", "contract", "room_inventory_complete"});
+    const auto token = text(value, "contract").value_or("");
+    AppraisalReportingContract contract;
+    if (token == "legacy_uad_2_6") contract = AppraisalReportingContract::legacy_uad_2_6;
+    else if (token == "uad_3_6") contract = AppraisalReportingContract::uad_3_6;
+    else throw std::invalid_argument("Unsupported reporting contract");
+    return {contract, reporting_bool(value, "room_inventory_complete")};
+}
+AppraisalAreaReportingFacts parse_appraisal_area_reporting_facts(const Json& value) {
+    reporting_keys(value, {"version", "source_geometry_sha256", "contained_within_primary", "rooms"});
+    AppraisalAreaReportingFacts result;
+    result.source_geometry_sha256 = text(value, "source_geometry_sha256").value_or("");
+    if (!digest_text(result.source_geometry_sha256)) throw std::invalid_argument("Reporting source geometry SHA256 is invalid");
+    if (value.contains("contained_within_primary")) result.contained_within_primary = reporting_bool(value, "contained_within_primary");
+    if (!value.contains("rooms") || !value.at("rooms").is_array() || value.at("rooms").size() > 10000)
+        throw std::invalid_argument("rooms must be a bounded declaration array");
+    std::set<std::string> unique;
+    for (const auto& item : value.at("rooms")) {
+        if (!item.is_object()) throw std::invalid_argument("Room declaration must be an object");
+        for (const auto& [key, ignored] : item.items()) {
+            (void)ignored;
+            if (key != "room_id" && key != "use" && key != "legacy_total_room") throw std::invalid_argument("Unknown room declaration field: " + key);
+        }
+        const auto id = text(item, "room_id").value_or("");
+        if (id.empty() || id.size() > 256 || id.find_first_not_of(" \t\r\n") == std::string::npos || !unique.insert(id).second)
+            throw std::invalid_argument("Room IDs must be bounded, nonblank and unique");
+        AppraisalRoomDeclaration room{id, room_use(text(item, "use").value_or("")), {}};
+        if (item.contains("legacy_total_room")) room.legacy_total_room = reporting_bool(item, "legacy_total_room");
+        result.rooms.push_back(std::move(room));
+    }
+    return result;
+}
+std::string appraisal_reporting_source_digest(const DocumentSnapshot& source, const std::string& boundary_id) {
+    // The persisted V1 source_geometry_sha256 key binds geometry together with
+    // the exact appraisal observations and owner context that interpret rooms
+    // and ADU containment. Reporting declarations/output and presentation are
+    // excluded so confirmation is neither self-referential nor name-dependent.
+    std::map<std::string, Entity, std::less<>> binding;
+    std::set<std::string> active;
+    const auto required_owner = [&](const std::string& id, const char* type) -> const Entity& {
+        const auto found = source.entities().find(id);
+        if (found == source.entities().end() || found->second.type != type)
+            throw std::invalid_argument(std::string("Reporting source references an unavailable ") + type);
+        return found->second;
+    };
+    const auto bind_owner = [&](const Entity& owner, std::initializer_list<const char*> keys) {
+        Json properties = Json::object();
+        for (const auto* key : keys) if (owner.properties.contains(key)) properties[key] = owner.properties.at(key);
+        binding.emplace(owner.id, Entity{owner.id, owner.type, std::move(properties), false, Json::object()});
+    };
+    std::function<void(const std::string&)> visit = [&](const std::string& id) {
+        if (!active.insert(id).second) throw std::invalid_argument("Cyclic reporting geometry dependency");
+        const auto found = source.entities().find(id);
+        if (found == source.entities().end() || !boundary_type(found->second.type)) throw std::invalid_argument("Reporting boundary is unavailable");
+        const auto& item = found->second;
+        auto children = deduction_ids(item); std::sort(children.begin(), children.end());
+        Json properties{{"geometry", appraisal_ceiling_geometry_digest(geometry(item), {})}, {"deductions", children}};
+        for (const auto* key : {"floor_id", "building_id", "property_id", "appraisal_facts"})
+            if (item.properties.contains(key)) properties[key] = item.properties.at(key);
+        properties["calculation_scope"] = scope(item);
+        const auto adjustment = factor(item.properties);
+        properties["factor"] = {adjustment.numerator, adjustment.denominator};
+        const auto& floor = required_owner(text(item.properties, "floor_id").value_or(""), "floor");
+        const auto& building = required_owner(text(floor.properties, "building_id").value_or(""), "building");
+        const auto& property = required_owner(text(building.properties, "property_id").value_or(""), "property");
+        (void)context(source, item, property.id);
+        bind_owner(floor, {"building_id", "property_id", "appraisal_facts"});
+        bind_owner(building, {"property_id"});
+        bind_owner(property, {"calculation_workflow", "appraisal_policy"});
+        binding.emplace(id, Entity{id, item.type, std::move(properties), false, Json::object()});
+        for (const auto& child : children) visit(child);
+        active.erase(id);
+    };
+    visit(boundary_id);
+    return entity_map_digest(binding);
+}
+void validate_appraisal_reporting_changes(const DocumentSnapshot& source, const AppraisalReportingChanges& changes,
+    const std::set<std::string, std::less<>>* visible_entity_ids) {
+    if (changes.revision != source.revision() || changes.source_document_id != source.document_id() ||
+        changes.source_snapshot_sha256 != document_snapshot_digest(source))
+        throw std::invalid_argument("Reporting changes belong to another project state");
+    (void)parse_appraisal_reporting_settings(appraisal_reporting_json(changes.settings));
+    const auto report = build_appraisal_document_report(source, changes.property_id, AreaUnit::square_foot, visible_entity_ids);
+    if (!report.configured) throw std::invalid_argument("Reporting requires an enabled appraisal property");
+    std::map<std::string, AppraisalAreaReportingFacts> replacements;
+    for (const auto& [id, facts] : changes.areas) {
+        if (!replacements.emplace(id, facts).second) throw std::invalid_argument("Duplicate reporting area changes");
+        const auto boundary = std::find_if(report.boundaries.begin(), report.boundaries.end(), [&](const auto& b) { return b.boundary_id == id; });
+        if (boundary == report.boundaries.end() || boundary->exclusion || !boundary->facts || boundary->facts->use != AreaUse::dwelling)
+            throw std::invalid_argument("Reporting change is outside this property's dwelling measurements");
+        (void)parse_appraisal_area_reporting_facts(appraisal_reporting_json(facts));
+        if (facts.source_geometry_sha256 != appraisal_reporting_source_digest(source, id)) throw std::invalid_argument("Reporting source observations are stale");
+        if (facts.contained_within_primary == true && (!boundary->facts->ansi ||
+            boundary->facts->ansi->dwelling_identity != DwellingIdentity::attached_adu))
+            throw std::invalid_argument("Only an attached ADU may be declared contained within the primary dwelling");
+    }
+    std::set<std::string> unique;
+    for (const auto& boundary : report.boundaries) {
+        if (boundary.exclusion || !boundary.facts || boundary.facts->use != AreaUse::dwelling) continue;
+        const auto changed = replacements.find(boundary.boundary_id);
+        std::optional<AppraisalAreaReportingFacts> facts;
+        if (changed != replacements.end()) facts = changed->second;
+        else {
+            const auto& properties = source.entities().at(boundary.boundary_id).properties;
+            const auto stored = properties.find("appraisal_reporting");
+            if (stored != properties.end()) facts = parse_appraisal_area_reporting_facts(*stored);
+        }
+        if (facts) for (const auto& room : facts->rooms)
+            if (!unique.insert(room.room_id).second) throw std::invalid_argument("Duplicate room membership: " + room.room_id);
+    }
+}
 
 CalculationProfile appraisal_display_profile(
     const nlohmann::json& property_properties, AreaUnit display_unit) {
@@ -682,6 +986,13 @@ AppraisalDocumentReport build_appraisal_document_report(
     }
     std::sort(result.issues.begin(), result.issues.end());
     result.issues.erase(std::unique(result.issues.begin(), result.issues.end()), result.issues.end());
+    if (const auto stored = property->second.properties.find("appraisal_reporting"); stored != property->second.properties.end()) {
+        try { result.reporting = form_projection(document, result, parse_appraisal_reporting_settings(*stored)); }
+        catch (const std::exception& error) {
+            result.reporting = AppraisalFormProjection{};
+            result.reporting->issues.push_back(std::string("Reporting configuration invalid: ") + error.what());
+        }
+    }
     return result;
 }
 

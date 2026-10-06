@@ -24,6 +24,51 @@ including the normal PNG reference decoder, persisted reference assets and
 stable project/2D/native-3D output hashes. This is developer-machine evidence;
 clean-machine, network-denied, hardware and human acceptance remain open.
 
+### Current implementation checkpoint
+
+The next source checkpoint adds an editable appraisal room-reporting contract,
+explicit conditional measurement declarations, and native 3D hosted-object
+gesture corrections. It has not yet replaced the installed candidate above.
+
+- Reporting is an atomic document edit from Details. Entered room types and
+  legacy Total Rooms membership are explicit observations. UAD 3.6 primary
+  counts include the declared rooms across grades and finish categories;
+  legacy unresolved ADU/unfinished-room primary mappings are withheld. Combined
+  ADU detail is clearly identified; separate living-unit identity and level
+  summaries remain an implementation gap. The joint-GSE reference and
+  implementation guides, version 1.4, support the implemented room mapping;
+  they do not certify a provider exchange or ANSI calculation.
+- Room confirmations bind the current geometry, deductions, appraisal facts,
+  measurement policy and physical owners. The editor checks the complete
+  captured snapshot, including retained history, and the semantic design phase
+  before committing. Presentation hiding does not remove appraisal facts.
+- Plans, uninspected-interior and indirect-measurement conditions have separate
+  declaration fields. Generic notes do not satisfy them. Incomplete observations
+  remain saveable while qualified output is withheld. Prescribed publisher
+  declaration wording remains unverified.
+- Native Move, rotation and scale preview the host together with its visible
+  hosted openings or stair railings. One authoritative commit feeds plans,
+  schedules and regeneration; cancellation and Undo restore the group. A failed
+  image export retains usable transform controls and allows retry. Transient
+  preparation progress has its own status channel and no longer becomes a
+  persistent shell error.
+- Durable saving identifies the filesystem through the already checked parent
+  handle instead of a restricted volume-root query. Fixed local NTFS/ReFS and
+  non-reparse-parent checks remain. The changed installed main application must
+  still pass the restricted save/reopen route before that route advances.
+- Native format 56 and extraction format 54 preserve these reporting and typed
+  declaration records throughout retained history. Older readers must refuse
+  the elevated floor; old files remain readable without invented observations.
+
+Affected Release builds pass. The calculation, appraisal-document, reporting,
+Details, ANSI desktop lifecycle, partition, project-storage, exchange and native
+preparation checks pass. The actual native gestures scenario passes at DPR 1,
+including MainWindow commits, schedules, Undo/Redo and save/reopen; the separate
+export-path scenario also passes. Root inspected the actual editor, Details and
+native captures. Private receipts retain the preceding fixture and integration
+failures as well as their focused corrections. Human usability, full product
+acceptance and production qualification remain open.
+
 The current source-delivery batch adds explicit CPython SPDX, GEOS recipe and
 OpenBLAS wheel/recipe evidence. Original publisher metadata, parent archive
 identity, selected archive members, source/notice bytes and historical recipe

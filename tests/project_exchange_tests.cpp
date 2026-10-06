@@ -30,6 +30,27 @@ void check(bool value, const char *message) {
   if (!value)
     throw std::runtime_error(message);
 }
+void test_appraisal_reporting_export_floor(const std::filesystem::path& root) {
+  auto property = sketch::Entity::create("property", {{"name", "Report property"}});
+  auto document = sketch::Document::create({property});
+  property.properties["appraisal_reporting"] = {{"version", 1}, {"contract", "uad_3_6"},
+      {"room_inventory_complete", false}};
+  document.apply(sketch::ApplyEntityChanges{document.revision(), {sketch::EntityChange::upsert(property)}, {}, "Declare reporting"});
+  const auto changed = document.snapshot();
+  auto deleted = sketch::Document::fork(changed);
+  deleted.apply(sketch::ApplyEntityChanges{deleted.revision(), {sketch::EntityChange::erase(property.id)}, {}, "Delete reported owner"});
+  document.undo(document.revision());
+  unsigned index = 0;
+  for (const auto& snapshot : {changed, document.snapshot(), deleted.snapshot()}) {
+    const auto output = root / ("reporting-v54-" + std::to_string(index++));
+    sketch::extract_project(snapshot, output);
+    std::ifstream input(output / "project.json");
+    const auto encoded = nlohmann::json::parse(input);
+    check(encoded.at("exchange_version") == 54 && encoded.at("revisions").size() == snapshot.history().size(),
+        "current, undone and deleted reporting facts require exchange54 with complete retained history");
+  }
+}
+
 void test_translation_export(const std::filesystem::path& root) {
   sketch::BoundaryConstructionRecord record;
   record.schema_version = sketch::boundary_receipt_schema_version_v2;
@@ -1331,6 +1352,7 @@ int main() {
     }
     }
     test_view_appearance_export_floor(root);
+    test_appraisal_reporting_export_floor(root);
     test_live_exterior_source_exchange_v17(root);
     test_live_exterior_source_exchange_v17(root, true);
     test_live_exterior_source_exchange_v17(root, true,true);

@@ -568,6 +568,7 @@ public:
     [[nodiscard]] bool editSelectedAppraisalFacts(
         const QString& declarations_json, std::optional<Revision> expected_revision = std::nullopt);
     void showAppraisalFacts();
+    void showAppraisalReporting(const QString& property_id = {});
     [[nodiscard]] bool setSelectedCalculationRule(bool include_in_building,
                                                    bool include_in_living);
     // Applies an analytic transform to a selected area, measured stroke or wall.

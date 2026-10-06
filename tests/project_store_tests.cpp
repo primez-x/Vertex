@@ -536,6 +536,26 @@ void test_save_reopen_preserves_exact_revision_history_and_assets() {
             "navigation after reopen must invalidate the old authoring source binding");
 }
 
+void test_save_rejects_reparse_parent_directory() {
+#ifdef _WIN32
+    TempDirectory temp;
+    const auto real_parent = temp.path / "ordinary-parent";
+    const auto linked_parent = temp.path / "linked-parent";
+    std::filesystem::create_directory(real_parent);
+    const auto created = CreateSymbolicLinkW(
+        linked_parent.c_str(), real_parent.c_str(),
+        SYMBOLIC_LINK_FLAG_DIRECTORY | SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE);
+    require(created != 0, "test fixture must create a directory reparse point");
+
+    const auto destination = linked_parent / "project.bldproj";
+    require_error([&] { (void)ProjectStore::save(destination, populated_document().snapshot()); },
+                  StorageErrorCode::io_error,
+                  "saving through a reparse-point parent must be refused");
+    require(!std::filesystem::exists(real_parent / destination.filename()),
+            "refusing a reparse-point parent must not create a project in its target");
+#endif
+}
+
 void test_existing_destination_requires_fingerprint_and_creates_backup() {
     TempDirectory temp;
     const auto file = temp.path / "project.psketch";
@@ -3197,6 +3217,59 @@ void test_ansi_appraisal_reader_floor_retains_history(unsigned policy_version = 
         "unrelated vendor field collision stays opaque in its original format");
 }
 
+void test_appraisal_reporting_reader_floor_retains_history() {
+    TempDirectory temp;
+    const auto settings = nlohmann::json{{"version", 1}, {"contract", "uad_3_6"},
+        {"room_inventory_complete", false}};
+    auto reporting_property = entity("reporting-property", "property", {{"appraisal_reporting", settings}});
+    auto reporting_area = entity("reporting-area", "measurement_boundary", {
+        {"boundary", nlohmann::json::array({
+            {{"start", {0,0}}, {"end", {2,0}}, {"sweep_radians", 0}},
+            {{"start", {2,0}}, {"end", {2,2}}, {"sweep_radians", 0}},
+            {{"start", {2,2}}, {"end", {0,2}}, {"sweep_radians", 0}},
+            {{"start", {0,2}}, {"end", {0,0}}, {"sweep_radians", 0}}})},
+        {"appraisal_reporting", {{"version", 1}, {"source_geometry_sha256", std::string(64, '0')},
+            {"rooms", nlohmann::json::array()}}}});
+    auto declarations_property = entity("declarations-property", "property", {
+        {"appraisal_policy", {{"policy_kind", "ansi_z765_2021"}, {"version", 2},
+            {"ansi", {{"limitation_declarations", nlohmann::json::array({
+                {{"kind", "based_on_plans"}, {"statement", "Measurement based on supplied plans."}}})}}}}}});
+    for (const auto& evidence : {reporting_property, reporting_area, declarations_property}) {
+        auto original = evidence;
+        original.properties.erase("appraisal_reporting");
+        original.properties.erase("appraisal_policy");
+        auto document = Document::create({original});
+        require(ProjectStore::required_format_version(document.snapshot()) == 1,
+            "ordinary property and boundary retain historical reader floor");
+        document.apply(ApplyEntityChanges{document.revision(), {EntityChange::upsert(evidence)}, {}, "Declare reporting facts"});
+        const auto changed = document.snapshot();
+        auto deleted = Document::fork(changed);
+        deleted.apply(ApplyEntityChanges{deleted.revision(), {EntityChange::erase(evidence.id)}, {}, "Delete reported owner"});
+        document.undo(document.revision());
+        for (const auto& snapshot : {changed, document.snapshot(), deleted.snapshot()}) {
+            require(ProjectStore::required_format_version(snapshot) == 56,
+                "typed declarations and reporting facts require v56 across current, undone and deleted owners");
+            const auto path = temp.path / ("reporting-" + sketch::make_stable_id() + ".bldproj");
+            (void)ProjectStore::save(path, snapshot);
+            const auto restored = ProjectStore::load(path).document.snapshot();
+            require(restored.entities() == snapshot.entities() && restored.history().size() == snapshot.history().size(),
+                "reporting facts and retained history reopen without alteration");
+            execute_sql(path, "PRAGMA user_version=55; UPDATE metadata SET value='55' WHERE key='format_version'");
+            rewrite_logical_digest(path);
+            const auto hash = ProjectStore::file_sha256(path);
+            require_error([&] { (void)ProjectStore::load(path); }, StorageErrorCode::unsupported_format,
+                "recomputed digest cannot downgrade retained reporting semantics");
+            require(ProjectStore::file_sha256(path) == hash, "refused downgrade preserves project bytes");
+        }
+    }
+    auto vendor = entity("vendor-reporting", "generic", {{"appraisal_reporting", settings}});
+    require(ProjectStore::required_format_version(Document::create({vendor}).snapshot()) == 1,
+        "unrelated vendor property collision remains opaque at its original floor");
+    reporting_property.properties["appraisal_reporting"]["version"] = 99;
+    require(ProjectStore::required_format_version(Document::create({reporting_property}).snapshot()) == 56,
+        "future reporting marker cannot downgrade to a reader unaware of reporting facts");
+}
+
 void test_view_appearance_reader_floor_and_source_integrity() {
     TempDirectory temp;
     const auto rejects_source = [](auto operation, std::string_view message) {
@@ -3972,6 +4045,7 @@ int main() {
         test_extended_annotation_reader_floor_and_extraction();
         test_ansi_appraisal_reader_floor_retains_history();
         test_ansi_appraisal_reader_floor_retains_history(2);
+        test_appraisal_reporting_reader_floor_retains_history();
         test_automatic_angle_redraw_reader_floor();
         test_rigid_group_storage_and_history_floors();
         test_live_exterior_source_storage_and_history_floor();
@@ -3991,6 +4065,7 @@ int main() {
         test_reviewed_physical_room_repair_floor_and_downgrade();
         test_styled_dimension_checkpoint_archive_roundtrip();
         test_save_reopen_preserves_exact_revision_history_and_assets();
+        test_save_rejects_reparse_parent_directory();
         test_existing_destination_requires_fingerprint_and_creates_backup();
         test_external_change_and_injected_failure_preserve_original();
         test_asset_hash_corruption_and_unsupported_format_are_rejected();

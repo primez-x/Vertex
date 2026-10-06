@@ -4,10 +4,13 @@
 
 #include "sketch/architectural_workflow_contract.hpp"
 #include "sketch/document.hpp"
+#include "sketch/document_wall.hpp"
+#include "sketch/stair_semantics.hpp"
 
 #include <AIS_InteractiveContext.hxx>
 #include <AIS_Manipulator.hxx>
 #include <AIS_ManipulatorMode.hxx>
+#include <AIS_ManipulatorOwner.hxx>
 #include <AIS_SelectionScheme.hxx>
 #include <AIS_Shape.hxx>
 #include <Aspect_DisplayConnection.hxx>
@@ -15,6 +18,7 @@
 #include <OpenGl_GraphicDriver.hxx>
 #include <OpenGl_View.hxx>
 #include <OpenGl_Window.hxx>
+#include <PrsMgr_PresentationManager.hxx>
 #include <Quantity_Color.hxx>
 #include <Standard_Failure.hxx>
 #include <TopoDS_Shape.hxx>
@@ -150,6 +154,7 @@ public:
     QString native_error;
     QString geometry_status;
     QString operation_error;
+    QString export_error;
     bool native_attempted{};
     bool native_ready{};
     bool has_fit{};
@@ -175,6 +180,7 @@ public:
     QPointF left_press;
     bool left_moved{};
     std::optional<std::string> translation_entity_id;
+    std::vector<std::string> translation_preview_ids;
     struct WorldPoint {
         double x{};
         double y{};
@@ -272,8 +278,7 @@ public:
 
     void notify_error(const QString& text) noexcept {
         // Observers do not own preparation or publication state. In particular,
-        // a throwing "Preparing" observer must not prevent the timer starting,
-        // and a throwing failure observer must not replace the real diagnostic.
+        // a throwing failure observer must not replace the real diagnostic.
         try {
             // Retain the callable while dispatching: the observer may replace
             // its own registration during the callback.
@@ -283,11 +288,18 @@ public:
         }
     }
 
-    void show_status(const QString& text) {
+    void show_status(const QString& text, bool report_error = true) {
         geometry_status = text;
         operation_error.clear();
+        export_error.clear();
         refresh_status_label();
-        if (!text.isEmpty()) notify_error(text);
+        try {
+            const auto callback = owner->onGeometryStatusChanged;
+            if (callback) callback(text);
+        } catch (...) {
+            // A progress observer cannot prevent scheduling or publication.
+        }
+        if (report_error && !text.isEmpty()) notify_error(text);
     }
 
     void show_native_error(const QString& text) {
@@ -302,15 +314,25 @@ public:
         notify_error(text);
     }
 
+    void show_export_error(const QString& text) {
+        // A refused destination or image writer failure does not invalidate
+        // the prepared model, viewport or a restored manipulation gesture.
+        export_error = text;
+        refresh_status_label();
+        notify_error(text);
+    }
+
     void refresh_status_label() {
         const auto text = !native_error.isEmpty()
                               ? native_error
-                              : (!geometry_status.isEmpty() ? geometry_status : operation_error);
+                              : (!geometry_status.isEmpty() ? geometry_status :
+                                 (!operation_error.isEmpty() ? operation_error : export_error));
         status_label->setText(text);
         status_label->setVisible(!text.isEmpty());
         status_label->raise();
         auto bounds = owner->rect().adjusted(12, 12, -12, -12);
-        if (regenerator.is_pending() && native_error.isEmpty()) {
+        if ((regenerator.is_pending() || !export_error.isEmpty()) &&
+            native_error.isEmpty() && operation_error.isEmpty()) {
             // Keep the previous valid scene visible while preparing its
             // replacement; a progress banner must not cover the viewport.
             bounds.setHeight(std::min(bounds.height(), status_label->sizeHint().height()));
@@ -324,7 +346,7 @@ public:
         prepared_geometry.reset();
         geometry_prepared = false;
         regenerator.request(*snapshot, visible_ids);
-        show_status(QStringLiteral("Preparing 3D geometry…"));
+        show_status(QStringLiteral("Preparing 3D geometry…"), false);
         preparation_timer->start();
     }
 
@@ -574,19 +596,47 @@ public:
     }
 
     bool supports_direct_translation(const QString& id) const {
-        if (!snapshot.has_value() || id.isEmpty()) {
-            return false;
-        }
-        const auto found = snapshot->entities().find(id.toStdString());
-        return found != snapshot->entities().end() &&
-               can_transform_architectural_entity_type(found->second.type);
+        return supports_direct_transform(id.toStdString());
     }
 
     bool supports_direct_transform(const std::string& id) const {
         if (!snapshot.has_value() || id.empty()) return false;
         const auto found = snapshot->entities().find(id);
-        return found != snapshot->entities().end() &&
-               can_transform_architectural_entity_type(found->second.type);
+        if (found == snapshot->entities().end() ||
+            !can_transform_architectural_entity_type(found->second.type)) return false;
+        if (found->second.type == "railing") {
+            try {
+                const auto rail = decode_railing_properties(id, found->second.properties);
+                // Hosted guards are placed by their stair. The shell commits
+                // one selected host, so a standalone guard cannot transform.
+                return !rail.host && !rail.landing_host;
+            } catch (...) { return false; }
+        }
+        return true;
+    }
+
+    std::vector<std::string> transform_presentation_ids(const std::string& host_id) const {
+        std::vector<std::string> result{host_id};
+        if (!snapshot || context.IsNull()) return result;
+        const auto host = snapshot->entities().find(host_id);
+        if (host == snapshot->entities().end()) return result;
+        for (const auto& [id, entity] : snapshot->entities()) {
+            bool dependent = false;
+            if (host->second.type == "wall" && entity.type == "opening") {
+                std::string wall_id, error;
+                dependent = read_document_wall_id(entity, wall_id, error) && wall_id == host_id;
+            } else if (host->second.type == "stair" && entity.type == "railing") {
+                try {
+                    const auto rail = decode_railing_properties(id, entity.properties);
+                    dependent = (rail.host && rail.host->stair_id == host_id) ||
+                                (rail.landing_host && rail.landing_host->stair_id == host_id);
+                } catch (...) { }
+            }
+            const auto solid = solids.find(id);
+            if (dependent && solid != solids.end() && !solid->second.presentation.IsNull() &&
+                context->IsDisplayed(solid->second.presentation)) result.push_back(id);
+        }
+        return result;
     }
 
     void detach_manipulator() noexcept {
@@ -637,7 +687,11 @@ public:
         }
         AIS_Manipulator::OptionsForAttach options;
         options.SetAdjustPosition(true).SetAdjustSize(false).SetEnableModes(true);
-        manipulator->Attach(found->second.presentation, options);
+        auto group = occ::handle<NCollection_HSequence<occ::handle<AIS_InteractiveObject>>>(
+            new NCollection_HSequence<occ::handle<AIS_InteractiveObject>>());
+        for (const auto& id : transform_presentation_ids(*selected_entity_id))
+            group->Append(solids.at(id).presentation);
+        manipulator->Attach(group, options);
         manipulator_entity_id = selected_entity_id;
         context->ClearSelected(false);
         context->AddOrRemoveSelected(found->second.presentation, false);
@@ -704,8 +758,8 @@ public:
     }
 
     void clear_translation_preview() {
-        if (translation_entity_id.has_value()) {
-            const auto found = solids.find(*translation_entity_id);
+        for (const auto& id : translation_preview_ids) {
+            const auto found = solids.find(id);
             if (found != solids.end() && !found->second.presentation.IsNull()) {
                 found->second.presentation->ResetTransformation();
                 if (native_ready && !context.IsNull()) {
@@ -713,6 +767,7 @@ public:
                 }
             }
         }
+        translation_preview_ids.clear();
     }
 
     void preview_translation(const WorldPoint& current) {
@@ -731,9 +786,13 @@ public:
         }
         gp_Trsf transform;
         transform.SetTranslation(gp_Vec(dx, dy, dz));
-        found->second.presentation->SetLocalTransformation(transform);
-        if (native_ready && !context.IsNull()) {
-            context->Redisplay(found->second.presentation, false);
+        for (const auto& id : translation_preview_ids) {
+            const auto member = solids.find(id);
+            if (member == solids.end() || member->second.presentation.IsNull()) continue;
+            member->second.presentation->SetLocalTransformation(transform);
+            if (native_ready && !context.IsNull()) {
+                context->Redisplay(member->second.presentation, false);
+            }
         }
         if (native_ready && !viewer.IsNull()) {
             viewer->RedrawImmediate();
@@ -784,34 +843,49 @@ public:
             return false;
         }
         if (path.trimmed().isEmpty()) {
-            show_operation_error(QStringLiteral("3D view image export requires a destination path"));
+            show_export_error(QStringLiteral("3D view image export requires a destination path"));
             return false;
         }
         const bool restore_manipulator = !manipulator.IsNull() && manipulator->IsAttached();
+        const int control_display_mode = restore_manipulator && manipulator->HasDisplayMode()
+            ? manipulator->DisplayMode() : context->DisplayMode();
         const auto highlighted_id = selected_entity_id;
-        detach_manipulator();
-        if (!context.IsNull()) context->ClearSelected(false);
-        const auto restore_controls = [this, restore_manipulator, highlighted_id] {
-            if (highlighted_id.has_value() && !context.IsNull()) {
-                const auto found = solids.find(*highlighted_id);
-                if (found != solids.end() && context->IsDisplayed(found->second.presentation))
-                    context->AddOrRemoveSelected(found->second.presentation, false);
-            }
-            if (restore_manipulator) {
-                try { attach_manipulator(); } catch (...) {}
+        const auto restore_controls = [this, restore_manipulator, control_display_mode, highlighted_id] {
+            try {
+                if (restore_manipulator && !context.IsNull())
+                    context->MainPrsMgr()->SetVisibility(manipulator, control_display_mode, true);
+                if (highlighted_id.has_value() && !context.IsNull()) {
+                    const auto found = solids.find(*highlighted_id);
+                    if (found != solids.end() && context->IsDisplayed(found->second.presentation))
+                        context->SetSelected(found->second.presentation, false);
+                }
+                return true;
+            } catch (...) {
+                show_operation_error(QStringLiteral("3D export could not restore editing controls. Refresh the model view."));
+                return false;
             }
         };
         try {
+            // Retain attachment and OCCT gesture start state. This phase is
+            // inside the restoration boundary, including partial hide failures.
+            if (restore_manipulator && !context.IsNull()) {
+                context->MainPrsMgr()->SetVisibility(manipulator, control_display_mode, false);
+                context->MainPrsMgr()->ClearImmediateDraw();
+            }
+            if (!context.IsNull()) context->ClearSelected(false);
             int width = 0, height = 0;
             view->Window()->Size(width, height);
             Image_PixMap pixels;
             if (width <= 0 || height <= 0 || !view->ToPixMap(pixels, width, height, Graphic3d_BT_RGB)) {
                 restore_controls();
-                show_operation_error(QStringLiteral(
+                show_export_error(QStringLiteral(
                     "OCCT could not capture the 3D framebuffer"));
                 return false;
             }
             const auto image = detail::framebufferImage(pixels);
+            // Restore before publishing a file. A control-restoration failure
+            // therefore cannot replace the user's existing image destination.
+            if (!restore_controls()) return false;
             QSaveFile destination(path);
             const auto encoding = QFileInfo(path).suffix().toLatin1().toLower();
             QImageWriter writer(&destination, encoding);
@@ -819,27 +893,26 @@ public:
                 !writer.write(image) || !destination.commit()) {
                 destination.cancelWriting();
                 restore_controls();
-                show_operation_error(QStringLiteral("3D image could not be saved: %1")
+                show_export_error(QStringLiteral("3D image could not be saved: %1")
                     .arg(writer.errorString()));
                 return false;
             }
         } catch (const Standard_Failure& error) {
             restore_controls();
-            show_operation_error(QStringLiteral("OCCT 3D framebuffer export failed: ") +
+            show_export_error(QStringLiteral("OCCT 3D framebuffer export failed: ") +
                                  exception_text(error));
             return false;
         } catch (const std::exception& error) {
             restore_controls();
-            show_operation_error(QStringLiteral("3D framebuffer export failed: ") +
+            show_export_error(QStringLiteral("3D framebuffer export failed: ") +
                                  exception_text(error));
             return false;
         } catch (...) {
             restore_controls();
-            show_operation_error(QStringLiteral("3D framebuffer export failed: unknown failure"));
+            show_export_error(QStringLiteral("3D framebuffer export failed: unknown failure"));
             return false;
         }
-        restore_controls();
-        operation_error.clear();
+        export_error.clear();
         refresh_status_label();
         return true;
     }
@@ -918,7 +991,8 @@ void NativeModelView::fitAll() {
 
 void NativeModelView::setSelectedEntity(const QString& entity_id) {
     const auto id = entity_id.trimmed().toStdString();
-    if (id.empty() || !m_impl->supports_direct_transform(id)) {
+    const auto solid = m_impl->solids.find(id);
+    if (id.empty() || !m_impl->snapshot || !m_impl->snapshot->entities().contains(id)) {
         m_impl->selected_entity_id.reset();
         m_impl->detach_manipulator();
         if (m_impl->native_ready && !m_impl->context.IsNull())
@@ -927,6 +1001,17 @@ void NativeModelView::setSelectedEntity(const QString& entity_id) {
         return;
     }
     m_impl->selected_entity_id = id;
+    if (!m_impl->supports_direct_transform(id)) {
+        m_impl->detach_manipulator();
+        if (!m_impl->context.IsNull()) {
+            m_impl->context->ClearSelected(false);
+            if (solid != m_impl->solids.end() && !solid->second.presentation.IsNull() &&
+                m_impl->context->IsDisplayed(solid->second.presentation))
+                m_impl->context->AddOrRemoveSelected(solid->second.presentation, false);
+        }
+        if (!m_impl->viewer.IsNull()) m_impl->viewer->Redraw();
+        return;
+    }
     try {
         m_impl->attach_manipulator();
     } catch (const Standard_Failure& error) {
@@ -967,7 +1052,7 @@ QString NativeModelView::lastError() const {
     if (!m_impl->geometry_status.isEmpty()) {
         return m_impl->geometry_status;
     }
-    return m_impl->operation_error;
+    return !m_impl->operation_error.isEmpty() ? m_impl->operation_error : m_impl->export_error;
 }
 
 bool NativeModelView::isGeometryPending() const noexcept {
@@ -1023,6 +1108,10 @@ void NativeModelView::setErrorCallback(std::function<void(QString)> callback) {
     onError = std::move(callback);
 }
 
+void NativeModelView::setGeometryStatusChangedCallback(std::function<void(QString)> callback) {
+    onGeometryStatusChanged = std::move(callback);
+}
+
 bool NativeModelView::beginMove(const QString& entity_id) {
     cancelInteraction();
     if (!isReady() || !m_impl->supports_direct_translation(entity_id)) return false;
@@ -1032,12 +1121,43 @@ bool NativeModelView::beginMove(const QString& entity_id) {
     m_impl->selected_entity_id = entity_id.toStdString();
     m_impl->detach_manipulator();
     m_impl->translation_entity_id = entity_id.toStdString();
+    m_impl->translation_preview_ids = m_impl->transform_presentation_ids(entity_id.toStdString());
     setCursor(Qt::SizeAllCursor);
     return true;
 }
 
 bool NativeModelView::isMoveActive() const noexcept {
     return m_impl->translation_entity_id.has_value();
+}
+
+std::optional<NativeModelView::TransformControl> NativeModelView::transformControlAt(
+    const QPointF& point) {
+    if (!isReady() || m_impl->context.IsNull() || m_impl->view.IsNull() ||
+        m_impl->manipulator.IsNull() || !m_impl->manipulator->IsAttached()) return std::nullopt;
+    const auto native = m_impl->input_point(point);
+    m_impl->context->MoveTo(native.x, native.y, m_impl->view, false);
+    const auto detected = occ::handle<AIS_ManipulatorOwner>::DownCast(
+        m_impl->context->DetectedOwner());
+    if (detected.IsNull() || m_impl->context->DetectedInteractive() != m_impl->manipulator)
+        return std::nullopt;
+    switch (detected->Mode()) {
+    case AIS_MM_Translation: return TransformControl::translation;
+    case AIS_MM_Rotation: return TransformControl::rotation;
+    case AIS_MM_Scaling: return TransformControl::scale;
+    default: return std::nullopt;
+    }
+}
+
+std::optional<std::array<double, 12>> NativeModelView::nativePresentationTransform(
+    const QString& entity_id) const {
+    const auto found = m_impl->solids.find(entity_id.toStdString());
+    if (found == m_impl->solids.end() || found->second.presentation.IsNull()) return std::nullopt;
+    std::array<double, 12> result{};
+    const auto& transform = found->second.presentation->LocalTransformation();
+    for (int row = 1; row <= 3; ++row)
+        for (int column = 1; column <= 4; ++column)
+            result[static_cast<std::size_t>((row - 1) * 4 + column - 1)] = transform.Value(row, column);
+    return result;
 }
 
 void NativeModelView::cancelInteraction() {

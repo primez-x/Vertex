@@ -8,6 +8,8 @@
 #include <QAction>
 #include <QApplication>
 #include <QComboBox>
+#include <QCheckBox>
+#include <QTableWidget>
 #include <QDir>
 #include <QFile>
 #include <QFont>
@@ -174,10 +176,65 @@ void ansi_report_html_pdf_canonical_units_and_evidence() {
             {"calculation_scope","building"},{"boundary",boundary},{"appraisal_facts",{{"finish","finished"},{"access","direct_interior"},
                 {"area_use","dwelling"},{"boundary_role","measured_area"},{"ansi",{{"year_round_suitable",true},{"finish_matches_dwelling",true},
                     {"dwelling_identity","primary"},{"ceiling",{{"kind","flat"},{"minimum_height_m",2.4384}}}}}}}})};
+    entities.front().properties["appraisal_reporting"]=sketch::appraisal_reporting_json(
+        sketch::AppraisalReportingSettings{sketch::AppraisalReportingContract::uad_3_6,true});
+    sketch::AppraisalAreaReportingFacts room_facts;
+    room_facts.source_geometry_sha256=sketch::appraisal_reporting_source_digest(sketch::Document::create(entities).snapshot(),"a");
+    room_facts.rooms={{"bedroom-explicit",sketch::AppraisalRoomUse::bedroom,true}};
+    entities.back().properties["appraisal_reporting"]=sketch::appraisal_reporting_json(room_facts);
     auto document=sketch::Document::create(entities);const auto source=document.snapshot();
     const auto report=sketch::build_appraisal_document_report(source,"p",sketch::AreaUnit::square_metre);
     require(report.qualified,"ANSI report fixture qualifies under declared rule checks");
     const auto html=sketch::desktop::appraisal_report_html(source,report,true,true);
+    require(html.contains("UAD 3.6 reporting") && html.contains("Primary all-grade room counts") &&
+        html.contains("1 bedrooms") && html.contains("bedroom-explicit") && html.contains("September 2026"),
+        "Actual HTML includes versioned fields, explicit room membership and guidance editions");
+    sketch::desktop::AppraisalReportingDialog editor(source,report);
+    auto& contract=child<QComboBox>(editor,"appraisalReportingContract");
+    auto& rooms=child<QTableWidget>(editor,"appraisalReportingRooms");
+    require(rooms.rowCount()==1 && rooms.item(0,0)->text()=="bedroom-explicit",
+        "Reporting editor exposes persisted typed room declarations");
+    contract.setCurrentIndex(contract.findData(static_cast<int>(sketch::AppraisalReportingContract::legacy_uad_2_6)));
+    bool applied=false;
+    editor.setApplyRequested([&](const sketch::AppraisalReportingChanges& changes,QString&){
+        sketch::validate_appraisal_reporting_changes(source,changes);
+        applied=changes.settings.contract==sketch::AppraisalReportingContract::legacy_uad_2_6 && changes.areas.size()==1;
+        return true;
+    });
+    child<QPushButton>(editor,"appraisalReportingSave").click();
+    require(applied && editor.result()==QDialog::Accepted,"Actual Save returns typed source-fenced reporting changes");
+    sketch::desktop::AppraisalReportingDialog rejected(source,report);
+    rejected.setApplyRequested([](const sketch::AppraisalReportingChanges&,QString& error){error="Source changed; reopen reporting";return false;});
+    child<QPushButton>(rejected,"appraisalReportingSave").click();
+    require(rejected.result()!=QDialog::Accepted && child<QLabel>(rejected,"appraisalReportingError").text().contains("Source changed"),
+        "Failed source-fenced transaction keeps the reporting editor and actionable error");
+    for (const bool malformed : {false, true}) {
+        auto scoped_entities = entities;
+        auto hidden = entities.back(); hidden.id = "hidden-room-area";
+        hidden.properties["boundary"] = json::array();
+        for (const auto& edge : square(10,0,3.048)) hidden.properties["boundary"].push_back(
+            {{"start",{edge.start.x,edge.start.y}},{"end",{edge.end.x,edge.end.y}},{"sweep_radians",edge.sweep_radians}});
+        if (malformed) hidden.properties["appraisal_reporting"] = {{"version",1},{"rooms","invalid hidden data"}};
+        scoped_entities.push_back(std::move(hidden));
+        const auto scoped_source = sketch::Document::create(scoped_entities).snapshot();
+        std::set<std::string,std::less<>> visible;
+        for (const auto& [id, item] : scoped_source.entities()) if (id != "hidden-room-area") visible.insert(id);
+        const auto scoped_report = sketch::build_appraisal_document_report(scoped_source,"p",sketch::AreaUnit::square_foot,&visible);
+        require(scoped_report.qualified && scoped_report.boundaries.size()==1,
+            "Reporting fixture independently excludes the other design-phase area");
+        sketch::desktop::AppraisalReportingDialog scoped_editor(scoped_source,scoped_report,nullptr,&visible);
+        require(child<QComboBox>(scoped_editor,"appraisalReportingArea").count()==1,
+            "Reporting editor lists only current semantic-phase areas");
+        bool scoped_applied=false;
+        scoped_editor.setApplyRequested([&](const sketch::AppraisalReportingChanges& changes,QString&){
+            sketch::validate_appraisal_reporting_changes(scoped_source,changes,&visible);
+            scoped_applied=changes.areas.size()==1 && changes.areas.front().first=="a";
+            return true;
+        });
+        child<QPushButton>(scoped_editor,"appraisalReportingSave").click();
+        require(scoped_applied && scoped_editor.result()==QDialog::Accepted,
+            "Hidden duplicate room membership and hidden malformed declarations cannot block a visible editor save");
+    }
     require(html.contains("MEASUREMENT SUMMARY") &&
         html.contains("Gross boundary area</td><td align='right'>100 sq ft") &&
         !html.contains("Gross boundary area</td><td align='right'>100.00 sq ft") &&
@@ -194,6 +251,8 @@ void ansi_report_html_pdf_canonical_units_and_evidence() {
     const auto path=directory.filePath("ansi-measurement.pdf");
     require(sketch::desktop::write_appraisal_report_pdf(source,report,true,path,error),"ANSI PDF exports authoritative report");
     const auto contents=pdf_text(path);
+    require(contents.contains("UAD 3.6 reporting") && contents.contains("bedroom-explicit"),
+        "Reopened PDF retains the same form projection and declared room evidence");
     require(contents.contains("MEASUREMENT SUMMARY") && contents.contains("100 sq ft") && contents.contains("40.0 ft") &&
         contents.contains("Interior inspected") && contents.contains("Direct measurement") && contents.contains("All rooms inspected <verified>.") &&
         contents.contains("normative",Qt::CaseInsensitive),"actual reopened PDF retains canonical measurements and declarations");

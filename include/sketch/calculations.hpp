@@ -127,12 +127,28 @@ struct AppraisalPolicy {
 };
 [[nodiscard]] std::string_view appraisal_policy_id(AppraisalPolicy policy);
 
+enum class AnsiDeclarationKind {
+    interior_not_inspected,
+    based_on_plans,
+    direct_measurement_not_possible
+};
+[[nodiscard]] std::string_view ansi_declaration_kind_name(AnsiDeclarationKind value);
+[[nodiscard]] std::optional<AnsiDeclarationKind> parse_ansi_declaration_kind(std::string_view token);
+struct AnsiLimitationDeclaration {
+    AnsiDeclarationKind kind;
+    std::string statement;
+};
 struct AnsiMeasurementDeclarations {
     std::optional<bool> interior_inspected;
     std::optional<bool> direct_measurement;
     std::optional<AcquisitionIncrement> acquisition_increment;
-    std::string limitations_statement;
+    std::string limitations_statement; // Supplemental text, not typed declaration evidence.
+    std::vector<AnsiLimitationDeclaration> limitation_declarations;
 };
+// Returns declaration kinds required by explicit measurement facts. Presence
+// checks do not verify prescribed publisher wording or lender-specific compliance.
+[[nodiscard]] std::vector<AnsiDeclarationKind> required_ansi_declarations(
+    MeasurementBasis basis, const AnsiMeasurementDeclarations& declarations);
 struct AnsiCeilingFacts {
     std::optional<CeilingKind> kind;
     std::optional<double> minimum_height_m;

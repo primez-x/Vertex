@@ -1,11 +1,14 @@
 #include "sketch/document.hpp"
 #include "sketch/building_entity.hpp"
+#include "sketch/architectural_document_adapter.hpp"
+#include "sketch/opening_assembly.hpp"
 #include "sketch/assembly_model.hpp"
 #include "sketch/constraint_authoring.hpp"
 #include "sketch/desktop/main_window.hpp"
 #include "sketch/visualization/native_model_view.hpp"
 #include "support/noninteractive_errors.hpp"
 #include "../src/visualization/framebuffer_image.hpp"
+#include "../src/desktop/plan_canvas.hpp"
 #include <QApplication>
 #include <QDir>
 #include <QDialog>
@@ -24,13 +27,17 @@
 #include <QWheelEvent>
 #include <QThread>
 #include <chrono>
+#include <algorithm>
 #include <cmath>
 #include <iostream>
+#include <map>
 #include <stdexcept>
 #include <vector>
 
 namespace {
 void check(bool condition, const char* message) { if (!condition) throw std::runtime_error(message); }
+void mouse(sketch::visualization::NativeModelView&,QEvent::Type,QPointF,
+           Qt::MouseButton,Qt::MouseButtons,Qt::KeyboardModifiers);
 void check_framebuffer_conversion() {
     for (const auto format : {Image_Format_RGB, Image_Format_BGR, Image_Format_RGB32,
                              Image_Format_BGR32, Image_Format_RGBA, Image_Format_BGRA}) {
@@ -78,6 +85,20 @@ void check_export_paths(sketch::visualization::NativeModelView& view, QTemporary
     check(!view.exportViewImage(blocked), "Unknown image encodings must fail explicitly");
     check(original.open(QIODevice::ReadOnly) && original.readAll() == QByteArray("keep original"),
           "Failed encoding must preserve existing destination bytes");
+    const auto export_error = view.lastError();
+    const auto original_transform = view.nativePresentationTransform(wall_id);
+    check(!export_error.isEmpty() && view.isReady() && view.beginMove(wall_id),
+          "A recoverable export failure must retain its diagnostic and permit Move before any successful retry");
+    const QPointF start(300,230), end(325,250);
+    mouse(view,QEvent::MouseButtonPress,start,Qt::LeftButton,Qt::LeftButton,Qt::NoModifier);
+    mouse(view,QEvent::MouseMove,end,Qt::NoButton,Qt::LeftButton,Qt::NoModifier);
+    check(original_transform && view.nativePresentationTransform(wall_id) != original_transform,
+          "Move after failed export must produce an actual native presentation preview");
+    view.cancelInteraction();
+    mouse(view,QEvent::MouseButtonRelease,end,Qt::LeftButton,Qt::NoButton,Qt::NoModifier);
+    check(view.lastError() == export_error && view.isReady() && !view.isMoveActive() &&
+          view.transformControlsVisible() && view.nativePresentationTransform(wall_id) == original_transform,
+          "Cancelling a real Move after failed export must restore controls without losing the export diagnostic");
     check(view.transformControlsVisible() && view.exportViewImage(temporary.filePath("after-failure.png")) &&
           view.transformControlsVisible() && QImage(temporary.filePath("after-failure.png")) == expected,
           "Export failure must restore editing controls and leave the framebuffer free of selection overlays");
@@ -150,6 +171,241 @@ void mouse(sketch::visualization::NativeModelView& view,QEvent::Type type,QPoint
            Qt::KeyboardModifiers modifiers = Qt::NoModifier) {
     QMouseEvent event(type,p,view.mapToGlobal(p.toPoint()),button,buttons,modifiers);
     QApplication::sendEvent(&view,&event);
+}
+
+using NativeTransform = std::array<double, 12>;
+constexpr NativeTransform identity_transform{1,0,0,0, 0,1,0,0, 0,0,1,0};
+bool near_transform(const NativeTransform& a, const NativeTransform& b) {
+    for (std::size_t i = 0; i < a.size(); ++i)
+        if (!std::isfinite(a[i]) || std::abs(a[i] - b[i]) > 1e-8) return false;
+    return true;
+}
+NativeTransform presentation_transform(sketch::visualization::NativeModelView& view,
+                                       const std::string& id) {
+    const auto value = view.nativePresentationTransform(QString::fromStdString(id));
+    check(value.has_value(), "Lifecycle fixture must have the actual AIS presentation");
+    return *value;
+}
+QPointF find_control(sketch::visualization::NativeModelView& view,
+                    sketch::visualization::NativeModelView::TransformControl mode) {
+    // Ask OCCT's sensitive-owner picker, rather than assuming handle colors or
+    // a screen position. Logical-pixel sampling also covers fractional DPI.
+    for (int y = 2; y < view.height(); y += 3)
+        for (int x = 2; x < view.width(); x += 3)
+            if (view.transformControlAt(QPointF(x, y)) == mode) return QPointF(x, y);
+    throw std::runtime_error("Actual OCCT transform handle was not pickable");
+}
+
+sketch::Document hosted_gesture_document(bool stairs) {
+    using namespace sketch;
+    const std::string host_id = stairs ? "gesture-stair" : "gesture-wall";
+    std::vector<Entity> entities{
+        {"gesture-property", "property", nlohmann::json::object()},
+        {"gesture-building", "building", {{"property_id", "gesture-property"}}},
+        {"gesture-floor", "floor", {{"building_id", "gesture-building"}}},
+        {"gesture-layer", "layer", {{"floor_id", "gesture-floor"}}}};
+    const auto organized = [](Entity entity) {
+        entity.properties.update({{"property_id", "gesture-property"},
+            {"building_id", "gesture-building"}, {"floor_id", "gesture-floor"},
+            {"layer_id", "gesture-layer"}, {"mark", entity.id}});
+        return entity;
+    };
+    if (stairs) {
+        entities.push_back(organized(encode_building_entity(StairFlight{
+            .id=host_id, .base_position={0,0,0}, .riser_count=8, .total_rise=2,
+            .going=.3, .width=1, .flights={{"gesture-lower",4},{"gesture-upper",4}},
+            .landings={{"gesture-turn",1.2,.15,StairTurn::left_quarter,0}}})));
+        entities.push_back(organized(encode_building_entity(Railing{
+            .id="gesture-flight-rail", .height=1, .thickness=.05, .post_spacing=.4,
+            .host=StairRailingHost{host_id,"gesture-upper",StairRailingSide::left,0,1}})));
+        entities.push_back(organized(encode_building_entity(Railing{
+            .id="gesture-landing-rail", .height=1, .thickness=.05, .post_spacing=.4,
+            .landing_host=StairLandingRailingHost{host_id,StairLandingRole::connecting,
+                "gesture-turn","gesture-lower","gesture-upper",0,0,1}})));
+    } else {
+        entities.push_back(organized(Entity{host_id, "wall", {
+            {"baseline",{{"start",{-3.,0.}},{"end",{3.,0.}},{"sweep_radians",0.}}},
+            {"thickness_m",.2},{"height_m",2.8},{"elevation_m",0.}}}));
+        for (const bool door : {true, false}) {
+            const auto id = door ? "gesture-door" : "gesture-window";
+            entities.push_back(organized(Entity{id, "opening", {{"wall_id", host_id},
+                {"opening_kind",door ? "door" : "window"}, {"offset_m",door ? .7 : 3.5},
+                {"width_m",1.}, {"sill_m",door ? 0. : .8}, {"height_m",door ? 2.1 : 1.3},
+                {"opening_assembly",opening_assembly_json(default_opening_assembly(
+                    door ? OpeningAssemblyKind::door : OpeningAssemblyKind::window))}}}));
+        }
+    }
+    if (stairs)
+        entities.push_back(organized(encode_building_entity(Railing{
+            "gesture-unrelated", {3,2,0}, 0,1,1,.05,.4})));
+    else
+        entities.push_back(organized(encode_building_entity(RectangularColumn{
+            "gesture-unrelated", {3,2,0}, .2,.2,1,0})));
+    return Document::create(std::move(entities));
+}
+
+void check_hosted_gesture_lifecycle(sketch::visualization::NativeModelView& view,
+                                   QTemporaryDir& temporary, bool stairs) {
+    using namespace sketch;
+    using Control = visualization::NativeModelView::TransformControl;
+    const std::string host_id = stairs ? "gesture-stair" : "gesture-wall";
+    const std::vector<std::string> dependent_ids = stairs
+        ? std::vector<std::string>{"gesture-flight-rail","gesture-landing-rail"}
+        : std::vector<std::string>{"gesture-door","gesture-window"};
+    auto model = hosted_gesture_document(stairs);
+    view.setSnapshot(model.snapshot());
+    check(ready_settled(view), "Hosted lifecycle scene must publish completely");
+    view.fitAll();
+    const auto selected = QString::fromStdString(host_id);
+    const auto name = QString::fromStdString(host_id);
+    if (stairs) {
+        view.setSelectedEntity(QStringLiteral("gesture-unrelated"));
+        check(view.transformControlsVisible() && view.beginMove(QStringLiteral("gesture-unrelated")),
+              "Independent v1 railings must retain their own transform controls and Move");
+        view.cancelInteraction();
+        for (const auto& id : dependent_ids) {
+            view.setSelectedEntity(QString::fromStdString(id));
+            check(!view.transformControlsVisible() && !view.beginMove(QString::fromStdString(id)),
+                  "Hosted flight and landing rails must remain selectable without standalone handles or Move");
+        }
+    }
+    int commits = 0;
+    std::map<Control, QPointF> control_points;
+    std::optional<ArchitecturalTransform> requested;
+    const auto commit = [&](QString target, ArchitecturalTransform transform) {
+        check(target == selected, "A dependent preview must commit only the selected semantic host");
+        requested = transform;
+        std::vector<std::string> ids;
+        const auto source = model.snapshot();
+        for (const auto& [id, entity] : source.entities()) { (void)entity; ids.push_back(id); }
+        ArchitecturalOperation operation{ArchitecturalAction::transform,host_id};
+        operation.transform = transform;
+        const auto transaction = ArchitecturalTransaction::create(make_stable_id(), "source",
+            std::move(ids), {operation}, "Native gesture lifecycle");
+        model.apply(architectural_transaction_command(source, transaction, model.revision()));
+        ++commits;
+        view.setSnapshot(model.snapshot());
+    };
+    view.onEntityTranslationRequested = [&](QString target,double x,double y,double z) {
+        commit(target,{x,y,z,0,1});
+    };
+    view.onEntityTransformRequested = [&](QString target,double x,double y,double z,double angle,double scale) {
+        commit(target,{x,y,z,angle,scale});
+    };
+    const auto check_group = [&] {
+        const auto preview = presentation_transform(view, host_id);
+        check(!near_transform(preview, identity_transform), "Real gesture must change the host AIS transform");
+        for (const auto& id : dependent_ids)
+            check(near_transform(presentation_transform(view,id),preview),
+                  "Every visible dependent must preview the exact host transform");
+        check(near_transform(presentation_transform(view,"gesture-unrelated"),identity_transform),
+              "Host gesture must not transform unrelated presentations");
+        return preview;
+    };
+    const auto check_reset = [&] {
+        check(near_transform(presentation_transform(view,host_id),identity_transform),
+              "Ending a gesture must discard the renderer's host preview");
+        for (const auto& id : dependent_ids)
+            check(near_transform(presentation_transform(view,id),identity_transform),
+                  "Ending a gesture must discard every dependent preview");
+    };
+    for (const auto mode : {std::optional<Control>{}, std::optional<Control>{Control::rotation},
+                             std::optional<Control>{Control::scale}}) {
+        for (const bool cancel : {true, false}) {
+            const auto before = model.snapshot();
+            const auto previous_commits = commits;
+            view.setSelectedEntity(selected);
+            const auto baseline = capture(view, temporary.filePath(name+"-baseline.png"));
+            QPointF start = baseline.centre / view.devicePixelRatioF();
+            if (!mode) check(view.beginMove(selected), "Host must support explicit Move");
+            else {
+                const auto cached = control_points.find(*mode);
+                if (cached == control_points.end()) {
+                    start = find_control(view,*mode);
+                    control_points.emplace(*mode,start);
+                } else start = cached->second;
+            }
+            QPointF end;
+            bool previewed = false;
+            // A screen delta can lie on the projected rotation/scale axis.
+            // Try bounded non-collinear drags through the actual event path.
+            for (const auto delta : {QPointF(28,18),QPointF(-24,22),QPointF(20,-25)}) {
+                mouse(view,QEvent::MouseButtonPress,start,Qt::LeftButton,Qt::LeftButton);
+                end = start + delta;
+                mouse(view,QEvent::MouseMove,end,Qt::NoButton,Qt::LeftButton);
+                if (!near_transform(presentation_transform(view,host_id),identity_transform)) {
+                    previewed = true;
+                    break;
+                }
+                view.cancelInteraction();
+                if (!mode) check(view.beginMove(selected), "Move retry must rearm the host");
+            }
+            check(previewed, "Actual handle drag must produce a nonidentity preview");
+            const auto preview = check_group();
+            const auto preview_frame = capture(view, temporary.filePath(name+"-preview.png"));
+            check(preview_frame.image != baseline.image &&
+                  near_transform(presentation_transform(view,host_id),preview),
+                  "Export must show the transformed solids without cancelling an active gesture");
+            check(model.snapshot().entities() == before.entities() && commits == previous_commits,
+                  "A renderer preview must leave document and history unchanged");
+            if (cancel) {
+                QKeyEvent escape(QEvent::KeyPress,Qt::Key_Escape,Qt::NoModifier);
+                QApplication::sendEvent(&view,&escape);
+            }
+            mouse(view,QEvent::MouseButtonRelease,end,Qt::LeftButton,Qt::NoButton);
+            mouse(view,QEvent::MouseButtonRelease,end,Qt::LeftButton,Qt::NoButton);
+            if (cancel) {
+                check(commits == previous_commits && model.snapshot().entities() == before.entities(),
+                      "Cancelled handle/Move and duplicate release must not commit");
+                check_reset();
+                check(capture(view,temporary.filePath(name+"-cancel.png")).image == baseline.image,
+                      "Cancelling must restore the complete host/dependent framebuffer");
+            } else {
+                check(commits == previous_commits+1 && requested && model.revision() != before.revision() &&
+                      model.snapshot().history().size() == before.history().size()+1,
+                      "Gesture release must produce exactly one authoritative command");
+                const double cosine = requested->scale * std::cos(requested->rotation_z_radians);
+                const double sine = requested->scale * std::sin(requested->rotation_z_radians);
+                const NativeTransform committed_transform{cosine,-sine,0,requested->x,
+                    sine,cosine,0,requested->y, 0,0,requested->scale,requested->z};
+                check(near_transform(committed_transform,preview),
+                      "Semantic commit must reproduce the exact preview matrix, including the pivot translation");
+                if (mode == Control::rotation)
+                    check(std::abs(requested->rotation_z_radians)>1e-8 && std::abs(requested->scale-1)<1e-8,
+                          "Rotation handle must commit signed Z rotation without scaling");
+                if (mode == Control::scale)
+                    check(requested->scale>0 && std::abs(requested->scale-1)>1e-8 &&
+                          std::abs(requested->rotation_z_radians)<1e-8,
+                          "Scale handle must commit positive uniform scale without rotation");
+                check(ready_settled(view), "Committed host and dependents must regenerate together");
+                check_reset();
+                const auto committed = model.snapshot();
+                check(committed.entities() != before.entities(), "Gesture must change semantic authoring");
+                model.undo(model.revision());
+                check(model.snapshot().entities() == before.entities(), "One undo must restore the complete hosted model");
+                model.redo(model.revision());
+                check(model.snapshot().entities() == committed.entities(), "One redo must restore the complete gesture commit");
+                model.undo(model.revision());
+                view.setSnapshot(model.snapshot());
+                check(ready_settled(view), "Undo must regenerate all hosted geometry");
+                check(capture(view,temporary.filePath(name+"-undo.png")).image == baseline.image,
+                      "Undo must restore the complete native geometry without a camera refit");
+            }
+        }
+    }
+    view.onEntityTranslationRequested = {};
+    view.onEntityTransformRequested = {};
+    // A visibility mask never creates a presentation for a hidden dependency.
+    view.setSnapshot(model.snapshot(), visualization::NativeModelView::VisibleEntityIds{
+        host_id,"gesture-unrelated"});
+    check(ready_settled(view) && view.beginMove(selected), "Host Move must work with hidden dependencies");
+    const QPointF start(300,230), end(325,250);
+    mouse(view,QEvent::MouseButtonPress,start,Qt::LeftButton,Qt::LeftButton);
+    mouse(view,QEvent::MouseMove,end,Qt::NoButton,Qt::LeftButton);
+    for (const auto& id : dependent_ids)
+        check(near_transform(presentation_transform(view,id),identity_transform),
+              "Hidden dependent presentations must not be transformed or displayed by the host preview");
+    view.cancelInteraction();
 }
 
 void check_native_resize(const sketch::DocumentSnapshot& snapshot, QTemporaryDir& temporary) {
@@ -461,6 +717,188 @@ void check_desktop_room_activation(QTemporaryDir& temporary) {
     window.hide();
 }
 
+void check_desktop_hosted_gestures(QTemporaryDir& temporary) {
+    using namespace sketch;
+    using Control = visualization::NativeModelView::TransformControl;
+    auto document = std::make_shared<Document>(hosted_gesture_document(true));
+    desktop::MainWindow window(document);
+    window.setAttribute(Qt::WA_DontShowOnScreen,true);
+    window.setAttribute(Qt::WA_ShowWithoutActivating,true);
+    window.resize(1200,760);
+    window.setWorkspace(desktop::Workspace::architectural);
+    window.setNativeModelViewVisible(true);
+    visualization::NativeModelView* view = nullptr;
+    for (auto* widget : window.findChildren<QWidget*>())
+        if (auto* candidate = dynamic_cast<visualization::NativeModelView*>(widget)) {
+            view = candidate;
+            break;
+        }
+    auto* canvas = dynamic_cast<desktop::PlanCanvas*>(
+        window.findChild<QWidget*>(QStringLiteral("architecturalPlanCanvas")));
+    check(view && canvas, "Actual shell fixture must expose native and architectural plan surfaces");
+    view->setAttribute(Qt::WA_DontShowOnScreen,true);
+    view->setAttribute(Qt::WA_ShowWithoutActivating,true);
+    window.show();
+    QApplication::processEvents();
+    check(ready_settled(*view) && view->isVisible(), "Actual shell native surface must publish while shown");
+    check(window.lastError().isEmpty(),
+          "Actual shell preparation progress must not become a retained operation error");
+    view->fitAll();
+    const std::vector<std::string> affected{"gesture-stair","gesture-flight-rail","gesture-landing-rail"};
+    const auto host = QStringLiteral("gesture-stair");
+    for (const auto& id : {QStringLiteral("gesture-flight-rail"),QStringLiteral("gesture-landing-rail")})
+        check(window.selectEntity(id) && !view->transformControlsVisible() && !view->beginMove(id),
+              "Shell rail selection must retain the semantic rail without unsupported standalone controls");
+    const auto plans = [&] {
+        std::map<std::string,Boundary> result;
+        for (const auto& id : affected) {
+            const auto found = std::find_if(canvas->entities().begin(),canvas->entities().end(),
+                [&](const auto& entity) { return entity.id == QString::fromStdString(id); });
+            check(found != canvas->entities().end() && !found->segments.empty(),
+                  "Actual retained plan must contain the host and both railing forms");
+            result.emplace(id,found->segments);
+        }
+        return result;
+    };
+    const auto quantities = [&] {
+        const auto projection = window.scheduleSnapshot();
+        std::string schedule_context =
+            "Shell schedule must be complete and bound to the actual gesture revision; schedule revision=" +
+            std::to_string(projection.snapshot.revision) + "; document revision=" +
+            std::to_string(window.document().revision());
+        for (const auto& diagnostic : projection.diagnostics)
+            schedule_context += "\n  " + diagnostic;
+        check(projection.diagnostics.empty() &&
+              projection.snapshot.revision == window.document().revision(),
+              schedule_context.c_str());
+        std::map<std::string,std::map<std::string,ScheduleQuantity>> result;
+        for (const auto& id : affected) {
+            const auto row = std::find_if(projection.snapshot.rows.begin(),projection.snapshot.rows.end(),
+                [&](const auto& value) { return value.object_id == id; });
+            check(row != projection.snapshot.rows.end(), "Shell schedule must retain each hosted building object");
+            auto& values = result[id];
+            for (const auto& [key,cell] : row->cells)
+                if (const auto* quantity = std::get_if<ScheduleQuantity>(&cell.value)) values.emplace(key,*quantity);
+            check(!values.empty(), "Hosted schedule rows must contain actual dimensional quantities");
+        }
+        return result;
+    };
+    // Deliberately retain MainWindow's real callbacks. The view must invoke the
+    // same selection, authoritative command and refresh path used by the UI.
+    int stage = 0;
+    for (const auto mode : {std::optional<Control>{},std::optional<Control>{Control::rotation},
+                             std::optional<Control>{Control::scale}}) {
+        ++stage;
+        check(window.selectEntity(host) && view->transformControlsVisible(),
+              "Shell selection must expose the native stair handles");
+        const auto source = window.document().snapshot();
+        const auto before_plans = plans();
+        const auto before_quantities = quantities();
+        const auto baseline = capture(*view,temporary.filePath(QString("shell-gesture-%1-before.png").arg(stage)));
+        QPointF start = baseline.centre / view->devicePixelRatioF();
+        if (!mode) check(view->beginMove(host), "Real shell host must support native Move");
+        else start = find_control(*view,*mode);
+        QPointF end;
+        bool changed = false;
+        for (const auto delta : {QPointF(28,18),QPointF(-24,22),QPointF(20,-25)}) {
+            mouse(*view,QEvent::MouseButtonPress,start,Qt::LeftButton,Qt::LeftButton);
+            end = start + delta;
+            mouse(*view,QEvent::MouseMove,end,Qt::NoButton,Qt::LeftButton);
+            changed = !near_transform(presentation_transform(*view,"gesture-stair"),identity_transform);
+            if (changed) break;
+            view->cancelInteraction();
+            if (!mode) check(view->beginMove(host), "Shell Move retry must rearm the host");
+        }
+        check(changed, "Actual shell native mouse drag must produce a preview");
+        const auto preview = presentation_transform(*view,"gesture-stair");
+        for (const auto& id : affected)
+            check(near_transform(presentation_transform(*view,id),preview),
+                  "Shell preview must move host and both hosted rail presentations together");
+        check(window.document().snapshot().entities() == source.entities() &&
+              window.document().snapshot().history().size() == source.history().size(),
+              "Actual shell preview must not publish authoring or history");
+        mouse(*view,QEvent::MouseButtonRelease,end,Qt::LeftButton,Qt::NoButton);
+        mouse(*view,QEvent::MouseButtonRelease,end,Qt::LeftButton,Qt::NoButton);
+        check(ready_settled(*view) && window.regenerationReadyForCurrentRevision(),
+              "Real shell callback must regenerate the current coordinated model");
+        const auto committed = window.document().snapshot();
+        const auto commit_context =
+            "Actual shell gesture and duplicate release must commit exactly one authoritative command; stage=" +
+            std::to_string(stage) + "; source revision=" + std::to_string(source.revision()) +
+            "; committed revision=" + std::to_string(committed.revision()) +
+            "; source history=" + std::to_string(source.history().size()) +
+            "; committed history=" + std::to_string(committed.history().size()) +
+            "; entities changed=" + std::to_string(committed.entities() != source.entities());
+        check(committed.revision() == source.revision()+1 &&
+              committed.entities() != source.entities() &&
+              committed.history().size() == source.history().size()+1,
+              commit_context.c_str());
+        const auto error_context = "Successful shell gesture must settle without a stale preparation diagnostic; stage=" +
+            std::to_string(stage) + "; shell error=" + window.lastError().toStdString() +
+            "; native error=" + view->lastError().toStdString();
+        check(window.lastError().isEmpty(), error_context.c_str());
+        const auto after_plans = plans();
+        bool plan_changed = false;
+        for (const auto& [id,boundary] : before_plans) {
+            const auto& after = after_plans.at(id);
+            for (const auto& segment : boundary)
+                for (const auto point : {segment.start,segment.end}) {
+                    const Vec2 expected{preview[0]*point.x+preview[1]*point.y+preview[3],
+                                        preview[4]*point.x+preview[5]*point.y+preview[7]};
+                    plan_changed |= std::hypot(expected.x-point.x,expected.y-point.y)>1e-7;
+                    check(std::any_of(after.begin(),after.end(),[&](const auto& target) {
+                        return std::hypot(target.start.x-expected.x,target.start.y-expected.y)<1e-5 ||
+                               std::hypot(target.end.x-expected.x,target.end.y-expected.y)<1e-5;
+                    }), "Actual retained plan endpoints must follow the exact native preview transform");
+                }
+        }
+        check(plan_changed, "A shell gesture must update coordinated plan placement");
+        const auto after_quantities = quantities();
+        const double scale = std::hypot(preview[0],preview[4]);
+        for (const auto& [id,values] : before_quantities)
+            for (const auto& [key,quantity] : values) {
+                const auto& after = after_quantities.at(id).at(key);
+                const int power = quantity.unit == ScheduleUnit::square_metre ? 2 :
+                                  quantity.unit == ScheduleUnit::cubic_metre ? 3 : 1;
+                check(after.unit == quantity.unit &&
+                      std::abs(after.value-quantity.value*std::pow(scale,power)) <
+                          1e-7*std::max(1.,std::abs(after.value)),
+                      "Actual schedule dimensional quantities must scale once and remain unchanged by rigid gestures");
+            }
+        for (const auto& id : affected)
+            check(near_transform(presentation_transform(*view,id),identity_transform),
+                  "Shell regeneration must replace previews with authoritative native geometry");
+        check(capture(*view,temporary.filePath(QString("shell-gesture-%1-after.png").arg(stage))).image != baseline.image,
+              "Real shell gesture must visibly regenerate the native model");
+        check(window.undoCommand() && ready_settled(*view) &&
+              window.document().snapshot().entities() == source.entities(),
+              "One actual shell undo must restore the complete stair/railing graph");
+        check(quantities() == before_quantities &&
+              capture(*view,temporary.filePath(QString("shell-gesture-%1-undo.png").arg(stage))).image == baseline.image,
+              "Shell undo must restore quantities and all native host/dependent geometry");
+        check(window.redoCommand() && ready_settled(*view) &&
+              window.document().snapshot().entities() == committed.entities() &&
+              quantities() == after_quantities,
+              "One actual shell redo must restore the exact hosted gesture and quantities");
+        const auto path = temporary.filePath(QString("shell-gesture-%1.bldproj").arg(stage));
+        const auto saved = window.document().snapshot();
+        const auto saved_frame = capture(*view,temporary.filePath(QString("shell-gesture-%1-saved.png").arg(stage)));
+        check(window.saveProjectAs(path) && window.openProject(path) && ready_settled(*view) &&
+              window.document().snapshot().entities() == saved.entities() &&
+              window.document().snapshot().history().size() == saved.history().size() &&
+              quantities() == after_quantities,
+              "Local shell save/reopen must retain the exact stair, hosted rails, history and quantities");
+        check(capture(*view,temporary.filePath(QString("shell-gesture-%1-reopened.png").arg(stage))).image == saved_frame.image,
+              "Reopened hosted native geometry must reproduce the saved frame");
+        check(window.undoCommand() && ready_settled(*view) &&
+              window.document().snapshot().entities() == source.entities() &&
+              window.redoCommand() && ready_settled(*view) &&
+              window.document().snapshot().entities() == saved.entities(),
+              "Reopened shell must retain one-command undo and redo for the native gesture");
+    }
+    window.hide();
+}
+
 void check_publication_reuse(sketch::visualization::NativeModelView& view) {
     // Exercise actual AIS publication on the Windows driver. Counts express
     // bounded presentation work; recorded timings do not qualify production
@@ -595,6 +1033,14 @@ int main(int argc,char** argv) {
             view.setSelectedEntity(QStringLiteral("missing-native-entity"));
             check(!view.transformControlsVisible(),
                   "Native transform controls must reject a missing semantic target");
+            if (scenario == "all" || scenario == "gestures") {
+                check_hosted_gesture_lifecycle(view, temporary, false);
+                check_hosted_gesture_lifecycle(view, temporary, true);
+                check_desktop_hosted_gestures(temporary);
+                view.setSnapshot(document.snapshot());
+                check(ready_settled(view), "Hosted lifecycle checks must restore the primary gesture scene");
+                view.fitAll();
+            }
             if (scenario == "gestures") {
                 check_gestures(view, wall_id, temporary);
                 int hidden_edits = 0, hidden_selections = 0;

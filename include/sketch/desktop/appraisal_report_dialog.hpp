@@ -9,6 +9,22 @@
 
 namespace sketch::desktop {
 
+// Shared visible form projection in Details and paginated HTML/PDF output.
+[[nodiscard]] QString appraisal_form_projection_html(const AppraisalDocumentReport& report, bool compact = false);
+[[nodiscard]] QString appraisal_ansi_declaration_rows(const AnsiMeasurementDeclarations& value);
+
+class AppraisalReportingDialog final : public QDialog {
+public:
+    AppraisalReportingDialog(const DocumentSnapshot& source, const AppraisalDocumentReport& report, QWidget* parent = nullptr,
+        const std::set<std::string, std::less<>>* visible_entity_ids = nullptr);
+    ~AppraisalReportingDialog() override;
+    // Root owns the transaction and validates the complete source fingerprint.
+    void setApplyRequested(std::function<bool(const AppraisalReportingChanges&, QString&)> callback);
+private:
+    struct Impl;
+    std::unique_ptr<Impl> impl_;
+};
+
 // Shared per-property policy presentation for the table and printed schedule.
 // Returns empty for rows without a square-metre area quantity.
 [[nodiscard]] QString appraisal_schedule_area_text(const ScheduleRow& row, bool metric);

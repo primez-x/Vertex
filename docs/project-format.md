@@ -1,4 +1,49 @@
-# Vertex project formats v1 through v55
+# Vertex project formats v1 through v56
+
+## Appraisal reporting and conditional declarations (v56)
+
+Native format 56 and JSON/assets extraction version 54 protect either an
+`appraisal_reporting` marker on a property or measurement boundary, or
+`appraisal_policy.ansi.limitation_declarations` on a property. The reader floor
+inspects all retained history, including undone creation, deletion and abandoned
+branches. Future or malformed markers still require the floor; they do not
+acquire executable authority. An identically named vendor field on another
+entity type remains ordinary opaque data. Lower format labels are refused even
+when their logical digest has been recomputed.
+
+Property `appraisal_reporting` version 1 contains `contract` (`legacy_uad_2_6`
+or `uad_3_6`) and an explicit Boolean `room_inventory_complete`. Boundary
+reporting contains `version: 1`, `source_geometry_sha256`, optional Boolean
+`contained_within_primary`, and `rooms`. Each room has a unique, bounded
+`room_id`, a declared `use` (`bedroom`, `bathroom_full`, `bathroom_half` or
+`other`), and optional Boolean `legacy_total_room`. Unknown fields, versions,
+uses and malformed values refuse typed interpretation. Room identifiers are
+membership identities; names and decorative fixture symbols are not room facts.
+
+The persisted digest field binds current geometry, deductions, relevant area
+and inherited floor observations, property measurement policy and ownership.
+Reporting's own fields, names and appearance are excluded. Changed observations
+require explicit reconfirmation; a new transaction fingerprint does not renew
+old declarations. Applying reporting uses one undoable command fenced by the
+entire captured snapshot, including retained history, and the same semantic
+design-phase scope used in the editor. Presentation hiding does not remove an
+area from appraisal calculations.
+
+UAD 3.6 primary room counts use declared original room types across grades and
+finish categories. ADUs and noncontinuous area retain separate summaries.
+Combined ADU summaries are not per-unit form fields. Legacy room mappings that
+remain unresolved withhold primary counts while preserving supported separate
+summaries. Report projection never changes canonical independent ADU areas.
+Absent reporting configuration leaves older projects in measurement-summary
+mode. This schema does not certify ANSI, lender forms or vendor interchange.
+
+Conditional ANSI declarations are a bounded array of `{kind, statement}` records.
+Kinds are `interior_not_inspected`, `based_on_plans`, and
+`direct_measurement_not_possible`; each requires an explicit nonblank statement
+when its measurement condition applies. Generic `limitations_statement` remains
+supplemental notes. Duplicate, unknown and inapplicable kinds are rejected for
+qualification. Saved incomplete facts remain editable but cannot produce
+qualified totals. Presence checks do not verify prescribed publisher wording.
 
 ## Physical wall axis dimensions (v55)
 
@@ -1566,7 +1611,7 @@ unknown project `format_version` is rejected rather than opened unsafely.
 ## SQLite schema
 
 The SQLite `application_id` is `0x50535444` (`PSTD`). `user_version` and metadata
-`format_version` are equal and range from `1` through `53`, according to the
+`format_version` are equal and range from `1` through `56`, according to the
 retained semantics. The baseline application tables below are shared; later
 versions add the proof columns and recovery data documented in this file.
 

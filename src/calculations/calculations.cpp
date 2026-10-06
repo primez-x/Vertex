@@ -185,6 +185,34 @@ std::optional<MeasurementBasis> parse_measurement_basis(std::string_view token) 
     return std::nullopt;
 }
 
+std::string_view ansi_declaration_kind_name(AnsiDeclarationKind value) {
+    switch (value) {
+    case AnsiDeclarationKind::interior_not_inspected: return "interior_not_inspected";
+    case AnsiDeclarationKind::based_on_plans: return "based_on_plans";
+    case AnsiDeclarationKind::direct_measurement_not_possible: return "direct_measurement_not_possible";
+    }
+    throw std::invalid_argument("Unknown ansi_declaration_kind");
+}
+std::optional<AnsiDeclarationKind> parse_ansi_declaration_kind(std::string_view token) {
+    if (token == "interior_not_inspected") return AnsiDeclarationKind::interior_not_inspected;
+    if (token == "based_on_plans") return AnsiDeclarationKind::based_on_plans;
+    if (token == "direct_measurement_not_possible") return AnsiDeclarationKind::direct_measurement_not_possible;
+    return std::nullopt;
+}
+
+std::vector<AnsiDeclarationKind> required_ansi_declarations(
+    MeasurementBasis basis, const AnsiMeasurementDeclarations& declarations) {
+    (void)measurement_basis_name(basis);
+    std::vector<AnsiDeclarationKind> required;
+    if (declarations.interior_inspected == false)
+        required.push_back(AnsiDeclarationKind::interior_not_inspected);
+    if (basis == MeasurementBasis::plans)
+        required.push_back(AnsiDeclarationKind::based_on_plans);
+    if (declarations.direct_measurement == false)
+        required.push_back(AnsiDeclarationKind::direct_measurement_not_possible);
+    return required;
+}
+
 std::string_view grade_status_name(GradeStatus value) {
     switch (value) {
     case GradeStatus::above: return "above";
@@ -384,10 +412,38 @@ AppraisalQualification derive_ansi(const AppraisalFacts& f, AppraisalPolicy poli
     if (!a.measurement.direct_measurement) issue("direct_measurement_missing", "Declare whether the dwelling was directly measured.");
     if (!a.measurement.acquisition_increment) issue("acquisition_increment_missing", "Declare inch or tenth-foot acquisition precision.");
     else (void)acquisition_increment_name(*a.measurement.acquisition_increment);
-    if ((f.measurement_basis == MeasurementBasis::plans || a.measurement.interior_inspected == false ||
-         a.measurement.direct_measurement == false) &&
-        a.measurement.limitations_statement.find_first_not_of(" \t\r\n") == std::string::npos)
-        issue("limitations_statement_missing", "Explain measurement limitations for plans, an uninspected interior or indirect measurements.");
+    const auto required_declarations = required_ansi_declarations(f.measurement_basis, a.measurement);
+    const auto declaration_index = [](AnsiDeclarationKind kind) -> std::size_t {
+        switch (kind) {
+        case AnsiDeclarationKind::interior_not_inspected: return 0;
+        case AnsiDeclarationKind::based_on_plans: return 1;
+        case AnsiDeclarationKind::direct_measurement_not_possible: return 2;
+        }
+        throw std::invalid_argument("Unknown ANSI limitation declaration kind");
+    };
+    std::array<std::size_t, 3> declaration_counts{};
+    for (const auto& declaration : a.measurement.limitation_declarations) {
+        const auto index = declaration_index(declaration.kind);
+        ++declaration_counts[index];
+        if (declaration.statement.find_first_not_of(" \t\r\n\f\v") == std::string::npos)
+            issue("ansi_limitation_declaration_statement_missing",
+                  "Each typed ANSI limitation declaration needs a nonblank statement.");
+        if (declaration_counts[index] > 1)
+            issue("ansi_limitation_declaration_duplicate",
+                  "Each applicable ANSI limitation kind must have exactly one declaration.");
+        if (std::find(required_declarations.begin(), required_declarations.end(), declaration.kind) ==
+            required_declarations.end())
+            issue("ansi_limitation_declaration_inapplicable",
+                  "A typed ANSI limitation declaration does not match the declared measurement facts.");
+    }
+    for (const auto kind : required_declarations) {
+        if (declaration_counts[declaration_index(kind)] == 0)
+            issue("ansi_limitation_declaration_missing",
+                  "Provide one typed ANSI limitation declaration for each applicable measurement condition.");
+    }
+    if (!required_declarations.empty() || !a.measurement.limitation_declarations.empty())
+        r.rule_notes.push_back(
+            "Typed ANSI limitation declarations are presence-checked; prescribed publisher wording and lender-specific compliance are not verified.");
     if (!a.any_part_below_grade) issue("floor_grade_missing", "Declare whether any part of this floor is below grade.");
     const bool below = a.any_part_below_grade.value_or(false);
     if (f.grade != GradeStatus::unknown && f.grade != (below ? GradeStatus::below : GradeStatus::above))

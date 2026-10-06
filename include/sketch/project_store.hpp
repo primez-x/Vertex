@@ -142,7 +142,9 @@ public:
     // v45 anywhere in retained history, including undone/deleted presentation.
     // Canonical v3 landing railings require v54; analytical physical-wall
     // axis dimensions require v55, including deleted and undone history.
-    static constexpr std::uint32_t format_version = 55;
+    // Form-specific appraisal reporting and typed limitation declarations
+    // require v56 across current, deleted and undone history.
+    static constexpr std::uint32_t format_version = 56;
     static constexpr std::uint32_t recovery_format_version = 4;
     [[nodiscard]] static std::uint32_t required_format_version(const DocumentSnapshot& snapshot);
     static constexpr std::uint64_t maximum_file_bytes = 4ULL * 1024ULL * 1024ULL * 1024ULL;

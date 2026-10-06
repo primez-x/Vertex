@@ -1,4 +1,5 @@
 #include "sketch/appraisal_document.hpp"
+#include "sketch/document_digest.hpp"
 #include "sketch/wall_measurement.hpp"
 
 #include <algorithm>
@@ -115,7 +116,15 @@ void ansi_declarations_and_canonical_reporting() {
     require(!report.qualified, "Plans require a limitations declaration");
     changed.front().properties["appraisal_policy"]["ansi"]["limitations_statement"] = "Measured from supplied building plans.";
     report = sketch::build_appraisal_document_report(sketch::Document::create(changed).snapshot(), "property-1");
+    require(!report.qualified, "Supplemental generic notes cannot replace a condition-specific plans declaration");
+    changed.front().properties["appraisal_policy"]["ansi"]["limitation_declarations"] = json::array({
+        {{"kind", "based_on_plans"}, {"statement", "Measured from supplied building plans."}}});
+    report = sketch::build_appraisal_document_report(sketch::Document::create(changed).snapshot(), "property-1");
     require(report.qualified, "Explicit plans limitations can satisfy rule checks");
+    auto bad_declaration=changed;
+    bad_declaration.front().properties["appraisal_policy"]["ansi"]["limitation_declarations"][0].erase("statement");
+    report=sketch::build_appraisal_document_report(sketch::Document::create(bad_declaration).snapshot(),"property-1");
+    require(!report.qualified,"Missing typed declaration statement cannot pass the document parser");
     changed = entities;
     changed[2].properties["appraisal_facts"]["ansi"]["any_part_below_grade"] = true;
     report = sketch::build_appraisal_document_report(sketch::Document::create(changed).snapshot(), "property-1");
@@ -898,9 +907,403 @@ void malformed_projection_data_withholds_totals() {
 
 } // namespace
 
+void reporting_projection_contracts() {
+    using namespace sketch;
+    auto entities = ansi_fixture_entities();
+    auto adu = entities.back(); adu.id = "adu";
+    adu.properties["boundary"] = square(10, 0, 3.048);
+    adu.properties["appraisal_facts"]["ansi"]["dwelling_identity"] = "attached_adu";
+    entities.push_back(adu);
+    const auto bind = [&](std::vector<Entity>& values) {
+        const auto source = Document::create(values).snapshot();
+        for (auto& item : values) if (item.type == "measurement_boundary") {
+            AppraisalAreaReportingFacts declaration;
+            declaration.source_geometry_sha256 = appraisal_reporting_source_digest(source, item.id);
+            declaration.contained_within_primary = item.id == "adu";
+            declaration.rooms = {{"room-" + item.id, AppraisalRoomUse::bedroom, true}};
+            item.properties["appraisal_reporting"] = appraisal_reporting_json(declaration);
+        }
+    };
+    const auto reconfirm = [](std::vector<Entity>& values) {
+        const auto source = Document::create(values).snapshot();
+        for (auto& item : values) if (item.properties.contains("appraisal_reporting") && item.type == "measurement_boundary")
+            item.properties["appraisal_reporting"]["source_geometry_sha256"] = appraisal_reporting_source_digest(source, item.id);
+    };
+    const auto require_stale = [](const AppraisalDocumentReport& value) {
+        require(value.reporting && !value.reporting->area_fields_available && !value.reporting->room_counts_available && !value.reporting->room_summaries_available &&
+            std::any_of(value.reporting->issues.begin(), value.reporting->issues.end(), [](const auto& issue) {
+                return issue.find("Reporting observations are stale") != std::string::npos;
+            }), "Changed semantic observations require explicit reporting reconfirmation");
+    };
+    entities.front().properties["appraisal_reporting"] = appraisal_reporting_json(
+        AppraisalReportingSettings{AppraisalReportingContract::legacy_uad_2_6, true});
+    bind(entities);
+    auto report = build_appraisal_document_report(Document::create(entities).snapshot(), "property-1");
+    require(report.reporting && report.reporting->area_fields_available && !report.reporting->room_counts_available && report.reporting->room_summaries_available &&
+        report.reporting->adu_counts.bedrooms == 1,
+        "Explicit reporting declarations retain area and ADU detail while unresolved ADU primary-count mapping is withheld");
+    near(report.reporting->primary_above_grade_finished_square_metres, 18.580608, 1e-7,
+        "Legacy projection combines an explicitly contained above-grade interior-access ADU");
+    near(report.calculation->property.gla().total.square_metres, 9.290304, 1e-7,
+        "Reporting must not change canonical independent ADU measurement");
+    entities.front().properties["appraisal_reporting"]["contract"] = "uad_3_6";
+    report = build_appraisal_document_report(Document::create(entities).snapshot(), "property-1");
+    near(report.reporting->primary_above_grade_finished_square_metres, 9.290304, 1e-7,
+        "UAD 3.6 keeps the same contained ADU separate");
+    require(report.reporting->room_counts_available && report.reporting->room_summaries_available &&
+        report.reporting->primary_counts.bedrooms == 1 && report.reporting->adu_counts.bedrooms == 1,
+        "UAD 3.6 primary bedroom counts are usable and exclude separately summarized ADU declarations");
+    require(std::any_of(report.reporting->evidence.begin(), report.reporting->evidence.end(), [](const auto& item) {
+        return item.url == "https://sf.freddiemac.com/docs/zip/requirements/appendix-f-1-urar-reference-guide.zip" &&
+            item.edition.find("v1.4") != std::string::npos && item.sections.find("10.023") != std::string::npos;
+    }) && std::any_of(report.reporting->evidence.begin(), report.reporting->evidence.end(), [](const auto& item) {
+        return item.url == "https://sf.freddiemac.com/docs/zip/requirements/appendix-b-1-urar-implementation-guide.zip" &&
+            item.sections.find("pp194") != std::string::npos;
+    }), "Supported UAD 3.6 count projection retains primary guide edition, pages and field evidence");
+    const auto valid_entities=entities;
+    entities.front().properties["appraisal_reporting"]["room_inventory_complete"]=false;
+    report=build_appraisal_document_report(Document::create(entities).snapshot(),"property-1");
+    require(report.reporting->area_fields_available && !report.reporting->room_counts_available && !report.reporting->room_summaries_available && report.qualified,
+        "Incomplete declared room inventory withholds counts while retaining independent area fields");
+    entities=valid_entities;
+    entities.front().properties["appraisal_reporting"]["contract"]="legacy_uad_2_6";
+    entities.back().properties["appraisal_facts"]["access"]="noncontinuous";
+    report=build_appraisal_document_report(Document::create(entities).snapshot(),"property-1");
+    require_stale(report);
+    reconfirm(entities);
+    report=build_appraisal_document_report(Document::create(entities).snapshot(),"property-1");
+    near(report.reporting->primary_above_grade_finished_square_metres,9.290304,1e-7,
+        "Exterior-only ADU access remains separately reported in legacy output");
+    entities=valid_entities;
+    entities[2].properties["appraisal_facts"]["grade"]="below";
+    entities[2].properties["appraisal_facts"]["ansi"]["any_part_below_grade"]=true;
+    report=build_appraisal_document_report(Document::create(entities).snapshot(),"property-1");
+    require_stale(report);
+    reconfirm(entities);
+    report=build_appraisal_document_report(Document::create(entities).snapshot(),"property-1");
+    require(report.reporting->primary_counts.bedrooms==1 && report.reporting->below_grade_counts.bedrooms==1,
+        "Berm home's below-grade bedroom contributes to UAD 3.6 total and level summary");
+    entities.front().properties["appraisal_reporting"]["contract"]="legacy_uad_2_6";
+    report=build_appraisal_document_report(Document::create(entities).snapshot(),"property-1");
+    require(report.reporting->primary_counts.bedrooms==0 && report.reporting->below_grade_counts.bedrooms==1 &&
+        report.reporting->primary_above_grade_finished_square_metres==0,
+        "Legacy berm home has zero above-grade rooms and no combined below-grade ADU area");
+    entities=valid_entities;
+    entities[4].properties["appraisal_facts"]["ansi"]["ceiling"]["minimum_height_m"]=1.9;
+    report=build_appraisal_document_report(Document::create(entities).snapshot(),"property-1");
+    require_stale(report);
+    reconfirm(entities);
+    report=build_appraisal_document_report(Document::create(entities).snapshot(),"property-1");
+    require(report.reporting->primary_counts.bedrooms==1 && report.reporting->primary_above_grade_finished_square_metres==0,
+        "Above-grade nonstandard bedroom remains in primary room counts");
+    entities[4].properties["appraisal_facts"]["access"]="noncontinuous";
+    report=build_appraisal_document_report(Document::create(entities).snapshot(),"property-1");
+    require_stale(report);
+    reconfirm(entities);
+    report=build_appraisal_document_report(Document::create(entities).snapshot(),"property-1");
+    require(report.reporting->primary_counts.bedrooms==0 && report.reporting->noncontinuous_counts.bedrooms==1,
+        "Noncontinuous room contributes only to separate summary");
+    entities=valid_entities;
+    entities.front().properties["appraisal_reporting"]["contract"]="legacy_uad_2_6";
+    entities.back().properties["appraisal_reporting"].erase("contained_within_primary");
+    report=build_appraisal_document_report(Document::create(entities).snapshot(),"property-1");
+    require(!report.reporting->area_fields_available && report.qualified,
+        "Unknown eligible legacy ADU containment withholds projected area without losing canonical measurements");
+    entities=valid_entities;
+    entities.back().properties["appraisal_reporting"]["rooms"][0]["room_id"] = "room-area-1";
+    report = build_appraisal_document_report(Document::create(entities).snapshot(), "property-1");
+    require(!report.reporting->room_counts_available && !report.reporting->room_summaries_available && report.qualified,
+        "Duplicate room membership withholds projected counts, not independent measurements");
+    entities.back().properties["appraisal_reporting"]["rooms"][0]["room_id"] = "room-adu";
+    entities.back().properties["boundary"] = square(10, 0, 4);
+    report = build_appraisal_document_report(Document::create(entities).snapshot(), "property-1");
+    require(!report.reporting->room_counts_available && !report.reporting->area_fields_available,
+        "Changed geometry refuses old reporting facts");
+    bool rejected = false;
+    try { (void)parse_appraisal_reporting_settings({{"version", 1}, {"contract", "unknown"}, {"room_inventory_complete", true}}); }
+    catch (const std::exception&) { rejected = true; }
+    require(rejected, "Unknown reporting contracts must be rejected");
+    const auto source=Document::create(valid_entities).snapshot();
+    AppraisalReportingChanges changes{source.revision(),source.document_id(),document_snapshot_digest(source),"property-1",
+        {AppraisalReportingContract::uad_3_6,true},{}};
+    validate_appraisal_reporting_changes(source,changes);
+    changes.source_snapshot_sha256=std::string(64,'0');rejected=false;
+    try{validate_appraisal_reporting_changes(source,changes);}catch(const std::exception&){rejected=true;}
+    require(rejected,"Same document/revision with a replaced source fingerprint cannot apply reporting changes");
+    auto bad=valid_entities.back().properties.at("appraisal_reporting");bad["unexpected"]=true;rejected=false;
+    try{(void)parse_appraisal_area_reporting_facts(bad);}catch(const std::exception&){rejected=true;}
+    require(rejected,"Unknown semantic room declaration fields are rejected");
+    auto no_reporting=valid_entities;no_reporting.front().properties.erase("appraisal_reporting");
+    report=build_appraisal_document_report(Document::create(no_reporting).snapshot(),"property-1");
+    require(report.qualified && !report.reporting,"Older measurement-only projects retain their existing totals and no inferred report contract");
+}
+
+void reporting_unfinished_room_treatment() {
+    using namespace sketch;
+    for (const auto contract : {AppraisalReportingContract::legacy_uad_2_6, AppraisalReportingContract::uad_3_6}) {
+        for (const bool below : {false, true}) {
+            for (const auto use : {AppraisalRoomUse::bedroom, AppraisalRoomUse::bathroom_full,
+                    AppraisalRoomUse::bathroom_half, AppraisalRoomUse::other}) {
+                auto entities = ansi_fixture_entities();
+                entities.front().properties["appraisal_reporting"] = appraisal_reporting_json(AppraisalReportingSettings{contract, true});
+                entities[2].properties["appraisal_facts"]["grade"] = below ? "below" : "above";
+                entities[2].properties["appraisal_facts"]["ansi"]["any_part_below_grade"] = below;
+                entities.back().properties["appraisal_facts"]["finish"] = "unfinished";
+                AppraisalAreaReportingFacts declaration;
+                declaration.source_geometry_sha256 = appraisal_reporting_source_digest(Document::create(entities).snapshot(), "area-1");
+                declaration.rooms = {{"unfinished-room", use, use != AppraisalRoomUse::other}};
+                entities.back().properties["appraisal_reporting"] = appraisal_reporting_json(declaration);
+                auto report = build_appraisal_document_report(Document::create(entities).snapshot(), "property-1");
+                const auto category = below ? AppraisalAreaCategory::below_grade_unfinished : AppraisalAreaCategory::above_grade_unfinished;
+                const bool uad3 = contract == AppraisalReportingContract::uad_3_6;
+                require(report.qualified && report.reporting && report.reporting->area_fields_available && report.reporting->room_counts_available == uad3 &&
+                    report.reporting->room_summaries_available && report.reporting->rooms.size() == 1 && report.reporting->rooms.front().included_in_primary_counts == uad3 &&
+                    report.reporting->primary_counts.bedrooms == (uad3 && use == AppraisalRoomUse::bedroom ? 1U : 0U) &&
+                    report.reporting->primary_counts.bathrooms_full == (uad3 && use == AppraisalRoomUse::bathroom_full ? 1U : 0U) &&
+                    report.reporting->primary_counts.bathrooms_half == (uad3 && use == AppraisalRoomUse::bathroom_half ? 1U : 0U) &&
+                    std::any_of(report.reporting->issues.begin(), report.reporting->issues.end(), [](const auto& issue) {
+                        return issue.find("unfinished primary room") != std::string::npos;
+                    }) == !uad3, "UAD 3.6 declared unfinished primary rooms count across all grades; unresolved legacy treatment withholds only primary form counts");
+                near(report.reporting->primary_area_fields.at(category), 9.290304, 1e-8,
+                    "Unfinished room counts and legacy withholding retain independently qualified area fields");
+                declaration.rooms.clear();
+                entities.back().properties["appraisal_reporting"] = appraisal_reporting_json(declaration);
+                report = build_appraisal_document_report(Document::create(entities).snapshot(), "property-1");
+                require(report.reporting->room_counts_available && report.reporting->rooms.empty() && report.reporting->primary_counts.bedrooms == 0,
+                    "An explicit empty unfinished inventory permits confirmed zero room counts without guessed room use");
+            }
+        }
+        for (const auto identity : {DwellingIdentity::attached_adu, DwellingIdentity::detached_adu, DwellingIdentity::detached_other}) {
+            auto entities = ansi_fixture_entities();
+            entities.front().properties["appraisal_reporting"] = appraisal_reporting_json(AppraisalReportingSettings{contract, true});
+            entities.back().properties["appraisal_facts"]["ansi"]["dwelling_identity"] = std::string(dwelling_identity_name(identity));
+            entities.back().properties["appraisal_facts"]["finish"] = "unfinished";
+            AppraisalAreaReportingFacts declaration;
+            declaration.source_geometry_sha256 = appraisal_reporting_source_digest(Document::create(entities).snapshot(), "area-1");
+            declaration.contained_within_primary = false;
+            declaration.rooms = {{"separate-bedroom", AppraisalRoomUse::bedroom, true}};
+            entities.back().properties["appraisal_reporting"] = appraisal_reporting_json(declaration);
+            const auto report = build_appraisal_document_report(Document::create(entities).snapshot(), "property-1");
+            const bool adu = identity != DwellingIdentity::detached_other;
+            const bool unresolved = adu && contract == AppraisalReportingContract::legacy_uad_2_6;
+            require(report.qualified && report.reporting->area_fields_available && report.reporting->room_counts_available == !unresolved && report.reporting->room_summaries_available &&
+                report.reporting->primary_counts.bedrooms == 0 && report.reporting->adu_counts.bedrooms == (adu ? 1U : 0U),
+                "UAD 3.6 separate unfinished ADUs preserve available primary counts; legacy mapping withholds only primary counts; detached-other stays separate");
+        }
+    }
+}
+
+void reporting_observation_context_integrity() {
+    using namespace sketch;
+    auto baseline = ansi_fixture_entities();
+    baseline.front().properties["appraisal_reporting"] = appraisal_reporting_json(
+        AppraisalReportingSettings{AppraisalReportingContract::uad_3_6, true});
+    const auto original_digest = appraisal_reporting_source_digest(Document::create(baseline).snapshot(), "area-1");
+    AppraisalAreaReportingFacts declaration{original_digest, {}, {{"bedroom", AppraisalRoomUse::bedroom, true}}};
+    baseline.back().properties["appraisal_reporting"] = appraisal_reporting_json(declaration);
+    const auto check_stale = [&](std::vector<Entity> values) {
+        const auto source = Document::create(values).snapshot();
+        require(appraisal_reporting_source_digest(source, "area-1") != original_digest,
+            "Current semantic observations must participate in the reporting confirmation digest");
+        const auto report = build_appraisal_document_report(source, "property-1");
+        require(report.reporting && !report.reporting->area_fields_available && !report.reporting->room_counts_available && !report.reporting->room_summaries_available &&
+            std::any_of(report.reporting->issues.begin(), report.reporting->issues.end(), [](const auto& issue) {
+                return issue.find("Reporting observations are stale") != std::string::npos;
+            }), "Previously confirmed room observations must be visibly stale after a semantic change");
+        AppraisalReportingChanges changes{source.revision(), source.document_id(), document_snapshot_digest(source), "property-1",
+            {AppraisalReportingContract::uad_3_6, true}, {{"area-1", declaration}}};
+        bool rejected = false;
+        try { validate_appraisal_reporting_changes(source, changes); } catch (const std::invalid_argument&) { rejected = true; }
+        require(rejected, "A fresh transaction fingerprint cannot validate reporting declarations bound to old observations");
+    };
+    auto changed = baseline;
+    changed.back().properties["appraisal_facts"]["finish"] = "unfinished"; check_stale(changed);
+    changed = baseline;
+    changed.back().properties["appraisal_facts"]["access"] = "through_unfinished"; check_stale(changed);
+    changed = baseline;
+    changed.back().properties["appraisal_facts"]["ansi"]["dwelling_identity"] = "detached_adu"; check_stale(changed);
+    changed = baseline;
+    changed.back().properties["appraisal_facts"]["ansi"]["ceiling"]["minimum_height_m"] = 1.9; check_stale(changed);
+    changed = baseline;
+    changed[2].properties["appraisal_facts"]["grade"] = "below";
+    changed[2].properties["appraisal_facts"]["ansi"]["any_part_below_grade"] = true; check_stale(changed);
+    changed = baseline;
+    changed.front().properties["appraisal_policy"]["ansi"]["acquisition_increment"] = "tenth_foot"; check_stale(changed);
+    changed = baseline;
+    changed.front().properties["appraisal_policy"]["version"] = 2; check_stale(changed);
+    changed = baseline;
+    changed.front().properties["appraisal_policy"]["measurement_basis"] = "plans";
+    changed.front().properties["appraisal_policy"]["ansi"]["limitation_declarations"] = json::array({
+        {{"kind", "based_on_plans"}, {"statement", "Based on supplied plans."}}}); check_stale(changed);
+    changed = baseline;
+    changed.front().properties["appraisal_policy"]["ansi"]["direct_measurement"] = false;
+    changed.front().properties["appraisal_policy"]["ansi"]["limitation_declarations"] = json::array({
+        {{"kind", "direct_measurement_not_possible"}, {"statement", "The inaccessible area could not be directly measured."}}}); check_stale(changed);
+    changed = baseline;
+    for (auto& item : changed) { item.properties["name"] = "Presentation name"; item.properties["color"] = "#123456"; }
+    changed.front().properties["calculation_profile"] = {{"decimal_places", 3}};
+    changed.front().properties["appraisal_reporting"]["contract"] = "legacy_uad_2_6";
+    changed.back().properties["appraisal_reporting"]["rooms"][0]["use"] = "bathroom_full";
+    changed.back().properties["appraisal_reporting"]["contained_within_primary"] = false;
+    const auto presentation_source = Document::create(changed).snapshot();
+    require(appraisal_reporting_source_digest(presentation_source, "area-1") == original_digest,
+        "Presentation, form contract and reporting output must not recursively invalidate observation confirmation");
+    auto report = build_appraisal_document_report(presentation_source, "property-1");
+    require(report.reporting->area_fields_available && report.reporting->room_counts_available && report.reporting->primary_counts.bathrooms_full == 1,
+        "Supported reporting edits retain a usable unchanged observation binding");
+    auto with_deduction = baseline;
+    auto deduction = with_deduction.back(); deduction.id = "void";
+    deduction.properties["boundary"] = square(0.5, 0.5, 0.5);
+    deduction.properties["appraisal_facts"]["boundary_role"] = "other_void";
+    deduction.properties.erase("appraisal_reporting");
+    with_deduction.back().properties["deduction_ids"] = json::array({"void"});
+    with_deduction.push_back(deduction);
+    const auto deduction_digest = appraisal_reporting_source_digest(Document::create(with_deduction).snapshot(), "area-1");
+    require(deduction_digest != original_digest, "Adding a deduction changes reporting source confirmation");
+    changed = with_deduction;
+    changed.back().properties["appraisal_facts"]["boundary_role"] = "open_to_below";
+    require(appraisal_reporting_source_digest(Document::create(changed).snapshot(), "area-1") != deduction_digest,
+        "Deduction observations belong to the exact reporting source context");
+    changed = with_deduction;
+    changed.back().properties["boundary"] = square(0.5, 0.5, 0.6);
+    require(appraisal_reporting_source_digest(Document::create(changed).snapshot(), "area-1") != deduction_digest,
+        "Deduction geometry changes must still invalidate room observation confirmation");
+    auto current = Document::create(baseline);
+    const auto before = current.snapshot();
+    (void)appraisal_reporting_source_digest(before, "area-1");
+    (void)build_appraisal_document_report(before, "property-1");
+    require(current.snapshot().entities() == before.entities(),
+        "Building current reporting output never modifies stored user declarations");
+    changed = baseline;
+    changed.push_back(entity("unrelated-property", "property", {{"appraisal_policy", policy()}}));
+    require(appraisal_reporting_source_digest(Document::create(changed).snapshot(), "area-1") == original_digest,
+        "Unrelated appraisal context does not invalidate current boundary observations");
+    for (const bool cyclic : {false, true}) {
+        changed = baseline;
+        changed.back().properties["deduction_ids"] = json::array({cyclic ? "area-1" : "missing-deduction"});
+        bool rejected = false;
+        try { (void)appraisal_reporting_source_digest(Document::create(changed).snapshot(), "area-1"); }
+        catch (const std::invalid_argument&) { rejected = true; }
+        require(rejected, "Unavailable or cyclic geometry dependencies cannot acquire a reporting confirmation digest");
+    }
+    changed = baseline;
+    changed[2].properties["building_id"] = "unavailable-building";
+    bool rejected = false;
+    try { (void)appraisal_reporting_source_digest(Document::create(changed).snapshot(), "area-1"); }
+    catch (const std::exception&) { rejected = true; }
+    require(rejected, "Unavailable appraisal owner context cannot acquire a reporting confirmation digest");
+}
+
+void reporting_adu_count_mapping_and_phase_scope() {
+    using namespace sketch;
+    for (const auto contract : {AppraisalReportingContract::legacy_uad_2_6, AppraisalReportingContract::uad_3_6}) {
+        for (const auto identity : {DwellingIdentity::attached_adu, DwellingIdentity::detached_adu}) {
+            for (const auto use : {AppraisalRoomUse::bedroom, AppraisalRoomUse::bathroom_full,
+                    AppraisalRoomUse::bathroom_half, AppraisalRoomUse::other}) {
+                for (const bool total_room : {false, true}) {
+                    auto entities = ansi_fixture_entities();
+                    entities.front().properties["appraisal_reporting"] = appraisal_reporting_json(AppraisalReportingSettings{contract, true});
+                    entities.back().properties["appraisal_facts"]["ansi"]["dwelling_identity"] = std::string(dwelling_identity_name(identity));
+                    AppraisalAreaReportingFacts declaration;
+                    declaration.source_geometry_sha256 = appraisal_reporting_source_digest(Document::create(entities).snapshot(), "area-1");
+                    declaration.contained_within_primary = false;
+                    declaration.rooms = {{"adu-room", use, total_room}};
+                    entities.back().properties["appraisal_reporting"] = appraisal_reporting_json(declaration);
+                    const auto report = build_appraisal_document_report(Document::create(entities).snapshot(), "property-1");
+                    const bool unresolved = contract == AppraisalReportingContract::legacy_uad_2_6 && (use != AppraisalRoomUse::other || total_room);
+                    require(report.qualified && report.reporting->area_fields_available && report.reporting->room_counts_available == !unresolved &&
+                        report.reporting->room_summaries_available &&
+                        report.reporting->rooms.size() == 1 && !report.reporting->rooms.front().included_in_primary_counts &&
+                        report.reporting->adu_counts.bedrooms == (use == AppraisalRoomUse::bedroom ? 1U : 0U) &&
+                        report.reporting->adu_counts.bathrooms_full == (use == AppraisalRoomUse::bathroom_full ? 1U : 0U) &&
+                        report.reporting->adu_counts.bathrooms_half == (use == AppraisalRoomUse::bathroom_half ? 1U : 0U) &&
+                        std::any_of(report.reporting->issues.begin(), report.reporting->issues.end(), [](const auto& issue) {
+                            return issue.find("ADU room mapping") != std::string::npos;
+                        }) == unresolved,
+                        "UAD 3.6 ADU counts stay separate; unresolved legacy ADU mapping withholds only primary counts while separate summaries and areas remain available");
+                    declaration.rooms.clear();
+                    entities.back().properties["appraisal_reporting"] = appraisal_reporting_json(declaration);
+                    require(build_appraisal_document_report(Document::create(entities).snapshot(), "property-1").reporting->room_counts_available,
+                        "Explicit empty ADU room membership has no unresolved nonzero primary-count mapping");
+                }
+            }
+        }
+    }
+    auto multiple_units = ansi_fixture_entities();
+    multiple_units.front().properties["appraisal_reporting"] = appraisal_reporting_json(
+        AppraisalReportingSettings{AppraisalReportingContract::uad_3_6, true});
+    auto adu_floor = multiple_units[2]; adu_floor.id = "adu-below-floor";
+    adu_floor.properties["appraisal_facts"]["grade"] = "below";
+    adu_floor.properties["appraisal_facts"]["ansi"]["any_part_below_grade"] = true;
+    auto adu_layer = multiple_units[3]; adu_layer.id = "adu-below-layer";
+    adu_layer.properties["floor_id"] = adu_floor.id;
+    auto attached_adu = multiple_units.back(); attached_adu.id = "attached-adu";
+    attached_adu.properties["floor_id"] = adu_floor.id;
+    attached_adu.properties["layer_id"] = adu_layer.id;
+    attached_adu.properties["boundary"] = square(10, 0, 3.048);
+    attached_adu.properties["appraisal_facts"]["ansi"]["dwelling_identity"] = "attached_adu";
+    auto detached_adu = multiple_units.back(); detached_adu.id = "detached-adu";
+    detached_adu.properties["boundary"] = square(20, 0, 3.048);
+    detached_adu.properties["appraisal_facts"]["ansi"]["dwelling_identity"] = "detached_adu";
+    multiple_units.push_back(adu_floor);
+    multiple_units.push_back(adu_layer);
+    multiple_units.push_back(attached_adu);
+    multiple_units.push_back(detached_adu);
+    const auto unit_source = Document::create(multiple_units).snapshot();
+    for (auto& item : multiple_units) if (item.type == "measurement_boundary") {
+        AppraisalAreaReportingFacts declaration;
+        declaration.source_geometry_sha256 = appraisal_reporting_source_digest(unit_source, item.id);
+        declaration.contained_within_primary = false;
+        declaration.rooms = {{"room-" + item.id, AppraisalRoomUse::bedroom, true}};
+        item.properties["appraisal_reporting"] = appraisal_reporting_json(declaration);
+    }
+    const auto unit_report = build_appraisal_document_report(Document::create(multiple_units).snapshot(), "property-1");
+    require(unit_report.qualified && unit_report.reporting->room_counts_available && unit_report.reporting->room_summaries_available &&
+        unit_report.reporting->primary_counts.bedrooms == 1 && unit_report.reporting->below_grade_counts.bedrooms == 0 &&
+        unit_report.reporting->adu_counts.bedrooms == 2,
+        "Multiple ADUs have combined aggregate detail; below-grade ADU rooms enter neither primary per-unit nor primary below-grade totals");
+    auto entities = ansi_fixture_entities();
+    entities.front().properties["appraisal_reporting"] = appraisal_reporting_json(
+        AppraisalReportingSettings{AppraisalReportingContract::uad_3_6, true});
+    AppraisalAreaReportingFacts visible_facts;
+    visible_facts.source_geometry_sha256 = appraisal_reporting_source_digest(Document::create(entities).snapshot(), "area-1");
+    visible_facts.rooms = {{"shared-room-id", AppraisalRoomUse::bedroom, true}};
+    entities.back().properties["appraisal_reporting"] = appraisal_reporting_json(visible_facts);
+    auto hidden = entities.back(); hidden.id = "hidden-area";
+    hidden.properties["boundary"] = square(10, 0, 3.048);
+    hidden.properties.erase("appraisal_reporting");
+    entities.push_back(hidden);
+    auto hidden_facts = visible_facts;
+    hidden_facts.source_geometry_sha256 = appraisal_reporting_source_digest(Document::create(entities).snapshot(), "hidden-area");
+    entities.back().properties["appraisal_reporting"] = appraisal_reporting_json(hidden_facts);
+    const std::set<std::string, std::less<>> visible_ids{"property-1", "building-1", "floor-1", "layer-1", "area-1"};
+    for (const bool malformed_hidden : {false, true}) {
+        auto values = entities;
+        if (malformed_hidden) values.back().properties["appraisal_reporting"]["rooms"] = "malformed";
+        const auto source = Document::create(values).snapshot();
+        AppraisalReportingChanges changes{source.revision(), source.document_id(), document_snapshot_digest(source), "property-1",
+            {AppraisalReportingContract::uad_3_6, true}, {{"area-1", visible_facts}}};
+        const auto report = build_appraisal_document_report(source, "property-1", AreaUnit::square_foot, &visible_ids);
+        require(report.qualified && report.reporting->room_counts_available,
+            "Hidden duplicate or malformed reporting declarations do not affect the visible phase projection");
+        validate_appraisal_reporting_changes(source, changes, &visible_ids);
+        bool rejected = false;
+        try { validate_appraisal_reporting_changes(source, changes); } catch (const std::exception&) { rejected = true; }
+        require(rejected, "Unfiltered validation still detects duplicate or malformed in-scope declarations");
+        changes.areas = {{"hidden-area", hidden_facts}};
+        rejected = false;
+        try { validate_appraisal_reporting_changes(source, changes, &visible_ids); } catch (const std::invalid_argument&) { rejected = true; }
+        require(rejected, "A phase-filtered reporting transaction rejects changes to a hidden area");
+    }
+}
+
 int main() {
     try {
         qualified_document_recalculates_from_geometry();
+        reporting_projection_contracts();
+        reporting_unfinished_room_treatment();
+        reporting_observation_context_integrity();
+        reporting_adu_count_mapping_and_phase_scope();
         ansi_declarations_and_canonical_reporting();
         ansi_flat_ceiling_precision_changes_contributions();
         ansi_finished_room_v2_uses_current_exclusion_geometry();

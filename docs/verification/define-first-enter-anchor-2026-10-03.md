@@ -51,3 +51,15 @@ physical keyboard qualification, ANSI validation and the unified production
 acceptance gate remain unfinished. APX-WF-002 is recorded as in progress rather
 than treating this fix as complete tutorial parity. Installation/runtime/remote
 evidence is recorded separately in the delivery artifact.
+
+## October 6 source reconciliation
+
+The October 3 H/V and Space gap statement above records the state at that time.
+Current `PlanCanvas` and `MainWindow` dispatch implement pending-dimension H/V
+orientation and held-Space suppression. `boundary_workflow_tests` exercises
+modified/repeated-key refusal, stationary Space behavior, pan/focus/source and
+read-only cases, text-field routing, persistence and unchanged history. The
+delivery record retains the passing focused boundary workflow evidence. These
+two implementation gaps are superseded; they are not new acceptance claims.
+U384 human execution, physical keyboard qualification and original Apex
+round-trips remain separate requirements.
