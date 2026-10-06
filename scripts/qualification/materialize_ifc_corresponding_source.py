@@ -60,9 +60,10 @@ def records(mapping):
 
 
 def tree_hash(root, expected):
-    """Inventory-compatible path/NUL/content/NUL hash with stable bounded reads."""
+    """Version 2 framed inventory identity, with stable bounded source reads."""
     safe.verify_tree(root, expected)
-    digest = hashlib.sha256()
+    digest = hashlib.sha256(b"Vertex-source-tree-v2\0")
+    digest.update(len(expected).to_bytes(8, "big"))
     for name, receipt in sorted(expected.items()):
         path = root / name
         safe.no_links(path)
@@ -70,21 +71,23 @@ def tree_hash(root, expected):
         stamp = lambda info: (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns)
         require(stat.S_ISREG(before.st_mode) and before.st_nlink == 1,
                 "Tree hash requires ordinary unlinked files")
-        digest.update(name.encode("utf-8") + b"\0")
+        encoded_name = name.encode("utf-8")
         content, size = hashlib.sha256(), 0
         with path.open("rb") as stream:
             require(stamp(os.fstat(stream.fileno())) == stamp(before), "Tree source changed before read")
             while chunk := stream.read(1 << 20):
                 size += len(chunk)
                 require(size <= receipt["bytes"], "Tree source grew during read")
-                digest.update(chunk)
                 content.update(chunk)
             require(stamp(os.fstat(stream.fileno())) == stamp(before), "Tree source changed during read")
         safe.no_links(path)
         require(stamp(path.stat()) == stamp(before) and
                 {"bytes": size, "sha256": content.hexdigest()} == safe.checked_record(receipt),
                 "Tree source changed after read")
-        digest.update(b"\0")
+        digest.update(len(encoded_name).to_bytes(8, "big"))
+        digest.update(encoded_name)
+        digest.update(size.to_bytes(8, "big"))
+        digest.update(content.digest())
     safe.verify_tree(root, expected)
     return digest.hexdigest()
 
@@ -230,6 +233,7 @@ def materialize(workspace, runtime_root, derived_source_root, sdk_source_root, b
                    "bytes": sum(row["bytes"] for row in tree.values()),
                    "sha256": tree_hash(stage / name, tree)} for name, tree in sorted(tables.items())}
     index = {"schema_version": 1, "kind": "ifc_preferred_source_materialization",
+        "tree_hash_encoding": "Vertex-source-tree-v2",
         "qualification": "incomplete", **{name: False for name in FLAGS},
         "source": source, "submodules": submodules, "modified_file": modified,
         "selected_runtime_manifest": safe.checked_record(runtime_receipt),

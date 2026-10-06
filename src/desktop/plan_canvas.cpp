@@ -5219,8 +5219,11 @@ void PlanCanvas::drawGrid(QPainter& painter, const QRectF& viewport, double scal
     const auto spacing = grid_spacing(scale, m_metric_units);
     const auto step = spacing.minor;
     const bool light_surface = m_canvas_background.lightnessF() > 0.5;
-    QPen minor(light_surface ? QColor(232, 237, 243) : QColor(43, 51, 62), 0.0);
-    QPen major(light_surface ? QColor(207, 217, 229) : QColor(58, 68, 82), 0.0);
+    const bool high_contrast = m_canvas_background == QColor(Qt::black);
+    QPen minor(high_contrast ? QColor(96, 96, 96)
+                             : light_surface ? QColor(232, 237, 243) : QColor(43, 51, 62), 0.0);
+    QPen major(high_contrast ? QColor(160, 160, 160)
+                             : light_surface ? QColor(207, 217, 229) : QColor(58, 68, 82), 0.0);
     const auto first_x = std::floor(min_x / step) * step;
     const auto first_y = std::floor(min_y / step) * step;
     const auto major_multiple = std::round(spacing.major / step);

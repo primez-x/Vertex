@@ -24,6 +24,17 @@ import stage_ifc_sdk_sources as safe
 MAX_FILE = 1024 * 1024 * 1024
 MAX_FILES = 4096
 MAX_CACHE_BYTES = 16 * 1024 * 1024 * 1024
+# SDK source trees are distinct from the small archive-cache table. The measured
+# Boost input has 8,189 files / 90,657,648 bytes; allow finite growth up to twice
+# its file count, with a separate budget for directories (including empty ones).
+MAX_SOURCE_TREE_FILES = 16_384
+MAX_SOURCE_TREE_ENTRIES = 32_768
+MAX_SOURCE_TREE_BYTES = 16 * 1024 * 1024 * 1024
+# The complete bundle includes the 8,189 Boost headers, controlled IFC source,
+# runtime, Qt notices and project kit. This budget is separate from archive caches.
+MAX_BUNDLE_FILES = 32_768
+MAX_DEPENDENCY_RECORDS = 20_000
+DEPENDENCY_KIT_PREFIX = "source-kit/third_party/dependency-inputs"
 DEFAULT_CACHE_DIRS = (".deps/vcpkg/downloads", ".deps/downloads", ".deps/downloads/cad-runtime")
 QT_BASE = "https://download.qt.io/archive/qt/6.8/6.8.3/submodules/"
 # Official Qt MirrorBrain metadata, verified 2026-10-06. PDF source is in WebEngine.
@@ -73,40 +84,84 @@ def json_input(root: Path, name: str, expected: str | None = None):
     return safe.parse_json(json_bytes), record
 
 
-def source_tree_hash(root: Path, name: str) -> str:
-    """Match inventory tree receipts, with bounded traversal and stable reads."""
+def source_tree_snapshot(root: Path, name: str):
+    """Bound every entry, including excluded caches and empty directories."""
     base = checked_path(root, name)
-    require(base.is_dir(), "source tree is not a directory")
+    require(stat.S_ISDIR(base.lstat().st_mode), "source tree is not a directory")
     files = []
+    stamps = {"": safe.stamp(base.lstat())}
+    names = {}
+    entries = total = 0
     def traversal_error(error):
         raise error
     for current, directories, filenames in os.walk(base, followlinks=False, onerror=traversal_error):
+        entries += len(directories) + len(filenames)
+        require(entries <= MAX_SOURCE_TREE_ENTRIES, "source tree entry count exceeds bound")
         for child in directories + filenames:
-            safe.no_links(Path(current) / child)
-        files.extend(Path(current) / child for child in filenames)
-        require(len(files) <= MAX_FILES, "source tree file count exceeds bound")
-    names = [path.relative_to(base).as_posix() for path in files]
-    safe.check_names(names)
-    require(sum(path.stat().st_size for path in files) <= MAX_CACHE_BYTES, "source tree bytes exceed bound")
-    value = hashlib.sha256()
-    for path in sorted(files, key=lambda entry: entry.relative_to(base).as_posix()):
+            path = Path(current) / child
+            safe.no_links(path)
+            relative = safe.relative_path(path.relative_to(base).as_posix())
+            kind = "directory" if child in directories else "file"
+            for index in range(1, len(parts := relative.split("/")) + 1):
+                spelling = "/".join(parts[:index])
+                entry = (spelling, "directory" if index < len(parts) else kind)
+                require(names.get(spelling.casefold(), entry) == entry, "source tree case-colliding path")
+                names[spelling.casefold()] = entry
+            before = path.lstat()
+            stamps[relative] = safe.stamp(before)
+            if kind == "directory":
+                require(stat.S_ISDIR(before.st_mode), "invalid source tree directory")
+            else:
+                require(stat.S_ISREG(before.st_mode) and before.st_size <= MAX_FILE, "invalid source tree file")
+                files.append(path)
+                require(len(files) <= MAX_SOURCE_TREE_FILES, "source tree file count exceeds bound")
+                total += before.st_size
+                require(total <= MAX_SOURCE_TREE_BYTES, "source tree bytes exceed bound")
+    return base, sorted(files, key=lambda path: path.relative_to(base).as_posix()), stamps
+
+
+def source_tree_files(root: Path, name: str) -> list[str]:
+    base, files, stamps = source_tree_snapshot(root, name)
+    require(source_tree_snapshot(root, name)[2] == stamps, "source tree changed during enumeration")
+    return [path.relative_to(root).as_posix() for path in files
+            if "__pycache__" not in path.relative_to(base).parts and path.suffix.lower() not in {".pyc", ".pyo"}]
+
+
+def source_tree_hash(root: Path, name: str) -> str:
+    """Match unambiguous v2 inventory receipts with bounded, stable reads."""
+    base, files, stamps = source_tree_snapshot(root, name)
+    value = hashlib.sha256(b"Vertex-source-tree-v2\0")
+    selected_count = sum("__pycache__" not in path.relative_to(base).parts
+                         and path.suffix.lower() not in {".pyc", ".pyo"} for path in files)
+    value.update(selected_count.to_bytes(8, "big"))
+    for path in files:
         relative = path.relative_to(base)
-        name = relative.as_posix()
+        child_name = relative.as_posix()
         before = path.lstat()
+        require(safe.stamp(before) == stamps[child_name], "source changed before hashing")
         require(stat.S_ISREG(before.st_mode) and before.st_size <= MAX_FILE, "invalid source tree file")
         # Match future workspace inventory receipts. Traversal, no-links and
         # resource limits still cover caches before their bytes are excluded.
         if "__pycache__" in relative.parts or path.suffix.lower() in {".pyc", ".pyo"}:
             continue
-        value.update(name.encode("utf-8") + b"\0")
+        path_bytes = child_name.encode("utf-8")
+        content_hash = hashlib.sha256()
+        count = 0
         with path.open("rb") as stream:
             require(safe.stamp(os.fstat(stream.fileno())) == safe.stamp(before), "source changed before read")
             while chunk := stream.read(1024 * 1024):
-                value.update(chunk)
+                count += len(chunk)
+                require(count <= before.st_size and count <= MAX_FILE, "source read bytes exceed bound")
+                content_hash.update(chunk)
             require(safe.stamp(os.fstat(stream.fileno())) == safe.stamp(before), "source changed during read")
+        require(count == before.st_size, "source read bytes differ")
         safe.no_links(path)
         require(safe.stamp(path.lstat()) == safe.stamp(before), "source changed after read")
-        value.update(b"\0")
+        value.update(len(path_bytes).to_bytes(8, "big"))
+        value.update(path_bytes)
+        value.update(count.to_bytes(8, "big"))
+        value.update(content_hash.digest())
+    require(source_tree_snapshot(root, name)[2] == stamps, "source tree changed during hashing")
     return value.hexdigest()
 
 
@@ -224,12 +279,98 @@ def metadata_index(root, path):
     return result, receipt
 
 
+def dependency_bundle_sources(root, bundle_root, manifest, by_path, document, inventory_receipt, source_kit_receipt, mapping):
+    """Bind SDK inputs to delivered source bytes, never a writable SDK fallback."""
+    reference = manifest.get("dependency_source_kit")
+    if reference is None:
+        return
+    relative = DEPENDENCY_KIT_PREFIX + "/dependency-source-kit-manifest.json"
+    require(isinstance(reference, dict) and reference.get("path") == relative,
+            "invalid frozen dependency source kit location")
+    member = by_path.get(relative)
+    require(member is not None and member.get("kind") == "dependency-source" and member.get("install") is False
+            and member["sha256"] == reference.get("sha256") and member.get("size") == reference.get("size"),
+            "dependency source kit reference differs from frozen payload")
+    kit, _ = json_input(root, bundle_root + "/" + relative, reference["sha256"])
+    require(kit.get("schema_version") == 1 and kit.get("payload_kind") == "candidate_dependency_source_payload"
+            and all(kit.get(key) is False for key in
+                    ("licensing_clearance", "corresponding_source_qualified", "offline_rebuild_qualified")),
+            "invalid frozen dependency source kit schema or qualification")
+    binding = kit.get("candidate_binding")
+    require(isinstance(binding, dict) and binding.get("inventory", {}).get("sha256") == inventory_receipt["sha256"],
+            "dependency source kit inventory differs from frozen candidate")
+    direct = binding.get("source_kit")
+    prior = binding.get("offline_bundle")
+    require(direct is not None or prior is not None, "dependency source kit has no project kit binding")
+    for selected in ([direct] if direct is not None else []) + ([prior.get("source_kit")] if isinstance(prior, dict) else []):
+        require(isinstance(selected, dict) and selected.get("sha256") == source_kit_receipt["sha256"],
+                "dependency source kit project kit differs from frozen candidate")
+    require(prior is None or isinstance(prior, dict), "invalid dependency source kit prior binding")
+    rows, components = kit.get("files"), kit.get("components")
+    require(isinstance(rows, list) and len(rows) <= MAX_DEPENDENCY_RECORDS
+            and isinstance(components, list) and len(components) <= 512, "invalid dependency source kit tables")
+    safe.check_names([row["path"] for row in rows])
+    component_ids = {item["id"] for item in document["components"]}
+    require(len(components) == len(component_ids) and {row["id"] for row in components} == component_ids,
+            "dependency source kit component ownership differs from candidate")
+    files = {}
+    for row in rows:
+        original = safe.relative_path(row["source_path"])
+        location = safe.relative_path(row["path"])
+        require(location == "inputs/" + original, "dependency source kit source/path differs")
+        frozen = by_path.get(DEPENDENCY_KIT_PREFIX + "/" + location)
+        require(frozen is not None and frozen.get("kind") == "dependency-source" and frozen.get("install") is False
+                and frozen["sha256"] == row["sha256"] and type(row.get("bytes")) is int
+                and frozen.get("size") == row["bytes"], "dependency source file differs from frozen payload")
+        owners, roles = row.get("component_ids"), row.get("roles")
+        require(isinstance(owners, list) and len(owners) <= 512 and len(set(owners)) == len(owners)
+                and set(owners) <= component_ids and isinstance(roles, list) and 0 < len(roles) <= 64
+                and all(isinstance(role, str) and 0 < len(role) <= 64 for role in roles)
+                and len(set(roles)) == len(roles), "invalid dependency source file owners or roles")
+        files[location] = row
+    expected = {relative, *[DEPENDENCY_KIT_PREFIX + "/" + path for path in files]}
+    require({path for path in by_path if path.startswith(DEPENDENCY_KIT_PREFIX + "/")} == expected,
+            "frozen dependency source kit has missing or unlisted files")
+    component_index = {row["id"]: row for row in components}
+    for component in document["components"]:
+        owner = component["id"]
+        declared = component_index[owner].get("assets")
+        require(isinstance(declared, list) and len(declared) <= MAX_DEPENDENCY_RECORDS,
+                "invalid dependency source input table")
+        for receipt in component.get("source_inputs", []):
+            original = safe.relative_path(receipt["path"])
+            matches = [row for row in declared if row.get("source_path") == original]
+            require(len(matches) == 1, "missing or ambiguous delivered dependency source input")
+            row = matches[0]
+            kind = receipt.get("kind", "file")
+            location = "inputs/" + original
+            require(row.get("payload_path") == location and row.get("sha256") == receipt["sha256"]
+                    and row.get("kind", "file") == kind, "delivered source input identity differs from inventory")
+            if kind == "directory":
+                children = source_tree_files(root, bundle_root + "/" + DEPENDENCY_KIT_PREFIX + "/" + location)
+                for child in children:
+                    child_relative = child[len(bundle_root + "/" + DEPENDENCY_KIT_PREFIX + "/"):]
+                    entry = files.get(child_relative)
+                    require(entry is not None and owner in entry["component_ids"] and "sdk_source" in entry["roles"],
+                            "delivered source tree has unbound child ownership")
+            else:
+                require(kind == "file", "unknown delivered source input kind")
+                entry = files.get(location)
+                require(entry is not None and owner in entry["component_ids"] and "assets" in entry["roles"]
+                        and entry["sha256"] == row["sha256"] and entry["bytes"] == row.get("bytes"),
+                        "delivered source input file has unbound ownership")
+            if not any((owner, original, role) in mapping for role in ("asset", "source")):
+                mapping[(owner, original, "source")] = {
+                    "path": bundle_root + "/" + DEPENDENCY_KIT_PREFIX + "/" + location,
+                    "sha256": receipt["sha256"], "kind": kind}
+
+
 def frozen_bundle_binding(root, bundle_root, inventory_receipt, document):
     """Bind explicit portable source identities to verified frozen payloads."""
     bundle_root = safe.relative_path(bundle_root)
     manifest, manifest_receipt = json_input(root, bundle_root + "/offline-bundle-manifest.json")
     require(manifest.get("schema_version") == 1 and isinstance(manifest.get("files"), list)
-            and len(manifest["files"]) <= 10000, "invalid offline bundle manifest")
+            and len(manifest["files"]) <= MAX_BUNDLE_FILES, "invalid offline bundle manifest")
     require(manifest["source_inventory"]["sha256"] == inventory_receipt["sha256"], "bundle inventory differs")
     safe.check_names([entry["path"] for entry in manifest["files"]])
     by_path = {entry["path"]: entry for entry in manifest["files"]}
@@ -300,21 +441,40 @@ def frozen_bundle_binding(root, bundle_root, inventory_receipt, document):
     require(sorted(map(identity, runtime["files"])) ==
             sorted(identity(entry) for entry in manifest["files"] if entry.get("install") is True),
             "runtime manifest differs from frozen install payload")
+    dependency_bundle_sources(root, bundle_root, manifest, by_path, document, inventory_receipt,
+                              bound_receipts["source_kit"], mapping)
     bundle = {"manifest": manifest_receipt, **bound_receipts, "portable_manifest": portable_receipt,
               "payload": payload, "source_location": bundle_root + "/source-kit"}
     return bundle, mapping
 
 
-def bound_component_record(root, component_id, receipt, mapping, kinds, *, required=False):
+def bound_component_record(root, component_id, receipt, mapping, kinds, *, required=False, source_input=False):
     original = safe.relative_path(receipt["path"])
+    kind = receipt.get("kind", "file")
+    require(kind in ("file", "directory"), "unknown component receipt kind")
+    require(kind != "directory" or source_input, "directory receipt is only admitted as source input")
+    require(isinstance(receipt["sha256"], str) and re.fullmatch(r"[0-9a-f]{64}", receipt["sha256"]),
+            "invalid component receipt hash")
+    if kind == "directory":
+        require(not ({"bytes", "sha512"} & set(receipt)), "invalid directory receipt")
+    def record(location):
+        if kind == "directory":
+            require(source_tree_hash(root, location) == receipt["sha256"], "source tree hash differs")
+            return {"path": location, "sha256": receipt["sha256"], "kind": "directory"}
+        actual = file_record(root, location, receipt["sha256"])
+        require("bytes" not in receipt or (type(receipt["bytes"]) is int and receipt["bytes"] == actual["bytes"]),
+                "component receipt bytes differ")
+        return actual
     matches = [mapping[(component_id, original, kind)] for kind in kinds if (component_id, original, kind) in mapping]
     require(len(matches) <= 1, "ambiguous frozen component source identity")
     if matches:
         entry = matches[0]
         require(entry["sha256"] == receipt["sha256"], "frozen source hash differs from original inventory receipt")
-        return {**file_record(root, entry["path"], receipt["sha256"]), "inventory_path": original}
+        require(entry.get("kind") == "directory" if kind == "directory" else entry.get("kind") != "directory",
+                "frozen source kind differs from original inventory receipt")
+        return {**record(entry["path"]), "inventory_path": original}
     require(not required, "missing exact frozen component source mapping")
-    return file_record(root, original, receipt["sha256"])
+    return record(original)
 
 
 def controlled_runtime_sources(root, component_id, source, mapping, *, frozen=False):
@@ -424,7 +584,8 @@ def audit(root: Path, inventory_path: str, *, build_receipts=(), metadata_path=N
         notices = [notice_record(root, bound_component_record(root, component["id"], entry, mapping, ("notice",),
                                                              required=bool(bundle) and included))
                    for entry in component.get("notices", [])]
-        assets = [bound_component_record(root, component["id"], entry, mapping, ("asset", "source"), required=bool(bundle) and included)
+        assets = [bound_component_record(root, component["id"], entry, mapping, ("asset", "source"), required=bool(bundle) and included,
+                                         source_input=True)
                   for entry in component.get("source_inputs", [])]
         artifacts = [bound_component_record(root, component["id"], entry, mapping, ("asset", "source", "notice"))
                      for entry in component.get("artifacts", [])]
@@ -558,7 +719,10 @@ def audit(root: Path, inventory_path: str, *, build_receipts=(), metadata_path=N
                           "redistributable_rights_review": sum(item["source_status"] == "redistributable_rights_review" for item in result)}}
     # Detect drift in the candidate receipts after the bounded audit as well.
     for record in [inventory_receipt, *receipts.values(), *build, *runtime_files, *component_records]:
-        file_record(root, record["path"], record["sha256"])
+        if record.get("kind") == "directory":
+            require(source_tree_hash(root, record["path"]) == record["sha256"], "source tree hash changed during audit")
+        else:
+            file_record(root, record["path"], record["sha256"])
     for record in controlled_trees:
         require(source_tree_hash(root, record["path"]) == record["sha256"], "controlled source tree hash changed during audit")
     if bundle:

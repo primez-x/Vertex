@@ -1606,6 +1606,10 @@ if(SKETCH_BUILD_DESKTOP)
       target_compile_options(ifc_desktop_workflow_tests PRIVATE /W4 /permissive- /utf-8)
     endif()
     add_test(NAME desktop_workflow COMMAND desktop_smoke)
+    add_test(NAME workspace_presentation_desktop COMMAND desktop_smoke --workspace-themes-only)
+    set_tests_properties(workspace_presentation_desktop PROPERTIES
+      ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_PLUGIN_PATH=${SKETCH_QT_PREFIX}/plugins"
+      ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${SKETCH_QT_BIN};PATH=path_list_prepend:${CMAKE_SOURCE_DIR}/.deps/native/x64-windows/$<IF:$<CONFIG:Debug>,debug/bin,bin>")
     add_test(NAME survey_report_desktop COMMAND desktop_smoke --survey-only)
     add_test(NAME drawing_set_output COMMAND desktop_smoke --drawing-set-output-only)
     add_test(NAME annotation_clipboard_desktop COMMAND desktop_smoke --annotation-clipboard-only)

@@ -22,6 +22,18 @@ inventory = importlib.util.module_from_spec(INVENTORY_SPEC)
 INVENTORY_SPEC.loader.exec_module(inventory)
 
 
+def tree_v2_digest(files):
+    value = hashlib.sha256(b"Vertex-source-tree-v2\0")
+    value.update(len(files).to_bytes(8, "big"))
+    for name, content in sorted(files.items()):
+        path = name.encode("utf-8")
+        value.update(len(path).to_bytes(8, "big"))
+        value.update(path)
+        value.update(len(content).to_bytes(8, "big"))
+        value.update(hashlib.sha256(content).digest())
+    return value.hexdigest()
+
+
 class SourceClosureTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -70,6 +82,117 @@ class SourceClosureTests(unittest.TestCase):
 
     def run_audit(self, **kwargs):
         return audit.audit(self.root, "inventory.json", cache_dirs=("cache",), **kwargs)
+
+    def declared_tree_fixture(self):
+        self.write("sdk/include/unit.hpp", b"header source")
+        digest = tree_v2_digest({"unit.hpp": b"header source"})
+        row = {"path": "sdk/include", "kind": "directory", "sha256": digest}
+        self.inventory["components"][0]["source_inputs"] = [row]
+        self.write_json("inventory.json", self.inventory)
+        return row
+
+    def test_declared_source_input_tree_is_bound_and_rechecked(self):
+        row = self.declared_tree_fixture()
+        result = self.run_audit()
+        self.assertEqual(result["components"][0]["assets"], [row])
+        self.assertFalse(result["corresponding_source_qualified"])
+        self.write("sdk/include/unit.hpp", b"changed header")
+        with self.assertRaisesRegex(ValueError, "tree hash"):
+            self.run_audit()
+
+    def test_declared_source_input_tree_late_addition_is_refused(self):
+        self.declared_tree_fixture()
+        original = audit.source_tree_hash
+        def drift(*args, **kwargs):
+            result = original(*args, **kwargs)
+            self.write("sdk/include/late.hpp", b"late source")
+            return result
+        with mock.patch.object(audit, "source_tree_hash", side_effect=drift):
+            with self.assertRaisesRegex(ValueError, "tree hash"):
+                self.run_audit()
+
+    def test_directory_receipts_are_explicit_and_source_input_only(self):
+        row = self.declared_tree_fixture()
+        component = self.inventory["components"][0]
+        for field in ("notices", "artifacts"):
+            with self.subTest(field=field):
+                original = component.get(field)
+                component[field] = [row]
+                self.write_json("inventory.json", self.inventory)
+                with self.assertRaisesRegex(ValueError, "directory|file"):
+                    self.run_audit()
+                if original is None:
+                    del component[field]
+                else:
+                    component[field] = original
+        for change in ({"kind": "file"}, {"kind": "unknown"}, {"bytes": 0}, {"sha256": "0" * 64}):
+            component["source_inputs"] = [{**row, **change}]
+            self.write_json("inventory.json", self.inventory)
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                self.run_audit()
+
+    def test_frozen_directory_binding_requires_exact_directory_mapping(self):
+        row = self.declared_tree_fixture()
+        self.write("bundle/sdk/unit.hpp", b"header source")
+        mapping = {("dependency", "sdk/include", "source"): {
+            "path": "bundle/sdk", "kind": "directory", "sha256": row["sha256"]}}
+        self.write("sdk/include/unit.hpp", b"live changed source")
+        record = audit.bound_component_record(self.root, "dependency", row, mapping, ("source",),
+                                              required=True, source_input=True)
+        self.assertEqual(record, {**row, "path": "bundle/sdk", "inventory_path": "sdk/include"})
+        with self.assertRaisesRegex(ValueError, "missing exact frozen"):
+            audit.bound_component_record(self.root, "dependency", row, {}, ("source",),
+                                         required=True, source_input=True)
+        del mapping[("dependency", "sdk/include", "source")]["kind"]
+        with self.assertRaisesRegex(ValueError, "kind"):
+            audit.bound_component_record(self.root, "dependency", row, mapping, ("source",),
+                                         required=True, source_input=True)
+
+    def test_source_tree_uses_separate_finite_file_and_entry_bounds(self):
+        self.write("sdk/include/a.hpp", b"a")
+        self.write("sdk/include/b.hpp", b"b")
+        expected = tree_v2_digest({"a.hpp": b"a", "b.hpp": b"b"})
+        with mock.patch.object(audit, "MAX_FILES", 1):
+            self.assertEqual(audit.source_tree_hash(self.root, "sdk/include"), expected)
+            self.write("cache/second.tar.gz", b"archive")
+            with self.assertRaisesRegex(ValueError, "too many cache"):
+                audit.source_cache(self.root, ("cache",))
+        with mock.patch.object(audit, "MAX_SOURCE_TREE_FILES", 1):
+            with self.assertRaisesRegex(ValueError, "file count"):
+                audit.source_tree_hash(self.root, "sdk/include")
+        (self.root / "sdk/include/empty").mkdir()
+        with mock.patch.object(audit, "MAX_SOURCE_TREE_ENTRIES", 2):
+            with self.assertRaisesRegex(ValueError, "entry count"):
+                audit.source_tree_hash(self.root, "sdk/include")
+
+    def test_source_tree_refuses_addition_during_hashing(self):
+        self.write("sdk/include/unit.hpp", b"header source")
+        original = Path.open
+        def add_during_read(path, *args, **kwargs):
+            stream = original(path, *args, **kwargs)
+            if path == self.root / "sdk/include/unit.hpp" and args == ("rb",):
+                self.write("sdk/include/late.hpp", b"late source")
+            return stream
+        with mock.patch.object(Path, "open", add_during_read):
+            with self.assertRaisesRegex(ValueError, "tree changed"):
+                audit.source_tree_hash(self.root, "sdk/include")
+
+    def test_source_tree_refuses_empty_directory_case_collision_and_nonregular_file(self):
+        (self.root / "sdk/include/Sub").mkdir(parents=True)
+        with mock.patch.object(audit.os, "walk", return_value=[(str(self.root / "sdk/include"), ["Sub", "sub"], [])]):
+            with self.assertRaisesRegex(ValueError, "case-colliding"):
+                audit.source_tree_hash(self.root, "sdk/include")
+        self.write("sdk/include/unit.hpp", b"header source")
+        original = Path.lstat
+        def nonregular(path, *args, **kwargs):
+            actual = original(path, *args, **kwargs)
+            if path == self.root / "sdk/include/unit.hpp":
+                return SimpleNamespace(st_mode=stat.S_IFIFO, st_dev=actual.st_dev, st_ino=actual.st_ino,
+                    st_size=actual.st_size, st_mtime_ns=actual.st_mtime_ns, st_file_attributes=0)
+            return actual
+        with mock.patch.object(Path, "lstat", nonregular):
+            with self.assertRaisesRegex(ValueError, "invalid source tree file"):
+                audit.source_tree_hash(self.root, "sdk/include")
 
     def model_asset_fixture(self):
         self.write("assets/model.traineddata", b"official trained model")
@@ -198,7 +321,7 @@ class SourceClosureTests(unittest.TestCase):
         source["corresponding_source_paths"][0]["sha256"] = audit.source_tree_hash(self.root, "dependency-src")
         source["corresponding_source_paths"] = source["corresponding_source_paths"][:1]
         self.write_json("inventory.json", self.inventory)
-        with mock.patch.object(audit, "MAX_FILES", 1):
+        with mock.patch.object(audit, "MAX_SOURCE_TREE_FILES", 1):
             with self.assertRaisesRegex(ValueError, "file count"):
                 self.run_audit()
 
@@ -300,6 +423,116 @@ class SourceClosureTests(unittest.TestCase):
         next(row for row in manifest["files"] if row["kind"] == "portable-package-manifest")["sha256"] = self.sha("bundle/metadata/portable.json")
         self.write_json("bundle/offline-bundle-manifest.json", manifest)
 
+    def dependency_bundle_fixture(self):
+        manifest, portable = self.frozen_bundle()
+        tree = self.declared_tree_fixture()
+        self.write("sdk/file.hpp", b"editable standalone source")
+        self.inventory["components"][0]["source_inputs"].append(self.record("sdk/file.hpp"))
+        self.write_json("inventory.json", self.inventory)
+        self.write("bundle/metadata/inventory.json", (self.root / "inventory.json").read_bytes())
+        manifest["source_inventory"]["sha256"] = self.sha("inventory.json")
+        next(row for row in manifest["files"] if row["path"] == "metadata/inventory.json")["sha256"] = self.sha("inventory.json")
+        portable["source_inventory"] = self.record("inventory.json")
+        kit_root = audit.DEPENDENCY_KIT_PREFIX
+        files = []
+        for original, role in (("sdk/include/unit.hpp", "sdk_source"), ("sdk/file.hpp", "assets")):
+            relative = "inputs/" + original
+            frozen = "bundle/" + kit_root + "/" + relative
+            self.write(frozen, (self.root / original).read_bytes())
+            files.append({"source_path": original, "path": relative, "sha256": self.sha(frozen),
+                          "bytes": (self.root / frozen).stat().st_size,
+                          "component_ids": ["dependency"], "roles": [role]})
+            manifest["files"].append({"path": kit_root + "/" + relative, "sha256": self.sha(frozen),
+                                      "size": (self.root / frozen).stat().st_size,
+                                      "kind": "dependency-source", "install": False})
+        file_row = files[1]
+        kit = {"schema_version": 1, "payload_kind": "candidate_dependency_source_payload",
+               "licensing_clearance": False, "corresponding_source_qualified": False, "offline_rebuild_qualified": False,
+               "candidate_binding": {"inventory": {"sha256": self.sha("inventory.json")},
+                                     "source_kit": {"sha256": self.sha("bundle/source-kit.json")}, "offline_bundle": None},
+               "components": [{"id": "dependency", "assets": [
+                   {"source_path": tree["path"], "kind": "directory", "sha256": tree["sha256"], "payload_path": "inputs/" + tree["path"]},
+                   {"source_path": file_row["source_path"], "sha256": file_row["sha256"],
+                    "bytes": file_row["bytes"], "payload_path": file_row["path"]}]}],
+               "files": files}
+        self.bind_dependency_fixture(manifest, portable, kit)
+        return manifest, portable, kit
+
+    def bind_dependency_fixture(self, manifest, portable, kit):
+        relative = audit.DEPENDENCY_KIT_PREFIX + "/dependency-source-kit-manifest.json"
+        self.write_json("bundle/" + relative, kit)
+        row = {"path": relative, "sha256": self.sha("bundle/" + relative),
+               "size": (self.root / "bundle" / relative).stat().st_size,
+               "kind": "dependency-source", "install": False}
+        manifest["files"] = [entry for entry in manifest["files"] if entry["path"] != relative] + [row]
+        manifest["dependency_source_kit"] = {key: row[key] for key in ("path", "sha256", "size")}
+        self.rewrite_mapping(manifest, portable)
+
+    def test_delivered_sdk_tree_and_file_ignore_changed_live_sdk(self):
+        self.dependency_bundle_fixture()
+        self.write("sdk/include/unit.hpp", b"changed live SDK")
+        self.write("sdk/file.hpp", b"changed live standalone source")
+        result = self.run_audit(bundle_root="bundle")
+        assets = result["components"][0]["assets"]
+        self.assertTrue(all(row["path"].startswith("bundle/" + audit.DEPENDENCY_KIT_PREFIX) for row in assets))
+        self.assertEqual(assets[0]["kind"], "directory")
+        self.assertFalse(result["corresponding_source_qualified"])
+
+    def test_frozen_dependency_source_mapping_rejects_relabelled_bindings(self):
+        manifest, portable, original = self.dependency_bundle_fixture()
+        mutations = (
+            lambda kit: kit["candidate_binding"]["inventory"].update(sha256="0" * 64),
+            lambda kit: kit["candidate_binding"]["source_kit"].update(sha256="0" * 64),
+            lambda kit: kit["components"][0]["assets"][0].update(payload_path="inputs/sdk/other"),
+            lambda kit: kit["components"][0]["assets"][0].update(kind="file"),
+            lambda kit: kit["files"][0].update(component_ids=[]),
+            lambda kit: kit["files"][0].update(roles=["notices"]),
+            lambda kit: kit["files"][1].update(sha256="0" * 64),
+            lambda kit: kit.update(corresponding_source_qualified=True),
+            lambda kit: kit["files"].pop())
+        for mutate in mutations:
+            kit = copy.deepcopy(original)
+            mutate(kit)
+            self.bind_dependency_fixture(manifest, portable, kit)
+            with self.subTest(mutate=mutate), self.assertRaises(ValueError):
+                self.run_audit(bundle_root="bundle")
+
+    def test_frozen_dependency_tree_hash_and_files_are_verified(self):
+        manifest, portable, kit = self.dependency_bundle_fixture()
+        original = "sdk/include/unit.hpp"
+        relative = audit.DEPENDENCY_KIT_PREFIX + "/inputs/" + original
+        self.write("bundle/" + relative, b"different delivered source")
+        row = next(entry for entry in kit["files"] if entry["source_path"] == original)
+        row.update(sha256=self.sha("bundle/" + relative), bytes=(self.root / "bundle" / relative).stat().st_size)
+        next(entry for entry in manifest["files"] if entry["path"] == relative).update(sha256=row["sha256"], size=row["bytes"])
+        self.bind_dependency_fixture(manifest, portable, kit)
+        with self.assertRaisesRegex(ValueError, "tree hash"):
+            self.run_audit(bundle_root="bundle")
+
+    def test_source_tree_v2_prevents_ambiguous_two_tree_substitution(self):
+        files = {"a.hpp": b"A", "b.hpp": b"B"}
+        substitute = {"a.hpp": b"A\0b.hpp\0B"}
+        legacy = lambda entries: hashlib.sha256(b"".join(
+            name.encode() + b"\0" + content + b"\0" for name, content in sorted(entries.items()))).hexdigest()
+        self.assertEqual(legacy(files), legacy(substitute))
+        for name, content in files.items():
+            self.write("sdk/include/" + name, content)
+        row = {"path": "sdk/include", "kind": "directory", "sha256": tree_v2_digest(files)}
+        self.assertEqual(audit.source_tree_hash(self.root, row["path"]), row["sha256"])
+        self.inventory["components"][0]["source_inputs"] = [row]
+        self.write_json("inventory.json", self.inventory)
+        self.run_audit()
+        self.write("sdk/include/a.hpp", substitute["a.hpp"])
+        (self.root / "sdk/include/b.hpp").unlink()
+        self.assertEqual(audit.source_tree_hash(self.root, row["path"]), tree_v2_digest(substitute))
+        self.assertNotEqual(row["sha256"], tree_v2_digest(substitute))
+        with self.assertRaisesRegex(ValueError, "tree hash"):
+            self.run_audit()
+        row["sha256"] = legacy(substitute)
+        self.write_json("inventory.json", self.inventory)
+        with self.assertRaisesRegex(ValueError, "tree hash"):
+            self.run_audit()
+
     def test_future_source_tree_hash_matches_inventory_and_ignores_python_caches(self):
         self.write("src/adapter.py", b"value = 1\n")
         self.write("src/adapter.pyd", b"retained runtime artifact")
@@ -344,7 +577,7 @@ class SourceClosureTests(unittest.TestCase):
     def test_source_tree_hash_retains_limits_for_excluded_cache_files(self):
         self.write("src/adapter.py", b"source")
         self.write("src/__pycache__/adapter.pyc", b"cache exceeding small test limits")
-        for limit, value, message in (("MAX_FILES", 1, "file count"), ("MAX_CACHE_BYTES", 1, "bytes"),
+        for limit, value, message in (("MAX_SOURCE_TREE_FILES", 1, "file count"), ("MAX_SOURCE_TREE_BYTES", 1, "bytes"),
                                       ("MAX_FILE", 8, "invalid source tree file")):
             with self.subTest(limit=limit), mock.patch.object(audit, limit, value):
                 with self.assertRaisesRegex(ValueError, message):

@@ -20,6 +20,20 @@ def record(name, data):
 
 
 class MaterializationTests(unittest.TestCase):
+    def test_tree_identity_is_unambiguous_and_inventory_compatible(self):
+        first, second = self.root / "first", self.root / "second"
+        first.mkdir()
+        second.mkdir()
+        expected = {row["path"]: row for row in (
+            self.write(first, "a.hpp", b"A"), self.write(first, "b.hpp", b"B"))}
+        other = self.write(second, "a.hpp", b"A\0b.hpp\0B")
+        self.assertNotEqual(materializer.tree_hash(first, expected),
+                            materializer.tree_hash(second, {other["path"]: other}))
+        framed = hashlib.sha256(b"Vertex-source-tree-v2\0" + (2).to_bytes(8, "big"))
+        for name, value in ((b"a.hpp", b"A"), (b"b.hpp", b"B")):
+            framed.update(len(name).to_bytes(8, "big") + name + len(value).to_bytes(8, "big") + hashlib.sha256(value).digest())
+        self.assertEqual(materializer.tree_hash(first, expected), framed.hexdigest())
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
@@ -252,11 +266,13 @@ class MaterializationTests(unittest.TestCase):
     def test_tree_hash_matches_distribution_inventory_encoding(self):
         result = self.run_materializer()
         for name, tree in result["trees"].items():
-            expected = hashlib.sha256()
+            expected = hashlib.sha256(b"Vertex-source-tree-v2\0")
+            expected.update(len(tree["files"]).to_bytes(8, "big"))
             for row in tree["files"]:
-                expected.update(row["path"].encode("utf-8") + b"\0")
-                expected.update((self.out / name / row["path"]).read_bytes())
-                expected.update(b"\0")
+                path = row["path"].encode("utf-8")
+                content = (self.out / name / row["path"]).read_bytes()
+                expected.update(len(path).to_bytes(8, "big") + path + len(content).to_bytes(8, "big")
+                                + hashlib.sha256(content).digest())
             self.assertEqual(tree["sha256"], expected.hexdigest())
 
     @unittest.skipUnless(os.name == "nt", "Windows no-replace publication")

@@ -29,6 +29,21 @@ def write_json(path, value):
 
 
 class ControlledSourceValidationTests(unittest.TestCase):
+    def test_versioned_tree_identity_distinguishes_embedded_file_names(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            first, second = root / "first", root / "second"
+            first.mkdir()
+            second.mkdir()
+            (first / "a.hpp").write_bytes(b"A")
+            (first / "b.hpp").write_bytes(b"B")
+            (second / "a.hpp").write_bytes(b"A\0b.hpp\0B")
+            self.assertNotEqual(inventory._tree_sha256(first), inventory._tree_sha256(second))
+            framed = hashlib.sha256(b"Vertex-source-tree-v2\0" + (2).to_bytes(8, "big"))
+            for name, value in ((b"a.hpp", b"A"), (b"b.hpp", b"B")):
+                framed.update(len(name).to_bytes(8, "big") + name + len(value).to_bytes(8, "big") + hashlib.sha256(value).digest())
+            self.assertEqual(inventory._tree_sha256(first), framed.hexdigest())
+
     def fixture(self):
         stage = "build/windows-release/cad-runtime"
         native = stage + "/Lib/site-packages/ifcopenshell/_ifcopenshell_wrapper.cp313-win_amd64.pyd"

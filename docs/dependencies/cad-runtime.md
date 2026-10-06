@@ -28,7 +28,7 @@ python -B scripts/prepare_cad_distribution.py `
   --runtime-root .deps/cad-runtime/3.13.15-ifc-source-ff3c5b849eee `
   --staged-root build/windows-release/cad-runtime `
   --selection-path build/windows-release/cad-runtime-selection.json `
-  --corresponding-source-manifest .deps/source-closure/ifc-controlled/corresponding-source-paths.json
+  --corresponding-source-manifest .deps/source-closure/ifc-controlled/corresponding-source-paths-v2.json
 ```
 
 The selected-runtime inspector verifies every SDK and staged file before the

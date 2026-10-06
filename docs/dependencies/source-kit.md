@@ -118,3 +118,21 @@ redistribution and a clean offline dependency rebuild remain separate work.
 The complete application's corresponding-source and production qualification
 flags therefore remain false. Compose the final offline source handoff only
 after adding those remaining inputs and recording a clean rebuild.
+
+## Composed dependency inputs
+
+`scripts/qualification/compose_dependency_source_kit.py` copies the explicitly
+declared archive, recipe, source-directory and notice inputs from a checked
+source-closure report. Source directories include the selected Boost and Eigen
+headers, not only native libraries. Stable traversal rejects links, ambiguous
+Windows names, oversized trees and changes during reading or copying. Tree
+identities use the same `Vertex-source-tree-v2` framing as the inventory producer,
+IFC materializer and offline-bundle verifier.
+
+The limits distinguish physical copies from metadata replay: 20,000 unique
+dependency payload files, 32,768 frozen bundle receipts and 65,536 replay records.
+Repeated references do not consume another physical-copy slot. The frozen audit
+maps delivered SDK source directories through their checked dependency manifest;
+it does not substitute writable developer headers for source inputs carried in
+that bundle. Source, redistribution and offline-rebuild qualification remain
+separate from a successful copy or audit.

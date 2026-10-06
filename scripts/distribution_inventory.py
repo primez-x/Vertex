@@ -151,11 +151,14 @@ def _relative_existing_path(root: pathlib.Path, value: Any, field: str,
 
 
 def _tree_sha256(path: pathlib.Path) -> str:
-    digest = hashlib.sha256()
+    # Versioned framing distinguishes separate files from embedded NUL/name
+    # bytes in one file. Legacy name/NUL/raw-content receipts are not admitted.
+    digest = hashlib.sha256(b"Vertex-source-tree-v2\0")
     try:
         children = sorted(path.rglob("*"), key=lambda item: item.relative_to(path).as_posix())
     except OSError as exc:
         _error(f"Could not enumerate source tree {path}: {exc}")
+    selected = []
     for child in children:
         if child.is_symlink():
             _error(f"Symlink is not valid source evidence: {child}")
@@ -166,16 +169,23 @@ def _tree_sha256(path: pathlib.Path) -> str:
         # workspace source. Check symlinks above before excluding cache paths.
         if "__pycache__" in relative_path.parts or child.suffix.lower() in {".pyc", ".pyo"}:
             continue
-        relative = relative_path.as_posix()
-        digest.update(relative.encode("utf-8"))
-        digest.update(b"\0")
+        selected.append(child)
+    digest.update(len(selected).to_bytes(8, "big"))
+    for child in selected:
+        relative = child.relative_to(path).as_posix().encode("utf-8")
+        file_digest = hashlib.sha256()
+        count = 0
         try:
             with child.open("rb") as source:
                 while chunk := source.read(1024 * 1024):
-                    digest.update(chunk)
+                    count += len(chunk)
+                    file_digest.update(chunk)
         except OSError as exc:
             _error(f"Could not read source evidence {child}: {exc}")
-        digest.update(b"\0")
+        digest.update(len(relative).to_bytes(8, "big"))
+        digest.update(relative)
+        digest.update(count.to_bytes(8, "big"))
+        digest.update(file_digest.digest())
     return digest.hexdigest()
 
 

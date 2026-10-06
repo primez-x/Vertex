@@ -1428,6 +1428,24 @@ class DependencySourceKitTests(unittest.TestCase):
         self.publish()
         self.assertTrue((self.root / "out/with-dependencies" / stage.DEPENDENCY_PREFIX / "inputs/vendor/empty").is_dir())
 
+    def test_declared_sdk_source_directory_is_delivered_without_installing_headers(self):
+        directory = self.root / "sdk/include"
+        directory.mkdir(parents=True)
+        (directory / "unit.hpp").write_bytes(b"editable header source")
+        sqlite = next(item for item in self.report["components"] if item["id"] == "sqlite")
+        sqlite["assets"].append({"path": "sdk/include", "kind": "directory",
+            "sha256": self.composer.closure.source_tree_hash(self.root, "sdk/include")})
+        self.payload_name = "artifacts/with-sdk-source"
+        self.payload = self.root / self.payload_name
+        self.manifest = self.payload / self.composer.MANIFEST
+        self.compose()
+        result = self.publish()
+        location = stage.DEPENDENCY_PREFIX + "/inputs/sdk/include/unit.hpp"
+        copied = next(row for row in result["files"] if row["path"] == location)
+        self.assertFalse(copied["install"])
+        self.assertEqual((self.root / "out/with-dependencies" / location).read_bytes(), b"editable header source")
+        self.assertEqual(stage.verify_bundle(self.root / "out/with-dependencies")["file_count"], len(result["files"]))
+
     def test_stale_project_reference_is_refused(self):
         self.change_manifest(lambda d: next(item for item in d["components"] if item["id"] == "vertex")
                              ["sources"][0]["local_files"][0].update(sha256="0" * 64))

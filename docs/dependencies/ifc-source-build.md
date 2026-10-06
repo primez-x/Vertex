@@ -390,6 +390,17 @@ source path table. Distribution preparation consumes that explicit table and
 the verified selected SDK/stage/selection identity. It retains original notices
 and distinguishes native binaries from source assets.
 
+The current table is `corresponding-source-paths-v2.json`, paired with
+`materialization-index-v2.json`. The original index and table remain preserved.
+All 4,744 original indexed file hashes and four tree memberships were verified
+before creating these sidecars. The source files and selected runtime did not
+change. Tree identities now use `Vertex-source-tree-v2`: a domain tag, an
+eight-byte big-endian file count, then each sorted UTF-8 relative path with its
+eight-byte length, actual eight-byte file size and raw SHA-256 digest. This
+unambiguous framing replaces the old name/content delimiter encoding; old tree
+hashes cannot authorize a new candidate. The v2 index retains the original
+index's hash and size as migration evidence.
+
 These are reproducible input and copy records. They do not yet establish
 transitive license closure, a completed offline rebuild or the final installed
 worker lifecycle. See [the delivery record](../delivery/progress.md) for current

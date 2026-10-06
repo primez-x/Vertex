@@ -35,7 +35,10 @@ _SOURCE_KIT_SPEC.loader.exec_module(project_manifest)
 safe = closure.safe
 require = closure.require
 MANIFEST = "dependency-source-kit-manifest.json"
-MAX_RECORDS = 20_000
+# Physical copied inputs and receipt replay have distinct bounded workloads.
+# Replay covers a full frozen bundle plus dependency inputs and metadata.
+MAX_PAYLOAD_FILES = 20_000
+MAX_RECORDS = 65_536
 MAX_TOTAL = 16 * 1024 * 1024 * 1024
 MAX_INPUT_BYTES = 32 * 1024 * 1024 * 1024
 MAX_JSON = 32 * 1024 * 1024
@@ -76,49 +79,17 @@ def strings(values, *, paths=False):
     return result
 
 
-def table(values):
-    require(isinstance(values, list) and len(values) <= MAX_RECORDS, "invalid record table")
+def table(values, *, limit=None):
+    require(isinstance(values, list) and len(values) <= (MAX_RECORDS if limit is None else limit),
+            "invalid record table")
     safe.check_names([fields(row, row.keys(), ("path",))["path"] for row in values if isinstance(row, dict)])
     require(all(isinstance(row, dict) for row in values), "invalid record")
     return values
 
 
 def directory_files(root, name):
-    """Enumerate with closure's cache exclusions, retaining all safety budgets."""
-    base = closure.checked_path(root, name)
-    require(base.is_dir(), "source tree is not a directory")
-    files = []
-    names = {}
-    entries = 0
-    def failed(error):
-        raise error
-    for current, directories, filenames in os.walk(base, followlinks=False, onerror=failed):
-        entries += len(directories) + len(filenames)
-        require(entries <= MAX_RECORDS, "source tree entry count exceeds bound")
-        for child in directories + filenames:
-            path = Path(current) / child
-            safe.no_links(path)
-            relative = safe.relative_path(path.relative_to(base).as_posix())
-            kind = "directory" if child in directories else "file"
-            for index in range(1, len(parts := relative.split("/")) + 1):
-                spelling = "/".join(parts[:index])
-                entry = (spelling, "directory" if index < len(parts) else kind)
-                require(names.get(spelling.casefold(), entry) == entry, "source tree case-colliding path")
-                names[spelling.casefold()] = entry
-        files.extend(Path(current) / child for child in filenames)
-        require(len(files) <= closure.MAX_FILES, "source tree file count exceeds bound")
-    safe.check_names([path.relative_to(base).as_posix() for path in files])
-    total = 0
-    included = []
-    for path in sorted(files):
-        info = path.lstat()
-        require(stat.S_ISREG(info.st_mode) and info.st_size <= closure.MAX_FILE, "invalid source tree file")
-        total += info.st_size
-        require(total <= closure.MAX_CACHE_BYTES, "source tree bytes exceed bound")
-        relative = path.relative_to(base)
-        if "__pycache__" not in relative.parts and path.suffix.lower() not in {".pyc", ".pyo"}:
-            included.append(path.relative_to(root).as_posix())
-    return included
+    """Use the same bounded/stable SDK tree enumeration as the source audit."""
+    return closure.source_tree_files(root, name)
 
 
 def copy_file(root, receipt, destination):
@@ -196,7 +167,7 @@ class Composer:
             self.names[spelling.casefold()] = entry
         self.identities[identity] = (row["sha256"], kind)
         if row.get("kind") == "directory":
-            require(role == "source", "directory receipt is only admitted as source input")
+            require(role in {"source", "sdk_source"}, "directory receipt is only admitted as source input")
             require(not ({"bytes", "sha512"} & set(row)), "invalid directory receipt")
             children = directory_files(self.root, location)
             if project and self.project_rows is not None:
@@ -211,7 +182,7 @@ class Composer:
             else:
                 result["payload_path"] = "inputs/" + identity
                 self.payload_trees[result["payload_path"]] = row["sha256"]
-                for child in directory_files(self.root, location):
+                for child in children:
                     child_identity = identity + "/" + child[len(location) + 1:]
                     self.record({**closure.file_record(self.root, child), "inventory_path": child_identity}, owner, role)
             return result
@@ -238,6 +209,7 @@ class Composer:
         elif copy:
             result["payload_path"] = "inputs/" + identity
             if identity not in self.payload:
+                require(len(self.payload) < MAX_PAYLOAD_FILES, "payload file count exceeds bound")
                 self.total += actual["bytes"]
                 require(self.total <= MAX_TOTAL, "payload bytes exceed bound")
                 self.payload[identity] = {**result, "path": result["payload_path"],
@@ -252,7 +224,7 @@ class Composer:
         """Bind an explicit first source kit without needing an existing bundle."""
         manifest, receipt = closure.json_input(self.root, path)
         project_manifest.validate_manifest(manifest)
-        require(len(manifest["files"]) <= MAX_RECORDS, "selected source kit file count exceeds bound")
+        require(len(manifest["files"]) <= closure.MAX_BUNDLE_FILES, "selected source kit file count exceeds bound")
         self.project_rows = {safe.relative_path(row["path"]): row for row in manifest["files"]}
         for identity, row in self.project_rows.items():
             self.record({"path": identity, "sha256": row["sha256"].lower(), "bytes": row["size"]},
@@ -330,7 +302,8 @@ class Composer:
         for key in ("notices", "assets", "artifacts"):
             rows = []
             for row in table(item[key]):
-                record = self.record(row, owner, key, extra={"content_role"} if key == "notices" else ())
+                role = "sdk_source" if key == "assets" and row.get("kind") == "directory" else key
+                record = self.record(row, owner, role, extra={"content_role"} if key == "notices" else ())
                 if "content_role" in row:
                     record["content_role"] = text(row["content_role"])
                 rows.append(record)
@@ -392,7 +365,8 @@ class Composer:
                                         for key in ("manifest", "portable_manifest", "runtime_manifest", "source_inventory", "source_kit")}
             result["offline_bundle"]["source_location"] = safe.relative_path(bundle["source_location"])
             self.project_prefix = result["offline_bundle"]["source_location"]
-            result["offline_bundle"]["payload"] = [self.record(row, None, "frozen_payload", copy=False) for row in table(bundle["payload"])]
+            result["offline_bundle"]["payload"] = [self.record(row, None, "frozen_payload", copy=False)
+                                                   for row in table(bundle["payload"], limit=closure.MAX_BUNDLE_FILES)]
         return result
 
     def verify(self):

@@ -7752,6 +7752,7 @@ public:
         const QString accent = contrast ? "#ffff00" : dark ? "#7db3ff" : "#2563eb";
         const QString selection = contrast ? "#ffff00" : dark ? "#243e67" : "#e7efff";
         const QString selectedText = contrast ? "#000000" : foreground;
+        const QString selectedAccent = contrast ? selectedText : accent;
         QPalette palette = owner->style()->standardPalette();
         palette.setColor(QPalette::Window, QColor(background));
         palette.setColor(QPalette::WindowText, QColor(foreground));
@@ -7779,14 +7780,14 @@ public:
             QPushButton, QToolButton { color: $foreground; background: $surface;
                 border: 1px solid $border; border-radius: 8px; padding: 8px 11px; }
             QToolBar QToolButton { border-color: transparent; border-radius: 3px; padding: 1px 4px; min-height: 20px; max-height: 20px; }
-            QToolBar QToolButton:hover { background: $selection; border-color: $selection; }
-            QToolBar QToolButton:checked { background: $selection; color: $accent; border-color: $accent; }
+            QToolBar QToolButton:hover { background: $selection; color: $selectedText; border-color: $selection; }
+            QToolBar QToolButton:checked { background: $selection; color: $selectedAccent; border-color: $accent; }
             QWidget#canvasStatusControls QToolButton { border: 0; border-radius: 4px;
                 padding: 2px; min-width: 22px; min-height: 20px; }
-            QWidget#canvasStatusControls QToolButton:hover { background: $selection; }
+            QWidget#canvasStatusControls QToolButton:hover { background: $selection; color: $selectedText; }
             QWidget#canvasStatusControls QToolButton:checked { background: $selection;
-                color: $accent; }
-            QPushButton:hover, QToolButton:hover { background: $selection; border-color: $accent; }
+                color: $selectedAccent; }
+            QPushButton:hover, QToolButton:hover { background: $selection; color: $selectedText; border-color: $accent; }
             QPushButton:pressed, QToolButton:pressed, QToolButton:checked {
                 background: $selection; color: $selectedText; border-color: $accent; }
             QPushButton:focus, QToolButton:focus, QComboBox:focus, QLineEdit:focus,
@@ -7840,7 +7841,7 @@ public:
             QTabWidget#workspaceTabs::pane { border: 0; background: transparent; }
             QTabBar::tab { background: transparent; color: $muted; padding: 10px 18px;
                 margin: 3px 2px; border: 1px solid transparent; border-radius: 8px; }
-            QTabBar::tab:selected { background: $selection; color: $accent; border-color: $accent; }
+            QTabBar::tab:selected { background: $selection; color: $selectedAccent; border-color: $accent; }
             QTabBar::tab:hover { color: $foreground; background: $background; }
             QWidget#measurementPlanCanvas, QWidget#architecturalPlanCanvas {
                 border: 1px solid $border; border-radius: 8px; }
@@ -7861,12 +7862,14 @@ public:
         stylesheet.replace("$background", background).replace("$surface", surface)
             .replace("$foreground", foreground).replace("$muted", muted)
             .replace("$border", border).replace("$accent", accent)
+            .replace("$selectedAccent", selectedAccent)
             .replace("$selection", selection).replace("$selectedText", selectedText);
         owner->setStyleSheet(stylesheet);
         owner->setProperty("workspaceTheme", QString::fromStdString(workspace_theme_name(theme)));
         m_theme = theme;
-        if (m_measurementCanvas) m_measurementCanvas->setCanvasBackground(QColor(dark ? "#141b27" : "#f8fafc"));
-        if (m_architecturalCanvas) m_architecturalCanvas->setCanvasBackground(QColor(dark ? "#141b27" : "#f8fafc"));
+        const QColor canvas_background(contrast ? "#000000" : dark ? "#141b27" : "#f8fafc");
+        if (m_measurementCanvas) m_measurementCanvas->setCanvasBackground(canvas_background);
+        if (m_architecturalCanvas) m_architecturalCanvas->setCanvasBackground(canvas_background);
     }
 
     QString workspaceProfilesPath() const {

@@ -274,7 +274,7 @@ def _validate_dependency_source_kit(root: pathlib.Path, relative: pathlib.Path |
     for key in ("licensing_clearance", "corresponding_source_qualified", "offline_rebuild_qualified"):
         _require(document[key] is False, "dependency source kit cannot confer qualification")
     helper.text(document["boundary"])
-    rows = helper.table(document["files"])
+    rows = helper.table(document["files"], limit=helper.MAX_PAYLOAD_FILES)
     _require([row["path"] for row in rows] == sorted(row["path"] for row in rows),
              "dependency payload files must be sorted")
     safe.check_names([helper.MANIFEST, *[row["path"] for row in rows]])
@@ -351,18 +351,23 @@ def _validate_dependency_source_kit(root: pathlib.Path, relative: pathlib.Path |
             _validate_sha256(row["sha256"], "dependency receipt hash")
             result = {"source_path": identity, "sha256": row["sha256"]}
             if row.get("kind") == "directory":
-                _require(role == "source" and not ({"bytes", "sha512"} & set(row)),
+                _require(role in {"source", "sdk_source"} and not ({"bytes", "sha512"} & set(row)),
                          "invalid dependency directory receipt")
                 result["kind"] = "directory"
                 if project:
                     children = sorted(path for path in project_rows if path.startswith(identity + "/"))
-                    digest = hashlib.sha256()
+                    digest = hashlib.sha256(b"Vertex-source-tree-v2\0")
+                    digest.update(len(children).to_bytes(8, "big"))
                     for child in children:
-                        digest.update(child[len(identity) + 1:].encode("utf-8") + b"\0")
-                        with _resolve_input_file(root, child, "dependency project reference").open("rb") as stream:
-                            while chunk := stream.read(1024 * 1024):
-                                digest.update(chunk)
-                        digest.update(b"\0")
+                        name = child[len(identity) + 1:].encode("utf-8")
+                        actual_hash, actual_bytes = _hash_file(_resolve_input_file(root, child, "dependency project reference"))
+                        bound = project_rows[child]
+                        _require(actual_hash == bound["sha256"] and actual_bytes == bound["size"],
+                                 "dependency project tree file differs from selected source kit")
+                        digest.update(len(name).to_bytes(8, "big"))
+                        digest.update(name)
+                        digest.update(actual_bytes.to_bytes(8, "big"))
+                        digest.update(bytes.fromhex(actual_hash))
                     _require(digest.hexdigest() == row["sha256"],
                              "dependency project tree differs from selected source kit")
                     result["project_source_kit_path"] = identity

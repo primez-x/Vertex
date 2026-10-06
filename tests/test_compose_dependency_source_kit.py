@@ -18,6 +18,18 @@ composer = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(composer)
 
 
+def tree_v2_digest(files):
+    value = hashlib.sha256(b"Vertex-source-tree-v2\0")
+    value.update(len(files).to_bytes(8, "big"))
+    for name, content in sorted(files.items()):
+        path = name.encode("utf-8")
+        value.update(len(path).to_bytes(8, "big"))
+        value.update(path)
+        value.update(len(content).to_bytes(8, "big"))
+        value.update(hashlib.sha256(content).digest())
+    return value.hexdigest()
+
+
 class ComposerTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -68,6 +80,57 @@ class ComposerTests(unittest.TestCase):
     def run_compose(self, output="out", report=None):
         self.write("report.json", (json.dumps(report or self.report) + "\n").encode())
         return composer.compose(self.root, "report.json", output)
+
+    def test_declared_sdk_source_input_directory_is_delivered_with_explicit_role(self):
+        self.write("sdk/include/unit.hpp", b"header source")
+        row = {"path": "sdk/include", "kind": "directory",
+               "sha256": tree_v2_digest({"unit.hpp": b"header source"})}
+        self.report["components"][0]["assets"] = [row]
+        with mock.patch.object(composer.closure, "MAX_FILES", 1):
+            result = self.run_compose()
+        delivered = result["components"][0]["assets"][0]
+        self.assertEqual(delivered["kind"], "directory")
+        self.assertEqual(delivered["sha256"], row["sha256"])
+        self.assertEqual((self.root / "out/inputs/sdk/include/unit.hpp").read_bytes(), b"header source")
+        payload = next(entry for entry in result["files"] if entry["source_path"] == "sdk/include/unit.hpp")
+        self.assertEqual(payload["roles"], ["sdk_source"])
+        self.assertFalse(result["offline_rebuild_qualified"])
+
+    def test_sdk_source_input_drift_and_directory_file_only_roles_refuse_publication(self):
+        self.write("sdk/include/unit.hpp", b"header source")
+        row = {"path": "sdk/include", "kind": "directory",
+               "sha256": tree_v2_digest({"unit.hpp": b"header source"})}
+        self.report["components"][0]["assets"] = [row]
+        original = composer.copy_file
+        def drift(*args, **kwargs):
+            result = original(*args, **kwargs)
+            self.write("sdk/include/late.hpp", b"late addition")
+            return result
+        with mock.patch.object(composer, "copy_file", side_effect=drift):
+            with self.assertRaisesRegex(ValueError, "tree hash"):
+                self.run_compose()
+        self.assertFalse((self.root / "out").exists())
+        self.report["components"][0]["assets"] = []
+        for field in ("notices", "artifacts"):
+            with self.subTest(field=field):
+                original_rows = self.report["components"][0][field]
+                self.report["components"][0][field] = [row]
+                with self.assertRaisesRegex(ValueError, "source input"):
+                    self.run_compose()
+                self.report["components"][0][field] = original_rows
+
+    def test_ambiguous_tree_substitution_and_legacy_receipts_refuse_publication(self):
+        files = {"a.hpp": b"A", "b.hpp": b"B"}
+        row = {"path": "sdk/include", "kind": "directory", "sha256": tree_v2_digest(files)}
+        self.report["components"][0]["assets"] = [row]
+        self.write("sdk/include/a.hpp", b"A\0b.hpp\0B")
+        with self.assertRaisesRegex(ValueError, "tree hash"):
+            self.run_compose()
+        self.assertFalse((self.root / "out").exists())
+        row["sha256"] = hashlib.sha256(b"a.hpp\0A\0b.hpp\0B\0").hexdigest()
+        with self.assertRaisesRegex(ValueError, "tree hash"):
+            self.run_compose()
+        self.assertFalse((self.root / "out").exists())
 
     def test_bound_payload_is_deterministic_and_keeps_obligations(self):
         first = self.run_compose("one")
@@ -271,7 +334,7 @@ class ComposerTests(unittest.TestCase):
                 self.run_compose()
 
     def test_resource_budgets_and_machine_metadata_fail_closed(self):
-        for constant, limit in (("MAX_RECORDS", 2), ("MAX_TOTAL", 1), ("MAX_INPUT_BYTES", 1), ("MAX_JSON", 1)):
+        for constant, limit in (("MAX_RECORDS", 2), ("MAX_PAYLOAD_FILES", 2), ("MAX_TOTAL", 1), ("MAX_INPUT_BYTES", 1), ("MAX_JSON", 1)):
             with self.subTest(constant=constant), mock.patch.object(composer, constant, limit):
                 with self.assertRaises(ValueError):
                     self.run_compose()
@@ -279,6 +342,56 @@ class ComposerTests(unittest.TestCase):
         self.report["components"][0]["recipe"]["recipe_options"] = ["-DPATH=/home/private/tools"]
         with self.assertRaisesRegex(ValueError, "machine path"):
             self.run_compose()
+
+    def test_frozen_payload_table_accepts_more_than_physical_payload_budget(self):
+        binding = copy.deepcopy(self.report["candidate_binding"])
+        binding["offline_bundle"] = {key: self.record("receipts/runtime.json") for key in
+            ("manifest", "portable_manifest", "runtime_manifest", "source_inventory", "source_kit")}
+        rows = [{"path": f"bundle/file-{index:05}.hpp", "sha256": "0" * 64, "bytes": 0}
+                for index in range(20_001)]
+        binding["offline_bundle"].update(payload=rows, source_location="bundle/source-kit")
+        instance = composer.Composer(self.root, self.root / "out")
+        # Isolate filesystem work: table admission and binding traversal remain real.
+        with mock.patch.object(instance, "record", side_effect=lambda row, *args, **kwargs: row):
+            result = instance.binding(binding, {"dependency"})
+            self.assertEqual(len(result["offline_bundle"]["payload"]), len(rows))
+            with mock.patch.object(composer.closure, "MAX_BUNDLE_FILES", len(rows) - 1):
+                with self.assertRaisesRegex(ValueError, "record table"):
+                    instance.binding(binding, {"dependency"})
+            rows.extend({"path": f"bundle/file-{index:05}.hpp", "sha256": "0" * 64, "bytes": 0}
+                        for index in range(len(rows), 32_768))
+            self.assertEqual(len(instance.binding(binding, {"dependency"})["offline_bundle"]["payload"]), 32_768)
+            rows.append({"path": "bundle/overflow.hpp", "sha256": "0" * 64, "bytes": 0})
+            with self.assertRaisesRegex(ValueError, "record table"):
+                instance.binding(binding, {"dependency"})
+        self.assertEqual(instance.payload, {})
+
+    def test_general_receipt_tables_and_metadata_keep_finite_replay_bounds(self):
+        rows = [{"path": f"receipt/file-{index:05}"} for index in range(65_536)]
+        self.assertEqual(len(composer.table(rows)), 65_536)
+        rows.append({"path": "receipt/overflow"})
+        with self.assertRaisesRegex(ValueError, "record table"):
+            composer.table(rows)
+        values = ["bounded metadata"] * 65_536
+        self.assertEqual(len(composer.strings(values)), 65_536)
+        values.append("overflow")
+        with self.assertRaisesRegex(ValueError, "metadata list"):
+            composer.strings(values)
+
+    def test_receipt_replay_budget_is_separate_from_unique_payload_budget(self):
+        instance = composer.Composer(self.root, self.root / "out")
+        with mock.patch.object(composer, "MAX_PAYLOAD_FILES", 1):
+            row = self.record("recipe/fix.patch")
+            instance.record(row, "dependency", "recipe")
+            instance.record(row, "dependency", "recipe")
+            instance.record(self.record("candidate/app.dll"), None, "frozen_payload", copy=False)
+            self.assertEqual(len(instance.payload), 1)
+            with self.assertRaisesRegex(ValueError, "payload file count"):
+                instance.record(self.record("recipe/portfile.cmake"), "dependency", "recipe")
+        instance.records = 65_535
+        instance.record(row, None, "frozen_payload", copy=False)
+        with self.assertRaisesRegex(ValueError, "record count"):
+            instance.record(row, None, "frozen_payload", copy=False)
 
     def test_duplicate_json_keys_are_rejected(self):
         self.write("report.json", b'{"schema_version":1,"schema_version":1}')
@@ -296,7 +409,7 @@ class ComposerTests(unittest.TestCase):
             self.run_compose()
 
     def test_case_collision_in_empty_source_directories_rejected(self):
-        (self.root / "vendor").mkdir()
+        (self.root / "vendor/Sub").mkdir(parents=True)
         with mock.patch.object(composer.os, "walk", return_value=[(str(self.root / "vendor"), ["Sub", "sub"], [])]):
             with self.assertRaisesRegex(ValueError, "case-colliding"):
                 composer.directory_files(self.root, "vendor")
@@ -312,18 +425,22 @@ class ComposerTests(unittest.TestCase):
             "files": [{"SPDXID": "SPDXRef-port-file-0", "fileName": "./portfile.cmake",
                        "checksums": [{"algorithm": "SHA256", "checksumValue": self.record(port)["sha256"]}]}]}
         self.write("receipts/spdx.json", json.dumps(spdx).encode())
+        self.write("sdk/include/unit.hpp", b"header source")
         inventory = {"schema_version": 1, "evidence": {
             "component_manifest": self.record("receipts/components.json"), "runtime": self.record("receipts/runtime.json")},
             "components": [{"id": "dependency", "package": {"name": "dependency", "version": "1", "license": "MIT",
                 "source": {"kind": "vcpkg", "package_name": "dependency", "spdx_path": "receipts/spdx.json",
                            "spdx_sha256": self.record("receipts/spdx.json")["sha256"]}},
-                "notices": [self.record("notices/license.txt")]}],
+                "notices": [self.record("notices/license.txt")],
+                "source_inputs": [{"path": "sdk/include", "kind": "directory",
+                    "sha256": tree_v2_digest({"unit.hpp": b"header source"})}]}],
             "binaries": [{"component_id": "dependency", **self.record("candidate/app.dll")}]}
         self.write("receipts/inventory.json", json.dumps(inventory).encode())
         audited = composer.closure.audit(self.root, "receipts/inventory.json", cache_dirs=("cache",),
                                           build_receipts=("build/CMakeCache.txt",))
         result = self.run_compose(report=audited)
         self.assertEqual(result["components"][0]["sources"][0]["local_files"][0]["sha512"], hashlib.sha512(archive_data).hexdigest())
+        self.assertEqual((self.root / "out/inputs/sdk/include/unit.hpp").read_bytes(), b"header source")
         self.assertFalse(result["offline_rebuild_qualified"])
 
     def test_controlled_runtime_sources_and_receipts_compose_without_qualification(self):
@@ -381,7 +498,7 @@ class ComposerTests(unittest.TestCase):
     def test_excluded_tree_inputs_still_count_against_limits(self):
         self.write("vendor/unit.cpp", b"unit")
         self.write("vendor/__pycache__/skip.pyc", b"cache exceeding bound")
-        with mock.patch.object(composer.closure, "MAX_FILES", 1):
+        with mock.patch.object(composer.closure, "MAX_SOURCE_TREE_FILES", 1):
             with self.assertRaisesRegex(ValueError, "file count"):
                 composer.directory_files(self.root, "vendor")
         with mock.patch.object(composer.closure, "MAX_FILE", 8):

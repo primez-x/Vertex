@@ -131,7 +131,7 @@ claimed by this record.
 
 ## Current continuation batch
 
-The previous checked source checkpoint is `85077b2972657eb8c461e18a15e97a68d40d591c`
+The previous checked source checkpoint is `549d0cd4119d75677bff48fbf832ff4a6a2b5bea`
 on `codex/vertex-delivery-reset`; the remote ref was verified after push. The
 changes below are a later source batch and do not describe the installed candidate.
 
@@ -316,6 +316,32 @@ Additional receipts include `selected-cad-identity-tests-20261006`,
 `actual-cad-stage-baseline-20261006`, `vertex-authored-stair-context-build-01`
 and `tests-01`, and `vertex-actual-worker-and-output-build-04`. Build-03 preserves
 the diagnosed Qt/Python `slots` macro collision; Build-04 contains its fix.
+
+## Reviewed workspace and source-tree correction
+
+- High Contrast now uses a black background in both canvases, readable selected
+  and hovered controls, and visible minor/major grid lines. The regression first
+  reproduced the light-canvas defect. The actual themed desktop and boundary
+  checks now pass; settled native capture inspection confirms the corrected
+  workspace. Physically scaled output and the full document digest stay unchanged
+  across High Contrast, Dark and Light. This is not hardware/DPI qualification.
+- Source-directory auditing and composition now retain the selected Boost/Eigen
+  SDK headers and validate bounded stable tree membership. All four source-tree
+  producers/consumers use unambiguous v2 framing. Independent review reproduced
+  and resolved the old delimiter-hash substitution and the inconsistent frozen
+  receipt limits; unique payload and replay budgets are separate.
+- The original IFC materialization index and source table remain preserved.
+  Verification of all 4,744 original files and four trees precedes new v2
+  sidecars. Actual distribution preparation passes with 2,569 CAD payload files.
+- Fresh full runtime inspection and distribution inventory cover 127 binaries,
+  18 static inputs and 52 components. The actual selected-source audit reports
+  49 exact local sources, two recorded assets, zero missing sources and one
+  redistributable-rights review item. These counts describe availability, not
+  transitive license closure or a clean offline rebuild. Final composition and
+  candidate binding remain pending.
+- Focused checks pass: 39 source-closure, 35 composer, 38 inventory, 21 IFC
+  materializer and 18 dependency-source stager cases. Independent review approves
+  the source-tree/budget corrections. Failed earlier receipts remain preserved.
 
 ## Identified human-test candidate
 

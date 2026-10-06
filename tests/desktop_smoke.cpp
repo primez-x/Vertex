@@ -1,6 +1,7 @@
 #include "sketch/desktop/main_window.hpp"
 
 #include "sketch/document.hpp"
+#include "sketch/document_digest.hpp"
 #include "sketch/architectural_document_adapter.hpp"
 #include "sketch/document_solid.hpp"
 #include "sketch/model_phases.hpp"
@@ -78,6 +79,7 @@
 #include <QTreeWidgetItemIterator>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <chrono>
@@ -699,6 +701,73 @@ void test_external_project_change_blocks_save() {
     QFile verify(path);
     require(verify.open(QIODevice::ReadOnly) && verify.readAll() == QByteArray("external edit"),
             "a blocked save must leave externally changed bytes untouched");
+}
+
+void test_workspace_theme_canvases() {
+    const ScenarioTiming scenario_timing(__func__);
+    using namespace sketch;
+    desktop::MainWindow window;
+    const auto wall = window.createStraightWall({-1, 0}, {1, 0}, QStringLiteral("exterior"));
+    require(!wall.isEmpty(), "theme fixture should create an actual physical wall");
+    const auto before = document_snapshot_digest(window.document().snapshot());
+    window.setAttribute(Qt::WA_DontShowOnScreen);
+    window.resize(1366, 768);
+    window.show();
+    QApplication::processEvents();
+    std::array<desktop::PlanCanvas*, 2> canvases{
+        dynamic_cast<desktop::PlanCanvas*>(window.findChild<QWidget*>("measurementPlanCanvas")),
+        dynamic_cast<desktop::PlanCanvas*>(window.findChild<QWidget*>("architecturalPlanCanvas"))};
+    const auto capture = [](desktop::PlanCanvas* canvas, bool output = false) {
+        QImage image(QSize(640, 480), QImage::Format_ARGB32_Premultiplied);
+        QPainter painter(&image);
+        if (output) canvas->renderSceneAt(painter, image.rect(), 100, {}, Qt::white);
+        else canvas->renderScene(painter, image.rect());
+        painter.end();
+        return image;
+    };
+    std::array<QImage, 2> output;
+    for (std::size_t i = 0; i < canvases.size(); ++i) {
+        require(canvases[i], "both workspace canvases must participate in theme changes");
+        canvases[i]->setViewTransform({}, 100);
+        canvases[i]->setGridEnabled(false);
+        canvases[i]->setOverviewMapEnabled(false);
+        canvases[i]->setSelectedId({});
+        output[i] = capture(canvases[i], true);
+    }
+    for (const auto theme : {WorkspaceTheme::high_contrast, WorkspaceTheme::dark, WorkspaceTheme::light}) {
+        window.setWorkspaceTheme(theme);
+        QApplication::processEvents();
+        if (theme == WorkspaceTheme::high_contrast) {
+            const auto captures = qEnvironmentVariable("VERTEX_TEST_CAPTURE_DIR");
+            if (!captures.isEmpty()) {
+                require(QDir().mkpath(captures) &&
+                        window.grab().save(QDir(captures).filePath("workspace-high-contrast.png")),
+                        "actual high-contrast workspace capture must be saved");
+            }
+        }
+        const auto background = theme == WorkspaceTheme::high_contrast ? QColor(Qt::black)
+            : theme == WorkspaceTheme::dark ? QColor("#141b27") : QColor("#f8fafc");
+        for (std::size_t i = 0; i < canvases.size(); ++i) {
+            const auto image = capture(canvases[i]);
+            require(image.pixelColor(9, 9) == background,
+                    "both canvases must render the selected field/light/dark background");
+            if (theme == WorkspaceTheme::high_contrast) {
+                bool visible_face = false;
+                for (int y = 228; y <= 232; ++y)
+                    visible_face = visible_face || image.pixelColor(320, y).lightnessF() > .5;
+                require(visible_face, "physical wall faces must remain readable on the black field canvas");
+                canvases[i]->setGridEnabled(true);
+                const auto grid = capture(canvases[i]);
+                require(grid.pixelColor(320, 20).lightnessF() >= .3,
+                        "the high-contrast field grid must remain visible away from drawing objects");
+                canvases[i]->setGridEnabled(false);
+            }
+            require(capture(canvases[i], true) == output[i],
+                    "workspace theme must not change physically scaled printed drawing output");
+        }
+    }
+    require(document_snapshot_digest(window.document().snapshot()) == before,
+            "theme changes must preserve the complete authoritative document");
 }
 
 void test_workspace_profiles() {
@@ -8095,6 +8164,12 @@ int main(int argc, char** argv) {
     const auto families = QFontDatabase::applicationFontFamilies(font_id);
     require(!families.isEmpty(), "bundled Inter font must expose a family");
     application.setFont(QFont(families.front(), 10));
+    if (argc == 2 && std::string_view(argv[1]) == "--workspace-themes-only") {
+        test_workspace_theme_canvases();
+        test_workspace_profiles();
+        std::cout << "Workspace theme and profile workflows passed\n";
+        return 0;
+    }
     if (argc == 2 && std::string_view(argv[1]) == "--area-details-deductions-only") {
         test_calculation_deduction_workflow();
         return 0;
