@@ -194,14 +194,18 @@ def select_references(module, members, payloads):
                 # Preserve ambiguous/pruned/external references; never fetch them.
                 if value in ("NOT_SHIPPED", "N/A"):
                     continue
-                if value.startswith("//"):
-                    reference = posixpath.relpath(CHROMIUM + "/" + value[2:], posixpath.dirname(metadata))
-                    select(metadata, reference, "chromium-license-reference", required=False)
-                elif re.match(r"https?://", value) or any(c in value for c in ",; "):
+                # A literal comma list names separate files, including // paths.
+                # URLs and prose remain original unresolved metadata, not guesses.
+                references = [part.strip() for part in value.split(",")]
+                if any(not ref or re.match(r"https?://", ref) or
+                       any(c.isspace() or c == ";" for c in ref) for ref in references):
                     unresolved.append({"module": module, "metadata_member": metadata,
                                        "reference": value, "reason": "external-or-ambiguous-reference"})
                 else:
-                    select(metadata, value, "chromium-license-reference", required=False)
+                    for reference in references:
+                        if reference.startswith("//"):
+                            reference = posixpath.relpath(CHROMIUM + "/" + reference[2:], posixpath.dirname(metadata))
+                        select(metadata, reference, "chromium-license-reference", required=False)
     return reasons, unresolved
 
 

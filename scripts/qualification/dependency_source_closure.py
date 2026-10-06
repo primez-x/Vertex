@@ -620,11 +620,16 @@ def audit(root: Path, inventory_path: str, *, build_receipts=(), metadata_path=N
                 require(hashlib.sha256(text.encode("utf-8")).hexdigest() == configuration["sha256"], "Qt configuration changed")
                 selected = {}
                 for line in text.splitlines():
-                    match = re.fullmatch(r"(QT_CONFIG|QT_VERSION|QT_COMPILER_[A-Z0-9_]+|QT\.global\.(?:enabled|disabled)_features)\s*([+]?=)\s*([A-Za-z0-9_. -]*)", line)
+                    match = re.fullmatch(
+                        r"(QT_CONFIG|QT_VERSION|QT_ARCH|QT_BUILDABI|QT_MSVC_(?:MAJOR|MINOR|PATCH)_VERSION|"
+                        r"QT_COMPILER_[A-Z0-9_]+|QT\.global\.(?:enabled|disabled)_features)"
+                        r"\s*(\+?=)\s*([A-Za-z0-9_. +\-]*)", line)
                     if match:
-                        selected[match[1]] = match[3].split()
+                        key, operator, value = match.groups()
+                        selected[key] = (selected.get(key, []) if operator == "+=" else []) + value.split()
                 item["configuration"] = {**configuration, "observed_variables": selected,
                                          "role": "observed prebuilt qconfig; complete configure/build/relink controls pending"}
+                component_records.append(configuration)
         elif kind == "bootstrap":
             _, receipt = json_input(root, source["dependencies_path"], source["dependencies_sha256"])
             if source.get("asset_path") is not None:

@@ -433,6 +433,22 @@ the diagnosed Qt/Python `slots` macro collision; Build-04 contains its fix.
 
 ## Identified human-test candidate
 
+The next frozen candidate is staged at artifacts/packages/vertex-candidate.pending
+from source commit 3ff0431e1d389dbd8955e308ebf16a9a094c7855. The built-in Windows
+PowerShell 5.1 verifier passed all 25,735 declared files. The complete handoff
+audit and delivered source-receipt replay also passed. Installation and installed
+workflows are still pending; the existing candidate below remains active.
+
+Subsequent source-delivery metadata corrections preserve literal Qt `+` tokens,
+qconfig replacement/append assignment order, architecture/ABI and MSVC version
+fields, and recheck the exact configuration receipt after reading. Qt notice
+selection now resolves each explicit comma-separated filename independently,
+including Chromium-root paths; URLs/prose remain unresolved and unsafe paths
+are refused. The original Red receipts reproduce all three qconfig defects and
+the comma-reference defects. Green checks pass 43 source-closure, 21 notice and
+35 composer cases. These changes do not rebuild the application or alter this
+frozen package, and confer no source, license or production qualification.
+
 One package is at artifacts/packages/vertex-candidate; its verified installation
 is artifacts/installed/candidate. Run bin/vertex.exe from that installation.
 The previous installation and one complete stable rollback remain available.

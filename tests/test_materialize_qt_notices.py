@@ -211,6 +211,107 @@ class MaterializeQtNoticesTests(unittest.TestCase):
         self.assertTrue(any(r["archive_member"].endswith("example/terms.txt") for r in report["files"]))
         self.assertTrue(any(r["reference"] == "https://example.invalid/terms" for r in report["unresolved_references"]))
 
+    def test_readme_relative_comma_filenames_are_retained_exactly_and_deterministically(self):
+        metadata = "src/3rdparty/chromium/third_party/example/README.chromium"
+        parent = "src/3rdparty/chromium/third_party/example/"
+        files = dict(self.payloads["qtwebengine"])
+        files[metadata] = b"License File: LICENSE.apache20, LICENSE\n"
+        files[parent + "LICENSE.apache20"] = b"Apache terms\r\n"
+        files[parent + "LICENSE"] = b"Second license\x00bytes"
+        self.archive("qtwebengine", files)
+
+        report = self.run_materializer()
+        for member, content in ((parent + "LICENSE.apache20", b"Apache terms\r\n"),
+                                (parent + "LICENSE", b"Second license\x00bytes")):
+            row = next(row for row in report["files"] if row["archive_member"].endswith(member))
+            self.assertEqual((self.output / row["path"]).read_bytes(), content)
+            self.assertEqual(row["selection_reasons"],
+                             ["chromium-license-reference", "notice-name-superset"])
+        self.assertFalse(any(row["metadata_member"] == metadata for row in report["unresolved_references"]))
+        for flag in notices.FLAGS:
+            self.assertFalse(report[flag])
+        first_report = report
+        first_output = {path.relative_to(self.output).as_posix(): path.read_bytes()
+                        for path in self.output.rglob("*") if path.is_file()}
+
+        self.output = self.root / "output2"
+        replay = self.run_materializer()
+        second_output = {path.relative_to(self.output).as_posix(): path.read_bytes()
+                         for path in self.output.rglob("*") if path.is_file()}
+        self.assertEqual(replay, first_report)
+        self.assertEqual(second_output, first_output)
+
+    def test_readme_chromium_root_comma_filenames_are_retained_exactly(self):
+        metadata = "src/3rdparty/chromium/third_party/example/README.chromium"
+        files = dict(self.payloads["qtwebengine"])
+        files[metadata] = b"License File: //a/LICENSE, //b/LICENSE\n"
+        files["src/3rdparty/chromium/a/LICENSE"] = b"Chromium root A\r\n"
+        files["src/3rdparty/chromium/b/LICENSE"] = b"Chromium root B\x00"
+        self.archive("qtwebengine", files)
+
+        report = self.run_materializer()
+        for member, content in (("src/3rdparty/chromium/a/LICENSE", b"Chromium root A\r\n"),
+                                ("src/3rdparty/chromium/b/LICENSE", b"Chromium root B\x00")):
+            row = next(row for row in report["files"] if row["archive_member"].endswith(member))
+            self.assertEqual((self.output / row["path"]).read_bytes(), content)
+            self.assertEqual(row["selection_reasons"],
+                             ["chromium-license-reference", "notice-name-superset"])
+        self.assertFalse(any(row["metadata_member"] == metadata for row in report["unresolved_references"]))
+        for flag in notices.FLAGS:
+            self.assertFalse(report[flag])
+
+    def test_readme_comma_lists_keep_present_and_missing_references_individual(self):
+        metadata = "src/3rdparty/chromium/third_party/example/README.chromium"
+        parent = "src/3rdparty/chromium/third_party/example/"
+        files = dict(self.payloads["qtwebengine"])
+        files[metadata] = (b"License File: available.dat, absent.dat\n"
+                           b"License File: //present/LICENSE, //missing/LICENSE\n")
+        files[parent + "available.dat"] = b"Available exact bytes"
+        files["src/3rdparty/chromium/present/LICENSE"] = b"Present root bytes"
+        self.archive("qtwebengine", files)
+
+        report = self.run_materializer()
+        relative = next(row for row in report["files"]
+                        if row["archive_member"].endswith(parent + "available.dat"))
+        chromium_root = next(row for row in report["files"]
+                             if row["archive_member"].endswith("src/3rdparty/chromium/present/LICENSE"))
+        self.assertEqual((self.output / relative["path"]).read_bytes(), b"Available exact bytes")
+        self.assertEqual(relative["selection_reasons"], ["chromium-license-reference"])
+        self.assertEqual((self.output / chromium_root["path"]).read_bytes(), b"Present root bytes")
+        self.assertEqual(chromium_root["selection_reasons"],
+                         ["chromium-license-reference", "notice-name-superset"])
+        self.assertEqual(
+            [(row["metadata_member"], row["resolved_member"], row["reason"])
+             for row in report["unresolved_references"]],
+            [(metadata, parent + "absent.dat", "not-present-in-pinned-archive"),
+             (metadata, "src/3rdparty/chromium/missing/LICENSE", "not-present-in-pinned-archive")])
+        for flag in notices.FLAGS:
+            self.assertFalse(report[flag])
+
+    def test_readme_urls_and_prose_remain_unresolved_and_unsafe_tokens_fail(self):
+        metadata = "src/3rdparty/chromium/third_party/example/README.chromium"
+        files = dict(self.payloads["qtwebengine"])
+        files[metadata] = (b"License File: https://example.invalid/a, https://example.invalid/b\n"
+                           b"License File: prose about a license, see release notes\n")
+        self.archive("qtwebengine", files)
+        report = self.run_materializer()
+        self.assertEqual(report["unresolved_references"], [
+            {"module": "qtwebengine", "metadata_member": metadata,
+             "reference": "https://example.invalid/a, https://example.invalid/b",
+             "reason": "external-or-ambiguous-reference"},
+            {"module": "qtwebengine", "metadata_member": metadata,
+             "reference": "prose about a license, see release notes",
+             "reason": "external-or-ambiguous-reference"}])
+        self.assertFalse(any(row["archive_member"].endswith("/a") or
+                             row["archive_member"].endswith("/b") for row in report["files"]))
+
+        files[metadata] = b"License File: ../../../../../../escape\n"
+        self.archive("qtwebengine", files)
+        self.output = self.root / "unsafe-output"
+        with self.assertRaisesRegex(ValueError, "escapes archive"):
+            self.run_materializer()
+        self.assertFalse(self.output.exists())
+
     def test_output_race_preserves_foreign_directory(self):
         original_mkdir = Path.mkdir
 

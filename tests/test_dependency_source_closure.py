@@ -83,6 +83,76 @@ class SourceClosureTests(unittest.TestCase):
     def run_audit(self, **kwargs):
         return audit.audit(self.root, "inventory.json", cache_dirs=("cache",), **kwargs)
 
+    def qt_configuration_fixture(self, configuration):
+        config_path = "qt/prefix/mkspecs/qconfig.pri"
+        self.write(config_path, configuration.encode("utf-8"))
+        self.write_json("spdx/qt.json", {"packages": [], "files": []})
+        component = self.inventory["components"][0]
+        component["id"] = "qtbase"
+        self.inventory["binaries"][0]["component_id"] = "qtbase"
+        component["package"].update(name="qtbase", version="6.8.3")
+        component["package"]["source"] = {
+            "kind": "qt", "prefix_path": "qt/prefix", "spdx_path": "spdx/qt.json",
+            "spdx_sha256": self.sha("spdx/qt.json")}
+        self.write_json("inventory.json", self.inventory)
+        return self.root / config_path
+
+    def test_qt_qconfig_preserves_plus_tokens_assignment_order_and_compiler_keys(self):
+        self.qt_configuration_fixture(
+            "QT_CONFIG = initial\n"
+            "QT_CONFIG += superseded\n"
+            "QT_CONFIG = release c++20 feature+\n"
+            "QT_CONFIG += exceptions\n"
+            "QT_COMPILER_STDCXX = c++20\n"
+            "QT_ARCH = x86_64\n"
+            "QT_BUILDABI = x86_64-little_endian-llp64\n"
+            "QT_MSVC_MAJOR_VERSION = 19\n"
+            "QT_MSVC_MINOR_VERSION = 41\n"
+            "QT_MSVC_PATCH_VERSION = 0\n")
+        report = self.run_audit()
+        component = report["components"][0]
+        observed = component["configuration"]["observed_variables"]
+        self.assertEqual(observed["QT_CONFIG"], ["release", "c++20", "feature+", "exceptions"])
+        self.assertEqual(observed["QT_COMPILER_STDCXX"], ["c++20"])
+        self.assertEqual(observed["QT_ARCH"], ["x86_64"])
+        self.assertEqual(observed["QT_BUILDABI"], ["x86_64-little_endian-llp64"])
+        self.assertEqual(observed["QT_MSVC_MAJOR_VERSION"], ["19"])
+        self.assertEqual(observed["QT_MSVC_MINOR_VERSION"], ["41"])
+        self.assertEqual(observed["QT_MSVC_PATCH_VERSION"], ["0"])
+        self.assertFalse(report["licensing_clearance"])
+        self.assertFalse(report["corresponding_source_qualified"])
+
+    def test_qt_qconfig_ignores_unselected_and_unsafe_expressions_without_evaluation(self):
+        marker = self.root / "qconfig-expression-ran"
+        self.qt_configuration_fixture(
+            "QT_CONFIG = c++20\n"
+            f"QT_CONFIG += $$system(echo unexpected > {marker})\n"
+            f"UNSELECTED = $$system(echo unexpected > {marker})\n"
+            "QT_FEATURE_dynamic = $$[QT_INSTALL_PREFIX]\n")
+        report = self.run_audit()
+        observed = report["components"][0]["configuration"]["observed_variables"]
+        self.assertEqual(observed, {"QT_CONFIG": ["c++20"]})
+        self.assertFalse(marker.exists())
+        self.assertFalse(report["licensing_clearance"])
+        self.assertFalse(report["corresponding_source_qualified"])
+
+    def test_qt_qconfig_receipt_is_rechecked_after_configuration_read(self):
+        config_path = self.qt_configuration_fixture("QT_CONFIG = release c++20\n")
+        read_bounded = audit.safe.read_bounded
+        drifted = False
+
+        def read_then_drift(path, *args, **kwargs):
+            nonlocal drifted
+            data = read_bounded(path, *args, **kwargs)
+            if Path(path) == config_path and not drifted:
+                drifted = True
+                config_path.write_bytes(data + b"QT_VERSION = changed\n")
+            return data
+
+        with mock.patch.object(audit.safe, "read_bounded", side_effect=read_then_drift):
+            with self.assertRaisesRegex(ValueError, "hash"):
+                self.run_audit()
+
     def declared_tree_fixture(self):
         self.write("sdk/include/unit.hpp", b"header source")
         digest = tree_v2_digest({"unit.hpp": b"header source"})
