@@ -1479,4 +1479,28 @@ std::optional<std::string> validate_boundary_holes(
     return std::nullopt;
 }
 
+Vec2 area_label_anchor(const Boundary& boundary) {
+    const auto bounds = boundary_bounds(boundary);
+    // Work near the source rather than multiplying large world coordinates.
+    const auto origin = boundary.front().start;
+    bool lines = true;
+    double twice_area = 0.0, x_sum = 0.0, y_sum = 0.0;
+    for (const auto& edge : boundary) {
+        if (edge.sweep_radians != 0.0) lines = false;
+        const auto a = edge.start - origin, b = edge.end - origin;
+        const auto product = cross(a, b);
+        twice_area += product;
+        x_sum += (a.x + b.x) * product;
+        y_sum += (a.y + b.y) * product;
+    }
+    if (lines && std::abs(twice_area) > default_geometry_tolerance_metres &&
+        std::isfinite(x_sum) && std::isfinite(y_sum)) {
+        const Vec2 anchor{origin.x + x_sum / (3.0 * twice_area),
+                          origin.y + y_sum / (3.0 * twice_area)};
+        if (std::isfinite(anchor.x) && std::isfinite(anchor.y)) return anchor;
+    }
+    return {std::midpoint(bounds.minimum.x, bounds.maximum.x),
+            std::midpoint(bounds.minimum.y, bounds.maximum.y)};
+}
+
 }  // namespace sketch

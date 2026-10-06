@@ -91,24 +91,45 @@ void style(const AnnotationStyle& s) {
     check(std::isfinite(s.text_height_metres) && s.text_height_metres > 0 &&
           std::isfinite(s.stroke_width_metres) && s.stroke_width_metres >= 0, "Invalid style dimensions");
     color(s.stroke_color); color(s.fill_color);
-    check(s.fill_pattern == "none" || s.fill_pattern == "solid" || s.fill_pattern == "hatch", "Invalid fill pattern");
+    check(s.fill_pattern == "none" || s.fill_pattern == "solid" || s.fill_pattern == "hatch" ||
+          s.fill_pattern == "cross" || s.fill_pattern == "horizontal" || s.fill_pattern == "dots", "Invalid fill pattern");
+    check(!s.fill_opacity || (std::isfinite(*s.fill_opacity) && *s.fill_opacity >= 0 && *s.fill_opacity <= 1),
+          "Invalid annotation fill opacity");
+    check(s.line_pattern == "solid" || s.line_pattern == "dash" || s.line_pattern == "dot" || s.line_pattern == "dashdot",
+          "Invalid annotation line pattern");
     check(s.text_alignment == "left" || s.text_alignment == "center" || s.text_alignment == "right",
           "Invalid annotation text alignment");
 }
-json encode_style(const AnnotationStyle& s, bool aligned = false) {
+bool extended_style(const AnnotationStyle& s) {
+    return s.fill_opacity.has_value() || s.line_pattern != "solid" ||
+        s.fill_pattern == "cross" || s.fill_pattern == "horizontal" || s.fill_pattern == "dots";
+}
+json encode_style(const AnnotationStyle& s, bool aligned = false, bool extended = false) {
     json result{{"font_family",s.font_family},{"text_height_metres",s.text_height_metres},
         {"stroke_width_metres",s.stroke_width_metres},{"stroke_color",s.stroke_color},
         {"fill_color",s.fill_color},{"fill_pattern",s.fill_pattern},{"bold",s.bold},{"italic",s.italic}};
     if(aligned)result["text_alignment"]=s.text_alignment;
+    if(extended) {
+        if(s.fill_opacity)result["fill_opacity"]=*s.fill_opacity;
+        result["line_pattern"]=s.line_pattern;
+    }
     return result;
 }
-AnnotationStyle decode_style(const json& j, bool aligned) {
+AnnotationStyle decode_style(const json& j, bool aligned, bool extended) {
     check(!j.contains("text_alignment") || (aligned && j.at("text_alignment").is_string()),
           "Text alignment requires annotation version 8 and a string");
-    return {j.at("font_family").get<std::string>(), j.at("text_height_metres").get<double>(),
+    check(!j.contains("fill_opacity") || (extended && (j.at("fill_opacity").is_null() || j.at("fill_opacity").is_number())),
+          "Fill opacity requires annotation version 9 and a number or null");
+    check(!j.contains("line_pattern") || (extended && j.at("line_pattern").is_string()),
+          "Line pattern requires annotation version 9 and a string");
+    AnnotationStyle result{j.at("font_family").get<std::string>(), j.at("text_height_metres").get<double>(),
         j.at("stroke_width_metres").get<double>(), j.at("stroke_color").get<std::string>(),
         j.at("fill_color").get<std::string>(), j.at("fill_pattern").get<std::string>(),
         j.at("bold").get<bool>(),j.at("italic").get<bool>(),j.value("text_alignment",std::string{"center"})};
+    if(j.contains("fill_opacity") && !j.at("fill_opacity").is_null())result.fill_opacity=j.at("fill_opacity").get<double>();
+    result.line_pattern=j.value("line_pattern",std::string{"solid"});
+    check(extended || !extended_style(result),"Extended fill and line styles require annotation version 9");
+    return result;
 }
 bool area_role(std::string_view kind) {return kind == "area_name" || kind == "area_calculation";}
 json encode_placement(const AnnotationPlacement& p) {
@@ -1146,6 +1167,9 @@ void validate_annotation_state(const AnnotationState& state, const std::vector<S
         check(!o.plan_label_rotation_radians || ((o.target_kind == "wall_dimension" || area_role(o.target_kind)) &&
               std::isfinite(*o.plan_label_rotation_radians)),
               "Callout label rotation must be finite");
+        check(!o.use_model_text_height || ((o.target_kind == "wall_dimension" || area_role(o.target_kind)) &&
+              !o.paper_text_height_mm),
+              "Model text height requires a callout target without a paper text height");
     }
 }
 
@@ -1160,14 +1184,17 @@ json encode_annotation_state(const AnnotationState& state, const std::vector<Sym
             value.paper_text_height_mm.has_value() || value.plan_label_rotation_radians.has_value();});
     const auto svg_palettes = std::any_of(state.symbols.begin(), state.symbols.end(),
         [](const auto& symbol) { return symbol.svg_palette.has_value(); });
-    const auto aligned = std::any_of(state.labels.begin(),state.labels.end(),[](const auto& l){return l.style.text_alignment!="center";}) ||
+    const auto extended = std::any_of(state.labels.begin(),state.labels.end(),[](const auto& l){return extended_style(l.style);}) ||
+        std::any_of(state.symbols.begin(),state.symbols.end(),[](const auto& s){return extended_style(s.style);}) ||
+        std::any_of(state.overrides.begin(),state.overrides.end(),[](const auto& o){return extended_style(o.style)||o.use_model_text_height;});
+    const auto aligned = extended || std::any_of(state.labels.begin(),state.labels.end(),[](const auto& l){return l.style.text_alignment!="center";}) ||
         std::any_of(state.symbols.begin(),state.symbols.end(),[](const auto& s){return s.style.text_alignment!="center";}) ||
         std::any_of(state.overrides.begin(),state.overrides.end(),[](const auto& o){return area_role(o.target_kind)||o.style.text_alignment!="center";});
-    json j{{"version",aligned ? 8 : svg_palettes ? 7 : wall_dimensions ? 6 : model_plan ? 5 : label_placements ? 4 : 3},{"catalog_revision",kSymbolCatalogRevision},
+    json j{{"version",extended ? 9 : aligned ? 8 : svg_palettes ? 7 : wall_dimensions ? 6 : model_plan ? 5 : label_placements ? 4 : 3},{"catalog_revision",kSymbolCatalogRevision},
            {"labels",json::array()},{"symbols",json::array()},{"overrides",json::array()}};
     for (const auto& l : state.labels) {
         json label{{"id",l.id},{"template_id",l.template_id},{"content",l.content},
-            {"style",encode_style(l.style,aligned)},{"placement",encode_placement(l.placement)},{"visible",l.visible}};
+            {"style",encode_style(l.style,aligned,extended)},{"placement",encode_placement(l.placement)},{"visible",l.visible}};
         if(l.model_plan) label["model_plan"]=true;
         j["labels"].push_back(std::move(label));
     }
@@ -1175,7 +1202,7 @@ json encode_annotation_state(const AnnotationState& state, const std::vector<Sym
         const auto& definition = s.definition ? *s.definition : *std::find_if(catalog.begin(), catalog.end(),
             [&](const auto& entry) { return entry.id == s.symbol_id; });
         j["symbols"].push_back({{"id",s.id},{"symbol_id",s.symbol_id},
-            {"style",encode_style(s.style,aligned)},{"placement",encode_placement(s.placement)},{"visible",s.visible},
+            {"style",encode_style(s.style,aligned,extended)},{"placement",encode_placement(s.placement)},{"visible",s.visible},
             {"definition",encode_symbol_catalog_manifest({definition}).at("entries").at(0)},
             {"pinned_svg",s.pinned_svg}, {"width_scale",s.width_scale}, {"depth_scale",s.depth_scale},
             {"flip_horizontal",s.flip_horizontal}, {"flip_vertical",s.flip_vertical}});
@@ -1183,7 +1210,7 @@ json encode_annotation_state(const AnnotationState& state, const std::vector<Sym
     }
     for (const auto& o : state.overrides) {
         json value{{"target_kind",o.target_kind},{"target_id",o.target_id},
-            {"style",encode_style(o.style,aligned)},{"visible",o.visible}};
+            {"style",encode_style(o.style,aligned,extended)},{"visible",o.visible}};
         if (o.paper_line_width_mm) value["paper_line_width_mm"] = *o.paper_line_width_mm;
         if (o.hatch_scale) value["hatch_scale"] = *o.hatch_scale;
         if (o.plan_label_offset) value["plan_label_offset_m"] =
@@ -1191,6 +1218,7 @@ json encode_annotation_state(const AnnotationState& state, const std::vector<Sym
         if (o.inherit_appearance) value["inherit_appearance"] = true;
         if (o.paper_text_height_mm) value["paper_text_height_mm"] = *o.paper_text_height_mm;
         if (o.plan_label_rotation_radians) value["plan_label_rotation_radians"] = *o.plan_label_rotation_radians;
+        if (o.use_model_text_height) value["use_model_text_height"] = true;
         j["overrides"].push_back(std::move(value));
     }
     return j;
@@ -1201,11 +1229,12 @@ AnnotationState decode_annotation_state(const json& j, const std::vector<SymbolD
         check(j.at("version").is_number_integer() &&
                   (j.at("version") == 1 || j.at("version") == 2 ||
                    j.at("version") == 3 || j.at("version") == 4 || j.at("version") == 5 ||
-                   j.at("version") == 6 || j.at("version") == 7 || j.at("version") == 8),
+                   j.at("version") == 6 || j.at("version") == 7 || j.at("version") == 8 || j.at("version") == 9),
               "Unsupported annotation version");
         const bool pinned = j.at("version") != 1;
         const bool independent_transform = j.at("version").get<int>() >= 3;
-        const bool aligned = j.at("version") == 8;
+        const bool aligned = j.at("version").get<int>() >= 8;
+        const bool extended = j.at("version") == 9;
         const auto catalog_revision = j.contains("catalog_revision")
             ? j.at("catalog_revision")
             : json(kLegacySymbolCatalogRevision);
@@ -1219,7 +1248,7 @@ AnnotationState decode_annotation_state(const json& j, const std::vector<SymbolD
             check(!l.contains("model_plan") || (j.at("version").get<int>()>=5 && l.at("model_plan").is_boolean()),
                 "Plan-anchored labels require annotation version 5 or later and a boolean mode");
             state.labels.push_back({l.at("id").get<std::string>(),
-                l.at("template_id").get<std::string>(),l.at("content").get<std::string>(),decode_style(l.at("style"),aligned),
+                l.at("template_id").get<std::string>(),l.at("content").get<std::string>(),decode_style(l.at("style"),aligned,extended),
                 decode_placement(l.at("placement")),l.at("visible").get<bool>(),l.value("model_plan",false)});
         }
         for (const auto& s : j.at("symbols")) {
@@ -1229,7 +1258,7 @@ AnnotationState decode_annotation_state(const json& j, const std::vector<SymbolD
                       (has_palette ? 1 : 0),
                   "Invalid symbol instance keys");
             SymbolInstance instance{s.at("id").get<std::string>(), s.at("symbol_id").get<std::string>(),
-                decode_placement(s.at("placement")),decode_style(s.at("style"),aligned),s.at("visible").get<bool>()};
+                decode_placement(s.at("placement")),decode_style(s.at("style"),aligned,extended),s.at("visible").get<bool>()};
             if (independent_transform) {
                 instance.width_scale = s.at("width_scale").get<double>();
                 instance.depth_scale = s.at("depth_scale").get<double>();
@@ -1277,7 +1306,7 @@ AnnotationState decode_annotation_state(const json& j, const std::vector<SymbolD
         }
         for (const auto& o : j.at("overrides")) {
             PresentationOverride value{o.at("target_kind").get<std::string>(),
-                o.at("target_id").get<std::string>(),decode_style(o.at("style"),aligned),o.at("visible").get<bool>()};
+                o.at("target_id").get<std::string>(),decode_style(o.at("style"),aligned,extended),o.at("visible").get<bool>()};
             check(!area_role(value.target_kind) || aligned,"Live area role presentation requires annotation version 8");
             check(value.target_kind != "wall_dimension" || j.at("version").get<int>() >= 6,
                   "Wall dimension presentation requires annotation version 6 or later");
@@ -1301,6 +1330,12 @@ AnnotationState decode_annotation_state(const json& j, const std::vector<SymbolD
                 check(j.at("version").get<int>() >= 6 && o.at("paper_text_height_mm").is_number(),
                       "Wall dimension paper text height requires annotation version 6 and a number");
                 value.paper_text_height_mm = o.at("paper_text_height_mm").get<double>();
+            }
+            if (o.contains("use_model_text_height")) {
+                check(extended && (value.target_kind == "wall_dimension" || area_role(value.target_kind)) &&
+                      o.at("use_model_text_height").is_boolean(),
+                      "Model text height requires annotation version 9, a callout target and a boolean");
+                value.use_model_text_height = o.at("use_model_text_height").get<bool>();
             }
             if (o.contains("plan_label_rotation_radians")) {
                 check(j.at("version").get<int>() >= 6 && o.at("plan_label_rotation_radians").is_number(),

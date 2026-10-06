@@ -56,6 +56,38 @@ int main() {
                     sketch::encode_annotation_state(state, sketch::default_symbol_catalog()),
                 "annotation state changed during entity decode");
 
+        const sketch::AnnotationEntityContext context{"property-1","building-1","floor-1","layer-ground","level-1"};
+        const auto scoped=sketch::make_annotation_entity("scoped-annotations",state,context);
+        require(scoped.properties.at("version")==2 && scoped.properties.size()==8 &&
+            scoped.properties.at("property_id")=="property-1" && scoped.properties.at("layer_id")=="layer-ground" &&
+            scoped.properties.at("level_id")=="level-1" &&
+            sketch::decode_annotation_entity(scoped).labels.front().placement.layer_id=="layer-ground",
+            "scoped outer v2 preserves complete context without changing inner state");
+        for(const auto key:{"property_id","building_id","floor_id","layer_id"}) {
+            auto invalid=scoped;invalid.properties.erase(key);
+            rejects_document([&]{(void)sketch::Document::create({invalid});});
+            invalid=scoped;invalid.properties[key]="bad id";
+            rejects_document([&]{(void)sketch::Document::create({invalid});});
+        }
+        for(const auto key:{"level_id","property_id"})for(const auto value:{nlohmann::json(nullptr),nlohmann::json(17),nlohmann::json("")}) {
+            auto invalid=scoped;invalid.properties[key]=value;
+            rejects_document([&]{(void)sketch::Document::create({invalid});});
+        }
+        auto invalid_scope=scoped;invalid_scope.properties["version"]=1;
+        rejects_document([&]{(void)sketch::Document::create({invalid_scope});});
+        invalid_scope=scoped;invalid_scope.properties["unknown"]=true;
+        rejects_document([&]{(void)sketch::Document::create({invalid_scope});});
+        invalid_scope=scoped;invalid_scope.properties["version"]=3;
+        rejects_document([&]{(void)sketch::Document::create({invalid_scope});});
+        auto context_without_level=context;context_without_level.level_id.reset();
+        const auto scoped_without_level=sketch::make_annotation_entity("scoped-annotations",state,context_without_level);
+        require(scoped_without_level.properties.size()==7 && !scoped_without_level.properties.contains("level_id"),
+            "scoped outer v2 permits absent level only");
+        auto invalid_context=context;invalid_context.floor_id="bad id";
+        try {(void)sketch::make_annotation_entity("annotations",state,invalid_context);
+            throw std::runtime_error("builder accepted invalid drawing context");}
+        catch(const std::invalid_argument&) {}
+
         auto document = sketch::Document::create({entity});
         const auto path = std::filesystem::temp_directory_path() /
             "vertex-annotation-entity.bldproj";
@@ -105,7 +137,7 @@ int main() {
             dimension_decoded.overrides.back().plan_label_offset->x==-0.5 &&
             dimension_decoded.overrides.back().inherit_appearance && !dimension_decoded.overrides.back().visible,
             "Native save/reopen must retain v6 wall callouts, v5 plan anchors, v4 area placements and opaque sibling metadata together");
-        auto future_dimension=dimension_entity;future_dimension.properties["state"]["version"]=9;
+        auto future_dimension=dimension_entity;future_dimension.properties["state"]["version"]=10;
         rejects_document([&]{(void)sketch::Document::create({future_dimension});});
         std::filesystem::remove(path);
         auto palette_state = dimension_state;

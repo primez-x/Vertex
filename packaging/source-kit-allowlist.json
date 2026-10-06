@@ -707,7 +707,15 @@
     },
     {
       "category": "fixtures",
+      "path": "assets/symbols/architectural_v2/symbols/10_windows/window-bow.svg"
+    },
+    {
+      "category": "fixtures",
       "path": "assets/symbols/architectural_v2/symbols/10_windows/window-casement.svg"
+    },
+    {
+      "category": "fixtures",
+      "path": "assets/symbols/architectural_v2/symbols/10_windows/window-corner.svg"
     },
     {
       "category": "fixtures",
@@ -724,6 +732,10 @@
     {
       "category": "fixtures",
       "path": "assets/symbols/architectural_v2/symbols/10_windows/window-sliding.svg"
+    },
+    {
+      "category": "fixtures",
+      "path": "assets/symbols/architectural_v2/symbols/10_windows/window-standard.svg"
     },
     {
       "category": "fixtures",
@@ -2855,6 +2867,10 @@
     },
     {
       "category": "docs",
+      "path": "docs/verification/pinc-desktop-import-2026-10-05.md"
+    },
+    {
+      "category": "docs",
       "path": "docs/verification/pinc-floor-reference-2026-10-04.md"
     },
     {
@@ -3419,7 +3435,19 @@
     },
     {
       "category": "source",
+      "path": "include/sketch/pinc_measurement_admission.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/pinc_presentation_admission.hpp"
+    },
+    {
+      "category": "source",
       "path": "include/sketch/pinc_project_import.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/pinc_symbol_counterparts.hpp"
     },
     {
       "category": "source",
@@ -4239,7 +4267,19 @@
     },
     {
       "category": "source",
+      "path": "src/core/pinc_measurement_admission.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/pinc_presentation_admission.cpp"
+    },
+    {
+      "category": "source",
       "path": "src/core/pinc_project_import.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/pinc_symbol_counterparts.cpp"
     },
     {
       "category": "source",
@@ -4528,6 +4568,14 @@
     {
       "category": "source",
       "path": "src/desktop/pinc_import_worker.hpp"
+    },
+    {
+      "category": "source",
+      "path": "src/desktop/pinc_project_admission.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/desktop/pinc_project_admission.hpp"
     },
     {
       "category": "source",
@@ -5271,7 +5319,27 @@
     },
     {
       "category": "source",
+      "path": "tests/pinc_measurement_admission_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/pinc_presentation_admission_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/pinc_project_admission_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/pinc_project_desktop_tests.cpp"
+    },
+    {
+      "category": "source",
       "path": "tests/pinc_project_import_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/pinc_symbol_counterparts_tests.cpp"
     },
     {
       "category": "source",

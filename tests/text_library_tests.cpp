@@ -54,7 +54,25 @@ void codec_checks() {
     require(centered_wire.at("entries")[0].at("style").at("text_alignment")=="center" &&
         sketch::encode_text_library(sketch::decode_text_library(centered_wire))==centered_wire,
         "explicit v2 must retain centered alignment and its version");
-    auto bad=wire;bad["version"]=3;rejected([&]{(void)sketch::decode_text_library(bad);});
+    auto modern=source;modern.version=3;modern.entries[0].style.fill_opacity=.35;
+    modern.entries[0].style.line_pattern="dash";modern.entries[0].style.fill_pattern="cross";
+    const auto modern_wire=sketch::encode_text_library(modern);
+    const auto modern_restored=sketch::decode_text_library(modern_wire);
+    require(modern_wire.at("version")==3 && modern_wire.at("entries")[0].at("style").size()==11 &&
+        modern_restored.entries[0].style.fill_opacity==.35 && modern_restored.entries[0].style.line_pattern=="dash" &&
+        sketch::encode_text_library(modern_restored)==modern_wire,"library v3 retains complete opacity and pattern style");
+    for(int version:{1,2}) {auto downlevel=modern;downlevel.version=version;
+        rejected([&]{(void)sketch::encode_text_library(downlevel);});
+        auto old=modern_wire;old["version"]=version;rejected([&]{(void)sketch::decode_text_library(old);});}
+    auto default_v3=source;default_v3.version=3;
+    const auto default_v3_wire=sketch::encode_text_library(default_v3);
+    require(default_v3_wire["entries"][0]["style"]["fill_opacity"].is_null() &&
+        !sketch::decode_text_library(default_v3_wire).entries[0].style.fill_opacity &&
+        sketch::encode_text_library(sketch::decode_text_library(default_v3_wire))==default_v3_wire,
+        "library v3 retains legacy opacity absence using a full style schema");
+    for(const auto key:{"fill_opacity","line_pattern"}) {auto incomplete=modern_wire;incomplete["entries"][0]["style"].erase(key);
+        rejected([&]{(void)sketch::decode_text_library(incomplete);});}
+    auto bad=wire;bad["version"]=4;rejected([&]{(void)sketch::decode_text_library(bad);});
     bad=wire;bad["entries"][0]["style"]["text_alignment"]="center";rejected([&]{(void)sketch::decode_text_library(bad);});
     bad=aligned_wire;bad["version"]=1;rejected([&]{(void)sketch::decode_text_library(bad);});
     bad=aligned_wire;bad["entries"][0]["style"].erase("text_alignment");rejected([&]{(void)sketch::decode_text_library(bad);});

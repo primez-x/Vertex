@@ -1,5 +1,18 @@
 # Implementation status
 
+## Native Pinc desktop import (2026-10-05)
+
+Commands now exposes **Import PincSketch project**, with protected worker parsing,
+fidelity/page assignment review, cancellation and atomic creation of an unsaved
+native project. Editable measurement geometry, exact endpoint joints, live
+quantities, scoped text/SVG instances and ordered page output are implemented.
+Source originals remain unchanged. Page focus is separate from explicit visibility
+filters, and generated portrait output fits painted content with reserved footer
+space. The [checkpoint record](verification/pinc-desktop-import-2026-10-05.md)
+states the actual native/runtime evidence and remaining limits. This does not
+certify all Pinc operations, Apex parity or production readiness. Installed
+delivery is recorded separately after bundle qualification.
+
 ## Source-bound physical rooms (2026-10-04)
 
 The area-class palette and wall-based room commands now create clear-space room

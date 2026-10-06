@@ -6,7 +6,31 @@ Run from PowerShell 7 on the development host after building the test targets:
 ./scripts/test-import-worker-independent.ps1 -Configuration Release
 ./scripts/test-import-worker-independent.ps1 -Configuration Debug
 ./scripts/test-import-worker-independent.ps1 -Configuration Release -CaptureSelfTest
+./scripts/test-import-worker-independent.ps1 -Configuration Release -PincOnly
 ```
+
+`-PincOnly` runs only `windows_import_worker_tests.exe` (with its probe) and
+`pinc_project_desktop_tests.exe`. It requires Release and rejects
+`-CaptureSelfTest`. The WMI child must be outside every Job Object before it
+starts either test. Both tests require zero exits, complete captured success
+messages, no skip messages, and confirmed termination. The desktop test executes
+from a fresh immutable fixture with the worker, inspected native DLL closure,
+pinned Qt Widgets/PrintSupport/Svg/OpenGL dependencies, and offscreen, Windows,
+style, and image plugins. Its plugin path and DLL search path use that fixture.
+No CAD fixture generator or assistance/CAD desktop tests run in this mode.
+
+An already protected runtime bin directory can be supplied instead of staging:
+
+```powershell
+./scripts/test-import-worker-independent.ps1 -Configuration Release -PincOnly -PackagedRuntimeRoot 'C:\path\to\protected\runtime\bin'
+```
+
+That directory must contain the current `pinc_project_desktop_tests.exe`, worker,
+DLL closure and a sibling `plugins` directory; the desktop test validates runtime protection.
+The supervisor and probe still come from `build/windows-release`. Pinc captures
+include hashes of every runtime file before and after execution, in addition to
+the four build binary hashes. Runtime changes, incomplete output, skips, capture
+failures, or timeouts fail the run. This remains development-host evidence.
 
 The runner uses local `Win32_Process.Create` with the current user's token and
 `SW_HIDE`. It creates a hidden PowerShell child; test processes use

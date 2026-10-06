@@ -33,6 +33,7 @@ const char* status_name(WindowsImportWorkerStatus status) noexcept {
     case WindowsImportWorkerStatus::launch_failed: return "launch_failed";
     case WindowsImportWorkerStatus::timed_out: return "timed_out";
     case WindowsImportWorkerStatus::failed: return "failed";
+    case WindowsImportWorkerStatus::cancelled: return "cancelled";
     }
     return "failed";
 }
@@ -45,6 +46,18 @@ void sort_diagnostics(WindowsImportWorkerReport& report) {
 
 void diagnostic(WindowsImportWorkerReport& report, const char* code) {
     report.diagnostics.emplace_back(code);
+}
+
+bool cancellation_requested(const WindowsImportWorkerOptions& options) noexcept {
+    return options.cancellation_requested && options.cancellation_requested->load(std::memory_order_acquire);
+}
+
+void mark_cancelled(WindowsImportWorkerReport& report) {
+    report.status = WindowsImportWorkerStatus::cancelled;
+    report.completed = false;
+    report.timed_out = false;
+    report.output.clear();
+    diagnostic(report, "worker_cancelled");
 }
 
 } // namespace
@@ -649,8 +662,9 @@ bool configure_job(HANDLE job, std::uint64_t memory, std::uint32_t active,
     return report.parent_exit_kill_verified;
 }
 
-bool pipe_read(HANDLE pipe, std::vector<std::byte>& output, std::uint64_t limit,
+bool pipe_read(HANDLE pipe, std::vector<std::byte>& output, const WindowsImportWorkerOptions& options,
                WindowsImportWorkerReport& report) {
+    if (cancellation_requested(options)) return true;
     DWORD available = 0;
     if (!PeekNamedPipe(pipe, nullptr, 0, nullptr, &available, nullptr)) {
         const auto error = GetLastError();
@@ -659,6 +673,7 @@ bool pipe_read(HANDLE pipe, std::vector<std::byte>& output, std::uint64_t limit,
         return false;
     }
     while (available) {
+        if (cancellation_requested(options)) return true;
         std::array<std::byte, 64 * 1024> buffer{};
         const DWORD requested = (std::min)(available, static_cast<DWORD>(buffer.size()));
         DWORD received = 0;
@@ -669,7 +684,7 @@ bool pipe_read(HANDLE pipe, std::vector<std::byte>& output, std::uint64_t limit,
             return false;
         }
         if (received == 0) break;
-        if (output.size() > limit || received > limit - output.size()) {
+        if (output.size() > options.max_output_bytes || received > options.max_output_bytes - output.size()) {
             diagnostic(report, "output_size_limit");
             return false;
         }
@@ -703,6 +718,10 @@ bool terminate_job(HANDLE job, HANDLE process, WindowsImportWorkerReport& report
 
 WindowsImportWorkerReport run_windows_import_worker(const WindowsImportWorkerOptions& options) {
     WindowsImportWorkerReport report;
+    if (cancellation_requested(options)) {
+        mark_cancelled(report);
+        return report;
+    }
     report.status = WindowsImportWorkerStatus::invalid_request;
     if (!local_absolute_path(options.executable) || !ordinary_object(options.executable, false))
         diagnostic(report, "invalid_worker_executable");
@@ -849,6 +868,13 @@ WindowsImportWorkerReport run_windows_import_worker(const WindowsImportWorkerOpt
     DWORD flags = CREATE_SUSPENDED | CREATE_NO_WINDOW | EXTENDED_STARTUPINFO_PRESENT |
         CREATE_UNICODE_ENVIRONMENT;
     if (parent_in_job) flags |= CREATE_BREAKAWAY_FROM_JOB;
+    if (cancellation_requested(options)) {
+        DeleteProcThreadAttributeList(attributes);
+        mark_cancelled(report);
+        if (!cleanup_job_directory(job_root)) diagnostic(report, "temporary_cleanup_failed");
+        sort_diagnostics(report);
+        return report;
+    }
     const BOOL launched = CreateProcessW(nullptr, command.data(), nullptr, nullptr, TRUE,
                                          flags, environment.data(), job_root.c_str(), &startup.StartupInfo,
                                          &process_information);
@@ -886,6 +912,21 @@ WindowsImportWorkerReport run_windows_import_worker(const WindowsImportWorkerOpt
         sort_diagnostics(report);
         return report;
     }
+    // Cancellation during process creation is handled while the worker is
+    // still suspended and already assigned to this invocation's job.
+    if (cancellation_requested(options)) {
+        (void)terminate_job(job.get(), process.get(), report, "worker_cancelled");
+        mark_cancelled(report);
+        if (!GetExitCodeProcess(process.get(), reinterpret_cast<LPDWORD>(&report.exit_code))) {
+            diagnostic(report, "worker_exit_code_failed");
+            report.exit_code = 1;
+        }
+        parent_input_write.close();
+        parent_output_read.close();
+        if (!cleanup_job_directory(job_root)) diagnostic(report, "temporary_cleanup_failed");
+        sort_diagnostics(report);
+        return report;
+    }
     if (!token_attestation(process.get(), app_sid.get(), report)) {
         (void)terminate_job(job.get(), process.get(), report, "worker_sandbox_attestation_failed");
         report.status = WindowsImportWorkerStatus::launch_failed;
@@ -916,6 +957,7 @@ WindowsImportWorkerReport run_windows_import_worker(const WindowsImportWorkerOpt
     std::thread input_thread([&] {
         std::size_t offset = 0;
         while (offset < options.input.size()) {
+            if (cancellation_requested(options)) break;
             const auto requested = static_cast<DWORD>((std::min)(options.input.size() - offset,
                                                                  static_cast<std::size_t>(64 * 1024)));
             DWORD written = 0;
@@ -932,8 +974,22 @@ WindowsImportWorkerReport run_windows_import_worker(const WindowsImportWorkerOpt
     const auto deadline = Clock::now() + std::chrono::milliseconds(options.timeout_ms);
     bool output_ok = true;
     bool timed_out = false;
+    bool cancelled = false;
+    const auto cancel_worker = [&] {
+        cancelled = true;
+        (void)terminate_job(job.get(), process.get(), report, "worker_cancelled");
+        report.output.clear();
+    };
     for (;;) {
-        output_ok = pipe_read(parent_output_read.get(), report.output, options.max_output_bytes, report);
+        if (cancellation_requested(options)) {
+            cancel_worker();
+            break;
+        }
+        output_ok = pipe_read(parent_output_read.get(), report.output, options, report);
+        if (cancellation_requested(options)) {
+            cancel_worker();
+            break;
+        }
         if (!output_ok) {
             (void)terminate_job(job.get(), process.get(), report, "worker_output_rejected");
             report.output.clear();
@@ -955,14 +1011,30 @@ WindowsImportWorkerReport run_windows_import_worker(const WindowsImportWorkerOpt
         }
         Sleep(2);
     }
+    if (!cancelled && cancellation_requested(options)) cancel_worker();
+    // A cancelled worker may have been blocked without reading stdin. Cancel
+    // only this invocation's writer, including the termination-failure path.
+    if (cancelled && input_thread.joinable()) {
+        const auto writer = static_cast<HANDLE>(input_thread.native_handle());
+        // Retry across the small race between the writer's flag check and
+        // WriteFile entering the kernel; a one-shot cancellation can miss it.
+        while (WaitForSingleObject(writer, 0) == WAIT_TIMEOUT) {
+            (void)CancelSynchronousIo(writer);
+            (void)WaitForSingleObject(writer, 5);
+        }
+    }
     if (input_thread.joinable()) input_thread.join();
     parent_input_write.close();
     // Drain output after normal exit. A failed/terminated worker's bytes are
     // discarded below, so a partial parse can never reach the document model.
-    if (!timed_out && output_ok && WaitForSingleObject(process.get(), 0) == WAIT_OBJECT_0) {
+    if (!cancelled && !timed_out && output_ok && WaitForSingleObject(process.get(), 0) == WAIT_OBJECT_0) {
         for (unsigned int pass = 0; pass < 1000; ++pass) {
+            if (cancellation_requested(options)) {
+                cancel_worker();
+                break;
+            }
             DWORD before = static_cast<DWORD>(report.output.size());
-            if (!pipe_read(parent_output_read.get(), report.output, options.max_output_bytes, report)) {
+            if (!pipe_read(parent_output_read.get(), report.output, options, report)) {
                 output_ok = false;
                 break;
             }
@@ -980,7 +1052,9 @@ WindowsImportWorkerReport run_windows_import_worker(const WindowsImportWorkerOpt
         report.exit_code = 1;
     }
     if (input_failed.load()) diagnostic(report, "worker_input_pipe_failed");
-    if (timed_out) {
+    if (cancelled || cancellation_requested(options)) {
+        mark_cancelled(report);
+    } else if (timed_out) {
         report.status = WindowsImportWorkerStatus::timed_out;
         report.timed_out = true;
         report.completed = false;
@@ -995,18 +1069,26 @@ WindowsImportWorkerReport run_windows_import_worker(const WindowsImportWorkerOpt
     }
     if (!cleanup_job_directory(job_root)) {
         diagnostic(report, "temporary_cleanup_failed");
-        report.status = WindowsImportWorkerStatus::failed;
+        if (report.status != WindowsImportWorkerStatus::cancelled)
+            report.status = WindowsImportWorkerStatus::failed;
         report.completed = false;
         report.output.clear();
     }
+    // Linearize the report after exit collection and cleanup. Callers must
+    // also recheck their cancellation/stale state before publishing a result.
+    if (cancellation_requested(options)) mark_cancelled(report);
     sort_diagnostics(report);
     return report;
 }
 
 #else
 
-WindowsImportWorkerReport run_windows_import_worker(const WindowsImportWorkerOptions&) {
+WindowsImportWorkerReport run_windows_import_worker(const WindowsImportWorkerOptions& options) {
     WindowsImportWorkerReport report;
+    if (cancellation_requested(options)) {
+        mark_cancelled(report);
+        return report;
+    }
     report.status = WindowsImportWorkerStatus::unsupported;
     diagnostic(report, "windows_only");
     sort_diagnostics(report);

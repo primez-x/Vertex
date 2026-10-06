@@ -2967,6 +2967,8 @@ const std::vector<CanvasLabel>& PlanCanvas::positionedLabels(
                   << label.fill_pattern << label.show_background << label.avoid_components
                   << label.plan_only << label.selection_type << label.font_family << label.model_plan
                   << label.wall_dimension_manual_rotation << label.text_alignment << label.callout_role;
+        signature << label.fill_opacity.has_value();
+        if (label.fill_opacity) signature << *label.fill_opacity;
         point_key(label.position);
         signature << label.leader_start.has_value() << label.plan_label_offset.has_value();
         if (label.leader_start) point_key(*label.leader_start);
@@ -5514,7 +5516,12 @@ void PlanCanvas::drawEntity(QPainter& painter, const CanvasEntity& entity, bool 
             return;
         }
     }
-    QPen pen(color, 0.0, entity.dashed_stroke ? Qt::DashLine : Qt::SolidLine,
+    const auto pattern = entity.line_pattern;
+    const auto pen_style = pattern == QStringLiteral("dash") ? Qt::DashLine
+        : pattern == QStringLiteral("dot") ? Qt::DotLine
+        : pattern == QStringLiteral("dashdot") ? Qt::DashDotLine
+        : entity.dashed_stroke ? Qt::DashLine : Qt::SolidLine;
+    QPen pen(color, 0.0, pen_style,
              Qt::RoundCap, Qt::RoundJoin);
     const auto paper_width = (output || entity.paper_stroke_width_on_screen)
         ? paper_stroke_pixels(entity,
@@ -5555,7 +5562,8 @@ void PlanCanvas::drawEntity(QPainter& painter, const CanvasEntity& entity, bool 
                                           ? (background.lightnessF() > 0.5 ? QColor(25, 25, 25)
                                                                              : QColor(235, 235, 235))
                                           : color;
-                fill_color.setAlpha(output ? 64 : 48);
+                if (entity.fill_opacity) fill_color.setAlphaF(*entity.fill_opacity);
+                else fill_color.setAlpha(output ? 64 : 48);
                 QBrush brush(fill_color, style);
                 const auto scale = std::isfinite(entity.hatch_scale) && entity.hatch_scale > 0.0
                                         ? std::clamp(entity.hatch_scale, 0.1, 10.0)
@@ -5723,7 +5731,8 @@ void PlanCanvas::drawLabels(QPainter& painter, const QRectF& viewport, double sc
                             custom_fill ? label_fill_style : Qt::SolidPattern);
         if (custom_fill) {
             auto fill = label.fill_color;
-            fill.setAlpha(output ? 220 : 238);
+            if (label.fill_opacity) fill.setAlphaF(*label.fill_opacity);
+            else fill.setAlpha(output ? 220 : 238);
             brush.setColor(fill);
         }
         if (label.show_background || custom_fill) {

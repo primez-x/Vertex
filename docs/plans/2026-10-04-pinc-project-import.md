@@ -65,26 +65,61 @@ Qt pixel transport and established safe preview creation for underlays.
   assets before construction; refuse malformed/forged worker output.
   The bounded codec/pixel transport is verified. Actual installed sandbox
   qualification remains part of the user-visible import gate below.
-- [ ] Root/assigned worker: implement detached native admission with fresh page
+- [x] Root/assigned worker: implement detached native admission with fresh page
   contexts, ordered restricted views/sheets, exact measured-line receipts,
   source-derived areas, labels, symbol mapping and visual wall associations.
   Preserve every unsupported item and its source pointer in the fidelity report.
   The geometry-only substep has a separate
   [checkpoint record](../verification/pinc-native-geometry-admission-2026-10-04.md).
   It does not satisfy the complete admission or user-visible import requirement.
-- [ ] Root: add native import access and review UI, current-state/dirty-transition
+- [x] Root: add native import access and review UI, current-state/dirty-transition
   guards, cancellation and atomic publication. Preserve exact original source
   and image bytes; use native Save As after import.
 - [ ] Root: qualify actual import, Cancel, failure, Undo/Redo, save/reopen and
   output, including underlay/ghost scope, styles, text and all symbol mappings.
   Update the practical checklist and comparison with actual evidence.
 
-Source integration inspection also confirms that Vertex currently combines an
-area's name and calculated value in one `CanvasLabel` and has no authored text
-alignment field. Import fidelity therefore depends on adding separate dynamic
+The [desktop import checkpoint](../verification/pinc-desktop-import-2026-10-05.md)
+now records passing actual synthetic import, Cancel/failure, connected editing,
+Undo/Redo, native persistence and output cases. The final checkbox remains open
+for installed qualification, representative historical files and full symbol/
+paired-workflow coverage; bounded fixture success does not replace these.
+
+Initial source integration inspection found that Vertex combined an
+area's name and calculated value in one `CanvasLabel` and lacked authored text
+alignment. The subsequent installed callout checkpoint added separate dynamic
 name/calculation callouts and text alignment, including persisted controls and
 screen/output agreement. These are also tracked under PINC-010/013; static text
 copies of computed totals are not an acceptable substitute.
+
+## Current completion work (2026-10-05)
+
+Independent live callouts and text alignment are now implemented, checked and
+installed. Complete the remaining import path as one end-to-end feature:
+
+- Measurement admission worker owns `pinc_measurement_admission.hpp/.cpp` and
+  its focused fixture. It composes existing exact geometry admission and
+  re-derived measured-area authoring into one detached command, with explicit
+  classifications and no inferred appraisal facts or containment deductions.
+- Presentation admission worker owns its new pure core module/fixture: source
+  dimensions, independent live name/value styles, aligned text, exact size and
+  transformed pinned symbol instances, page/layer context and visual source
+  associations. Unknown/missing counterparts remain identified losses.
+- Cancellation worker owns the import supervisor's optional cancellation
+  request and its focused tests. Cancellation terminates only its task-owned
+  sandbox job and returns no publishable output.
+- Root owns resource symbol bindings, raster/source assets, ordered page views,
+  desktop review/dirty-state/atomic publication, CMake, generators and delivery.
+
+The desktop import creates a new unsaved native project after the ordinary
+dirty-project transition guard. Review maps source pages to explicit native
+floors and distinct calculation/interior layers; pages are not assumed to be
+floors. Source JSON is retained once unchanged, and Save As cannot overwrite it.
+Cancellation or failure preserves the active project. Review uses plain-text
+source strings and lists unsupported/unresolved content before publication.
+Root freezes all source/header/test/script writers before any native job.
+The gate includes actual broker import, Cancel/failure, edit/Undo/Redo,
+save/reopen, ordered page/ghost scope, rendered output and fidelity reporting.
 
 ## Independent review and limits
 

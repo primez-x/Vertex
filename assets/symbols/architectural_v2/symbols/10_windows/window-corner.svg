@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="1280" viewBox="-40 -40 1280 1280" role="img" aria-labelledby="window-corner--title window-corner--desc" data-vertex-style="white-outline-2">
+<title id="window-corner--title">Window · corner</title>
+<desc id="window-corner--desc">Original orthographic top view of two straight glazed window runs meeting in an L at a room corner. Nominal footprint 1200 by 1200 millimetres. Front is +Y. Transparent background. Editable suggested default; not a certified product or construction detail.</desc>
+<g id="window-corner--artwork">
+  <path d="M0,0 H1200 V200 H200 V1200 H0 Z" fill="#ffffff" stroke="#111111" stroke-width="24" stroke-linejoin="round" />
+  <path d="M24,24 H1176 V176 H176 V1176 H24 Z" fill="none" stroke="#b8b8b8" stroke-width="10" stroke-linejoin="round" />
+  <rect x="48" y="48" width="1104" height="104" rx="2" fill="#f7f7f7" stroke="#111111" stroke-width="12" />
+  <rect x="48" y="200" width="104" height="952" rx="2" fill="#f7f7f7" stroke="#111111" stroke-width="12" />
+  <path d="M600,54 V146 M54,676 H146" fill="none" stroke="#111111" stroke-width="14" />
+  <path d="M606,56 V144 M56,682 H144" fill="none" stroke="#b8b8b8" stroke-width="4" />
+</g>
+</svg>

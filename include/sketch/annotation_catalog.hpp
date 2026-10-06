@@ -23,10 +23,13 @@ struct AnnotationStyle {
     double stroke_width_metres{0.002};
     std::string stroke_color{"#000000"};
     std::string fill_color{"#FFFFFF"};
-    std::string fill_pattern{"none"}; // none, solid, hatch
+    std::string fill_pattern{"none"}; // none, solid, hatch, cross, horizontal, dots
     bool bold{};
     bool italic{};
     std::string text_alignment{"center"}; // left, center, right; v8 presentation
+    // Absence retains the legacy renderer's fill alpha. Explicit 1 is opaque.
+    std::optional<double> fill_opacity;
+    std::string line_pattern{"solid"}; // solid, dash, dot, dashdot; v9 presentation
 };
 
 struct AnnotationPlacement {
@@ -76,6 +79,9 @@ struct PresentationOverride {
     // Automatic wall-length or live area-role callouts, independent of geometry.
     std::optional<double> paper_text_height_mm;
     std::optional<double> plan_label_rotation_radians;
+    // Explicit imported callouts use style.text_height_metres in model space.
+    // False retains legacy paper-height selection even with a styled callout.
+    bool use_model_text_height{false};
 };
 
 struct SymbolStroke { Vec2 start; Vec2 end; };

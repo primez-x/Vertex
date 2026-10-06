@@ -211,6 +211,55 @@ Entity wall(const char* id,Vec2 start,Vec2 end) {
         {"baseline",{{"start",{start.x,start.y}},{"end",{end.x,end.y}},{"sweep_radians",0}}},
         {"thickness_m",.2},{"height_m",3},{"elevation_m",0}},false};
 }
+void generic_measurement_callouts_do_not_claim_appraisal() {
+    QTemporaryDir files;require(files.isValid(),"generic callout fixture has private storage");
+    MainWindow window({},nullptr,files.filePath("text-library.json"));display(window);
+    const auto id=window.createBoundary(square(),"living");
+    require(!id.isEmpty() && window.selectEntity(id),"generic area is created");
+    name_area(window,id,"studio-West_1");
+    require(window.separateSelectedAreaCallouts(),"generic name and calculated value can be separated");
+    require(callout(canvas(window),id,"area_name").text=="studio-West_1" &&
+        callout(canvas(window),id,"area_calculation").text.contains("16.00"),"authored name is exact and measurement area comes from geometry");
+    require(window.editSelectedFactor("1/2") && callout(canvas(window),id,"area_calculation").text.contains("8.00"),
+        "generic callout uses the same stored factor as Details");
+    const Boundary cut{{{1,1},{2,1},0},{{2,1},{2,2},0},{{2,2},{1,2},0},{{1,2},{1,1},0}};
+    const auto deduction=window.createBoundary(cut,"living");
+    require(!deduction.isEmpty(),"actual contained deduction geometry is created");
+    auto source=window.document().snapshot();auto parent=source.entities().at(id.toStdString());
+    parent.properties["deduction_ids"]=nlohmann::json::array({deduction.toStdString()});
+    window.document().apply(ApplyEntityChanges{source.revision(),{EntityChange::upsert(parent)}, {},"Add actual measurement deduction"});
+    require(window.selectEntity(id) && callout(canvas(window),id,"area_calculation").text.contains("7.50"),
+        "actual geometric deduction precedes the stored factor");
+    window.setMetricUnits(false);
+    require(callout(canvas(window),id,"area_calculation").text.contains("80.73"),"generic net quantity converts to square feet");
+    window.setMetricUnits(true);
+    const auto path=files.filePath("generic-callouts.bldproj");
+    require(window.saveProjectAs(path),"generic calculation saves natively");
+    require(window.createNewProject(),"release the saved native project before opening another editor");
+    MainWindow reopened({},nullptr,files.filePath("text-library.json"));display(reopened);
+    require(reopened.openProject(path) && reopened.selectEntity(id) &&
+        callout(canvas(reopened),id,"area_calculation").text.contains("7.50"),"native reopen derives the same generic net quantity");
+    for(const auto& corrupt_id:{id,deduction}) {
+        const auto before=reopened.document().snapshot();auto corrupt=before.entities().at(corrupt_id.toStdString());
+        corrupt.properties["property_id"]="other-property";
+        reopened.document().apply(ApplyEntityChanges{before.revision(),{EntityChange::upsert(corrupt),
+            EntityChange::upsert(Entity{"other-property","property",{{"name","Different property"}},false})}, {},"Corrupt explicit area ownership"});
+        reopened.setMetricUnits(false);
+        const auto invalid=labels(canvas(reopened),id);
+        require(std::none_of(invalid.begin(),invalid.end(),[](const auto& value){return value.callout_role=="area_calculation" && !value.text.isEmpty();}),
+            "contradictory parent or deduction property ownership withholds a numeric callout");
+        require(reopened.undoCommand(),"restore valid measurement owner context");reopened.setMetricUnits(true);
+        require(callout(canvas(reopened),id,"area_calculation").text.contains("7.50"),"Undo restores the exact valid generic calculation");
+    }
+    auto& workflow=control<QComboBox>(reopened,"calculationWorkflow");
+    workflow.setCurrentIndex(workflow.findData(QStringLiteral("appraisal")));
+    const auto unqualified=labels(canvas(reopened),id);
+    require(reopened.document().snapshot().is_editable() && workflow.currentData().toString()=="appraisal" && reopened.lastError().isEmpty(),
+        "actual editable workflow changes to appraisal");
+    require(std::none_of(unqualified.begin(),unqualified.end(),[](const auto& value){
+        return value.callout_role=="area_calculation" && !value.text.isEmpty();}),
+        "unqualified appraisal never falls back to the generic geometric label");
+}
 void stale_physical_calculation_is_withheld() {
     auto document=std::make_shared<Document>(Document::create({
         {"p","property",{{"name","Physical callout fixture"}},false},
@@ -239,7 +288,7 @@ int main(int argc,char** argv) {
     try {
         require(QFontDatabase::addApplicationFont(QStringLiteral(":/fonts/Inter.ttf"))>=0,"bundled font loads for actual native captures");
         app.setFont(QFont(QStringLiteral("Inter"),10));
-        independent_live_callouts_and_reopen();stale_physical_calculation_is_withheld();
+        independent_live_callouts_and_reopen();generic_measurement_callouts_do_not_claim_appraisal();stale_physical_calculation_is_withheld();
         std::cout<<"area_callout_desktop_tests passed\n";return 0;
     } catch(const std::exception& error) {std::cerr<<"area_callout_desktop_tests: "<<error.what()<<'\n';return 1;}
 }

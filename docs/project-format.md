@@ -1,4 +1,26 @@
-# Vertex project formats v1 through v45
+# Vertex project formats v1 through v46
+
+## Scoped annotations and explicit presentation (v46)
+
+Annotation state version 9 adds optional `style.fill_opacity` in `[0,1]`,
+`style.line_pattern` (`solid`, `dash`, `dot`, `dashdot`), and `cross`,
+`horizontal`, and `dots` fill patterns. Absent opacity preserves earlier screen
+and output alpha defaults. Explicit opacity, including 0 and 1, is retained.
+The optional `use_model_text_height` callout flag uses the style's metre height
+instead of the default paper height, without changing earlier callouts. It
+cannot coexist with explicit paper text height. Earlier states reject new keys.
+
+Outer annotation entity version 2 retains a complete property/building/floor/layer
+context, with an optional level. Outer version 1 remains unchanged. Reusable
+text library version 3 carries these styles; earlier library formats refuse
+unsupported fields. Native format 46 and extraction 44 apply to retained history,
+including removed or undone annotations.
+
+Pinc imports retain the exact source file once as an `application/x-pincsketch`
+asset. Source pointers and page display mappings are provenance in extensions;
+native measured-line receipts and source-derived areas remain the geometry
+authority. Decoded underlays keep original encoded assets and PNG previews.
+Source categories never establish appraisal eligibility or physical wall depth.
 
 ## Independent live area callouts and text alignment (v45)
 

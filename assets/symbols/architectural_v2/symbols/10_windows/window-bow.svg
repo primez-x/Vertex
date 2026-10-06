@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="2480" height="680" viewBox="-40 -40 2480 680" role="img" aria-labelledby="window-bow--title window-bow--desc" data-vertex-style="white-outline-2">
+<title id="window-bow--title">Window · bow</title>
+<desc id="window-bow--desc">Original orthographic top view of a curved five-panel bow window. Nominal footprint 2400 by 600 millimetres. Front is +Y. Transparent background. Editable suggested default; not a certified product or construction detail.</desc>
+<g id="window-bow--artwork">
+  <path d="M0,0 C300,0 360,470 1200,560 C2040,470 2100,0 2400,0 L2370,62 C2070,62 2025,414 1200,480 C375,414 330,62 30,62 Z" fill="#ffffff" stroke="#111111" stroke-width="24" stroke-linejoin="round" />
+  <path d="M35,61 C340,68 381,415 1200,476 C2019,415 2060,68 2365,61" fill="none" stroke="#b8b8b8" stroke-width="10" stroke-linecap="round" />
+  <path d="M398,214 L425,150 M800,454 L820,390 M1200,548 L1200,478 M1600,454 L1580,390 M2002,214 L1975,150" fill="none" stroke="#111111" stroke-width="14" stroke-linecap="round" />
+  <path d="M402,211 L428,151 M804,451 L824,391 M1200,545 L1200,480 M1596,451 L1576,391 M1998,211 L1972,151" fill="none" stroke="#b8b8b8" stroke-width="4" stroke-linecap="round" />
+</g>
+</svg>

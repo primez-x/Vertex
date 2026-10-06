@@ -9,6 +9,7 @@
 #include <cstring>
 #include <iostream>
 #include <stdexcept>
+#include <string_view>
 #ifdef _WIN32
 #include <Windows.h>
 #endif
@@ -21,6 +22,13 @@ template<class Function> void rejects(Function function) {
     bool rejected = false;
     try { function(); } catch (const std::exception&) { rejected = true; }
     require(rejected, "Malformed Pinc worker response must be refused");
+}
+template<class Function> void cancels(Function function) {
+    bool cancelled = false;
+    try { function(); } catch (const std::runtime_error& error) {
+        cancelled = std::string_view(error.what()) == "Pinc import cancelled.";
+    }
+    require(cancelled, "Cancelled Pinc import must return the stable cancellation outcome");
 }
 sketch::WindowsImportWorkerReport attested(std::vector<std::byte> output) {
     sketch::WindowsImportWorkerReport result;
@@ -91,6 +99,21 @@ int main(int argc, char** argv) {
         rejects([&] { (void)importPincProjectBytes(bytes(plain),{},broker); });
         reply = attested(wire); reply.status = sketch::WindowsImportWorkerStatus::timed_out;
         rejects([&] { (void)importPincProjectBytes(bytes(plain),{},broker); });
+        reply = attested(wire); reply.status = sketch::WindowsImportWorkerStatus::cancelled;
+        cancels([&] { (void)importPincProjectBytes(bytes(plain),{},broker); });
+        sketch::WindowsImportWorkerOptions cancellable;
+        auto cancellation = std::make_shared<std::atomic_bool>(true);
+        cancellable.cancellation_requested = cancellation;
+        const auto before_cancel = calls;
+        cancels([&] { (void)importPincProjectBytes(bytes(plain),cancellable,broker); });
+        require(calls == before_cancel, "Pre-cancelled Pinc import must not invoke the broker");
+        cancellation->store(false);
+        const ReferenceBroker completion_race = [&](const sketch::WindowsImportWorkerOptions& options) {
+            require(options.cancellation_requested == cancellation, "Broker must receive the caller's cancellation flag");
+            cancellation->store(true);
+            return attested(wire);
+        };
+        cancels([&] { (void)importPincProjectBytes(bytes(plain),cancellable,completion_race); });
         const auto before = calls;
         rejects([&] { (void)importPincProjectBytes({}, {}, broker); });
         require(calls == before, "Empty input must be refused before worker launch");

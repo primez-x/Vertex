@@ -2,12 +2,14 @@
 #include "support/noninteractive_errors.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <cstddef>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -135,6 +137,85 @@ private:
     inline static HANDLE process_{};
     void** slot_{};
     void* original_{};
+};
+
+// Trigger cancellation at an actual worker lifecycle boundary. Like the
+// assignment fixture above, patch only this test executable's imported API.
+class CancellationAtBoundary final {
+public:
+    enum class Point { resumed, input_write_started, exit_collected };
+    CancellationAtBoundary(Point point, std::shared_ptr<std::atomic_bool> flag) {
+        flag_ = std::move(flag);
+        const char* target = point == Point::resumed ? "ResumeThread" :
+            point == Point::input_write_started ? "WriteFile" : "GetExitCodeProcess";
+        const auto image = reinterpret_cast<std::byte*>(GetModuleHandleW(nullptr));
+        const auto dos = reinterpret_cast<IMAGE_DOS_HEADER*>(image);
+        const auto nt = reinterpret_cast<IMAGE_NT_HEADERS*>(image + dos->e_lfanew);
+        const auto directory = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
+        auto descriptor = reinterpret_cast<IMAGE_IMPORT_DESCRIPTOR*>(image + directory.VirtualAddress);
+        for (; descriptor->Name && !slot_; ++descriptor) {
+            if (!descriptor->OriginalFirstThunk) continue;
+            auto name = reinterpret_cast<IMAGE_THUNK_DATA*>(image + descriptor->OriginalFirstThunk);
+            auto address = reinterpret_cast<IMAGE_THUNK_DATA*>(image + descriptor->FirstThunk);
+            for (; name->u1.AddressOfData; ++name, ++address) {
+                if (IMAGE_SNAP_BY_ORDINAL(name->u1.Ordinal)) continue;
+                const auto imported = reinterpret_cast<IMAGE_IMPORT_BY_NAME*>(image + name->u1.AddressOfData);
+                if (std::strcmp(reinterpret_cast<const char*>(imported->Name), target) == 0) {
+                    slot_ = reinterpret_cast<void**>(&address->u1.Function);
+                    break;
+                }
+            }
+        }
+        require(slot_ != nullptr, "cancellation fixture must find its lifecycle API");
+        DWORD protection = 0;
+        require(VirtualProtect(slot_, sizeof(*slot_), PAGE_READWRITE, &protection) != FALSE,
+                "cancellation fixture must access its import slot");
+        auto replacement = point == Point::resumed ? reinterpret_cast<void*>(&resume) :
+            point == Point::input_write_started ? reinterpret_cast<void*>(&write) : reinterpret_cast<void*>(&exit_code);
+        original_ = InterlockedExchangePointer(slot_, replacement);
+        DWORD ignored = 0;
+        VirtualProtect(slot_, sizeof(*slot_), protection, &ignored);
+    }
+    ~CancellationAtBoundary() {
+        DWORD protection = 0;
+        if (VirtualProtect(slot_, sizeof(*slot_), PAGE_READWRITE, &protection)) {
+            InterlockedExchangePointer(slot_, original_);
+            DWORD ignored = 0;
+            VirtualProtect(slot_, sizeof(*slot_), protection, &ignored);
+        }
+        if (process_) {
+            if (WaitForSingleObject(process_, 0) != WAIT_OBJECT_0) {
+                TerminateProcess(process_, 1);
+                WaitForSingleObject(process_, 5000);
+            }
+            CloseHandle(process_);
+            process_ = nullptr;
+        }
+        flag_.reset();
+    }
+    HANDLE process() const { return process_; }
+private:
+    static DWORD WINAPI resume(HANDLE thread) {
+        process_ = OpenProcess(SYNCHRONIZE | PROCESS_TERMINATE | PROCESS_QUERY_LIMITED_INFORMATION,
+                               FALSE, GetProcessIdOfThread(thread));
+        const auto result = reinterpret_cast<DWORD (WINAPI*)(HANDLE)>(original_)(thread);
+        if (result != static_cast<DWORD>(-1)) flag_->store(true);
+        return result;
+    }
+    static BOOL WINAPI exit_code(HANDLE process, LPDWORD code) {
+        const auto result = reinterpret_cast<BOOL (WINAPI*)(HANDLE, LPDWORD)>(original_)(process, code);
+        if (result) flag_->store(true);
+        return result;
+    }
+    static BOOL WINAPI write(HANDLE handle, LPCVOID data, DWORD count, LPDWORD written, LPOVERLAPPED overlapped) {
+        flag_->store(true);
+        return reinterpret_cast<BOOL (WINAPI*)(HANDLE, LPCVOID, DWORD, LPDWORD, LPOVERLAPPED)>(original_)(
+            handle, data, count, written, overlapped);
+    }
+    inline static std::shared_ptr<std::atomic_bool> flag_;
+    inline static HANDLE process_{};
+    inline static void* original_{};
+    void** slot_{};
 };
 
 std::vector<std::byte> current_user_sid_storage() {
@@ -325,6 +406,82 @@ void invalid_requests_fail_closed() {
         require(has(report, "invalid_worker_executable"), "invalid executable diagnostic missing");
 }
 
+void precancelled_request_does_not_launch() {
+    auto options = base_options();
+    options.cancellation_requested = std::make_shared<std::atomic_bool>(true);
+    const auto report = run_windows_import_worker(options);
+    require(report.status == WindowsImportWorkerStatus::cancelled && !report.launched &&
+                !report.completed && !report.timed_out && report.output.empty() && !report.controls_attested(),
+            "pre-cancelled requests must not launch or publish output");
+    require(has(report, "worker_cancelled") && report.to_json().at("status") == "cancelled" &&
+                report.to_json().at("controls_attested") == false && report.to_json().at("output_bytes") == 0,
+            "cancelled report JSON must remain consistent and non-publishable");
+}
+
+void attested_echo_round_trip(const std::filesystem::path& worker);
+
+void cancellation_terminates_only_the_invocation(const std::filesystem::path& worker) {
+#ifdef _WIN32
+    auto options = base_options(worker);
+    options.temporary_root /= "cancel-test-" + std::to_string(GetCurrentProcessId()) + "-" +
+                              std::to_string(GetTickCount64());
+    require(std::filesystem::create_directory(options.temporary_root), "cancellation fixture temp root must be fresh");
+    struct Cleanup {
+        std::filesystem::path root;
+        ~Cleanup() { std::error_code error; std::filesystem::remove_all(root, error); }
+    } cleanup{options.temporary_root};
+    options.arguments = {L"--sleep-ms", L"2000"};
+    // More than a pipe buffer: the second cancellation below occurs after
+    // the writer's flag check, before its blocking write to a sleeping child.
+    options.input.assign(1024 * 1024, std::byte{'x'});
+    auto flag = std::make_shared<std::atomic_bool>(false);
+    options.cancellation_requested = flag;
+    {
+        CancellationAtBoundary cancellation(CancellationAtBoundary::Point::resumed, flag);
+        const auto report = run_windows_import_worker(options);
+        require(cancellation.process() != nullptr && WaitForSingleObject(cancellation.process(), 0) == WAIT_OBJECT_0,
+                "cancelled invocation must confirm termination of its exact worker");
+        require(report.status == WindowsImportWorkerStatus::cancelled && report.launched &&
+                    !report.completed && !report.timed_out && report.output.empty() && !report.controls_attested(),
+                "live cancellation must reject all worker output and attestation");
+        require(report.exit_code == 1 && has(report, "worker_cancelled") &&
+                    !has(report, "worker_exit_unconfirmed") && !has(report, "temporary_cleanup_failed") &&
+                    std::filesystem::is_empty(options.temporary_root),
+                "live cancellation must capture exit and clean the private job root");
+    }
+    flag->store(false);
+    {
+        CancellationAtBoundary cancellation(CancellationAtBoundary::Point::input_write_started, flag);
+        const auto report = run_windows_import_worker(options);
+        require(report.launched && report.status == WindowsImportWorkerStatus::cancelled && report.exit_code == 1 &&
+                    !report.completed && report.output.empty() && !report.controls_attested() &&
+                    !has(report, "worker_exit_unconfirmed") && std::filesystem::is_empty(options.temporary_root),
+                "cancellation must unblock this invocation's input writer and clean its job root");
+    }
+    // The cancellation flag belongs to one call; another worker remains usable.
+    attested_echo_round_trip(worker);
+#else
+    (void)worker;
+#endif
+}
+
+void completion_race_cannot_publish_cancelled_output(const std::filesystem::path& worker) {
+#ifdef _WIN32
+    auto options = base_options(worker);
+    auto flag = std::make_shared<std::atomic_bool>(false);
+    options.cancellation_requested = flag;
+    CancellationAtBoundary cancellation(CancellationAtBoundary::Point::exit_collected, flag);
+    const auto report = run_windows_import_worker(options);
+    require(report.launched && report.exit_code == 0 && report.status == WindowsImportWorkerStatus::cancelled &&
+                !report.completed && report.output.empty() && !report.controls_attested(),
+            "cancellation concurrent with normal exit must discard completed output");
+    require(has(report, "worker_cancelled") && !has(report, "temporary_cleanup_failed"),
+            "completion cancellation must preserve private-root cleanup");
+#else
+    (void)worker;
+#endif
+}
+
 void attested_echo_round_trip(const std::filesystem::path& worker) {
 #ifdef _WIN32
     const auto report = run_windows_import_worker(base_options(worker));
@@ -430,6 +587,7 @@ void caller_secrets_are_not_inherited(const std::filesystem::path& worker) {
 
 void run(const std::filesystem::path& worker) {
     invalid_requests_fail_closed();
+    precancelled_request_does_not_launch();
 #ifdef _WIN32
     const auto profile_root = worker_profile_root();
     std::error_code profile_error;
@@ -453,6 +611,8 @@ void run(const std::filesystem::path& worker) {
     require(executable_access != INVALID_HANDLE_VALUE, "protected fixture must remain executable by the broker user");
     CloseHandle(executable_access);
     attested_echo_round_trip(worker_copy);
+    cancellation_terminates_only_the_invocation(worker_copy);
+    completion_race_cannot_publish_cancelled_output(worker_copy);
     deadline_terminates_whole_job(worker_copy);
     output_limit_rejects_partial_result(worker_copy);
     malformed_image_preserves_launch_error(worker_copy);

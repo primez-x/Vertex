@@ -52,6 +52,10 @@ struct Bounds2 {
 [[nodiscard]] Bounds2 segment_bounds(const Segment& segment);
 [[nodiscard]] Bounds2 boundary_bounds(const Boundary& boundary);
 
+// Shared presentation anchor: polygon centroid for straight closed outlines,
+// otherwise the midpoint of exact analytical bounds. Never an area quantity.
+[[nodiscard]] Vec2 area_label_anchor(const Boundary& boundary);
+
 // Clip line and circular-arc segments to a closed axis-aligned rectangle.
 // Surviving arc pieces retain their exact circular representation; the helper
 // never tessellates or invents edges along the crop rectangle. Segment order

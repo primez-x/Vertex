@@ -1,6 +1,8 @@
 # PincSketch symbol coverage against Vertex SVG assets
 
-This crosswalk compares the 80 unique symbol names found by static inspection of the archived PincSketch 4.3 HTML bundle with the named entries in Vertex Architectural SVG Library v2. It is a name-and-kind comparison: a listed Vertex asset is a plausible graphic candidate, not proof of equal artwork, dimensions, editing controls, placement behavior, or user-visible availability. “No confirmed counterpart” means the v2 index has no clearly corresponding named entry; it does not assert that no custom drawing could approximate it.
+Updated 2026-10-05. This crosswalk compares the 80 unique symbol names found by static inspection of the archived PincSketch 4.3 HTML bundle with the named entries in Vertex Architectural SVG Library v2. It is a name-and-kind comparison: a listed Vertex asset is a plausible graphic candidate, not proof of equal artwork, dimensions, editing controls, placement behavior, or user-visible availability. “No confirmed counterpart” means the v2 index has no clearly corresponding named entry; it does not assert that no custom drawing could approximate it.
+
+Current source has 345 visible SVG library entries (233 nominal and 112 editable-default entries) plus 809 legacy catalog entries, for 1,154 catalog records. These counts describe available records; they do not establish complete Pinc coverage or quality.
 
 The PincSketch inventory reports 110 symbol occurrences including 26 Favorites (84 excluding Favorites), but those are still only 80 unique names. Favorites repeat names from the other categories. The Pinc names therefore do not imply 80 distinct drawing implementations. The separately inventoried 22 area types, including Clear, are outside this symbol-only crosswalk.
 
@@ -84,18 +86,18 @@ Each Vertex link opens the SVG source named by the v2 index. The IDs shown are t
 | Stairs U | [`svg-v2-11_circulation-stairs-u` · Stairs U](../../assets/symbols/architectural_v2/symbols/11_circulation/stairs-u.svg) | Close named form match. |
 | Stairs Up | [`svg-v2-11_circulation-stairs-straight-up` · Stairs Straight Up](../../assets/symbols/architectural_v2/symbols/11_circulation/stairs-straight-up.svg) | New independently authored candidate with nominal physical dimensions; native placement, output and comparison qualification recorded separately. |
 | Window - Bay | [`svg-v2-10_windows-window-bay` · Window Bay](../../assets/symbols/architectural_v2/symbols/10_windows/window-bay.svg) | Close named form match; hosted behavior is described below. |
-| Window - Bow | — | No confirmed bow-window entry; bay window is a distinct form. |
-| Window - Corner | — | No confirmed corner-window entry; a wall-corner symbol is not counted as a window. |
+| Window - Bow | [`svg-v2-10_windows-window-bow` · Window Bow](../../assets/symbols/architectural_v2/symbols/10_windows/window-bow.svg) | New first-party bow-window candidate; nominal footprint 2400 × 600 mm. Artwork, default-size suitability and semantic wall hosting remain unqualified. |
+| Window - Corner | [`svg-v2-10_windows-window-corner` · Window Corner](../../assets/symbols/architectural_v2/symbols/10_windows/window-corner.svg) | New first-party corner-window candidate; nominal footprint 1200 × 1200 mm. Artwork, default-size suitability and semantic wall hosting remain unqualified. |
 | Window - Double | [`svg-v2-10_windows-window-double` · Window Double](../../assets/symbols/architectural_v2/symbols/10_windows/window-double.svg) | Close named match; hosted behavior is described below. |
-| Window - Standard | — | No generic standard-window entry with confirmed meaning; fixed windows are only conditional candidates if “standard” means fixed. |
+| Window - Standard | [`svg-v2-10_windows-window-standard` · Window Standard](../../assets/symbols/architectural_v2/symbols/10_windows/window-standard.svg) | New first-party standard-window candidate; nominal footprint 1200 × 200 mm. Artwork, default-size suitability and semantic wall hosting remain unqualified. |
 | Window - Triple | [`svg-v2-10_windows-window-triple` · Window Triple](../../assets/symbols/architectural_v2/symbols/10_windows/window-triple.svg) | Close named match; hosted behavior is described below. |
 | Wood Stove | [`svg-v2-18_fireplace-wood-stove` · Wood Stove](../../assets/symbols/architectural_v2/symbols/18_fireplace/wood-stove.svg) | Close named match. |
 
 ## Gaps and interpretation
 
-The initial index lacked confirmed counterparts for 18 Pinc names. This change adds distinct SVGs for 15 of those, plus a composed cabinet run, a true five-foot tub, a glass-screen shower and separate up/down stair graphics. The updated crosswalk links their actual indexed files. Bow/corner/standard window distinctions still require direct semantic comparison and hosted integration; French/cased/sliding and garage-width variants remain open as indicated by the unchanged rows. New artwork does not establish full placement, print or Pinc equivalence.
+At the earlier reviewed checkpoint, the index lacked confirmed counterparts for 18 Pinc names; that checkpoint added distinct SVGs for 15, plus a composed cabinet run, a true five-foot tub, a glass-screen shower and separate up/down stair graphics. The current index adds first-party bow, corner and standard window candidates, linked above. French/cased/sliding and garage-width variants remain open as indicated by the unchanged rows. New artwork does not establish full placement, print or Pinc equivalence.
 
-Pinc-level coverage is required. The following are concrete v2 additions and remaining variant work. The crosswalk above distinguishes installed additions from remaining variants; the category prefix below is the Vertex index category, and the generated catalog ID would prepend `svg-v2-<category>-`.
+Pinc-level coverage is required. The following are concrete v2 additions and remaining variant work. The crosswalk above distinguishes source-indexed additions from remaining variants; the category prefix below is the Vertex index category, and the generated catalog ID would prepend `svg-v2-<category>-`.
 
 | Pinc gap | Proposed new index ID(s) |
 |---|---|
@@ -107,13 +109,12 @@ Pinc-level coverage is required. The following are concrete v2 additions and rem
 | Mechanical - Furnace; Mechanical - HVAC; Mechanical - HWB | `20_hvac_plumbing/furnace`; `20_hvac_plumbing/hvac-system`; `20_hvac_plumbing/baseboard-heater` |
 | Misc - Structural Issue; Open Below | `25_drafting_symbols/structural-issue`; `16_walls_openings/open-below` |
 | Pool - Kidney | `21_swimming_pools/pool-kidney` |
-| Window - Bow; Window - Corner; Window - Standard | `10_windows/window-bow`; `10_windows/window-corner`; `10_windows/window-standard` |
 
 For the variant gaps where a related symbol already exists, these additional IDs would preserve the distinction instead of stretching a generic entry: `01_bathroom/tub-alcove-5ft`, `01_bathroom/shower-glass`, `16_walls_openings/cased-opening`, `09_doors/door-french-double`, `09_doors/door-garage-single`, `09_doors/door-garage-double`, `09_doors/door-hinged-interior`, `09_doors/door-hinged-exterior`, `09_doors/door-sliding`, `11_circulation/stairs-straight-up`, and `11_circulation/stairs-straight-down`. Compare artwork, default dimensions and operation semantics directly; an unrelated family asset does not satisfy a distinct fixture.
 
 Door and window candidates require special care. In this repository, the desktop symbol library removes legacy non-SVG `doors_windows` entries and routes the SVG v2 categories `09_doors` and `10_windows` through hosted wall-opening placement; its UI describes dropping them on a wall and cutting that host wall. These records therefore can represent an architectural operation, not just an ornamental glyph. Other indexed SVG categories use ordinary plan-symbol placement. Pinc's source supports attachment metadata for openings, but that is not runtime proof of each variant's host behavior.
 
-At HTML line 520, all six Pinc window names use the same generic four-line renderer. Bay, bow and corner names therefore do not establish distinct bay/bow/corner artwork in the supplied implementation. Vertex's actual bay graphic is retained. The remaining bow/corner architectural forms and the standard-window default still need their own explicit implementation or qualification; multiplying generic aliases would not improve the library.
+At HTML line 520, all six Pinc window names use the same generic four-line renderer. Bay, bow and corner names therefore do not establish distinct bay/bow/corner artwork in the supplied implementation. Vertex's actual bay graphic is retained, and the current index now contains distinct bow, corner and standard SVG assets. Their visual quality and default-size suitability still need direct qualification. Import fixture visual wall association does not establish semantic physical-wall hosting.
 
 The catalog source combines generated SVG records with a much larger code-authored legacy symbol catalog. A catalog entry count, SVG file, or family name alone is not proof that a particular item appears in the desktop library, supports the same edits, or behaves the same way. This document does not claim visual fidelity or placement-quality parity: both remain unverified. The archive inventory is static evidence, and no Pinc runtime behavior is inferred here.
 
@@ -126,4 +127,4 @@ The public [feature inventory](pincsketch-4.3-feature-inventory.md) records the 
 - [Vertex v2 index](../../assets/symbols/architectural_v2/index.json) supplies each asset ID, display name, category, and file path. Catalog IDs add the category namespace, as generated in [catalog_data.inc](../../assets/symbols/architectural_v2/catalog_data.inc).
 - [Core annotation catalog](../../src/core/annotation_catalog.cpp) builds the legacy catalog and appends the generated SVG records. [Desktop catalog filtering and hosted opening behavior](../../src/desktop/main_window.cpp) show the library filter and the separate placement path for door/window categories.
 
-The 20 additions are first-party SVG implementations with white surfaces, black outlines and subtle shading. All new footprints are editable nominal defaults. The uploaded Pinc HTML/installer remains local and is not redistributed. Full PINC-012 acceptance also requires category/preset semantics and observable paired workflows.
+The earlier 20 additions were first-party SVG implementations with white surfaces, black outlines and subtle shading and editable nominal defaults. The three window entries linked above are later first-party additions with editable nominal footprints. The uploaded Pinc HTML/installer remains local and is not redistributed. Full PINC-012 acceptance also requires category/preset semantics and observable paired workflows.

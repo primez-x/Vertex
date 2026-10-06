@@ -1,4 +1,5 @@
 #include "sketch/project_store.hpp"
+#include "sketch/project_exchange.hpp"
 #include "sketch/document_digest.hpp"
 #include "sketch/boundary_entity.hpp"
 #include "sketch/boundary_receipt.hpp"
@@ -3263,6 +3264,53 @@ void test_view_appearance_reader_floor_and_source_integrity() {
         "missing view appearance source is rejected on admission");
 }
 
+void test_extended_annotation_reader_floor_and_extraction() {
+    TempDirectory temp;
+    sketch::AnnotationState state;
+    state.labels.push_back(sketch::instantiate_label(sketch::default_label_templates().front(),"styled-label"));
+    const auto legacy=sketch::make_annotation_entity("style-owner",state);
+    state.labels[0].style.fill_opacity=1.0;
+    state.labels[0].style.line_pattern="dot";
+    const auto extended=sketch::make_annotation_entity("style-owner",state);
+    auto legacy_v9=legacy;legacy_v9.properties["state"]["version"]=9;
+    const sketch::AnnotationEntityContext context{"p","b","f","l",std::nullopt};
+    const auto scoped=sketch::make_annotation_entity("style-owner",sketch::AnnotationState{},context);
+    const std::vector<Entity> owners{entity("p","property"),entity("b","building",{{"property_id","p"}}),
+        entity("f","floor",{{"building_id","b"}}),entity("l","layer",{{"floor_id","f"}})};
+    for(const auto& carrier:{extended,legacy_v9,scoped}) {
+        auto document=Document::create(owners);
+        (void)document.apply(ApplyEntityChanges{document.revision(),{EntityChange::upsert(carrier)}, {},"Add presentation"});
+        const auto head=document.snapshot();
+        auto deleted=Document::fork(head);
+        (void)deleted.apply(ApplyEntityChanges{deleted.revision(),{EntityChange::erase(carrier.id)}, {},"Delete presentation"});
+        (void)document.undo(document.revision());
+        for(const auto& snapshot:{head,document.snapshot(),deleted.snapshot()}) {
+            require(ProjectStore::required_format_version(snapshot)==46,
+                "active, undone and deleted v9 or scoped annotations require native46");
+            const auto path=temp.path/("annotation-"+sketch::make_stable_id()+".bldproj");
+            (void)ProjectStore::save(path,snapshot);
+            const auto restored=ProjectStore::load(path).document.snapshot();
+            require(restored.entities()==snapshot.entities() && restored.history().size()==snapshot.history().size(),
+                "new annotation carrier and retained history reopen exactly");
+            const auto destination=temp.path/("extracted-"+sketch::make_stable_id());
+            sketch::extract_project(snapshot,destination);
+            std::ifstream input(destination/"project.json");nlohmann::json extraction;input>>extraction;
+            require(extraction.at("exchange_version")==44 && extraction.at("revisions").size()==snapshot.history().size(),
+                "extraction declares reader44 for new annotations retained anywhere in history");
+            execute_sql(path,"PRAGMA user_version=45; UPDATE metadata SET value='45' WHERE key='format_version'");
+            rewrite_logical_digest(path);const auto hash=ProjectStore::file_sha256(path);
+            require_error([&]{(void)ProjectStore::load(path);},StorageErrorCode::unsupported_format,
+                "recomputed digest cannot downgrade new annotation presentation or scope");
+            require(ProjectStore::file_sha256(path)==hash,"annotation downgrade refusal preserves source bytes");
+        }
+    }
+    require(ProjectStore::required_format_version(Document::create({legacy}).snapshot())==1,
+        "legacy unscoped centered annotations keep native1");
+    auto vendor=entity("style-vendor","generic",extended.properties);
+    require(ProjectStore::required_format_version(Document::create({vendor}).snapshot())==1,
+        "opaque vendor annotation property collision keeps native1");
+}
+
 void test_svg_palette_reader_floor() {
     TempDirectory temp;const auto catalog=sketch::default_symbol_catalog();
     const auto definition=std::find_if(catalog.begin(),catalog.end(),[](const auto& value){return value.svg_asset.has_value();});
@@ -3458,6 +3506,7 @@ int main() {
         test_deep_windows_project_paths_preserve_publication_contracts();
         test_view_appearance_reader_floor_and_source_integrity();
         test_svg_palette_reader_floor();
+        test_extended_annotation_reader_floor_and_extraction();
         test_ansi_appraisal_reader_floor_retains_history();
         test_ansi_appraisal_reader_floor_retains_history(2);
         test_automatic_angle_redraw_reader_floor();

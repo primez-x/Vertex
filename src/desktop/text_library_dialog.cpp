@@ -103,6 +103,10 @@ void TextLibraryStore::upsert(TextLibraryEntry entry) {
     const auto found=std::find_if(candidate.entries.begin(),candidate.entries.end(),[&](const auto& value){return value.id==entry.id;});
     if(found==candidate.entries.end()) candidate.entries.push_back(std::move(entry));
     else *found=std::move(entry);
+    if (std::any_of(candidate.entries.begin(),candidate.entries.end(),[](const auto& value){
+        return value.style.fill_opacity.has_value() || value.style.line_pattern!="solid" ||
+            value.style.fill_pattern=="cross" || value.style.fill_pattern=="horizontal" || value.style.fill_pattern=="dots";
+    })) candidate.version=3;
     commit(std::move(candidate));
 }
 void TextLibraryStore::remove(std::string_view id) {

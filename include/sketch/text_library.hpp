@@ -22,6 +22,7 @@ struct TextLibraryEntry {
 struct TextLibraryDocument {
     // v1 keeps implicit centered styles; v2 retains explicit text alignment.
     // Encoding promotes v1 to v2 when any entry uses a noncenter alignment.
+    // v3 retains full opacity/pattern styles; older versions refuse these values.
     int version{1};
     std::vector<TextLibraryEntry> entries;
 };

@@ -154,6 +154,9 @@ struct CanvasEntity {
     // Analytical baselines for directional alignment of visible walls,
     // independent of the active floor's ordinary mouse snap candidates.
     Boundary drawing_alignment_segments;
+    // Explicit persisted styles; absence preserves legacy screen/output alpha.
+    std::optional<double> fill_opacity;
+    QString line_pattern{QStringLiteral("solid")};
 };
 
 // A retained document annotation. Unlike BoundaryDraftPreview, labels are
@@ -218,6 +221,7 @@ struct CanvasLabel {
     // Distinguishes derived presentations sharing one native owner identity.
     // Selection and viewport membership continue to use id.
     QString callout_role;
+    std::optional<double> fill_opacity;
 };
 
 // Padded local pixel bounds before rotation, using only captured rendering

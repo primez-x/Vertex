@@ -711,6 +711,9 @@ public:
     // original source bytes as a project asset for any reported gaps.
     [[nodiscard]] bool exportDxf(const QString& path);
     [[nodiscard]] bool importDxf(const QString& path);
+    // Programmatic import uses the same sandbox and atomic admission. The UI
+    // command additionally presents page ownership and fidelity review.
+    [[nodiscard]] bool importPinc(const QString& path, bool review = true);
     [[nodiscard]] bool importDxfWithLayerReview(const QString& path);
     // Local IFC4 STEP interchange. Export/import use the same fidelity-report
     // and source-retention rules as DXF.

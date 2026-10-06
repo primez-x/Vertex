@@ -1,21 +1,28 @@
 # PincSketch 4.3 compared with Vertex
 
-Reviewed 2026-10-04 against the supplied embedded HTML and current Vertex source.
+Reviewed 2026-10-05 against the supplied embedded HTML and current Vertex source.
 The [full inventory](pincsketch-4.3-feature-inventory.md) lists 134 practical
 operations, all 22 area-type entries, 80 named symbols and 30 built-in labels.
 Source presence is not runtime qualification. PincSketch's own QA report leaves
 4.3 mouse-level rendering unverified. Its 4.2 title/project format and 4.3 package
 labels are recorded rather than silently reconciled.
 
-The current installed checkpoint is `vertex-20261005-area-callouts`; the Desktop
-Vertex shortcut points to its verified executable. The chronological checkpoints
-below retain their original limits. Reviewed same-ID room repair and all 22 named
-drawing choices are now implemented, while automatic room correspondence,
-multi-room dispositions, physical-room dimensions and complete appraisal-preset
-fact-review shortcuts remain open. This does not establish full parity.
-Independent name/calculation callouts and text alignment are included in this
-installed checkpoint. Eleven affected native checks and six installed-runtime
-samples passed; these are bounded checks, not complete user workflow certification.
+The installed Desktop checkpoint remains `vertex-20261005-area-callouts`; its
+shortcut points to the verified executable. Current source has since gained a
+Pinc import command and passed bounded synthetic-fixture desktop qualification,
+recorded in the [current import verification](../verification/pinc-desktop-import-2026-10-05.md).
+That source build is not yet installed. The installed checkpoint retains the
+independent name/calculation callouts and text alignment. Eleven affected native
+checks and six installed-runtime samples passed for that checkpoint; these are
+bounded checks, not complete user workflow certification. Reviewed same-ID room
+repair and all 22 named drawing choices are implemented, while automatic room
+correspondence, multi-room dispositions, physical-room dimensions and complete
+appraisal-preset fact-review shortcuts remain open. This does not establish full
+parity.
+
+The following dated checkpoint notes preserve the evidence and limits recorded
+at each step. Current source status below supersedes earlier statements about
+whether Pinc import exists; it does not change their historical test results.
 
 The [Pinc importer foundation](../verification/pinc-import-foundation-2026-10-04.md)
 now parses known modern and legacy projects and transports validated image
@@ -39,38 +46,71 @@ All 11 affected native checks pass, including actual native reopening and
 rotation/reflection. It implements this portion of PINC-010; tentative-curve
 shortcuts and direct reusable-label access remain open.
 
+## Current source update (2026-10-05)
+
+The current source offers `Commands > Import PincSketch project`, exercised with
+synthetic fixtures through a separate protected worker. Cancellation and failed
+import leave the active project unchanged; a successful import opens as an
+independent, unsaved native project. The original source is preserved exactly,
+and native Save As blocks the `.pinc` extension. The desktop importer, page ownership,
+measurement conversion, labels, styles and output were exercised against a
+synthetic fixture; the full [verification record](../verification/pinc-desktop-import-2026-10-05.md)
+lists the covered cases and limits.
+
+That fixture uses source-derived generic measurement areas, not ANSI facts, and
+retains authored names, styles, alignment, size and pinned-SVG transforms. It
+checks endpoint-coincident joints, an 8 ft to 10 ft connected edit producing a
+72 sq ft slanted face, live PDF output, reopen and Undo, ordered page-canvas
+focus, a screen-only previous-page ghost and a two-page PDF. Later-page native
+symbol/label ownership, long rotated text, distant-callout fitting, and a
+pre-publication known-artwork-fidelity note also passed against the fixture.
+Visual wall association in the import does not establish semantic physical-wall
+hosting.
+
+The affected native CTest run reported 20 passes and one worker-check skip due
+to its harness. Independent real-worker and desktop-GUI checks passed; evidence
+is retained under
+`artifacts/import-worker-independent/release-e48bd4c5695d476fb280fd45ecc4340e`.
+This is bounded synthetic-fixture evidence, not certification against all 134
+paired operations. Original historical Pinc project files were not supplied.
+All 80 named symbol kinds have stable crosswalk rows, but complete artwork,
+default-size and hosting-quality comparisons remain open. The installed Desktop
+checkpoint remains the earlier `vertex-20261005-area-callouts` build until the
+qualified source is installed.
+
 ## Matching capabilities and actual differences
 
 | Workflow | Vertex implementation/access | Comparison and required action |
 | --- | --- | --- |
-| New/Open/Save/Save As; editable local projects | Main action bar; `main_window.cpp` file workflows; `ProjectStore` | Present. Vertex also preserves typed history, asset integrity, migrations and recovery. File formats differ; opening `.pinc` is not currently supported. |
+| New/Open/Save/Save As; editable local projects | Main action bar; `main_window.cpp` file workflows; `ProjectStore` | Present. Vertex also preserves typed history, asset integrity, migrations and recovery. Current source imports `.pinc` through a separate command; the installed Desktop checkpoint remains earlier. |
 | Undo/Redo, selection, copy/paste/delete | Unified canvas and action bar; clipboard/dependency helpers | Present. Mixed-source movement remains under active remediation; ordinary selection is not proof every compound group works. |
 | Exterior/interior drawing; preview; grid/point/edge/alignment snapping | Wall drawing mode; `plan_canvas.cpp`, `constraint_authoring.cpp` | Present. Retain Vertex's physical thickness and unified surface rather than adopting separate Select/Draw/Pan modes. |
-| Closed-space detection; shared edges; classification | Tools > Detect closed areas; wall-closure review; `measurement_area_definition` | Present with a more interrupted classification workflow. Add the spatial palette workflow below. Classification retention after changed geometry needs direct comparison cases. |
+| Closed-space detection; shared edges; classification | Tools > Detect closed areas; wall-closure review; `measurement_area_definition` | Present with a more interrupted classification workflow. Imported generic measurement areas retain Pinc-authored names but do not create ANSI facts. Add the spatial palette workflow below. Classification retention after changed geometry needs direct comparison cases. |
 | Feet/inches, decimal lengths, arithmetic, directions, rise/run, exact angle | Drawing input; `submitDrawingInput`, quantity parser and wall/boundary properties | Present. Pinc's one-operation arithmetic is not a reason to remove Vertex's retained exact quantities. Keyboard fluidity must still be qualified on real input. |
 | Auto-close, point-of-beginning guidance, cancel/finish | Canvas/drawing input; `autoCloseDrawing`, drawing-session commands | Present. Keyboard J/along-wall offset/walk differs and remains a gap below. |
 | Curves and editing dimensions/nodes | Source-derived arc authoring and inverse editing; wall/boundary quick properties and handles | Present and broader analytical constructions. Pinc wheel-bowing a tentative wall is a distinct shortcut; add it without making zoom ambiguous. |
 | Panning, pointer zoom, fit | Unified drag, middle/right drag, wheel, status controls | Present. Preserve the user's requested Vertex gesture rules. Pinc has no explicit application right-click action in the inspected handlers. |
 | Double-click edit, moving labels/dimensions, rotation/mirroring/nudges | Quick properties; selection transforms; typed dimension placement | Area quick properties now offer **Separate name and value**, with independent placement, size, color, alignment, rotation and visibility. Existing combined callouts remain until adoption. Pinc's symbol double-click rotation conflicts with the user's requested quick-properties behavior; retain quick properties with accessible rotation controls. |
 | Fence rectangle and connected layout grouping | Ctrl marquee/multiselect; container organization; group transforms/copy | Selection and grouping exist. Batch style controls and some mixed transforms remain incomplete. Pinc's bbox/centroid fence rules are not exact containment semantics. |
-| Area fill/color/opacity/hatches, label position, wall/dimension styles | Area appearance, text/dimension properties; shared scene renderer | Independent name/calculation callouts and reusable-text alignment are implemented and natively checked. Importing Pinc text/alignment, exterior-only/shared-edge automatic styling and batch presentation remain gaps. |
-| Symbol categories/search/click and drag placement; real dimensions/rotation/mirror | Left Library; pinned SVG catalog; hosted opening authoring | Present. Names/counts do not prove every Pinc counterpart exists or is equally useful. Audit each of the inventory's 80 named kinds for semantic counterpart, artwork and default size; add missing kinds. Do not pad catalog counts with aliases. |
+| Area fill/color/opacity/hatches, label position, wall/dimension styles | Area appearance, text/dimension properties; shared scene renderer | Independent name/calculation callouts and reusable-text alignment are implemented and natively checked. Pinc import preserves fixture-authored styles, alignment and size; exterior-only/shared-edge automatic styling, batch presentation and broader parity remain open. |
+| Symbol categories/search/click and drag placement; real dimensions/rotation/mirror | Left Library; pinned SVG catalog; hosted opening authoring | Present. The crosswalk now links all 80 Pinc names to candidates or remaining variant gaps. Names/counts do not prove artwork, default-size, placement or hosting parity; continue the per-entry comparison without padding counts with aliases. |
 | Door/opening hosting, width, hinge and swing | Walls & openings; hosted opening properties | Present. Preserve actual hosted geometry rather than treating doors/windows solely as decoration. Reattachment and every door variant need direct workflow comparison. |
 | Reusable labels, custom text, user-saved templates and search | Text library command; `text_library_dialog.cpp`, local template store | Present. Pinc saves reusable text, not searches; do not invent a saved-search gap. Compare its inline label retrieval against Vertex's dialog workflow. |
-| Multiple pages, duplicate/rename/delete, navigation | Sheet/document organization and page controls; Layers > Floor reference | Present with a different property/building/floor/sheet model. A floor is not a page. Vertex now links a chosen source floor as a live aligned 2D ghost rather than assuming printed-page order. |
+| Multiple pages, duplicate/rename/delete, navigation | Sheet/document organization and page controls; Layers > Floor reference | Present with a different property/building/floor/sheet model. A floor is not a page. The import fixture preserves ordered page-canvas focus and a screen-only previous-page ghost; Vertex's separate live floor link remains world-aligned rather than assuming printed-page order. |
 | Image tracing, size/opacity | Reference import, calibration and reference properties; Layers > Floor reference | PDF/image calibration remains available. The new previous-floor reference provides visibility, opacity and XY alignment, with source updates and save/reopen; it is excluded from measurements and output. |
 | GLA, categories, gross/net/deductions/perimeter and print report | Details > Setup/Edit facts/Full report; appraisal document core | Present and based on recorded grade/finish/access/ceiling/identity evidence. Pinc sums category flags. Never adopt an area preset as automatic proof of ANSI eligibility. |
 | Live GLA while drawing | New compact `appraisalGlaShortcut` in status bar; same current Details report | Implemented in this change; native verification recorded separately. Click opens Details. Unqualified totals are withheld; unconfigured projects do not get a fabricated zero placeholder. |
 | Short geometric calculation arithmetic | Details and printed audit use `derive_area_arithmetic` through one shared formatter | Added rectangle/strip multiplication, triangle base/height and signed chord/arc derivation, reconciled to current gross. Native known-answer, concave/major-arc, reversed-winding and fractional ANSI-rounding checks pass. |
 | Portrait report guide and appraisal-ready cropped PDF | Tools > Sketch composition guide; Tools > Export sketch PDF; regular sheet/report output retained | Added an optional guide showing the actual content crop and a dedicated vector PDF with 2 mm padding. Navigation, grid, tracing images and interaction overlays are excluded. This crop is not a certified architectural scale. Pinc's useful crop workflow is retained without manufacturing a raster screenshot. |
 | Stroke widths independent of screen zoom | Shared scene/output renderer and symbol palette | Present architecture; qualify actual symbols at varied zoom/output scales. Source inventory alone cannot certify output. |
-| Legacy Pinc version-2 opening | No Pinc adapter | Missing if migrating the supplied tool's files. Add an isolated importer with explicit unsupported-content reporting and preserved originals. It does not replace Apex compatibility. |
+| Legacy Pinc version-2 opening | `Commands > Import PincSketch project`; separate protected worker | Implemented in current source and exercised against a synthetic fixture, with cancellation, independent unsaved-project admission and exact source preservation. Not yet installed; original historical projects and full paired-operation qualification remain unavailable. Native Save As blocks `.pinc`. This does not replace Apex compatibility. |
 
 ## Required additions and improvements
 
 These are additional production requirements from the user's supplied-tool
-comparison. They remain in scope until implemented and verified; creating this
-table does not satisfy them. The original unified release gate remains binding.
+comparison. They remain gates at the required qualification level; an
+implementation or synthetic fixture pass does not by itself satisfy a complete
+paired-workflow requirement. The original unified release gate remains binding.
 
 The initial adoption checkpoint added live GLA access, the spatial palette and arithmetic,
 plus 20 independently authored SVGs (342 visible library entries total).
@@ -142,8 +182,8 @@ for actual qualification and remaining limits.
 | PINC-008 | Bulk presentation edit for a selected fence/group's walls, dimensions and text | Heterogeneous selection, retain unrelated values/metadata, one atomic revision, cancellation, Undo and reopen. |
 | PINC-009 | Fast J/corner jump, typed travel, along-wall starting offset and pen-up wall walk | Physical keyboard and pointer tests; pen state/preview/cancel; separate walls versus measurement mode; exact stored distance. |
 | PINC-010 | Useful tentative-curve adjustment shortcut, direct reusable-label access and independently editable area-name/calculation callouts | Modifier/gesture conflicts resolved against Vertex's unified input; separate label anchors, size, color and visibility; text alignment; preview/commit/cancel and no accidental geometry changes. |
-| PINC-011 | Pinc `.pinc` import, including known version-2 conversion | Representative files/fixtures; geometry/arcs, classification, labels, symbol size/rotation/hosting, pages, style and references; report any loss and preserve original. |
-| PINC-012 | Complete semantic counterparts for all 80 Pinc named symbol kinds and 22 area-type entries | [Per-entry symbol crosswalk](pincsketch-symbol-coverage.md), artwork/default-size/placement comparison, no alias-count substitution; map classifications to explicit Vertex facts rather than preset-driven GLA certification. |
+| PINC-011 | Pinc `.pinc` import, including known version-2 conversion | Current source command and bounded synthetic desktop fixture pass are recorded in the [import verification](../verification/pinc-desktop-import-2026-10-05.md). Original historical files were unavailable; complete conversion/fidelity comparison, unsupported-content reporting, semantic physical hosting and all 134 paired operations remain unverified. Preserve original source. |
+| PINC-012 | Complete semantic counterparts for all 80 Pinc named symbol kinds and 22 area-type entries | [Per-entry symbol crosswalk](pincsketch-symbol-coverage.md) now has stable rows for all 80 names, including three new window SVG entries. Complete artwork/default-size/placement/hosting comparison remains open; map classifications to explicit Vertex facts rather than preset-driven GLA certification. |
 | PINC-013 | Qualify equivalent drawing/edit/layout/history/output workflows against all 134 inventory operations | Actual paired scenarios and practical checklist outcomes; differences judged by useful behavior, not copied menus or unchecked source claims. |
 
 Remaining mixed-selection gap: a hard-connected component spanning rigid and

@@ -4,6 +4,7 @@ param(
     [ValidateSet('Debug', 'Release')][string]$Configuration = 'Release',
     [switch]$Child,
     [switch]$CaptureSelfTest,
+    [switch]$PincOnly,
     [string]$CaptureDirectory,
     [string]$PackagedRuntimeRoot = ''
 )
@@ -12,6 +13,8 @@ Set-StrictMode -Version Latest
 $fixtureParentOriginalAcl = $null
 $fixtureParentPath = $null
 if (!$IsWindows) { throw 'This runner requires Windows.' }
+if ($PincOnly -and $CaptureSelfTest) { throw 'PincOnly cannot be combined with CaptureSelfTest.' }
+if ($PincOnly -and $Configuration -ne 'Release') { throw 'PincOnly requires the inspected Release runtime.' }
 if ($PackagedRuntimeRoot) {
     if ($CaptureSelfTest -or $Configuration -ne 'Release') { throw 'Packaged CAD checking requires Release and no capture self-test.' }
     if ($PackagedRuntimeRoot -match '["\x00-\x1f]') { throw 'Invalid packaged runtime path.' }
@@ -25,6 +28,10 @@ $build = Join-Path $root ('build/windows-' + $Configuration.ToLowerInvariant())
 $names = @('windows_import_worker_tests.exe', 'windows_import_worker_probe.exe',
            'assistance_workflow_tests.exe', 'dxf_desktop_workflow_tests.exe',
            'ifc_desktop_workflow_tests.exe', 'cad_library_worker_tests.exe', 'vertex-import-worker.exe')
+if ($PincOnly) {
+    $names = @('windows_import_worker_tests.exe', 'windows_import_worker_probe.exe',
+               'pinc_project_desktop_tests.exe', 'vertex-import-worker.exe')
+}
 $captureLimitBytes = 1MB
 function Get-BinaryEvidence {
     @($names | ForEach-Object {
@@ -40,6 +47,14 @@ function Get-OptionalFileHash([string]$Path) {
     }
     return $null
 }
+function Get-RuntimeEvidence([string]$RuntimeRoot) {
+    $paths = @($RuntimeRoot)
+    if ($PincOnly) { $paths += Join-Path (Split-Path -Parent $RuntimeRoot) 'plugins' }
+    @(Get-ChildItem -LiteralPath $paths -File -Recurse | Sort-Object FullName | ForEach-Object {
+        [ordered]@{ path = $_.FullName; bytes = $_.Length;
+            sha256 = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash }
+    })
+}
 function Get-CaptureFailure($Stdout, $Stderr) {
     foreach ($stream in @(@('stdout', $Stdout), @('stderr', $Stderr))) {
         if ($stream[1].IsFaulted) { return ($stream[0] + '_capture_failed') }
@@ -52,14 +67,18 @@ function Get-CaptureFailure($Stdout, $Stderr) {
 }
 function New-ImmutableDesktopFixtureRoot([string]$CaptureRoot) {
     $runtime = Join-Path $CaptureRoot 'immutable-desktop-runtime'
-    $null = New-Item -ItemType Directory -Path $runtime
-    foreach ($name in @('dxf_desktop_workflow_tests.exe', 'ifc_desktop_workflow_tests.exe', 'cad_library_worker_tests.exe',
-                         'vertex-import-worker.exe', 'vertex-planegcs.dll')) {
+    $protectedRoot = $runtime
+    if ($PincOnly) { $runtime = Join-Path $runtime 'bin' }
+    $null = New-Item -ItemType Directory -Path $runtime -Force
+    $fixtureNames = if ($PincOnly) { @('pinc_project_desktop_tests.exe', 'vertex-import-worker.exe', 'vertex-planegcs.dll') }
+        else { @('dxf_desktop_workflow_tests.exe', 'ifc_desktop_workflow_tests.exe', 'cad_library_worker_tests.exe',
+                 'vertex-import-worker.exe', 'vertex-planegcs.dll') }
+    foreach ($name in $fixtureNames) {
         Copy-Item -LiteralPath (Join-Path $build $name) -Destination $runtime
     }
     # The CAD bridge loads its pinned interpreter lazily from this exact sibling
     # directory. Include native extensions before assigning immutable ACLs.
-    Copy-Item -LiteralPath (Join-Path $build 'cad-runtime') -Destination $runtime -Recurse
+    if (!$PincOnly) { Copy-Item -LiteralPath (Join-Path $build 'cad-runtime') -Destination $runtime -Recurse }
     $qtBin = Join-Path $root '.deps/qt/6.8.3/msvc2022_64/bin'
     $qtSuffix = if ($Configuration -eq 'Debug') { 'd' } else { '' }
     foreach ($name in @("Qt6Core$qtSuffix.dll", "Qt6Gui$qtSuffix.dll",
@@ -68,8 +87,24 @@ function New-ImmutableDesktopFixtureRoot([string]$CaptureRoot) {
     }
     # Native IFC reconstruction now uses the solid kernel inside the worker.
     # Stage its inspected DLL closure before making the fixture immutable.
-    & (Join-Path $PSScriptRoot 'inspect-runtime.ps1') -EntryPoints @(
-        (Join-Path $build 'vertex-import-worker.exe')) | Out-Null
+    $entryPoints = @((Join-Path $build 'vertex-import-worker.exe'))
+    if ($PincOnly) {
+        $qtPrefix = Split-Path -Parent $qtBin
+        foreach ($module in @('Widgets', 'PrintSupport', 'Svg', 'OpenGL', 'OpenGLWidgets')) {
+            $entryPoints += Join-Path $qtBin "Qt6$module.dll"
+        }
+        $entryPoints += Join-Path $build 'pinc_project_desktop_tests.exe'
+        foreach ($plugin in @('platforms/qoffscreen.dll', 'platforms/qwindows.dll',
+                             'styles/qmodernwindowsstyle.dll', 'imageformats/qgif.dll',
+                             'imageformats/qico.dll', 'imageformats/qjpeg.dll', 'imageformats/qsvg.dll')) {
+            $source = Join-Path $qtPrefix "plugins/$plugin"
+            $destination = Join-Path $protectedRoot "plugins/$plugin"
+            $null = New-Item -ItemType Directory -Path (Split-Path -Parent $destination) -Force
+            Copy-Item -LiteralPath $source -Destination $destination
+            $entryPoints += $source
+        }
+    }
+    & (Join-Path $PSScriptRoot 'inspect-runtime.ps1') -EntryPoints $entryPoints | Out-Null
     $inventory = Get-Content -LiteralPath (Join-Path $root 'artifacts/runtime/release-imports.json') -Raw | ConvertFrom-Json
     foreach ($module in $inventory.modules) {
         if ([IO.Path]::GetExtension($module.path) -ne '.dll') { continue }
@@ -116,7 +151,7 @@ public static class VertexAppContainerFixture {
         $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new(
             [Security.Principal.SecurityIdentifier]::new($sid), $full, $inheritance, $none, $allow))
     }
-    Set-Acl -LiteralPath $runtime -AclObject $acl
+    Set-Acl -LiteralPath $protectedRoot -AclObject $acl
     # The containing capture directory otherwise grants DELETE on the runtime
     # through FILE_DELETE_CHILD. This fixture-owned parent stays writable for
     # stdout/stderr capture; remove only the alternate child-deletion route
@@ -139,6 +174,7 @@ if ($Child) {
         host_pid = $PID; user = [Security.Principal.WindowsIdentity]::GetCurrent().Name;
         host_in_job = $null; binaries_before = @(); tests = @(); error = $null;
         capture_self_test = [bool]$CaptureSelfTest; capture_limit_bytes_per_stream = $captureLimitBytes;
+        pinc_only = [bool]$PincOnly;
         packaged_runtime_root = $PackagedRuntimeRoot;
         qualification_boundary = 'Development-host fixture evidence only; packaged CAD mode uses the supplied immutable installed bin directory; no clean-machine, complete compatibility or production qualification.' }
     try {
@@ -177,24 +213,28 @@ public static class BoundedWorkerCapture {
             throw "IsProcessInJob failed: $([Runtime.InteropServices.Marshal]::GetLastWin32Error())"
         }
         $report.host_in_job = $inJob
+        if ($PincOnly -and $inJob) { throw 'Pinc host must run outside every Job Object.' }
         $report.binaries_before = Get-BinaryEvidence
-        if (!$CaptureSelfTest) {
+        if (!$CaptureSelfTest -and !$PincOnly) {
             & (Join-Path $root '.deps/cad-runtime/3.13.15/python.exe') -I -B (
                 Join-Path $root 'tests/generate_cad_library_worker_fixtures.py') (
                 Join-Path $CaptureDirectory 'cad-fixtures')
             if ($LASTEXITCODE -ne 0) { throw 'CAD library fixture generation failed.' }
         }
-        $desktopFixtureRoot = if ($PackagedRuntimeRoot) { $build } elseif ($CaptureSelfTest) { $null } else {
+        $desktopFixtureRoot = if ($PackagedRuntimeRoot -and $PincOnly) { $PackagedRuntimeRoot }
+            elseif ($PackagedRuntimeRoot) { $build } elseif ($CaptureSelfTest) { $null } else {
             New-ImmutableDesktopFixtureRoot $CaptureDirectory
         }
-        $cases = if ($PackagedRuntimeRoot) { @('cad_library_worker_tests.exe') }
+        if ($PincOnly) { $report.runtime_before = Get-RuntimeEvidence $desktopFixtureRoot }
+        $cases = if ($PincOnly) { @('windows_import_worker_tests.exe', 'pinc_project_desktop_tests.exe') }
+                 elseif ($PackagedRuntimeRoot) { @('cad_library_worker_tests.exe') }
                  elseif ($CaptureSelfTest) { @('capture-stdout-overflow', 'capture-stderr-overflow', 'capture-at-limit',
                 'capture-empty', 'capture-open-failure') }
                  else { @('windows_import_worker_tests.exe', 'assistance_workflow_tests.exe',
                           'dxf_desktop_workflow_tests.exe', 'ifc_desktop_workflow_tests.exe', 'cad_library_worker_tests.exe') }
         foreach ($name in $cases) {
             $executable = if ($CaptureSelfTest) { (Get-Process -Id $PID).Path }
-                elseif ($name -in @('dxf_desktop_workflow_tests.exe', 'ifc_desktop_workflow_tests.exe', 'cad_library_worker_tests.exe')) {
+                elseif ($name -in @('pinc_project_desktop_tests.exe', 'dxf_desktop_workflow_tests.exe', 'ifc_desktop_workflow_tests.exe', 'cad_library_worker_tests.exe')) {
                     Join-Path $desktopFixtureRoot $name
                 } else { Join-Path $build $name }
             $info = [Diagnostics.ProcessStartInfo]::new($executable)
@@ -212,6 +252,12 @@ public static class BoundedWorkerCapture {
             $native = if ($Configuration -eq 'Debug') { 'debug/bin' } else { 'bin' }
             $info.Environment['PATH'] = (Join-Path $root '.deps/qt/6.8.3/msvc2022_64/bin') + ';' +
                 (Join-Path $root ".deps/native/x64-windows/$native") + ';' + $env:PATH
+            if ($PincOnly -and $name -eq 'pinc_project_desktop_tests.exe') {
+                $info.WorkingDirectory = $desktopFixtureRoot
+                $info.Environment['QT_PLUGIN_PATH'] = Join-Path (Split-Path -Parent $desktopFixtureRoot) 'plugins'
+                $info.Environment['PATH'] = $desktopFixtureRoot + ';' + [Environment]::SystemDirectory
+                $info.Environment['VERTEX_TEST_CAPTURE_DIR'] = Join-Path $CaptureDirectory 'pinc-desktop-captures'
+            }
             if ($name -eq 'windows_import_worker_tests.exe') {
                 $info.ArgumentList.Add((Join-Path $build 'windows_import_worker_probe.exe'))
             }
@@ -265,6 +311,19 @@ public static class BoundedWorkerCapture {
             }
         }
         $report.binaries_after = Get-BinaryEvidence
+        if ($PincOnly) {
+            $report.runtime_after = Get-RuntimeEvidence $desktopFixtureRoot
+            if (($report.runtime_before | ConvertTo-Json -Depth 5 -Compress) -cne
+                ($report.runtime_after | ConvertTo-Json -Depth 5 -Compress)) { throw 'Pinc runtime provenance changed during the run.' }
+            foreach ($test in $report.tests) {
+                $expected = if ($test.name -eq 'windows_import_worker_tests.exe') { 'windows import worker tests passed' }
+                    else { 'Pinc project desktop tests passed' }
+                $output = Get-Content -LiteralPath $test.stdout -Raw
+                if (!$test.termination_confirmed -or $test.exit_code -ne 0 -or $test.timed_out -or
+                    $test.capture_failure -or $output -notmatch [regex]::Escape($expected) -or
+                    $output -match '(?i)\bskip(?:ped)?\b') { throw "Pinc fixture failed or produced incomplete evidence: $($test.name)" }
+            }
+        }
         if (($report.binaries_before | ConvertTo-Json -Depth 5 -Compress) -cne
             ($report.binaries_after | ConvertTo-Json -Depth 5 -Compress)) { throw 'Binary provenance changed during the run.' }
         if ($CaptureSelfTest) {
@@ -330,6 +389,7 @@ try {
     $command = '"' + $pwsh + '" -NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -File "' + $PSCommandPath +
         '" -Configuration ' + $Configuration + ' -Child -CaptureDirectory "' + $CaptureDirectory + '"'
     if ($CaptureSelfTest) { $command += ' -CaptureSelfTest' }
+    if ($PincOnly) { $command += ' -PincOnly' }
     if ($PackagedRuntimeRoot) { $command += ' -PackagedRuntimeRoot "' + $PackagedRuntimeRoot + '"' }
     $created = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{
         CommandLine = $command; CurrentDirectory = $root; ProcessStartupInformation = $startup }
@@ -365,7 +425,7 @@ finally {
 }
 Write-Output $CaptureDirectory
 if ($capture.error) { throw $capture.error }
-$expectedCount = if ($PackagedRuntimeRoot) { 1 } else { 5 }
+$expectedCount = if ($PincOnly) { 2 } elseif ($PackagedRuntimeRoot) { 1 } else { 5 }
 if (!$capture.termination_confirmed -or $capture.host_exit_code -ne 0 -or $result.host_in_job -ne $false -or
     $result.error -or @($result.tests).Count -ne $expectedCount -or (!$CaptureSelfTest -and @($result.tests | Where-Object {
         $_.exit_code -ne 0 -or $_.timed_out -or $_.capture_failure }).Count)) {

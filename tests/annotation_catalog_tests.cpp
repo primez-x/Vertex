@@ -24,6 +24,112 @@ int main() {
     using namespace sketch;
     const auto catalog = default_symbol_catalog();
     {
+        for(const auto kind:{"wall_dimension","area_name","area_calculation"}) {
+            AnnotationState state;state.overrides.push_back({kind,"callout-owner",{},true});
+            state.overrides[0].style.text_height_metres=.75;
+            const auto legacy=encode_annotation_state(state,catalog);
+            require(!legacy["overrides"][0].contains("use_model_text_height") &&
+                !decode_annotation_state(legacy,catalog).overrides[0].use_model_text_height,
+                "old callout styles preserve their legacy paper height selection");
+            state.overrides[0].use_model_text_height=true;
+            const auto wire=encode_annotation_state(state,catalog);
+            require(wire.at("version")==9 && wire["overrides"][0]["use_model_text_height"]==true &&
+                decode_annotation_state(wire,catalog).overrides[0].use_model_text_height &&
+                encode_annotation_state(decode_annotation_state(wire,catalog),catalog)==wire,
+                "explicit model text height alone requires and round-trips annotation v9");
+            auto omitted=wire;omitted["overrides"][0].erase("use_model_text_height");
+            require(!decode_annotation_state(omitted,catalog).overrides[0].use_model_text_height,
+                "omitted v9 height mode retains legacy default");
+            auto explicit_false=wire;explicit_false["overrides"][0]["use_model_text_height"]=false;
+            const auto false_state=decode_annotation_state(explicit_false,catalog);
+            require(!false_state.overrides[0].use_model_text_height &&
+                !encode_annotation_state(false_state,catalog)["overrides"][0].contains("use_model_text_height"),
+                "false model text height is accepted in v9 and omitted when encoding legacy behavior");
+            for(const auto value:{nlohmann::json(1),nlohmann::json("true"),nlohmann::json(nullptr)}) {
+                auto invalid=wire;invalid["overrides"][0]["use_model_text_height"]=value;
+                rejected([&]{(void)decode_annotation_state(invalid,catalog);});
+            }
+            auto conflicting=state;conflicting.overrides[0].paper_text_height_mm=3;
+            rejected([&]{validate_annotation_state(conflicting,catalog);});
+            auto conflicting_wire=wire;conflicting_wire["overrides"][0]["paper_text_height_mm"]=3;
+            rejected([&]{(void)decode_annotation_state(conflicting_wire,catalog);});
+        }
+        for(int version=1;version<9;++version)for(const bool mode:{false,true}) {
+            AnnotationState state;state.overrides.push_back({"area","area-owner",{},true});
+            auto old=encode_annotation_state(state,catalog);old["version"]=version;
+            old["overrides"][0]["use_model_text_height"]=mode;
+            rejected([&]{(void)decode_annotation_state(old,catalog);});
+        }
+        for(const auto kind:{"area","object","output_view"}) {
+            AnnotationState invalid;invalid.overrides.push_back({kind,"owner",{},true});
+            invalid.overrides[0].use_model_text_height=true;
+            rejected([&]{validate_annotation_state(invalid,catalog);});
+            invalid.overrides[0].use_model_text_height=false;
+            auto wire=encode_annotation_state(invalid,catalog);wire["version"]=9;
+            wire["overrides"][0]["use_model_text_height"]=false;
+            rejected([&]{(void)decode_annotation_state(wire,catalog);});
+        }
+    }
+    {
+        AnnotationState presentation;
+        presentation.labels.push_back(instantiate_label(default_label_templates().front(),"opacity-label"));
+        presentation.symbols.push_back({"pattern-symbol",catalog.front().id,{},{},true});
+        presentation.overrides.push_back({"area","area-owner",{},true});
+        for(const auto pattern:{"none","solid","hatch","cross","horizontal","dots"}) {
+            presentation.labels[0].style.fill_pattern=pattern;
+            presentation.labels[0].style.fill_opacity=1.0;
+            presentation.symbols[0].style.line_pattern="dashdot";
+            const auto wire=encode_annotation_state(presentation,catalog);
+            const auto decoded=decode_annotation_state(wire,catalog);
+            require(wire.at("version")==9 && wire["overrides"][0]["style"]["text_alignment"]=="center" &&
+                decoded.labels[0].style.fill_opacity==1.0 && decoded.symbols[0].style.line_pattern=="dashdot" &&
+                encode_annotation_state(decoded,catalog)==wire,"v9 must preserve explicit opaque fill and line/fill patterns across all styles");
+            for(int version=1;version<9;++version) {
+                auto old=wire;old["version"]=version;
+                rejected([&]{(void)decode_annotation_state(old,catalog);});
+            }
+        }
+        auto wire=encode_annotation_state(presentation,catalog);
+        wire["labels"][0]["style"].erase("fill_opacity");
+        wire["symbols"][0]["style"].erase("line_pattern");
+        const auto omitted=decode_annotation_state(wire,catalog);
+        require(!omitted.labels[0].style.fill_opacity && omitted.symbols[0].style.line_pattern=="solid",
+            "omitted v9 fields retain legacy opacity and solid line defaults");
+        for(const double opacity:{-0.01,1.01,std::numeric_limits<double>::infinity(),std::numeric_limits<double>::quiet_NaN()}) {
+            auto bad=presentation;bad.overrides[0].style.fill_opacity=opacity;
+            rejected([&]{validate_annotation_state(bad,catalog);});
+        }
+        for(const auto pattern:{"dash","dot","dashdot","solid"}) {
+            presentation.symbols[0].style.line_pattern=pattern;validate_annotation_state(presentation,catalog);
+        }
+        for(const auto pattern:{"diagonal","unknown",""}) {
+            auto bad=presentation;bad.labels[0].style.fill_pattern=pattern;
+            rejected([&]{validate_annotation_state(bad,catalog);});
+        }
+        auto bad=presentation;bad.symbols[0].style.line_pattern="dashed";
+        rejected([&]{validate_annotation_state(bad,catalog);});
+        AnnotationState legacy;legacy.labels.push_back(presentation.labels[0]);legacy.labels[0].style={};
+        for(int version=1;version<9;++version)for(const auto key:{"fill_opacity","line_pattern"}) {
+            auto old=encode_annotation_state(legacy,catalog);old["version"]=version;
+            old["labels"][0]["style"][key]=key==std::string("fill_opacity")?nlohmann::json(1.0):nlohmann::json("solid");
+            rejected([&]{(void)decode_annotation_state(old,catalog);});
+        }
+        for(int version=1;version<9;++version)for(const auto pattern:{"cross","horizontal","dots"}) {
+            auto old=encode_annotation_state(legacy,catalog);old["version"]=version;old["labels"][0]["style"]["fill_pattern"]=pattern;
+            rejected([&]{(void)decode_annotation_state(old,catalog);});
+        }
+        for(const auto value:{nlohmann::json(true),nlohmann::json("0.5"),nlohmann::json(-.1),nlohmann::json(1.1)}) {
+            auto invalid=wire;invalid["labels"][0]["style"]["fill_opacity"]=value;
+            rejected([&]{(void)decode_annotation_state(invalid,catalog);});
+        }
+        legacy.labels[0].style.fill_opacity=0.0;
+        const auto transparent=encode_annotation_state(legacy,catalog);
+        require(transparent.at("version")==9 && decode_annotation_state(transparent,catalog).labels[0].style.fill_opacity==0.0,
+            "explicit zero opacity must stay engaged and round-trip as transparent");
+        legacy.labels[0].style.fill_opacity.reset();
+        require(encode_annotation_state(legacy,catalog).at("version")==3,"legacy default styles retain annotation v3");
+    }
+    {
         AnnotationState independent;
         PresentationOverride name{"area_name","area-owner",{},false};
         name.style.text_alignment="left";name.style.stroke_color="#123456";
@@ -604,7 +710,7 @@ int main() {
         require(encode_annotation_state(decode_annotation_state(legacy, {marker}), {marker}) == original_saved,
                 "Version1 upgrade must preserve old geometry and pin the original catalog definition");
     }
-    require(catalog.size() == 1151, "Preserve 809 legacy symbols and expose 342 SVG symbols");
+    require(catalog.size() == 1154, "Preserve 809 legacy symbols and expose 345 SVG symbols");
     const auto svg_toilets = filter_symbol_catalog(catalog, "Toilet Close Coupled", "01_bathroom");
     require(svg_toilets.size() == 1 &&
                 svg_toilets.front().id == "svg-v2-01_bathroom-toilet-close-coupled",
@@ -621,7 +727,7 @@ int main() {
         require(!definition.name.empty() && asset.view_box[2] > 0 && asset.view_box[3] > 0,
                 "SVG renderers require human names and positive intrinsic bounds");
     }
-    require(svg_count == 342 && nominal_count == 230 && svg_categories.size() == 25,
+    require(svg_count == 345 && nominal_count == 233 && svg_categories.size() == 25,
             "Import complete SVG category coverage without inventing nominal dimensions");
     AnnotationState every_symbol;
     for (const auto& definition : catalog)
@@ -862,7 +968,7 @@ int main() {
     rejected([&]{(void)placed_symbol_preview(catalog.front(),{{},0,0.001});});
     auto malformed = encoded; malformed["version"] = 1.0;
     rejected([&]{(void)decode_annotation_state(malformed,catalog);});
-    malformed = encoded; malformed["version"] = 9;
+    malformed = encoded; malformed["version"] = 10;
     rejected([&]{(void)decode_annotation_state(malformed,catalog);});
     malformed = encoded; malformed["labels"][0]["visible"] = "false";
     rejected([&]{(void)decode_annotation_state(malformed,catalog);});

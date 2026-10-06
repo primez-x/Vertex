@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="280" viewBox="-40 -40 1280 280" role="img" aria-labelledby="window-standard--title window-standard--desc" data-vertex-style="white-outline-2">
+<title id="window-standard--title">Window · standard</title>
+<desc id="window-standard--desc">Original orthographic top view of a straight single-lite standard window. Nominal footprint 1200 by 200 millimetres. Front is +Y. Transparent background. Editable suggested default; not a certified product or construction detail.</desc>
+<g id="window-standard--artwork">
+  <rect x="0" y="0" width="1200" height="200" rx="2" fill="#ffffff" stroke="#111111" stroke-width="20" />
+  <rect x="20" y="24" width="1160" height="152" rx="2" fill="#f7f7f7" stroke="#111111" stroke-width="10" />
+  <rect x="38" y="48" width="1124" height="104" rx="1" fill="#ffffff" stroke="#111111" stroke-width="10" />
+  <path d="M44,96 H1156" fill="none" stroke="#b8b8b8" stroke-width="6" stroke-linecap="round" />
+</g>
+</svg>

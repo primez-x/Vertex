@@ -1,7 +1,7 @@
 {
   "library": "Vertex Architectural SVG Library",
   "version": "2.0",
-  "count": 342,
+  "count": 345,
   "symbols": [
     {
       "id": "basin-oval",
@@ -994,10 +994,22 @@
       "file": "symbols/10_windows/window-bay.svg"
     },
     {
+      "id": "window-bow",
+      "name": "Window Bow",
+      "category": "10_windows",
+      "file": "symbols/10_windows/window-bow.svg"
+    },
+    {
       "id": "window-casement",
       "name": "Window Casement",
       "category": "10_windows",
       "file": "symbols/10_windows/window-casement.svg"
+    },
+    {
+      "id": "window-corner",
+      "name": "Window Corner",
+      "category": "10_windows",
+      "file": "symbols/10_windows/window-corner.svg"
     },
     {
       "id": "window-double",
@@ -1022,6 +1034,12 @@
       "name": "Window Sliding",
       "category": "10_windows",
       "file": "symbols/10_windows/window-sliding.svg"
+    },
+    {
+      "id": "window-standard",
+      "name": "Window Standard",
+      "category": "10_windows",
+      "file": "symbols/10_windows/window-standard.svg"
     },
     {
       "id": "window-triple",

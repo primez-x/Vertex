@@ -9,6 +9,8 @@
 #include "draft_image_stamp.hpp"
 #include "sketch_pdf_output.hpp"
 #include "reference_import.hpp"
+#include "pinc_project_admission.hpp"
+#include "sketch/pinc_symbol_counterparts.hpp"
 
 #include "sketch/architecture.hpp"
 #include "sketch/opening_assembly.hpp"
@@ -197,6 +199,7 @@
 #include <cctype>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <filesystem>
 #include <functional>
 #include <iomanip>
@@ -216,6 +219,8 @@
 #include <tuple>
 #include <stdexcept>
 #include <thread>
+#include <future>
+#include <atomic>
 #include <type_traits>
 #include <utility>
 
@@ -227,6 +232,49 @@ static void initialize_vertex_symbol_resources() {
 
 namespace sketch::desktop {
 namespace {
+
+class PincProgressDialog final : public QDialog {
+public:
+    PincProgressDialog(QWidget* parent, std::shared_ptr<std::atomic_bool> cancelled,
+                       const QString& operation) : QDialog(parent), cancelled_(std::move(cancelled)) {
+        if (parent && parent->testAttribute(Qt::WA_DontShowOnScreen)) setAttribute(Qt::WA_DontShowOnScreen);
+        setWindowTitle(QStringLiteral("Import PincSketch project"));
+        setObjectName(QStringLiteral("pincImportProgress"));
+        auto* layout=new QVBoxLayout(this);
+        status_=new QLabel(operation,this);status_->setTextFormat(Qt::PlainText);layout->addWidget(status_);
+        cancel_=new QPushButton(QStringLiteral("Cancel"),this);
+        cancel_->setObjectName(QStringLiteral("pincImportCancel"));layout->addWidget(cancel_);
+        QObject::connect(cancel_,&QPushButton::clicked,this,[this]{reject();});
+        setMinimumWidth(360);
+    }
+    void reject() override {
+        cancelled_->store(true);cancel_->setEnabled(false);
+        status_->setText(QStringLiteral("Cancelling import…"));
+    }
+protected:
+    void closeEvent(QCloseEvent* event) override { reject();event->ignore(); }
+private:
+    std::shared_ptr<std::atomic_bool> cancelled_;
+    QLabel* status_{};QPushButton* cancel_{};
+};
+
+template<class Operation>
+auto runPincOperation(QWidget* owner, const std::shared_ptr<std::atomic_bool>& cancelled,
+                      const QString& label, Operation operation) {
+    auto future=std::async(std::launch::async,std::move(operation));
+    PincProgressDialog dialog(owner,cancelled,label);
+    QTimer poll(&dialog);
+    QObject::connect(&poll,&QTimer::timeout,&dialog,[&]{
+        if (future.wait_for(std::chrono::milliseconds(0))==std::future_status::ready)
+            dialog.done(QDialog::Accepted);
+    });
+    poll.start(15);dialog.exec();poll.stop();
+    // The worker has actually returned before its owned process/thread state
+    // is released; closing/cancelling the dialog never publishes partial data.
+    auto result=future.get();
+    if (cancelled->load()) throw std::runtime_error("Pinc import cancelled.");
+    return result;
+}
 
 // Review canvases fit after layout and whenever the dialog is resized.
 // Fitting only at construction uses the widget's provisional size.
@@ -1068,8 +1116,10 @@ PlanAreaPresentation appraisal_plan_area_presentation(std::string_view category)
 }
 
 QString plan_area_label(const Entity& entity) {
-    auto value = read_string(entity.properties, "name")
-        .value_or(read_string(entity.properties, "classification").value_or(""));
+    const auto authored = read_string(entity.properties, "name");
+    if (authored && !QString::fromStdString(*authored).trimmed().isEmpty())
+        return QString::fromStdString(*authored);
+    auto value = authored.value_or(read_string(entity.properties, "classification").value_or(""));
     const auto normalized = QString::fromStdString(value).trimmed().toLower();
     if (normalized.isEmpty()) return {};
     static const std::set<QString> generic{
@@ -1086,25 +1136,7 @@ QString plan_area_label(const Entity& entity) {
 }
 
 Vec2 plan_label_anchor(const Boundary& boundary) {
-    bool line_only = !boundary.empty();
-    double twice_area = 0.0;
-    double x_sum = 0.0;
-    double y_sum = 0.0;
-    for (const auto& segment : boundary) {
-        if (segment.sweep_radians != 0.0) line_only = false;
-        const auto cross = segment.start.x * segment.end.y -
-                           segment.end.x * segment.start.y;
-        twice_area += cross;
-        x_sum += (segment.start.x + segment.end.x) * cross;
-        y_sum += (segment.start.y + segment.end.y) * cross;
-    }
-    if (line_only && std::abs(twice_area) > default_geometry_tolerance_metres &&
-        std::isfinite(x_sum) && std::isfinite(y_sum)) {
-        return {x_sum / (3.0 * twice_area), y_sum / (3.0 * twice_area)};
-    }
-    const auto bounds = boundary_bounds(boundary);
-    return {std::midpoint(bounds.minimum.x, bounds.maximum.x),
-            std::midpoint(bounds.minimum.y, bounds.maximum.y)};
+    return area_label_anchor(boundary);
 }
 
 json parse_bounded_string_attributes(const QString& encoded_value) {
@@ -3117,6 +3149,69 @@ PlanAreaPresentation effective_plan_area_presentation(
         read_string(entity.properties, "classification").value_or("")));
 }
 
+std::map<std::string, QString, std::less<>> measurement_plan_area_values(
+    const DocumentSnapshot& snapshot, bool metric_units) {
+    std::map<std::string, QString, std::less<>> values;
+    std::set<std::string, std::less<>> phase_visible;
+    try { phase_visible=visible_project_entities_with_phase(snapshot,ProjectViewFilter{}); }
+    catch (const std::exception&) { return values; }
+    const auto& entities=snapshot.entities();
+    const auto organization=organize_project(snapshot);
+    const auto sources=measurement_linework_source_checks(entities,&phase_visible);
+    std::set<std::string, std::less<>> deduction_only;
+    for (const auto& [id,entity]:entities) {
+        if (!is_closed_boundary_entity(entity.type) || is_physical_wall_room(entity) ||
+            !phase_visible.contains(id)) continue;
+        try {
+            const auto context=organization.drawing_context(id);
+            if (!context) continue;
+            const auto& property=entities.at(context->property_id);
+            // A geometric label is never a fallback for incomplete appraisal facts.
+            if (property.type!="property" || calculation_workflow_name(property.properties)!="measurement") continue;
+            const auto classification=area_classification_for_workflow(entity.properties,"measurement");
+            if (!classification || classification->empty() || *classification=="non_calculated") continue;
+            if (!wall_measurement_source_current(snapshot,entity) ||
+                !measurement_linework_source_current(sources,entity)) continue;
+            const auto floor_id=read_string(entity.properties,"floor_id");
+            if (!floor_id) continue;
+            const auto& floor=entities.at(*floor_id);
+            const auto building_id=read_string(floor.properties,"building_id");
+            if (floor.type!="floor" || !building_id) continue;
+            const auto& building=entities.at(*building_id);
+            if (building.type!="building" || read_string(building.properties,"property_id")!=context->property_id) continue;
+            if (const auto declared=read_string(entity.properties,"building_id");declared && *declared!=*building_id) continue;
+            auto profile=read_calculation_profile(property.properties);
+            profile.display_unit=metric_units ? AreaUnit::square_metre : AreaUnit::square_foot;
+            std::vector<AreaDeduction> deductions;
+            for (const auto& deduction_id:read_deduction_ids(entity.properties)) {
+                const auto& deduction=entities.at(deduction_id);
+                const auto deduction_context=organization.drawing_context(deduction_id);
+                if (deduction_id==id || !is_closed_boundary_entity(deduction.type) || is_physical_wall_room(deduction) ||
+                    !phase_visible.contains(deduction_id) ||
+                    !deduction_context || deduction_context->property_id!=context->property_id ||
+                    deduction_context->building_id!=context->building_id || deduction_context->floor_id!=context->floor_id ||
+                    read_string(deduction.properties,"floor_id")!=floor_id ||
+                    !read_deduction_ids(deduction.properties).empty() ||
+                    !wall_measurement_source_current(snapshot,deduction) ||
+                    !measurement_linework_source_current(sources,deduction))
+                    throw std::invalid_argument("Measurement deduction is unavailable or stale.");
+                if (const auto declared=read_string(deduction.properties,"building_id");declared && *declared!=*building_id)
+                    throw std::invalid_argument("Measurement deduction belongs to another building.");
+                deductions.push_back({deduction_id,read_boundary(deduction.properties)});
+            }
+            const auto scope=area_scope_name(entity.properties)=="site" ? AreaScope::site : AreaScope::building;
+            const auto calculated=calculate_area(MeasurementArea{id,*building_id,*floor_id,*classification,
+                read_boundary(entity.properties),std::move(deductions),read_stored_factor(entity.properties).rational,scope},profile);
+            values.emplace(id,format_display_area(calculated.display));
+            for (const auto& deduction:read_deduction_ids(entity.properties)) deduction_only.insert(deduction);
+        } catch (const std::exception&) {
+            // Retain names; unavailable geometry or dependencies must not yield a plausible number.
+        }
+    }
+    for (const auto& deduction:deduction_only) values.erase(deduction);
+    return values;
+}
+
 AppraisalPlanAreaProjection appraisal_plan_area_projection(
     const DocumentSnapshot& snapshot, bool metric_units) {
     AppraisalPlanAreaProjection projection;
@@ -3340,6 +3435,7 @@ std::vector<CanvasLabel> area_callout_labels(const Entity& entity,const Boundary
         label.avoid_components=true;label.plan_only=true;
         label.callout_role=QString::fromStdString(role);
         if (!role.empty()) {
+            label.plan_label_offset=Vec2{0.0,role=="area_name" ? .18 : -.18};
             if (presentations.conflicts.contains({entity.id,role})) return;
             if (const auto found=presentations.find({entity.id,role});found!=presentations.end()) {
                 const auto& value=found->second;
@@ -3400,6 +3496,10 @@ CanvasLabel wall_dimension_label(const std::string& id,const Segment& baseline,
             label.bold=value.style.bold;label.italic=value.style.italic;
             label.font_family=QString::fromStdString(value.style.font_family);
             label.text_alignment=QString::fromStdString(value.style.text_alignment);
+            if (value.use_model_text_height) {
+                label.text_height_metres=value.style.text_height_metres;
+                label.paper_height_mm=0.0;
+            }
         }
         if (value.paper_text_height_mm) label.paper_height_mm=*value.paper_text_height_mm;
         if (value.plan_label_rotation_radians) {
@@ -3514,6 +3614,12 @@ std::set<std::string, std::less<>> architectural_view_references(
         if (entity.type == "opening" && !unavailable.contains(id) &&
             referenced.contains(read_string(entity.properties, "wall_id").value_or("")))
             referenced.insert(id);
+    }
+    for (const auto& [id,entity] : entities) {
+        if (entity.type!=kAnnotationEntityType || !referenced.contains(id)) continue;
+        const auto state=decode_annotation_entity(entity);
+        for (const auto& label:state.labels) if (!unavailable.contains(label.id)) referenced.insert(label.id);
+        for (const auto& symbol:state.symbols) if (!unavailable.contains(symbol.id)) referenced.insert(symbol.id);
     }
     return referenced;
 }
@@ -4765,7 +4871,7 @@ public:
             if (!updated.contains(*provider)) updated.emplace(*provider,source.entities().at(*provider));
             auto& owner=updated.at(*provider);
             upgrade_annotation_transform_version(owner,decode_annotation_entity(owner));
-            auto& raw=owner.properties.at("state");raw["version"]=8;
+            auto& raw=owner.properties.at("state");raw["version"]=std::max(8,raw.at("version").get<int>());
             auto& records=raw.at("overrides");
             auto record=std::find_if(records.begin(),records.end(),[&](const auto& item){
                 return item.at("target_kind")==value.target_kind && item.at("target_id")==value.target_id;});
@@ -5121,8 +5227,23 @@ public:
             pattern->addItem(QStringLiteral("None"), QStringLiteral("none"));
             pattern->addItem(QStringLiteral("Solid"), QStringLiteral("solid"));
             pattern->addItem(QStringLiteral("Hatch"), QStringLiteral("hatch"));
+            pattern->addItem(QStringLiteral("Cross"), QStringLiteral("cross"));
+            pattern->addItem(QStringLiteral("Horizontal"), QStringLiteral("horizontal"));
+            pattern->addItem(QStringLiteral("Dots"), QStringLiteral("dots"));
             pattern->setCurrentIndex(pattern->findData(QString::fromStdString(initial.style.fill_pattern)));
             form->addRow(QStringLiteral("Fill pattern"), pattern);
+            auto* opacity_enabled=new QCheckBox(QStringLiteral("Custom fill opacity"),&dialog);
+            opacity_enabled->setObjectName(prefix+QStringLiteral("OpacityEnabled"));opacity_enabled->setChecked(initial.style.fill_opacity.has_value());
+            auto* opacity=new QDoubleSpinBox(&dialog);opacity->setObjectName(prefix+QStringLiteral("FillOpacity"));
+            opacity->setRange(0,100);opacity->setDecimals(1);opacity->setSuffix(QStringLiteral(" %"));
+            opacity->setValue(initial.style.fill_opacity.value_or(.2)*100);opacity->setEnabled(opacity_enabled->isChecked());
+            form->addRow(opacity_enabled,opacity);
+            QObject::connect(opacity_enabled,&QCheckBox::toggled,opacity,&QWidget::setEnabled);
+            auto* line_pattern=new QComboBox(&dialog);line_pattern->setObjectName(prefix+QStringLiteral("LinePattern"));
+            for (const auto* name:{"solid","dash","dot","dashdot"}) line_pattern->addItem(QString::fromLatin1(name),QString::fromLatin1(name));
+            line_pattern->setCurrentIndex(line_pattern->findData(QString::fromStdString(initial.style.line_pattern)));
+            form->addRow(QStringLiteral("Line pattern"),line_pattern);
+            const auto initial_opacity=opacity->value();
             auto* hatch = new QDoubleSpinBox(&dialog);
             hatch->setObjectName(prefix + QStringLiteral("HatchScale"));
             hatch->setButtonSymbols(QAbstractSpinBox::NoButtons);
@@ -5163,6 +5284,9 @@ public:
             QObject::connect(outline, &QLineEdit::textChanged, &dialog, edited);
             QObject::connect(fill, &QLineEdit::textChanged, &dialog, edited);
             QObject::connect(pattern, &QComboBox::currentIndexChanged, &dialog, edited);
+            QObject::connect(opacity_enabled,&QCheckBox::toggled,&dialog,edited);
+            QObject::connect(opacity,&QDoubleSpinBox::valueChanged,&dialog,edited);
+            QObject::connect(line_pattern,&QComboBox::currentIndexChanged,&dialog,edited);
             QObject::connect(hatch, &QDoubleSpinBox::valueChanged, &dialog, edited);
             QObject::connect(width, &QDoubleSpinBox::valueChanged, &dialog, edited);
             QObject::connect(visible, &QCheckBox::toggled, &dialog, edited);
@@ -5171,6 +5295,8 @@ public:
                 outline->setText(QString::fromStdString(defaults.style.stroke_color));
                 fill->setText(QString::fromStdString(defaults.style.fill_color));
                 pattern->setCurrentIndex(pattern->findData(QString::fromStdString(defaults.style.fill_pattern)));
+                opacity_enabled->setChecked(false);opacity->setValue(20);
+                line_pattern->setCurrentIndex(line_pattern->findData(QStringLiteral("solid")));
                 hatch->setValue(*defaults.hatch_scale);
                 width->setValue(*defaults.paper_line_width_mm);
                 visible->setChecked(true);
@@ -5187,6 +5313,8 @@ public:
                         outline->text().trimmed() == QString::fromStdString(initial.style.stroke_color) &&
                         fill->text().trimmed() == QString::fromStdString(initial.style.fill_color) &&
                         pattern->currentData().toString() == QString::fromStdString(initial.style.fill_pattern) &&
+                        opacity_enabled->isChecked()==initial.style.fill_opacity.has_value() && opacity->value()==initial_opacity &&
+                        line_pattern->currentData().toString()==QString::fromStdString(initial.style.line_pattern) &&
                         hatch->value() == initial_hatch && width->value() == initial_width &&
                         visible->isChecked() == initial.visible) {
                         // Merely opening and applying the editor must not add
@@ -5222,6 +5350,8 @@ public:
                         value.style.stroke_color = outline->text().trimmed().toStdString();
                         value.style.fill_color = fill->text().trimmed().toStdString();
                         value.style.fill_pattern = pattern->currentData().toString().toStdString();
+                        value.style.fill_opacity=opacity_enabled->isChecked() ? std::optional<double>{opacity->value()/100.0} : std::nullopt;
+                        value.style.line_pattern=line_pattern->currentData().toString().toStdString();
                         value.visible = visible->isChecked();
                         if (!provider_id || width->value() != initial_width)
                             value.paper_line_width_mm = width->value();
@@ -5231,7 +5361,8 @@ public:
                             value.style.stroke_width_metres = *value.paper_line_width_mm / 1000.0;
                         AnnotationState record_state;
                         record_state.overrides.push_back(value);
-                        const auto encoded = encode_annotation_state(record_state, desktop_symbol_catalog()).at("overrides").at(0);
+                        const auto encoded_state=encode_annotation_state(record_state,desktop_symbol_catalog());
+                        const auto encoded = encoded_state.at("overrides").at(0);
                         auto record = provider_id ? original_record : encoded;
                         record.erase("inherit_appearance");
                         for (const auto* key : {"stroke_color", "fill_color", "fill_pattern", "stroke_width_metres"})
@@ -5249,6 +5380,9 @@ public:
                             updated = make_annotation_entity(id, AnnotationState{});
                         }
                         auto& records = updated.properties.at("state").at("overrides");
+                        upgrade_annotation_transform_version(updated,decode_annotation_entity(updated));
+                        auto& state_version=updated.properties.at("state").at("version");
+                        state_version=std::max(state_version.get<int>(),encoded_state.at("version").get<int>());
                         if (provider_id) {
                             for (auto& existing : records)
                                 if (existing.at("target_kind") == target_kind && existing.at("target_id") == selected->id)
@@ -9729,6 +9863,14 @@ public:
         if (m_workspace != Workspace::measurement) return std::nullopt;
         const auto context = activeFloorContext(snapshot);
         if (!context || context->floor_id.empty()) return std::nullopt;
+        std::vector<PincPageRecord> pages;
+        try { pages = pincPages(snapshot); }
+        catch (const std::exception&) { /* The page control reports invalid metadata. */ }
+        if (std::any_of(pages.begin(), pages.end(), [&](const auto& page) {
+                return page.sheet_id == m_output_sheet_id.toStdString() &&
+                    (page.calculation_layer_id == context->layer_id ||
+                     page.interior_layer_id == context->layer_id);
+            })) return context;
         const auto floor = snapshot.entities().find(context->floor_id);
         // Keep the destination focused even when its link needs repair.
         if (floor == snapshot.entities().end() || !floor->second.properties.contains("tracing_reference"))
@@ -9741,6 +9883,21 @@ public:
         if (const auto context = tracingFloorContext(snapshot)) {
             for (const auto& [id, entity] : snapshot.entities())
                 if (entity.type == "floor" && id != context->floor_id) filter.hidden_floor_ids.insert(id);
+            // Page navigation focuses only the interactive canvas. Keep this
+            // mask out of the user's visibility settings and saved-view output.
+            std::vector<PincPageRecord> pages;
+            try { pages = pincPages(snapshot); }
+            catch (const std::exception&) { /* Preserve ordinary floor tracing after a metadata error. */ }
+            const auto current = std::find_if(pages.begin(), pages.end(), [&](const auto& page) {
+                return page.sheet_id == m_output_sheet_id.toStdString() &&
+                    (page.calculation_layer_id == context->layer_id ||
+                     page.interior_layer_id == context->layer_id);
+            });
+            if (current != pages.end()) for (const auto& page : pages) {
+                if (page.sheet_id == current->sheet_id) continue;
+                filter.hidden_layer_ids.insert(page.calculation_layer_id);
+                filter.hidden_layer_ids.insert(page.interior_layer_id);
+            }
         }
         return filter;
     }
@@ -9855,14 +10012,17 @@ public:
     }
 
     [[nodiscard]] bool entityVisible(const QString& id) const {
+        const auto snapshot = m_document->snapshot();
+        auto visibility = m_view_filter;
+        try { visibility = tracingViewFilter(snapshot); }
+        catch (const std::exception&) { /* Malformed page metadata is reported by refresh. */ }
         try {
-            const auto snapshot = m_document->snapshot();
-            const auto visible = visible_project_entities_with_phase(snapshot, tracingViewFilter(snapshot));
+            const auto visible = visible_project_entities_with_phase(snapshot, visibility);
             return visible.contains(id.toStdString());
         } catch (const std::exception&) {
             // A malformed phase record is a document error; organization
             // visibility remains fail-open for selection and diagnostics.
-            const auto visible = visible_project_entities(m_document->snapshot(), m_view_filter);
+            const auto visible = visible_project_entities(snapshot, visibility);
             return visible.contains(id.toStdString());
         }
     }
@@ -10036,6 +10196,7 @@ public:
                 throw std::invalid_argument("Drawing sheet identity was not found");
             }
             m_output_sheet_id = QString::fromStdString(wanted);
+            if (activatePincPage(wanted)) refresh();
             clearError();
             return true;
         } catch (const std::exception& error) {
@@ -12923,7 +13084,7 @@ public:
         const auto builtins = default_label_templates();
         if (std::any_of(builtins.begin(), builtins.end(), [&](const auto& value) { return value.id == entry.id; }))
             candidate.id = "user-text-builtin-" + entry.id;
-        validate_text_library(TextLibraryDocument{1,{candidate}});
+        validate_text_library(TextLibraryDocument{3,{candidate}});
     }
 
     TextLibraryStore& textLibraryStore() {
@@ -12950,10 +13111,7 @@ public:
             const auto context = requireDrawingContext();
             if (!context) return {};
             const auto source = authoringSnapshot();
-            auto annotation = std::find_if(source.entities().begin(), source.entities().end(),
-                                            [](const auto& entry) {
-                                                return entry.second.type == kAnnotationEntityType;
-                                            });
+            auto annotation = annotationCarrierForLayer(source,context->layer_id);
             if (annotation == source.entities().end()) {
                 throw std::invalid_argument("The project has no annotation state entity.");
             }
@@ -13013,10 +13171,7 @@ public:
             const auto context = requireDrawingContext();
             if (!context) return {};
             const auto source = authoringSnapshot();
-            auto annotation = std::find_if(source.entities().begin(), source.entities().end(),
-                                            [](const auto& entry) {
-                                                return entry.second.type == kAnnotationEntityType;
-                                            });
+            auto annotation = annotationCarrierForLayer(source,context->layer_id);
             if (annotation == source.entities().end()) {
                 throw std::invalid_argument("The project has no annotation state entity.");
             }
@@ -13053,10 +13208,18 @@ public:
             if (definition->svg_asset) {
                 symbol.pinned_svg = load_symbol_svg(*definition->svg_asset).toStdString();
             }
-            state.symbols.push_back(symbol);
+            AnnotationState addition;addition.symbols.push_back(symbol);
+            const auto encoded_addition=encode_annotation_state(addition,catalog);
+            auto updated=annotation->second;
+            if (encoded_addition.at("version").get<int>()>=3)
+                upgrade_annotation_transform_version(updated,state);
+            auto& raw_version=updated.properties.at("state").at("version");
+            raw_version=std::max(raw_version.get<int>(),encoded_addition.at("version").get<int>());
+            updated.properties.at("state").at("symbols").push_back(encoded_addition.at("symbols").at(0));
+            validate_annotation_entity(updated);
             const auto command = ApplyEntityChanges{
                 source.revision(),
-                {EntityChange::upsert(make_annotation_entity(annotation->second.id, state))},
+                {EntityChange::upsert(std::move(updated))},
                 {}, "Add annotation symbol"};
             (void)Document::preview_command(source, command);
             applyDocumentCommand(command);
@@ -13133,6 +13296,7 @@ public:
                     auto style = *replacement_style;
                     style.stroke_width_metres = label.style.stroke_width_metres;
                     style.fill_pattern = label.style.fill_pattern;
+                    style.fill_opacity=label.style.fill_opacity;style.line_pattern=label.style.line_pattern;
                     style.text_alignment=text_alignment.isEmpty() ? label.style.text_alignment : text_alignment.toStdString();
                     label.style = std::move(style);
                 }
@@ -13162,6 +13326,8 @@ public:
                         auto style = *replacement_style;
                         style.stroke_width_metres = symbol.style.stroke_width_metres;
                         style.fill_pattern = symbol.style.fill_pattern;
+                        style.fill_opacity=symbol.style.fill_opacity;style.line_pattern=symbol.style.line_pattern;
+                        style.text_alignment=symbol.style.text_alignment;
                         symbol.style = std::move(style);
                     }
                     found = true;
@@ -13241,7 +13407,7 @@ public:
             if(symbol->svg_palette) {
                 const auto encoded=encode_annotation_state(state,desktop_symbol_catalog());
                 for(const auto& record:encoded.at("symbols"))if(record.at("id")==id)raw["svg_palette"]=record.at("svg_palette");
-                updated.properties.at("state")["version"]=7;
+                updated.properties.at("state")["version"]=std::max(7,updated.properties.at("state").at("version").get<int>());
             } else raw.erase("svg_palette");
             validate_annotation_entity(updated);
             const ApplyEntityChanges command{source.revision(),{EntityChange::upsert(std::move(updated))},{},
@@ -13329,9 +13495,8 @@ public:
             const auto source = authoringSnapshot();
             const auto wanted = m_selected_id.toStdString();
             if (wanted.empty()) throw std::invalid_argument("Select a component to update.");
-            const auto annotation = std::find_if(
-                source.entities().begin(), source.entities().end(),
-                [](const auto& entry) { return entry.second.type == kAnnotationEntityType; });
+            const auto parent=annotation_parent_for_child(source,wanted);
+            const auto annotation=parent ? source.entities().find(*parent) : source.entities().end();
             if (annotation == source.entities().end()) {
                 throw std::invalid_argument("The project has no annotation state entity.");
             }
@@ -13778,10 +13943,9 @@ public:
         if (source.entities().contains(id)) {
             throw std::invalid_argument("Assisted label ID already exists.");
         }
-        const auto annotation = std::find_if(source.entities().begin(), source.entities().end(),
-                                              [](const auto& entry) {
-                                                  return entry.second.type == kAnnotationEntityType;
-                                              });
+        const auto context=requireDrawingContext();
+        if (!context) throw std::invalid_argument("Choose a layer for the assisted label.");
+        const auto annotation=annotationCarrierForLayer(source,context->layer_id);
         if (annotation == source.entities().end()) throw std::invalid_argument("Annotation state is missing.");
         const auto templates = default_label_templates();
         const auto template_id = args.at("template_id").get<std::string>();
@@ -13792,9 +13956,18 @@ public:
         auto label = instantiate_label(*definition, id);
         label.content = args.at("content").get<std::string>();
         label.placement.position = *position;
-        state.labels.push_back(std::move(label));
+        label.placement.layer_id = context->layer_id;
+        AnnotationState addition;addition.labels.push_back(std::move(label));
+        const auto encoded_addition=encode_annotation_state(addition,desktop_symbol_catalog());
+        auto updated=annotation->second;
+        if (encoded_addition.at("version").get<int>()>=3)
+            upgrade_annotation_transform_version(updated,state);
+        auto& raw_version=updated.properties.at("state").at("version");
+        raw_version=std::max(raw_version.get<int>(),encoded_addition.at("version").get<int>());
+        updated.properties.at("state").at("labels").push_back(encoded_addition.at("labels").at(0));
+        validate_annotation_entity(updated);
         const ApplyEntityChanges command{
-            source.revision(), {EntityChange::upsert(make_annotation_entity(annotation->second.id, state))},
+            source.revision(), {EntityChange::upsert(std::move(updated))},
             {}, "Accept assisted label"};
         (void)Document::preview_command(source, command);
         applyDocumentCommand(command);
@@ -17745,7 +17918,9 @@ public:
                         record_delta(*old,symbol,false);
             }
             const auto area_projection = appraisal_plan_area_projection(candidate_snapshot, metric_units);
-            const auto& area_values = area_projection.values;
+            auto area_values = area_projection.values;
+            for (const auto& [id,value]:measurement_plan_area_values(candidate_snapshot,metric_units))
+                area_values.try_emplace(id,value);
             const auto wall_regions=wall_dimension_exterior_regions(candidate_snapshot);
             const auto wall_presentations=wall_dimension_presentations(candidate);
             // A worker-local paint device measures candidate text without
@@ -23303,6 +23478,7 @@ public:
         }
         try {
             const auto model = decode_sheet_view_entity(*sheet_entity);
+            const auto imported_pages=pincPages(snapshot);
             if (model.sheets().empty()) throw std::invalid_argument("no drawing sheets are defined");
             const auto selected_sheet = std::find_if(
                 model.sheets().begin(), model.sheets().end(),
@@ -23351,7 +23527,8 @@ public:
                     viewport.bounds.height_mm * paper_scale);
                 painter.save();
                 painter.setClipRect(viewport_rect);
-                const auto model_scale = paper_scale * 1000.0 / viewport.scale_denominator;
+                auto output_denominator=viewport.scale_denominator;
+                auto model_scale = paper_scale * 1000.0 / output_denominator;
                 // A viewport references one persisted view, not the workspace's
                 // currently selected kind. Two plans/elevations can have entirely
                 // different source objects, frames, and presentation settings.
@@ -23360,14 +23537,14 @@ public:
                 if (cached == m_coordinated_view_entities.end())
                     throw std::invalid_argument("coordinated viewport geometry is unavailable");
                 auto temporary_canvas = std::make_unique<PlanCanvas>();
+                temporary_canvas->setFont(m_measurementCanvas->font());
                 temporary_canvas->setGridEnabled(false);
                 temporary_canvas->setSnapEnabled(false);
                 temporary_canvas->setMetricUnits(m_metric_units);
                 temporary_canvas->setEntities(cached->second);
+                const auto referenced=architectural_view_references(architectural_view_context(*view),snapshot.entities(),{});
                 const auto includes = [&](const QString& id) {
-                    return (!view->restrict_to_objects && view->object_ids.empty()) ||
-                        std::find(view->object_ids.begin(), view->object_ids.end(),
-                                  id.toStdString()) != view->object_ids.end();
+                    return (!view->restrict_to_objects && view->object_ids.empty()) || referenced.contains(id.toStdString());
                 };
                 std::vector<CanvasLabel> labels;
                 for (const auto& label : m_sheet_plan_labels)
@@ -23386,8 +23563,17 @@ public:
                     if (includes(grid.id)) grids.push_back(grid);
                 temporary_canvas->setReferenceGrids(std::move(grids));
                 auto* viewport_canvas = temporary_canvas.get();
-                const auto viewport_center = viewport_canvas->contentCenter();
-                viewport_canvas->renderSceneAt(painter, viewport_rect, model_scale,
+                auto viewport_center = viewport_canvas->contentCenter();
+                auto content_rect=viewport_rect;
+                if(!view->presentation.crop && std::any_of(imported_pages.begin(),imported_pages.end(),
+                    [&](const auto& item){return item.view_id==view->id;})) {
+                    content_rect=viewport_rect.adjusted(3*paper_scale,12*paper_scale,-3*paper_scale,-3*paper_scale);
+                    if(const auto fit=fitPincContent(*viewport_canvas,viewport.bounds.width_mm-6,viewport.bounds.height_mm-15)) {
+                        output_denominator=fit->denominator;viewport_center=fit->center;
+                        model_scale=paper_scale*1000/output_denominator;
+                    }
+                }
+                viewport_canvas->renderSceneAt(painter, content_rect, model_scale,
                                                viewport_center, Qt::white, paper_scale);
                 painter.restore();
                 painter.setPen(QPen(QColor(115, 125, 138), std::max(1.0, paper_scale * 0.6)));
@@ -23403,7 +23589,7 @@ public:
                                                         -3.0 * paper_scale),
                                  Qt::AlignLeft | Qt::AlignTop,
                                  view_caption + QStringLiteral("  •  1:%1")
-                                     .arg(QString::number(viewport.scale_denominator, 'f', 0)));
+                                     .arg(QString::number(output_denominator, 'f', 0)));
             }
 
             // Schedule placements are part of the persisted sheet graph. Draw
@@ -23553,6 +23739,9 @@ public:
             }
 
             const auto title_height = std::max(24.0, 26.0 * paper_scale);
+            // A4 portrait is narrower than the large-sheet title block.
+            // Keep both the title and revision table inside the actual page.
+            const auto title_width = std::min(220.0 * paper_scale, page.width());
             if (!sheet.revisions.empty()) {
                 const auto header_height = std::max(12.0, 15.0 * paper_scale);
                 const auto row_height = std::max(10.0, 13.0 * paper_scale);
@@ -23563,10 +23752,10 @@ public:
                         std::max(0.0, available_height - header_height) / row_height)));
                 if (max_rows > 0) {
                     const QRectF revision_rect(
-                        page.right() - 220.0 * paper_scale,
+                        page.right() - title_width,
                         page.bottom() - title_height - header_height -
                             static_cast<double>(max_rows) * row_height,
-                        220.0 * paper_scale,
+                        title_width,
                         header_height + static_cast<double>(max_rows) * row_height);
                     painter.save();
                     painter.fillRect(revision_rect, Qt::white);
@@ -23603,9 +23792,9 @@ public:
                     painter.restore();
                 }
             }
-            const QRectF title_rect(page.right() - 220.0 * paper_scale,
+            const QRectF title_rect(page.right() - title_width,
                                     page.bottom() - title_height,
-                                    220.0 * paper_scale, title_height);
+                                    title_width, title_height);
             painter.setPen(QPen(QColor(45, 52, 60), std::max(1.0, paper_scale * 0.6)));
             painter.drawRect(title_rect);
             painter.setPen(QColor(35, 41, 48));
@@ -24719,6 +24908,250 @@ public:
             reinterpret_cast<const std::byte*>(raw.constData()),
             static_cast<std::size_t>(raw.size()));
         return import_project_in_worker(bytes, kind, std::move(options));
+    }
+
+    struct PincPageRecord {
+        std::string name,view_id,sheet_id,floor_id,calculation_layer_id,interior_layer_id;
+        bool ghost_previous{},show_print_guide{};
+        std::size_t source_page_index{};
+    };
+
+    std::map<std::string,Entity,std::less<>>::const_iterator annotationCarrierForLayer(
+        const DocumentSnapshot& source,const std::string& layer_id) const {
+        auto carrier_layer=layer_id;
+        for (const auto& page:pincPages(source)) if (page.interior_layer_id==layer_id) carrier_layer=page.calculation_layer_id;
+        auto found=std::find_if(source.entities().begin(),source.entities().end(),[&](const auto& entry){
+            return entry.second.type==kAnnotationEntityType && entry.second.properties.value("layer_id",std::string{})==carrier_layer;
+        });
+        if (found!=source.entities().end()) return found;
+        return std::find_if(source.entities().begin(),source.entities().end(),[](const auto& entry){
+            return entry.second.type==kAnnotationEntityType && !entry.second.properties.contains("layer_id");
+        });
+    }
+
+    std::vector<PincPageRecord> pincPages(const DocumentSnapshot& snapshot) const {
+        for (const auto& [id,entity]:snapshot.entities()) {
+            (void)id;
+            if (entity.type!=kSheetViewEntityType || !entity.extensions.contains("pinc_import")) continue;
+            const auto& metadata=entity.extensions.at("pinc_import");
+            if (!metadata.is_object() || metadata.value("version",0)!=1 || !metadata.contains("pages") ||
+                !metadata.at("pages").is_array() || metadata.at("pages").size()>128 ||
+                !metadata.contains("source_asset_id") || !metadata.at("source_asset_id").is_string())
+                throw std::invalid_argument("Imported page metadata is invalid.");
+            const auto source=snapshot.assets().find(metadata.at("source_asset_id").get<std::string>());
+            if (source==snapshot.assets().end() || source->second.media_type!="application/x-pincsketch")
+                throw std::invalid_argument("Imported page source is missing.");
+            const auto model=decode_sheet_view_entity(entity);
+            const auto organization=organize_project(snapshot);
+            std::vector<PincPageRecord> result;
+            std::set<std::string> identities;
+            for (const auto& raw:metadata.at("pages")) {
+                if (!raw.is_object()) throw std::invalid_argument("Imported page record is invalid.");
+                const auto text=[&](const char* key) {
+                    if (!raw.contains(key) || !raw.at(key).is_string() || raw.at(key).get_ref<const std::string&>().size()>4096)
+                        throw std::invalid_argument("Imported page field is invalid.");
+                    return raw.at(key).get<std::string>();
+                };
+                PincPageRecord page{text("name"),text("view_id"),text("sheet_id"),text("floor_id"),text("calculation_layer_id"),text("interior_layer_id")};
+                if (!raw.contains("ghost_previous") || !raw.at("ghost_previous").is_boolean() ||
+                    !raw.contains("show_print_guide") || !raw.at("show_print_guide").is_boolean())
+                    throw std::invalid_argument("Imported page flags are invalid.");
+                page.ghost_previous=raw.at("ghost_previous").get<bool>();page.show_print_guide=raw.at("show_print_guide").get<bool>();
+                if (!raw.contains("page_index") || !raw.at("page_index").is_number_unsigned())
+                    throw std::invalid_argument("Imported page index is invalid.");
+                page.source_page_index=raw.at("page_index").get<std::size_t>();
+                const auto calculation=organization.drawing_context(page.calculation_layer_id);
+                const auto interior=organization.drawing_context(page.interior_layer_id);
+                // Page source metadata is retained after deliberate native
+                // sheet/container deletion. It must not block further edits.
+                if (!calculation || !interior ||
+                    std::none_of(model.views().begin(),model.views().end(),[&](const auto& view){return view.id==page.view_id;}) ||
+                    std::none_of(model.sheets().begin(),model.sheets().end(),[&](const auto& sheet){return sheet.id==page.sheet_id;})) continue;
+                if (page.source_page_index>=128 || calculation->floor_id!=page.floor_id || interior->floor_id!=page.floor_id ||
+                    !identities.insert(page.calculation_layer_id).second || !identities.insert(page.interior_layer_id).second)
+                    throw std::invalid_argument("Imported page links are missing or inconsistent.");
+                result.push_back(std::move(page));
+            }
+            return result;
+        }
+        return {};
+    }
+
+    bool activatePincPage(const std::string& sheet_id) {
+        const auto pages=pincPages(m_document->snapshot());
+        const auto found=std::find_if(pages.begin(),pages.end(),[&](const auto& page){return page.sheet_id==sheet_id;});
+        if (found==pages.end()) return false;
+        m_active_layer_id=QString::fromStdString(found->calculation_layer_id);
+        m_output_sheet_id=QString::fromStdString(sheet_id);
+        m_selected_id.clear();m_selected_ids.clear();
+        setSketchCompositionGuideEnabled(found->show_print_guide);
+        return true;
+    }
+
+    void refreshPincPageControl(const DocumentSnapshot& snapshot) {
+        if (!m_pinc_pages_combo) return;
+        const QSignalBlocker blocker(m_pinc_pages_combo);
+        m_pinc_pages_combo->clear();
+        try {
+            const auto pages=pincPages(snapshot);
+            m_pinc_pages_combo->setVisible(!pages.empty());
+            if (pages.empty()) {m_pinc_pages_document.reset();return;}
+            if (m_pinc_pages_document.lock()!=m_document) {
+                m_pinc_pages_document=m_document;
+                std::size_t initial=0;
+                for (const auto& [id,entity]:snapshot.entities()) {
+                    (void)id;
+                    if (entity.type==kSheetViewEntityType && entity.extensions.contains("pinc_import")) {
+                        const auto value=entity.extensions.at("pinc_import").value("current_page",std::size_t{});
+                        if (value<pages.size()) initial=value;
+                        break;
+                    }
+                }
+                (void)activatePincPage(pages[initial].sheet_id);
+            }
+            for (const auto& page:pages) m_pinc_pages_combo->addItem(QString::fromStdString(page.name),QString::fromStdString(page.sheet_id));
+            m_pinc_pages_combo->setCurrentIndex(m_pinc_pages_combo->findData(m_output_sheet_id));
+        } catch (const std::exception& error) {
+            m_pinc_pages_combo->hide();setError(QStringLiteral("Imported pages: %1").arg(QString::fromUtf8(error.what())));
+        }
+    }
+
+    bool importPinc(const QString& path, bool review) {
+        if (m_pinc_import_active) {setError(QStringLiteral("A Pinc import is already running."));return false;}
+        if (!confirmDirtyTransition(QStringLiteral("Import PincSketch project"),
+            QStringLiteral("Save current changes before importing a PincSketch project?"))) return false;
+        m_pinc_import_active=true;
+        struct ImportGuard { bool& active;~ImportGuard(){active=false;} } guard{m_pinc_import_active};
+        const auto context=captureModalContext();
+        const auto epoch=m_project_workspace->epoch();
+        const auto workspace=m_workspace;
+        const auto draft=hasBoundaryDraftChanges();
+        const auto cancelled=std::make_shared<std::atomic_bool>(false);
+        const auto unchanged=[&] {
+            return !cancelled->load() && modalContextUnchanged(context) &&
+                m_project_workspace->epoch()==epoch && m_workspace==workspace &&
+                hasBoundaryDraftChanges()==draft;
+        };
+        try {
+            const QFileInfo info(path);
+            if (!info.isFile() || info.suffix().compare(QStringLiteral("pinc"),Qt::CaseInsensitive)!=0 ||
+                info.size()<=0 || info.size()>64LL*1024*1024)
+                throw std::invalid_argument("Choose a PincSketch .pinc project of at most 64 MiB.");
+            QFile input(path);
+            if (!input.open(QIODevice::ReadOnly)) throw std::runtime_error("The Pinc project could not be opened.");
+            const auto raw=input.read(64LL*1024*1024+1);
+            if (input.error()!=QFileDevice::NoError || !input.atEnd() || raw.size()!=info.size())
+                throw std::runtime_error("The Pinc project changed or could not be read completely.");
+            std::vector<std::byte> original(static_cast<std::size_t>(raw.size()));
+            std::memcpy(original.data(),raw.constData(),original.size());
+            WindowsImportWorkerOptions options;
+            const auto root=std::filesystem::path(QCoreApplication::applicationDirPath().toStdWString());
+            options.executable=root/L"vertex-import-worker.exe";
+            options.immutable_module_roots={root};
+            const auto plugins=root.parent_path()/L"plugins";
+            if (std::filesystem::is_directory(plugins)) options.immutable_module_roots.push_back(plugins);
+            options.temporary_root=std::filesystem::path(QDir::tempPath().toStdWString());
+            options.cancellation_requested=cancelled;
+            const auto imported=runPincOperation(owner,cancelled,QStringLiteral("Reading and validating project…"),
+                [original,options]{return importPincProjectBytes(original,options);});
+            if (!unchanged()) throw std::runtime_error("The current project changed during import. Import again.");
+            std::vector<PincSymbolBinding> bindings;
+            const auto catalog=default_symbol_catalog();
+            for (const auto& counterpart:default_pinc_symbol_counterparts()) {
+                const auto found=std::find_if(catalog.begin(),catalog.end(),[&](const auto& item){return item.id==counterpart.catalog_id;});
+                if (found==catalog.end() || !found->svg_asset) throw std::runtime_error("A bundled Pinc symbol counterpart is unavailable.");
+                bindings.push_back({counterpart.source_kind,*found,load_symbol_svg(*found->svg_asset).toStdString(),counterpart.fidelity_note});
+                auto& binding=bindings.back();
+                if (counterpart.source_kind=="Door - Interior" || counterpart.source_kind=="Door - Exterior") {
+                    binding.door_transform=PincDoorArtworkTransform::swing_left_positive_svg_y;
+                    binding.opening_anchor_fraction={0,380.0/910.0};
+                } else if (counterpart.source_kind=="Door - French Double" || counterpart.source_kind=="Door - Bifold") {
+                    binding.door_transform=PincDoorArtworkTransform::side_positive_svg_y;
+                    binding.opening_anchor_fraction={0,counterpart.source_kind=="Door - Bifold" ? 140.0/430.0 : 425.0/1000.0};
+                } else if (counterpart.source_kind=="Door - Garage Double" || counterpart.source_kind=="Door - Garage Single")
+                    binding.door_transform=PincDoorArtworkTransform::symmetric_source_garage;
+            }
+            std::vector<PincPageFloorChoice> choices;
+            for (std::size_t page=0;page<imported.project.pages.size();++page)
+                choices.push_back({page,page,"Floor "+std::to_string(page+1)});
+            const auto namespace_id="pinc-"+make_stable_id();
+            const auto basename=info.fileName().toStdString();
+            auto prepare=[&](const std::vector<PincPageFloorChoice>& requested) {
+                return runPincOperation(owner,cancelled,QStringLiteral("Preparing editable Vertex content…"),
+                    [imported,original,basename,requested,bindings,namespace_id]{
+                        return preparePincProjectAdmission(imported,original,basename,requested,bindings,namespace_id);
+                    });
+            };
+            auto candidate=prepare(choices);
+            fitPincCandidatePages(candidate);
+            if (!unchanged()) throw std::runtime_error("The current project changed during import. Import again.");
+            if (review) {
+                QDialog dialog(owner);dialog.setObjectName(QStringLiteral("pincImportReview"));
+                if (owner->testAttribute(Qt::WA_DontShowOnScreen)) dialog.setAttribute(Qt::WA_DontShowOnScreen);
+                dialog.setWindowTitle(QStringLiteral("Review PincSketch import"));dialog.resize(760,560);
+                auto* layout=new QVBoxLayout(&dialog);
+                auto* summary=new QLabel(QStringLiteral("%1 pages. Choose which native floor owns each page. Each page keeps separate calculation and interior layers. Area categories describe the source; they do not verify appraisal eligibility.").arg(choices.size()),&dialog);
+                summary->setTextFormat(Qt::PlainText);summary->setWordWrap(true);layout->addWidget(summary);
+                auto* pages=new QTableWidget(static_cast<int>(choices.size()),2,&dialog);
+                pages->setObjectName(QStringLiteral("pincImportPages"));pages->setHorizontalHeaderLabels({QStringLiteral("Source page"),QStringLiteral("Native floor")});
+                pages->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
+                std::vector<QComboBox*> destinations;
+                for (std::size_t page=0;page<choices.size();++page) {
+                    auto* name=new QTableWidgetItem(QString::fromStdString(imported.project.pages[page].name));
+                    name->setFlags(name->flags()&~Qt::ItemIsEditable);pages->setItem(static_cast<int>(page),0,name);
+                    auto* destination=new QComboBox(pages);
+                    for (const auto& choice:choices) destination->addItem(QString::fromStdString(choice.floor_name),static_cast<qulonglong>(choice.floor_group));
+                    destination->setCurrentIndex(static_cast<int>(page));destinations.push_back(destination);pages->setCellWidget(static_cast<int>(page),1,destination);
+                }
+                layout->addWidget(pages);
+                auto* report=new QPlainTextEdit(&dialog);report->setObjectName(QStringLiteral("pincImportFidelity"));report->setReadOnly(true);
+                QStringList lines;
+                lines<<QStringLiteral("The original .pinc file is retained unchanged. Imported walls are measured strokes, not inferred physical walls. Bundled symbols preserve source size and transforms; artwork differences are listed below.");
+                constexpr std::size_t displayed_limit=1000;
+                for (std::size_t i=0;i<std::min(candidate.diagnostics.size(),displayed_limit);++i) {
+                    const auto& diagnostic=candidate.diagnostics[i];
+                    lines<<QString::fromStdString(diagnostic.source_pointer+" — "+diagnostic.code+": "+diagnostic.message);
+                }
+                if (candidate.diagnostics.size()>displayed_limit) lines<<QStringLiteral("Additional diagnostics are retained in the imported project.");
+                report->setPlainText(lines.join(QLatin1Char('\n')));layout->addWidget(report);
+                auto* buttons=new QDialogButtonBox(QDialogButtonBox::Cancel|QDialogButtonBox::Ok,&dialog);
+                buttons->button(QDialogButtonBox::Ok)->setText(QStringLiteral("Import project"));
+                QObject::connect(buttons,&QDialogButtonBox::accepted,&dialog,&QDialog::accept);
+                QObject::connect(buttons,&QDialogButtonBox::rejected,&dialog,&QDialog::reject);layout->addWidget(buttons);
+                if (dialog.exec()!=QDialog::Accepted) {clearError();return false;}
+                if (!unchanged()) throw std::runtime_error("The current project changed during review. Import again.");
+                bool changed=false;
+                for (std::size_t page=0;page<choices.size();++page) {
+                    const auto group=destinations[page]->currentData().toULongLong();
+                    changed|=group!=choices[page].floor_group;
+                    choices[page]={page,static_cast<std::size_t>(group),"Floor "+std::to_string(group+1)};
+                }
+                if (changed) {candidate=prepare(choices);fitPincCandidatePages(candidate);}
+            }
+            waitForSaveBarrier();
+            if (!unchanged()) throw std::runtime_error("The current project changed before import publication. Import again.");
+            auto document=std::make_shared<Document>(std::move(candidate.document));
+            auto project_workspace=std::make_unique<ProjectWorkspace>(document->snapshot());
+            auto ownership=std::make_unique<ProjectOwnershipSession>();
+            const auto& current=candidate.contexts.at(candidate.current_page);
+            if (m_project_ownership) {
+                const auto released=m_project_ownership->release();
+                if (!released.ok()) throw std::runtime_error("The current project ownership could not be released.");
+            }
+            beginPerformanceRun();m_document=std::move(document);m_project_workspace=std::move(project_workspace);
+            m_project_ownership=std::move(ownership);m_recovery_ledger.clear();m_saved_workspace_epoch=0;m_saved_edited_generation=0;
+            resetAutosaveSession();m_file_path.clear();m_file_sha256.clear();m_view_filter={};
+            initializeDrawingContext();m_active_layer_id=QString::fromStdString(current.calculation.layer_id);
+            m_selected_id.clear();m_selected_ids.clear();m_active_named_view.clear();m_active_named_view_owner.clear();
+            m_output_sheet_id=QString::fromStdString(candidate.sheets.sheet_order().at(candidate.current_page));
+            m_project_resource_catalog.reset();m_project_resource_names.clear();clearPreview();
+            m_tool=CanvasTool::select;m_workspace=Workspace::measurement;syncToolControls();clearError();refresh();fitView();
+            return true;
+        } catch (const std::exception& error) {
+            if (cancelled->load() || std::string_view(error.what())=="Pinc import cancelled.") clearError();
+            else setError(QStringLiteral("Pinc import failed: %1").arg(QString::fromUtf8(error.what())));
+            return false;
+        }
     }
 
     void validateImportedHostedGeometry(const DocumentSnapshot& snapshot, const std::vector<std::string>& imported_ids) {
@@ -28242,6 +28675,10 @@ public:
                     owner, QStringLiteral("Import DXF"), {}, QStringLiteral("DXF drawing (*.dxf *.DXF)"));
                 if (!selected.isEmpty()) importDxf(selected, true);
             }},
+            {QStringLiteral("Import PincSketch project"), [this] {
+                const auto selected=QFileDialog::getOpenFileName(owner,QStringLiteral("Import PincSketch project"),{},QStringLiteral("PincSketch project (*.pinc *.PINC)"));
+                if (!selected.isEmpty()) importPinc(selected,true);
+            }},
             {QStringLiteral("Export DXF"), [this] {
                 const auto selected = QFileDialog::getSaveFileName(
                     owner, QStringLiteral("Export DXF"), {}, QStringLiteral("DXF drawing (*.dxf)"));
@@ -28838,6 +29275,35 @@ private:
                     changes->entity_changes.push_back(EntityChange::upsert(std::move(updated)));
                 }
             }
+            // Imported page views retain explicit ownership as new content is
+            // authored. The same command registers new layer-owned objects,
+            // so drawing after import also appears on that page's output.
+            const auto page_records=pincPages(source);
+            if (!page_records.empty()) {
+                const auto authored=changes->entity_changes;
+                for (const auto& [id,original]:source.entities()) {
+                    if (original.type!=kSheetViewEntityType || !original.extensions.contains("pinc_import")) continue;
+                    auto updated=original;
+                    for (const auto& change:changes->entity_changes) if (change.kind==EntityChangeKind::upsert && change.entity.id==id) updated=change.entity;
+                    const auto model=decode_sheet_view_entity(updated);auto views=model.views();bool changed=false;
+                    for (auto& view:views) {
+                        const auto page=std::find_if(page_records.begin(),page_records.end(),[&](const auto& record){return record.view_id==view.id;});
+                        if (page==page_records.end()) continue;
+                        for (const auto& change:authored) {
+                            if (change.kind!=EntityChangeKind::upsert || change.entity.id==id || source.entities().contains(change.entity.id)) continue;
+                            const auto layer=change.entity.properties.value("layer_id",std::string{});
+                            if (layer!=page->calculation_layer_id && layer!=page->interior_layer_id) continue;
+                            if (std::find(view.object_ids.begin(),view.object_ids.end(),change.entity.id)==view.object_ids.end()) {
+                                view.object_ids.push_back(change.entity.id);changed=true;
+                            }
+                        }
+                    }
+                    if (!changed) continue;
+                    updated.properties=make_sheet_view_entity(id,SheetViewModel::create(std::move(views),model.sheets(),model.schedule_ids(),model.sheet_order())).properties;
+                    std::erase_if(changes->entity_changes,[&](const auto& change){return change.kind==EntityChangeKind::upsert && change.entity.id==id;});
+                    changes->entity_changes.push_back(EntityChange::upsert(std::move(updated)));
+                }
+            }
             if (const auto record = decode_phase_model(source); record &&
                 std::none_of(changes->entity_changes.begin(), changes->entity_changes.end(),
                     [&](const auto& change) {
@@ -29114,6 +29580,9 @@ private:
 
     void pollAutosave() {
         drainSaveCompletions();
+        // Modal import operations pump timers. Finish old completions, but do
+        // not queue another old-project checkpoint before publication.
+        if (m_pinc_import_active) return;
         if (!m_document->is_editable()) return;
         try {
             const bool recovery_project = !m_recovery_ledger.empty();
@@ -29208,6 +29677,10 @@ private:
     }
 
     bool saveTo(const std::filesystem::path& path, bool current_destination) {
+        if (QString::fromStdWString(path.extension().wstring()).compare(QStringLiteral(".pinc"),Qt::CaseInsensitive)==0) {
+            setError(QStringLiteral("Save the imported project as a Vertex .bldproj file. The original .pinc file is preserved."));
+            return false;
+        }
         if (!m_document->is_editable()) {
             setError(QStringLiteral("This document is read-only and cannot be saved."));
             return false;
@@ -29993,6 +30466,14 @@ private:
         auto* layers_layout = new QVBoxLayout(layers_page);
         layers_layout->setContentsMargins(0, 8, 0, 0);
         layers_layout->setSpacing(6);
+        m_pinc_pages_combo=new QComboBox(layers_page);m_pinc_pages_combo->setObjectName(QStringLiteral("pincProjectPage"));
+        m_pinc_pages_combo->setToolTip(QStringLiteral("Imported drawing page"));m_pinc_pages_combo->hide();layers_layout->addWidget(m_pinc_pages_combo);
+        QObject::connect(m_pinc_pages_combo,&QComboBox::currentIndexChanged,owner,[this](int index){
+            if (index<0 || m_refreshing) return;
+            if (hasBoundaryDraftChanges()) {setError(QStringLiteral("Finish or cancel the pending drawing before changing pages."));return;}
+            finishMeasurementLinework();
+            if (activatePincPage(m_pinc_pages_combo->itemData(index).toString().toStdString())) {clearPreview();refresh();fitView();}
+        });
         auto* symbols_page = new QWidget(sidebar_tabs);
         symbols_page->setObjectName(QStringLiteral("symbolsPanel"));
         auto* library_layout = new QVBoxLayout(symbols_page);
@@ -32151,6 +32632,7 @@ private:
         else if (m_selected_ids.isEmpty() || m_selected_ids.back() != m_selected_id)
             m_selected_ids = {m_selected_id};
         auto snapshot = m_document->snapshot();
+        refreshPincPageControl(snapshot);
         m_selected_ids.removeIf([&](const QString& id) {
             return !snapshot.entities().contains(id.toStdString()) &&
                 !annotation_parent_for_child(snapshot, id.toStdString());
@@ -32202,6 +32684,84 @@ private:
         std::map<std::string, PresentationOverride, std::less<>> object_appearance, object_appearance_defaults;
         QString diagnostics;
     };
+    struct PincContentFit { Vec2 center; double denominator; };
+    static std::optional<PincContentFit> fitPincContent(const PlanCanvas& canvas,
+        double width_mm,double height_mm) {
+        Vec2 minimum{1e100,1e100},maximum{-1e100,-1e100};bool present=false;
+        const auto include=[&](Vec2 p) {
+            if(!std::isfinite(p.x)||!std::isfinite(p.y)||std::abs(p.x)>1e6||std::abs(p.y)>1e6)
+                throw std::invalid_argument("Pinc output content exceeds supported extents.");
+            minimum.x=std::min(minimum.x,p.x);minimum.y=std::min(minimum.y,p.y);
+            maximum.x=std::max(maximum.x,p.x);maximum.y=std::max(maximum.y,p.y);present=true;
+        };
+        QString diagnostic;
+        if(const auto ink=canvas.recordSketchContent(80,&diagnostic)) {
+            include({ink->model_center.x+ink->ink_bounds.left()/ink->model_scale,
+                ink->model_center.y-ink->ink_bounds.bottom()/ink->model_scale});
+            include({ink->model_center.x+ink->ink_bounds.right()/ink->model_scale,
+                ink->model_center.y-ink->ink_bounds.top()/ink->model_scale});
+        } else if(!canvas.entities().empty()||std::any_of(canvas.labels().begin(),canvas.labels().end(),
+            [](const auto& label){return !label.text.isEmpty();}))
+            throw std::invalid_argument(diagnostic.toStdString());
+        for(const auto& reference:canvas.references()) {
+            if(!reference.visible||reference.image.isNull())continue;
+            const auto w=reference.image.width()*reference.metres_per_source_unit*reference.scale;
+            const auto h=reference.image.height()*reference.metres_per_source_unit*reference.scale;
+            const auto angle=reference.rotation_degrees*std::numbers::pi/180;
+            for(const auto x:{-.5,.5})for(const auto y:{-.5,.5})
+                include({reference.position.x+x*w*std::cos(angle)-y*h*std::sin(angle),
+                    reference.position.y+x*w*std::sin(angle)+y*h*std::cos(angle)});
+        }
+        if(!present)return std::nullopt;
+        if(width_mm<=0||height_mm<=0)throw std::invalid_argument("Pinc output viewport is too small.");
+        const auto padding=std::max(.1,std::max(maximum.x-minimum.x,maximum.y-minimum.y)*.05);
+        return PincContentFit{{std::midpoint(minimum.x,maximum.x),std::midpoint(minimum.y,maximum.y)},
+            std::max((maximum.x-minimum.x+2*padding)*1000/width_mm,
+                     (maximum.y-minimum.y+2*padding)*1000/height_mm)};
+    }
+    void fitPincCandidatePages(PincProjectAdmission& candidate) {
+        const auto snapshot=candidate.document.snapshot();
+        auto views=candidate.sheets.views();auto sheets=candidate.sheets.sheets();
+        PlanSceneCaches caches;
+        for(std::size_t p=0;p<candidate.contexts.size();++p) {
+            const auto& context=candidate.contexts[p];
+            PlanCanvas canvas;canvas.setFont(m_measurementCanvas->font());
+            SnapshotPlanSceneOptions options;options.metric_units=m_metric_units;
+            options.active_context=context.calculation;options.scope_id=context.calculation.floor_id;
+            options.scope_property_id=context.calculation.property_id;options.scope_building_id=context.calculation.building_id;
+            options.label_font=canvas.font();options.label_device=&canvas;
+            for(const auto& other:candidate.contexts)if(other.page_index!=p) {
+                options.visibility.hidden_layer_ids.insert(other.calculation.layer_id);
+                options.visibility.hidden_layer_ids.insert(other.interior.layer_id);
+            }
+            auto scene=projectSnapshotPlanScene(snapshot,options,caches);
+            canvas.setEntities(std::move(scene.geometry));canvas.setLabels(std::move(scene.labels));
+            canvas.setReferences(std::move(scene.references));
+            auto& sheet=*std::find_if(sheets.begin(),sheets.end(),[&](const auto& value){
+                return value.id==candidate.sheets.sheet_order().at(p);});
+            auto& viewport=sheet.viewports.front();
+            const auto fit=fitPincContent(canvas,viewport.bounds.width_mm-6,viewport.bounds.height_mm-15);
+            if(fit)viewport.scale_denominator=fit->denominator;
+            auto& view=*std::find_if(views.begin(),views.end(),[&](const auto& value){return value.id==viewport.view_id;});
+            // An explicit crop authored later opts out of automatic content fit.
+            view.presentation.crop.reset();
+        }
+        candidate.sheets=SheetViewModel::create(std::move(views),std::move(sheets),{},candidate.sheets.sheet_order());
+        auto replacement=make_sheet_view_entity(candidate.sheet_view_entity_id,candidate.sheets);
+        replacement.extensions=snapshot.entities().at(candidate.sheet_view_entity_id).extensions;
+        // Rebuild the detached import event rather than adding a layout-only
+        // undo step. The source and the live project are never touched here.
+        auto document=Document::fork_at_revision(snapshot,0);const auto base=document.snapshot();
+        ApplyEntityChanges command{base.revision(),{}, {},"Import Pinc project"};
+        for(const auto& [id,entity]:snapshot.entities()) {
+            const auto old=base.entities().find(id);
+            if(id==replacement.id)command.entity_changes.push_back(EntityChange::upsert(replacement));
+            else if(old==base.entities().end()||old->second!=entity)command.entity_changes.push_back(EntityChange::upsert(entity));
+        }
+        for(const auto& [id,asset]:snapshot.assets())if(!base.assets().contains(id))
+            command.asset_changes.push_back(AssetChange::upsert(asset));
+        document.apply(command);candidate.document=std::move(document);
+    }
     static void applySnapshotObjectAppearance(CanvasEntity& entity,
         const std::map<std::string, PresentationOverride, std::less<>>& object_appearance) {
             // Projection creates new shapes later, and several physical strokes
@@ -32219,6 +32779,8 @@ private:
                 entity.paper_stroke_width_on_screen = true;
             }
             entity.fill_color = QColor(QString::fromStdString(value.style.fill_color));
+            entity.fill_opacity=value.style.fill_opacity;
+            entity.line_pattern=QString::fromStdString(value.style.line_pattern);
             entity.hatch_pattern = QString::fromStdString(value.style.fill_pattern);
             if (value.hatch_scale) entity.hatch_scale = *value.hatch_scale;
             entity.filled = value.style.fill_pattern != "none" && entity.fill_color.isValid();
@@ -32260,6 +32822,7 @@ private:
         }
         const auto appraisal_area_projection = appraisal_plan_area_projection(snapshot, options.metric_units);
         const auto& appraisal_area_values = appraisal_area_projection.values;
+        const auto measurement_area_values = measurement_plan_area_values(snapshot, options.metric_units);
         const auto area_presentations=area_callout_presentations(snapshot.entities());
         for (const auto& [owner,role]:area_presentations.conflicts) {
             const auto found=snapshot.entities().find(owner);
@@ -32345,19 +32908,25 @@ private:
                             if (handled_vertices.insert(edge.end_vertex_id).second)
                                 linework.vertex_handles.push_back({id_from(edge.end_vertex_id),edge.segment.end,snapshot.revision()});
                         }
+                        const auto configured=wall_presentations.find(id);
+                        const auto presentation=configured==wall_presentations.end() ? std::optional<PresentationOverride>{}
+                            : std::optional<PresentationOverride>{configured->second};
+                        if (presentation && !presentation->visible) continue;
                         auto dimension = wall_dimension_label(id, edge.segment, 0.0,
-                            options.metric_units, id_from(id) == options.selected_id, std::nullopt);
+                            options.metric_units, id_from(id) == options.selected_id, presentation);
                         dimension.text = format_boundary_length(segment_length(edge.segment), options.metric_units,
                             ansi_boundary_dimensions(snapshot, entity));
-                        if (right_side) {
+                        if (right_side && dimension.automatic_linear_placement) {
                             auto& placement = *dimension.automatic_linear_placement;
                             placement.outward_normal = {-placement.outward_normal.x, -placement.outward_normal.y};
                             const auto midpoint = point_at_segment(edge.segment, 0.5).value();
                             dimension.position = {midpoint.x + placement.outward_normal.x * placement.clearance_metres,
                                 midpoint.y + placement.outward_normal.y * placement.clearance_metres};
                         }
-                        dimension.text_height_metres = 0.14;
-                        dimension.paper_height_mm = 2.5;
+                        if (!presentation || presentation->inherit_appearance) {
+                            dimension.text_height_metres = 0.14;
+                            if (!presentation || !presentation->paper_text_height_mm) dimension.paper_height_mm = 2.5;
+                        }
                         dimension.selection_type = QStringLiteral("measurement_linework");
                         all_labels.push_back(std::move(dimension));
                     }
@@ -32802,6 +33371,8 @@ private:
                 if (const auto value = appraisal_area_values.find(id); value != appraisal_area_values.end()) {
                     if (!calculation.isEmpty()) calculation += QLatin1Char('\n');
                     calculation += value->second;
+                } else if (const auto value = measurement_area_values.find(id); value != measurement_area_values.end()) {
+                    calculation = value->second;
                 }
                 auto labels=area_callout_labels(geometry_entity,segments,calculation,
                     id_from(id)==options.selected_id,area_presentations);
@@ -32853,6 +33424,7 @@ private:
                     canvas_label.font_family = QString::fromStdString(label.style.font_family);
                     canvas_label.model_plan = label.model_plan;
                     canvas_label.fill_color = QColor(QString::fromStdString(label.style.fill_color));
+                    canvas_label.fill_opacity=label.style.fill_opacity;
                     canvas_label.fill_pattern = QString::fromStdString(label.style.fill_pattern);
                     canvas_label.show_background = label.style.fill_pattern != "none";
                     all_labels.push_back(std::move(canvas_label));
@@ -32878,6 +33450,8 @@ private:
                     canvas_symbol.output_stroke_width_mm = 0.25;
                     canvas_symbol.fill_color =
                         QColor(QString::fromStdString(symbol.style.fill_color));
+                    canvas_symbol.fill_opacity=symbol.style.fill_opacity;
+                    canvas_symbol.line_pattern=QString::fromStdString(symbol.style.line_pattern);
                     canvas_symbol.hatch_pattern =
                         QString::fromStdString(symbol.style.fill_pattern);
                     canvas_symbol.filled = symbol.style.fill_pattern != "none" &&
@@ -32973,6 +33547,8 @@ private:
                     }
                     found->fill_color = QColor(QString::fromStdString(
                         override.style.fill_color));
+                    found->fill_opacity=override.style.fill_opacity;
+                    found->line_pattern=QString::fromStdString(override.style.line_pattern);
                     found->hatch_pattern = QString::fromStdString(
                         override.style.fill_pattern);
                     if (override.hatch_scale) found->hatch_scale = *override.hatch_scale;
@@ -33321,6 +33897,8 @@ private:
                 << entity.hatch_pattern << entity.hatch_scale << entity.fill_color << entity.stroke_color
                 << entity.dark_stroke_color << entity.stroke_width_metres << entity.output_stroke_width_mm
                 << entity.dimension_end_ticks << entity.paper_stroke_width_on_screen;
+            stream << entity.line_pattern << entity.fill_opacity.has_value();
+            if (entity.fill_opacity) stream << *entity.fill_opacity;
             path(stream, entity.segments); stream << quint64(entity.holes.size());
             for (const auto& hole : entity.holes) path(stream, hole);
             stream << entity.stroke_segments.has_value(); if (entity.stroke_segments) path(stream, *entity.stroke_segments);
@@ -33342,6 +33920,8 @@ private:
                 << label.fill_color << label.fill_pattern << label.show_background << label.font_family
                 << label.avoid_components << label.plan_only << label.model_plan << label.wall_dimension_manual_rotation;
             stream << label.callout_role << label.text_alignment;
+            stream << label.fill_opacity.has_value();
+            if (label.fill_opacity) stream << *label.fill_opacity;
             point(stream, label.position); stream << label.leader_start.has_value();
             if (label.leader_start) point(stream, *label.leader_start);
             stream << label.plan_label_offset.has_value();
@@ -34365,6 +34945,28 @@ private:
         m_measurementCanvas->clearFloorGhost();
         m_architecturalCanvas->clearFloorGhost();
         m_floor_reference_projection_error.clear();
+        try {
+            const auto pages=pincPages(snapshot);
+            const auto current=std::find_if(pages.begin(),pages.end(),[&](const auto& page){return page.sheet_id==m_output_sheet_id.toStdString();});
+            if (current!=pages.end() && current->ghost_previous && current!=pages.begin() &&
+                std::prev(current)->source_page_index+1==current->source_page_index) {
+                const auto& previous=*std::prev(current);
+                SnapshotPlanSceneOptions options;options.metric_units=m_metric_units;
+                options.scope_id=previous.floor_id;
+                const auto organization=organize_project(snapshot);
+                const auto previous_context=organization.drawing_context(previous.calculation_layer_id);
+                options.scope_property_id=previous_context->property_id;options.scope_building_id=previous_context->building_id;
+                for (const auto& [id,entity]:snapshot.entities()) if (entity.type=="layer" &&
+                    id!=previous.calculation_layer_id && id!=previous.interior_layer_id) options.visibility.hidden_layer_ids.insert(id);
+                options.label_font=m_measurementCanvas->font();options.label_device=m_measurementCanvas;
+                const auto scene=projectSnapshotPlanScene(snapshot,options,m_floor_reference_scene_caches);
+                if (!scene.diagnostics.isEmpty()) throw std::invalid_argument(scene.diagnostics.toStdString());
+                m_measurementCanvas->setFloorGhost(scene.geometry,.25,{},scene.labels);
+                return;
+            }
+        } catch (const std::exception& error) {
+            m_floor_reference_projection_error=QStringLiteral("Previous page unavailable: %1").arg(QString::fromUtf8(error.what()));return;
+        }
         const auto context = tracingFloorContext(snapshot);
         if (!context) return;
         try {
@@ -34659,7 +35261,13 @@ private:
                 item->setCheckState(0, own_hidden ? Qt::Unchecked : Qt::Checked);
                 tooltip += QStringLiteral("\nSpace toggles this container's view visibility only.");
                 if (!effective_visible) {
-                    tooltip += hidden_by_floor && own_hidden
+                    const bool outside_focus = !own_hidden && !hidden_by_floor &&
+                        (effective_filter.hidden_floor_ids.contains(node.context.floor_id) ||
+                         (node.type == "floor" && effective_filter.hidden_floor_ids.contains(id)) ||
+                         (node.type == "layer" && effective_filter.hidden_layer_ids.contains(id)));
+                    tooltip += outside_focus
+                        ? QStringLiteral("\nOutside the active page or floor view; visibility setting is unchanged.")
+                        : hidden_by_floor && own_hidden
                         ? QStringLiteral("\nEffective state: hidden by its floor and layer filters.")
                         : hidden_by_floor
                             ? QStringLiteral("\nEffective state: hidden by its floor filter.")
@@ -40361,6 +40969,9 @@ private:
     QAction* m_architectural_view_control_action{};
     std::vector<QAction*> m_architectural_actions;
     QString m_output_sheet_id;
+    bool m_pinc_import_active{};
+    QComboBox* m_pinc_pages_combo{};
+    std::weak_ptr<Document> m_pinc_pages_document;
     QLabel* m_drawing_context_label{};
     QString m_selected_id;
     QStringList m_selected_ids;
@@ -41529,6 +42140,10 @@ bool MainWindow::exportDxf(const QString& path) {
 
 bool MainWindow::importDxf(const QString& path) {
     return m_impl->importDxf(path);
+}
+
+bool MainWindow::importPinc(const QString& path, bool review) {
+    return m_impl->importPinc(path,review);
 }
 
 bool MainWindow::importDxfWithLayerReview(const QString& path) {

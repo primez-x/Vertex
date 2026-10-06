@@ -159,6 +159,11 @@ PincWorkerProject importPincProjectBytes(std::span<const std::byte> source,
     WindowsImportWorkerOptions options, const ReferenceBroker& broker) {
     if (source.empty() || source.size() > PincImportLimits{}.max_bytes)
         throw std::invalid_argument("Pinc projects must contain between 1 byte and 64 MiB.");
+    const auto cancelled = [&options]() noexcept {
+        return options.cancellation_requested &&
+            options.cancellation_requested->load(std::memory_order_acquire);
+    };
+    if (cancelled()) throw std::runtime_error("Pinc import cancelled.");
     options.arguments = {L"pinc", L"0"};
     options.input.assign(source.begin(), source.end());
     options.timeout_ms = 30'000;
@@ -167,10 +172,13 @@ PincWorkerProject importPincProjectBytes(std::span<const std::byte> source,
     options.max_output_bytes = pincReplyLimit;
     options.proj_offline_required = true;
     const auto report = broker(options);
+    if (report.status == WindowsImportWorkerStatus::cancelled || cancelled())
+        throw std::runtime_error("Pinc import cancelled.");
     if (!report.controls_attested())
         throw std::runtime_error("Isolated Pinc import is unavailable. Install or repair the bundled "
             "vertex-import-worker in a read-only application directory with Windows sandbox support.");
     auto result = validatePincWorkerReply(report.output);
+    if (cancelled()) throw std::runtime_error("Pinc import cancelled.");
     result.isolation_controls_attested = true;
     return result;
 }

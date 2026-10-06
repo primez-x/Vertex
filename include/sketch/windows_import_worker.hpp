@@ -2,9 +2,11 @@
 
 #include <nlohmann/json.hpp>
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -24,6 +26,9 @@ struct WindowsImportWorkerOptions {
     std::uint32_t max_active_processes{1};
     std::uint64_t max_output_bytes{256ULL * 1024 * 1024};
     bool proj_offline_required{true};
+    // A caller may set this flag to true once; keep it asserted until this
+    // invocation returns. A null flag preserves the uncancellable API.
+    std::shared_ptr<const std::atomic_bool> cancellation_requested;
 };
 
 enum class WindowsImportWorkerStatus {
@@ -33,6 +38,7 @@ enum class WindowsImportWorkerStatus {
     launch_failed,
     timed_out,
     failed,
+    cancelled,
 };
 
 struct WindowsImportWorkerReport {
@@ -65,8 +71,8 @@ struct WindowsImportWorkerReport {
 
 // Launch and supervise one local import worker. The call is synchronous so a
 // caller can publish output only after this report says completed. On
-// non-Windows hosts it always returns unsupported; the product target is
-// Windows and therefore does not silently fall back to an unsandboxed launch.
+// non-Windows hosts it returns unsupported unless already cancelled. The
+// product target is Windows, without an unsandboxed launch fallback.
 [[nodiscard]] WindowsImportWorkerReport run_windows_import_worker(
     const WindowsImportWorkerOptions& options);
 
