@@ -317,6 +317,65 @@ def bound_component_record(root, component_id, receipt, mapping, kinds, *, requi
     return file_record(root, original, receipt["sha256"])
 
 
+def controlled_runtime_sources(root, component_id, source, mapping, *, frozen=False):
+    """Separate selected runtime/provenance from declared preferred source bytes."""
+    require(source.get("licensing_clearance") is False and source.get("source_closure_qualified") is False
+            and source.get("ifcopenshell_version_informative_only") is True,
+            "controlled runtime cannot confer source or licensing qualification")
+    revision = source.get("source_revision")
+    require(isinstance(revision, str) and re.fullmatch(r"[0-9a-f]{40}", revision),
+            "invalid controlled runtime source revision")
+
+    def descriptor(row, *, kinds):
+        require(isinstance(row, dict), "invalid controlled source receipt")
+        safe.relative_path(row.get("path"))
+        require(isinstance(row.get("sha256"), str) and re.fullmatch(r"[0-9a-f]{64}", row["sha256"])
+                and row.get("kind", "file") in kinds, "invalid controlled source hash/kind")
+        if "bytes" in row:
+            require(type(row["bytes"]) is int and 0 <= row["bytes"] <= MAX_FILE, "invalid controlled receipt bytes")
+        return row
+
+    def exact_file(row, *, runtime=False):
+        descriptor(row, kinds=("file",))
+        if runtime:
+            record = bound_component_record(root, component_id, row, mapping, ("asset", "source"), required=frozen)
+        else:
+            record = file_record(root, row["path"], row["sha256"])
+        require("bytes" not in row or row["bytes"] == record["bytes"], "controlled receipt bytes differ")
+        return record
+
+    provenance = exact_file(source.get("runtime_manifest"))
+    selection = exact_file(source.get("selection"))
+    runtime_paths = source.get("source_paths")
+    declared = source.get("corresponding_source_paths", [])
+    require(isinstance(runtime_paths, list) and 0 < len(runtime_paths) <= MAX_FILES
+            and isinstance(declared, list) and len(declared) <= MAX_FILES, "invalid controlled runtime source table")
+    safe.check_names([descriptor(row, kinds=("file",))["path"] for row in runtime_paths])
+    safe.check_names([descriptor(row, kinds=("file", "directory"))["path"] for row in declared])
+    assets = [exact_file(row, runtime=True) for row in runtime_paths]
+    records, missing = [], []
+    for row in declared:
+        # Dependency sources remain workspace-relative even for a frozen app kit.
+        path = checked_path(root, row["path"])
+        if not path.exists() or (row.get("kind", "file") == "directory" and not path.is_dir()):
+            missing.append(row["path"])
+            continue
+        if row.get("kind", "file") == "directory":
+            actual = {"path": row["path"], "kind": "directory", "sha256": source_tree_hash(root, row["path"])}
+        else:
+            actual = file_record(root, row["path"])
+            require("bytes" not in row or row["bytes"] == actual["bytes"], "controlled source bytes differ")
+        if actual["sha256"] == row["sha256"]:
+            records.append(actual)
+        else:
+            missing.append(row["path"])
+    sources = [{"url": None, "status": "exact_local_source_present" if records and not missing else "missing_source",
+                "local_files": records, "missing_or_changed_paths": missing, "provenance": selection,
+                "binding_role": "Declared source bytes for controlled runtime revision " + revision
+                                + "; transitive closure and rebuild remain unqualified"}]
+    return sources, assets, provenance, selection
+
+
 def audit(root: Path, inventory_path: str, *, build_receipts=(), metadata_path=None, cache_dirs=DEFAULT_CACHE_DIRS, bundle_root=None) -> dict:
     root = root.absolute()
     safe.no_links(root)
@@ -357,6 +416,7 @@ def audit(root: Path, inventory_path: str, *, build_receipts=(), metadata_path=N
     cache = source_cache(root, cache_dirs)
     result = []
     component_records = []
+    controlled_trees = []
     for component in sorted(components, key=lambda item: item["id"]):
         source = component["package"]["source"]
         require(isinstance(source, dict) and isinstance(source.get("kind"), str), "invalid component source")
@@ -444,6 +504,16 @@ def audit(root: Path, inventory_path: str, *, build_receipts=(), metadata_path=N
                                 "local_files": records, "missing_or_changed_paths": missing}]
             if kind == "planegcs":
                 item["provenance"] = file_record(root, source["provenance_path"], source["provenance_sha256"])
+        elif kind == "controlled-runtime":
+            item["sources"], controlled_assets, item["provenance"], selection = controlled_runtime_sources(
+                root, component["id"], source, mapping, frozen=bool(bundle) and included)
+            item["assets"].extend(record for record in controlled_assets if record not in item["assets"])
+            component_records.extend([*controlled_assets, item["provenance"], selection])
+            for record in item["sources"][0]["local_files"]:
+                (controlled_trees if record.get("kind") == "directory" else component_records).append(record)
+            if not source.get("corresponding_source_paths"):
+                item["remaining"].append("controlled_runtime_corresponding_source_paths_not_declared")
+            item["remaining"].append("controlled_runtime_transitive_source_closure_not_qualified")
         elif kind == "locked-archive":
             item["binary_archive"] = file_record(root, source["archive_path"], source["archive_sha256"])
             item["provenance"] = file_record(root, source["lock_path"], source["lock_sha256"])
@@ -489,6 +559,8 @@ def audit(root: Path, inventory_path: str, *, build_receipts=(), metadata_path=N
     # Detect drift in the candidate receipts after the bounded audit as well.
     for record in [inventory_receipt, *receipts.values(), *build, *runtime_files, *component_records]:
         file_record(root, record["path"], record["sha256"])
+    for record in controlled_trees:
+        require(source_tree_hash(root, record["path"]) == record["sha256"], "controlled source tree hash changed during audit")
     if bundle:
         for record in [bundle[key] for key in ("manifest", "source_inventory", "runtime_manifest", "source_kit", "portable_manifest")] + bundle["payload"]:
             file_record(root, record["path"], record["sha256"])

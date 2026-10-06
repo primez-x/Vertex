@@ -65,7 +65,7 @@ std::string entity_content(const Entity& entity,
 Entity effective_geometry_entity(const DocumentSnapshot& snapshot, const Entity& source) {
     if (source.type == "railing") {
         const auto object = decode_building_entity(source);
-        if (const auto* rail = std::get_if<Railing>(&object); rail && rail->host) return source;
+        if (const auto* rail = std::get_if<Railing>(&object); rail && (rail->host || rail->landing_host)) return source;
     }
     return resolve_vertical_placement(snapshot, source);
 }
@@ -106,8 +106,9 @@ void append_building_dependencies(std::string& content, const DocumentSnapshot& 
     if (effective.type != "railing") return;
     const auto object = decode_building_entity(effective);
     const auto* rail = std::get_if<Railing>(&object);
-    if (!rail || !rail->host) return;
-    const auto host = snapshot.entities().find(rail->host->stair_id);
+    if (!rail || (!rail->host && !rail->landing_host)) return;
+    const auto& stair_id = rail->host ? rail->host->stair_id : rail->landing_host->stair_id;
+    const auto host = snapshot.entities().find(stair_id);
     if (host == snapshot.entities().end() || host->second.type != "stair")
         throw std::invalid_argument("hosted railing stair is missing");
     const auto resolved = resolve_vertical_placement(snapshot, host->second);
@@ -131,8 +132,86 @@ bool is_ignored_hierarchy_type(std::string_view type) {
         "sheet",             "view",            "constraint",  "annotation", "dimension",
         "annotation_state",  "sheet_view_model", "boundary", "measurement_boundary",
         "reference_asset",   "assembly_model",    "model_phases", "room_relationships",
-        "vertical_levels",   "room_boundary",     "terrain_surface"};
+        "vertical_levels",   "room_boundary",     "terrain_surface", "ifc_source"};
     return std::find(std::begin(ignored), std::end(ignored), type) != std::end(ignored);
+}
+
+bool has_null_ifc_proxy_representation(std::string_view arguments) {
+    // IFC4 proxies have nine fields. Inspect Representation (index six) as a
+    // complete token, rather than trusting a suffix or commas inside strings.
+    if (arguments.empty() || arguments.size() > 1024 * 1024) return false;
+    std::size_t start = 0;
+    std::size_t field_count = 0;
+    std::size_t depth = 0;
+    bool quoted = false;
+    bool null_representation = false;
+    const auto field = [&](std::size_t end) {
+        auto value = arguments.substr(start, end - start);
+        const auto first = value.find_first_not_of(" \t\r\n");
+        if (first == std::string_view::npos || field_count == 9) return false;
+        const auto last = value.find_last_not_of(" \t\r\n");
+        value = value.substr(first, last - first + 1);
+        if (field_count == 6) null_representation = value == "$";
+        ++field_count;
+        return true;
+    };
+    for (std::size_t index = 0; index < arguments.size(); ++index) {
+        const auto character = arguments[index];
+        if (character == '\'') {
+            if (quoted && index + 1 < arguments.size() && arguments[index + 1] == '\'')
+                ++index;
+            else quoted = !quoted;
+            continue;
+        }
+        if (quoted) continue;
+        if (character == '(') {
+            if (++depth > 128) return false;
+        } else if (character == ')') {
+            if (depth == 0) return false;
+            --depth;
+        } else if (character == ',' && depth == 0) {
+            if (!field(index)) return false;
+            start = index + 1;
+        }
+    }
+    return !quoted && depth == 0 && field(arguments.size()) &&
+           field_count == 9 && null_representation;
+}
+
+bool is_inert_ifc_reference(const Entity& entity) {
+    if (entity.type != "ifc_reference" || !entity.properties.is_object() ||
+        !entity.extensions.is_object()) return false;
+    // The exporter uses geometry-free proxies for retained organization and
+    // receipt descriptors. A physical IFC record or an unclassified reference
+    // must still report missing native geometry, even when hidden.
+    const auto ifc_type = entity.properties.find("ifc_type");
+    const auto source = entity.extensions.find("ifc_source");
+    if (ifc_type == entity.properties.end() || *ifc_type != "IFCBUILDINGELEMENTPROXY" ||
+        source == entity.extensions.end() || !source->is_object()) return false;
+    const auto record_type = source->find("record_type");
+    if (record_type == source->end() || *record_type != "IFCBUILDINGELEMENTPROXY") return false;
+    const auto arguments = source->find("arguments");
+    if (arguments == source->end() || !arguments->is_string() ||
+        !has_null_ifc_proxy_representation(arguments->get_ref<const std::string&>())) return false;
+    const auto metadata = entity.extensions.find("ifc_vertex_properties");
+    if (metadata == entity.extensions.end() || !metadata->is_object() || metadata->size() != 1)
+        return false;
+    const auto native = metadata->find("native_entity");
+    if (native == metadata->end() || !native->is_object() || native->size() != 5) return false;
+    const auto id = native->find("id");
+    const auto type = native->find("type");
+    const auto required = native->find("required");
+    const auto properties = native->find("properties");
+    const auto extensions = native->find("extensions");
+    if (id == native->end() || !id->is_string() || id->get_ref<const std::string&>().empty() ||
+        type == native->end() || !type->is_string() ||
+        required == native->end() || !required->is_boolean() ||
+        properties == native->end() || !properties->is_object() ||
+        extensions == native->end() || !extensions->is_object()) return false;
+    static constexpr std::string_view inert_types[] = {
+        "property", "building", "floor", "layer", "annotation_state", "ifc_source"};
+    const std::string_view native_type = type->get_ref<const std::string&>();
+    return std::find(std::begin(inert_types), std::end(inert_types), native_type) != std::end(inert_types);
 }
 
 bool is_pending_geometry_type(std::string_view type) {
@@ -297,7 +376,7 @@ std::optional<PreparedNativeGeometry> prepare_native_geometry(
             if (is_pending_geometry_type(entity.type)) {
                 append_unique(pending, "entity '" + id + "' of type '" + entity.type +
                                          "' has no native solid representation yet");
-            } else if (!is_ignored_hierarchy_type(entity.type)) {
+            } else if (!is_ignored_hierarchy_type(entity.type) && !is_inert_ifc_reference(entity)) {
                 append_unique(pending, "entity '" + id + "' of unsupported type '" + entity.type +
                                          "' is pending native geometry");
             }

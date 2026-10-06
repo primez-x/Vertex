@@ -188,7 +188,7 @@ def _copy_deterministic(source: pathlib.Path, destination: pathlib.Path, relativ
 
 
 def _load_sibling(name: str, filename: str) -> Any:
-    path = pathlib.Path(__file__).resolve().with_name(filename)
+    path = pathlib.Path(__file__).resolve().parent / filename
     spec = importlib.util.spec_from_file_location(name, path)
     if spec is None or spec.loader is None:
         _error(f"could not load packaging helper {path}")
@@ -242,6 +242,261 @@ def _validate_source_kit(root: pathlib.Path, path: pathlib.Path | str) -> tuple[
         _require(actual_size == expected_size,
                  f"stale source-kit size for {item_path}: expected {expected_size}, received {actual_size}")
     return manifest_path, relative, manifest
+
+
+DEPENDENCY_PREFIX = "source-kit/third_party/dependency-inputs"
+
+
+def _validate_dependency_source_kit(root: pathlib.Path, relative: pathlib.Path | str,
+                                    inventory_relative: str, source_kit_file: pathlib.Path,
+                                    source_kit: Mapping[str, Any]) -> tuple[Any, pathlib.Path, dict, dict]:
+    """Validate frozen composer output without composing or rerunning an audit.
+
+    Replay the composer's metadata schema through a receipt-only adapter. This
+    shares its schema checks while resolving copies exclusively from the frozen
+    payload, and project references exclusively from the selected source kit.
+    """
+    helper = _load_sibling("dependency_payload_for_offline_bundle",
+                           "qualification/compose_dependency_source_kit.py")
+    safe, closure = helper.safe, helper.closure
+    name = safe.relative_path(relative.as_posix() if isinstance(relative, pathlib.PurePath) else relative)
+    payload_root = closure.checked_path(root, name)
+    _require(payload_root.is_dir(), "dependency source kit must be a directory")
+    document, receipt = closure.json_input(payload_root, helper.MANIFEST)
+    helper.fields(document, {"schema_version", "payload_kind", "source_report", "candidate_binding",
+                             "components", "files", "licensing_clearance", "corresponding_source_qualified",
+                             "offline_rebuild_qualified", "boundary"},
+                  {"schema_version", "payload_kind", "source_report", "candidate_binding", "components",
+                   "files", "licensing_clearance", "corresponding_source_qualified", "offline_rebuild_qualified", "boundary"})
+    _require(type(document["schema_version"]) is int and document["schema_version"] == 1
+             and document["payload_kind"] == "candidate_dependency_source_payload",
+             "unsupported dependency source kit schema")
+    for key in ("licensing_clearance", "corresponding_source_qualified", "offline_rebuild_qualified"):
+        _require(document[key] is False, "dependency source kit cannot confer qualification")
+    helper.text(document["boundary"])
+    rows = helper.table(document["files"])
+    _require([row["path"] for row in rows] == sorted(row["path"] for row in rows),
+             "dependency payload files must be sorted")
+    safe.check_names([helper.MANIFEST, *[row["path"] for row in rows]])
+    by_path = {}
+    total = 0
+    for row in rows:
+        helper.fields(row, {"source_path", "sha256", "bytes", "sha512", "path", "component_ids", "roles"},
+                      {"source_path", "sha256", "bytes", "path", "component_ids", "roles"})
+        source = safe.relative_path(row["source_path"])
+        _require(row["path"] == "inputs/" + source, "dependency payload source/path differs")
+        actual = closure.file_record(payload_root, row["path"], row["sha256"])
+        _require(type(row["bytes"]) is int and row["bytes"] == actual["bytes"],
+                 "dependency payload bytes differ")
+        if "sha512" in row:
+            closure.file_record(payload_root, row["path"], row["sha512"], algorithm="sha512")
+        total += actual["bytes"]
+        _require(total <= helper.MAX_TOTAL, "dependency payload bytes exceed bound")
+        for field in ("component_ids", "roles"):
+            values = helper.strings(row[field])
+            _require(values == sorted(set(values)), "dependency payload owners/roles must be unique and sorted")
+        _require(bool(row["roles"]), "dependency payload roles cannot be empty")
+        by_path[row["path"]] = row
+
+    # Enumerate every entry, including caches and empty directories. Unlike a
+    # source tree, a composed payload has no implicit file exclusions.
+    allowed_dirs = {"/".join(path.split("/")[:index]) for path in by_path
+                    for index in range(1, len(path.split("/")))}
+    actual_files = set()
+    entries = 0
+    names = {}
+    def walk_error(error):
+        raise error
+    for current, directories, filenames in os.walk(payload_root, followlinks=False, onerror=walk_error):
+        entries += len(directories) + len(filenames)
+        _require(entries <= helper.MAX_RECORDS, "dependency payload entry count exceeds bound")
+        for child in directories + filenames:
+            path = pathlib.Path(current) / child
+            safe.no_links(path)
+            entry = safe.relative_path(path.relative_to(payload_root).as_posix())
+            kind = "directory" if child in directories else "file"
+            for index in range(1, len(parts := entry.split("/")) + 1):
+                spelling = "/".join(parts[:index])
+                identity = (spelling, "directory" if index < len(parts) else kind)
+                _require(names.get(spelling.casefold(), identity) == identity,
+                         "dependency payload case-colliding path")
+                names[spelling.casefold()] = identity
+            if kind == "file":
+                actual_files.add(entry)
+    _require(actual_files == {helper.MANIFEST, *by_path}, "dependency payload contains missing or unlisted files")
+
+    project_rows = {safe.relative_path(row["path"]): row for row in source_kit["files"]}
+    used = {}
+    trees = set()
+    record_count = 0
+
+    def restore(value):
+        if isinstance(value, list):
+            return [restore(item) for item in value]
+        if not isinstance(value, dict):
+            return value
+        result = {key: restore(item) for key, item in value.items()
+                  if key not in {"source_path", "payload_path", "project_source_kit_path"}}
+        if "source_path" in value:
+            result["path"] = value["source_path"]
+        return result
+
+    class ReceiptValidator(helper.Composer):
+        def record(self, row, owner, role, *, copy=True, project=False, extra=()):
+            nonlocal record_count
+            helper.fields(row, {"path", "sha256", "sha512", "bytes", "kind", *extra}, ("path", "sha256"))
+            record_count += 1
+            _require(record_count <= helper.MAX_RECORDS, "dependency receipt count exceeds bound")
+            identity = safe.relative_path(row["path"])
+            _validate_sha256(row["sha256"], "dependency receipt hash")
+            result = {"source_path": identity, "sha256": row["sha256"]}
+            if row.get("kind") == "directory":
+                _require(role == "source" and not ({"bytes", "sha512"} & set(row)),
+                         "invalid dependency directory receipt")
+                result["kind"] = "directory"
+                if project:
+                    children = sorted(path for path in project_rows if path.startswith(identity + "/"))
+                    digest = hashlib.sha256()
+                    for child in children:
+                        digest.update(child[len(identity) + 1:].encode("utf-8") + b"\0")
+                        with _resolve_input_file(root, child, "dependency project reference").open("rb") as stream:
+                            while chunk := stream.read(1024 * 1024):
+                                digest.update(chunk)
+                        digest.update(b"\0")
+                    _require(digest.hexdigest() == row["sha256"],
+                             "dependency project tree differs from selected source kit")
+                    result["project_source_kit_path"] = identity
+                else:
+                    location = "inputs/" + identity
+                    trees.add(location)
+                    _require(closure.source_tree_hash(payload_root, location) == row["sha256"],
+                             "dependency payload tree hash differs")
+                    result["payload_path"] = location
+                    for child, bound in by_path.items():
+                        if child.startswith(location + "/"):
+                            self.record({"path": bound["source_path"], "sha256": bound["sha256"],
+                                         "bytes": bound["bytes"]}, owner, role)
+                return result
+            _require(row.get("kind", "file") == "file" and type(row.get("bytes")) is int
+                     and 0 <= row["bytes"] <= closure.MAX_FILE, "invalid dependency file receipt")
+            result["bytes"] = row["bytes"]
+            if "sha512" in row:
+                _require(isinstance(row["sha512"], str) and re.fullmatch(r"[0-9a-f]{128}", row["sha512"]),
+                         "invalid dependency SHA512 receipt")
+                result["sha512"] = row["sha512"]
+            if project:
+                bound = project_rows.get(identity)
+                _require(bound is not None and bound["sha256"] == row["sha256"] and bound["size"] == row["bytes"],
+                         "dependency project file differs from selected source kit")
+                if "sha512" in row:
+                    closure.file_record(root, identity, row["sha512"], algorithm="sha512")
+                result["project_source_kit_path"] = identity
+            elif copy:
+                location = "inputs/" + identity
+                bound = by_path.get(location)
+                _require(bound is not None and all(bound.get(key) == result.get(key)
+                                                   for key in ("sha256", "bytes")),
+                         "dependency receipt differs from declared payload")
+                if "sha512" in row:
+                    closure.file_record(payload_root, location, row["sha512"], algorithm="sha512")
+                result["payload_path"] = location
+                owners, roles = used.setdefault(location, (set(), set()))
+                if owner is not None:
+                    owners.add(owner)
+                roles.add(role)
+            return result
+
+        def binding(self, binding, owners):
+            binding = dict(binding)
+            direct = binding.pop("source_kit", None)
+            result = super().binding(binding, owners)
+            # Portable workspace receipts already use their original identities.
+            self.project_prefix = None
+            if direct is not None:
+                result["source_kit"] = self.record(direct, None, "source_kit")
+            return result
+
+    components = document["components"]
+    _require(isinstance(components, list) and 0 < len(components) <= 512, "invalid dependency component table")
+    owners = [helper.fields(row, row.keys(), ("id",))["id"] for row in components if isinstance(row, dict)]
+    _require(len(owners) == len(components) and all(isinstance(owner, str) and
+             re.fullmatch(r"[a-z0-9][a-z0-9-]*", owner) for owner in owners)
+             and owners == sorted(set(owners)), "invalid dependency component IDs/order")
+    validator = ReceiptValidator(payload_root, payload_root.parent / ".unused-validator-output")
+    _require(validator.record(restore(document["source_report"]), None, "source_report", copy=False)
+             == document["source_report"], "invalid dependency source report receipt")
+    binding = validator.binding(restore(document["candidate_binding"]), owners)
+    _require(binding == document["candidate_binding"], "invalid dependency candidate binding schema")
+    for item in components:
+        _require(validator.component(restore(item)) == item, "invalid dependency component schema")
+    for path, row in by_path.items():
+        admitted = used.get(path)
+        _require(admitted is not None and row["component_ids"] == sorted(admitted[0])
+                 and row["roles"] == sorted(admitted[1]), "dependency payload has unbound files/owners/roles")
+    allowed_dirs.update("/".join(path.split("/")[:index]) for path in trees
+                        for index in range(1, len(path.split("/")) + 1))
+    for spelling, kind in names.values():
+        if kind == "directory":
+            _require(spelling in allowed_dirs or spelling in trees,
+                     "dependency payload contains an unlisted directory")
+    selected_inventory = closure.file_record(root, inventory_relative)
+    _require(binding["inventory"] == {"source_path": inventory_relative,
+             "sha256": selected_inventory["sha256"], "bytes": selected_inventory["bytes"],
+             "payload_path": "inputs/" + inventory_relative},
+             "dependency inventory binding differs from selected inventory")
+    frozen = binding["offline_bundle"]
+    direct = binding.get("source_kit")
+    _require(frozen is not None or direct is not None,
+             "dependency source kit requires a source kit candidate binding")
+    if direct is not None:
+        selected_relative = source_kit_file.relative_to(root).as_posix()
+        selected_hash, selected_bytes = _hash_file(source_kit_file)
+        _require(direct == {"source_path": selected_relative, "sha256": selected_hash,
+                           "bytes": selected_bytes, "payload_path": "inputs/" + selected_relative},
+                 "dependency source kit binding differs from selected source kit")
+    if frozen is not None:
+        selected_hash, selected_bytes = _hash_file(source_kit_file)
+        _require(frozen["source_kit"]["sha256"] == selected_hash
+                 and frozen["source_kit"]["bytes"] == selected_bytes,
+                 "dependency source kit binding differs from selected source kit")
+        _require(frozen["source_inventory"]["sha256"] == selected_inventory["sha256"]
+                 and frozen["source_inventory"]["bytes"] == selected_inventory["bytes"],
+                 "dependency frozen inventory binding differs from selected inventory")
+    inventory, _ = closure.json_input(root, inventory_relative, selected_inventory["sha256"])
+    _require(set(owners) == {row["id"] for row in inventory["components"]},
+             "dependency components differ from selected inventory")
+    for key in ("component_manifest", "runtime"):
+        evidence = inventory.get("evidence", {}).get(key)
+        if evidence is not None:
+            _require(binding[key]["source_path"] == evidence["path"]
+                     and binding[key]["sha256"] == evidence["sha256"],
+                     "dependency candidate evidence differs from selected inventory")
+    expected_binaries = []
+    if frozen is not None:
+        _require(frozen["source_location"].endswith("/source-kit"), "invalid frozen project source location")
+    for row in inventory["binaries"]:
+        original = safe.relative_path(row["path"])
+        expected_binaries.append((row["component_id"], original, row["sha256"], _hash_file(
+            _resolve_input_file(root, original, "dependency selected binary"))[1]))
+    actual_binaries = []
+    for row in binding["binaries"]:
+        original = row["source_path"]
+        actual_binaries.append((row["component_id"], original, row["sha256"], row["bytes"]))
+    _require(sorted(actual_binaries) == sorted(expected_binaries),
+             "dependency binary binding differs from selected inventory")
+    return helper, payload_root, document, receipt
+
+
+def _dependency_tree_paths(value: Any) -> set[str]:
+    """Declared directory receipts, including empty source trees."""
+    if isinstance(value, list):
+        return set().union(*(_dependency_tree_paths(item) for item in value))
+    if not isinstance(value, dict):
+        return set()
+    paths = set().union(*(_dependency_tree_paths(item) for item in value.values()))
+    if value.get("kind") == "directory" and "payload_path" in value:
+        paths.add(value["payload_path"])
+    return paths
 
 
 def _inventory_license_rows(inventory: Mapping[str, Any]) -> list[dict[str, Any]]:
@@ -485,7 +740,7 @@ def _validate_bundle_references(manifest: Mapping[str, Any]) -> None:
     files = manifest["files"]
     by_path = {canonical_relative(row["path"], "bundle file path").casefold(): row
                for row in files}
-    for field in ("source_inventory", "source_kit", "runtime_manifest", "sbom"):
+    for field in ("source_inventory", "source_kit", "runtime_manifest", "sbom", "dependency_source_kit"):
         reference = manifest.get(field)
         if reference is None:
             continue
@@ -499,6 +754,11 @@ def _validate_bundle_references(manifest: Mapping[str, Any]) -> None:
         if field == "sbom":
             _require(reference.get("format") == "SPDX-2.3",
                      "bundle sbom format must be SPDX-2.3")
+        if field == "dependency_source_kit":
+            _require(type(reference.get("size")) is int and reference["size"] == record["size"]
+                     and record.get("install") is False and record.get("kind") == "dependency-source"
+                     and record.get("category") == "dependency-source",
+                     "bundle dependency source kit reference differs from its source file record")
 
 
 def _validate_sbom_reference(root: pathlib.Path, manifest: Mapping[str, Any]) -> None:
@@ -587,6 +847,7 @@ def stage_bundle(
     verifier_template: pathlib.Path | str | None = None,
     installer_name: pathlib.Path | str = DEFAULT_INSTALLER_NAME,
     verifier_name: pathlib.Path | str = DEFAULT_VERIFIER_NAME,
+    dependency_source_kit: pathlib.Path | str | None = None,
 ) -> dict[str, Any]:
     """Stage and verify an offline installer bundle atomically enough for local use."""
 
@@ -605,6 +866,13 @@ def stage_bundle(
     _require(inventory.get("audit_status") == "incomplete",
              "distribution inventory audit_status must remain 'incomplete'")
     _require(inventory_qualified is False, "distribution inventory cannot claim qualification")
+    dependency_payload = None
+    if dependency_source_kit is not None:
+        try:
+            dependency_payload = _validate_dependency_source_kit(
+                root, dependency_source_kit, inventory_relative, source_kit_file, source_kit)
+        except (ValueError, OSError, KeyError, TypeError) as exc:
+            _error(f"invalid dependency source kit: {exc}")
 
     installer_path = pathlib.Path(installer_template) if installer_template is not None else pathlib.Path(__file__).resolve().with_name(DEFAULT_INSTALLER_NAME)
     verifier_path = pathlib.Path(verifier_template) if verifier_template is not None else pathlib.Path(__file__).resolve().with_name(DEFAULT_VERIFIER_NAME)
@@ -709,6 +977,37 @@ def stage_bundle(
             ))
         source_records = _sorted_file_records(source_records)
 
+        dependency_manifest_record = None
+        if dependency_payload is not None:
+            helper, payload_root, dependency_document, dependency_receipt = dependency_payload
+            # Reserve this directory; project sources must never overwrite the
+            # bound dependency receipt or any of its frozen input files.
+            _require(not (staging / DEPENDENCY_PREFIX).exists(),
+                     "project source kit overlaps dependency input destination")
+            for directory in sorted(_dependency_tree_paths(dependency_document)):
+                (staging / DEPENDENCY_PREFIX / directory).mkdir(parents=True, exist_ok=True)
+            for row in [dependency_receipt, *dependency_document["files"]]:
+                relative = DEPENDENCY_PREFIX + "/" + row["path"]
+                target = staging / relative
+                helper.copy_file(payload_root, {key: row[key] for key in ("path", "sha256", "bytes")}, target)
+                os.utime(target, (FIXED_MTIME, FIXED_MTIME))
+                record = _file_record(target, relative, kind="dependency-source",
+                                      role="source-kit", category="dependency-source", install=False)
+                _require(record["sha256"] == row["sha256"] and record["size"] == row["bytes"],
+                         "dependency payload changed while composing bundle")
+                source_records.append(record)
+                if row["path"] == helper.MANIFEST:
+                    dependency_manifest_record = record
+            # Revalidate after copying to reject concurrent drift, additions,
+            # or relabeling of receipts during staging.
+            try:
+                checked = _validate_dependency_source_kit(
+                    root, dependency_source_kit, inventory_relative, source_kit_file, source_kit)
+                _require(checked[2:] == dependency_payload[2:], "dependency manifest changed during staging")
+            except (ValueError, OSError, KeyError, TypeError) as exc:
+                _error(f"dependency source kit changed during staging: {exc}")
+            source_records = _sorted_file_records(source_records)
+
         installed_runtime_records = [row for row in runtime_records if row["install"]]
         sbom_records = [row for row in runtime_records if row["kind"] == "sbom"]
         _require(len(sbom_records) == 1, "portable package must contain exactly one SPDX SBOM")
@@ -807,6 +1106,13 @@ def stage_bundle(
                 "license clearance, corresponding-source completeness, or offline runtime behavior."
             ),
         }
+        if dependency_manifest_record is not None:
+            bundle["dependency_source_kit"] = {
+                "path": dependency_manifest_record["path"],
+                "sha256": dependency_manifest_record["sha256"],
+                "size": dependency_manifest_record["size"],
+                "original_path": payload_root.relative_to(root).as_posix() + "/" + helper.MANIFEST,
+            }
         _validate_manifest_shape(bundle)
         _write_json(staging / DEFAULT_BUNDLE_MANIFEST, bundle)
         verify_bundle(staging, strict_files=True)
@@ -831,6 +1137,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="generated source-kit manifest JSON")
     parser.add_argument("--source-root", "--root", dest="source_root", required=True,
                         type=pathlib.Path, help="explicit root for all input paths")
+    parser.add_argument("--dependency-source-kit", type=pathlib.Path,
+                        help="optional workspace-relative composed dependency source payload directory")
     parser.add_argument("--output-root", required=True, type=pathlib.Path,
                         help="directory under which the bundle is published")
     parser.add_argument("--destination", default=DEFAULT_DESTINATION,
@@ -850,6 +1158,7 @@ def main(argv: list[str] | None = None) -> int:
             args.destination,
             installer_template=args.installer_template,
             verifier_template=args.verifier_template,
+            dependency_source_kit=args.dependency_source_kit,
         )
     except (BundleError, ValueError, OSError, RuntimeError) as exc:
         print(f"offline bundle staging: {exc}", file=sys.stderr)

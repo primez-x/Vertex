@@ -76,7 +76,8 @@ claimed by this record.
   identity lifetime, level edits, transforms and retained-history format floors
   are integrated. The actual controller lifecycle passes after adding the
   post-spacing quantity path and assigning complete pasted-stair context.
-  Landing guards remain a separate unfinished family.
+  Landing guards were unfinished in this checkpoint; their subsequent
+  implementation and verification are recorded below.
 - Chain dimensions: the existing dimension creator now includes a connected
   multi-edge choice and highlighted path/total preview. The public creation path
   and full retained-source guard are implemented. The actual creator lifecycle
@@ -92,7 +93,7 @@ claimed by this record.
   and confidence feed explicit proposal review. Source transforms, flips and
   complete snapshot guards are integrated. Actual recognition, review-dialog and
   acceptance lifecycle checks pass. Label and command previews use their actual
-  proposal types. Wall targets remain unfinished; no sandbox qualification is
+  proposal types. Wall targets were unfinished in this checkpoint; no sandbox qualification is
   claimed by trusted developer fixtures. Native label/command review captures
   were inspected after loading the actual bundled application font.
 - D08 IFC roofs/rooms: native solid export and independently checked geometric
@@ -120,12 +121,201 @@ claimed by this record.
 
 ## Next actions, in order
 
-1. Commit and push this checked source checkpoint, preserving the existing
-   installed candidate and all failed diagnostic evidence.
-2. Complete landing guards, wall-target assistance and the remaining native
-   exchange families. Passing checkpoints do not close D06-D08.
-3. Continue ordinary drawing acceptance, D01 acquisition and D02 distribution
-   qualification. A development candidate does not satisfy the production gate.
+1. Refresh the selected-runtime distribution inventory, compose corresponding
+   sources and complete notices, and qualify their final candidate binding.
+   The clean source-built extension, exact staging and complete actual worker
+   lifecycle now pass below.
+2. Record and push the next checked source checkpoint, preserving the installed
+   candidate and every failed diagnostic receipt. Continue ordinary drawing
+   acceptance, D01 acquisition, D02 rights and the remaining production gates.
+
+## Current continuation batch
+
+The previous checked source checkpoint is `85077b2972657eb8c461e18a15e97a68d40d591c`
+on `codex/vertex-delivery-reset`; the remote ref was verified after push. The
+changes below are a later source batch and do not describe the installed candidate.
+
+- D06 landing guards: canonical v3 connecting/top landing hosts, exposed-edge
+  intervals, supported post footprints, witness refusal, authoring preview,
+  document/level/transform/clone/quantity integration are implemented. Affected
+  core and controller checks pass. This does not qualify the entire architecture
+  package.
+- D07 wall assistance: canonical v4 physical wall-axis length targets use actual
+  straight or curved wall geometry. Reviewed OCR proposals retain observed text
+  and provenance separately from the accepted dimension value. Source fences,
+  cancellation/history, save/reopen and actual controller checks pass.
+- The dimension creator now offers physical walls, with true axis length and
+  automatic placement beside the wall. Actual creator/manual placement/style/
+  live edit/history/output/reopen checks pass. The saved dialog capture was
+  inspected after correcting its light-theme label contrast and readable source
+  names.
+- D08 IFC: native stairs, flight railings and landing guards join opened roofs
+  and curved rooms. Independent native geometry, host/context/phase consistency,
+  work limits, exact source proof and version-aware inert retention are integrated.
+  Original source proof is retained only while live physical authority agrees;
+  edits require new proof. The actual core exchange check passes, including
+  semantic tamper cases. The desktop five-family check remains open below.
+- Native and exchange format floors are 55 and 53 respectively; retained history
+  and unknown future forms remain protected. The affected storage check passes.
+- Windows worker admission now supports an inherited parent-job chain without
+  breakaway. Exact owned-job membership is required before resume; failed
+  assignment/membership never resumes the worker. Bounded writer cleanup and
+  owned-child termination preserve unknown processes and fixtures. Actual
+  nested-job and negative-admission checks pass.
+- Actual immutable Windows run `vertex-actual-worker-isolation-tests-01`:
+  worker admission, assistance workflow and CAD library imports passed; OCR
+  failed with exit 4 and the IFC desktop workflow failed during hosted railing
+  creation. DXF returned the obsolete parent-job skip. The two desktop fixture
+  corrections are implemented; their affected rerun is pending. No aggregate
+  pass or full sandbox qualification is claimed.
+- Later actual runs `tests-02` and `tests-03` passed DXF without the obsolete
+  parent-job skip. Fixed bounded worker diagnostics identified OCR's exact
+  failure as resource metadata access denied in the AppContainer. OCR now opens
+  the granted endpoints, verifies exact final path/ordinary-file identity, and
+  hashes/recognizes the same retained model bytes. Case-only ancestor redirects
+  are refused; independent source review approved the correction. The affected
+  native build passes. `vertex-actual-worker-isolation-tests-04` passes the real
+  OCR worker, including endpoint and redirection refusals, as well as the
+  broker, assistance, DXF and CAD worker checks. Its IFC case fails on a distinct
+  property-provenance gap; no aggregate pass is claimed.
+- `vertex-authored-stair-context-tests-01` passes the complete authored
+  multi-flight stair/landing railing lifecycle (15.51 seconds). The repair
+  persists all known hierarchy references atomically, including older authored
+  shorthand hosts and the existing legacy upgrade. The IFC desktop fixture now
+  accounts for exactly five active physical families plus the exact known inert
+  source descriptors; it does not discard provenance or accept arbitrary extras.
+- D02 source payload attachment and controlled-runtime composition are
+  implemented with bounded complete inventories, current recipe/input binding,
+  portable evidence, atomic publication and foreign-substitution preservation.
+  Independent review approved those four corrected code areas. Current pure
+  composer/stager checks pass (45 and 20); qualification flags remain false.
+- Exact CAD build staging replaces directory merging. Its 44 inert Windows
+  fixtures cover 3,000-file repeated replacement, interrupted rotation,
+  persistent descendant-reopen failure, late foreign members and preserved
+  unknown objects. Independent review approved the corrected recovery code.
+  Actual baseline staging passed and a subsequent application build verified
+  the same stage as unchanged. The verified old unmarked copy is preserved at
+  the fixed legacy snapshot path. SDK payload files/manifest remain unchanged;
+  only 35 verified-empty cache directories were removed after the source build.
+- The selected-runtime inspector passes 13 inert fixtures. CMake now checks the
+  exact SDK and compiles controlled manifest/extension/wrapper identities when
+  explicitly selecting source-built IFC. Its alternate branch still requires
+  the pinned wheel metadata. Controlled worker execution remains pending.
+- Generic SDK copies preserve 18,495 files and 4,731,315,330 bytes with matching
+  hashes. The old source-built extension contains personal build paths and has
+  not been distributed. A new extension rebuild, actual payload scan, composition
+  and selected-runtime integration remain required. Source presence alone is
+  not corresponding-source or redistribution qualification.
+- `vertex-controlled-ifc-portable-build-01` completed successfully. Its new
+  extension is 41,445,888 bytes with SHA-256
+  `c36cb09193101ef72775396d7a9c3201dbf9c7671865dd65e20142ea44af696f`.
+  The actual payload scan still finds one original Boost-thread header path,
+  traced to its precompiled static library. That library requires an exact-source
+  rebuild before the IFC payload can replace the baseline. Original build bytes
+  and failed privacy evidence remain preserved; no new runtime is qualified.
+- Automatic development watermarks were removed from ordinary drawing output.
+  A floor/layer visibility note appears only when those filters affect output.
+  Export/print actions now use ordinary product labels. Actual PDF atomicity and
+  building-form SVG workflows pass in `vertex-pdf-output-atomicity-tests-01`
+  and `vertex-building-form-output-tests-01`. The PDF checks verify the useful
+  visibility note when filtering applies; public legacy API names remain
+  compatible. Physical printing and human appearance acceptance remain open.
+- The earlier actual IFC desktop run exposed a property proxy with no metadata link:
+  the default calculation profile exceeds the old single-string cutoff.
+  Bounded, hashed chunking now preserves organization and source receipts as
+  inert references. `vertex-ifc-provenance-build-01` passes. The first focused
+  core run passes fresh OCR codec/recognition checks but fails a new oversized
+  fixture before IFC export because it exceeds the authoritative document
+  extension limit. The corrected bounded fixture now passes without raising
+  model or import limits. Later restricted-worker failures remain recorded below.
+
+### Selected source-built runtime and distribution batch
+
+- `vertex-controlled-ifc-clean-build-02` passes the complete eight-schema build
+  after rebuilding the exact Boost.Thread source and preserving its original
+  library. The new extension is 41,445,888 bytes, SHA-256
+  `710c14599b1243d7a032668f6cc21796af2399c72b2a515f75e325d7a6f58cdf`.
+  The actual narrow/wide-string payload scan finds none of the personal path
+  markers checked in the previously refused payload. Earlier bytes and receipts
+  remain preserved; this does not establish source or licensing qualification.
+- The explicit selected SDK uses source revision
+  `ff3c5b849eee2ef6343b537c885b971ae6bba452` and manifest SHA-256
+  `606e69273eb7a1799b41b785af2f8ee4e278ce8b9bca9b7482529fb042d1a587`.
+  Actual selected-runtime inspection and the 575-record IFC stage verification
+  pass. `vertex-selected-ifc-proof-build-05` builds the application and workers
+  against that selection. A refused earlier SDK is preserved rather than overwritten.
+- The selected SDK's isolated actual-library probe passes binary DXF, nested
+  insertion world coordinates and a native IFC cube. The result is retained in
+  `controlled-cad-actual-probe-20261006-01.json`; it is separate from application
+  worker isolation or installed qualification.
+- Bounded IFC metadata, unchanged roof/room proof and coordinated stair-cluster
+  proofs now pass `vertex-selected-ifc-cluster-fixture-tests-05`. The earlier
+  cluster-fixture failure incorrectly looked up a retained source ID by a live
+  imported ID; its correction preserves the unrelated object's original proof.
+- Restricted run `vertex-selected-ifc-provenance-isolation-tests-08` passes
+  unchanged re-export, opaque host edits, human metadata edits, and required
+  roof/room edits. It then fails while waiting for current-revision native 3D.
+  Inert source and hierarchy records are being distinguished from unsupported
+  physical geometry. That failed run remains retained; later corrections and
+  complete current passes are recorded below.
+- Native preparation now ignores only verified inert source/hierarchy records.
+  Unsupported physical references and malformed descriptors remain pending,
+  including hidden objects. Exact IFC proxy arity and quoted/nested argument
+  handling pass the affected native preparation check.
+- Restricted runs 09/10 subsequently pass current-revision native 3D and then
+  fail a later mapped import. Fixed bounded worker stage markers identify the
+  core parse stage in run 11. Its test fixture injected a malformed four-field
+  aggregate despite existing core checks requiring six. The desktop fixture now
+  retains a well-formed spatial relationship and requires its exact `#999999`
+  fidelity diagnostic; no production parser or proof guard was relaxed.
+- `vertex-selected-ifc-actual-isolation-tests-12` passes the full IFC desktop
+  lifecycle with the selected source-built runtime, including all five native
+  families, current-revision plan/3D preparation, semantic and metadata edits,
+  retained source proof, history, save/reopen and re-export.
+- `vertex-selected-runtime-all-workers-build-06` rebuilds all affected fixtures
+  and the CLI against the same selected runtime. The complete actual isolated
+  run `vertex-selected-runtime-all-workers-isolation-tests-13` passes all six
+  workflows: broker controls, assistance, OCR, DXF, IFC and CAD library imports.
+  Each retained process reports exit zero, confirmed termination, no timeout or
+  capture failure; all six stderr streams are empty. These are development-host
+  immutable-worker results, not installed or clean-machine qualification.
+- Observed project failures now show neutral guidance and a fixed known stage
+  without assigning an unobserved malformed-input cause. Marker filtering,
+  failure-output disposal and successful candidate authority remain separate.
+  Actual supervisor and reference-import checks pass; independent review approves
+  the corrected bounded change.
+- Tracing review now shows actual proposed contours and holes over the exact
+  calibrated/flipped/rotated reference, with readable source names and more
+  space for the preview. Actual concave and outlined-hole dialogs, pixel and
+  independent-coordinate checks, cancellation and unchanged-source checks pass
+  `vertex-trace-review-presentation-tests-03`. Their settled native captures were
+  inspected. This closes the preview omission, not the whole assistance package.
+- Actual preferred-source materialization copies 4,744 verified source and
+  build-control files into four distinct trees, with portable receipts. Actual
+  controlled CAD manifest preparation covers 2,569 payload files and binds those
+  declared source trees. Original generated manifests remain preserved.
+- Qt notice materialization and independent hash verification cover all 2,380
+  original texts, plus the route notice/index. Component and portable manifests
+  now declare their delivery alongside four unchanged Microsoft terms documents
+  and the local OCR engine/model. The notice index still exposes 100 metadata
+  references requiring applicable closure or candidate-bound exclusion evidence.
+  Neither operation certifies transitive closure, offline rebuilding or rights.
+- The reviewed distribution integration passes 12 manifest-preparation,
+  37 inventory and 18 stage-verifier checks. Source-audit/composer and preferred
+  source materializer checks also pass. Independent review approved the corrected
+  distribution integration; the materializer and final package qualification
+  are separate work. Qualification flags remain false.
+
+Current focused receipts are under ignored `artifacts/reset-delivery`:
+`vertex-landing-wall-ifc-isolation-build-03` through `build-07`,
+`vertex-landing-wall-ifc-isolation-tests-03` through `tests-07`,
+`vertex-wall-dialog-contrast-build-01` and `tests-01`, and
+`controlled-cad-wrapper-evidence-tests-20261006`. Failed earlier evidence is
+retained; later passes cover only the corrected affected inputs.
+Additional receipts include `selected-cad-identity-tests-20261006`,
+`actual-cad-stage-baseline-20261006`, `vertex-authored-stair-context-build-01`
+and `tests-01`, and `vertex-actual-worker-and-output-build-04`. Build-03 preserves
+the diagnosed Qt/Python `slots` macro collision; Build-04 contains its fix.
 
 ## Identified human-test candidate
 

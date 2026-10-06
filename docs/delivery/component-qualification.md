@@ -47,6 +47,18 @@ kit uses commit 387ab41b271a23e0dedb8015a175c77343be4eb9. This closes the stale
 application allowlist portion of D02-Q03/Q08; exact dependency source, build,
 notice and redistribution obligations below remain open.
 
+The later source batch now has a selected controlled IfcOpenShell runtime and
+4,744 materialized original/derived/control source files; their exact identities
+and checks are in [ifc-source-build.md](../dependencies/ifc-source-build.md).
+The full Qt notice extraction also completed: 2,380 original files totaling
+10,640,392 bytes, plus its index and route notice. Those original text paths are
+now declared in the Qt component entries and all output hashes were verified.
+[qt-notices.md](../dependencies/qt-notices.md) records the pinned inputs and the
+100 remaining metadata references. This advances D02-Q02/Q04's actual local
+inputs; it does not rebind the historical inventory or certify the installed
+candidate. The next inventory/source payload must include these new declarations
+and preserve unresolved applicable obligations.
+
 ## Specific remaining facts and smallest fixes
 
 | ID | Observed evidence or gap | Required completion evidence / smallest fix | Owner |
@@ -129,6 +141,18 @@ The generated JSON and official metadata receipt remain ignored under
 | Exact official PyPI metadata was observed for all 11 locked wheel project/version pairs. Ten publish source distributions with authoritative archive URLs and SHA-256 checksums; none of these ten source archives is locally cached. IfcOpenShell 0.8.3.post2 publishes no source distribution in that metadata response. | Source distributions do not establish exact wheel/native-library derivation. Resolve the IfcOpenShell wheel binding or qualify the controlled replacement. Retain embedded GEOS, OpenBLAS, OpenSSL, libffi and other source/build/notice obligations. |
 | All frozen package files match, and the import-worker's individually listed source files match its source kit. The application and CLI `src` directory aggregate receipts differ from the frozen kit. The current source tree includes generated Python cache content that the allowlist omits. | Root should make source-tree receipts exclude generated/cache files consistently with the source kit, then regenerate the next candidate. Keep this historical mismatch explicit; the audit does not relabel an unmatched aggregate receipt as complete. |
 | The remaining 17 source-status entries are the three Qt modules, 11 wheel projects, Inter's unrecorded editable/source payload, and the two unmatched application/CLI aggregate receipts. One additional entry is the MSVC redistributable rights review. | Preserve the existing font/artwork authorization evidence and resolve any required provenance facts. MSVC distributor eligibility and applicable terms remain external facts. URLs and pointer notices never count as delivered source or complete notice text. |
+
+The initial cache observations in the preceding table are historical. The
+2026-10-05 acquisition receipt now verifies all three Qt archives and all ten
+available PyPI source distributions under `.deps/downloads/source-closure`.
+The subsequent audit records 33 locally present sources, four missing source
+entries, and one redistributable-rights review for that earlier candidate.
+Its detailed receipt is retained at
+`artifacts/reset-delivery/dependency-source-closure/source-acquisition.json`.
+Local availability has advanced; final runtime/source binding, delivery,
+embedded-source obligations and offline rebuilding remain unqualified. Pass
+`--cache-dir .deps/downloads/source-closure` when refreshing the audit, because
+the default cache scan does not recursively search nested directories.
 
 The [official Qt archive index](https://download.qt.io/archive/qt/6.8/6.8.3/submodules/)
 and its [qtbase checksum metadata](https://download.qt.io/archive/qt/6.8/6.8.3/submodules/qtbase-everywhere-src-6.8.3.tar.xz.mirrorlist),

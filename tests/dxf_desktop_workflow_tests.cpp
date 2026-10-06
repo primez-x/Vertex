@@ -29,12 +29,6 @@
 #include <iostream>
 #include <map>
 #include <stdexcept>
-#ifdef _WIN32
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
-#include <Windows.h>
-#endif
 
 namespace {
 void require(bool value, const char* message) {
@@ -778,13 +772,6 @@ int main(int argc, char** argv) {
     QStandardPaths::setTestModeEnabled(true);
     QApplication application(argc, argv);
     try {
-#ifdef _WIN32
-        BOOL in_job = FALSE;
-        if (!IsProcessInJob(GetCurrentProcess(), nullptr, &in_job) || in_job != FALSE) {
-            std::cout << "DXF desktop worker fixture skipped: host process is in a parent job\n";
-            return 77;
-        }
-#endif
         using namespace sketch;
         using namespace sketch::desktop;
         QTemporaryDir temporary;

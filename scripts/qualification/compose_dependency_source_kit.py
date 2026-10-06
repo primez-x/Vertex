@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -26,6 +27,11 @@ from urllib.parse import urlparse
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import dependency_source_closure as closure
 
+_SOURCE_KIT_SPEC = importlib.util.spec_from_file_location(
+    "vertex_source_kit_for_dependency_payload", Path(__file__).resolve().parent.parent / "source_kit_manifest.py")
+project_manifest = importlib.util.module_from_spec(_SOURCE_KIT_SPEC)
+_SOURCE_KIT_SPEC.loader.exec_module(project_manifest)
+
 safe = closure.safe
 require = closure.require
 MANIFEST = "dependency-source-kit-manifest.json"
@@ -33,7 +39,7 @@ MAX_RECORDS = 20_000
 MAX_TOTAL = 16 * 1024 * 1024 * 1024
 MAX_INPUT_BYTES = 32 * 1024 * 1024 * 1024
 MAX_JSON = 32 * 1024 * 1024
-SOURCE_KINDS = {"vcpkg", "qt", "bootstrap", "workspace", "planegcs", "locked-archive", "redistributable"}
+SOURCE_KINDS = {"vcpkg", "qt", "bootstrap", "workspace", "planegcs", "locked-archive", "redistributable", "controlled-runtime"}
 SOURCE_STATUSES = {"exact_local_source_present", "missing_source", "distributed_asset_recorded", "redistributable_rights_review"}
 
 
@@ -165,6 +171,7 @@ class Composer:
         self.trees = {}
         self.payload_trees = {}
         self.project_prefix = None
+        self.project_rows = None
         self.total = 0
         self.input_total = 0
         self.records = 0
@@ -191,7 +198,11 @@ class Composer:
         if row.get("kind") == "directory":
             require(role == "source", "directory receipt is only admitted as source input")
             require(not ({"bytes", "sha512"} & set(row)), "invalid directory receipt")
-            directory_files(self.root, location)
+            children = directory_files(self.root, location)
+            if project and self.project_rows is not None:
+                selected = {name for name in self.project_rows if name.startswith(identity + "/")}
+                actual = {identity + "/" + name[len(location) + 1:] for name in children}
+                require(selected == actual, "project tree differs from selected source kit")
             require(closure.source_tree_hash(self.root, location) == row["sha256"], "source tree hash differs")
             self.trees[location] = row["sha256"]
             result = {"source_path": identity, "sha256": row["sha256"], "kind": "directory"}
@@ -218,6 +229,11 @@ class Composer:
         if "sha512" in row:
             result["sha512"] = row["sha512"]
         if project:
+            if self.project_rows is not None:
+                selected = self.project_rows.get(identity)
+                require(selected is not None and selected["sha256"].lower() == actual["sha256"]
+                        and selected["size"] == actual["bytes"],
+                        "project source differs from selected source kit")
             result["project_source_kit_path"] = identity
         elif copy:
             result["payload_path"] = "inputs/" + identity
@@ -231,6 +247,22 @@ class Composer:
                 payload["component_ids"].add(owner)
             payload["roles"].add(role)
         return result
+
+    def attach_source_kit(self, path, binding):
+        """Bind an explicit first source kit without needing an existing bundle."""
+        manifest, receipt = closure.json_input(self.root, path)
+        project_manifest.validate_manifest(manifest)
+        require(len(manifest["files"]) <= MAX_RECORDS, "selected source kit file count exceeds bound")
+        self.project_rows = {safe.relative_path(row["path"]): row for row in manifest["files"]}
+        for identity, row in self.project_rows.items():
+            self.record({"path": identity, "sha256": row["sha256"].lower(), "bytes": row["size"]},
+                        None, "source", project=True)
+        frozen = binding["offline_bundle"]
+        if frozen is not None:
+            require(frozen["source_kit"]["sha256"] == receipt["sha256"]
+                    and frozen["source_kit"]["bytes"] == receipt["bytes"],
+                    "selected source kit differs from frozen candidate binding")
+        binding["source_kit"] = self.record(receipt, None, "source_kit")
 
     def provenance(self, value, owner):
         if value is None:
@@ -371,7 +403,8 @@ class Composer:
             require(closure.source_tree_hash(self.root, location) == expected, "source tree hash differs after composition")
 
 
-def compose(workspace: Path, report_path: str, output_root: str) -> dict:
+def compose(workspace: Path, report_path: str, output_root: str, *,
+            source_kit_manifest: str | None = None) -> dict:
     """Publish a deterministic new/empty directory; return the portable manifest."""
     root = Path(workspace).absolute()
     safe.no_links(root)
@@ -393,6 +426,8 @@ def compose(workspace: Path, report_path: str, output_root: str) -> dict:
     composer = Composer(root, output)
     source_report = composer.record(report_receipt, None, "source_report", copy=False)
     binding = composer.binding(document["candidate_binding"], owners)
+    if source_kit_manifest is not None:
+        composer.attach_source_kit(source_kit_manifest, binding)
     components = [composer.component(item) for item in sorted(items, key=lambda row: row["id"])]
     payload = []
     for identity, row in sorted(composer.payload.items()):
@@ -435,9 +470,11 @@ def main():
     parser.add_argument("--workspace", type=Path, required=True)
     parser.add_argument("--report", required=True, help="Workspace-relative schema 1 source closure report.")
     parser.add_argument("--output-root", required=True, help="Workspace-relative new/empty dependency payload directory; parent must exist.")
+    parser.add_argument("--source-kit-manifest", help="Explicit workspace-relative source-kit manifest to verify and bind before first bundle staging.")
     args = parser.parse_args()
     try:
-        manifest = compose(args.workspace, args.report, args.output_root)
+        manifest = compose(args.workspace, args.report, args.output_root,
+                           source_kit_manifest=args.source_kit_manifest)
         manifest_receipt = closure.file_record(args.workspace.absolute(), args.output_root + "/" + MANIFEST)
         print(json.dumps({"manifest": MANIFEST, "sha256": manifest_receipt["sha256"], "bytes": manifest_receipt["bytes"],
                           "files": len(manifest["files"]), "corresponding_source_qualified": False,

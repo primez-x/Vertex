@@ -32,6 +32,7 @@ sketch::WindowsImportWorkerReport successfulReply() {
     r.status = sketch::WindowsImportWorkerStatus::completed;
     r.completed = r.launched = r.app_container_verified = r.restricted_token_verified =
         r.network_denial_verified = r.job_limits_verified = r.parent_exit_kill_verified =
+        r.job_membership_verified =
         r.brokered_handles_verified = r.private_temporary_root_verified =
         r.immutable_module_roots_verified = r.fixed_search_applied = r.proj_offline_applied = true;
     r.output.resize(36);
@@ -58,6 +59,86 @@ sketch::WindowsImportWorkerReport textReply() {
         qToLittleEndian<quint64>(std::bit_cast<quint64>(values[i]), p + 49 + i * 8);
     return reply;
 }
+
+void project_failure_classification() {
+    auto failed = successfulReply();
+    failed.status = sketch::WindowsImportWorkerStatus::failed;
+    failed.completed = false;
+    failed.exit_code = 4;
+    failed.output.clear();
+    const std::byte source[]{std::byte{'x'}};
+    for (const auto kind : {sketch::ProjectImportKind::ifc, sketch::ProjectImportKind::dxf}) {
+        auto reply = failed;
+        const sketch::ProjectImportBroker broker = [&](const auto&) { return reply; };
+        const auto expect = [&](bool project_failed, std::string_view stage = {}) {
+            bool matched = false;
+            try { (void)sketch::import_project_in_worker(source, kind, {}, broker); }
+            catch (const std::runtime_error& error) {
+                const std::string_view message(error.what());
+                matched = project_failed
+                    ? message.starts_with("The isolated importer could not complete this project import") &&
+                      message.ends_with("; the document is unchanged.") &&
+                      message.find("malformed") == std::string_view::npos &&
+                      message.find("unsupported") == std::string_view::npos &&
+                      message.find("Install or repair") == std::string_view::npos &&
+                      (stage.empty() ? message.find(" during ") == std::string_view::npos
+                                     : message.find(stage) != std::string_view::npos)
+                    : message.find("Install or repair") != std::string_view::npos;
+            }
+            require(matched, "project failure guidance must use observed facts without assigning an unobserved cause");
+        };
+        expect(true); // Observed exit four has no exit-query failure diagnostic.
+        for (const auto& [code, stage] : std::initializer_list<std::pair<const char*, const char*>>{
+                {"worker_project_failed_core", " during project parsing"},
+                {"worker_project_failed_library", " during CAD library processing"},
+                {"worker_project_failed_merge", " during import assembly"},
+                {"worker_project_failed_candidate", " during import validation"}}) {
+            reply = failed; reply.diagnostics = {code}; expect(true, stage);
+        }
+        for (const auto* code : {"worker_exit_code_failed", "worker_exit_unconfirmed", "worker_input_pipe_failed",
+                "worker_cancelled", "temporary_cleanup_failed", "worker_output_pipe_failed",
+                "worker_project_failed_unknown", "arbitrary worker text"}) {
+            reply = failed; reply.diagnostics = {"worker_project_failed_core", code}; expect(false);
+        }
+        reply = failed; reply.diagnostics = {"worker_project_failed_core", "worker_project_failed_merge"}; expect(false);
+        for (auto flag : {&sketch::WindowsImportWorkerReport::app_container_verified,
+                &sketch::WindowsImportWorkerReport::restricted_token_verified,
+                &sketch::WindowsImportWorkerReport::network_denial_verified,
+                &sketch::WindowsImportWorkerReport::job_limits_verified,
+                &sketch::WindowsImportWorkerReport::job_membership_verified,
+                &sketch::WindowsImportWorkerReport::parent_exit_kill_verified,
+                &sketch::WindowsImportWorkerReport::brokered_handles_verified,
+                &sketch::WindowsImportWorkerReport::private_temporary_root_verified,
+                &sketch::WindowsImportWorkerReport::immutable_module_roots_verified,
+                &sketch::WindowsImportWorkerReport::fixed_search_applied,
+                &sketch::WindowsImportWorkerReport::proj_offline_applied,
+                &sketch::WindowsImportWorkerReport::launched}) {
+            reply = failed; reply.*flag = false; expect(false);
+        }
+        for (const auto status : {sketch::WindowsImportWorkerStatus::completed,
+                sketch::WindowsImportWorkerStatus::launch_failed, sketch::WindowsImportWorkerStatus::timed_out,
+                sketch::WindowsImportWorkerStatus::cancelled, sketch::WindowsImportWorkerStatus::invalid_request,
+                sketch::WindowsImportWorkerStatus::unsupported}) {
+            reply = failed; reply.status = status; expect(false);
+        }
+        for (const auto code : {0U, 1U, 5U, 259U}) {
+            reply = failed; reply.exit_code = code; expect(false);
+        }
+        reply = failed; reply.completed = true; expect(false);
+        reply = failed; reply.timed_out = true; expect(false);
+        reply = failed; reply.launch_error = 5; expect(false);
+        reply = failed; reply.job_assignment_error = 5; expect(false);
+        reply = failed; reply.output = {std::byte{'x'}}; expect(false);
+        // Neither a recognized diagnostic nor a marker can become candidate authority.
+        reply = successfulReply(); reply.diagnostics = {"worker_project_failed_core"};
+        rejects([&] { (void)sketch::decode_project_import_candidate(reply, kind); });
+        reply = successfulReply();
+        constexpr std::string_view marker = "VERTEX_PROJECT_FAILURE_V1:core\n";
+        reply.output.assign(reinterpret_cast<const std::byte*>(marker.data()),
+                            reinterpret_cast<const std::byte*>(marker.data() + marker.size()));
+        rejects([&] { (void)sketch::decode_project_import_candidate(reply, kind); });
+    }
+}
 }
 
 int main(int argc, char** argv) {
@@ -65,6 +146,7 @@ int main(int argc, char** argv) {
     QGuiApplication app(argc, argv);
     try {
         using namespace sketch::desktop;
+        project_failure_classification();
         int calls = 0;
         auto response = successfulReply();
         const ReferenceBroker broker = [&](const sketch::WindowsImportWorkerOptions& options) {
@@ -189,7 +271,11 @@ int main(int argc, char** argv) {
             }
             const auto bytes = process.readAllStandardOutput();
             if (!success) {
-                require(process.exitCode() != 0 && bytes.isEmpty(), "malformed project must publish no candidate");
+                require(process.exitCode() == 4 && bytes.isEmpty(), "malformed project must publish no candidate");
+                auto marker = process.readAllStandardError();
+                marker.replace("\r\n", "\n");
+                require(marker == "VERTEX_PROJECT_FAILURE_V1:core\n",
+                        "actual malformed native project must identify only the fixed core stage");
                 return sketch::ProjectImportCandidate{};
             }
             require(process.exitStatus() == QProcess::NormalExit && process.exitCode() == 0,
@@ -339,7 +425,7 @@ int main(int argc, char** argv) {
         require(retained_result.entities == std::vector<sketch::Entity>{retained} &&
                 retained_result.source_retention_required && retained_result.isolation_controls_attested,
                 "unsupported IFC references must cross the isolated candidate boundary without semantic loss");
-        (void)run_project_codec("invalid", sketch::ProjectImportKind::dxf, false);
+        (void)run_project_codec("VERTEX_ENTITY_V1", sketch::ProjectImportKind::dxf, false);
         (void)run_project_codec("invalid", sketch::ProjectImportKind::ifc, false);
         const auto run_codec = [&](const QByteArray& input, const QString& format, int page, bool success) {
             QProcess process;

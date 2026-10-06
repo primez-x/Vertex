@@ -1,6 +1,7 @@
 #include "sketch/desktop/building_object_dialog.hpp"
 
 #include "sketch/quantity.hpp"
+#include "sketch/building_plan_projection.hpp"
 
 #include <QCheckBox>
 #include <QComboBox>
@@ -13,6 +14,8 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QPushButton>
+#include <QPainter>
+#include <QPixmap>
 #include <QScrollArea>
 #include <QSignalBlocker>
 #include <QSizePolicy>
@@ -54,7 +57,7 @@ struct FormInfo {
     std::string_view label;
 };
 
-constexpr std::array<FormInfo, 10> form_infos{{
+constexpr std::array<FormInfo, 11> form_infos{{
     {"column", "rectangular_column", "Rectangular column"},
     {"column", "circular_column", "Circular column"},
     {"beam", "straight_beam", "Straight beam"},
@@ -62,6 +65,7 @@ constexpr std::array<FormInfo, 10> form_infos{{
     {"stair", "multi_flight_stair", "Multi-flight stair"},
     {"railing", "straight_railing", "Straight railing"},
     {"railing", "stair_flight_railing", "Stair flight railing"},
+    {"railing", "stair_landing_railing", "Stair landing railing"},
     {"roof", "sloped_roof_panel", "Sloped roof panel"},
     {"roof", "gable_roof", "Gable roof"},
     {"roof", "hip_roof", "Hip roof"},
@@ -341,14 +345,15 @@ public:
                 return false;
             }
             std::vector<Entity> upgrades;
-            if (const auto* rail = std::get_if<Railing>(&*object); rail && rail->host) {
+            if (const auto* rail = std::get_if<Railing>(&*object); rail && (rail->host || rail->landing_host)) {
                 if (!source_snapshot) throw std::invalid_argument("A current document is required for hosted railings.");
+                const auto& stair_id = rail->host ? rail->host->stair_id : rail->landing_host->stair_id;
                 auto entities = source_snapshot->entities();
-                if (const auto found = upgraded_hosts.find(rail->host->stair_id); found != upgraded_hosts.end()) {
+                if (const auto found = upgraded_hosts.find(stair_id); rail->host && found != upgraded_hosts.end()) {
                     entities.insert_or_assign(found->first, found->second);
                     upgrades.push_back(found->second);
                 }
-                const auto found = entities.find(rail->host->stair_id);
+                const auto found = entities.find(stair_id);
                 if (found == entities.end()) throw std::invalid_argument("The selected stair host is unavailable.");
                 (void)make_building_shape(*object, entities);
             }
@@ -489,6 +494,7 @@ private:
                          [this] { submit(); });
         QObject::connect(buttons, &QDialogButtonBox::rejected, owner,
                          [this] { owner->reject(); });
+        QObject::connect(owner, &QDialog::rejected, owner, [this] { invalidate_candidate(); });
 
         if (original_entity.has_value()) {
             initialize_edit();
@@ -521,7 +527,7 @@ private:
                     } else if constexpr (std::is_same_v<Object, StairFlight>) {
                         return value.flights.empty() ? "straight_stair_flight" : "multi_flight_stair";
                     } else if constexpr (std::is_same_v<Object, Railing>) {
-                        return value.host ? "stair_flight_railing" : "straight_railing";
+                        return value.landing_host ? "stair_landing_railing" : value.host ? "stair_flight_railing" : "straight_railing";
                     } else if constexpr (std::is_same_v<Object, SlopedRoofPanel>) {
                         return "sloped_roof_panel";
                     } else if constexpr (std::is_same_v<Object, GableRoof>) {
@@ -600,6 +606,7 @@ private:
     }
 
     void rebuild_form() {
+        invalidate_candidate();
         fields.clear();
         quantity_pointers.clear();
         dirty.clear();
@@ -613,6 +620,14 @@ private:
         host_combo = nullptr;
         host_flight_combo = nullptr;
         host_side_combo = nullptr;
+        host_landing_combo = nullptr;
+        host_edge_combo = nullptr;
+        host_interval_combo = nullptr;
+        landing_summary = nullptr;
+        railing_preview = nullptr;
+        railing_preview_status = nullptr;
+        landing_choices.clear();
+        landing_intervals.clear();
         if (form_page != nullptr) {
             form_stack->removeWidget(form_page);
             delete form_page;
@@ -722,17 +737,19 @@ private:
                 for (const auto* name : {"buildingObjectTotalRise", "buildingObjectGoing", "buildingObjectWidth"})
                     QObject::connect(fields.at(name), &QLineEdit::textChanged, owner, [this] { refresh_stair_summary(); });
             }
-        } else if (form == "straight_railing" || form == "stair_flight_railing") {
+        } else if (form == "straight_railing" || form == "stair_flight_railing" || form == "stair_landing_railing") {
             if (form == "straight_railing") {
                 add_coordinate_fields(layout, "Base", "buildingObjectBaseX",
                                   "buildingObjectBaseY", "buildingObjectBaseZ", {});
                 add_angle_field(layout, "Orientation (degrees)",
                             "buildingObjectOrientationDegrees", 0.0);
                 add_quantity_field(layout, "Length", "buildingObjectLength", 3.0);
-            } else setup_railing_host(layout);
+            } else if (form == "stair_landing_railing") setup_landing_railing_host(layout);
+            else setup_railing_host(layout);
             add_quantity_field(layout, "Height", "buildingObjectHeight", 1.1);
             add_quantity_field(layout, "Thickness", "buildingObjectThickness", 0.08);
-            add_quantity_field(layout, "Post spacing", "buildingObjectPostSpacing", 0.9);
+            add_quantity_field(layout, "Maximum post spacing", "buildingObjectPostSpacing", 0.9);
+            if (form == "stair_landing_railing") setup_railing_preview(layout);
         } else if (form == "sloped_roof_panel") {
             add_coordinate_fields(layout, "Base", "buildingObjectBaseX",
                                   "buildingObjectBaseY", "buildingObjectBaseZ", {
@@ -776,6 +793,16 @@ private:
         }
         refresh_pitch();
         refresh_stair_summary();
+        // Changes to any form control invalidate a previously submitted candidate
+        // and any geometry preview. The captured document remains immutable.
+        for (auto* edit : form_page->findChildren<QLineEdit*>())
+            QObject::connect(edit, &QLineEdit::textChanged, owner, [this] { if (!loading) invalidate_candidate(); });
+        for (auto* box : form_page->findChildren<QComboBox*>())
+            QObject::connect(box, qOverload<int>(&QComboBox::currentIndexChanged), owner, [this] { if (!loading) invalidate_candidate(); });
+        for (auto* check : form_page->findChildren<QCheckBox*>())
+            QObject::connect(check, &QCheckBox::toggled, owner, [this] { if (!loading) invalidate_candidate(); });
+        for (auto* table : form_page->findChildren<QTableWidget*>())
+            QObject::connect(table, &QTableWidget::itemChanged, owner, [this] { if (!loading) invalidate_candidate(); });
         const bool roof = form_info(form) != nullptr && form_info(form)->type == "roof";
         roof_openings_group->setVisible(roof || roof_openings_table->rowCount() != 0);
         roof_openings_help->setText(roof
@@ -1006,6 +1033,215 @@ private:
         } catch (const std::exception& caught) {
             stair_summary->setText(QStringLiteral("Invalid stair: %1").arg(QString::fromUtf8(caught.what())));
         }
+    }
+
+    void invalidate_candidate() {
+        candidate_entity.reset();
+        related_entities.clear();
+        if (railing_preview) railing_preview->clear();
+        if (railing_preview_status) railing_preview_status->setText(QStringLiteral("Preview needs updating."));
+    }
+
+    StairFlight selected_landing_stair() const {
+        if (!source_snapshot || !host_combo || host_combo->currentData().toString().isEmpty())
+            throw std::invalid_argument("Choose a current multi-flight stair.");
+        const auto id = host_combo->currentData().toString().toStdString();
+        const auto& entity = source_snapshot->entities().at(id);
+        if (entity.properties.value("version", 0) != 2 ||
+            entity.properties.value("form", std::string{}) != "multi_flight_stair")
+            throw std::invalid_argument("Landing railings require a canonical multi-flight stair.");
+        return decode_stair_properties(id, entity.properties);
+    }
+
+    void setup_landing_railing_host(QFormLayout* layout) {
+        host_combo = new QComboBox(form_page);
+        host_combo->setObjectName(QStringLiteral("buildingObjectStairHost"));
+        host_combo->addItem(QStringLiteral("Choose a stair…"), QString());
+        if (source_snapshot) {
+            int number{};
+            for (const auto& [id, entity] : source_snapshot->entities()) {
+                if (entity.type != "stair") continue;
+                try {
+                    const auto stair = decode_stair_properties(id, entity.properties);
+                    if (entity.properties.value("version", 0) != 2 || stair.flights.empty() ||
+                        (stair.landings.empty() && !stair.top_landing)) continue;
+                    auto name = QStringLiteral("Stair %1").arg(++number);
+                    if (entity.extensions.contains("name") && entity.extensions.at("name").is_string())
+                        name = qt_string(entity.extensions.at("name").get<std::string>());
+                    host_combo->addItem(name, qt_string(id));
+                } catch (const std::exception&) { /* Unsupported hosts cannot supply authority. */ }
+            }
+        }
+        layout->addRow(QStringLiteral("Stair"), host_combo);
+        host_landing_combo = new QComboBox(form_page);
+        host_landing_combo->setObjectName(QStringLiteral("buildingObjectStairHostLanding"));
+        layout->addRow(QStringLiteral("Landing"), host_landing_combo);
+        host_edge_combo = new QComboBox(form_page);
+        host_edge_combo->setObjectName(QStringLiteral("buildingObjectStairHostLandingEdge"));
+        layout->addRow(QStringLiteral("Exposed edge"), host_edge_combo);
+        host_interval_combo = new QComboBox(form_page);
+        host_interval_combo->setObjectName(QStringLiteral("buildingObjectStairHostLandingInterval"));
+        layout->addRow(QStringLiteral("Available coverage"), host_interval_combo);
+        add_scalar_field(layout, QStringLiteral("Start coverage (%)"), "buildingObjectHostStartPercent", 0);
+        add_scalar_field(layout, QStringLiteral("End coverage (%)"), "buildingObjectHostEndPercent", 100);
+        auto* full = new QPushButton(QStringLiteral("Use full available coverage"), form_page);
+        full->setObjectName(QStringLiteral("buildingObjectLandingFullCoverage"));
+        layout->addRow(full);
+        landing_summary = new QLabel(form_page);
+        landing_summary->setObjectName(QStringLiteral("buildingObjectLandingRailingSummary"));
+        landing_summary->setWordWrap(true);
+        landing_summary->setText(QStringLiteral("Choose a stair to see its landing edges."));
+        layout->addRow(landing_summary);
+        auto* note = new QLabel(QStringLiteral("Coverage measures the outer post faces along the original landing edge. Each railing must fit one exposed interval. Flight access remains open."), form_page);
+        note->setWordWrap(true); layout->addRow(note);
+        QObject::connect(host_combo, qOverload<int>(&QComboBox::currentIndexChanged), owner, [this] { populate_host_landings(); });
+        QObject::connect(host_landing_combo, qOverload<int>(&QComboBox::currentIndexChanged), owner, [this] { populate_landing_edges(); });
+        QObject::connect(host_edge_combo, qOverload<int>(&QComboBox::currentIndexChanged), owner, [this] { populate_landing_intervals(); });
+        QObject::connect(host_interval_combo, qOverload<int>(&QComboBox::currentIndexChanged), owner, [this] { use_landing_interval(); });
+        QObject::connect(full, &QPushButton::clicked, owner, [this] { use_landing_interval(); });
+    }
+
+    void populate_host_landings() {
+        const QSignalBlocker blocker(*host_landing_combo);
+        host_landing_combo->clear(); landing_choices.clear();
+        try {
+            const auto stair = selected_landing_stair();
+            for (std::size_t i = 0; i < stair.landings.size(); ++i) {
+                landing_choices.push_back({stair.id, StairLandingRole::connecting, stair.landings[i].id,
+                    stair.flights[i].id, stair.flights[i + 1].id});
+                host_landing_combo->addItem(QStringLiteral("Connecting landing %1 (flights %2 → %3)").arg(i + 1).arg(i + 1).arg(i + 2),
+                    static_cast<int>(landing_choices.size() - 1));
+            }
+            if (stair.top_landing) {
+                landing_choices.push_back({stair.id, StairLandingRole::top, {}, stair.flights.back().id, {}});
+                host_landing_combo->addItem(QStringLiteral("Top landing (after flight %1)").arg(stair.flights.size()),
+                    static_cast<int>(landing_choices.size() - 1));
+            }
+        } catch (const std::exception&) { /* Empty choice is reported when submitted. */ }
+        populate_landing_edges();
+    }
+
+    std::optional<StairLandingRailingHost> selected_landing_host() const {
+        if (!host_landing_combo || host_landing_combo->currentIndex() < 0) return std::nullopt;
+        const auto index = host_landing_combo->currentData().toInt();
+        if (index < 0 || static_cast<std::size_t>(index) >= landing_choices.size()) return std::nullopt;
+        return landing_choices[static_cast<std::size_t>(index)];
+    }
+
+    void populate_landing_edges() {
+        const QSignalBlocker blocker(*host_edge_combo);
+        host_edge_combo->clear();
+        try {
+            const auto stair = selected_landing_stair();
+            auto host = selected_landing_host();
+            if (host) for (std::size_t edge = 0; edge < 4; ++edge) {
+                host->edge_index = edge;
+                const auto derived = derive_stair_landing_edge(stair, *host);
+                if (derived.exposed_intervals.empty()) continue;
+                const auto dx = derived.edge_end.x - derived.edge_start.x;
+                const auto dy = derived.edge_end.y - derived.edge_start.y;
+                // Edges follow the landing's own travel frame, independent of
+                // world rotation. The number retains the original perimeter ID.
+                const std::array<const char*, 4> labels{"Right side", "Far side", "Left side", "Near side"};
+                host_edge_combo->addItem(QStringLiteral("%1 — edge %2, %3").arg(QString::fromLatin1(labels[edge])).arg(edge + 1)
+                    .arg(display_length(std::hypot(dx, dy), metric)), static_cast<int>(edge));
+            }
+        } catch (const std::exception& caught) { fail(QString::fromUtf8(caught.what())); }
+        populate_landing_intervals();
+    }
+
+    void populate_landing_intervals() {
+        const QSignalBlocker blocker(*host_interval_combo);
+        host_interval_combo->clear(); landing_intervals.clear();
+        try {
+            const auto stair = selected_landing_stair();
+            auto host = selected_landing_host();
+            if (host && host_edge_combo->currentIndex() >= 0) {
+                host->edge_index = static_cast<std::size_t>(host_edge_combo->currentData().toInt());
+                const auto edge = derive_stair_landing_edge(stair, *host);
+                landing_intervals = edge.exposed_intervals;
+                const auto length = std::hypot(edge.edge_end.x - edge.edge_start.x, edge.edge_end.y - edge.edge_start.y);
+                for (std::size_t i = 0; i < landing_intervals.size(); ++i) {
+                    const auto& interval = landing_intervals[i];
+                    host_interval_combo->addItem(QStringLiteral("%1–%2% of edge (%3)")
+                        .arg(QString::number(interval.start_fraction * 100, 'g', 6), QString::number(interval.end_fraction * 100, 'g', 6),
+                             display_length(length * (interval.end_fraction - interval.start_fraction), metric)), static_cast<int>(i));
+                }
+                landing_summary->setText(QStringLiteral("Original edge %1; landing span inward %2. Choose one available interval, then adjust its coverage if needed.")
+                    .arg(display_length(length, metric), display_length(edge.normal_span, metric)));
+            } else landing_summary->setText(QStringLiteral("No exposed landing edge is selected."));
+        } catch (const std::exception& caught) { fail(QString::fromUtf8(caught.what())); }
+        use_landing_interval();
+    }
+
+    void use_landing_interval() {
+        if (!host_interval_combo || host_interval_combo->currentIndex() < 0) return;
+        const auto index = static_cast<std::size_t>(host_interval_combo->currentData().toInt());
+        if (index >= landing_intervals.size()) return;
+        fields.at("buildingObjectHostStartPercent")->setText(display_scalar(landing_intervals[index].start_fraction * 100));
+        fields.at("buildingObjectHostEndPercent")->setText(display_scalar(landing_intervals[index].end_fraction * 100));
+        if (!loading) {
+            dirty["buildingObjectHostStartPercent"] = true;
+            dirty["buildingObjectHostEndPercent"] = true;
+            invalidate_candidate();
+        }
+    }
+
+    void setup_railing_preview(QFormLayout* layout) {
+        auto* button = new QPushButton(QStringLiteral("Preview landing railing"), form_page);
+        button->setObjectName(QStringLiteral("buildingObjectRailingPreview"));
+        layout->addRow(button);
+        railing_preview = new QLabel(form_page);
+        railing_preview->setObjectName(QStringLiteral("buildingObjectRailingPreview" "Image"));
+        railing_preview->setAlignment(Qt::AlignCenter);
+        layout->addRow(railing_preview);
+        railing_preview_status = new QLabel(QStringLiteral("Preview needs updating."), form_page);
+        railing_preview_status->setObjectName(QStringLiteral("buildingObjectRailingPreviewStatus"));
+        railing_preview_status->setWordWrap(true); layout->addRow(railing_preview_status);
+        QObject::connect(button, &QPushButton::clicked, owner, [this] {
+            invalidate_candidate(); clear_error(); parsed_quantities.clear();
+            if (original_invalid) { fail(QStringLiteral("The original landing attachment is unavailable in this document.")); return; }
+            try {
+                const auto object = read_object();
+                if (!object) return;
+                if (!source_snapshot) throw std::invalid_argument("A current document is required for a landing preview.");
+                const auto shape = make_building_shape(*object, source_snapshot->entities());
+                if (shape.IsNull()) throw std::invalid_argument("Landing railing preview did not produce geometry.");
+                const auto& rail = std::get<Railing>(*object);
+                const auto edge = derive_stair_landing_edge(selected_landing_stair(), *rail.landing_host);
+                const auto span = std::hypot(edge.edge_end.x - edge.edge_start.x, edge.edge_end.y - edge.edge_start.y) *
+                    (rail.landing_host->end_fraction - rail.landing_host->start_fraction);
+                const auto plan = project_building_plan(*object, source_snapshot->entities());
+                const auto stair_layout = derive_stair_layout(selected_landing_stair());
+                const auto landing_index = rail.landing_host->role == StairLandingRole::top
+                    ? selected_landing_stair().landings.size()
+                    : static_cast<std::size_t>(host_landing_combo->currentData().toInt());
+                const auto& landing = stair_layout.landings.at(landing_index).footprint;
+                double min_x = std::numeric_limits<double>::infinity(), min_y = min_x;
+                double max_x = -min_x, max_y = -min_x;
+                for (const auto& segment : plan) for (const auto& point : {segment.start, segment.end}) {
+                    min_x = std::min(min_x, point.x); max_x = std::max(max_x, point.x);
+                    min_y = std::min(min_y, point.y); max_y = std::max(max_y, point.y);
+                }
+                for (const auto& point : landing) {
+                    min_x = std::min(min_x, point.x); max_x = std::max(max_x, point.x);
+                    min_y = std::min(min_y, point.y); max_y = std::max(max_y, point.y);
+                }
+                if (plan.empty()) throw std::invalid_argument("Landing railing preview has no plan geometry.");
+                QPixmap image(320, 140); image.fill(owner->palette().color(QPalette::Base));
+                QPainter painter(&image); painter.setRenderHint(QPainter::Antialiasing);
+                const auto scale = std::min(288.0 / std::max(max_x - min_x, 0.01), 108.0 / std::max(max_y - min_y, 0.01));
+                const auto point = [&](const auto& p) { return QPointF(16 + (p.x - min_x) * scale, 124 - (p.y - min_y) * scale); };
+                painter.setPen(QPen(owner->palette().color(QPalette::Mid), 1, Qt::DashLine));
+                for (std::size_t i = 0; i < landing.size(); ++i) painter.drawLine(point(landing[i]), point(landing[(i + 1) % landing.size()]));
+                painter.setPen(QPen(owner->palette().color(QPalette::Text), 1.5));
+                for (const auto& segment : plan) painter.drawLine(point(segment.start), point(segment.end));
+                painter.end(); railing_preview->setPixmap(image);
+                railing_preview_status->setText(QStringLiteral("Native geometry validated against this stair. Plan preview; coverage %1, height %2, thickness %3, maximum post spacing %4.")
+                    .arg(display_length(span, metric), display_length(rail.height, metric), display_length(rail.thickness, metric), display_length(rail.post_spacing, metric)));
+            } catch (const std::exception& caught) { fail(QString::fromUtf8(caught.what())); }
+            parsed_quantities.clear();
+        });
     }
 
     void setup_railing_host(QFormLayout* layout) {
@@ -1462,7 +1698,34 @@ private:
                                  ? qt_string(value.level_connection->upper_level_id)
                                  : QString());
                 } else if constexpr (std::is_same_v<Object, Railing>) {
-                    if (value.host && host_combo) {
+                    if (value.landing_host && host_combo) {
+                        const auto& host = *value.landing_host;
+                        host_combo->setCurrentIndex(host_combo->findData(qt_string(host.stair_id)));
+                        populate_host_landings();
+                        int landing_index = -1;
+                        for (std::size_t i = 0; i < landing_choices.size(); ++i) {
+                            const auto& choice = landing_choices[i];
+                            if (choice.role == host.role && choice.landing_id == host.landing_id &&
+                                choice.incoming_flight_id == host.incoming_flight_id && choice.outgoing_flight_id == host.outgoing_flight_id)
+                                landing_index = static_cast<int>(i);
+                        }
+                        host_landing_combo->setCurrentIndex(landing_index);
+                        populate_landing_edges();
+                        host_edge_combo->setCurrentIndex(host_edge_combo->findData(static_cast<int>(host.edge_index)));
+                        populate_landing_intervals();
+                        int interval_index = -1;
+                        for (std::size_t i = 0; i < landing_intervals.size(); ++i)
+                            if (host.start_fraction >= landing_intervals[i].start_fraction - geometry_tolerance &&
+                                host.end_fraction <= landing_intervals[i].end_fraction + geometry_tolerance)
+                                interval_index = static_cast<int>(i);
+                        host_interval_combo->setCurrentIndex(interval_index);
+                        set_scalar("buildingObjectHostStartPercent", host.start_fraction * 100);
+                        set_scalar("buildingObjectHostEndPercent", host.end_fraction * 100);
+                        if (host_combo->currentIndex() < 1 || landing_index < 0 || host_edge_combo->currentIndex() < 0 || interval_index < 0) {
+                            original_invalid = true;
+                            fail(QStringLiteral("The original landing edge or its flight witnesses are unavailable in this document."));
+                        }
+                    } else if (value.host && host_combo) {
                         host_combo->setCurrentIndex(host_combo->findData(qt_string(value.host->stair_id)));
                         populate_host_flights();
                         host_flight_combo->setCurrentIndex(host_flight_combo->findData(qt_string(value.host->flight_id)));
@@ -1963,6 +2226,36 @@ private:
             if (stair_flights && !read_stair_topology(result)) return std::nullopt;
             return result;
         }
+        if (form == "stair_landing_railing") {
+            auto host = selected_landing_host();
+            if (!host || !host_edge_combo || host_edge_combo->currentIndex() < 0 ||
+                !host_interval_combo || host_interval_combo->currentIndex() < 0) {
+                fail(QStringLiteral("Choose a current stair, landing, exposed edge and available coverage.")); return std::nullopt;
+            }
+            const auto* fallback = original_as<Railing>();
+            const auto height = read_length("buildingObjectHeight", "Height", true, fallback ? fallback->height : 1.1);
+            const auto thickness = read_length("buildingObjectThickness", "Thickness", true, fallback ? fallback->thickness : 0.08);
+            const auto spacing = read_length("buildingObjectPostSpacing", "Maximum post spacing", true, fallback ? fallback->post_spacing : 0.9);
+            const auto fraction = [&](const char* name, const char* label, bool end) -> std::optional<double> {
+                if (fallback && fallback->landing_host && !dirty.contains(name))
+                    return end ? fallback->landing_host->end_fraction : fallback->landing_host->start_fraction;
+                const auto percent = read_scalar(name, QString::fromLatin1(label), end ? 100.0 : 0.0);
+                if (!percent) return std::nullopt;
+                return *percent / 100.0;
+            };
+            const auto start = fraction("buildingObjectHostStartPercent", "Start coverage (%)", false);
+            const auto end = fraction("buildingObjectHostEndPercent", "End coverage (%)", true);
+            if (!height || !thickness || !spacing || !start || !end) return std::nullopt;
+            host->edge_index = static_cast<std::size_t>(host_edge_combo->currentData().toInt());
+            host->start_fraction = *start; host->end_fraction = *end;
+            // Re-read the actual source and witnesses before building. The helper
+            // rejects blocked contact edges and changed ordered topology.
+            (void)derive_stair_landing_edge(selected_landing_stair(), *host);
+            Railing result{original_entity ? original_entity->id : std::string{}, {}, 0, 0, *height, *thickness, *spacing};
+            result.landing_host = *host;
+            validate_railing(result);
+            return result;
+        }
         if (form == "stair_flight_railing") {
             const auto* fallback = original_as<Railing>();
             if (!host_combo || host_combo->currentData().toString().isEmpty() ||
@@ -2196,6 +2489,14 @@ private:
     QComboBox* host_combo{};
     QComboBox* host_flight_combo{};
     QComboBox* host_side_combo{};
+    QComboBox* host_landing_combo{};
+    QComboBox* host_edge_combo{};
+    QComboBox* host_interval_combo{};
+    QLabel* landing_summary{};
+    QLabel* railing_preview{};
+    QLabel* railing_preview_status{};
+    std::vector<StairLandingRailingHost> landing_choices;
+    std::vector<StairLandingEdgeInterval> landing_intervals;
     QCheckBox* level_connection_check{};
     QGroupBox* roof_openings_group{};
     QLabel* roof_openings_help{};

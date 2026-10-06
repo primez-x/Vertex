@@ -289,7 +289,7 @@ void multi_flight_resize_contract() {
     auto floor=Entity::create("floor",{{"building_id",building.id}}); floor.id="resize-floor";
     auto layer=Entity::create("layer",{{"floor_id",floor.id}}); layer.id="resize-layer";
     auto straight=encode_building_entity(StairFlight{.id="straight-v2",.riser_count=8,.total_rise=2,
-        .going=.3,.width=1,.flights={{"straight-flight",8}}});
+        .going=.3,.width=1,.top_landing=StairLanding{1.2,.1},.flights={{"straight-flight",8}}});
     straight.properties["layer_id"]=layer.id;
     straight.properties["property_id"]=property.id;
     straight.properties["building_id"]=building.id;
@@ -308,12 +308,16 @@ void multi_flight_resize_contract() {
     rail.properties["property_id"]=property.id;
     rail.properties["building_id"]=building.id;
     rail.properties["floor_id"]=floor.id;
+    auto landing=encode_building_entity(Railing{.id="resize-landing-rail",.height=1,.thickness=.05,.post_spacing=.4,
+        .landing_host=StairLandingRailingHost{straight.id,StairLandingRole::top,"","straight-flight","",0,0,1}});
+    for(const char* key:{"layer_id","property_id","building_id","floor_id"}) landing.properties[key]=rail.properties[key];
     auto future_rail=Entity::create("railing",{{"version",99},{"form","stair_flight_railing"},{"host","opaque"}});
     future_rail.id="resize-future-rail";
-    auto doc=Document::create({property,building,floor,layer,straight,turned,rail,future_rail});
+    auto doc=Document::create({property,building,floor,layer,straight,turned,rail,landing,future_rail});
     const auto before=doc.snapshot();
     rejects([&] { (void)plan_axis_resize_command(before,turned.id,2,3,{}); });
     rejects([&] { (void)plan_axis_resize_command(before,rail.id,2,3,{}); });
+    rejects([&] { (void)plan_axis_resize_command(before,landing.id,2,3,{}); });
     doc.apply(plan_axis_resize_command(before,straight.id,2,3,{}));
     const auto after=doc.snapshot();
     const auto result=decode_stair_properties(straight.id,after.entities().at(straight.id).properties);
@@ -322,6 +326,8 @@ void multi_flight_resize_contract() {
     require(after.entities().at(straight.id).properties["flights"]==straight.properties["flights"],
         "plan resize lost child metadata");
     require(after.entities().at(rail.id)==rail,"plan resize rewrote authored railing placement");
+    require(after.entities().at(landing.id)==landing,"plan resize rewrote authored landing guard attachment");
+    near(result.top_landing->depth,2.4,"single-flight v2 top landing resized with host");
     require(after.entities().at(future_rail.id)==future_rail,"plan resize interpreted opaque future railing host");
     require(doc.snapshot().entities()!=before.entities(),"straight v2 resize was ineffective");
 }

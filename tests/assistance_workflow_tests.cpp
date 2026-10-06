@@ -22,6 +22,7 @@
 #include <cmath>
 #include <filesystem>
 #include <iostream>
+#include <numbers>
 #include <stdexcept>
 #include <utility>
 #include <vector>
@@ -331,6 +332,7 @@ void pdf_dimension_import_workflow(const QString& directory) {
     report.status = WindowsImportWorkerStatus::completed;
     report.completed = report.launched = report.app_container_verified = report.restricted_token_verified =
         report.network_denial_verified = report.job_limits_verified = report.parent_exit_kill_verified =
+        report.job_membership_verified =
         report.brokered_handles_verified = report.private_temporary_root_verified =
         report.immutable_module_roots_verified = report.fixed_search_applied = report.proj_offline_applied = true;
     report.output.resize(static_cast<std::size_t>(bytes.size()));
@@ -467,6 +469,148 @@ void pdf_dimension_import_workflow(const QString& directory) {
     }
 }
 
+void physical_wall_dimension_assistance_workflow(const QString& directory) {
+    using namespace sketch;
+    using namespace sketch::desktop;
+    using json = nlohmann::json;
+    MainWindow window;
+    QImage image(80, 60, QImage::Format_ARGB32);
+    image.fill(Qt::white);
+    const auto path = QDir(directory).filePath("wall-dimension-observation.png");
+    require(image.save(path, "PNG"), "wall observation fixture must save");
+    const auto reference_id = testing::importOrSeedTrustedReferenceFixture(window, path, image);
+    // This fixture supplies persisted text observations only; it does not attest
+    // OCR execution or worker isolation. MainWindow owns association and acceptance.
+    auto reference = window.document().snapshot().entities().at(reference_id.toStdString());
+    const std::string text = "Wall: 12 ft";
+    reference.properties["source_text"] = text;
+    reference.properties["source_text_version"] = 1;
+    reference.properties["source_text_runs"] = json::array({{
+        {"offset", std::size_t{0}}, {"length", text.size()},
+        {"x", 0.1}, {"y", 0.2}, {"width", 0.4}, {"height", 0.05}}});
+    window.document().apply(ApplyEntityChanges{window.document().revision(),
+        {EntityChange::upsert(reference)}, {}, "Seed wall text observation"});
+    require(window.calibrateReference(reference_id, "0", "0", "20", "0", "1 m"),
+            "wall text reference must use normal calibration");
+    window.setAssistanceEnabled(true);
+    const auto straight = window.createStraightWall({0, 0}, {3, 4});
+    const auto curved = window.createCurvedWall({8, 0}, {10, 0}, "180 deg");
+    require(!straight.isEmpty() && !curved.isEmpty(), "wall association fixture needs real supported walls");
+    const auto source = window.document().snapshot();
+    const auto generate = [&](const QString& wall) {
+        return window.suggestReferenceAssistance(reference_id, AssistanceKind::dimension_extraction, wall);
+    };
+    const auto initial = generate(straight);
+    require(initial.size() == 1 && initial.front().preview.command_type == "add_wall_dimension_suggestion" &&
+                initial.front().preview.arguments.size() == 7 &&
+                initial.front().preview.arguments.at("target_wall_id") == straight.toStdString() &&
+                initial.front().preview.arguments.at("source_document_digest") == document_snapshot_digest(source) &&
+                initial.front().preview.arguments.at("source_workspace") == static_cast<int>(window.workspace()) &&
+                initial.front().source.original_text == "12 ft" &&
+                document_snapshot_digest(window.document().snapshot()) == document_snapshot_digest(source),
+            "wall association must produce an owner-only guarded observation without mutation");
+    const auto refuse = [&](const AssistanceProposal& proposal) {
+        const auto before = document_snapshot_digest(window.document().snapshot());
+        const auto workspace = window.workspace();
+        require(!window.acceptAssistanceProposal(proposal) && window.workspace() == workspace &&
+                    document_snapshot_digest(window.document().snapshot()) == before,
+                "invalid wall observations must refuse without document or workspace mutation");
+    };
+    for (int malformed = 0; malformed != 9; ++malformed) {
+        auto proposal = initial.front();
+        auto& args = proposal.preview.arguments;
+        if (malformed == 0) args.erase("source_document_digest");
+        else if (malformed == 1) args.erase("source_workspace");
+        else if (malformed == 2) args["source_document_digest"] = 12;
+        else if (malformed == 3) args["source_workspace"] = "measurement";
+        else if (malformed == 4) args["length_metres"] = 99.0;
+        else if (malformed == 5) args["source_text"] = "99 ft";
+        else if (malformed == 6) args["target_wall_id"] = reference_id.toStdString();
+        else if (malformed == 7) args["source_offset"] = -1;
+        else args["target_segment_id"] = "invented-wall-edge";
+        refuse(proposal);
+    }
+    for (int changed = 0; changed != 5; ++changed) {
+        auto replacement = source;
+        auto& record = const_cast<std::vector<RevisionRecord>&>(replacement.history()).back();
+        if (changed == 0) record.entities.at(straight.toStdString()).properties["baseline"]["end"] = {6, 8};
+        else if (changed == 1) record.entities.at(reference_id.toStdString()).properties["source_text"] = "Wall: 13 ft";
+        else if (changed == 2) record.entities.at(window.activeLayerId().toStdString()).properties["name"] = "Replaced layer";
+        else if (changed == 3) {
+            auto& asset = record.assets.begin()->second;
+            asset = Asset::create(asset.id, asset.media_type, {std::byte{42}});
+        } else record.action = "Replaced source history";
+        window.document() = Document::fork(replacement);
+        require(window.document().revision() == source.revision() &&
+                    window.document().snapshot().document_id() == source.document_id(),
+                "wall retained-source fixture must preserve identity and revision");
+        refuse(initial.front());
+        window.document() = Document::fork(source);
+    }
+    window.setWorkspace(Workspace::architectural);
+    refuse(initial.front());
+    window.setWorkspace(Workspace::measurement);
+    require(window.suggestReferenceAssistance(reference_id, AssistanceKind::dimension_extraction,
+                straight, "invented-wall-edge").empty() &&
+                document_snapshot_digest(window.document().snapshot()) == document_snapshot_digest(source),
+            "wall association cannot accept a boundary segment selector");
+    for (int malformed = 0; malformed != 3; ++malformed) {
+        auto replacement = source;
+        auto& wall = const_cast<std::vector<RevisionRecord>&>(replacement.history()).back().entities.at(curved.toStdString());
+        if (malformed == 0) wall.extensions["curve_input"]["version"] = 999;
+        else if (malformed == 1) wall.extensions["curve_input"]["radians"] = 1.0;
+        else wall.properties["thickness_m"] = -1.0;
+        window.document() = Document::fork(replacement);
+        const auto before = document_snapshot_digest(window.document().snapshot());
+        require(generate(curved).empty() && document_snapshot_digest(window.document().snapshot()) == before,
+                "unsupported, stale or malformed wall sources cannot generate an association");
+        auto proposal = initial.front();
+        proposal.preview.arguments["target_wall_id"] = curved.toStdString();
+        proposal.preview.arguments["source_document_digest"] = before;
+        refuse(proposal);
+        window.document() = Document::fork(source);
+    }
+    for (const auto& wall_id : {straight, curved}) {
+        const auto before = window.document().snapshot();
+        const auto proposals = generate(wall_id);
+        require(proposals.size() == 1, "supported physical walls must produce one reviewed observation");
+        const auto proposal = proposals.front();
+        require(window.acceptAssistanceProposal(proposal), "reviewed wall association must accept");
+        const auto accepted = window.document().snapshot();
+        const auto& entity = accepted.entities().at(proposal.id);
+        const auto decoded = decode_boundary_dimension_entity(entity);
+        const auto length = wall_id == straight ? 5.0 : std::numbers::pi;
+        require(decoded.supported() && decoded.dimension->kind == BoundaryDimensionKind::wall_axis_length &&
+                    decoded.dimension->segment_id.empty() &&
+                    entity.properties.at("dimension_version") == 4 &&
+                    entity.properties.at("target") == json{{"entity_id", wall_id.toStdString()}} &&
+                    std::abs(decoded.dimension->resolve(accepted).segment_length_metres - length) < 1e-9 &&
+                    entity.extensions.at("assistance_provenance").at("proposal") == encode_assistance_proposal(proposal) &&
+                    entity.extensions.at("assistance_provenance").at("accepted_operation") == "add_linked_wall_axis_dimension" &&
+                    std::abs(entity.extensions.at("assistance_provenance").at("linked_length_metres").get<double>() - length) < 1e-9 &&
+                    std::abs(entity.extensions.at("assistance_provenance").at("recognized_length_metres").get<double>() - 3.6576) < 1e-9,
+                "association must persist typed live axis length and keep OCR measurement solely as provenance");
+        require(accepted.revision() == before.revision() + 1 && accepted.history().size() == before.history().size() + 1 &&
+                    accepted.entities().size() == before.entities().size() + 1 && accepted.assets() == before.assets(),
+                "accepted wall association must add only one dimension in one command");
+        for (const auto& [id, original] : before.entities())
+            require(accepted.entities().at(id) == original, "wall association must preserve every source entity");
+        for (const auto* key : {"property_id", "building_id", "floor_id", "layer_id", "phase_id"})
+            if (before.entities().at(wall_id.toStdString()).properties.contains(key))
+                require(entity.properties.at(key) == before.entities().at(wall_id.toStdString()).properties.at(key),
+                        "assisted wall dimension must retain source organization");
+        require(window.undoCommand() && window.document().snapshot().entities() == before.entities() &&
+                    window.redoCommand() && window.document().snapshot().entities() == accepted.entities(),
+                "assisted wall dimension must Undo and Redo as one exact history operation");
+    }
+    const auto accepted = window.document().snapshot();
+    const auto project = QDir(directory).filePath("assisted-wall-dimensions.sketch");
+    require(window.saveProjectAs(project) && window.openProject(project) && window.document().is_editable() &&
+                window.document().snapshot().entities() == accepted.entities() &&
+                window.document().snapshot().assets() == accepted.assets(),
+            "wall association must reopen editable with exact dimensions, observations and reference assets");
+}
+
 sketch::AssistanceRaster dimension_fixture() {
     sketch::AssistanceRaster raster;
     raster.reference_id = "reference-1";
@@ -498,6 +642,7 @@ int main(int argc, char** argv) {
         calibrated_reference_transform_workflow(temporary.path());
         oversized_reference_refusal(temporary.path());
         pdf_dimension_import_workflow(temporary.path());
+        physical_wall_dimension_assistance_workflow(temporary.path());
         const auto image_path = std::filesystem::path(temporary.path().toStdWString()) / "plan.png";
         QImage image(80, 60, QImage::Format_ARGB32);
         image.fill(Qt::white);

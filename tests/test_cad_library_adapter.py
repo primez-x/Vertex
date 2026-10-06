@@ -372,6 +372,30 @@ class DxfAdapterTests(unittest.TestCase):
 
 
 class IfcAdapterTests(unittest.TestCase):
+    def test_stair_railing_metadata_exclusion_requires_native_admission(self):
+        for kind in ("IfcStair", "IfcStairFlight", "IfcRailing"):
+            for envelope in ("Pset_VertexExchange_v1", "Pset_VertexExchange_v2", "Pset_VertexExchange_v3"):
+                with self.subTest(kind=kind, envelope=envelope):
+                    model, context = ifc_model()
+                    foreign = add_swept(model, context)
+                    product = model.create_entity(kind, GlobalId=ifcopenshell.guid.new(),
+                                                  ObjectPlacement=foreign.ObjectPlacement,
+                                                  Representation=foreign.Representation)
+                    model.remove(foreign)
+                    pset = model.create_entity("IfcPropertySet", GlobalId=ifcopenshell.guid.new(),
+                                               Name=envelope, HasProperties=[])
+                    model.create_entity("IfcRelDefinesByProperties", GlobalId=ifcopenshell.guid.new(),
+                                        RelatedObjects=[product], RelatingPropertyDefinition=pset)
+                    data = model.to_string().encode()
+                    self.assertEqual(len(adapter.project_ifc(data)["boundaries"]), 1)
+                    admitted = adapter.project_ifc(data, [product.id()])
+                    self.assertEqual(len(admitted["boundaries"]), 1 if envelope.endswith("v3") else 0)
+
+    def test_native_admission_ids_are_exact_typed_and_bounded(self):
+        for ids in (True, "1", [True], [1.0], [0], [-1]):
+            with self.subTest(ids=ids), self.assertRaisesRegex(ValueError, "invalid_native_ifc_admission"):
+                adapter.project_ifc(b"input", ids)
+
     def test_swept_rotated_translated_product_section_is_world_si(self):
         model, context = ifc_model()
         product = add_swept(model,context)

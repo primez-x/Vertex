@@ -896,6 +896,24 @@ std::vector<AssistanceProposal> extract_dimensions(const AssistanceRaster& raste
     return result;
 }
 
+std::vector<AssistanceProposal> extract_wall_dimensions(const AssistanceRaster& raster,
+                                                       AssistanceEngineOptions options,
+                                                       std::string target_wall_id) {
+    if (!valid_identifier(target_wall_id)) invalid("dimension target wall ID is invalid");
+    // Share recognition and raster provenance with the boundary operation,
+    // then give the physical-wall operation a separate identity and schema.
+    auto result = extract_dimensions(raster, options);
+    for (auto& value : result) {
+        value.id = stable_id("assist-wall-dimension", value.id + ":wall:" + target_wall_id);
+        value.preview.command_type = "add_wall_dimension_suggestion";
+        value.preview.affected_entity_ids = {value.id, target_wall_id};
+        value.preview.arguments.erase("target_boundary_id");
+        value.preview.arguments["target_wall_id"] = target_wall_id;
+        validate_assistance_proposal(value);
+    }
+    return result;
+}
+
 std::vector<AssistanceProposal> suggest_label_placements(
     std::span<const AssistanceAnchor> anchors) {
     std::set<std::string, std::less<>> seen;

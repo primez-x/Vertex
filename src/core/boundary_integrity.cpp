@@ -1302,6 +1302,12 @@ std::optional<std::string> validate_boundary_integrity(
         }
         const auto& dimension = *decoded.dimension;
         const auto owner = entities.find(dimension.boundary_id);
+        if (dimension.kind == BoundaryDimensionKind::wall_axis_length) {
+            if (owner == entities.end() || owner->second.type != "wall")
+                throw std::invalid_argument("Dimension " + id + ": missing or invalid physical wall owner");
+            validate_boundary_dimension_target(dimension, owner->second);
+            continue;
+        }
         if (owner == entities.end() || (!can_recognize_boundary_entity_type(owner->second.type) &&
                                       owner->second.type != "measurement_linework"))
             throw std::invalid_argument("Dimension " + id + ": missing or invalid boundary owner");

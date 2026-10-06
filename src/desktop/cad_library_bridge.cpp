@@ -1,12 +1,28 @@
 #include "cad_library_bridge.hpp"
 
+#include <algorithm>
+#include <array>
 #include <cstdio>
 #include <cstring>
 #include <limits>
+#include <memory>
 #include <stdexcept>
 #include <string>
 
+#if defined(VERTEX_CAD_CONTROLLED_MANIFEST_SHA256) || \
+    defined(VERTEX_CAD_CONTROLLED_IFC_EXTENSION_SHA256) || \
+    defined(VERTEX_CAD_CONTROLLED_IFC_WRAPPER_SHA256)
+#if !defined(VERTEX_CAD_CONTROLLED_MANIFEST_SHA256) || \
+    !defined(VERTEX_CAD_CONTROLLED_IFC_EXTENSION_SHA256) || \
+    !defined(VERTEX_CAD_CONTROLLED_IFC_WRAPPER_SHA256)
+#error Controlled CAD runtime selection requires all three compiled SHA-256 identities.
+#endif
+#define VERTEX_CAD_CONTROLLED_RUNTIME 1
+#endif
+
 #ifdef _WIN32
+#include <QByteArrayView>
+#include <QCryptographicHash>
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
@@ -17,8 +33,11 @@
 // The bundled interpreter is a release build, including in a Debug worker.
 // Python's Windows SDK otherwise auto-links python313_d.lib and changes its ABI.
 #pragma push_macro("_DEBUG")
+#pragma push_macro("slots")
 #undef _DEBUG
+#undef slots
 #include <Python.h>
+#pragma pop_macro("slots")
 #pragma pop_macro("_DEBUG")
 
 #if PY_MAJOR_VERSION != 3 || PY_MINOR_VERSION != 13 || PY_MICRO_VERSION != 15
@@ -29,9 +48,175 @@
 namespace sketch::desktop {
 namespace {
 
+#ifdef VERTEX_CAD_CONTROLLED_RUNTIME
+template<std::size_t Size>
+constexpr bool valid_compiled_sha256(const char (&value)[Size]) {
+    if constexpr (Size != 65) return false;
+    else {
+        for (std::size_t i = 0; i < 64; ++i)
+            if (!((value[i] >= '0' && value[i] <= '9') || (value[i] >= 'a' && value[i] <= 'f')))
+                return false;
+        return value[64] == '\0';
+    }
+}
+static_assert(valid_compiled_sha256(VERTEX_CAD_CONTROLLED_MANIFEST_SHA256),
+              "Controlled CAD manifest SHA-256 must be 64 lowercase hexadecimal characters");
+static_assert(valid_compiled_sha256(VERTEX_CAD_CONTROLLED_IFC_EXTENSION_SHA256),
+              "Controlled IFC extension SHA-256 must be 64 lowercase hexadecimal characters");
+static_assert(valid_compiled_sha256(VERTEX_CAD_CONTROLLED_IFC_WRAPPER_SHA256),
+              "Controlled IFC wrapper SHA-256 must be 64 lowercase hexadecimal characters");
+#endif
+
 #ifdef _WIN32
 constexpr std::size_t input_limit = 64U * 1024U * 1024U;
 constexpr std::size_t json_limit = 32U * 1024U * 1024U;
+
+std::wstring windows_path_text(const std::filesystem::path& path) {
+    auto value = path.lexically_normal().wstring();
+    std::replace(value.begin(), value.end(), L'/', L'\\');
+    if (value.starts_with(L"\\\\?\\UNC\\")) value = L"\\\\" + value.substr(8);
+    else if (value.starts_with(L"\\\\?\\")) value.erase(0, 4);
+    return value;
+}
+
+bool same_windows_path(const std::filesystem::path& left, const std::filesystem::path& right) {
+    const auto a = windows_path_text(left), b = windows_path_text(right);
+    return !a.empty() && !b.empty() && a.size() < 32768 && b.size() < 32768 &&
+        CompareStringOrdinal(a.data(), static_cast<int>(a.size()),
+                             b.data(), static_cast<int>(b.size()), TRUE) == CSTR_EQUAL;
+}
+
+#ifdef VERTEX_CAD_CONTROLLED_RUNTIME
+[[noreturn]] void controlled_identity_error() {
+    throw std::runtime_error("Bundled controlled CAD runtime identity mismatch");
+}
+
+bool reserved_windows_component(std::wstring_view component) {
+    const auto stem = component.substr(0, component.find(L'.'));
+    const auto equal = [stem](std::wstring_view name) {
+        return CompareStringOrdinal(stem.data(), static_cast<int>(stem.size()),
+            name.data(), static_cast<int>(name.size()), TRUE) == CSTR_EQUAL;
+    };
+    for (const auto name : {L"CON", L"PRN", L"AUX", L"NUL", L"CONIN$", L"CONOUT$"})
+        if (equal(name)) return true;
+    if (stem.size() != 4) return false;
+    const auto last = stem.back();
+    return ((last >= L'1' && last <= L'9') || last == L'\u00b9' || last == L'\u00b2' || last == L'\u00b3') &&
+        (equal(std::wstring(L"COM") + last) || equal(std::wstring(L"LPT") + last));
+}
+
+// The broker already holds the immutable module-root lease. Query only the
+// ordinary granted endpoints, so AppContainer never needs ancestor enumeration.
+std::wstring controlled_local_path(const std::filesystem::path& path) {
+    auto value = path.wstring();
+    std::replace(value.begin(), value.end(), L'/', L'\\');
+    if (value.starts_with(L"\\\\?\\")) value.erase(0, 4);
+    if (value.size() < 3 || value.size() >= 32764 || value.find(L'\0') != std::wstring::npos ||
+        !((value[0] >= L'A' && value[0] <= L'Z') || (value[0] >= L'a' && value[0] <= L'z')) ||
+        value[1] != L':' || value[2] != L'\\') controlled_identity_error();
+    if (value[0] >= L'a' && value[0] <= L'z') value[0] -= L'a' - L'A';
+    for (std::size_t start = 3; start < value.size();) {
+        const auto separator = value.find(L'\\', start);
+        const auto end = separator == std::wstring::npos ? value.size() : separator;
+        const auto component = std::wstring_view(value).substr(start, end - start);
+        if (component.empty() || component == L"." || component == L".." ||
+            component.back() == L'.' || component.back() == L' ' ||
+            reserved_windows_component(component) ||
+            component.find_first_of(L":<>\"|?*") != std::wstring_view::npos ||
+            std::any_of(component.begin(), component.end(), [](wchar_t c) { return c < 32 || (c >= 127 && c <= 159); }) ||
+            (separator != std::wstring::npos && separator + 1 == value.size()))
+            controlled_identity_error();
+        start = end + 1;
+    }
+    return value;
+}
+
+bool same_controlled_path(const std::filesystem::path& left, const std::filesystem::path& right) {
+    const auto a = controlled_local_path(left), b = controlled_local_path(right);
+    // Case-sensitive Windows directories can contain case-only junctions.
+    // Only the drive letter has an inherently case-insensitive identity.
+    return a == b;
+}
+
+class ControlledFile final {
+public:
+    ControlledFile(const std::filesystem::path& path, std::uint64_t limit, const char* expected)
+        : path_(controlled_local_path(path)) {
+        const auto extended = L"\\\\?\\" + path_.wstring();
+        // Deny write and delete sharing through import and interpreter teardown.
+        handle_ = CreateFileW(extended.c_str(), FILE_READ_DATA | FILE_READ_ATTRIBUTES,
+            FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+            FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_SEQUENTIAL_SCAN, nullptr);
+        if (handle_ == INVALID_HANDLE_VALUE) controlled_identity_error();
+        try {
+            BY_HANDLE_FILE_INFORMATION information{};
+            if (!GetFileInformationByHandle(handle_, &information) ||
+                GetFileType(handle_) != FILE_TYPE_DISK || information.nNumberOfLinks != 1 ||
+                (information.dwFileAttributes & (FILE_ATTRIBUTE_REPARSE_POINT | FILE_ATTRIBUTE_DIRECTORY)))
+                controlled_identity_error();
+            LARGE_INTEGER size{};
+            if (!GetFileSizeEx(handle_, &size) || size.QuadPart <= 0 ||
+                static_cast<std::uint64_t>(size.QuadPart) > limit) controlled_identity_error();
+            verify_path();
+            QCryptographicHash hash(QCryptographicHash::Sha256);
+            std::array<char, 64U * 1024U> buffer{};
+            std::uint64_t total = 0;
+            for (;;) {
+                DWORD received = 0;
+                if (!ReadFile(handle_, buffer.data(), static_cast<DWORD>(buffer.size()), &received, nullptr))
+                    controlled_identity_error();
+                if (received == 0) break;
+                total += received;
+                if (total > limit || total > static_cast<std::uint64_t>(size.QuadPart))
+                    controlled_identity_error();
+                hash.addData(QByteArrayView(buffer.data(), static_cast<qsizetype>(received)));
+            }
+            if (total != static_cast<std::uint64_t>(size.QuadPart) || hash.result().toHex() != expected)
+                controlled_identity_error();
+            verify_path();
+        } catch (...) {
+            CloseHandle(handle_);
+            handle_ = INVALID_HANDLE_VALUE;
+            throw;
+        }
+    }
+    ~ControlledFile() { if (handle_ != INVALID_HANDLE_VALUE) CloseHandle(handle_); }
+    ControlledFile(const ControlledFile&) = delete;
+    ControlledFile& operator=(const ControlledFile&) = delete;
+    [[nodiscard]] const std::filesystem::path& path() const noexcept { return path_; }
+    void verify_path() const {
+        std::wstring final(32768, L'\0');
+        const auto length = GetFinalPathNameByHandleW(handle_, final.data(), static_cast<DWORD>(final.size()),
+            FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
+        if (!length || length >= final.size()) controlled_identity_error();
+        final.resize(length);
+        if (!same_controlled_path(path_, std::filesystem::path(final)))
+            controlled_identity_error();
+    }
+private:
+    std::filesystem::path path_;
+    HANDLE handle_{INVALID_HANDLE_VALUE};
+};
+
+class ControlledRuntimeIdentity final {
+public:
+    explicit ControlledRuntimeIdentity(const std::filesystem::path& root)
+        : manifest_(root / L"controlled-runtime-manifest.json", 16ULL * 1024 * 1024,
+                    VERTEX_CAD_CONTROLLED_MANIFEST_SHA256),
+          extension_(root / L"Lib" / L"site-packages" / L"ifcopenshell" /
+                     L"_ifcopenshell_wrapper.cp313-win_amd64.pyd", 512ULL * 1024 * 1024,
+                     VERTEX_CAD_CONTROLLED_IFC_EXTENSION_SHA256),
+          wrapper_(root / L"Lib" / L"site-packages" / L"ifcopenshell" / L"ifcopenshell_wrapper.py",
+                   512ULL * 1024 * 1024, VERTEX_CAD_CONTROLLED_IFC_WRAPPER_SHA256) {}
+    void verify_paths() const {
+        manifest_.verify_path(); extension_.verify_path(); wrapper_.verify_path();
+    }
+    [[nodiscard]] const std::filesystem::path& extension_path() const noexcept { return extension_.path(); }
+    [[nodiscard]] const std::filesystem::path& wrapper_path() const noexcept { return wrapper_.path(); }
+private:
+    ControlledFile manifest_, extension_, wrapper_;
+};
+#endif
 
 // CMake delay-loads python313.dll. Load its verified absolute location before
 // any C API reference can invoke the delay loader's basename-based lookup.
@@ -56,8 +241,7 @@ public:
             auto loaded_path = std::filesystem::path(loaded).lexically_normal();
             loaded_path.make_preferred();
             loaded = loaded_path.wstring();
-            if (CompareStringOrdinal(loaded.data(), static_cast<int>(loaded.size()),
-                                     expected.data(), static_cast<int>(expected.size()), TRUE) != CSTR_EQUAL ||
+            if (!same_windows_path(loaded_path, expected_path) ||
                 GetModuleHandleW(L"python313.dll") != module_)
                 throw std::runtime_error("Bundled CAD interpreter location mismatch");
         } catch (...) {
@@ -198,7 +382,11 @@ void check_library_versions() {
     if (!version.get() || !PyCallable_Check(version.get()))
         python_error("Cannot inspect bundled CAD library versions");
     const struct { const char* package; const char* version; } libraries[]{
-        {"ezdxf", "1.4.3"}, {"ifcopenshell", "0.8.3.post2"}};
+        {"ezdxf", "1.4.3"}
+#ifndef VERTEX_CAD_CONTROLLED_RUNTIME
+        , {"ifcopenshell", "0.8.3.post2"}
+#endif
+    };
     for (const auto& library : libraries) {
         PythonObject name(PyUnicode_FromString(library.package));
         if (!name.get()) python_error("Cannot inspect bundled CAD library versions");
@@ -208,7 +396,70 @@ void check_library_versions() {
         const auto equal = PyUnicode_CompareWithASCIIString(actual.get(), library.version);
         if (equal != 0) python_error("Bundled CAD library version mismatch");
     }
+#ifdef VERTEX_CAD_CONTROLLED_RUNTIME
+    // The controlled composer replaces the wheel package and its dist-info.
+    // A surviving wheel identity is a mixed runtime, not source admission.
+    PythonObject missing(PyObject_GetAttrString(metadata.get(), "PackageNotFoundError"));
+    PythonObject ifc_name(PyUnicode_FromString("ifcopenshell"));
+    if (!missing.get() || !PyExceptionClass_Check(missing.get()) || !ifc_name.get())
+        python_error("Cannot inspect controlled IFC distribution identity");
+    PythonObject wheel_version(PyObject_CallOneArg(version.get(), ifc_name.get()));
+    if (wheel_version.get() || !PyErr_ExceptionMatches(missing.get()))
+        python_error("Controlled IFC runtime contains a distribution identity");
+    PyErr_Clear();
+#endif
 }
+
+#ifdef VERTEX_CAD_CONTROLLED_RUNTIME
+void check_python_module_path(PyObject* module, const std::filesystem::path& expected) {
+    // PyModule_Check imports the PyModule_Type DLL data symbol, which cannot be
+    // delay-loaded by MSVC. The C API validates the module without data imports.
+    if (!module || !PyModule_GetDict(module)) python_error("Cannot inspect controlled IFC module identity");
+    PythonObject file(PyObject_GetAttrString(module, "__file__"));
+    if (!file.get() || !PyUnicode_Check(file.get()))
+        python_error("Cannot inspect controlled IFC module identity");
+    const auto length = PyUnicode_GetLength(file.get());
+    if (length <= 0 || length >= 32768)
+        python_error("Controlled IFC module location mismatch");
+    Py_ssize_t written = 0;
+    const std::unique_ptr<wchar_t, decltype(&PyMem_Free)> text(
+        PyUnicode_AsWideCharString(file.get(), &written), &PyMem_Free);
+    if (!text) python_error("Cannot inspect controlled IFC module identity");
+    const std::wstring value(text.get(), static_cast<std::size_t>(written));
+    // Do not normalize an unsafe origin into an accepted path.
+    if (!same_controlled_path(std::filesystem::path(value), expected))
+        python_error("Controlled IFC module location mismatch");
+}
+
+void check_controlled_ifc_modules(const ControlledRuntimeIdentity& identity) {
+    // The exact compiled manifest is checked before Python loads. Verified
+    // manifest-bound staging supplies package source, and the broker retains
+    // the immutable module root. Informative versions confer no admission.
+    PythonObject package(PyImport_ImportModule("ifcopenshell"));
+    check_python_module_path(package.get(), identity.wrapper_path().parent_path() / L"__init__.py");
+    PythonObject wrapper(PyImport_ImportModule("ifcopenshell.ifcopenshell_wrapper"));
+    check_python_module_path(wrapper.get(), identity.wrapper_path());
+    PythonObject native(PyImport_ImportModule("ifcopenshell._ifcopenshell_wrapper"));
+    check_python_module_path(native.get(), identity.extension_path());
+
+    // Identify the native module by the address of its module definition,
+    // rather than a basename that could select a different loaded DLL.
+    auto* definition = PyModule_GetDef(native.get());
+    HMODULE module = nullptr;
+    if (!definition || !GetModuleHandleExW(
+            GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+            reinterpret_cast<LPCWSTR>(definition), &module))
+        python_error("Cannot identify controlled IFC native module");
+    std::wstring loaded(32768, L'\0');
+    const auto length = GetModuleFileNameW(module, loaded.data(), static_cast<DWORD>(loaded.size()));
+    if (!length || length >= loaded.size())
+        python_error("Cannot identify controlled IFC native module");
+    loaded.resize(length);
+    if (!same_controlled_path(std::filesystem::path(loaded), identity.extension_path()))
+        python_error("Controlled IFC native module location mismatch");
+    identity.verify_paths();
+}
+#endif
 
 class PythonInterpreter final {
 public:
@@ -273,7 +524,8 @@ public:
     PythonInterpreter& operator=(const PythonInterpreter&) = delete;
 };
 
-nlohmann::json invoke_adapter(const char* function, std::string_view bytes) {
+nlohmann::json invoke_adapter(const char* function, std::string_view bytes,
+                              std::span<const std::uint64_t> native_admitted_ids) {
     PythonObject adapter(PyImport_ImportModule("cad_library_adapter"));
     if (!adapter.get()) python_error("Cannot load bundled CAD adapter");
     PythonObject callable(PyObject_GetAttrString(adapter.get(), function));
@@ -281,24 +533,35 @@ nlohmann::json invoke_adapter(const char* function, std::string_view bytes) {
         python_error("Cannot resolve bundled CAD adapter function");
     PythonObject input(PyBytes_FromStringAndSize(bytes.data(), static_cast<Py_ssize_t>(bytes.size())));
     if (!input.get()) python_error("Cannot allocate CAD adapter input");
-    PythonObject result(PyObject_CallOneArg(callable.get(), input.get()));
+    PythonObject admitted(PyTuple_New(static_cast<Py_ssize_t>(native_admitted_ids.size())));
+    if (!admitted.get()) python_error("Cannot allocate native IFC admission identities");
+    for (std::size_t i = 0; i < native_admitted_ids.size(); ++i) {
+        auto* id = PyLong_FromUnsignedLongLong(native_admitted_ids[i]);
+        if (!id) python_error("Cannot encode native IFC admission identity");
+        if (PyTuple_SetItem(admitted.get(), static_cast<Py_ssize_t>(i), id) != 0)
+            python_error("Cannot construct native IFC admission identities");
+    }
+    PythonObject args(std::strcmp(function, "project_ifc") == 0
+        ? PyTuple_Pack(2, input.get(), admitted.get()) : PyTuple_Pack(1, input.get()));
+    if (!args.get()) python_error("Cannot allocate CAD adapter arguments");
+    PythonObject result(PyObject_CallObject(callable.get(), args.get()));
     if (!result.get()) python_error("CAD library rejected document");
 
     PythonObject json(PyImport_ImportModule("json"));
     if (!json.get()) python_error("Cannot load bundled JSON serializer");
     PythonObject dumps(PyObject_GetAttrString(json.get(), "dumps"));
-    PythonObject args(PyTuple_Pack(1, result.get()));
+    PythonObject serialization_args(PyTuple_Pack(1, result.get()));
     PythonObject kwargs(PyDict_New());
     // Use functions rather than Py_True/Py_False DLL data imports, which MSVC
     // cannot delay-load. These still return Python's immutable bool singletons.
     PythonObject false_value(PyBool_FromLong(0));
     PythonObject true_value(PyBool_FromLong(1));
-    if (!dumps.get() || !PyCallable_Check(dumps.get()) || !args.get() || !kwargs.get() ||
+    if (!dumps.get() || !PyCallable_Check(dumps.get()) || !serialization_args.get() || !kwargs.get() ||
         !false_value.get() || !true_value.get() ||
         PyDict_SetItemString(kwargs.get(), "allow_nan", false_value.get()) != 0 ||
         PyDict_SetItemString(kwargs.get(), "ensure_ascii", true_value.get()) != 0)
         python_error("Cannot configure bundled JSON serializer");
-    PythonObject serialized(PyObject_Call(dumps.get(), args.get(), kwargs.get()));
+    PythonObject serialized(PyObject_Call(dumps.get(), serialization_args.get(), kwargs.get()));
     if (!serialized.get() || !PyUnicode_Check(serialized.get()))
         python_error("Cannot serialize CAD adapter result");
     const auto characters = PyUnicode_GetLength(serialized.get());
@@ -319,11 +582,16 @@ nlohmann::json invoke_adapter(const char* function, std::string_view bytes) {
 } // namespace
 
 nlohmann::json call_cad_library(const std::filesystem::path& runtime_root,
-                              const char* function, std::string_view bytes) {
+                              const char* function, std::string_view bytes,
+                              std::span<const std::uint64_t> native_admitted_ids) {
 #ifdef _WIN32
     if (!function || (std::strcmp(function, "normalize_dxf") != 0 &&
                       std::strcmp(function, "project_ifc") != 0))
         throw std::invalid_argument("Unsupported CAD adapter function");
+    if (native_admitted_ids.size() > 100'000 ||
+        (std::strcmp(function, "project_ifc") != 0 && !native_admitted_ids.empty()) ||
+        std::any_of(native_admitted_ids.begin(), native_admitted_ids.end(), [](const auto id) { return id == 0; }))
+        throw std::invalid_argument("Invalid native IFC admission identities");
     if (!runtime_root.is_absolute() || runtime_root.native().find(L'\0') != std::wstring::npos)
         throw std::invalid_argument("CAD runtime directory must be an absolute path");
     if (bytes.size() > input_limit ||
@@ -333,9 +601,17 @@ nlohmann::json call_cad_library(const std::filesystem::path& runtime_root,
     nlohmann::json result;
     {
         const auto root = runtime_root.lexically_normal();
+#ifdef VERTEX_CAD_CONTROLLED_RUNTIME
+        // Keep all verified endpoints open before any delay-loaded Python call,
+        // through imports, adapter execution, and interpreter finalization.
+        const ControlledRuntimeIdentity identity(runtime_root);
+#endif
         PythonRuntimeDll dll(root);
         PythonInterpreter interpreter(root);
-        result = invoke_adapter(function, bytes);
+#ifdef VERTEX_CAD_CONTROLLED_RUNTIME
+        check_controlled_ifc_modules(identity);
+#endif
+        result = invoke_adapter(function, bytes, native_admitted_ids);
     }
     output.restore();
     return result;
@@ -343,6 +619,7 @@ nlohmann::json call_cad_library(const std::filesystem::path& runtime_root,
     static_cast<void>(runtime_root);
     static_cast<void>(function);
     static_cast<void>(bytes);
+    static_cast<void>(native_admitted_ids);
     throw std::runtime_error("CAD library embedding is only supported on Windows");
 #endif
 }

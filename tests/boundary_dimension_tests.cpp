@@ -74,6 +74,164 @@ BoundaryDimension manual_dimension(std::string segment_id = "segment-a") {
     };
 }
 
+Entity physical_wall(Segment axis = {{0, 0}, {3, 4}, 0}) {
+    return {"physical-wall", "wall", {{"baseline", {{"start", {axis.start.x, axis.start.y}},
+        {"end", {axis.end.x, axis.end.y}}, {"sweep_radians", axis.sweep_radians}}},
+        {"thickness_m", 0.2}, {"height_m", 2.4}, {"elevation_m", 0.0}}, true};
+}
+
+BoundaryDimension wall_dimension() {
+    auto value = manual_dimension();
+    value.boundary_id = "physical-wall";
+    value.segment_id.clear();
+    value.kind = sketch::BoundaryDimensionKind::wall_axis_length;
+    return value;
+}
+
+void test_wall_axis_dimension_codec_and_live_geometry() {
+    const auto dimension = wall_dimension();
+    auto encoded = sketch::encode_boundary_dimension_entity(dimension);
+    require(encoded.properties.at("dimension_version") == 4 &&
+                encoded.properties.at("dimension_kind") == "wall_axis_length" &&
+                encoded.properties.at("target") == json{{"entity_id", "physical-wall"}},
+            "wall axis dimensions require exact typed v4 owner-only targets");
+    require(sketch::inspect_boundary_dimension_version(encoded).format ==
+                BoundaryDimensionFormat::supported_v4,
+            "only the typed wall v4 envelope is a supported version four form");
+    encoded.properties["opaque"] = {"retain", 1};
+    encoded.properties["target"]["vendor"] = "retain";
+    encoded.properties["text_position"].push_back(1); // Known position must remain strict.
+    rejected([&] { (void)sketch::decode_boundary_dimension_entity(encoded); },
+             "wall text position must use the strict existing schema");
+    encoded.properties["text_position"] = {2.0, 0.75};
+    encoded.extensions["vendor"] = {"retain", 2};
+    encoded.properties["length_m"] = 999; // Opaque cached observations are never authoritative.
+    const auto decoded = sketch::decode_boundary_dimension_entity(encoded);
+    require(decoded.dimension == dimension && decoded.version == 4 &&
+                sketch::encode_boundary_dimension_entity(*decoded.dimension, &encoded) == encoded,
+            "wall dimension codec must preserve unknown source and target metadata");
+    auto styled = dimension;
+    styled.presentation = sketch::BoundaryDimensionPresentation{};
+    require(sketch::decode_boundary_dimension_entity(
+                sketch::encode_boundary_dimension_entity(styled)).dimension == styled,
+            "wall dimension presentation must round trip without changing v4 semantics");
+    auto automatic = dimension;
+    automatic.placement = BoundaryDimensionPlacement::automatic;
+    automatic.automatic_placement_version = 2;
+    require(sketch::decode_boundary_dimension_entity(
+                sketch::encode_boundary_dimension_entity(automatic)).dimension == automatic,
+            "wall dimensions retain explicit versioned automatic placement");
+    auto wall = physical_wall();
+    wall.properties["length_m"] = 999;
+    const auto retained = wall;
+    const auto straight = dimension.resolve(wall);
+    require(straight.kind == dimension.kind && straight.segment_length() == 5 &&
+                straight.segment.start.x == 0 && straight.segment.end.y == 4 && wall == retained,
+            "straight wall dimension must resolve physical axis without changing geometry");
+    wall = physical_wall(sketch::arc_from_chord_angle({-1, 0}, {1, 0}, std::numbers::pi));
+    wall.extensions["curve_input"] = {{"version", 2}, {"start", {-1, 0}}, {"end", {1, 0}},
+        {"radians", std::numbers::pi}, {"construction", "angle"},
+        {"measure", "180 deg"}, {"measure_value", std::numbers::pi}};
+    const auto retained_curve = wall;
+    const auto curved = dimension.resolve(wall);
+    require(std::abs(curved.segment_length() - std::numbers::pi) < 1e-12 &&
+                curved.segment.sweep_radians == std::numbers::pi &&
+                std::abs(curved.segment_length() - 2) > 1 && wall == retained_curve,
+            "wall dimension must measure the true curved axis rather than its chord or exterior face");
+    const auto view = sketch::resolve_dimension_wall_axis_owner(wall);
+    require(view.sweep_radians == std::numbers::pi,
+            "preview owner resolver must retain the physical arc");
+    auto stale_curve = wall;
+    stale_curve.extensions["curve_input"]["radians"] = 1.0;
+    rejected([&] { (void)dimension.resolve(stale_curve); },
+             "stale authored curve receipt must not publish a wall measurement");
+    stale_curve = wall;
+    stale_curve.extensions["curve_input"].erase("construction");
+    rejected([&] { (void)dimension.resolve(stale_curve); },
+             "malformed supported curve receipt must report typed invalid admission");
+    std::map<std::string, Entity, std::less<>> entities{{wall.id, wall}};
+    require(std::abs(dimension.resolve(entities).segment_length() - std::numbers::pi) < 1e-12,
+            "authoritative map must resolve the current wall");
+    entities.at(wall.id) = physical_wall({{0, 0}, {6, 8}, 0});
+    require(dimension.resolve(entities).segment_length() == 10,
+            "wall edit must update dimension length without relying on a cached observation");
+    const auto document = sketch::Document::create({entities.at(wall.id)});
+    require(dimension.resolve(document.snapshot()).segment_length() == 10,
+            "snapshot resolution must use the same authoritative current physical axis");
+    entities.at(wall.id).id = "different-wall";
+    rejected([&] { (void)dimension.resolve(entities); }, "map identity mismatch must reject");
+    entities.clear();
+    rejected([&] { (void)dimension.resolve(entities); }, "missing live wall must reject");
+}
+
+void test_wall_axis_dimension_strict_admission_and_opacity() {
+    const auto dimension = wall_dimension();
+    const auto valid = sketch::encode_boundary_dimension_entity(dimension);
+    for (const auto* field : {"segment_id", "second_segment_id", "vertex_id", "segment_ids"}) {
+        auto malformed = valid;
+        malformed.properties["target"][field] = "unused";
+        rejected([&] { (void)sketch::decode_boundary_dimension_entity(malformed); },
+                 "wall target must reject all boundary target fields even when unused");
+    }
+    for (const auto* field : {"target", "text_position", "placement_origin"}) {
+        auto malformed = valid; malformed.properties.erase(field);
+        rejected([&] { (void)sketch::decode_boundary_dimension_entity(malformed); },
+                 "known wall v4 schema requires every canonical field");
+    }
+    for (const auto bad_id : {"", "unsafe/wall"}) {
+        auto malformed = valid; malformed.properties["target"]["entity_id"] = bad_id;
+        rejected([&] { (void)sketch::decode_boundary_dimension_entity(malformed); },
+                 "wall owner ID must be valid");
+    }
+    for (const auto kind : {"segment_length", "angle", "area", "unknown"}) {
+        auto opaque = valid; opaque.properties["dimension_kind"] = kind;
+        opaque.properties["target"] = "future-target";
+        const auto decoded = sketch::decode_boundary_dimension_entity(opaque);
+        require(!decoded.supported() && decoded.original_entity == opaque &&
+                    sketch::inspect_boundary_dimension_version(opaque).format ==
+                        BoundaryDimensionFormat::unsupported_version,
+                "v4 prior and unknown kinds must remain opaque without target admission");
+    }
+    for (const auto version : {1, 2, 3, 5, 999}) {
+        auto opaque = valid; opaque.properties["dimension_version"] = version;
+        const auto decoded = sketch::decode_boundary_dimension_entity(opaque);
+        require(!decoded.supported() && decoded.original_entity == opaque,
+                "wall semantics must never be authorized by older or future dimension versions");
+    }
+    auto invalid_model = dimension; invalid_model.segment_id = "edge";
+    rejected([&] { (void)sketch::encode_boundary_dimension_entity(invalid_model); },
+             "typed wall model cannot contain boundary edge identifiers");
+    for (int change = 0; change < 11; ++change) {
+        auto wall = physical_wall();
+        if (change == 0) wall.type = "wall_v2";
+        if (change == 1) wall.id = "other";
+        if (change == 2) wall.properties.erase("baseline");
+        if (change == 3) wall.properties["baseline"]["end"] = {0, 0};
+        if (change == 4) wall.properties["baseline"]["sweep_radians"] = 2 * std::numbers::pi;
+        if (change == 5) wall.properties["thickness_m"] = -1;
+        if (change == 6) wall.properties["baseline"]["start"] = {0, 0, 0};
+        if (change == 7) wall.extensions["curve_input"] = {{"version", 999}};
+        if (change == 8) wall.properties["height_m"] = "unknown";
+        if (change == 9) wall.properties["baseline"]["end"] = {std::numeric_limits<double>::infinity(), 0};
+        if (change == 10) wall.extensions["curve_input_derivation"] = json::object();
+        rejected([&] { (void)dimension.resolve(wall); },
+                 "unsupported, malformed, future, or wrong-owner wall must reject");
+    }
+    auto area = dimension; area.kind = sketch::BoundaryDimensionKind::area;
+    rejected([&] { (void)area.resolve(physical_wall()); },
+             "physical wall axis cannot confer closed-boundary area semantics");
+    auto boundary = sketch::encode_identified_boundary_entity(rectangle_model());
+    boundary.id = dimension.boundary_id;
+    rejected([&] { (void)dimension.resolve(boundary); },
+             "wall axis kind must reject an invented boundary owner");
+    auto oversized = physical_wall();
+    oversized.extensions["opaque"] = json::array();
+    for (int index = 0; index < 100'000; ++index)
+        oversized.extensions["opaque"].push_back(0);
+    rejected([&] { (void)dimension.resolve(oversized); },
+             "physical owner resolution must bound opaque JSON work as well as recognized fields");
+}
+
 void test_straight_resolution_derives_length_from_canonical_geometry() {
     const auto boundary = sketch::encode_identified_boundary_entity(rectangle_model());
     const auto encoded = sketch::encode_boundary_dimension_entity(
@@ -670,6 +828,8 @@ void test_segment_chain_validation_and_future_opacity() {
 }  // namespace
 
 int main() {
+    test_wall_axis_dimension_codec_and_live_geometry();
+    test_wall_axis_dimension_strict_admission_and_opacity();
     test_segment_chain_codec_and_physical_resolution();
     test_segment_chain_validation_and_future_opacity();
     test_open_measured_stroke_dimensions_follow_replayed_stable_targets();

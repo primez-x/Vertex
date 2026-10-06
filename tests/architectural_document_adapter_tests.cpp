@@ -927,7 +927,7 @@ void test_room_volume_dimensions() {
             "legacy room aliases must resize and remain readable");
 }
 
-void test_multi_flight_stair_attachment_lifecycle() {
+void test_multi_flight_stair_attachment_lifecycle(bool landing_guard=false,bool top_guard=false) {
     using namespace sketch;
     auto property = Entity::create("property"); property.id = "stair-property";
     auto building = Entity::create("building", {{"property_id",property.id}}); building.id = "stair-building";
@@ -935,6 +935,7 @@ void test_multi_flight_stair_attachment_lifecycle() {
     auto layer = Entity::create("layer", {{"floor_id",floor.id}}); layer.id = "stair-layer";
     auto stair = encode_building_entity(StairFlight{.id="lifecycle-stair", .base_position={2,3,1},
         .riser_count=8, .total_rise=2, .going=.3, .width=1,
+        .top_landing=top_guard?std::optional<StairLanding>{StairLanding{1.2,.15}}:std::nullopt,
         .flights={{"lower-flight",4},{"upper-flight",4}},
         .landings={{"turn-landing",1.2,.15,StairTurn::left_quarter,0}}});
     stair.properties["layer_id"] = layer.id;
@@ -946,6 +947,9 @@ void test_multi_flight_stair_attachment_lifecycle() {
     stair.properties["quantity_entries"] = {{"/going_m",{{"opaque","receipt"}}}};
     auto rail = encode_building_entity(Railing{.id="lifecycle-rail",.height=1,.thickness=.05,.post_spacing=.4,
         .host=StairRailingHost{stair.id,"upper-flight",StairRailingSide::left,0,1}});
+    if(landing_guard) rail=encode_building_entity(Railing{.id="lifecycle-rail",.height=1,.thickness=.05,.post_spacing=.4,
+        .landing_host=top_guard?StairLandingRailingHost{stair.id,StairLandingRole::top,"","upper-flight","",0,0,1}:
+            StairLandingRailingHost{stair.id,StairLandingRole::connecting,"turn-landing","lower-flight","upper-flight",0,0,1}});
     rail.properties["layer_id"] = layer.id;
     rail.properties["property_id"] = property.id;
     rail.properties["building_id"] = building.id;
@@ -1033,7 +1037,13 @@ void test_multi_flight_stair_attachment_lifecycle() {
     for (const auto& [id,entity] : cloned.entities()) {
         if (entity.type=="railing" && entity.properties["host"]["stair_id"]==copy.id) {
             clone_rail_id=id;
-            require(id!=rail.id && entity.properties["host"]["flight_id"]==copy_stair.flights[1].id &&
+            const auto& h=entity.properties.at("host");
+            const bool remapped=landing_guard?(top_guard?
+                h.at("role")=="top" && h.at("incoming_flight_id")==copy_stair.flights[1].id &&
+                    !h.contains("landing_id") && !h.contains("outgoing_flight_id"):
+                h.at("landing_id")==copy_stair.landings[0].id && h.at("incoming_flight_id")==copy_stair.flights[0].id &&
+                    h.at("outgoing_flight_id")==copy_stair.flights[1].id):h.at("flight_id")==copy_stair.flights[1].id;
+            require(id!=rail.id && remapped &&
                 entity.properties["host"]["opaque"]=="upper-flight" && entity.extensions==rail.extensions,
                 "cloned rail must remap only authoritative host references");
         }
@@ -1052,7 +1062,7 @@ void test_multi_flight_stair_attachment_lifecycle() {
     std::filesystem::remove(path);
 }
 
-void test_multi_flight_level_placement_lifecycle() {
+void test_multi_flight_level_placement_lifecycle(bool landing_guard=false) {
     using namespace sketch;
     const VerticalLevelGraph graph({{"lower",10},{"upper",12}},{{"storey","lower","upper"}});
     auto levels=Entity::create("vertical_levels",{{"model",nlohmann::json::parse(graph.serialize())}}); levels.id="v2-levels";
@@ -1080,6 +1090,8 @@ void test_multi_flight_level_placement_lifecycle() {
     legacy.properties["landings"][0]["id"]="absolute-landing";
     auto rail=encode_building_entity(Railing{.id="level-v2-rail",.height=1,.thickness=.05,.post_spacing=.4,
         .host=StairRailingHost{stair.id,"level-flight-a",StairRailingSide::right,0,1}});
+    if(landing_guard) rail=encode_building_entity(Railing{.id="level-v2-rail",.height=1,.thickness=.05,.post_spacing=.4,
+        .landing_host=StairLandingRailingHost{stair.id,StairLandingRole::connecting,"level-landing","level-flight-a","level-flight-b",0,0,1}});
     rail.properties["layer_id"]=layer.id;
     rail.properties["property_id"]=property.id;
     rail.properties["building_id"]=building.id;
@@ -1164,7 +1176,10 @@ int main() {
     try {
         test_typed_join_commands();
         test_multi_flight_stair_attachment_lifecycle();
+        test_multi_flight_stair_attachment_lifecycle(true);
+        test_multi_flight_stair_attachment_lifecycle(true,true);
         test_multi_flight_level_placement_lifecycle();
+        test_multi_flight_level_placement_lifecycle(true);
         test_unrelated_lifecycle_preserves_opaque_stairs_and_rails();
         test_room_volume_dimensions();
         test_material_assignments();

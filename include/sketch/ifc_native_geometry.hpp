@@ -39,4 +39,12 @@ inline constexpr double ifc_native_mesh_deviation_m = 0.001;
 [[nodiscard]] std::vector<IfcNativeMesh> ifc_native_room_mesh(
     const Entity& room, std::size_t vertex_budget, std::size_t triangle_budget);
 
+// Canonical stair/railing solids, without independent placement resolution.
+// Hosted rails require the current resolved stair, never a metadata substitute.
+[[nodiscard]] std::vector<IfcNativeMesh> ifc_native_stair_mesh(
+    const Entity& stair, std::size_t vertex_budget, std::size_t triangle_budget);
+[[nodiscard]] std::vector<IfcNativeMesh> ifc_native_railing_mesh(
+    const Entity& railing, const Entity* resolved_stair,
+    std::size_t vertex_budget, std::size_t triangle_budget);
+
 } // namespace sketch

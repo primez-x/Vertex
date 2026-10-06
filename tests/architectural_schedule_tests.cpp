@@ -475,6 +475,32 @@ void test_multi_flight_and_hosted_railing_quantities() {
         [](const auto& candidate) { return candidate.object_id == "hosted"; }) &&
         !row(unavailable, "hosted").cells.contains("volume") && !unavailable.diagnostics.empty(),
         "unsupported future hosted rail withholds building and material quantities");
+    Railing guard{"landing-guard",{},0,0,.9,.05,.5};
+    guard.landing_host=StairLandingRailingHost{"multi",StairLandingRole::connecting,"turn","first","second",0,0,1};
+    auto guard_entity=assigned(encode_building_entity(guard));architectural_context(guard_entity);
+    document.apply(ApplyEntityChanges{document.revision(),{EntityChange::upsert(guard_entity)}, {},"landing guard"});
+    const auto with_guard=build_architectural_schedules(document.snapshot());
+    require(with_guard.diagnostics.empty(),"landing guard schedules derive native geometry");
+    const auto& landing_row=building_row(with_guard,guard.id);
+    require(std::abs(std::get<ScheduleQuantity>(landing_row.cells.at("length").value).value-.95)<1e-9 &&
+        std::get<std::string>(landing_row.cells.at("host_role").value)=="connecting" &&
+        std::get<std::string>(landing_row.cells.at("host_landing_id").value)=="turn" &&
+        std::get<std::string>(landing_row.cells.at("host_incoming_flight_id").value)=="first" &&
+        std::get<std::string>(landing_row.cells.at("host_outgoing_flight_id").value)=="second" &&
+        std::get<std::int64_t>(landing_row.cells.at("edge_index").value)==0 &&
+        !landing_row.cells.contains("host_flight_id") && !landing_row.cells.contains("side"),
+        "landing rows expose actual role/witnesses/edge without fictional flight-side values");
+    require(std::find(landing_row.cells.at("volume").sources.begin(),landing_row.cells.at("volume").sources.end(),
+        ScheduleSourceRef{"multi","geometry"})!=landing_row.cells.at("volume").sources.end(),"landing quantity retains host provenance");
+    stair.top_landing=StairLanding{1.2,.15};
+    changed_stair=assigned(encode_building_entity(stair));architectural_context(changed_stair);
+    guard.landing_host=StairLandingRailingHost{"multi",StairLandingRole::top,"","second","",0,0,1};
+    guard_entity=assigned(encode_building_entity(guard));architectural_context(guard_entity);
+    document.apply(ApplyEntityChanges{document.revision(),{EntityChange::upsert(changed_stair),EntityChange::upsert(guard_entity)}, {},"top landing guard"});
+    const auto top_projection=build_architectural_schedules(document.snapshot());
+    const auto& top_row=building_row(top_projection,guard.id);
+    require(top_projection.diagnostics.empty()&&std::get<std::string>(top_row.cells.at("host_role").value)=="top" &&
+        !top_row.cells.contains("host_landing_id")&&!top_row.cells.contains("host_outgoing_flight_id"),"top schedule has explicit role and no invented child");
 }
 }
 int main() {

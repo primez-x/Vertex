@@ -464,7 +464,7 @@ def _section_loops(vertices, faces):
     return [item[0] for item in classified],[item[1] for item in classified]
 
 
-def project_ifc(data: bytes) -> dict:
+def project_ifc(data: bytes, native_admitted_ids=()) -> dict:
     """Return SI world-coordinate measurement sections for foreign products.
 
     IfcOpenShell parses/extracts geometry. Each product uses a disclosed default
@@ -472,6 +472,14 @@ def project_ifc(data: bytes) -> dict:
     wall/slab/opening; native metadata products belong exclusively to C++.
     """
     _input(data)
+    # These identities come from the strict native geometric admission result.
+    # A familiar property-set name cannot authorize new native families alone.
+    if not isinstance(native_admitted_ids, (tuple, list)) or any(
+            type(value) is not int or value <= 0 for value in native_admitted_ids):
+        raise ValueError("invalid_native_ifc_admission")
+    admitted = set(native_admitted_ids)
+    if len(admitted) > MAX_IFC_PRODUCTS:
+        raise ValueError("ifc_product_limit")
     import ifcopenshell
     import ifcopenshell.geom
 
@@ -508,7 +516,9 @@ def project_ifc(data: bytes) -> dict:
         definitions=relation.RelatingPropertyDefinition
         definitions=definitions if isinstance(definitions,tuple) else (definitions,)
         if any(definition and definition.is_a("IfcPropertySet") and definition.Name in NATIVE_IFC_PSETS for definition in definitions):
-            native.update(product.id() for product in relation.RelatedObjects)
+            native.update(product.id() for product in relation.RelatedObjects
+                          if product.is_a() not in ("IfcStair", "IfcStairFlight", "IfcRailing")
+                          or product.id() in admitted)
     settings=ifcopenshell.geom.settings()
     settings.set("use-world-coords",True)
     settings.set("convert-back-units",False)

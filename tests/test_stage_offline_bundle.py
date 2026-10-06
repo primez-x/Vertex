@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import copy
 import importlib.util
 import json
 import os
@@ -9,6 +10,11 @@ import shutil
 import subprocess
 import tempfile
 import unittest
+from unittest import mock
+from types import SimpleNamespace
+import stat
+from contextlib import redirect_stdout
+import io
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -1236,6 +1242,321 @@ try { $null=Get-OwnedModulePaths FIXTURE_ROOT $bad } catch {
         with self.assertRaises(stage.BundleError) as context:
             stage.verify_bundle(bundle)
         self.assertIn("sbom", str(context.exception).lower())
+
+
+class DependencySourceKitTests(unittest.TestCase):
+    """Tiny local payload fixtures; no installer, compiler or child process."""
+
+    def setUp(self):
+        fixture = StageOfflineBundleTests.fixture(self)
+        self.addCleanup(fixture[0].cleanup)
+        _, self.root, self.inventory, self.source_kit, self.allowlist, *_ = fixture
+        component_manifest = self.root / "third_party/distribution-components.json"
+        component_manifest.write_bytes((self.root / "third_party/NOTICE.txt").read_bytes())
+        runtime = self.root / "artifacts/runtime/runtime.json"
+        runtime.write_bytes(b"{}")
+        inventory = json.loads(self.inventory.read_text())
+        inventory["evidence"]["runtime"] = {"path": runtime.relative_to(self.root).as_posix(), "sha256": digest(runtime)}
+        write_json(self.inventory, inventory)
+        self.base = stage.stage_bundle(self.inventory, self.allowlist, self.source_kit,
+                                       self.root, self.root / "out", "base")
+        self.composer = stage._load_sibling("test_dependency_composer_for_stager",
+                                           "qualification/compose_dependency_source_kit.py")
+        self.payload_name = "artifacts/dependency-kit"
+        self.payload = self.root / self.payload_name
+        self.manifest = self.payload / self.composer.MANIFEST
+        binding = {"inventory": self.receipt(self.inventory.relative_to(self.root).as_posix()),
+                   "component_manifest": self.receipt("third_party/distribution-components.json"),
+                   "runtime": self.receipt("artifacts/runtime/runtime.json"),
+                   "binaries": [{"component_id": row["component_id"], **self.receipt(row["path"])}
+                                for row in inventory["binaries"]],
+                   "build_receipts": [], "upstream_metadata": None}
+        frozen = {key: self.receipt("out/base/" + relative) for key, relative in (
+            ("manifest", "offline-bundle-manifest.json"),
+            ("portable_manifest", "metadata/portable-package-manifest.json"),
+            ("runtime_manifest", "runtime-manifest.json"),
+            ("source_inventory", "metadata/distribution-inventory.json"),
+            ("source_kit", "metadata/source-kit-manifest.json"))}
+        frozen.update(payload=[self.receipt("out/base/" + row["path"]) for row in self.base["files"]],
+                      source_location="out/base/source-kit")
+        binding["offline_bundle"] = frozen
+        components = []
+        for item in inventory["components"]:
+            vertex = item["id"] == "vertex"
+            components.append({"id": item["id"], "package": item["package"],
+                "declared_source_kind": "workspace" if vertex else "locked-archive",
+                "sources": [{"url": None, "status": "exact_local_source_present",
+                    "local_files": [{**self.receipt("out/base/source-kit/src/main.cpp"),
+                                     "inventory_path": "src/main.cpp"}]}] if vertex else [],
+                "notices": [], "assets": [], "artifacts": [], "recipe": None,
+                "source_status": "exact_local_source_present" if vertex else "missing_source",
+                "remaining": ["source_and_rebuild_not_qualified"],
+                "licensing_clearance": False, "corresponding_source_qualified": False})
+        self.report = {"schema_version": 1, "audit_kind": "candidate_dependency_source_closure",
+                       "candidate_binding": binding, "components": components,
+                       "licensing_clearance": False, "corresponding_source_qualified": False}
+        archive = self.root / "cache/dependency.tar.xz"
+        archive.parent.mkdir()
+        archive.write_bytes(b"opaque source archive")
+        recipe = self.root / "recipe/portfile.cmake"
+        recipe.parent.mkdir()
+        recipe.write_bytes(b"configure()\n")
+        sqlite = next(item for item in components if item["id"] == "sqlite")
+        sqlite.update(source_status="exact_local_source_present",
+                      sources=[{"url": "https://example.invalid/dependency.tar.xz",
+                                "status": "exact_local_source_present",
+                                "local_files": [self.receipt("cache/dependency.tar.xz")]}],
+                      recipe={"status": "exact_local_recipe_present", "recipe_options": [],
+                              "files": [self.receipt("recipe/portfile.cmake")]})
+        self.compose()
+
+    def receipt(self, name):
+        path = self.root / name
+        return {"path": name, "sha256": digest(path), "bytes": path.stat().st_size}
+
+    def compose(self):
+        write_json(self.root / "artifacts/source-report.json", self.report)
+        self.document = self.composer.compose(self.root, "artifacts/source-report.json", self.payload_name)
+
+    def publish(self, name="with-dependencies"):
+        return stage.stage_bundle(self.inventory, self.allowlist, self.source_kit,
+                                  self.root, self.root / "out", name,
+                                  dependency_source_kit=self.payload_name)
+
+    def change_manifest(self, mutate):
+        document = copy.deepcopy(self.document)
+        mutate(document)
+        write_json(self.manifest, document)
+
+    def test_exact_payload_and_manifest_are_hashed_and_never_installed(self):
+        result = self.publish()
+        bundle = self.root / "out/with-dependencies"
+        copied = [row for row in result["files"] if row.get("category") == "dependency-source"]
+        self.assertEqual(len(copied), len(self.document["files"]) + 1)
+        for row in copied:
+            original = self.payload / row["path"][len(stage.DEPENDENCY_PREFIX) + 1:]
+            self.assertEqual((bundle / row["path"]).read_bytes(), original.read_bytes())
+            self.assertEqual(row["sha256"], digest(original))
+            self.assertFalse(row["install"])
+            self.assertEqual(row["kind"], "dependency-source")
+        self.assertEqual(result["dependency_source_kit"]["sha256"], digest(self.manifest))
+        self.assertEqual((bundle / "runtime-manifest.json").read_bytes(),
+                         (self.root / "out/base/runtime-manifest.json").read_bytes())
+        self.assertEqual(stage.verify_bundle(bundle)["file_count"], len(result["files"]))
+        self.assertFalse(result["offline_qualified"])
+        self.assertEqual((bundle / stage.DEPENDENCY_PREFIX / "inputs/cache/dependency.tar.xz").read_bytes(),
+                         b"opaque source archive")
+
+    def direct_binding(self):
+        """The direct receipt wire format, independent of composer CLI changes."""
+        document = copy.deepcopy(self.document)
+        original = self.source_kit.relative_to(self.root).as_posix()
+        receipt = self.receipt(original)
+        normalized = {"source_path": original, "sha256": receipt["sha256"],
+                      "bytes": receipt["bytes"], "payload_path": "inputs/" + original}
+        document["candidate_binding"]["source_kit"] = normalized
+        document["candidate_binding"]["offline_bundle"] = None
+        # Remove payloads whose only admission came from the frozen binding.
+        document["files"] = [row for row in document["files"] if row["roles"] != ["offline_bundle_receipt"]]
+        for row in self.document["files"]:
+            if row["roles"] == ["offline_bundle_receipt"]:
+                (self.payload / row["path"]).unlink()
+        payload_path = self.payload / normalized["payload_path"]
+        payload_path.parent.mkdir(parents=True, exist_ok=True)
+        payload_path.write_bytes(self.source_kit.read_bytes())
+        document["files"].append({"source_path": original, "sha256": receipt["sha256"],
+                                  "bytes": receipt["bytes"], "path": normalized["payload_path"],
+                                  "component_ids": [], "roles": ["source_kit"]})
+        document["files"].sort(key=lambda row: row["path"])
+        # The composer creates only parents of declared files/trees.
+        for directory in sorted((p for p in self.payload.rglob("*") if p.is_dir()),
+                                key=lambda p: len(p.parts), reverse=True):
+            if not any(directory.iterdir()):
+                directory.rmdir()
+        self.document = document
+        write_json(self.manifest, document)
+
+    def test_direct_source_kit_binding_accepts_first_freeze(self):
+        self.direct_binding()
+        self.assertIn("dependency_source_kit", self.publish())
+
+    def test_actual_composer_direct_receipt_stages_first_source_kit(self):
+        self.report["candidate_binding"]["offline_bundle"] = None
+        vertex = next(item for item in self.report["components"] if item["id"] == "vertex")
+        vertex["sources"][0]["local_files"] = [self.receipt("src/main.cpp")]
+        write_json(self.root / "artifacts/source-report.json", self.report)
+        self.payload_name = "artifacts/direct-dependency-kit"
+        self.payload = self.root / self.payload_name
+        self.manifest = self.payload / self.composer.MANIFEST
+        self.document = self.composer.compose(self.root, "artifacts/source-report.json",
+            self.payload_name, source_kit_manifest=self.source_kit.relative_to(self.root).as_posix())
+        result = self.publish("actual-direct")
+        self.assertEqual(result["dependency_source_kit"]["sha256"], digest(self.manifest))
+        installed = self.root / "out/actual-direct"
+        self.assertEqual(stage.verify_bundle(installed)["file_count"], len(result["files"]))
+        self.assertFalse(result["offline_qualified"])
+        self.assertTrue(all(not row["install"] for row in result["files"]
+                            if row.get("category") == "dependency-source"))
+
+    def test_missing_source_kit_binding_and_mixed_binary_binding_are_refused(self):
+        self.change_manifest(lambda d: d["candidate_binding"].update(offline_bundle=None))
+        with self.assertRaises(stage.BundleError):
+            self.publish()
+        self.change_manifest(lambda d: d["candidate_binding"]["binaries"][0].update(sha256="0" * 64))
+        with self.assertRaisesRegex(stage.BundleError, "binary binding"):
+            self.publish()
+
+    def test_direct_source_kit_binding_must_match_selected_manifest(self):
+        self.direct_binding()
+        source_kit = json.loads(self.source_kit.read_text())
+        source_kit["boundary"] += " changed"
+        write_json(self.source_kit, source_kit)
+        with self.assertRaisesRegex(stage.BundleError, "source kit binding"):
+            self.publish()
+
+    def test_dependency_directory_and_empty_tree_are_copied(self):
+        directory = self.root / "vendor/empty"
+        directory.mkdir(parents=True)
+        sqlite = next(item for item in self.report["components"] if item["id"] == "sqlite")
+        sqlite["sources"].append({"url": None, "status": "exact_local_source_present", "local_files": [{
+            "path": "vendor/empty", "kind": "directory",
+            "sha256": self.composer.closure.source_tree_hash(self.root, "vendor/empty")}]})
+        self.payload_name = "artifacts/with-empty-tree"
+        self.payload = self.root / self.payload_name
+        self.manifest = self.payload / self.composer.MANIFEST
+        self.compose()
+        self.publish()
+        self.assertTrue((self.root / "out/with-dependencies" / stage.DEPENDENCY_PREFIX / "inputs/vendor/empty").is_dir())
+
+    def test_stale_project_reference_is_refused(self):
+        self.change_manifest(lambda d: next(item for item in d["components"] if item["id"] == "vertex")
+                             ["sources"][0]["local_files"][0].update(sha256="0" * 64))
+        with self.assertRaisesRegex(stage.BundleError, "project file"):
+            self.publish()
+
+    def test_stale_inventory_cannot_be_relabelled_as_current(self):
+        inventory = json.loads(self.inventory.read_text())
+        inventory["new_candidate"] = "changed"
+        write_json(self.inventory, inventory)
+        with self.assertRaisesRegex(stage.BundleError, "inventory binding"):
+            self.publish()
+        self.assertFalse((self.root / "out/with-dependencies").exists())
+
+    def test_source_kit_identity_and_workspace_references_are_bound(self):
+        source_kit = json.loads(self.source_kit.read_text())
+        source_kit["boundary"] += " new receipt"
+        write_json(self.source_kit, source_kit)
+        with self.assertRaisesRegex(stage.BundleError, "source kit binding"):
+            self.publish()
+
+    def test_stale_payload_hash_and_bytes_are_refused(self):
+        row = self.document["files"][0]
+        target = self.payload / row["path"]
+        target.write_bytes(target.read_bytes() + b"drift")
+        with self.assertRaisesRegex(stage.BundleError, "hash"):
+            self.publish()
+        target.write_bytes(target.read_bytes()[:-5])
+        self.change_manifest(lambda d: d["files"][0].update(bytes=row["bytes"] + 1))
+        with self.assertRaisesRegex(stage.BundleError, "bytes"):
+            self.publish()
+
+    def test_extra_files_including_caches_and_empty_directories_are_refused(self):
+        for name in ("secret.txt", "inputs/__pycache__/secret.pyc", "extra-empty"):
+            target = self.payload / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            if name == "extra-empty":
+                target.mkdir()
+            else:
+                target.write_bytes(b"private")
+            with self.subTest(name=name), self.assertRaisesRegex(stage.BundleError, "unlisted"):
+                self.publish()
+            if target.is_dir():
+                target.rmdir()
+            else:
+                target.unlink()
+            if name.startswith("inputs/__pycache__"):
+                target.parent.rmdir()
+
+    def test_case_collisions_traversal_and_unknown_schema_are_refused(self):
+        mutations = (
+            lambda d: d["files"].append({**d["files"][0], "path": d["files"][0]["path"].upper()}),
+            lambda d: d["files"][0].update(path="../secret"),
+            lambda d: d["components"][0].update(unknown="secret"),
+            lambda d: d.update(offline_rebuild_qualified=True))
+        for mutate in mutations:
+            self.change_manifest(mutate)
+            with self.subTest(mutate=mutate), self.assertRaises(stage.BundleError):
+                self.publish()
+        write_json(self.manifest, self.document)
+        with self.assertRaises(stage.BundleError):
+            stage.stage_bundle(self.inventory, self.allowlist, self.source_kit, self.root,
+                               self.root / "out", dependency_source_kit=self.payload)
+
+    def test_reparse_points_are_refused_without_following_them(self):
+        original = pathlib.Path.lstat
+        target = self.payload / self.document["files"][0]["path"]
+        def reparse(path, *args, **kwargs):
+            if path == target:
+                return SimpleNamespace(st_mode=stat.S_IFREG, st_file_attributes=0x400)
+            return original(path, *args, **kwargs)
+        with mock.patch.object(pathlib.Path, "lstat", reparse):
+            with self.assertRaisesRegex(stage.BundleError, "link|reparse"):
+                self.publish()
+
+    def test_failed_copy_and_existing_destination_preserve_previous_bundle(self):
+        previous = {path.relative_to(self.root / "out/base").as_posix(): path.read_bytes()
+                    for path in (self.root / "out/base").rglob("*") if path.is_file()}
+        with mock.patch.object(stage, "_load_sibling", return_value=self.composer):
+            with mock.patch.object(self.composer, "copy_file", side_effect=OSError("copy failed")):
+                with self.assertRaisesRegex(OSError, "copy failed"):
+                    self.publish()
+        self.assertFalse((self.root / "out/with-dependencies").exists())
+        self.assertEqual(list((self.root / "out").glob(".offline-bundle-*")), [])
+        with self.assertRaisesRegex(stage.BundleError, "already exists"):
+            self.publish("base")
+        self.assertEqual(previous, {path.relative_to(self.root / "out/base").as_posix(): path.read_bytes()
+                                   for path in (self.root / "out/base").rglob("*") if path.is_file()})
+
+    def test_late_unlisted_file_and_publication_failure_never_publish(self):
+        original_copy = self.composer.copy_file
+        last = self.document["files"][-1]["path"]
+        def copy_with_late_extra(root, receipt, destination):
+            original_copy(root, receipt, destination)
+            if receipt["path"] == last:
+                (self.payload / "late-private.txt").write_bytes(b"unlisted")
+        with mock.patch.object(stage, "_load_sibling", return_value=self.composer):
+            with mock.patch.object(self.composer, "copy_file", side_effect=copy_with_late_extra):
+                with self.assertRaisesRegex(stage.BundleError, "unlisted"):
+                    self.publish()
+        self.assertFalse((self.root / "out/with-dependencies").exists())
+        (self.payload / "late-private.txt").unlink()
+        original_rename = pathlib.Path.rename
+        def fail_publication(path, target):
+            if target == self.root / "out/with-dependencies":
+                raise OSError("publication failed")
+            return original_rename(path, target)
+        with mock.patch.object(pathlib.Path, "rename", fail_publication):
+            with self.assertRaisesRegex(stage.BundleError, "publication failed"):
+                self.publish()
+        self.assertFalse((self.root / "out/with-dependencies").exists())
+        self.assertTrue((self.root / "out/base/offline-bundle-manifest.json").is_file())
+
+    def test_cli_forwards_optional_payload(self):
+        with redirect_stdout(io.StringIO()):
+            result = stage.main(["--inventory", str(self.inventory), "--allowlist", str(self.allowlist),
+                                 "--source-kit", str(self.source_kit), "--source-root", str(self.root),
+                                 "--output-root", str(self.root / "out"), "--destination", "cli",
+                                 "--dependency-source-kit", self.payload_name])
+        self.assertEqual(result, 0)
+        manifest = json.loads((self.root / "out/cli/offline-bundle-manifest.json").read_text())
+        self.assertIn("dependency_source_kit", manifest)
+
+    def test_default_flow_ignores_optional_payload_and_remains_identical(self):
+        (self.payload / "unlisted-secret.txt").write_bytes(b"private")
+        result = stage.stage_bundle(self.inventory, self.allowlist, self.source_kit,
+                                    self.root, self.root / "out", "legacy")
+        self.assertEqual(result, self.base)
+        self.assertNotIn("dependency_source_kit", result)
 
 
 if __name__ == "__main__":

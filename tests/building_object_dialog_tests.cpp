@@ -76,7 +76,7 @@ void select_form(BuildingObjectDialog& dialog, std::string_view form) {
         type = "beam";
     } else if (form == "straight_stair_flight" || form == "multi_flight_stair") {
         type = "stair";
-    } else if (form == "straight_railing" || form == "stair_flight_railing") {
+    } else if (form == "straight_railing" || form == "stair_flight_railing" || form == "stair_landing_railing") {
         type = "railing";
     } else {
         type = "roof";
@@ -892,6 +892,85 @@ void test_hosted_railing_candidates_are_atomic_and_cancel_is_immutable() {
     require_quantity_receipt(changed_rail, "/height_m", "3 ft", "ft", 1143, 1250);
 }
 
+void test_landing_railing_choices_editing_and_refusals() {
+    sketch::StairFlight stair{"landing-host", {2, 3, 0}, 0, 12, 3, 0.3, 1.2,
+        sketch::StairLanding{1.2, 0.15}};
+    stair.flights = {{"lower-flight", 6}, {"upper-flight", 6}};
+    stair.landings = {{"turn-landing", 1.2, 0.15, sketch::StairTurn::left_quarter, 0}};
+    auto host = sketch::encode_building_entity(stair, {{"name", "Hall stair"}});
+    sketch::StairFlight legacy{"legacy-host", {}, 0, 10, 2.5, 0.25, 1.2,
+        sketch::StairLanding{1.2, 0.15}};
+    const auto document = sketch::Document::create({host, sketch::encode_building_entity(legacy)});
+    const auto source = document.snapshot();
+    for (const auto role : {sketch::StairLandingRole::connecting, sketch::StairLandingRole::top}) {
+        BuildingObjectDialog dialog(source, std::nullopt, true);
+        select_form(dialog, "stair_landing_railing");
+        auto& hosts = combo(dialog, "buildingObjectStairHost");
+        require(hosts.findData("legacy-host") < 0, "landing guards must not silently upgrade legacy hosts");
+        require(!dialog.submit() && !dialog.candidate(), "landing guard requires explicit current host");
+        hosts.setCurrentIndex(hosts.findData("landing-host"));
+        auto& landings = combo(dialog, "buildingObjectStairHostLanding");
+        landings.setCurrentIndex(role == sketch::StairLandingRole::connecting ? 0 : 1);
+        require(combo(dialog, "buildingObjectStairHostLandingEdge").count() > 0 &&
+                    combo(dialog, "buildingObjectStairHostLandingInterval").count() > 0,
+                "each landing role must offer an actual exposed edge and interval");
+        require(!dialog.findChild<QLineEdit*>("buildingObjectBaseX") &&
+                    !dialog.findChild<QLineEdit*>("buildingObjectLength"),
+                "landing guard placement must come entirely from its host");
+        set_field(dialog, "buildingObjectPostSpacing", "800 mm");
+        auto* preview = dialog.findChild<QPushButton*>("buildingObjectRailingPreview");
+        require(preview, "landing guard must offer an actual native geometry preview"); preview->click();
+        require(dialog.lastError().isEmpty() &&
+                    dialog.findChild<QLabel*>("buildingObjectRailingPreviewStatus")->text().contains("validated"),
+                "valid selected interval must build a native preview against the captured host");
+        require(dialog.submit(), "default exposed landing coverage must build successfully");
+        auto original = *dialog.candidate();
+        auto rail = sketch::decode_railing_properties(original.id, original.properties);
+        require(rail.landing_host && rail.landing_host->role == role && !rail.host &&
+                    original.properties.at("version") == 3 && dialog.relatedCandidates().empty(),
+                "landing guards must persist v3 role and witnesses without flight upgrades");
+        require(!original.properties.at("host").contains("flight_id") &&
+                    !original.properties.at("host").contains("side"),
+                "landing attachment must contain only the landing witness vocabulary");
+        if (role == sketch::StairLandingRole::top)
+            require(!original.properties.at("host").contains("landing_id") &&
+                        !original.properties.at("host").contains("outgoing_flight_id"),
+                    "top landing must omit connecting-only witnesses");
+        const auto interval = sketch::derive_stair_landing_edge(stair, *rail.landing_host);
+        require(!interval.exposed_intervals.empty(), "selected edge must be physically exposed");
+        original.properties["host"]["future_anchor"] = {{"opaque", 7}};
+        original.extensions["vendor"] = "retain";
+        BuildingObjectDialog edit(source, original, true);
+        require(edit.submit() && edit.candidate()->properties == original.properties &&
+                    edit.candidate()->extensions == original.extensions,
+                "unchanged landing editor must reconstruct exact attachment, receipts and opaque metadata");
+        const auto old_spacing = original.properties.at("quantity_entries").at("/post_spacing_m");
+        set_field(edit, "buildingObjectHeight", "1000 mm");
+        require(!edit.candidate() && edit.relatedCandidates().empty(), "any field change must invalidate prior candidate");
+        require(edit.submit() && edit.candidate()->properties.at("quantity_entries").at("/post_spacing_m") == old_spacing &&
+                    edit.candidate()->properties.at("host") == original.properties.at("host"),
+                "dimension editing must preserve unchanged landing witnesses and exact spacing receipt");
+        set_field(edit, "buildingObjectHostStartPercent", "99");
+        set_field(edit, "buildingObjectHostEndPercent", "1");
+        preview = edit.findChild<QPushButton*>("buildingObjectRailingPreview"); preview->click();
+        require(!edit.lastError().isEmpty() && !edit.submit() && !edit.candidate(),
+                "invalid coverage must refuse native preview and submit without clipping");
+        auto malformed = original; malformed.properties["host"]["edge_index"] = 20;
+        BuildingObjectDialog invalid_edge(source, malformed, true);
+        require(!invalid_edge.submit() && !invalid_edge.candidate(), "invalid persisted edge must not choose a replacement");
+        auto missing = original;
+        missing.properties["host"]["incoming_flight_id"] = "missing-flight";
+        BuildingObjectDialog invalid_witness(source, missing, true);
+        require(!invalid_witness.submit(), "missing topology witness must refuse reconstruction");
+        BuildingObjectDialog cancel(source, std::nullopt, true); select_form(cancel, "stair_landing_railing");
+        combo(cancel, "buildingObjectStairHost").setCurrentIndex(1); cancel.reject();
+        require(!cancel.candidate() && cancel.relatedCandidates().empty(), "cancel must discard landing candidates");
+        require(document.snapshot().entities() == source.entities() && document.snapshot().revision() == source.revision(),
+                "all preview, edit, invalid and cancel paths must leave source immutable");
+        capture(dialog, role == sketch::StairLandingRole::top ? "stair-top-landing-railing" : "stair-connecting-landing-railing");
+    }
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -933,6 +1012,7 @@ int main(int argc, char** argv) {
         test_roof_form_changes_preserve_opening_draft();
         test_multiflight_widgets_preserve_identity_and_metadata();
         test_hosted_railing_candidates_are_atomic_and_cancel_is_immutable();
+        test_landing_railing_choices_editing_and_refusals();
         return 0;
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';

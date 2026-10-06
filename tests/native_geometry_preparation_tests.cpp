@@ -13,6 +13,7 @@
 #include <BRep_Tool.hxx>
 #include <TopExp_Explorer.hxx>
 #include <TopoDS.hxx>
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <iostream>
@@ -108,6 +109,85 @@ void update(Document& document, Entity entity) {
         {EntityChange::upsert(std::move(entity))}, {}, "geometry dependency regression"});
 }
 
+Entity retained_ifc_reference(std::string id, std::string native_type) {
+    return Entity{std::move(id), "ifc_reference",
+        {{"ifc_name", "Retained source"}, {"ifc_type", "IFCBUILDINGELEMENTPROXY"}}, false,
+        {{"ifc_source", {{"record_id", 1}, {"record_type", "IFCBUILDINGELEMENTPROXY"},
+                         {"arguments", "'guid',#1,'Retained, O''Brien',$,'property',#2, $ ,$,.NOTDEFINED."}}},
+         {"ifc_vertex_properties", {{"native_entity", {{"id", "source-id"},
+             {"type", std::move(native_type)}, {"required", false},
+             {"properties", {{"name", "Source descriptor"}}},
+             {"extensions", {{"opaque", "Preserved source evidence"}}}}}}}}};
+}
+
+void test_ifc_provenance_does_not_block_native_geometry() {
+    const auto wall = walls(1).snapshot().entities().begin()->second;
+    std::vector<Entity> entities{wall,
+        {"receipt", "ifc_source", {{"asset_id", "source-step"}, {"format", "IFC4 STEP"},
+            {"diagnostics", nlohmann::json::array({{{"code", "native_reference_only"}}})}}}};
+    for (const auto* type : {"property", "building", "floor", "layer", "annotation_state", "ifc_source"})
+        entities.push_back(retained_ifc_reference(std::string{"retained-"} + type, type));
+    const auto document = Document::create(std::move(entities),
+        {Asset::create("source-step", "application/step", {std::byte{'I'}, std::byte{'F'}, std::byte{'C'}})});
+    const auto before = document.snapshot();
+    const auto result = prepare(document);
+    check(result.pending.empty() && result.solids.size() == 1 && result.solids.contains(wall.id),
+          "inert IFC organization descriptors and source receipts must not block a native solid");
+    check_meshed(result.solids.at(wall.id).shape);
+    const auto after = document.snapshot();
+    check(after.revision() == before.revision() && after.entities() == before.entities() &&
+          after.assets() == before.assets() && after.history().size() == before.history().size(),
+          "classifying inert IFC provenance must preserve the complete source document");
+}
+
+void test_unresolved_ifc_references_remain_pending() {
+    std::vector<Entity> entities{
+        retained_ifc_reference("unknown-physical", "future_equipment"),
+        retained_ifc_reference("known-physical", "roof"),
+        retained_ifc_reference("physical-room-source", "room_boundary")};
+    auto malformed = retained_ifc_reference("malformed-descriptor", "property");
+    malformed.extensions["ifc_vertex_properties"]["native_entity"].erase("extensions");
+    entities.push_back(std::move(malformed));
+    auto physical_record = retained_ifc_reference("physical-record", "property");
+    physical_record.properties["ifc_type"] = "IFCWALL";
+    physical_record.extensions["ifc_source"]["record_type"] = "IFCWALL";
+    entities.push_back(std::move(physical_record));
+    auto represented_proxy = retained_ifc_reference("represented-proxy", "property");
+    represented_proxy.extensions["ifc_source"]["arguments"] =
+        "'guid',#1,'Unreconstructed proxy',$,'property',#2,#99,$,.NOTDEFINED.";
+    entities.push_back(std::move(represented_proxy));
+    auto extra_fields = retained_ifc_reference("extra-fields-proxy", "property");
+    extra_fields.extensions["ifc_source"]["arguments"] =
+        "'guid',#1,'Ambiguous proxy',$,'property',#2,#99,$,$,.NOTDEFINED.";
+    entities.push_back(std::move(extra_fields));
+    auto quoted_representation = retained_ifc_reference("quoted-representation", "property");
+    quoted_representation.extensions["ifc_source"]["arguments"] =
+        "'guid',#1,'Misleading proxy',$,'property',#2,'$',$,.NOTDEFINED.";
+    entities.push_back(std::move(quoted_representation));
+    auto malformed_arguments = retained_ifc_reference("malformed-arguments", "property");
+    malformed_arguments.extensions["ifc_source"]["arguments"] =
+        "'guid',#1,'Unterminated proxy,$,'property',#2,$,$,.NOTDEFINED.";
+    entities.push_back(std::move(malformed_arguments));
+    auto nested_representation = retained_ifc_reference("nested-representation", "property");
+    nested_representation.extensions["ifc_source"]["arguments"] =
+        "'guid',#1,'Nested proxy',$,'property',#2,(#99,$),$,.NOTDEFINED.";
+    entities.push_back(std::move(nested_representation));
+    entities.push_back(Entity{"unclassified-reference", "ifc_reference",
+        {{"ifc_name", "property"}, {"ifc_type", "IFCBUILDINGELEMENTPROXY"}}});
+    const auto document = Document::create(entities);
+    for (const auto& mask : {std::optional<NativeGeometryVisibleIds>{},
+                            std::optional<NativeGeometryVisibleIds>{NativeGeometryVisibleIds{}}}) {
+        const auto result = prepare_native_geometry(document.snapshot(), mask);
+        check(result && result->errors.empty() && result->solids.empty() &&
+              result->pending.size() == entities.size(),
+              "unknown, physical, and malformed IFC references must stay pending even with no visible solids");
+        for (const auto& entity : entities)
+            check(std::any_of(result->pending.begin(), result->pending.end(), [&](const auto& message) {
+                return message.find("'" + entity.id + "'") != std::string::npos;
+            }), "every unresolved IFC reference must retain an identifiable pending diagnostic");
+    }
+}
+
 void test_assembly_identity() {
     auto document = walls(1);
     auto wall = document.snapshot().entities().begin()->second;
@@ -201,7 +281,7 @@ void test_terrain_identity() {
           "terrain point elevation must invalidate prepared geometry identity");
 }
 
-void test_hosted_stair_dependencies() {
+void test_hosted_stair_dependencies(bool landing_guard=false) {
     StairFlight stair{"stair", {0, 0, 0}, 0, 8, 2.0, 0.25, 1.0};
     stair.flights = {{"lower", 4}, {"upper", 4}};
     stair.landings = {{"turn", 1.0, 0.15, StairTurn::left_quarter, 0.0}};
@@ -210,6 +290,10 @@ void test_hosted_stair_dependencies() {
     source.properties["vertical_placement"] = {{"version", 1}, {"mode", "level"}, {"offset_m", 0.25}};
     Railing railing{"rail", {}, 0, 0, 0.9, 0.05, 0.5};
     railing.host = StairRailingHost{"stair", "upper", StairRailingSide::left, 0, 1};
+    if(landing_guard) {
+        railing.host.reset();
+        railing.landing_host=StairLandingRailingHost{"stair",StairLandingRole::connecting,"turn","lower","upper",0,0,1};
+    }
     auto rail = encode_building_entity(railing);
     architectural_context(rail);
     Entity levels{"levels", "vertical_levels", {{"model", nlohmann::json::parse(
@@ -333,11 +417,14 @@ int main() {
     sketch::testing::noninteractive_errors();
     try {
         test_coalescing();
+        test_ifc_provenance_does_not_block_native_geometry();
+        test_unresolved_ifc_references_remain_pending();
         test_assembly_identity();
         test_resolved_join_and_opening_identity();
         test_opening_assembly_obeys_its_drawing_layer_and_floor();
         test_terrain_identity();
         test_hosted_stair_dependencies();
+        test_hosted_stair_dependencies(true);
         test_worker_failure_recovery();
         auto document = walls(12);
         const auto before = document.snapshot();

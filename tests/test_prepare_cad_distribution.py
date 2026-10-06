@@ -16,6 +16,7 @@ import sys
 import tempfile
 import unittest
 import zipfile
+from types import SimpleNamespace
 from unittest import mock
 
 
@@ -266,6 +267,115 @@ class PrepareCadDistributionTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "must not cross a link"):
                     prepare_distribution.prepare(self.root, linked_output)
             self.assertEqual(list(Path(outside).iterdir()), [])
+
+    def controlled_fixture(self):
+        old_wheel = self._asset("ifcopenshell", "wheel", "ifcopenshell-0.8.5-cp313-cp313-win_amd64.whl",
+                                "0.8.5", _zip_bytes({"ifcopenshell/old.py": b"old wheel"}), "LGPL-3.0-or-later")
+        self.lock["assets"].append(old_wheel)
+        self.lock["library_versions"]["ifcopenshell"] = "0.8.5"
+        _write_json(self.root / "third_party/cad-runtime-lock.json", self.lock)
+        entries = {
+            "Lib/site-packages/ifcopenshell/_ifcopenshell_wrapper.cp313-win_amd64.pyd": b"MZselected IFC",
+            "Lib/site-packages/ifcopenshell/ifcopenshell_wrapper.py": b"generated wrapper",
+            "Lib/site-packages/ifcopenshell/__init__.py": b"version = '0.0.0'",
+            "notices/ifcopenshell/COPYING.LESSER": b"GNU LESSER GENERAL PUBLIC LICENSE",
+            "receipts/build.json": b'{"source_closure_qualified":false}',
+            "controlled-runtime-manifest.json": b'{"qualification":"incomplete"}',
+        }
+        for name, data in entries.items():
+            path = self.stage / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(data)
+        selection = self.root / "build/windows-release/cad-runtime-selection.json"
+        _write_json(selection, {"kind": "controlled", "source_revision": "a" * 40})
+        verified = {
+            "identity": {"kind": "controlled", "source_revision": "a" * 40},
+            "sdk_root": ".deps/controlled-sdk", "staged_root": "build/windows-release/cad-runtime",
+            "selection_record": {"path": selection.relative_to(self.root).as_posix(),
+                                 "sha256": hashlib.sha256(selection.read_bytes()).hexdigest(), "bytes": selection.stat().st_size},
+            "payload": [{"path": name, "sha256": hashlib.sha256(data).hexdigest(), "bytes": len(data),
+                         "origin": "source-built-ifcopenshell"} for name, data in sorted(entries.items())],
+        }
+        return SimpleNamespace(verify_selected_stage=mock.Mock(return_value=verified)), verified
+
+    def test_controlled_selection_replaces_wheel_and_keeps_payload_provenance(self):
+        helper, verified = self.controlled_fixture()
+        with mock.patch.object(bootstrap, "bootstrap", return_value={}), mock.patch.dict(
+                sys.modules, {"controlled_cad_distribution": helper}):
+            payload = prepare_distribution.prepare(self.root, self.output,
+                runtime_root=Path(".deps/controlled-sdk"), staged_root=Path("build/windows-release/cad-runtime"))
+        component = next(row for row in json.loads((self.output / "cad-components.json").read_text())["components"]
+                         if row["id"] == "cad-ifcopenshell")
+        self.assertEqual(component["source"]["kind"], "controlled-runtime")
+        self.assertEqual(component["source"]["corresponding_source_paths"], [])
+        self.assertNotIn("archive_filename", component["source"])
+        self.assertEqual(component["package"]["version"], "source-" + "a" * 40)
+        self.assertTrue(any(row["component"] == "cad-ifcopenshell" and row["path"].endswith("/receipts/build.json")
+                            for row in payload["files"]))
+        self.assertFalse(any(row["path"].endswith("/old.py") for row in payload["files"]))
+        self.assertEqual(payload["selected_runtime"], verified["identity"])
+        self.assertFalse(payload["source_closure_qualified"])
+        self.assertEqual(helper.verify_selected_stage.call_count, 2)
+
+    def test_controlled_identity_drift_is_refused_before_output_publication(self):
+        helper, verified = self.controlled_fixture()
+        helper.verify_selected_stage.side_effect = [verified, {**verified, "identity": {"kind": "changed"}}]
+        with mock.patch.object(bootstrap, "bootstrap", return_value={}), mock.patch.dict(
+                sys.modules, {"controlled_cad_distribution": helper}), self.assertRaisesRegex(ValueError, "changed during"):
+            prepare_distribution.prepare(self.root, self.output, runtime_root=Path(".deps/controlled-sdk"))
+        self.assertFalse(self.output.exists())
+
+    def test_source_inputs_require_explicit_controlled_selection(self):
+        with mock.patch.object(bootstrap, "bootstrap", return_value={}), self.assertRaisesRegex(ValueError, "explicit runtime"):
+            prepare_distribution.prepare(self.root, self.output, corresponding_source_paths=[])
+        self.assertFalse(self.output.exists())
+
+    def test_malformed_falsy_source_inputs_are_rejected(self):
+        helper, _ = self.controlled_fixture()
+        for malformed in ({}, False, 0, ""):
+            with self.subTest(value=malformed), mock.patch.object(bootstrap, "bootstrap", return_value={}), mock.patch.dict(
+                    sys.modules, {"controlled_cad_distribution": helper}), self.assertRaises((ValueError, inventory.InventoryError)):
+                prepare_distribution.prepare(self.root, self.output, runtime_root=Path(".deps/controlled-sdk"),
+                                             corresponding_source_paths=malformed)
+            self.assertFalse(self.output.exists())
+
+    def test_output_inside_selected_input_tree_is_refused(self):
+        helper, _ = self.controlled_fixture()
+        original = {path: path.read_bytes() for path in self.stage.rglob("*") if path.is_file()}
+        for output in (self.stage / "manifests", self.root / ".deps/controlled-sdk/manifests"):
+            with self.subTest(output=output), mock.patch.object(bootstrap, "bootstrap", return_value={}), mock.patch.dict(
+                    sys.modules, {"controlled_cad_distribution": helper}), self.assertRaisesRegex(ValueError, "overlap"):
+                prepare_distribution.prepare(self.root, output, runtime_root=Path(".deps/controlled-sdk"))
+            self.assertFalse(output.exists())
+            self.assertTrue(all(path.read_bytes() == data for path, data in original.items()))
+
+    def test_output_cannot_replace_compiled_selection(self):
+        helper, verified = self.controlled_fixture()
+        selection = self.output / "cad-components.json"
+        _write_json(selection, verified["identity"])
+        original = selection.read_bytes()
+        verified["selection_record"] = {"path": selection.relative_to(self.root).as_posix(),
+                                        "bytes": len(original), "sha256": hashlib.sha256(original).hexdigest()}
+        with mock.patch.object(bootstrap, "bootstrap", return_value={}), mock.patch.dict(
+                sys.modules, {"controlled_cad_distribution": helper}), self.assertRaisesRegex(ValueError, "overlap"):
+            prepare_distribution.prepare(self.root, self.output, runtime_root=Path(".deps/controlled-sdk"),
+                                         selection_path=selection)
+        self.assertEqual(selection.read_bytes(), original)
+        self.assertFalse((self.output / "cad-allowlist.json").exists())
+
+    def test_output_cannot_replace_declared_source_file_or_enter_source_tree(self):
+        helper, _ = self.controlled_fixture()
+        source = self.output / "cad-payload.json"
+        source.parent.mkdir(parents=True)
+        source.write_bytes(b"preferred source must survive")
+        for row in ({"path": source.relative_to(self.root).as_posix(), "kind": "file", "sha256": hashlib.sha256(source.read_bytes()).hexdigest()},
+                    {"path": self.output.relative_to(self.root).as_posix(), "kind": "directory", "sha256": "a" * 64}):
+            with self.subTest(kind=row["kind"]), mock.patch.object(bootstrap, "bootstrap", return_value={}), mock.patch.dict(
+                    sys.modules, {"controlled_cad_distribution": helper}), self.assertRaisesRegex(ValueError, "overlap"):
+                prepare_distribution.prepare(self.root, self.output, runtime_root=Path(".deps/controlled-sdk"),
+                                             corresponding_source_paths=[row])
+            self.assertEqual(source.read_bytes(), b"preferred source must survive")
+            self.assertFalse((self.output / "cad-components.json").exists())
 
 
 if __name__ == "__main__":

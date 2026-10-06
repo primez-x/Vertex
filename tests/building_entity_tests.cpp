@@ -475,6 +475,15 @@ void test_multi_flight_hosted_codec_and_current_map() {
     rejected([&]{(void)decode_building_entity(bad);},"v1 refuses multi-flight topology");
     bad=hosted;bad.properties["length_m"]=99;
     rejected([&]{(void)decode_building_entity(bad);},"hosted stale independent dimensions refused");
+    rail.host.reset();rail.landing_host=StairLandingRailingHost{"multi",StairLandingRole::connecting,"turn","lower","upper",0,0,1};
+    const auto landing=encode_building_entity(rail);
+    require(landing.properties.at("version")==3 &&
+        encode_building_entity(decode_building_entity(landing)).properties==landing.properties,"landing entity typed roundtrip");
+    map={{encoded.id,encoded}};
+    require(solid_volume(make_building_shape(decode_building_entity(landing),map))>0,"landing current-map solid");
+    rejected([&]{(void)make_building_shape(decode_building_entity(landing));},"landing independent shape refused");
+    map.at(encoded.id).properties["flights"][1]["id"]="reconnected";
+    rejected([&]{(void)make_building_shape(decode_building_entity(landing),map);},"landing stale adjacency refused");
 }
 
 int main() {

@@ -7,7 +7,8 @@ namespace sketch {
 
 // Pure admission over the ORIGINAL current entity map. Throws invalid_argument;
 // never changes entities, performs native geometry work, or recurses into Document.
-// Known v1 straight and v2 multi-flight/hosted forms are decoded strictly. Generic
+// Known v1 straight, v2 multi-flight/flight-hosted and exactly v3 landing-hosted
+// railing forms are decoded strictly. Generic
 // legacy descriptors without form/version and unsupported future forms/versions
 // remain opaque. Known forms with missing/malformed versions are invalid; v1
 // cannot carry v2 topology/host authority. Opaque forms cannot host known rails.

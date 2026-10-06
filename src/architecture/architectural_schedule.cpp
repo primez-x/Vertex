@@ -583,7 +583,7 @@ void add_building_scalar(ScheduleRecord& record, const Entity& entity,
 
 BuildingObject effective_building_object(const DocumentSnapshot& document, const Entity& entity) {
     auto object = decode_building_entity(entity);
-    if (const auto* rail = std::get_if<Railing>(&object); rail && rail->host) return object;
+    if (const auto* rail = std::get_if<Railing>(&object); rail && (rail->host || rail->landing_host)) return object;
     return decode_building_entity(resolve_vertical_placement(document, entity));
 }
 
@@ -591,8 +591,8 @@ std::vector<ScheduleSourceRef> building_geometry_sources(const DocumentSnapshot&
     const Entity& entity, const BuildingObject& object) {
     std::vector<ScheduleSourceRef> sources{{entity.id, "geometry"}};
     const Entity* placed = &entity;
-    if (const auto* rail = std::get_if<Railing>(&object); rail && rail->host) {
-        const auto host = document.entities().find(rail->host->stair_id);
+    if (const auto* rail = std::get_if<Railing>(&object); rail && (rail->host || rail->landing_host)) {
+        const auto host = document.entities().find(rail->host?rail->host->stair_id:rail->landing_host->stair_id);
         if (host == document.entities().end() || host->second.type != "stair")
             throw std::invalid_argument("hosted railing stair is missing");
         placed = &host->second;
@@ -721,8 +721,8 @@ void append_building_rows(const DocumentSnapshot& document,
                 add_layout_quantity(record, "flight_count", static_cast<std::int64_t>(layout.flights.size()));
                 add_layout_quantity(record, "landing_count", static_cast<std::int64_t>(layout.landings.size()));
             }
-            if (const auto* rail = std::get_if<Railing>(&object); rail && rail->host) {
-                const auto host = document.entities().find(rail->host->stair_id);
+            if (const auto* rail = std::get_if<Railing>(&object); rail && (rail->host || rail->landing_host)) {
+                const auto host = document.entities().find(rail->host?rail->host->stair_id:rail->landing_host->stair_id);
                 if (host == document.entities().end() || host->second.type != "stair")
                     throw std::invalid_argument("hosted railing stair is missing");
                 const auto current_host = decode_building_entity(resolve_vertical_placement(document, host->second));
@@ -734,9 +734,22 @@ void append_building_rows(const DocumentSnapshot& document,
                 add_layout_quantity(record, "length", ScheduleQuantity{
                     std::hypot(std::hypot(b.x-a.x, b.y-a.y), b.z-a.z), ScheduleUnit::metre});
                 add_layout_quantity(record, "post_count", static_cast<std::int64_t>(layout.posts.size()));
-                add_layout_quantity(record, "host_stair_id", rail->host->stair_id);
-                add_layout_quantity(record, "host_flight_id", rail->host->flight_id);
-                add_layout_quantity(record, "side", std::string(rail->host->side == StairRailingSide::left ? "left" : "right"));
+                if(rail->landing_host) {
+                    const auto& h=*rail->landing_host;
+                    record.properties.erase("side"); record.properties.erase("host_flight_id");
+                    add_layout_quantity(record,"host_stair_id",h.stair_id);
+                    add_layout_quantity(record,"host_role",std::string(h.role==StairLandingRole::top?"top":"connecting"));
+                    if(h.role==StairLandingRole::connecting) {
+                        add_layout_quantity(record,"host_landing_id",h.landing_id);
+                        add_layout_quantity(record,"host_outgoing_flight_id",h.outgoing_flight_id);
+                    }
+                    add_layout_quantity(record,"host_incoming_flight_id",h.incoming_flight_id);
+                    add_layout_quantity(record,"edge_index",static_cast<std::int64_t>(h.edge_index));
+                } else {
+                    add_layout_quantity(record, "host_stair_id", rail->host->stair_id);
+                    add_layout_quantity(record, "host_flight_id", rail->host->flight_id);
+                    add_layout_quantity(record, "side", std::string(rail->host->side == StairRailingSide::left ? "left" : "right"));
+                }
             }
             const auto shape = make_building_shape(object, document.entities());
             const auto volume = solid_volume(shape);

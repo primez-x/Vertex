@@ -213,6 +213,11 @@ repository root with PowerShell 7:
 ```powershell
 pwsh -NoProfile -File scripts/build-ifc-source.ps1 `
   -BuildRoot C:/Build/Vertex/ifc-candidate-7 -Parallel 4
+# Use the same verified SDK bytes at generic prefixes for a portable rebuild:
+pwsh -NoProfile -File scripts/build-ifc-source.ps1 `
+  -BuildRoot C:/Build/Vertex/ifc-portable-candidate `
+  -KernelRoot C:/Build/Vertex/ifc-kernel/x64-windows-ifc-static `
+  -SupportRoot C:/Build/Vertex/ifc-support/x64-windows-ifc-static -Parallel 4
 # Optional configure-only probe (also requires a new directory):
 pwsh -NoProfile -File scripts/build-ifc-source.ps1 `
   -BuildRoot C:/Build/Vertex/ifc-configure-7 -ConfigureOnly
@@ -226,6 +231,25 @@ preserved; rerunning requires another new root. No cleanup or resume operation
 is offered. `-CMakeExecutable` can select an explicit CMake executable; by
 default the recipe uses the discovered Visual Studio 2022 CMake. CMake 3.31 or
 newer is required by policies used in this pinned source.
+
+`-KernelRoot` and `-SupportRoot` select existing installed triplet prefixes.
+Omitting them preserves the `.deps/ifc-kernel/x64-windows-ifc-static` and
+`.deps/ifc-support/x64-windows-ifc-static` defaults. Each selected prefix must
+retain its sibling `../vcpkg/status` metadata; changing the location does not
+relax any pinned package, header or library checks. For generic rebuild paths,
+copy and independently verify the complete installed SDK bytes and metadata
+before invocation. The recipe does not copy, modify, delete or reuse SDK inputs.
+Using generic SDK paths prevents these include prefixes from embedding a
+personal workspace location in compiled diagnostics; the resulting binary still
+requires a portability audit.
+
+SDK and build roots must be absolute local directory paths, without UNC/device
+namespaces, drive roots, traversal, CMake list separators, alternate streams,
+reserved names or ambiguous Windows characters. Missing SDK prefixes/status
+metadata, links and reparse points, and build-root overlap with either selected
+SDK prefix are rejected before creating a reservation or output directory.
+The build root also remains disjoint from the workspace. Rejection preserves
+existing inputs and outputs.
 
 The script invokes the locked Python executable for
 `prepare_ifc_source.py --offline --check`, checks the official vcpkg origin,
@@ -264,6 +288,9 @@ preparation manifest supplies the locked source file table. This evidence
 does not inventory every transitive dependency source or assert license
 closure. `build_qualified` and `source_closure_qualified` remain `false`, even
 after compilation succeeds.
+Its private `sdk_roots` object records `kernel` and `support` as the selected
+absolute triplet prefixes; the corresponding installed status files retain
+their own path/hash entries in `inputs`.
 
 ## Isolated Python candidate staging
 
@@ -295,8 +322,12 @@ bytes saved as `<BuildRoot>/build-recipe.ps1`.
 
 This stage does not import or install the package, replace the product runtime,
 create a wheel, or deliver the C++ corresponding source and dependency license
-closure. The generated wrapper is hashed at staging rather than bound in the
-original build evidence. All qualification flags remain false. The derived
+closure. The current build recipe binds the generated wrapper's path, length
+and SHA-256 in `generated_wrapper` before publishing successful build evidence.
+Staging verifies that original receipt when present and records the binding
+fact explicitly. Historical evidence without that field remains admissible
+only with the binding fact false; a later staging hash cannot establish an
+original build receipt. All qualification flags remain false. The derived
 path requires the bound manifest/helper/patch and exact derivation invocation,
 replays both inventories, and verifies that configuration uses the derived
 source. Its verifier executes the hash-checked source bytes directly rather
@@ -333,3 +364,33 @@ under the actual independent sandbox worker. Candidate outputs must stay
 separate from `.deps/cad-runtime/3.13.15` and the installed application until
 those checks justify replacement. A successful source build and direct adapter
 checks do not qualify the product runtime or the unified production release.
+
+## Current controlled runtime
+
+The later clean eight-schema build uses the preserved generic static SDK and
+an exact-source rebuild of Boost.Thread. `scripts/rebuild_ifc_boost_thread.py`
+binds the original source, compiler inputs, generated controls and produced
+library. The original library remains preserved. A new full IFC build then
+produced the selected extension, rather than patching private strings in a
+binary. Its SHA-256 is
+`710c14599b1243d7a032668f6cc21796af2399c72b2a515f75e325d7a6f58cdf`.
+The payload scan found none of the checked user/workspace path markers.
+
+Explicit selected-runtime inspection binds the controlled manifest, native
+extension and generated wrapper to CMake and the import worker. Exact staging
+replaces the owned CAD directory rather than merging it. Baseline wheel
+selection retains its separate requirements; the controlled selection does
+not manufacture wheel metadata or a publisher version.
+
+`scripts/qualification/materialize_ifc_corresponding_source.py` delivers four
+separate verified source trees: derived IFC source, complete pinned static SDK
+source kit, exact Boost.Thread source, and bound build controls. The actual
+materialization includes 4,744 files with a portable index and corresponding
+source path table. Distribution preparation consumes that explicit table and
+the verified selected SDK/stage/selection identity. It retains original notices
+and distinguishes native binaries from source assets.
+
+These are reproducible input and copy records. They do not yet establish
+transitive license closure, a completed offline rebuild or the final installed
+worker lifecycle. See [the delivery record](../delivery/progress.md) for current
+actual checks and unresolved qualification.

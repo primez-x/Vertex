@@ -937,6 +937,41 @@ if(SKETCH_BUILD_DESKTOP)
     if(NOT EXISTS "${VERTEX_CAD_RUNTIME_ROOT}/libs/python313.lib")
       message(FATAL_ERROR "Prepare the pinned CAD SDK using scripts/bootstrap_cad_runtime.py; see docs/dependencies/cad-runtime.md. Builds never download it implicitly.")
     endif()
+    find_package(Python3 REQUIRED COMPONENTS Interpreter)
+    # Select an exact, offline-verified payload before compiling its identity.
+    # Informative upstream version text never grants source-built IFC admission.
+    execute_process(
+      COMMAND "${Python3_EXECUTABLE}" -B "${CMAKE_SOURCE_DIR}/scripts/inspect_selected_cad_runtime.py"
+        --runtime-root "${VERTEX_CAD_RUNTIME_ROOT}" --workspace "${CMAKE_SOURCE_DIR}"
+      RESULT_VARIABLE VERTEX_CAD_INSPECTION_RESULT
+      OUTPUT_VARIABLE VERTEX_CAD_SELECTED_IDENTITY
+      ERROR_VARIABLE VERTEX_CAD_INSPECTION_ERROR
+      OUTPUT_STRIP_TRAILING_WHITESPACE)
+    if(NOT VERTEX_CAD_INSPECTION_RESULT EQUAL 0)
+      message(FATAL_ERROR "Selected CAD runtime verification failed: ${VERTEX_CAD_INSPECTION_ERROR}")
+    endif()
+    string(JSON VERTEX_CAD_SELECTED_KIND GET "${VERTEX_CAD_SELECTED_IDENTITY}" kind)
+    string(JSON VERTEX_CAD_SELECTED_MANIFEST GET "${VERTEX_CAD_SELECTED_IDENTITY}" manifest_name)
+    if(VERTEX_CAD_SELECTED_KIND STREQUAL "controlled")
+      foreach(identity IN ITEMS MANIFEST IFC_EXTENSION IFC_WRAPPER)
+        string(TOLOWER "${identity}_sha256" field)
+        string(JSON identity_sha256 GET "${VERTEX_CAD_SELECTED_IDENTITY}" "${field}")
+        target_compile_definitions(vertex-import-worker PRIVATE
+          "VERTEX_CAD_CONTROLLED_${identity}_SHA256=\"${identity_sha256}\"")
+      endforeach()
+    elseif(NOT VERTEX_CAD_SELECTED_KIND STREQUAL "baseline")
+      message(FATAL_ERROR "Unsupported selected CAD runtime kind")
+    endif()
+    file(GENERATE
+      OUTPUT "$<TARGET_FILE_DIR:vertex-import-worker>/cad-runtime-selection.json"
+      CONTENT "${VERTEX_CAD_SELECTED_IDENTITY}\n")
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+      "${CMAKE_SOURCE_DIR}/scripts/inspect_selected_cad_runtime.py"
+      "${CMAKE_SOURCE_DIR}/scripts/qualification/compose_controlled_cad_runtime.py"
+      "${CMAKE_SOURCE_DIR}/third_party/cad-runtime-lock.json"
+      "${VERTEX_CAD_RUNTIME_ROOT}/${VERTEX_CAD_SELECTED_MANIFEST}"
+      "${VERTEX_CAD_RUNTIME_ROOT}/Lib/site-packages/ifcopenshell/_ifcopenshell_wrapper.cp313-win_amd64.pyd"
+      "${VERTEX_CAD_RUNTIME_ROOT}/Lib/site-packages/ifcopenshell/ifcopenshell_wrapper.py")
     target_include_directories(vertex-import-worker PRIVATE "${VERTEX_CAD_RUNTIME_ROOT}/include")
     target_link_libraries(vertex-import-worker PRIVATE "${VERTEX_CAD_RUNTIME_ROOT}/libs/python313.lib")
     if(MSVC)
@@ -948,11 +983,11 @@ if(SKETCH_BUILD_DESKTOP)
         "${CMAKE_SOURCE_DIR}/resources/windows/vertex-import-worker.manifest")
     endif()
     add_custom_target(vertex-cad-runtime
-      COMMAND "${CMAKE_COMMAND}" -E copy_directory "${VERTEX_CAD_RUNTIME_ROOT}"
-        "$<TARGET_FILE_DIR:vertex-import-worker>/cad-runtime"
-      COMMAND "${CMAKE_COMMAND}" -E copy_if_different
-        "${CMAKE_SOURCE_DIR}/src/desktop/cad_library_adapter.py"
-        "$<TARGET_FILE_DIR:vertex-import-worker>/cad-runtime/cad_library_adapter.py"
+      COMMAND "${CMAKE_COMMAND}" -E make_directory "$<TARGET_FILE_DIR:vertex-import-worker>"
+      COMMAND "${Python3_EXECUTABLE}" -B "${CMAKE_SOURCE_DIR}/scripts/stage_cad_runtime.py"
+        --runtime-root "${VERTEX_CAD_RUNTIME_ROOT}"
+        --adapter "${CMAKE_SOURCE_DIR}/src/desktop/cad_library_adapter.py"
+        --output "$<TARGET_FILE_DIR:vertex-import-worker>/cad-runtime"
       VERBATIM)
     add_dependencies(vertex-import-worker vertex-cad-runtime)
   endif()
@@ -1492,6 +1527,16 @@ if(SKETCH_BUILD_DESKTOP)
     target_link_libraries(assistance_ocr_recognition_tests PRIVATE sketch_assistance_ocr_recognizer Qt6::Gui)
     add_dependencies(assistance_ocr_recognition_tests vertex-assistance-runtime)
     add_test(NAME assistance_ocr_recognition COMMAND assistance_ocr_recognition_tests "${CMAKE_SOURCE_DIR}")
+    if(WIN32)
+      add_executable(assistance_ocr_isolation_tests tests/assistance_ocr_isolation_tests.cpp)
+      target_include_directories(assistance_ocr_isolation_tests PRIVATE tests)
+      target_link_libraries(assistance_ocr_isolation_tests PRIVATE sketch_assistance_ocr Qt6::Gui ole32)
+      add_dependencies(assistance_ocr_isolation_tests vertex-import-worker vertex-assistance-runtime)
+      target_compile_options(assistance_ocr_isolation_tests PRIVATE /W4 /permissive- /utf-8)
+      # The real broker requires an immutable module/resource root. Run this
+      # target through test-import-worker-independent.ps1 beside its staged
+      # worker, not directly from the writable build tree.
+    endif()
     set_tests_properties(assistance_ocr_codec assistance_ocr_recognition PROPERTIES
       ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_PLUGIN_PATH=${SKETCH_QT_PREFIX}/plugins;PATH=${SKETCH_QT_BIN}\;${CMAKE_SOURCE_DIR}/.deps/native/x64-windows/bin\;$ENV{PATH}"
       TIMEOUT 60)
@@ -1602,7 +1647,7 @@ if(SKETCH_BUILD_DESKTOP)
     add_test(NAME assistance_workflow COMMAND assistance_workflow_tests)
     add_test(NAME dxf_desktop_workflow COMMAND dxf_desktop_workflow_tests)
     add_test(NAME ifc_desktop_workflow COMMAND ifc_desktop_workflow_tests)
-    set_tests_properties(dxf_desktop_workflow ifc_desktop_workflow
+    set_tests_properties(dxf_desktop_workflow
       PROPERTIES SKIP_RETURN_CODE 77)
     set_tests_properties(ansi_appraisal_desktop appraisal_details_panel directional_alignment_canvas witness_alignment_desktop bay_return_desktop drawing_measurement_desktop wall_measurement_desktop wall_chain_connection connected_wall_canvas wall_corner_canvas PROPERTIES
       ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_PLUGIN_PATH=${SKETCH_QT_PREFIX}/plugins"
@@ -1644,7 +1689,7 @@ if(BUILD_TESTING)
     add_test(NAME "performance_${performance_test}_contract" COMMAND "${Python3_EXECUTABLE}" -m unittest discover
       -s "${CMAKE_SOURCE_DIR}/tests" -p "test_performance_${performance_test}.py")
   endforeach()
-  foreach(packaging_test IN ITEMS source_kit_manifest update_source_kit_allowlist distribution_inventory distribution_sbom stage_portable_package stage_project_package stage_offline_bundle handoff_inventory_audit prepare_msvc_runtime installed_runtime offline_static_audit source_provenance_audit symbol_catalog_manifest)
+  foreach(packaging_test IN ITEMS source_kit_manifest update_source_kit_allowlist distribution_inventory distribution_sbom prepare_cad_distribution controlled_cad_distribution materialize_ifc_corresponding_source materialize_qt_notices stage_portable_package stage_project_package stage_offline_bundle stage_cad_runtime inspect_selected_cad_runtime compose_controlled_cad_runtime rebuild_ifc_boost_thread handoff_inventory_audit prepare_msvc_runtime installed_runtime offline_static_audit source_provenance_audit symbol_catalog_manifest)
     add_test(NAME "packaging_${packaging_test}" COMMAND "${Python3_EXECUTABLE}" -m unittest discover
       -s "${CMAKE_SOURCE_DIR}/tests" -p "test_${packaging_test}.py")
   endforeach()
@@ -2037,7 +2082,6 @@ if(BUILD_TESTING)
     endif()
     target_link_libraries(windows_import_worker_tests PRIVATE ole32)
     add_test(NAME windows_import_worker COMMAND windows_import_worker_tests "$<TARGET_FILE:windows_import_worker_probe>")
-    set_tests_properties(windows_import_worker PROPERTIES SKIP_RETURN_CODE 77)
   else()
     add_test(NAME windows_import_worker COMMAND windows_import_worker_tests)
   endif()

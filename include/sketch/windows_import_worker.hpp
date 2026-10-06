@@ -50,6 +50,8 @@ struct WindowsImportWorkerReport {
     bool restricted_token_verified{};
     bool network_denial_verified{};
     bool job_limits_verified{};
+    // Exact broker-owned job membership observed while the child is suspended.
+    bool job_membership_verified{};
     bool parent_exit_kill_verified{};
     bool brokered_handles_verified{};
     bool private_temporary_root_verified{};
@@ -60,6 +62,8 @@ struct WindowsImportWorkerReport {
     std::uint32_t exit_code{};
     // Win32 error captured immediately when CreateProcessW fails; zero otherwise.
     std::uint32_t launch_error{};
+    // Win32 error captured immediately when AssignProcessToJobObject fails.
+    std::uint32_t job_assignment_error{};
     std::vector<std::byte> output;
     // Codes are stable and deliberately exclude paths, command lines and
     // worker-provided text.

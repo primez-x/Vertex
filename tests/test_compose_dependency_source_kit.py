@@ -326,6 +326,43 @@ class ComposerTests(unittest.TestCase):
         self.assertEqual(result["components"][0]["sources"][0]["local_files"][0]["sha512"], hashlib.sha512(archive_data).hexdigest())
         self.assertFalse(result["offline_rebuild_qualified"])
 
+    def test_controlled_runtime_sources_and_receipts_compose_without_qualification(self):
+        self.write("vendor/source/unit.cpp", b"editable controlled source")
+        self.write("staged/ifc-wrapper.pyd", b"exact controlled payload")
+        self.write("receipts/sdk.json", b"sdk receipt")
+        self.write("receipts/selection.json", b"selection receipt")
+        source = {"kind": "controlled-runtime", "source_revision": "a" * 40,
+                  "runtime_manifest": self.record("receipts/sdk.json"),
+                  "selection": self.record("receipts/selection.json"),
+                  "source_paths": [self.record("staged/ifc-wrapper.pyd")],
+                  "corresponding_source_paths": [
+                      {"path": "vendor/source", "kind": "directory",
+                       "sha256": composer.closure.source_tree_hash(self.root, "vendor/source")},
+                      {**self.record("recipe/portfile.cmake"), "kind": "file"}],
+                  "licensing_clearance": False, "source_closure_qualified": False,
+                  "ifcopenshell_version_informative_only": True}
+        inventory = {"schema_version": 1, "evidence": {
+            "component_manifest": self.record("receipts/components.json"), "runtime": self.record("receipts/runtime.json")},
+            "components": [{"id": "dependency", "package": {"name": "ifcopenshell", "version": "0.8.5", "license": "LGPL-3.0-or-later",
+                            "source": source}, "notices": [self.record("notices/license.txt")]}],
+            "binaries": [{"component_id": "dependency", **self.record("candidate/app.dll")}]}
+        self.write("receipts/inventory.json", json.dumps(inventory).encode())
+        audited = composer.closure.audit(self.root, "receipts/inventory.json", cache_dirs=())
+        result = self.run_compose(report=audited)
+        item = result["components"][0]
+        self.assertEqual(item["declared_source_kind"], "controlled-runtime")
+        self.assertEqual((self.root / "out/inputs/vendor/source/unit.cpp").read_bytes(), b"editable controlled source")
+        self.assertEqual((self.root / "out/inputs/staged/ifc-wrapper.pyd").read_bytes(), b"exact controlled payload")
+        self.assertEqual(item["provenance"]["source_path"], "receipts/sdk.json")
+        self.assertEqual(item["sources"][0]["provenance"]["source_path"], "receipts/selection.json")
+        self.assertFalse(result["offline_rebuild_qualified"])
+        self.assertFalse(item["licensing_clearance"])
+        self.assertFalse(item["corresponding_source_qualified"])
+        self.write("receipts/selection.json", b"stale selection")
+        with self.assertRaisesRegex(ValueError, "hash"):
+            self.run_compose("stale", report=audited)
+        self.assertFalse((self.root / "stale").exists())
+
     def test_cli_publishes_manifest_receipt_and_refuses_existing_payload(self):
         self.write("report.json", json.dumps(self.report).encode())
         arguments = ["composer", "--workspace", str(self.root), "--report", "report.json", "--output-root", "out"]
@@ -365,6 +402,77 @@ class ComposerTests(unittest.TestCase):
         result = self.run_compose()
         self.assertEqual(result["components"][0]["configuration"]["observed_variables"], {"QT_VERSION": ["6.8.3"]})
         self.assertIn("payload_path", result["components"][0]["upstream_asset"])
+
+    def selected_source_kit(self, paths):
+        # The actual source-kit generator supplies its own validated schema.
+        import sys
+        sys.path.insert(0, str(ROOT / "scripts"))
+        import source_kit_manifest
+        manifest = source_kit_manifest.build_manifest(self.root, [
+            {"path": path, "category": "source"} for path in paths])
+        self.write("receipts/source-kit.json", json.dumps(manifest).encode())
+        return "receipts/source-kit.json"
+
+    def test_direct_selected_source_kit_is_copied_and_bound_without_frozen_bundle(self):
+        selected = self.selected_source_kit(["recipe/portfile.cmake"])
+        self.write("report.json", json.dumps(self.report).encode())
+        result = composer.compose(self.root, "report.json", "out", source_kit_manifest=selected)
+        bound = result["candidate_binding"]["source_kit"]
+        self.assertEqual(bound, {"source_path": selected, "payload_path": "inputs/" + selected,
+                                "sha256": self.record(selected)["sha256"],
+                                "bytes": self.record(selected)["bytes"]})
+        row = next(row for row in result["files"] if row["source_path"] == selected)
+        self.assertEqual(row["roles"], ["source_kit"])
+        self.assertIsNone(result["candidate_binding"]["offline_bundle"])
+
+    def test_direct_project_reference_must_be_in_selected_source_kit(self):
+        self.write("src/unit.cpp", b"unit")
+        item = self.report["components"][0]
+        item["id"] = "vertex"
+        item["declared_source_kind"] = "workspace"
+        self.report["candidate_binding"]["binaries"][0]["component_id"] = "vertex"
+        item["sources"] = [{"url": None, "status": "exact_local_source_present",
+            "local_files": [{"path": "src", "kind": "directory",
+                             "sha256": composer.closure.source_tree_hash(self.root, "src")}]}]
+        selected = self.selected_source_kit(["recipe/portfile.cmake"])
+        self.write("report.json", json.dumps(self.report).encode())
+        with self.assertRaisesRegex(ValueError, "selected source kit"):
+            composer.compose(self.root, "report.json", "missing", source_kit_manifest=selected)
+        self.assertFalse((self.root / "missing").exists())
+        selected = self.selected_source_kit(["src/unit.cpp"])
+        result = composer.compose(self.root, "report.json", "out", source_kit_manifest=selected)
+        self.assertEqual(result["components"][0]["sources"][0]["local_files"][0]
+                         ["project_source_kit_path"], "src")
+        self.assertFalse((self.root / "out/inputs/src").exists())
+
+    def test_stale_direct_manifest_and_late_source_drift_do_not_publish(self):
+        selected = self.selected_source_kit(["recipe/portfile.cmake"])
+        self.write("report.json", json.dumps(self.report).encode())
+        self.write("recipe/portfile.cmake", b"changed")
+        with self.assertRaisesRegex(ValueError, "hash|selected source kit"):
+            composer.compose(self.root, "report.json", "stale", source_kit_manifest=selected)
+        self.assertFalse((self.root / "stale").exists())
+        self.write("recipe/portfile.cmake", b"configure()")
+        copy_input = composer.copy_file
+        def drift(*args, **kwargs):
+            value = copy_input(*args, **kwargs)
+            self.write("receipts/source-kit.json", b"{}")
+            return value
+        with mock.patch.object(composer, "copy_file", side_effect=drift):
+            with self.assertRaisesRegex(ValueError, "hash"):
+                composer.compose(self.root, "report.json", "drift", source_kit_manifest=selected)
+        self.assertFalse((self.root / "drift").exists())
+
+    def test_direct_source_kit_cli_option_is_forwarded(self):
+        selected = self.selected_source_kit(["recipe/portfile.cmake"])
+        self.write("report.json", json.dumps(self.report).encode())
+        arguments = ["composer", "--workspace", str(self.root), "--report", "report.json",
+                     "--output-root", "out", "--source-kit-manifest", selected]
+        output = io.StringIO()
+        with mock.patch.object(composer.sys, "argv", arguments), redirect_stdout(output):
+            self.assertEqual(composer.main(), 0)
+        result = json.loads((self.root / "out" / composer.MANIFEST).read_text())
+        self.assertEqual(result["candidate_binding"]["source_kit"]["source_path"], selected)
 
 
 if __name__ == "__main__":

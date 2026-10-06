@@ -22,6 +22,7 @@
 #include <regex>
 #include <set>
 #include <sstream>
+#include <span>
 #include <stdexcept>
 #include <string>
 
@@ -901,6 +902,524 @@ std::string replace_ifc_record(std::string bytes, const std::string& id, const R
     row += ");"; bytes.replace(begin,end-begin+1,row); return bytes;
 }
 
+// Read carriers through their property sets, independently of the importer.
+// Re-sign chunked payloads so refusal tests exercise semantic proof rejection,
+// rather than an accidentally broken transport checksum.
+template<class Mutation>
+std::string mutate_native_metadata(const std::string& bytes, Mutation mutate) {
+    using Json = nlohmann::json;
+    const auto graph = records(bytes);
+    auto altered = bytes;
+    std::size_t witnesses = 0;
+    const auto text_value = [](const Record& r) {
+        check(r.type == "IFCPROPERTYSINGLEVALUE" && r.fields.size() == 4 &&
+            r.fields[2].starts_with("IFCTEXT('") && r.fields[2].ends_with("')"),
+            "metadata fixture requires an IFC text property");
+        auto value = r.fields[2].substr(9,r.fields[2].size()-11);
+        for (std::size_t i=0;(i=value.find("''",i))!=std::string::npos;++i) value.erase(i,1);
+        return value;
+    };
+    const auto replace_text = [&](const std::string& id, const std::string& value) {
+        auto changed = graph.at(id);
+        std::string escaped;
+        for (const auto c : value) { escaped += c; if (c == '\'') escaped += c; }
+        changed.fields[2] = "IFCTEXT('"+escaped+"')";
+        altered = replace_ifc_record(std::move(altered),id,changed);
+    };
+    for (const auto& [id,pset] : graph) {
+        if (pset.type != "IFCPROPERTYSET" || pset.fields.size() != 5 ||
+            (pset.fields[2] != "'Pset_VertexExchange_v1'" &&
+             pset.fields[2] != "'Pset_VertexExchange_v2'")) continue;
+        std::string property_id, manifest_id, payload;
+        std::map<std::size_t,std::string> chunks;
+        for (const auto& property : list(pset.fields[4])) {
+            const auto& r = graph.at(property);
+            check(r.type == "IFCPROPERTYSINGLEVALUE" && r.fields.size() == 4,
+                "metadata fixture requires single-value properties");
+            if (r.fields[0] == "'Properties'") property_id = property;
+            else if (r.fields[0] == "'MetadataManifest'") manifest_id = property;
+            else if (r.fields[0].starts_with("'PropertiesChunk:") && r.fields[0].ends_with("'")) {
+                const auto index = std::stoull(r.fields[0].substr(17,r.fields[0].size()-18));
+                check(chunks.emplace(index,property).second,"metadata chunks must have unique indices");
+            }
+        }
+        Json manifest;
+        if (pset.fields[2] == "'Pset_VertexExchange_v1'") {
+            check(!property_id.empty(),"v1 metadata fixture requires Properties");
+            payload = text_value(graph.at(property_id));
+        } else {
+            check(!manifest_id.empty() && !chunks.empty(),"v2 metadata fixture requires manifest and chunks");
+            manifest = Json::parse(text_value(graph.at(manifest_id)));
+            check(manifest.at("chunks").get<std::size_t>() == chunks.size(),"manifest must count all chunks");
+            for (std::size_t i=0;i<chunks.size();++i) {
+                check(chunks.contains(i),"metadata chunks must be contiguous");
+                payload += text_value(graph.at(chunks.at(i)));
+            }
+            check(manifest.at("bytes").get<std::size_t>() == payload.size() &&
+                manifest.at("sha256") == sketch::sha256_hex(std::as_bytes(std::span(payload.data(),payload.size()))),
+                "original chunked fixture must have valid byte count and hash");
+        }
+        auto metadata = Json::parse(payload);
+        const auto original_metadata = metadata;
+        if (!mutate(metadata)) continue;
+        const auto changed = metadata.dump(-1,' ',true);
+        check(metadata != original_metadata && changed != payload,
+            "negative metadata fixture must change its selected carrier");
+        ++witnesses;
+        if (!property_id.empty()) replace_text(property_id,changed);
+        else {
+            // Preserve the graph and chunk cardinality while distributing the
+            // modified payload in numeric chunk order.
+            const auto chunk_size = (changed.size()+chunks.size()-1)/chunks.size();
+            for (std::size_t i=0;i<chunks.size();++i)
+                replace_text(chunks.at(i),changed.substr(std::min(i*chunk_size,changed.size()),chunk_size));
+            manifest["bytes"] = changed.size();
+            manifest["sha256"] = sketch::sha256_hex(std::as_bytes(std::span(changed.data(),changed.size())));
+            replace_text(manifest_id,manifest.dump());
+        }
+    }
+    check(witnesses == 1 && altered != bytes,"negative metadata fixture must mutate exactly one intended carrier");
+    return altered;
+}
+
+void native_stairs_and_railings() {
+    using namespace sketch;
+    using Json = nlohmann::json;
+    for (const auto turn : {StairTurn::straight, StairTurn::left_quarter, StairTurn::right_quarter,
+        StairTurn::left_half, StairTurn::right_half}) for (const bool multiple : {false, true}) {
+        StairFlight stair{"stair", {2,3,4}, .3, 8, 1.6, .3, 1.0, StairLanding{1.0,.15}};
+        if (multiple) {
+            stair.flights = {{"lower-flight",4},{"upper-flight",4}};
+            stair.landings = {{"middle-landing",1.3,.15,turn,
+                turn == StairTurn::left_half || turn == StairTurn::right_half ? .25 : 0.0}};
+        }
+        if (!multiple) {
+            const auto independent = export_project_ifc(Document::create({encode_building_entity(stair),
+                encode_building_entity(Railing{"free-v1",{7,8,3},.25,2,1,.04,.45})}).snapshot());
+            const auto independent_result = import_project_ifc(independent.step);
+            verify_worker_candidate(independent_result,"independent v1 stair and v1 railing");
+            check(independent_result.entities.size() == 2 &&
+                std::count_if(independent_result.entities.begin(),independent_result.entities.end(),[](const auto& e){
+                    return e.type == "stair" && e.properties.at("version") == 1;
+                }) == 1 && std::count_if(independent_result.entities.begin(),independent_result.entities.end(),[](const auto& e){
+                    return e.type == "railing" && e.properties.at("version") == 1;
+                }) == 1, "independent version-1 families must recover without inventing unsupported host authority");
+            continue;
+        }
+        auto stair_entity = encode_building_entity(stair);
+        stair_entity.extensions["human"] = {{"note","stair"},{"phase",{{"id","historic-phase"}}}};
+        if (multiple && turn == StairTurn::left_half)
+            stair_entity.extensions["human"]["long_note"] = std::string(5000,'s');
+        Railing rail;
+        rail.id = "rail"; rail.height = 1.0; rail.thickness = .04; rail.post_spacing = .45;
+        rail.host = StairRailingHost{"stair",multiple ? "upper-flight" : "stair",StairRailingSide::right,.1,.9};
+        auto rail_entity = encode_building_entity(rail);
+        rail_entity.extensions["human"] = {{"note","rail"}};
+        Railing free_rail{"free-rail",{7,8,3},.25,2,1,.04,.45};
+        auto source_entities = project_import_detail::detached_ifc_validation_entities(
+            {stair_entity,rail_entity,encode_building_entity(free_rail)});
+        for (auto& e : source_entities) if (e.type == "stair" || (e.type == "railing" && e.properties.contains("host")))
+            e.properties["phase_id"] = "source-phase";
+        const auto exported = export_project_ifc(Document::create(source_entities).snapshot());
+        check(std::none_of(exported.diagnostics.begin(),exported.diagnostics.end(),[](const auto& d){
+            return d.source_kind == "stair" || d.source_kind == "railing";
+        }), "canonical stair and actual railing solids must export without physical degradation");
+        const auto graph = records(exported.step);
+        std::string stair_id, rail_id, aggregate_id;
+        std::size_t stair_products = 0, rail_products = 0;
+        for (const auto& [id,r] : graph) {
+            if (r.type == "IFCSTAIR") { stair_id = id; ++stair_products; }
+            if (r.type == "IFCRAILING") {
+                ++rail_products;
+                if (r.fields[2] == "'rail'") rail_id = id;
+                check(independently_read_mesh_volume(graph,r) > 0, "rail must contain actual closed positive-volume members");
+            }
+            check(r.type != "IFCSTAIRFLIGHT", "solid parts must not produce duplicate metadata-less child products");
+        }
+        check(stair_products == 1 && rail_products == 2, "stair/rail products require exact physical cardinality");
+        const auto layout = derive_stair_layout(stair);
+        double expected_volume = 0;
+        const double h = stair.total_rise / stair.riser_count;
+        for (const auto& flight : layout.flights) {
+            const auto n = static_cast<double>(flight.treads.size());
+            expected_volume += stair.width * stair.going * h * n * (n+1) / 2;
+        }
+        for (const auto& landing : layout.landings) {
+            double twice_area = 0;
+            for (std::size_t i=0; i<4; ++i) {
+                const auto& a=landing.footprint[i]; const auto& b=landing.footprint[(i+1)%4];
+                twice_area += a.x*b.y-b.x*a.y;
+            }
+            expected_volume += std::abs(twice_area) / 2 * landing.thickness;
+        }
+        check(std::abs(independently_read_mesh_volume(graph,graph.at(stair_id))-expected_volume) < 1e-7,
+            "independent stair volume must include every true riser and connecting/top landing");
+        for (const auto& [id,r] : graph) if (r.type == "IFCRELAGGREGATES" && r.fields[4] == stair_id) {
+            check(list(r.fields[5]) == std::vector<std::string>{rail_id}, "host aggregate must name the exact physical rail");
+            aggregate_id = id;
+        }
+        check(!aggregate_id.empty(), "hosted rail requires a physical stair aggregate");
+        const auto imported = import_project_ifc(exported.step);
+        verify_worker_candidate(imported,"canonical stair/railing native candidate");
+        check(std::count_if(imported.entities.begin(),imported.entities.end(),[](const auto& e){
+            return e.type == "stair" || e.type == "railing";
+        }) == 3, "native stair/rail exchange must not add physical measurement duplicates");
+        const Entity* recovered_stair=nullptr; const Entity* recovered_rail=nullptr;
+        for (const auto& e : imported.entities) {
+            if (e.type == "stair") recovered_stair = &e;
+            if (e.type == "railing" && e.properties.contains("host")) recovered_rail = &e;
+        }
+        check(recovered_stair && recovered_rail && recovered_stair->properties == stair_entity.properties,
+            "stair must recover exact ordered topology and native manufacturing parameters");
+        check(recovered_rail->properties.at("host").at("stair_id") == recovered_stair->id &&
+            recovered_rail->properties.at("host").at("flight_id") == (multiple ? "upper-flight" : recovered_stair->id),
+            "only proved host identities may remap; version-2 child identity must stay exact");
+        check(recovered_stair->extensions.at("human") == stair_entity.extensions.at("human"),
+            "nested phase/human source metadata must remain unchanged");
+        auto native_entities = imported.entities;
+        std::erase_if(native_entities,[](const auto& e){return e.type != "stair" && e.type != "railing";});
+        const auto repeated = import_project_ifc(export_project_ifc(Document::create(
+            project_import_detail::detached_ifc_validation_entities(native_entities)).snapshot()).step);
+        check(std::count_if(repeated.entities.begin(),repeated.entities.end(),[](const auto& e){return e.type == "railing";}) == 2 &&
+            std::count_if(repeated.entities.begin(),repeated.entities.end(),
+            [](const auto& e){return e.type == "stair";}) == 1, "repeated native exchange must preserve editable physical families");
+        for (const auto& e : repeated.entities) if (e.type == "stair")
+            check(e.extensions.at("ifc_vertex_properties") == recovered_stair->extensions.at("ifc_vertex_properties"),
+                "unchanged exchange must retain the original source proof without recursive metadata growth");
+        auto edited_entities = native_entities;
+        for (auto& e : edited_entities) if (e.type == "stair") e.properties["going_m"] = .35;
+        const auto edited = import_project_ifc(export_project_ifc(Document::create(
+            project_import_detail::detached_ifc_validation_entities(edited_entities)).snapshot()).step);
+        check(std::count_if(edited.entities.begin(),edited.entities.end(),[](const auto& e){return e.type == "stair";}) == 1 &&
+            std::count_if(edited.entities.begin(),edited.entities.end(),[](const auto& e){return e.type == "railing";}) == 2,
+            "a legitimate host edit must export fresh same-model host proof and keep the native rail editable");
+        std::size_t refusal_case = 0;
+        const auto declined = [&](const std::string& bytes, bool stair_declined) {
+            const auto ordinal = refusal_case++;
+            const auto result = [&] {
+                try { return import_project_ifc(bytes); }
+                catch (const std::exception& error) {
+                    throw std::runtime_error("Stair/rail refusal fixture import: turn=" +
+                        std::to_string(static_cast<int>(turn)) + " case=" + std::to_string(ordinal) +
+                        " cause=" + error.what());
+                }
+            }();
+            if (!result.source_retention_required || !std::none_of(result.entities.begin(),result.entities.end(),
+                [&](const auto& e){ return stair_declined ? e.type == "stair" : e.type == "railing" && e.properties.contains("host"); }))
+                throw std::runtime_error("Unproved stair/rail carrier remained active: turn=" +
+                    std::to_string(static_cast<int>(turn)) + " case=" + std::to_string(ordinal));
+            verify_worker_candidate(result,"declined stair/rail candidate");
+        };
+        auto ambiguous = exported.step;
+        const auto& aggregate = graph.at(aggregate_id);
+        std::string row = "#900001=IFCRELAGGREGATES(";
+        for (const auto& f : aggregate.fields) { if (row.back() != '(') row += ','; row += f; }
+        ambiguous.insert(ambiguous.find("ENDSEC;\nEND-ISO"),row+");\n");
+        declined(ambiguous,false);
+        auto wrong_kind = graph.at(stair_id); wrong_kind.fields[8] = ".STRAIGHT_RUN_STAIR.";
+        declined(replace_ifc_record(exported.step,stair_id,wrong_kind),true);
+        auto nonmetre = exported.step;
+        const auto metre = nonmetre.find(".LENGTHUNIT.,$,.METRE.");
+        nonmetre.replace(metre, std::string(".LENGTHUNIT.,$,.METRE.").size(), ".LENGTHUNIT.,.MILLI.,.METRE.");
+        declined(nonmetre,true);
+        auto tampered_mesh = exported.step;
+        for (const auto& [id,r] : graph) if (r.type == "IFCCARTESIANPOINTLIST3D") {
+            auto moved = r; auto rows = list(r.fields[0]); auto point = list(rows[0]);
+            point[0] = std::to_string(std::stod(point[0]) + .2);
+            rows[0] = "("+point[0]+","+point[1]+","+point[2]+")";
+            moved.fields[0] = "(";
+            for (const auto& p : rows) { if (moved.fields[0].size()>1) moved.fields[0]+=','; moved.fields[0]+=p; }
+            moved.fields[0]+=')'; tampered_mesh=replace_ifc_record(std::move(tampered_mesh),id,moved);
+        }
+        declined(tampered_mesh,true);
+        if (turn == StairTurn::straight) {
+            // Repeated duplicate-identity carriers share the actual geometry
+            // but each attempted regeneration consumes the file-wide ledger.
+            std::string property_relation;
+            for (const auto& [id,r] : graph) if (r.type == "IFCRELDEFINESBYPROPERTIES" &&
+                list(r.fields[4]) == std::vector<std::string>{stair_id}) property_relation=id;
+            check(!property_relation.empty(), "stair work fixture requires native property relation");
+            auto repeated_work=exported.step;
+            std::string additions;
+            const auto append=[&](int id, const Record& r) {
+                std::string row="#"+std::to_string(id)+"="+r.type+"(";
+                for (const auto& f:r.fields) { if (row.back() != '(') row+=','; row+=f; }
+                additions+=row+");\n";
+            };
+            for (int i=0;i<8;++i) {
+                const int id=900000+2*i;
+                append(id,graph.at(stair_id));
+                auto relation=graph.at(property_relation); relation.fields[4]="(#"+std::to_string(id)+")";
+                append(id+1,relation);
+            }
+            repeated_work.insert(repeated_work.find("ENDSEC;\nEND-ISO"),additions);
+            IfcExchangeLimits bounded; bounded.max_mesh_vertices=2200; bounded.max_mesh_triangles=2200;
+            const auto exhausted=import_project_ifc(repeated_work,bounded);
+            check(std::count_if(exhausted.entities.begin(),exhausted.entities.end(),[](const auto& e){return e.type == "stair";}) == 1 &&
+                std::any_of(exhausted.diagnostics.begin(),exhausted.diagnostics.end(),[](const auto& d) {
+                    return d.code == "native_stair_or_railing_reconstruction_budget_exceeded";
+                }), "failed duplicate carriers must not refund expected mesh work or add active products");
+            verify_worker_candidate(exhausted,"aggregate failed stair reconstruction work");
+        }
+        if (turn == StairTurn::straight) for (const auto mutation : {"unknown-version", "source-only", "physical-change"}) {
+            const auto altered = mutate_native_metadata(exported.step,[&](Json& metadata) {
+                if (!metadata.contains("_vertex_ifc_mesh") || metadata.at("_vertex_ifc_mesh").at("role") != "stair") return false;
+                if (std::string_view(mutation) == "unknown-version") {
+                    metadata["version"] = 99; metadata["_vertex_ifc_entity"]["properties"]["version"] = 99;
+                } else {
+                    metadata["_vertex_ifc_entity"]["properties"]["width_m"] = 1.1;
+                    if (std::string_view(mutation) == "physical-change") metadata["width_m"] = 1.1;
+                }
+                return true;
+            });
+            declined(altered,true);
+        }
+        if (turn == StairTurn::straight) for (const auto key : {"property_id","building_id","floor_id","layer_id","phase_id"}) {
+            const auto altered = mutate_native_metadata(exported.step,[&](Json& metadata) {
+                if (!metadata.contains("_vertex_ifc_mesh") || metadata.at("_vertex_ifc_mesh").at("role") != "railing" ||
+                    !metadata.contains("host")) return false;
+                const Json contradiction = std::string_view(key) == "layer_id" ? Json(17) : Json("contradictory-source");
+                metadata[key]=contradiction; metadata["_vertex_ifc_entity"]["properties"][key]=contradiction;
+                return true;
+            });
+            declined(altered,false);
+        }
+        if (multiple && turn == StairTurn::left_half) if (const auto* directory = std::getenv("VERTEX_TEST_CAPTURE_DIR")) {
+            std::filesystem::create_directories(directory);
+            std::ofstream output(std::filesystem::path(directory)/"native-stair-railing.ifc",std::ios::binary);
+            output << exported.step;
+            check(output.good(), "stair/railing worker capture must be written completely");
+        }
+    }
+}
+
+void native_landing_railing_exchange() {
+    using namespace sketch; using Json=nlohmann::json;
+    for (const auto role : {StairLandingRole::connecting,StairLandingRole::top}) {
+        StairFlight stair{"landing-stair",{2,3,4},.37,8,1.6,.3,1,StairLanding{1.1,.15}};
+        stair.flights={{"incoming-flight",4},{"outgoing-flight",4}};
+        stair.landings={{"connecting-landing",1.3,.15,StairTurn::straight,0}};
+        Railing rail{"landing-rail",{},0,0,.9,.04,.3};
+        rail.landing_host=StairLandingRailingHost{stair.id,role,
+            role==StairLandingRole::connecting?"connecting-landing":"",
+            role==StairLandingRole::connecting?"incoming-flight":"outgoing-flight",
+            role==StairLandingRole::connecting?"outgoing-flight":"",0,.1,.9};
+        const auto canonical=encode_railing_properties(rail);
+        const auto source=Document::create(project_import_detail::detached_ifc_validation_entities(
+            {encode_building_entity(stair),encode_building_entity(rail)}));
+        const auto exported=export_project_ifc(source.snapshot());
+        const auto imported=import_project_ifc(exported.step);
+        verify_worker_candidate(imported,"canonical v3 landing railing candidate");
+        const auto recovered=std::find_if(imported.entities.begin(),imported.entities.end(),[](const auto& e){return e.type=="railing";});
+        const auto host=std::find_if(imported.entities.begin(),imported.entities.end(),[](const auto& e){return e.type=="stair";});
+        check(recovered!=imported.entities.end() && host!=imported.entities.end() &&
+            recovered->properties.at("version")==3 && recovered->properties.at("form")=="stair_landing_railing",
+            "exact canonical landing railing must recover as a native editable v3 family");
+        auto expected=canonical; expected["host"]["stair_id"]=host->id;
+        check(recovered->properties==expected, "landing host witnesses and fractions must remain exact through owner remapping");
+        for (const auto mutation : {"unknown-version","wrong-witness","blocked-edge","missing-phase"}) {
+            const auto altered = mutate_native_metadata(exported.step,[&](Json& metadata) {
+                if(!metadata.contains("_vertex_ifc_mesh")||metadata.at("_vertex_ifc_mesh").at("role")!="railing") return false;
+                if(std::string_view(mutation)=="unknown-version") {
+                    metadata["version"]=4; metadata["_vertex_ifc_entity"]["properties"]["version"]=4;
+                } else if(std::string_view(mutation)=="missing-phase") {
+                    metadata["phase_id"]="unexpected-phase";
+                    metadata["_vertex_ifc_entity"]["properties"]["phase_id"]="unexpected-phase";
+                } else {
+                    const auto key=std::string_view(mutation)=="wrong-witness"?"incoming_flight_id":"edge_index";
+                    const Json value=std::string_view(mutation)=="wrong-witness"?Json("retired-flight"):Json(3);
+                    metadata["host"][key]=value; metadata["_vertex_ifc_entity"]["properties"]["host"][key]=value;
+                }
+                return true;
+            });
+            const auto refused=import_project_ifc(altered);
+            check(refused.source_retention_required && std::none_of(refused.entities.begin(),refused.entities.end(),
+                [](const auto& e){return e.type=="railing";}), "unproved landing host/version/phase must stay inert with original source retained");
+            verify_worker_candidate(refused,"declined v3 landing railing carrier");
+        }
+        if(const auto* directory=std::getenv("VERTEX_TEST_CAPTURE_DIR")) {
+            std::filesystem::create_directories(directory);
+            std::ofstream output(std::filesystem::path(directory)/(role==StairLandingRole::top?
+                "native-top-landing-railing.ifc":"native-connecting-landing-railing.ifc"),std::ios::binary);
+            output<<exported.step;check(output.good(),"v3 landing IFC capture must be written completely");
+        }
+    }
+}
+
+void native_stair_export_cluster_proofs() {
+    using namespace sketch;
+    StairFlight stair{"cluster-stair",{2,3,4},.37,8,1.6,.3,1,StairLanding{1.1,.15}};
+    stair.flights = {{"cluster-lower",4},{"cluster-upper",4}};
+    stair.landings = {{"cluster-middle",1.3,.15,StairTurn::straight,0}};
+    Railing flight{"cluster-flight",{},0,0,1,.04,.45};
+    flight.host = StairRailingHost{stair.id,"cluster-upper",StairRailingSide::right,.1,.9};
+    Railing guard{"cluster-guard",{},0,0,.9,.04,.3};
+    guard.landing_host = StairLandingRailingHost{stair.id,StairLandingRole::connecting,
+        "cluster-middle","cluster-lower","cluster-upper",0,.1,.9};
+    auto flight_entity = encode_building_entity(flight);
+    flight_entity.properties["host"]["landing_id"] = "cluster-middle";
+    flight_entity.properties["host"]["incoming_flight_id"] = "cluster-lower";
+    flight_entity.properties["host"]["outgoing_flight_id"] = "cluster-upper";
+    auto source_entities = project_import_detail::detached_ifc_validation_entities({
+        encode_building_entity(stair),flight_entity,encode_building_entity(guard),
+        encode_building_entity(StairFlight{"independent-stair",{20,20,0},0,4,.8,.3,1})});
+    const auto imported = import_project_ifc(export_project_ifc(Document::create(source_entities).snapshot()).step);
+    std::vector<Entity> live;
+    for (auto entity : imported.entities) {
+        if (entity.type != "stair" && entity.type != "railing") continue;
+        const auto source_id = entity.extensions.at("ifc_vertex_properties").at("_vertex_ifc_entity").at("id");
+        if (source_id == "cluster-stair") {
+            entity.id = "live-stair";
+            entity.properties["flights"][0]["id"] = "live-lower";
+            entity.properties["flights"][1]["id"] = "live-upper";
+            entity.properties["landings"][0]["id"] = "live-middle";
+        } else if (source_id == "cluster-flight") {
+            entity.id = "live-flight";
+            entity.properties["host"]["stair_id"] = "live-stair";
+            entity.properties["host"]["flight_id"] = "live-upper";
+        } else if (source_id == "cluster-guard") {
+            entity.id = "live-guard";
+            entity.properties["host"]["stair_id"] = "live-stair";
+            entity.properties["host"]["landing_id"] = "live-middle";
+            entity.properties["host"]["incoming_flight_id"] = "live-lower";
+            entity.properties["host"]["outgoing_flight_id"] = "live-upper";
+        }
+        for (const auto* key : {"property_id","building_id","floor_id","layer_id"})
+            entity.properties[key] = std::string("destination-") + key;
+        live.push_back(std::move(entity));
+    }
+    check(live.size() == 4,"cluster fixture must recover two stairs and both v2/v3 hosted rails");
+    const auto recover = [&](const std::vector<Entity>& active) {
+        auto entities = active;
+        entities.push_back(Entity{"destination-property_id","property"});
+        entities.push_back(Entity{"destination-building_id","building",{{"property_id","destination-property_id"}}});
+        entities.push_back(Entity{"destination-floor_id","floor",{{"building_id","destination-building_id"}}});
+        entities.push_back(Entity{"destination-layer_id","layer",{{"floor_id","destination-floor_id"}}});
+        const auto document = Document::create(entities);
+        check(document.snapshot().is_editable(),"remapped cluster fixture must retain valid destination authority");
+        const auto result = import_project_ifc(export_project_ifc(document.snapshot()).step);
+        verify_worker_candidate(result,"coherent remapped stair export cluster");
+        check(document.snapshot().entities() == Document::create(entities).snapshot().entities(),
+            "cluster proof preparation must not mutate live entities or immutable retained evidence");
+        std::map<std::string,Entity> recovered;
+        for (const auto& entity : result.entities) {
+            if (entity.type != "stair" && entity.type != "railing") continue;
+            const auto id = entity.extensions.at("ifc_vertex_properties").at("_vertex_ifc_entity").at("id").get<std::string>();
+            check(recovered.emplace(id,entity).second,"cluster re-export must preserve unique active families");
+        }
+        check(recovered.size() == 4,"cluster member edits must preserve two active stairs and both hosted railings");
+        return recovered;
+    };
+    const auto recovered_entity = [](const std::map<std::string,Entity>& recovered,
+                                     const std::string& id, const char* phase) -> const Entity& {
+        const auto found = recovered.find(id);
+        if (found != recovered.end()) return found->second;
+        std::string keys;
+        for (const auto& [key, entity] : recovered) {
+            (void)entity;
+            if (!keys.empty()) keys += ',';
+            keys += key;
+        }
+        throw std::runtime_error(std::string{"cluster proof phase="} + phase +
+            " missing source id=" + id + " recovered source ids=" + keys);
+    };
+    const auto unchanged = recover(live);
+    for (const auto& entity : live) {
+        const auto& prior = entity.extensions.at("ifc_vertex_properties");
+        check(recovered_entity(unchanged,prior.at("_vertex_ifc_entity").at("id").get<std::string>(),"unchanged").extensions.at("ifc_vertex_properties") == prior,
+            "an unchanged remapped cluster must retain every exact source proof and opaque v2 host extra");
+    }
+    for (const auto* change : {"opaque","rail-human","guard-human","stair-human","rail-required",
+        "stair-required","rail-height","guard-height","stair-elevation"}) {
+        auto edited = live;
+        for (auto& entity : edited) {
+            if (entity.id == "live-flight") {
+                if (std::string_view(change) == "opaque") entity.properties["host"]["landing_id"] = "live-middle";
+                if (std::string_view(change) == "rail-human") entity.extensions["human"] = {{"reviewed_note","rail"}};
+                if (std::string_view(change) == "rail-required") entity.required = true;
+                if (std::string_view(change) == "rail-height") entity.properties["height_m"] = 1.1;
+            }
+            if (entity.id == "live-stair") {
+                if (std::string_view(change) == "stair-human") entity.extensions["human"] = {{"reviewed_note","stair"}};
+                if (std::string_view(change) == "stair-required") entity.required = true;
+                if (std::string_view(change) == "stair-elevation") entity.properties["base_position_m"][2] = 4.5;
+            }
+            if (entity.id == "live-guard") {
+                if (std::string_view(change) == "guard-human") entity.extensions["human"] = {{"reviewed_note","guard"}};
+                if (std::string_view(change) == "guard-height") entity.properties["height_m"] = 1.1;
+            }
+        }
+        const auto recovered = recover(edited);
+        const auto& host_proof = recovered_entity(recovered,"live-stair",change).extensions.at("ifc_vertex_properties");
+        for (const auto& entity : edited) {
+            const auto& prior = entity.extensions.at("ifc_vertex_properties");
+            const auto source_id = prior.at("_vertex_ifc_entity").at("id").get<std::string>();
+            if (source_id == "independent-stair") {
+                // The recovered map uses proof identities. An unchanged
+                // unrelated carrier retains its source ID even when the
+                // imported live entity received an IFC occurrence identity.
+                check(recovered_entity(recovered,source_id,change).extensions.at("ifc_vertex_properties") == prior,
+                    "a changed hosted cluster must preserve unrelated stair source evidence");
+                continue;
+            }
+            const auto& metadata = recovered_entity(recovered,entity.id,change).extensions.at("ifc_vertex_properties");
+            auto extensions = entity.extensions;
+            extensions.erase("ifc_source"); extensions.erase("ifc_vertex_properties");
+            const auto& proof = metadata.at("_vertex_ifc_entity");
+            check(proof.at("id") == entity.id && proof.at("properties") == entity.properties &&
+                proof.at("required") == entity.required && proof.at("extensions") == extensions,
+                "one changed member must export current authoritative proofs for its entire hosted cluster");
+            if (entity.type == "railing") check(metadata.at("_vertex_ifc_host") == host_proof,
+                "each v2/v3 hosted rail must carry the exact emitted stair proof");
+        }
+        check(recovered.at("live-flight").properties.at("host").at("landing_id") ==
+            (std::string_view(change) == "opaque" ? "live-middle" : "cluster-middle"),
+            "v2 unknown host fields must remain opaque through coherent proof regeneration");
+    }
+}
+
+void native_stair_source_context() {
+    using namespace sketch;
+    StairFlight stair{"level-stair",{2,3,4},.2,8,1.6,.3,1.0};
+    stair.flights = {{"connected-flight",8}};
+    stair.level_connection = StairLevelConnection{"levels","floor-link","lower","upper"};
+    auto entity = encode_building_entity(stair);
+    entity.required = true;
+    entity.properties["property_id"] = "property";
+    entity.properties["building_id"] = "building";
+    entity.properties["floor_id"] = "floor";
+    entity.properties["layer_id"] = "layer";
+    entity.properties["parent_id"] = "layer";
+    entity.properties["vertical_placement"] = {{"version",1},{"mode","level"},{"offset_m",.5}};
+    entity.extensions["human"] = {{"phase",{{"id","original-phase"}}},{"nested",{{"source_id","level-stair"}}}};
+    const VerticalLevelGraph levels({{"lower",10.0},{"upper",11.6}},{{"floor-link","lower","upper"}});
+    const auto document = Document::create({entity, Entity{"property","property"},
+        Entity{"building","building",{{"property_id","property"}}},
+        Entity{"floor","floor",{{"building_id","building"},
+            {"vertical_level_binding",VerticalLevelBinding{"levels","lower"}.to_json()}}},
+        Entity{"layer","layer",{{"floor_id","floor"}}},
+        Entity{"levels","vertical_levels",{{"model",nlohmann::json::parse(levels.serialize())}}}});
+    const auto result = import_project_ifc(export_project_ifc(document.snapshot()).step);
+    verify_worker_candidate(result,"source-context detached stair");
+    const auto recovered = std::find_if(result.entities.begin(),result.entities.end(),[](const auto& e){return e.type == "stair";});
+    check(recovered != result.entities.end() && recovered->properties.at("base_position_m").at(2) == 14.5 &&
+        !recovered->required && !recovered->properties.contains("floor_id") && !recovered->properties.contains("layer_id") &&
+        !recovered->properties.contains("vertical_placement") && !recovered->properties.contains("level_connection") &&
+        recovered->extensions.at("ifc_vertex_properties").at("_vertex_ifc_entity").at("properties") == entity.properties &&
+        recovered->extensions.at("human") == entity.extensions.at("human"),
+        "resolved source stair geometry must detach active context and preserve its immutable original envelope");
+    check(document.snapshot().entities().at(entity.id).properties == entity.properties,
+        "native IFC source preparation must not mutate original stair authoring");
+    const auto repeated = import_project_ifc(export_project_ifc(Document::create(
+        project_import_detail::detached_ifc_validation_entities({*recovered})).snapshot()).step);
+    const auto repeated_stair = std::find_if(repeated.entities.begin(), repeated.entities.end(),
+        [](const auto& e) { return e.type == "stair"; });
+    check(repeated_stair != repeated.entities.end() && !repeated_stair->required &&
+        repeated_stair->extensions.at("ifc_vertex_properties").at("_vertex_ifc_entity") ==
+            recovered->extensions.at("ifc_vertex_properties").at("_vertex_ifc_entity"),
+        "untouched detached required-source stair must retain its exact original required/context envelope on re-export");
+}
+
 void native_roofs_and_spaces() {
     using namespace sketch;
     using Json=nlohmann::json;
@@ -1375,12 +1894,167 @@ void current_physical_room_spaces() {
 }
 #endif
 
+void bounded_inert_provenance() {
+    using namespace sketch;
+    using Json = nlohmann::json;
+    const Entity property{"source-property", "property", {{"name", "Source property"}}, false,
+        {{"opaque", std::string(6000, 'p')}, {"quoted", "O'Brien"}}};
+    const Entity receipt{"source-receipt", "ifc_source", {{"diagnostics", Json::array({
+        {{"code", "native_reference_only"}, {"detail", std::string(6000, 'r')}}})}}};
+    const auto exported = export_project_ifc(Document::create({property, receipt}).snapshot());
+    check(exported.step.find("Pset_VertexExchange_v2") != std::string::npos &&
+        std::none_of(exported.diagnostics.begin(), exported.diagnostics.end(), [](const auto& diagnostic) {
+            return diagnostic.code == "vertex_properties_not_exported";
+        }), "large property and source receipt descriptors must use the bounded metadata carrier");
+    std::multiset<std::string> expected;
+    for (const auto& entity : {property, receipt})
+        expected.insert(Json{{"native_entity", {{"id", entity.id}, {"type", entity.type},
+            {"required", entity.required}, {"properties", entity.properties}, {"extensions", entity.extensions}}}}.dump());
+    const auto inspect = [&](const IfcProjectImportResult& imported) {
+        std::multiset<std::string> descriptors;
+        for (const auto& entity : imported.entities) {
+            check(entity.type == "ifc_reference" && !entity.required &&
+                !entity.properties.contains("property_id") && !entity.properties.contains("asset_id"),
+                "large organization and receipt carriers must remain inert");
+            descriptors.insert(entity.extensions.at("ifc_vertex_properties").dump());
+        }
+        check(imported.source_retention_required && descriptors == expected,
+            "large provenance must retain exact identity, type, properties, and extensions without extras");
+    };
+    const auto imported = import_project_ifc(exported.step);
+    inspect(imported);
+    inspect(import_project_ifc(export_project_ifc(Document::create(imported.entities).snapshot()).step));
+    auto quoted_property = property;
+    quoted_property.id = "quoted-property";
+    quoted_property.extensions["opaque"] = std::string(6000, '\'');
+    const auto quoted_export = export_project_ifc(Document::create({quoted_property}).snapshot());
+    const auto quoted_import = import_project_ifc(quoted_export.step);
+    const Json quoted_descriptor{{"native_entity", {{"id", quoted_property.id}, {"type", quoted_property.type},
+        {"required", quoted_property.required}, {"properties", quoted_property.properties},
+        {"extensions", quoted_property.extensions}}}};
+    check(quoted_import.entities.size() == 1 && quoted_import.entities[0].type == "ifc_reference" &&
+        quoted_import.entities[0].extensions.at("ifc_vertex_properties") == quoted_descriptor,
+        "apostrophe-heavy chunks must include escaped field overhead and preserve exact source metadata");
+    const auto quoted_reimport = import_project_ifc(export_project_ifc(Document::create(quoted_import.entities).snapshot()).step);
+    check(quoted_reimport.entities.size() == 1 && quoted_reimport.entities[0].type == "ifc_reference" &&
+        quoted_reimport.entities[0].extensions.at("ifc_vertex_properties") == quoted_descriptor,
+        "apostrophe-heavy inert metadata must survive repeated exact round trips");
+    auto altered = exported.step;
+    const auto note = altered.find(std::string(32, 'p'));
+    check(note != std::string::npos, "chunk corruption fixture must find opaque source text");
+    altered[note] = 'q';
+    bool rejected = false;
+    try { (void)import_project_ifc(altered); } catch (const std::invalid_argument&) { rejected = true; }
+    check(rejected, "large inert provenance must reject a changed chunk without a matching hash");
+    const auto graph = records(exported.step);
+    std::vector<std::string> proxies;
+    for (const auto& [id, record] : graph)
+        if (record.type == "IFCBUILDINGELEMENTPROXY") proxies.push_back(id);
+    check(proxies.size() == 2, "owner refusal fixture must have exactly two inert products");
+    for (const auto& [id, record] : graph) {
+        if (record.type != "IFCRELDEFINESBYPROPERTIES") continue;
+        auto changed = record;
+        changed.fields[4] = "(" + proxies[0] + "," + proxies[1] + ")";
+        std::string row = id + '=' + changed.type + '(';
+        for (const auto& field : changed.fields) { if (row.back() != '(') row += ','; row += field; }
+        row += ");";
+        altered = exported.step;
+        const auto begin = altered.find(id + '=');
+        altered.replace(begin, altered.find(';', begin) - begin + 1, row);
+        rejected = false;
+        try { (void)import_project_ifc(altered); } catch (const std::invalid_argument&) { rejected = true; }
+        check(rejected, "chunked inert metadata must retain its exact single-product owner restriction");
+        break;
+    }
+    IfcExchangeLimits restricted;
+    restricted.max_string_bytes = 256;
+    const auto withheld = export_project_ifc(Document::create({property}).snapshot(), restricted);
+    check(std::any_of(withheld.diagnostics.begin(), withheld.diagnostics.end(), [](const auto& diagnostic) {
+        return diagnostic.source_id == "source-property" && diagnostic.code == "vertex_properties_not_exported";
+    }) && import_project_ifc(withheld.step).entities.empty(),
+        "unsupported small string limits must diagnose metadata loss without inventing an empty reference");
+    // A valid source bounds properties and extensions separately at 1 MiB.
+    // Their combined carrier can still exceed the 4096-chunk transport budget.
+    auto many_chunks = property;
+    many_chunks.properties["opaque"] = std::string(600 * 1024, 'p');
+    many_chunks.extensions["opaque"] = std::string(600 * 1024, 'p');
+    const auto bounded_source = Document::create({many_chunks}).snapshot();
+    restricted.max_string_bytes = 512;
+    const auto too_large = export_project_ifc(bounded_source, restricted);
+    check(std::any_of(too_large.diagnostics.begin(), too_large.diagnostics.end(), [](const auto& diagnostic) {
+        return diagnostic.source_id == "source-property" && diagnostic.code == "vertex_properties_not_exported";
+    }) && too_large.step.find("Pset_VertexExchange_v2") == std::string::npos,
+        "valid inert provenance above the chunk-count budget must remain explicitly withheld");
+    auto oversized = property;
+    oversized.extensions["opaque"] = std::string(1024 * 1024, 'p');
+    rejected = false;
+    try { (void)Document::create({oversized}); }
+    catch (const DocumentError& error) {
+        rejected = error.code() == DocumentErrorCode::invalid_entity &&
+            std::string(error.what()) == "entity extensions exceeds the encoded size limit";
+    }
+    check(rejected, "source descriptors must respect the authoritative document extension limit before IFC export");
+    auto deep_property = property;
+    deep_property.id = "deep-property";
+    Json nested = std::string(6000, 'd');
+    for (int i = 0; i < 40; ++i) nested = Json::array({nested});
+    deep_property.extensions["nested"] = std::move(nested);
+    const auto depth_limited = export_project_ifc(Document::create({deep_property, receipt}).snapshot());
+    check(std::any_of(depth_limited.diagnostics.begin(), depth_limited.diagnostics.end(), [](const auto& diagnostic) {
+        return diagnostic.source_id == "deep-property" && diagnostic.code == "vertex_properties_not_exported";
+    }), "valid document metadata deeper than the IFC parser limit must be explicitly withheld");
+    const auto depth_import = import_project_ifc(depth_limited.step);
+    check(depth_import.entities.size() == 1 && depth_import.entities[0].type == "ifc_reference" &&
+        depth_import.entities[0].extensions.at("ifc_vertex_properties").at("native_entity").at("id") == receipt.id &&
+        expected.contains(depth_import.entities[0].extensions.at("ifc_vertex_properties").dump()),
+        "withholding deep metadata must preserve the remaining valid source receipt");
+    std::vector<Entity> budget_properties;
+    std::multiset<std::string> accepted_budget_descriptors;
+    for (int i = 0; i < 6; ++i) {
+        auto candidate = property;
+        candidate.id = "budget-" + std::to_string(i);
+        candidate.properties["opaque"] = Json::array();
+        for (int j = 0; j < 90000; ++j) candidate.properties["opaque"].push_back(0);
+        if (i < 5) accepted_budget_descriptors.insert(Json{{"native_entity", {{"id", candidate.id},
+            {"type", candidate.type}, {"required", candidate.required}, {"properties", candidate.properties},
+            {"extensions", candidate.extensions}}}}.dump());
+        budget_properties.push_back(std::move(candidate));
+    }
+    const auto budget_export = export_project_ifc(Document::create(std::move(budget_properties)).snapshot());
+    check(std::count_if(budget_export.diagnostics.begin(), budget_export.diagnostics.end(), [](const auto& diagnostic) {
+        return diagnostic.code == "vertex_properties_not_exported";
+    }) == 1 && std::any_of(budget_export.diagnostics.begin(), budget_export.diagnostics.end(), [](const auto& diagnostic) {
+        return diagnostic.source_id == "budget-5" && diagnostic.code == "vertex_properties_not_exported";
+    }), "export must withhold the exact descriptor exceeding the shared aggregate metadata budget");
+    const auto budget_import = import_project_ifc(budget_export.step);
+    std::multiset<std::string> retained_budget_descriptors;
+    for (const auto& entity : budget_import.entities) {
+        check(entity.type == "ifc_reference", "aggregate metadata limiting must not activate source properties");
+        retained_budget_descriptors.insert(entity.extensions.at("ifc_vertex_properties").dump());
+    }
+    check(retained_budget_descriptors == accepted_budget_descriptors,
+        "aggregate-limited export must remain importable with exactly the accepted source metadata");
+}
+
 void run() {
     using namespace sketch;
+    bounded_inert_provenance();
+    const auto import_case = [](const char* name, const std::string& bytes) {
+        try { return import_project_ifc(bytes); }
+        catch (const std::exception& error) { throw std::runtime_error(std::string(name) + ": " + error.what()); }
+    };
     const auto exported = export_project_ifc(make_document().snapshot());
 #ifdef SKETCH_IFC_NATIVE_GEOMETRY
-    native_roofs_and_spaces();
-    current_physical_room_spaces();
+    const auto native_case = [](const char* name, auto operation) {
+        try { operation(); }
+        catch (const std::exception& error) { throw std::runtime_error(std::string(name) + ": " + error.what()); }
+    };
+    native_case("roofs and spaces", native_roofs_and_spaces);
+    native_case("stairs and railings", native_stairs_and_railings);
+    native_case("stair export cluster proofs", native_stair_export_cluster_proofs);
+    native_case("stair source context", native_stair_source_context);
+    native_case("landing railings", native_landing_railing_exchange);
+    native_case("physical room spaces", current_physical_room_spaces);
     check(exported.step.find("IFCDOOR(") != std::string::npos &&
           exported.step.find("IFCRELFILLSELEMENT(") != std::string::npos &&
           exported.step.find("IFCTRIANGULATEDFACESET(") != std::string::npos,
@@ -1434,7 +2108,7 @@ void run() {
             associated = list(record.fields[4]) == std::vector<std::string>{wall_id, type_id} && record.fields[5] == set_id;
     }
     check(typed && associated, "wall occurrence, type and layer set must form connected IFC relationships");
-    const auto layered_import = import_project_ifc(layered.step);
+    const auto layered_import = import_case("layered wall", layered.step);
     const auto imported_wall = std::find_if(layered_import.entities.begin(), layered_import.entities.end(),
         [](const auto& entity) { return entity.type == "wall"; });
     check(imported_wall != layered_import.entities.end() &&
@@ -1465,7 +2139,7 @@ void run() {
         return item.source_id == "wall-1" &&
                item.code == "wall_layer_placement_not_exported";
     }), "oblique asymmetric layers must retain the placement-fidelity diagnostic");
-    const auto oblique = import_project_ifc(oblique_export.step);
+    const auto oblique = import_case("oblique wall", oblique_export.step);
     const auto oblique_imported_wall = std::find_if(oblique.entities.begin(), oblique.entities.end(),
         [](const auto& entity) { return entity.type == "wall"; });
     check(oblique_imported_wall != oblique.entities.end() &&
@@ -1483,7 +2157,7 @@ void run() {
           std::any_of(sloped.diagnostics.begin(), sloped.diagnostics.end(), [](const auto& item) {
               return item.code == "native_reference_only";
           }), "unsupported sloped wall must not silently become a flat wall");
-    const auto reference_import = import_project_ifc(sloped.step);
+    const auto reference_import = import_case("sloped wall reference", sloped.step);
     check(reference_import.entities.size() == 1 && reference_import.entities[0].type == "ifc_reference" &&
           reference_import.entities[0].extensions.at("ifc_vertex_properties").at("native_entity").at("properties") == sloped_wall.properties &&
           reference_import.entities[0].extensions.at("ifc_vertex_properties").at("native_entity").at("extensions") == sloped_wall.extensions &&
@@ -1492,7 +2166,7 @@ void run() {
     check(std::none_of(repeated_reference.diagnostics.begin(), repeated_reference.diagnostics.end(),
         [](const auto& item) { return item.code == "vertex_properties_not_exported"; }),
         "unchanged reference payload must remain below the retention limit on re-export");
-    const auto repeated_reference_import = import_project_ifc(repeated_reference.step);
+    const auto repeated_reference_import = import_case("repeated sloped wall reference", repeated_reference.step);
     check(repeated_reference_import.entities.size() == 1 &&
           repeated_reference_import.entities[0].type == "ifc_reference" &&
           repeated_reference_import.entities[0].extensions.at("ifc_vertex_properties") ==
@@ -1503,10 +2177,10 @@ void run() {
     check(hosted_reference.step.find("IFCOPENINGELEMENT(") == std::string::npos &&
           hosted_reference.step.find("IFCRELVOIDSELEMENT(") == std::string::npos,
           "unsupported hosts must not leave orphan IFC opening features");
-    check(import_project_ifc(hosted_reference.step).entities.size() == 2,
+    check(import_case("unsupported host and opening reference", hosted_reference.step).entities.size() == 2,
           "unsupported host and opening must both retain native references");
 
-    const auto old_axis = import_project_ifc(
+    const auto old_axis = import_case("legacy wall axis",
         "ISO-10303-21;\nHEADER;\nFILE_SCHEMA(('IFC4'));\nENDSEC;\nDATA;\n"
         "#1=IFCSIUNIT(*,.LENGTHUNIT.,$,.METRE.);\n"
         "#2=IFCCARTESIANPOINT((0.,0.,0.));\n#3=IFCCARTESIANPOINT((4.,0.,0.));\n"
@@ -1525,7 +2199,7 @@ void run() {
     const auto end_solid = inconsistent_body.find(");", extrusion);
     const auto last_comma = inconsistent_body.rfind(',', end_solid);
     inconsistent_body.replace(last_comma + 1, end_solid - last_comma - 1, "8.");
-    const auto inconsistent = import_project_ifc(inconsistent_body);
+    const auto inconsistent = import_case("inconsistent wall body", inconsistent_body);
     check(std::none_of(inconsistent.entities.begin(), inconsistent.entities.end(), [](const auto& entity) {
               return entity.type == "wall";
           }) &&
@@ -1625,12 +2299,29 @@ void run() {
     const auto marker = std::string("ENDSEC;\nEND-ISO-10303-21;");
     const auto position = with_unsupported.find(marker);
     check(position != std::string::npos, "export must have a replaceable STEP terminator");
-    with_unsupported.insert(position, "#999999=IFCRELAGGREGATES($,$,$,$);\n");
-    const auto diagnosed = import_project_ifc(with_unsupported);
+    const auto base_graph = records(exported.step);
+    const auto spatial_relation = std::find_if(base_graph.begin(),base_graph.end(),
+        [](const auto& item) { return item.second.type == "IFCRELAGGREGATES"; });
+    check(spatial_relation != base_graph.end(), "relationship retention fixture needs actual spatial owners");
+    auto retained_relation = spatial_relation->second;
+    retained_relation.fields[0] = "'3aaaaaaaaaaaaaaaaaaaaa'";
+    std::string retained_row = "#999999=IFCRELAGGREGATES(";
+    for (const auto& field : retained_relation.fields) {
+        if (retained_row.back() != '(') retained_row += ',';
+        retained_row += field;
+    }
+    with_unsupported.insert(position, retained_row + ");\n");
+    const auto diagnosed = import_case("unreconstructed spatial relationship", with_unsupported);
     check(diagnosed.source_retention_required, "unreconstructed relationships require source retention");
     check(std::any_of(diagnosed.diagnostics.begin(), diagnosed.diagnostics.end(), [](const auto& item) {
         return item.source_kind == "IFCRELAGGREGATES" && item.code == "relationship_not_reconstructed";
     }), "relationship gaps must be identifiable in the fidelity diagnostics");
+    auto malformed_relation = exported.step;
+    malformed_relation.insert(malformed_relation.find(marker), "#999999=IFCRELAGGREGATES($,$,$,$);\n");
+    bool malformed_relation_rejected = false;
+    try { (void)import_project_ifc(malformed_relation); }
+    catch (const std::invalid_argument&) { malformed_relation_rejected = true; }
+    check(malformed_relation_rejected, "malformed aggregate arity must fail closed before native host binding");
 
     auto nonvertical = exported.step;
     const auto direction = nonvertical.find("IFCDIRECTION((0.,0.,1.))");
@@ -1704,12 +2395,12 @@ void run() {
     catch (const std::invalid_argument&) { rejected = true; }
     check(rejected, "malformed IFC must fail closed");
 #ifdef SKETCH_IFC_NATIVE_GEOMETRY
-    native_door_mechanisms();
-        native_window_layouts();
-        native_historic_fixed_windows();
-    native_assemblies();
-    closed_leaf_without_operation();
-    desktop_hosted_worker_protocol();
+    native_case("door mechanisms", native_door_mechanisms);
+    native_case("window layouts", native_window_layouts);
+    native_case("historic fixed windows", native_historic_fixed_windows);
+    native_case("assemblies", native_assemblies);
+    native_case("closed door leaf", closed_leaf_without_operation);
+    native_case("hosted worker protocol", desktop_hosted_worker_protocol);
 #endif
 }
 

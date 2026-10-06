@@ -10,6 +10,7 @@
 #include <map>
 #include <set>
 #include <stdexcept>
+#include <string_view>
 #ifdef _WIN32
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -18,6 +19,24 @@
 #endif
 
 namespace sketch::desktop {
+const char* AssistanceOcrFailure::stage_code() const noexcept {
+    switch (stage_) {
+    case AssistanceOcrFailureStage::frame_decode: return "frame_decode";
+    case AssistanceOcrFailureStage::resource_metadata: return "resource_metadata";
+    case AssistanceOcrFailureStage::resource_read: return "resource_read";
+    case AssistanceOcrFailureStage::resource_validation: return "resource_validation";
+    case AssistanceOcrFailureStage::resource_hash: return "resource_hash";
+    case AssistanceOcrFailureStage::model_read: return "model_read";
+    case AssistanceOcrFailureStage::model_hash: return "model_hash";
+    case AssistanceOcrFailureStage::engine_version: return "engine_version";
+    case AssistanceOcrFailureStage::engine_init: return "engine_init";
+    case AssistanceOcrFailureStage::engine_languages: return "engine_languages";
+    case AssistanceOcrFailureStage::recognition: return "recognition";
+    case AssistanceOcrFailureStage::reply: return "reply";
+    }
+    return "unknown";
+}
+
 std::filesystem::path assistanceOcrApplicationRoot() {
     const auto binary = std::filesystem::path(QCoreApplication::applicationDirPath().toStdWString());
     return QString::fromStdWString(binary.filename().native()).compare(QStringLiteral("bin"), Qt::CaseInsensitive) == 0
@@ -109,32 +128,114 @@ double real(const Json& value) {
     if (!value.is_number()) invalid();
     const auto n = value.get<double>(); if (!std::isfinite(n)) invalid(); return n;
 }
-QString nativePath(const std::filesystem::path& path) {
 #ifdef _WIN32
-    return QString::fromStdWString(path.native());
+[[noreturn]] void metadataFailure(std::uint32_t os_error = 0) {
+    throw AssistanceOcrFailure(AssistanceOcrFailureStage::resource_metadata, os_error);
+}
+std::wstring localDosPath(const std::filesystem::path& path) {
+    auto value = path.native();
+    std::replace(value.begin(), value.end(), L'/', L'\\');
+    if (value.starts_with(L"\\\\?\\")) value.erase(0, 4);
+    if (value.size() < 3 || value.size() >= 32767 || value.find(L'\0') != std::wstring::npos ||
+        !((value[0] >= L'A' && value[0] <= L'Z') || (value[0] >= L'a' && value[0] <= L'z')) ||
+        value[1] != L':' || value[2] != L'\\') metadataFailure();
+    if (value[0] >= L'a' && value[0] <= L'z') value[0] = static_cast<wchar_t>(value[0] - (L'a' - L'A'));
+    for (std::size_t start = 3; start < value.size();) {
+        const auto separator = value.find(L'\\', start);
+        const auto end = separator == std::wstring::npos ? value.size() : separator;
+        const auto component = std::wstring_view(value).substr(start, end - start);
+        if (component.empty() || component == L"." || component == L".." ||
+            component.back() == L'.' || component.back() == L' ' ||
+            component.find_first_of(L":<>\"|?*") != std::wstring_view::npos ||
+            std::any_of(component.begin(), component.end(), [](wchar_t c) { return c < 32; })) metadataFailure();
+        if (separator != std::wstring::npos && separator + 1 == value.size()) metadataFailure();
+        start = end + 1;
+    }
+    return value;
+}
+class ResourceHandle final {
+public:
+    ResourceHandle(const std::filesystem::path& path, bool regular)
+        : requested_(localDosPath(path)) {
+        const auto extended = L"\\\\?\\" + requested_;
+        handle_ = CreateFileW(extended.c_str(), FILE_READ_ATTRIBUTES | (regular ? FILE_READ_DATA : 0),
+            FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+            FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+        if (handle_ == INVALID_HANDLE_VALUE) metadataFailure(GetLastError());
+        try {
+            BY_HANDLE_FILE_INFORMATION information{};
+            if (!GetFileInformationByHandle(handle_, &information)) metadataFailure(GetLastError());
+            if (GetFileType(handle_) != FILE_TYPE_DISK ||
+                (information.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) ||
+                bool(information.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == regular) metadataFailure();
+            verifyPath();
+        } catch (...) { CloseHandle(handle_); throw; }
+    }
+    ~ResourceHandle() { CloseHandle(handle_); }
+    ResourceHandle(const ResourceHandle&) = delete;
+    ResourceHandle& operator=(const ResourceHandle&) = delete;
+    [[nodiscard]] HANDLE get() const noexcept { return handle_; }
+    void verifyPath() const {
+        // DOS normalized final names resolve ancestor junctions. Query only
+        // this granted endpoint; no metadata access to private ancestors is needed.
+        std::wstring final(32768, L'\0');
+        const auto length = GetFinalPathNameByHandleW(handle_, final.data(), static_cast<DWORD>(final.size()),
+            FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
+        if (!length) metadataFailure(GetLastError());
+        if (length >= final.size()) metadataFailure(ERROR_INSUFFICIENT_BUFFER);
+        final.resize(length);
+        final = localDosPath(std::filesystem::path(final));
+        // Preserve every stored component's case: case-sensitive directories
+        // can contain a case-only ancestor junction to a different endpoint.
+        if (CompareStringOrdinal(requested_.data(), static_cast<int>(requested_.size()),
+            final.data(), static_cast<int>(final.size()), FALSE) != CSTR_EQUAL) metadataFailure();
+    }
+private:
+    std::wstring requested_;
+    HANDLE handle_{INVALID_HANDLE_VALUE};
+};
 #else
+QString nativePath(const std::filesystem::path& path) {
     return QString::fromStdString(path.native());
-#endif
 }
 void safePath(const std::filesystem::path& path, bool regular) {
-    if (!path.is_absolute()) invalid();
+    const auto rejected = [](std::uint32_t os_error = 0) {
+        throw AssistanceOcrFailure(AssistanceOcrFailureStage::resource_metadata, os_error);
+    };
+    if (!path.is_absolute()) rejected();
     std::filesystem::path current;
     for (const auto& component : path) {
         current /= component;
         if (current == path.root_name()) continue;
         std::error_code error;
         const auto status = std::filesystem::symlink_status(current, error);
-        if (error || std::filesystem::is_symlink(status) ||
-            (!std::filesystem::is_directory(status) && current != path)) invalid();
-#ifdef _WIN32
-        const auto attributes = GetFileAttributesW(current.c_str());
-        if (attributes == INVALID_FILE_ATTRIBUTES || (attributes & FILE_ATTRIBUTE_REPARSE_POINT)) invalid();
-#endif
+        if (error) rejected(static_cast<std::uint32_t>(error.value()));
+        if (std::filesystem::is_symlink(status) ||
+            (!std::filesystem::is_directory(status) && current != path)) rejected();
         if (current == path && (regular ? !std::filesystem::is_regular_file(status)
-                                      : !std::filesystem::is_directory(status))) invalid();
+                                      : !std::filesystem::is_directory(status))) rejected();
     }
 }
+#endif
 QByteArray read(const std::filesystem::path& path, qsizetype limit) {
+#ifdef _WIN32
+    const ResourceHandle handle(path, true);
+    LARGE_INTEGER size{};
+    if (!GetFileSizeEx(handle.get(), &size))
+        throw AssistanceOcrFailure(AssistanceOcrFailureStage::resource_read, GetLastError());
+    if (size.QuadPart <= 0 || size.QuadPart > limit) invalid();
+    QByteArray result(static_cast<qsizetype>(size.QuadPart), Qt::Uninitialized);
+    DWORD received = 0;
+    if (!ReadFile(handle.get(), result.data(), static_cast<DWORD>(result.size()), &received, nullptr))
+        throw AssistanceOcrFailure(AssistanceOcrFailureStage::resource_read, GetLastError());
+    if (received != result.size()) invalid();
+    char extra = 0;
+    if (!ReadFile(handle.get(), &extra, 1, &received, nullptr))
+        throw AssistanceOcrFailure(AssistanceOcrFailureStage::resource_read, GetLastError());
+    if (received) invalid();
+    handle.verifyPath();
+    return result; // Hash and consume this owned snapshot; never reopen its path.
+#else
     safePath(path, true);
     QFile file(nativePath(path));
     if (!file.open(QIODevice::ReadOnly) || file.size() <= 0 || file.size() > limit) invalid();
@@ -142,6 +243,7 @@ QByteArray read(const std::filesystem::path& path, qsizetype limit) {
     if (result.isEmpty() || result.size() > limit || file.error() != QFileDevice::NoError ||
         !file.atEnd()) invalid();
     return result;
+#endif
 }
 std::span<const std::byte> bytes(const QByteArray& data) {
     return {reinterpret_cast<const std::byte*>(data.constData()), static_cast<std::size_t>(data.size())};
@@ -219,16 +321,37 @@ AssistanceOcrResult validateAssistanceOcrReply(std::span<const std::byte> reply)
     return result;
 }
 
+AssistanceOcrVerifiedBundle loadVerifiedAssistanceOcrBundle(const std::filesystem::path& root) {
+    auto stage = AssistanceOcrFailureStage::resource_metadata;
+    try {
+#ifdef _WIN32
+        const ResourceHandle root_handle(root, false);
+#else
+        safePath(root, false);
+#endif
+        stage = AssistanceOcrFailureStage::resource_read;
+        const auto description = read(root / assistanceOcrEnginePath, 16384);
+        stage = AssistanceOcrFailureStage::resource_validation;
+        if (parse(bytes(description), 16384) != descriptor()) invalid();
+        stage = AssistanceOcrFailureStage::resource_read;
+        const auto license = read(root / assistanceOcrLicensePath, 65536);
+        stage = AssistanceOcrFailureStage::resource_validation;
+        if (!license.contains("Apache License") || !license.contains("Version 2.0")) invalid();
+        stage = AssistanceOcrFailureStage::resource_read;
+        const auto model = read(root / assistanceOcrModelPath, assistanceOcrModelBytes);
+        stage = AssistanceOcrFailureStage::resource_hash;
+        if (model.size() != assistanceOcrModelBytes ||
+            QCryptographicHash::hash(model, QCryptographicHash::Sha256).toHex() != assistanceOcrModelSha256) invalid();
+#ifdef _WIN32
+        root_handle.verifyPath();
+#endif
+        return {fixedResources(), {model.begin(), model.end()}};
+    } catch (const AssistanceOcrFailure&) { throw; }
+      catch (...) { throw AssistanceOcrFailure(stage); }
+}
+
 std::vector<AssistanceResource> verifiedAssistanceOcrResources(const std::filesystem::path& root) {
-    safePath(root, false);
-    const auto description = read(root / assistanceOcrEnginePath, 16384);
-    if (parse(bytes(description), 16384) != descriptor()) invalid();
-    const auto license = read(root / assistanceOcrLicensePath, 65536);
-    if (!license.contains("Apache License") || !license.contains("Version 2.0")) invalid();
-    const auto model = read(root / assistanceOcrModelPath, assistanceOcrModelBytes);
-    if (model.size() != assistanceOcrModelBytes ||
-        QCryptographicHash::hash(model, QCryptographicHash::Sha256).toHex() != assistanceOcrModelSha256) invalid();
-    return fixedResources();
+    return loadVerifiedAssistanceOcrBundle(root).resources;
 }
 
 AssistanceOcrResult recognizeAssistanceRaster(const AssistanceRaster& raster,

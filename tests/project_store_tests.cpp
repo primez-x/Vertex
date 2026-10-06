@@ -3678,6 +3678,264 @@ void test_typed_stair_and_owned_railing_history_floors() {
         "unrelated vendor form collision stays opaque and native1");
 }
 
+// These checks catch a head-only floor scan, lossy retained JSON, and a reader
+// that trusts a recomputed digest instead of enforcing semantic admission.
+void verify_semantic_history_storage(const sketch::DocumentSnapshot& snapshot,
+                                     unsigned native_floor, unsigned exchange_floor) {
+    require(ProjectStore::required_format_version(snapshot) == native_floor,
+        "new typed semantics must establish the reader floor in every retained state");
+    TempDirectory temp;
+    const auto path = temp.path / "semantic-history.bldproj";
+    (void)ProjectStore::save(path, snapshot);
+    sqlite3* database = nullptr;
+    require(sqlite3_open(path.string().c_str(), &database) == SQLITE_OK,
+        "semantic history fixture should open its saved metadata");
+    const auto marker = metadata_value(database, "format_version");
+    const auto sqlite_marker = sqlite_user_version(database);
+    sqlite3_close(database);
+    require(marker == std::to_string(native_floor) && sqlite_marker == static_cast<int>(native_floor),
+        "semantic history save must publish both actual native reader markers");
+
+    auto loaded = ProjectStore::load(path);
+    const auto restored = loaded.document.snapshot();
+    require(restored.entities() == snapshot.entities() && restored.revision() == snapshot.revision() &&
+        restored.history().size() == snapshot.history().size() &&
+        restored.is_editable() == snapshot.is_editable() &&
+        sketch::document_authoring_source_digest_v1(restored) == sketch::document_authoring_source_digest_v1(snapshot),
+        "native reopen must retain exact source JSON, current state and history navigation");
+    for (std::size_t i = 0; i < snapshot.history().size(); ++i) {
+        const auto& expected = snapshot.history()[i];
+        const auto& actual = restored.history()[i];
+        require(actual.revision == expected.revision && actual.parent_revision == expected.parent_revision &&
+            actual.source_revision == expected.source_revision && actual.action == expected.action &&
+            actual.name == expected.name && actual.entities == expected.entities && actual.assets == expected.assets &&
+            actual.undo_stack == expected.undo_stack && actual.redo_stack == expected.redo_stack,
+            "native reopen must retain every exact semantic revision and its navigation stacks");
+    }
+    auto expected_navigation = Document::fork(snapshot);
+    require(loaded.document.can_undo() == expected_navigation.can_undo() &&
+        loaded.document.can_redo() == expected_navigation.can_redo(),
+        "native reopen must preserve available semantic Undo and Redo");
+    if (expected_navigation.can_redo()) {
+        expected_navigation.redo(expected_navigation.revision());
+        loaded.document.redo(loaded.document.revision());
+        require(loaded.document.snapshot().entities() == expected_navigation.snapshot().entities(),
+            "reopened Redo must restore exact hosted sources and unknown metadata");
+    } else if (expected_navigation.can_undo()) {
+        expected_navigation.undo(expected_navigation.revision());
+        loaded.document.undo(loaded.document.revision());
+        require(loaded.document.snapshot().entities() == expected_navigation.snapshot().entities(),
+            "reopened Undo must restore exact hosted sources and unknown metadata");
+        loaded.document.redo(loaded.document.revision());
+        require(loaded.document.snapshot().entities() == snapshot.entities(),
+            "reopened Undo/Redo must restore the exact saved semantic state");
+    }
+
+    const auto destination = temp.path / "extracted";
+    sketch::extract_project(snapshot, destination);
+    std::ifstream input(destination / "project.json");
+    nlohmann::json extraction; input >> extraction;
+    require(extraction.at("exchange_version") == exchange_floor &&
+        extraction.at("revisions").size() == snapshot.history().size(),
+        "exchange extraction must declare its semantic floor even for history-only entities");
+    for (std::size_t i = 0; i < snapshot.history().size(); ++i) {
+        const auto& expected = snapshot.history()[i];
+        const auto& row = extraction.at("revisions").at(i);
+        auto expected_entities = nlohmann::json::array();
+        for (const auto& [id, value] : expected.entities) {
+            (void)id;
+            expected_entities.push_back({{"id", value.id}, {"type", value.type}, {"required", value.required},
+                {"properties", value.properties}, {"extensions", value.extensions}});
+        }
+        require(row.at("revision") == expected.revision && row.at("entities") == expected_entities &&
+            row.at("undo_stack") == expected.undo_stack && row.at("redo_stack") == expected.redo_stack,
+            "exchange must retain exact semantic source and metadata in all revisions");
+    }
+
+    const auto previous = std::to_string(native_floor - 1);
+    execute_sql(path, "PRAGMA user_version=" + previous + "; UPDATE metadata SET value='" + previous + "' WHERE key='format_version'");
+    rewrite_logical_digest(path);
+    const auto hash = ProjectStore::file_sha256(path);
+    require_error([&] { (void)ProjectStore::load(path); }, StorageErrorCode::unsupported_format,
+        "a valid digest must not permit new typed semantics in an underfloor native store");
+    require(ProjectStore::file_sha256(path) == hash,
+        "underfloor semantic refusal must leave original bytes unchanged without migration");
+}
+
+std::vector<Entity> semantic_floor_organization() {
+    return {entity("semantic-property", "property"),
+        entity("semantic-building", "building", {{"property_id", "semantic-property"}}),
+        entity("semantic-floor", "floor", {{"building_id", "semantic-building"}}),
+        entity("semantic-layer", "layer", {{"floor_id", "semantic-floor"}})};
+}
+
+void verify_tampered_opaque_semantic_rejected(const sketch::DocumentSnapshot& snapshot,
+                                             unsigned underfloor, const std::string& mutation) {
+    TempDirectory temp; const auto path = temp.path / "tampered-opaque.bldproj";
+    (void)ProjectStore::save(path, snapshot);
+    require(ProjectStore::load(path).document.snapshot().entities() == snapshot.entities(),
+        "opaque predecessor must reopen intact before the typed payload is injected");
+    sqlite3* database = nullptr;
+    require(sqlite3_open(path.string().c_str(), &database) == SQLITE_OK,
+        "opaque predecessor fixture should open its actual native format metadata");
+    const auto original_format = std::stoul(metadata_value(database, "format_version"));
+    sqlite3_close(database);
+    // Native2 opaque dimensions have no command columns. Relabeling that file
+    // as native54 alone creates an invalid schema, so prepare the real nullable
+    // revision layout before testing semantic admission rather than SQL failure.
+    for (const auto& [introduced, column] : std::array<std::pair<unsigned, const char*>, 6>{{
+             {5, "boundary_translation_json"}, {6, "boundary_transform_json"},
+             {7, "boundary_edit_json"}, {8, "boundary_constraint_changes_json"},
+             {9, "boundary_translations_json"}, {18, "boundary_transforms_json"}}}) {
+        if (original_format < introduced && underfloor >= introduced)
+            execute_sql(path, std::string("ALTER TABLE revisions ADD COLUMN ") + column + " TEXT");
+    }
+    const auto marker = std::to_string(underfloor);
+    execute_sql(path, "PRAGMA user_version=" + marker + "; UPDATE metadata SET value='" + marker + "' WHERE key='format_version'");
+    rewrite_logical_digest(path);
+    require(ProjectStore::load(path).document.snapshot().entities() == snapshot.entities(),
+        "schema-valid underfloor predecessor must reopen intact before typed payload injection");
+    execute_sql(path, mutation);
+    rewrite_logical_digest(path);
+    const auto hash = ProjectStore::file_sha256(path);
+    require_error([&] { (void)ProjectStore::load(path); }, StorageErrorCode::unsupported_format,
+        "injecting supported semantics into an underfloor opaque store must fail despite a valid digest");
+    require(ProjectStore::file_sha256(path) == hash,
+        "typed payload injection refusal must preserve the original underfloor store bytes");
+}
+
+Entity semantic_floor_context(Entity value) {
+    value.properties["property_id"] = "semantic-property";
+    value.properties["building_id"] = "semantic-building";
+    value.properties["floor_id"] = "semantic-floor";
+    value.properties["layer_id"] = "semantic-layer";
+    return value;
+}
+
+void test_landing_railing_retained_history_reader_floor() {
+    for (const auto role : {sketch::StairLandingRole::connecting, sketch::StairLandingRole::top}) {
+        sketch::StairFlight stair{"semantic-stair", {2, 3, 4}, .37, 8, 1.6, .3, 1,
+            sketch::StairLanding{1.1, .15}};
+        stair.flights = {{"incoming-flight", 4}, {"outgoing-flight", 4}};
+        stair.landings = {{"connecting-landing", 1.3, .15, sketch::StairTurn::straight, 0}};
+        auto host = semantic_floor_context(entity(stair.id, "stair", sketch::encode_stair_properties(stair)));
+        host.extensions["vendor_source"] = {{"sequence", {3, 1, 4}}, {"keep", "host"}};
+        sketch::Railing railing{"semantic-rail", {}, 0, 0, .9, .04, .3};
+        railing.landing_host = sketch::StairLandingRailingHost{stair.id, role,
+            role == sketch::StairLandingRole::connecting ? "connecting-landing" : "",
+            role == sketch::StairLandingRole::connecting ? "incoming-flight" : "outgoing-flight",
+            role == sketch::StairLandingRole::connecting ? "outgoing-flight" : "", 0, .1, .9};
+        auto rail = semantic_floor_context(entity(railing.id, "railing", sketch::encode_railing_properties(railing)));
+        rail.properties["vendor_observation"] = {{"length_m", 999}, {"keep", "rail"}};
+        rail.extensions["vendor_source"] = {{"sequence", {2, 7, 1}}};
+        auto values = semantic_floor_organization(); values.push_back(host);
+        auto document = Document::create(values);
+        require(document.is_editable() && ProjectStore::required_format_version(document.snapshot()) == 51,
+            "complete source organization and canonical host must be admitted before adding a landing guard");
+        document.apply(ApplyEntityChanges{document.revision(), {EntityChange::upsert(rail)}, {}, "Add landing guard"});
+        const auto head = document.snapshot();
+        require(head.entities().at(rail.id) == rail && document.is_editable() &&
+            sketch::derive_hosted_railing_layout(railing, stair).posts.size() > 1,
+            "actual Document admission must preserve an editable guard with supported landing posts");
+        auto deleted = Document::fork(head);
+        deleted.apply(ApplyEntityChanges{deleted.revision(), {EntityChange::erase(rail.id)}, {}, "Delete landing guard"});
+        document.undo(document.revision());
+        const auto undone = document.snapshot();
+        require(!undone.entities().contains(rail.id) && document.can_redo(),
+            "undone guard must be retained solely in history with a real Redo path");
+        auto abandoned = Document::fork(undone);
+        abandoned.apply(ApplyEntityChanges{abandoned.revision(), {EntityChange::upsert(entity("branch-note", "label",
+            {{"text", "Keep abandoned guard source"}}))}, {}, "Branch after guard Undo"});
+        require(!abandoned.can_redo() && !abandoned.snapshot().entities().contains(rail.id),
+            "abandoned guard branch fixture must have no active guard or Redo path");
+        for (const auto& snapshot : {head, undone, deleted.snapshot(), abandoned.snapshot()})
+            verify_semantic_history_storage(snapshot, 54, 52);
+        auto future_rail = rail;
+        future_rail.properties["form"] = "vendor_future_railing";
+        auto opaque_values = values; opaque_values.push_back(future_rail);
+        const auto opaque = Document::create(opaque_values);
+        verify_tampered_opaque_semantic_rejected(opaque.snapshot(), 53,
+            "UPDATE revision_entities SET properties_json=json_set(properties_json,'$.form','stair_landing_railing') WHERE id='semantic-rail'");
+    }
+}
+
+void test_wall_axis_dimension_retained_history_reader_floor() {
+    auto wall = semantic_floor_context(entity("semantic-wall", "wall",
+        {{"baseline", {{"start", {0, 0}}, {"end", {3, 4}}, {"sweep_radians", 0.0}}},
+         {"thickness_m", .2}, {"height_m", 2.4}, {"elevation_m", 0.0}, {"length_m", 999}}));
+    wall.extensions["vendor_source"] = {{"keep", "physical-axis"}};
+    auto values = semantic_floor_organization(); values.push_back(wall);
+    auto document = Document::create(values);
+    require(ProjectStore::required_format_version(document.snapshot()) == 1,
+        "ordinary physical wall source must retain its existing floor without a wall dimension");
+    sketch::BoundaryDimension dimension;
+    dimension.id = "semantic-wall-dimension"; dimension.boundary_id = wall.id;
+    dimension.kind = sketch::BoundaryDimensionKind::wall_axis_length;
+    dimension.text_position = {1.5, 2.75};
+    dimension.presentation = sketch::BoundaryDimensionPresentation{};
+    auto carrier = semantic_floor_context(sketch::encode_boundary_dimension_entity(dimension));
+    carrier.properties["target"]["vendor_witness"] = {{"keep", "target"}};
+    carrier.properties["length_m"] = 999;
+    carrier.extensions["vendor_source"] = {{"sequence", {8, 5, 3}}};
+    document.apply(ApplyEntityChanges{document.revision(), {EntityChange::upsert(carrier)}, {}, "Add wall axis dimension"});
+    const auto head = document.snapshot();
+    require(document.is_editable() && dimension.resolve(head).segment_length() == 5 &&
+        head.entities().at(carrier.id) == carrier,
+        "admitted wall dimension must resolve the actual five-metre axis and preserve opaque cached observations");
+    auto deleted = Document::fork(head);
+    deleted.apply(ApplyEntityChanges{deleted.revision(), {EntityChange::erase(carrier.id)}, {}, "Delete wall dimension"});
+    document.undo(document.revision());
+    const auto undone = document.snapshot();
+    require(!undone.entities().contains(carrier.id) && document.can_redo(),
+        "undone wall dimension must be absent from head and retained for Redo");
+    auto abandoned = Document::fork(undone);
+    abandoned.apply(ApplyEntityChanges{abandoned.revision(), {EntityChange::upsert(entity("branch-note", "label",
+        {{"text", "Keep abandoned dimension source"}}))}, {}, "Branch after dimension Undo"});
+    require(!abandoned.can_redo() && !abandoned.snapshot().entities().contains(carrier.id),
+        "abandoned dimension branch must retain semantic history without an active callout");
+    auto copied = values; copied.push_back(carrier);
+    const auto imported = Document::create(copied);
+    for (const auto& snapshot : {head, undone, deleted.snapshot(), abandoned.snapshot(), imported.snapshot()})
+        verify_semantic_history_storage(snapshot, 55, 53);
+    copied.back().properties["dimension_version"] = 999;
+    const auto opaque = Document::create(copied);
+    verify_tampered_opaque_semantic_rejected(opaque.snapshot(), 54,
+        "UPDATE revision_entities SET properties_json=json_set(properties_json,'$.dimension_version',4) WHERE id='semantic-wall-dimension'");
+}
+
+void test_other_railing_v3_and_dimension_v4_forms_remain_opaque() {
+    std::vector<Entity> opaque;
+    for (const auto form : {"stair_flight_railing", "straight_railing", "vendor_future_railing"})
+        opaque.push_back(entity(std::string("future-") + form, "railing",
+            {{"version", 3}, {"form", form}, {"vendor_source", {{"sequence", {1, 3, 5}}}}}, false,
+            {{"vendor_extension", "retain-rail"}}));
+    require(ProjectStore::required_format_version(Document::create(opaque).snapshot()) == 1,
+        "other v3 railing forms must retain their prior opaque native1 floor");
+    for (const auto kind : {"segment_length", "angle", "area"}) {
+        auto dimension = entity(std::string("future-") + kind, "dimension",
+            {{"dimension_version", 4}, {"dimension_kind", kind}, {"target", {{"entity_id", "future-owner"}}},
+             {"vendor_source", {{"sequence", {2, 4, 6}}}}}, false, {{"vendor_extension", "retain-dimension"}});
+        const auto decoded = sketch::decode_boundary_dimension_entity(dimension);
+        require(!decoded.supported() && decoded.original_entity && *decoded.original_entity == dimension,
+            "old dimension kinds in v4 must remain completely opaque, even without a known target");
+        opaque.push_back(std::move(dimension));
+    }
+    const auto document = Document::create(opaque);
+    require(!document.is_editable() && ProjectStore::required_format_version(document.snapshot()) == 2,
+        "other v3 railing and v4 dimension forms retain the opaque read-only policy and prior native floor");
+    TempDirectory temp; const auto path = temp.path / "opaque-semantics.bldproj";
+    (void)ProjectStore::save(path, document.snapshot());
+    const auto restored = ProjectStore::load(path).document.snapshot();
+    require(!restored.is_editable() && restored.entities() == document.snapshot().entities() &&
+        restored.read_only_reason() == document.snapshot().read_only_reason(),
+        "native reopen must preserve all opaque future JSON and its refusal reason");
+    const auto destination = temp.path / "extracted";
+    sketch::extract_project(document.snapshot(), destination);
+    std::ifstream input(destination / "project.json"); nlohmann::json extraction; input >> extraction;
+    require(extraction.at("exchange_version") == 1 && extraction.at("revisions").front().at("entities").size() == opaque.size(),
+        "opaque future forms must remain extractable without falsely declaring new supported semantics");
+}
+
 void test_native_room_topology_is_validated_on_restore() {
     TempDirectory temp;
     const auto path = temp.path / "room.bldproj";
@@ -3725,6 +3983,9 @@ int main() {
         test_physical_arc_length_history_requires_v12();
         test_direct_curve_length_history_requires_v13();
         test_typed_stair_and_owned_railing_history_floors();
+        test_landing_railing_retained_history_reader_floor();
+        test_wall_axis_dimension_retained_history_reader_floor();
+        test_other_railing_v3_and_dimension_v4_forms_remain_opaque();
         test_translated_physical_source_native53_storage();
         test_native_room_topology_is_validated_on_restore();
         test_reviewed_physical_room_repair_floor_and_downgrade();

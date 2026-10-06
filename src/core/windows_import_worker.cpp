@@ -4,8 +4,10 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <charconv>
 #include <cwctype>
 #include <cwchar>
+#include <string_view>
 #include <thread>
 #include <utility>
 
@@ -48,6 +50,52 @@ void diagnostic(WindowsImportWorkerReport& report, const char* code) {
     report.diagnostics.emplace_back(code);
 }
 
+void retain_ocr_failure_diagnostic(const WindowsImportWorkerOptions& options,
+                                  WindowsImportWorkerReport& report) {
+    if (options.arguments != std::vector<std::wstring>{L"ocr", L"0"} ||
+        report.exit_code != 4 || report.output.empty() || report.output.size() > 128) return;
+    const std::string_view marker(reinterpret_cast<const char*>(report.output.data()), report.output.size());
+    constexpr std::string_view prefix = "VERTEX_OCR_FAILURE_V1:";
+    if (!marker.starts_with(prefix) || !marker.ends_with('\n')) return;
+    auto body = marker.substr(prefix.size(), marker.size() - prefix.size() - 1);
+    // Windows CRT stderr may translate its single LF to CRLF.
+    if (body.ends_with('\r')) body.remove_suffix(1);
+    const auto separator = body.find(':');
+    if (separator == std::string_view::npos) return;
+    const auto stage = body.substr(0, separator);
+    constexpr std::string_view stages[]{"frame_decode", "resource_metadata", "resource_read",
+        "resource_validation", "resource_hash", "model_read", "model_hash", "engine_version",
+        "engine_init", "engine_languages", "recognition", "reply"};
+    if (std::find(std::begin(stages), std::end(stages), stage) == std::end(stages)) return;
+    const auto digits = body.substr(separator + 1);
+    if (digits.empty() || digits.size() > 10) return;
+    std::uint32_t os_error{};
+    const auto parsed = std::from_chars(digits.data(), digits.data() + digits.size(), os_error);
+    if (parsed.ec != std::errc{} || parsed.ptr != digits.data() + digits.size() ||
+        std::to_string(os_error) != digits) return;
+    // Untrusted diagnostics have no effect on completion or control attestation.
+    // Retain only a known stage and canonical integer, never arbitrary worker text.
+    report.diagnostics.emplace_back("worker_ocr_failed_" + std::string(stage));
+    report.diagnostics.emplace_back("worker_ocr_os_error_" + std::to_string(os_error));
+}
+
+void retain_project_failure_diagnostic(const WindowsImportWorkerOptions& options,
+                                      WindowsImportWorkerReport& report) {
+    if ((options.arguments != std::vector<std::wstring>{L"ifc", L"0"} &&
+         options.arguments != std::vector<std::wstring>{L"dxf", L"0"}) ||
+        report.exit_code != 4 || report.output.empty() || report.output.size() > 128) return;
+    const std::string_view marker(reinterpret_cast<const char*>(report.output.data()), report.output.size());
+    constexpr std::string_view prefix = "VERTEX_PROJECT_FAILURE_V1:";
+    if (!marker.starts_with(prefix) || !marker.ends_with('\n')) return;
+    auto stage = marker.substr(prefix.size(), marker.size() - prefix.size() - 1);
+    if (stage.ends_with('\r')) stage.remove_suffix(1);
+    constexpr std::string_view stages[]{"core", "library", "merge", "candidate"};
+    if (std::find(std::begin(stages), std::end(stages), stage) == std::end(stages)) return;
+    // This untrusted fixed stage is diagnostic only. Never retain exception
+    // text, source bytes or paths, or use it to attest successful completion.
+    report.diagnostics.emplace_back("worker_project_failed_" + std::string(stage));
+}
+
 bool cancellation_requested(const WindowsImportWorkerOptions& options) noexcept {
     return options.cancellation_requested && options.cancellation_requested->load(std::memory_order_acquire);
 }
@@ -65,7 +113,7 @@ void mark_cancelled(WindowsImportWorkerReport& report) {
 bool WindowsImportWorkerReport::controls_attested() const noexcept {
     return status == WindowsImportWorkerStatus::completed && completed &&
         app_container_verified && restricted_token_verified && network_denial_verified &&
-        job_limits_verified && parent_exit_kill_verified && brokered_handles_verified &&
+        job_limits_verified && job_membership_verified && parent_exit_kill_verified && brokered_handles_verified &&
         private_temporary_root_verified && immutable_module_roots_verified && fixed_search_applied &&
         proj_offline_applied;
 }
@@ -82,6 +130,7 @@ nlohmann::json WindowsImportWorkerReport::to_json() const {
         {"restricted_token_verified", restricted_token_verified},
         {"network_denial_verified", network_denial_verified},
         {"job_limits_verified", job_limits_verified},
+        {"job_membership_verified", job_membership_verified},
         {"parent_exit_kill_verified", parent_exit_kill_verified},
         {"brokered_handles_verified", brokered_handles_verified},
         {"private_temporary_root_verified", private_temporary_root_verified},
@@ -91,6 +140,7 @@ nlohmann::json WindowsImportWorkerReport::to_json() const {
         {"process_id", process_id},
         {"exit_code", exit_code},
         {"launch_error", launch_error},
+        {"job_assignment_error", job_assignment_error},
         {"output_bytes", output.size()},
         {"diagnostics", diagnostics},
         {"network_requests_permitted", false},
@@ -494,31 +544,6 @@ bool cleanup_job_directory(const std::filesystem::path& path) {
     return !error && !std::filesystem::exists(path, error);
 }
 
-bool parent_job_allows_breakaway(bool& parent_in_job, WindowsImportWorkerReport& report) {
-    parent_in_job = false;
-    BOOL in_job = FALSE;
-    if (!IsProcessInJob(GetCurrentProcess(), nullptr, &in_job)) {
-        diagnostic(report, "parent_job_query_failed");
-        return false;
-    }
-    if (!in_job) return true;
-
-    JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits{};
-    if (!QueryInformationJobObject(nullptr, JobObjectExtendedLimitInformation, &limits,
-                                   sizeof(limits), nullptr)) {
-        diagnostic(report, "parent_job_query_failed");
-        return false;
-    }
-    const auto breakaway_flags = limits.BasicLimitInformation.LimitFlags &
-        (JOB_OBJECT_LIMIT_BREAKAWAY_OK | JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK);
-    if (!breakaway_flags) {
-        diagnostic(report, "parent_job_breakaway_unavailable");
-        return false;
-    }
-    parent_in_job = true;
-    return true;
-}
-
 bool app_container_sid(SidBuffer& sid, WindowsImportWorkerReport& report) {
     static constexpr wchar_t profile_name[] = L"Vertex.ImportWorker";
     PSID value = nullptr;
@@ -608,9 +633,13 @@ bool token_attestation(HANDLE process, PSID expected_sid, WindowsImportWorkerRep
         diagnostic(report, "worker_capability_query_failed");
         return false;
     }
-    // These are the three network capabilities defined by Windows. Other
-    // capabilities do not grant network access, so a future non-network
-    // capability can be reviewed without weakening this denial check.
+    // The launch profile grants zero capabilities. Reject any unexpected
+    // capability, including non-network capabilities, before worker execution.
+    if (capabilities && capabilities->GroupCount != 0) {
+        diagnostic(report, "worker_unexpected_capability_present");
+        return false;
+    }
+    // Retain explicit network denial attestation for the report contract.
     static constexpr const wchar_t* network_sids[] = {
         L"S-1-15-3-1", L"S-1-15-3-2", L"S-1-15-3-3"
     };
@@ -858,16 +887,11 @@ WindowsImportWorkerReport run_windows_import_worker(const WindowsImportWorkerOpt
     startup.StartupInfo.hStdError = child_output_write.get();
     startup.lpAttributeList = attributes;
     PROCESS_INFORMATION process_information{};
-    bool parent_in_job = false;
-    if (!parent_job_allows_breakaway(parent_in_job, report)) {
-        DeleteProcThreadAttributeList(attributes);
-        (void)cleanup_job_directory(job_root);
-        sort_diagnostics(report);
-        return report;
-    }
-    DWORD flags = CREATE_SUSPENDED | CREATE_NO_WINDOW | EXTENDED_STARTUPINFO_PRESENT |
+    // Windows 11 supports nested jobs: inherit the host's job chain, then
+    // assign the suspended child to our empty job. The actual native launch
+    // and assignment decide compatibility; there is no breakaway or fallback.
+    const DWORD flags = CREATE_SUSPENDED | CREATE_NO_WINDOW | EXTENDED_STARTUPINFO_PRESENT |
         CREATE_UNICODE_ENVIRONMENT;
-    if (parent_in_job) flags |= CREATE_BREAKAWAY_FROM_JOB;
     if (cancellation_requested(options)) {
         DeleteProcThreadAttributeList(attributes);
         mark_cancelled(report);
@@ -900,22 +924,35 @@ WindowsImportWorkerReport run_windows_import_worker(const WindowsImportWorkerOpt
     child_output_write.close();
 
     if (!AssignProcessToJobObject(job.get(), process.get())) {
+        report.job_assignment_error = GetLastError();
         diagnostic(report, "worker_job_assignment_failed");
         // The suspended process never joined our job; terminating that empty
         // job cannot stop it. Retain its handle until direct termination is
         // confirmed, before returning or removing its temporary directory.
         if (!TerminateProcess(process.get(), 1)) diagnostic(report, "worker_termination_failed");
-        if (WaitForSingleObject(process.get(), 5000) != WAIT_OBJECT_0)
+        const bool exited = WaitForSingleObject(process.get(), 5000) == WAIT_OBJECT_0;
+        if (!exited)
             diagnostic(report, "worker_exit_unconfirmed");
+        else if (!GetExitCodeProcess(process.get(), reinterpret_cast<LPDWORD>(&report.exit_code)))
+            diagnostic(report, "worker_exit_code_failed");
         report.status = WindowsImportWorkerStatus::launch_failed;
-        (void)cleanup_job_directory(job_root);
+        if (exited && !cleanup_job_directory(job_root)) diagnostic(report, "temporary_cleanup_failed");
         sort_diagnostics(report);
         return report;
     }
+    BOOL in_broker_job = FALSE;
+    if (!IsProcessInJob(process.get(), job.get(), &in_broker_job) || !in_broker_job) {
+        const bool exited = terminate_job(job.get(), process.get(), report, "worker_job_membership_unverified");
+        report.status = WindowsImportWorkerStatus::launch_failed;
+        if (exited && !cleanup_job_directory(job_root)) diagnostic(report, "temporary_cleanup_failed");
+        sort_diagnostics(report);
+        return report;
+    }
+    report.job_membership_verified = true;
     // Cancellation during process creation is handled while the worker is
     // still suspended and already assigned to this invocation's job.
     if (cancellation_requested(options)) {
-        (void)terminate_job(job.get(), process.get(), report, "worker_cancelled");
+        const bool exited = terminate_job(job.get(), process.get(), report, "worker_cancelled");
         mark_cancelled(report);
         if (!GetExitCodeProcess(process.get(), reinterpret_cast<LPDWORD>(&report.exit_code))) {
             diagnostic(report, "worker_exit_code_failed");
@@ -923,14 +960,14 @@ WindowsImportWorkerReport run_windows_import_worker(const WindowsImportWorkerOpt
         }
         parent_input_write.close();
         parent_output_read.close();
-        if (!cleanup_job_directory(job_root)) diagnostic(report, "temporary_cleanup_failed");
+        if (exited && !cleanup_job_directory(job_root)) diagnostic(report, "temporary_cleanup_failed");
         sort_diagnostics(report);
         return report;
     }
     if (!token_attestation(process.get(), app_sid.get(), report)) {
-        (void)terminate_job(job.get(), process.get(), report, "worker_sandbox_attestation_failed");
+        const bool exited = terminate_job(job.get(), process.get(), report, "worker_sandbox_attestation_failed");
         report.status = WindowsImportWorkerStatus::launch_failed;
-        (void)cleanup_job_directory(job_root);
+        if (exited && !cleanup_job_directory(job_root)) diagnostic(report, "temporary_cleanup_failed");
         sort_diagnostics(report);
         return report;
     }
@@ -939,25 +976,26 @@ WindowsImportWorkerReport run_windows_import_worker(const WindowsImportWorkerOpt
     report.proj_offline_applied = options.proj_offline_required;
     if (options.proj_offline_required == false) {
         diagnostic(report, "proj_offline_required");
-        (void)terminate_job(job.get(), process.get(), report, "unsafe_proj_network_policy");
+        const bool exited = terminate_job(job.get(), process.get(), report, "unsafe_proj_network_policy");
         report.status = WindowsImportWorkerStatus::launch_failed;
-        (void)cleanup_job_directory(job_root);
+        if (exited && !cleanup_job_directory(job_root)) diagnostic(report, "temporary_cleanup_failed");
         sort_diagnostics(report);
         return report;
     }
     if (ResumeThread(thread.get()) == static_cast<DWORD>(-1)) {
-        (void)terminate_job(job.get(), process.get(), report, "worker_resume_failed");
+        const bool exited = terminate_job(job.get(), process.get(), report, "worker_resume_failed");
         report.status = WindowsImportWorkerStatus::launch_failed;
-        (void)cleanup_job_directory(job_root);
+        if (exited && !cleanup_job_directory(job_root)) diagnostic(report, "temporary_cleanup_failed");
         sort_diagnostics(report);
         return report;
     }
 
     std::atomic<bool> input_failed{false};
+    std::atomic<bool> input_shutdown_requested{false};
     std::thread input_thread([&] {
         std::size_t offset = 0;
         while (offset < options.input.size()) {
-            if (cancellation_requested(options)) break;
+            if (cancellation_requested(options) || input_shutdown_requested.load()) break;
             const auto requested = static_cast<DWORD>((std::min)(options.input.size() - offset,
                                                                  static_cast<std::size_t>(64 * 1024)));
             DWORD written = 0;
@@ -1012,9 +1050,10 @@ WindowsImportWorkerReport run_windows_import_worker(const WindowsImportWorkerOpt
         Sleep(2);
     }
     if (!cancelled && cancellation_requested(options)) cancel_worker();
-    // A cancelled worker may have been blocked without reading stdin. Cancel
-    // only this invocation's writer, including the termination-failure path.
-    if (cancelled && input_thread.joinable()) {
+    // Every terminal path stops only this invocation's writer. A timeout or
+    // termination failure can leave stdin blocked just as cancellation can.
+    input_shutdown_requested.store(true);
+    if (input_thread.joinable()) {
         const auto writer = static_cast<HANDLE>(input_thread.native_handle());
         // Retry across the small race between the writer's flag check and
         // WriteFile entering the kernel; a one-shot cancellation can miss it.
@@ -1047,6 +1086,8 @@ WindowsImportWorkerReport run_windows_import_worker(const WindowsImportWorkerOpt
         }
     }
     parent_output_read.close();
+    const bool exited = WaitForSingleObject(process.get(), 0) == WAIT_OBJECT_0;
+    if (!exited) diagnostic(report, "worker_exit_unconfirmed");
     if (!GetExitCodeProcess(process.get(), reinterpret_cast<LPDWORD>(&report.exit_code))) {
         diagnostic(report, "worker_exit_code_failed");
         report.exit_code = 1;
@@ -1062,12 +1103,16 @@ WindowsImportWorkerReport run_windows_import_worker(const WindowsImportWorkerOpt
     } else if (!output_ok || report.exit_code != 0 || !report.diagnostics.empty()) {
         report.status = WindowsImportWorkerStatus::failed;
         report.completed = false;
+        if (output_ok && exited) {
+            retain_ocr_failure_diagnostic(options, report);
+            retain_project_failure_diagnostic(options, report);
+        }
         report.output.clear();
     } else {
         report.status = WindowsImportWorkerStatus::completed;
         report.completed = true;
     }
-    if (!cleanup_job_directory(job_root)) {
+    if (exited && !cleanup_job_directory(job_root)) {
         diagnostic(report, "temporary_cleanup_failed");
         if (report.status != WindowsImportWorkerStatus::cancelled)
             report.status = WindowsImportWorkerStatus::failed;

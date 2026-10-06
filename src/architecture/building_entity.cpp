@@ -352,7 +352,7 @@ BuildingObject decode_roof(const Entity& entity, const Json& properties,
 }
 
 void validate_geometry(const BuildingObject& object) {
-    if (const auto* rail = std::get_if<Railing>(&object); rail && rail->host) {
+    if (const auto* rail = std::get_if<Railing>(&object); rail && (rail->host || rail->landing_host)) {
         validate_railing(*rail);
         return;
     }
@@ -431,8 +431,9 @@ TopoDS_Shape make_building_shape(
     const BuildingObject& object,
     const std::map<std::string, Entity, std::less<>>& entities) {
     const auto* railing = std::get_if<Railing>(&object);
-    if (!railing || !railing->host) return make_building_shape(object);
-    const auto host = entities.find(railing->host->stair_id);
+    if (!railing || (!railing->host && !railing->landing_host)) return make_building_shape(object);
+    validate_railing(*railing);
+    const auto host = entities.find(railing->host?railing->host->stair_id:railing->landing_host->stair_id);
     if (host == entities.end() || host->second.type != "stair")
         invalid("Hosted railing stair does not exist in the current entity map");
     const auto effective = resolve_vertical_placement(entities, host->second);

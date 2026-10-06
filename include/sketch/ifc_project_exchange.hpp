@@ -62,6 +62,9 @@ struct IfcProjectImportResult {
 // Spaces decompose the storey through IfcRelAggregates. Stale source-bound room
 // geometry is withheld. Complete roof/room authoring metadata is retained in a
 // bounded property envelope, including nested extension metadata.
+// Canonical v1/v2 stairs and railings likewise use real IFCSTAIR/IFCRAILING
+// native solid compounds. Hosted railings aggregate under their source stair;
+// individual flight/landing solids do not become duplicate active products.
 // IFC fill OverallWidth is the opening body's local X envelope; retained native
 // curved width_m continues to measure stations along the host arc.
 // Unsupported required objects retain native payload
@@ -95,6 +98,10 @@ struct IfcProjectImportResult {
 // charges analytical and expected construction work before native regeneration,
 // including failed/mismatching carriers. Foreign roof/space geometries and
 // physical-room source descriptors remain conservative retained candidates.
+// Stair/railing recovery also checks the captured original authoring envelope
+// and exact meshes; hosted rails require one actual aggregate to a proved
+// same-model stair. Only validated identities are remapped; source organization,
+// level context and extensions remain opaque retained provenance.
 [[nodiscard]] IfcProjectImportResult import_project_ifc(
     std::string_view bytes,
     const IfcExchangeLimits& limits = {});

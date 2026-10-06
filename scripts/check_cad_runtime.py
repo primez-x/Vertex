@@ -10,6 +10,8 @@ import pathlib
 import subprocess
 import tempfile
 
+from inspect_selected_cad_runtime import inspect as inspect_runtime
+
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 PROBE = r'''
 import io,json,pathlib,sys
@@ -61,6 +63,7 @@ def main():
     args=parser.parse_args()
     runtime=args.runtime_root.resolve()
     lock=json.loads((ROOT/"third_party/cad-runtime-lock.json").read_text())
+    identity=inspect_runtime(runtime,ROOT)
     with tempfile.TemporaryDirectory(prefix="vertex-cad-probe-") as directory:
         poison=pathlib.Path(directory)
         (poison/"ezdxf.py").write_text("raise RuntimeError('untrusted PYTHONPATH module loaded')")
@@ -77,9 +80,18 @@ def main():
         if result.returncode:
             raise RuntimeError(f"Bundled SDK probe failed ({result.returncode}): {result.stderr.decode('utf-8',errors='replace')}")
         report=json.loads(result.stdout)
-    if report["python"]!=lock["python_version"] or any(
-        report[name]!=lock["library_versions"][name] for name in ("ifcopenshell","ezdxf")):
+    expected_ifc=("0.0.0" if identity["kind"]=="controlled" else lock["library_versions"]["ifcopenshell"])
+    if (report["python"]!=lock["python_version"] or
+            report["ezdxf"]!=lock["library_versions"]["ezdxf"] or report["ifcopenshell"]!=expected_ifc):
         raise ValueError("Bundled SDK version differs from lock")
+    if inspect_runtime(runtime,ROOT)!=identity:
+        raise ValueError("Selected SDK changed during its generated fixture probe")
+    report.update(runtime_kind=identity["kind"],manifest_sha256=identity["manifest_sha256"],
+                  ifc_extension_sha256=identity["ifc_extension_sha256"],
+                  ifc_wrapper_sha256=identity["ifc_wrapper_sha256"])
+    if identity["kind"]=="controlled":
+        report["source_revision"]=identity["source_revision"]
+        report["ifcopenshell_version_informative_only"]=True
     report.update(production_worker_integrated=False,qualification="incomplete")
     if args.output:
         args.output.parent.mkdir(parents=True,exist_ok=True)

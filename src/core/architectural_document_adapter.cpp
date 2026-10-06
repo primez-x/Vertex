@@ -34,7 +34,8 @@ bool canonical_stair(const Entity& entity) {
 }
 
 bool canonical_hosted_railing(const Entity& entity) {
-    return canonical_form(entity,"railing",2,"stair_flight_railing");
+    return canonical_form(entity,"railing",2,"stair_flight_railing") ||
+        canonical_form(entity,"railing",3,"stair_landing_railing");
 }
 
 std::string join_member_type(ArchitecturalJoinKind kind) {
@@ -183,7 +184,7 @@ BuildingObject transform_building_object(BuildingObject object,
                     landing.return_gap *= transform.scale;
                 }
             } else if constexpr (std::is_same_v<Object, Railing>) {
-                if (value.host) throw std::invalid_argument(
+                if (value.host || value.landing_host) throw std::invalid_argument(
                     "Hosted railing placement follows its stair; transform the host stair instead");
                 value.base_position = transform_point(value.base_position, transform);
                 value.orientation_radians += transform.rotation_z_radians;
@@ -521,6 +522,12 @@ Entity transform_building_entity(const Entity& source,
         for (const auto& [key,value] : canonical.properties.at("top_landing").items())
             result.properties["top_landing"][key]=value;
     }
+    if(source.type=="stair" && source.properties.contains("level_connection") &&
+       source.properties.at("level_connection").is_object() && canonical.properties.contains("level_connection")) {
+        result.properties["level_connection"]=source.properties.at("level_connection");
+        for(const auto& [key,value]:canonical.properties.at("level_connection").items())
+            result.properties["level_connection"][key]=value;
+    }
     // Retain application-owned properties such as marks, material
     // assignments, quantity receipts, and future extensions while replacing
     // every canonical building field with the transformed value.  A legacy
@@ -539,7 +546,7 @@ std::vector<std::string> hosted_railing_ids(const EntityState& entities, const s
     for (const auto& [id,entity] : entities) {
         if (!canonical_hosted_railing(entity)) continue;
         const auto railing=decode_railing_properties(id,entity.properties);
-        if (railing.host && railing.host->stair_id==stair_id) result.push_back(id);
+        if ((railing.host?railing.host->stair_id:railing.landing_host->stair_id)==stair_id) result.push_back(id);
     }
     return result;
 }
@@ -583,7 +590,7 @@ EntityState apply_operations(const DocumentSnapshot& source,
         if (operation.action!=ArchitecturalAction::duplicate || original==entities.end() ||
             !canonical_hosted_railing(original->second)) continue;
         const auto rail=decode_railing_properties(original->first,original->second.properties);
-        const auto host=stair_clone_counts.find(rail.host->stair_id);
+        const auto host=stair_clone_counts.find(rail.host?rail.host->stair_id:rail.landing_host->stair_id);
         if (host==stair_clone_counts.end()) continue;
         if (host->second!=1 || !selected_rail_clones.emplace(operation.object_id,operation.duplicate_id).second)
             throw std::invalid_argument("Selected stair and railing clones require one unambiguous host clone");
@@ -615,7 +622,7 @@ EntityState apply_operations(const DocumentSnapshot& source,
                 throw std::invalid_argument("architectural transform target is missing");
             if (canonical_hosted_railing(found->second)) {
                 const auto railing=decode_railing_properties(found->first,found->second.properties);
-                const auto host=transforms.find(railing.host->stair_id);
+                const auto host=transforms.find(railing.host?railing.host->stair_id:railing.landing_host->stair_id);
                 const auto own=transforms.find(found->first);
                 if (host==transforms.end() || host->second.size()!=1 || own->second.size()!=1 ||
                     transform_json(host->second.front())!=transform_json(*operation.transform))
@@ -672,7 +679,15 @@ EntityState apply_operations(const DocumentSnapshot& source,
                     if (entities.contains(rail.id)) throw std::invalid_argument("Hosted railing duplicate identity already exists");
                     auto& host=rail.properties.at("host");
                     host["stair_id"]=copy.id;
-                    host["flight_id"]=children.at(host.at("flight_id").get<std::string>());
+                    // Only canonical identity fields are remapped. Nested
+                    // application metadata is retained verbatim.
+                    if(canonical_form(rail,"railing",3,"stair_landing_railing")) {
+                        host["incoming_flight_id"]=children.at(host.at("incoming_flight_id").get<std::string>());
+                        if(host.at("role")=="connecting") {
+                            host["landing_id"]=children.at(host.at("landing_id").get<std::string>());
+                            host["outgoing_flight_id"]=children.at(host.at("outgoing_flight_id").get<std::string>());
+                        }
+                    } else host["flight_id"]=children.at(host.at("flight_id").get<std::string>());
                     const auto rail_id_copy=rail.id;
                     entities.emplace(rail_id_copy,std::move(rail));
                 }

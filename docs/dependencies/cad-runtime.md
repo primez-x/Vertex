@@ -1,10 +1,50 @@
 # Bundled CAD library runtime
 
-The selected production adapters are IfcOpenShell and ezdxf. They currently run
-in independent validation tooling; the native application still uses its bounded
-C++ adapters. This bootstrap prepares their production dependency runtime. It
-does not claim that worker integration, distribution closure, source obligations
-or external-format qualification are finished.
+The application import worker embeds IfcOpenShell and ezdxf behind the bounded
+C++ admission adapters. This bootstrap prepares their pinned dependency SDK;
+its manifest describes preparation, not production qualification. Distribution
+closure, source obligations and external-format qualification remain separate.
+
+## Current selected source-built runtime
+
+The current Release source batch selects
+`.deps/cad-runtime/3.13.15-ifc-source-ff3c5b849eee` explicitly. It replaces only
+the IfcOpenShell wheel cohort with the controlled eight-schema build from
+revision `ff3c5b849eee2ef6343b537c885b971ae6bba452`; the interpreter and other
+locked packages retain their verified original bytes. The extension SHA-256 is
+`710c14599b1243d7a032668f6cc21796af2399c72b2a515f75e325d7a6f58cdf`
+and the SDK manifest SHA-256 is
+`606e69273eb7a1799b41b785af2f8ee4e278ce8b9bca9b7482529fb042d1a587`.
+See [ifc-source-build.md](ifc-source-build.md) for original/derived sources,
+build controls and the separately rebuilt Boost thread input.
+
+Build and derive the matching packaging inputs with the same explicit selection:
+
+```powershell
+& scripts/build.ps1 -Desktop -Configuration Release -SkipTests `
+  -CadRuntimeRoot .deps/cad-runtime/3.13.15-ifc-source-ff3c5b849eee
+
+python -B scripts/prepare_cad_distribution.py `
+  --runtime-root .deps/cad-runtime/3.13.15-ifc-source-ff3c5b849eee `
+  --staged-root build/windows-release/cad-runtime `
+  --selection-path build/windows-release/cad-runtime-selection.json `
+  --corresponding-source-manifest .deps/source-closure/ifc-controlled/corresponding-source-paths.json
+```
+
+The selected-runtime inspector verifies every SDK and staged file before the
+bridge is compiled. CMake binds the manifest, controlled provenance and adapter
+hashes into the worker. The packaging generator retains that exact selection,
+rejects stale wheel metadata, and declares the verified preferred-source paths.
+The materialized IFC source payload contains 4,744 original/derived/control
+files; the current generated CAD payload contains 2,569 files. SDK probes and
+actual worker results are recorded separately in
+[the execution record](../delivery/progress.md). Neither a successful build nor
+these counts establishes complete transitive source, licensing or offline
+rebuild qualification. The previously installed candidate still uses its older
+payload until a coherent replacement candidate is staged and checked.
+
+The baseline bootstrap and earlier wheel observations below remain available
+for reproducibility; they do not identify the current selected Release runtime.
 
 `third_party/cad-runtime-lock.json` pins Windows x64 CPython 3.13.15, the matching
 development package, IfcOpenShell 0.8.3.post2, ezdxf 1.4.3 and eleven total Python
@@ -30,6 +70,20 @@ after worker integration; they will not install Python or packages themselves.
 The default prepared runtime is `.deps/cad-runtime/3.13.15`. Builds that need a
 different locked runtime use a new child under `.deps/cad-runtime`; existing
 targets are verified and never overwritten on mismatch.
+
+CMake inspects the selected SDK's complete manifest-bound inventory before
+configuration. `scripts/stage_cad_runtime.py` stages that exact inventory and
+the workspace adapter instead of merging directories. Changed stages retain
+one verified rollback; interrupted rotation uses a bounded identity-bound
+transaction record. Unmarked legacy output is refused for a separate verified
+migration. Build callers must freeze their inputs, serialize staging/build jobs
+and keep the output unused during replacement.
+
+An explicitly selected controlled source-built IFC SDK also requires its exact
+manifest, native extension and generated-wrapper SHA-256 identities compiled
+into the worker. Its upstream `0.0.0` Python text is informative. A source build
+does not claim the former wheel's version or provenance. Source-built selection
+does not waive source, notice, sandbox or interchange qualification.
 
 The bootstrap does not use pip or execute wheel installation hooks. It verifies
 cached archives, takes an immutable hash-checked byte snapshot for extraction,

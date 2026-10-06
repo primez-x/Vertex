@@ -1,5 +1,7 @@
 #include "sketch/boundary_dimension.hpp"
 #include "sketch/measurement_linework.hpp"
+#include "sketch/document_wall.hpp"
+#include "sketch/constraint_wall_edit.hpp"
 #include "sketch/physical_wall_room_data.hpp"
 #ifdef VERTEX_HAS_PHYSICAL_ROOM_REVIEW
 #include "sketch/physical_room_dimension_source.hpp"
@@ -173,6 +175,7 @@ std::optional<BoundaryDimensionKind> kind_from_name(std::string_view name) {
     if (name == "segment_length") return BoundaryDimensionKind::segment_length;
     if (name == "angle") return BoundaryDimensionKind::angle;
     if (name == "area") return BoundaryDimensionKind::area;
+    if (name == "wall_axis_length") return BoundaryDimensionKind::wall_axis_length;
     return std::nullopt;
 }
 
@@ -242,9 +245,10 @@ void validate_model(const BoundaryDimension& dimension) {
             }
             break;
         case BoundaryDimensionKind::area:
+        case BoundaryDimensionKind::wall_axis_length:
             if (!dimension.segment_id.empty() || !dimension.vertex_id.empty() ||
                 !dimension.secondary_segment_id.empty()) {
-                invalid("area dimension cannot contain segment or vertex target fields");
+                invalid("owner-only dimension cannot contain segment or vertex target fields");
             }
             break;
         default:
@@ -357,6 +361,7 @@ std::string_view boundary_dimension_kind_name(BoundaryDimensionKind kind) {
         case BoundaryDimensionKind::segment_length: return "segment_length";
         case BoundaryDimensionKind::angle: return "angle";
         case BoundaryDimensionKind::area: return "area";
+        case BoundaryDimensionKind::wall_axis_length: return "wall_axis_length";
     }
     invalid("unknown dimension kind");
 }
@@ -387,6 +392,11 @@ BoundaryDimensionVersion inspect_boundary_dimension_version(const Entity& entity
     if (version == 3) {
         return {BoundaryDimensionFormat::supported_v3, version, {}};
     }
+    if (version == 4) {
+        const auto kind = entity.properties.find("dimension_kind");
+        if (kind != entity.properties.end() && kind->is_string() && *kind == "wall_axis_length")
+            return {BoundaryDimensionFormat::supported_v4, version, {}};
+    }
     return {BoundaryDimensionFormat::unsupported_version, version,
             "unsupported boundary dimension version " + std::to_string(version)};
 }
@@ -406,7 +416,8 @@ BoundaryDimensionDecodeResult decode_boundary_dimension_entity(const Entity& ent
     const auto kind = json_string(required_property(entity.properties, "dimension_kind"),
                                   "dimension kind must be a string");
     const auto parsed_kind = kind_from_name(kind);
-    if (!parsed_kind.has_value()) {
+    if (!parsed_kind.has_value() ||
+        (*parsed_kind == BoundaryDimensionKind::wall_axis_length && version != 4)) {
         return unsupported_result(entity, version, kind,
                                   "unsupported boundary dimension kind " + kind);
     }
@@ -450,7 +461,7 @@ BoundaryDimensionDecodeResult decode_boundary_dimension_entity(const Entity& ent
     } else {
         if (target.contains("segment_id") || target.contains("second_segment_id") ||
             target.contains("vertex_id")) {
-            invalid("area dimension target cannot contain segment or vertex fields");
+            invalid("owner-only dimension target cannot contain segment or vertex fields");
         }
     }
     const auto text_position = json_point(
@@ -493,7 +504,7 @@ BoundaryDimensionDecodeResult decode_boundary_dimension_entity(const Entity& ent
         .secondary_segment_id = secondary_segment_id,
         .segment_chain_ids = std::move(segment_chain_ids),
     };
-    if (version == 2 || (version == 3 && entity.properties.contains("presentation")))
+    if (version == 2 || ((version == 3 || version == 4) && entity.properties.contains("presentation")))
         result.presentation = decode_presentation(required_property(entity.properties, "presentation"));
     validate_model(result);
     return BoundaryDimensionDecodeResult{
@@ -520,9 +531,10 @@ Entity encode_boundary_dimension_entity(const BoundaryDimension& dimension,
         if (!previous.supported()) {
             invalid("cannot encode over unsupported dimension semantics");
         }
-        if ((previous.version == 2 || (previous.version == 3 && previous.dimension->presentation)) && !dimension.presentation)
+        if ((previous.version == 2 || ((previous.version == 3 || previous.version == 4) && previous.dimension->presentation)) && !dimension.presentation)
             invalid("cannot remove version two dimension presentation");
-        if (previous.version == 1 && (dimension.presentation || !dimension.segment_chain_ids.empty()) &&
+        if (previous.version == 1 && (dimension.presentation || !dimension.segment_chain_ids.empty() ||
+            dimension.kind == BoundaryDimensionKind::wall_axis_length) &&
             original->properties.contains("presentation"))
             invalid("dimension presentation upgrade would overwrite opaque version one metadata");
         preserve_presentation = dimension.presentation == previous.dimension->presentation;
@@ -532,7 +544,8 @@ Entity encode_boundary_dimension_entity(const BoundaryDimension& dimension,
     }
 
     auto& properties = result.properties;
-    properties["dimension_version"] = !dimension.segment_chain_ids.empty() ? 3 : (dimension.presentation ? 2 : 1);
+    properties["dimension_version"] = dimension.kind == BoundaryDimensionKind::wall_axis_length
+        ? 4 : (!dimension.segment_chain_ids.empty() ? 3 : (dimension.presentation ? 2 : 1));
     if (dimension.presentation && !preserve_presentation) {
         const auto& value = *dimension.presentation;
         properties["presentation"] = {{"text_height_mm", value.text_height_mm}, {"color", value.color},
@@ -568,6 +581,7 @@ Entity encode_boundary_dimension_entity(const BoundaryDimension& dimension,
             target["vertex_id"] = dimension.vertex_id;
             break;
         case BoundaryDimensionKind::area:
+        case BoundaryDimensionKind::wall_axis_length:
             target.erase("segment_ids");
             target.erase("segment_id");
             target.erase("second_segment_id");
@@ -610,6 +624,27 @@ IdentifiedBoundary resolve_dimension_geometry_owner(const Entity& entity) {
         invalid("dimension source boundary must use identified model version one");
     }
     return decode_identified_boundary_entity(entity);
+}
+
+Segment resolve_dimension_wall_axis_owner(const Entity& entity) {
+    if (entity.type != "wall" || !valid_identifier(entity.id))
+        invalid("dimension wall source must be a supported physical wall with a valid id");
+    if (!entity.properties.is_object() || !entity.extensions.is_object())
+        invalid("dimension wall source properties and extensions must be JSON objects");
+    std::size_t count = 0;
+    validate_json_tree(entity.properties, 0, count);
+    validate_json_tree(entity.extensions, 0, count);
+    Wall wall;
+    std::string error;
+    if (!read_document_wall(entity, {}, wall, error))
+        invalid("dimension wall source is malformed: " + error);
+    validate_wall_semantics(wall);
+    try {
+        validate_wall_curve_input(entity);
+    } catch (const Json::exception& exception) {
+        invalid("dimension wall source provenance is malformed: " + std::string(exception.what()));
+    }
+    return wall.baseline;
 }
 
 static BoundaryDimensionResolution resolve_identified_dimension(
@@ -680,6 +715,10 @@ static BoundaryDimensionResolution resolve_retained_dimension_target(
     validate_model(dimension);
     if (boundary_entity.id != dimension.boundary_id)
         invalid("dimension source boundary id does not match target entity id");
+    if (dimension.kind == BoundaryDimensionKind::wall_axis_length) {
+        const auto axis = resolve_dimension_wall_axis_owner(boundary_entity);
+        return {axis, segment_length(axis), BoundaryDimensionKind::wall_axis_length, 0.0, 0.0};
+    }
     if (dimension.kind == BoundaryDimensionKind::area && boundary_entity.type == "measurement_linework")
         invalid("area dimensions cannot target measured strokes");
     return resolve_identified_dimension(dimension, resolve_dimension_geometry_owner(boundary_entity));

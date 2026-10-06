@@ -4905,10 +4905,11 @@ void test_building_form_authoring_and_quantity_history() {
     const auto svg = directory.filePath("architectural-forms.svg");
     require(window.exportDraftSvg(svg), "the architectural-form scene exports through the shared SVG renderer");
     QFile svg_file(svg);
-    require(svg_file.open(QIODevice::ReadOnly | QIODevice::Text), "draft SVG should be readable");
+    require(svg_file.open(QIODevice::ReadOnly | QIODevice::Text), "drawing SVG should be readable");
     const auto svg_text = QString::fromUtf8(svg_file.readAll());
-    require(svg_text.contains("<svg") && svg_text.contains("DRAFT"),
-            "draft SVG should contain vector markup and its draft stamp");
+    require(svg_text.contains("<svg") && !svg_text.contains("DRAFT") &&
+                !svg_text.contains("internal checkpoint"),
+            "drawing SVG must preserve vector markup without development watermarks");
 }
 
 void test_contextual_building_dimension_inspector(const QString& capture_directory) {
@@ -7223,6 +7224,11 @@ void test_pdf_export_atomicity() {
         QPdfDocument pdf;
         require(pdf.load(path) == QPdfDocument::Error::None && pdf.pageCount() == 1,
                 "replacement PDF must be readable after writer finalization");
+        const auto text = pdf.getAllText(0).text().simplified();
+        require(!text.contains(QStringLiteral("DRAFT")) &&
+                    !text.contains(QStringLiteral("internal checkpoint")) &&
+                    !text.contains(QStringLiteral("visibility filters applied")),
+                "ordinary drawing output must not add development or irrelevant visibility notes");
         pdf.close();
     }
     const auto fingerprint_digest = [&] {
@@ -7242,6 +7248,14 @@ void test_pdf_export_atomicity() {
     }
     require(fingerprint_digest() != visible_digest,
             "effective visibility masks must change the output fingerprint");
+    {
+        QPdfDocument pdf;
+        require(pdf.load(path) == QPdfDocument::Error::None &&
+                    pdf.getAllText(0).text().simplified().contains(QStringLiteral(
+                        "Floor and layer visibility filters applied; calculation totals include hidden areas.")),
+                "filtered drawing output must explain the difference between shown geometry and calculation totals");
+        pdf.close();
+    }
     window.showAllContainers();
     const auto inspect_pdf_without_explicit_close = [&] {
         QPdfDocument pdf;

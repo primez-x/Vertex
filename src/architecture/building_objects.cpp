@@ -446,7 +446,7 @@ TopoDS_Shape make_stair_flight(const StairFlight& flight) {
 }
 
 TopoDS_Shape make_railing(const Railing& railing) {
-    if (railing.host) {
+    if (railing.host || railing.landing_host) {
         throw std::invalid_argument("Hosted railing requires the current stair map");
     }
     finite_coordinate(railing.base_position, "Railing base position must be finite");

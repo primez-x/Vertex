@@ -3,6 +3,8 @@
 #include "sketch/hosted_opening_geometry.hpp"
 #include "sketch/building_entity.hpp"
 #include "sketch/document_solid.hpp"
+#include "sketch/building_objects.hpp"
+#include "sketch/project_import_worker.hpp"
 
 #include <BRepMesh_IncrementalMesh.hxx>
 #include <BRep_Tool.hxx>
@@ -166,5 +168,59 @@ std::vector<IfcNativeMesh> ifc_native_room_mesh(const Entity& room,
     std::string error;
     if (!read_document_room(room, volume, error)) throw std::invalid_argument(error);
     return tessellate(make_room_volume(volume), vertices, triangles);
+}
+
+std::vector<IfcNativeMesh> ifc_native_stair_mesh(const Entity& stair,
+    std::size_t vertices, std::size_t triangles) {
+    if (stair.type != "stair") throw std::invalid_argument("ifc_native_stair_type_invalid");
+    const auto& p = stair.properties;
+    // Reserve before semantic layout allocates treads or tests landing overlap.
+    if (!p.contains("riser_count") || !p.at("riser_count").is_number_integer() ||
+        p.at("riser_count") <= 0 || p.at("riser_count") > 10000)
+        throw std::invalid_argument("ifc_native_stair_count_invalid");
+    const auto risers = p.at("riser_count").get<std::size_t>();
+    const auto landings = p.contains("landings") && p.at("landings").is_array() ? p.at("landings").size() : 0;
+    const auto work = risers + landings + 2;
+    if (work > std::min(vertices, triangles) / 64 || landings > 256 ||
+        4 * work * (work - 1) / 2 > project_import_geometry_pair_limit)
+        throw std::invalid_argument("ifc_mesh_budget_exceeded");
+    return tessellate(make_stair_flight(decode_stair_properties(stair.id, p)), vertices, triangles);
+}
+
+std::vector<IfcNativeMesh> ifc_native_railing_mesh(const Entity& entity,
+    const Entity* resolved_stair, std::size_t vertices, std::size_t triangles) {
+    if (entity.type != "railing") throw std::invalid_argument("ifc_native_railing_type_invalid");
+    const auto railing = decode_railing_properties(entity.id, entity.properties);
+    if (railing.host || railing.landing_host) {
+        if (!resolved_stair || resolved_stair->type != "stair")
+            throw std::invalid_argument("ifc_native_railing_host_missing");
+        // The host preflight runs before its decoder's topology work.
+        const auto& p = resolved_stair->properties;
+        if (!p.contains("riser_count") || !p.at("riser_count").is_number_integer() ||
+            p.at("riser_count") <= 0 || p.at("riser_count") > 10000 ||
+            p.at("riser_count") > std::min(vertices, triangles) / 64)
+            throw std::invalid_argument("ifc_mesh_budget_exceeded");
+        const auto risers = p.at("riser_count").get<std::size_t>();
+        const auto landings = p.contains("landings") && p.at("landings").is_array() ? p.at("landings").size() : 0;
+        const auto work = risers + landings + 2;
+        if (landings > 256 || 4 * work * (work - 1) / 2 > project_import_geometry_pair_limit)
+            throw std::invalid_argument("ifc_mesh_budget_exceeded");
+        const auto stair = decode_stair_properties(resolved_stair->id, p);
+        double length = stair.riser_count * stair.going + stair.total_rise;
+        for (const auto& landing : stair.landings)
+            length += landing.depth + 2 * stair.width + landing.return_gap;
+        if (stair.top_landing) length += stair.top_landing->depth + stair.width;
+        const auto posts = std::ceil(length / railing.post_spacing) + 3;
+        if (!std::isfinite(posts) || posts > static_cast<double>(std::min(vertices, triangles) / 64))
+            throw std::invalid_argument("ifc_mesh_budget_exceeded");
+        const auto layout = derive_hosted_railing_layout(railing, stair);
+        if (layout.posts.size() + 1 > std::min(vertices, triangles) / 64)
+            throw std::invalid_argument("ifc_mesh_budget_exceeded");
+        return tessellate(make_hosted_railing(railing, stair), vertices, triangles);
+    }
+    const auto posts = std::floor((railing.length - 1e-7) / railing.post_spacing) + 3;
+    if (!std::isfinite(posts) || posts > static_cast<double>(std::min(vertices, triangles) / 64))
+        throw std::invalid_argument("ifc_mesh_budget_exceeded");
+    return tessellate(make_railing(railing), vertices, triangles);
 }
 } // namespace sketch

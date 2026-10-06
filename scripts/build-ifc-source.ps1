@@ -6,13 +6,15 @@ Dependencies must already be prepared; see docs/dependencies/ifc-source-build.md
 [CmdletBinding()]
 param(
     [string]$BuildRoot = ('C:/Build/Vertex/ifc-' + [guid]::NewGuid().ToString('N').Substring(0, 12)),
+    [ValidateNotNullOrEmpty()][string]$KernelRoot,
+    [ValidateNotNullOrEmpty()][string]$SupportRoot,
     [ValidateRange(1, 32)][int]$Parallel = 4,
     [string]$CMakeExecutable,
     [switch]$ConfigureOnly
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
-if ($args.Count) { throw 'Unexpected arguments; use named recipe parameters.' }
+if ((Test-Path variable:args) -and $args.Count) { throw 'Unexpected arguments; use named recipe parameters.' }
 
 function Assert-IfcNoReparse([string]$Path) {
     $current = [IO.Path]::GetFullPath($Path)
@@ -26,20 +28,53 @@ function Assert-IfcNoReparse([string]$Path) {
     }
 }
 
-function Assert-IfcCandidateRoot([string]$Candidate, [string]$Workspace) {
-    if (![IO.Path]::IsPathFullyQualified($Candidate) -or $Candidate -match '[;\r\n]') { throw 'BuildRoot must be an absolute local path without CMake list separators.' }
-    $candidatePath = [IO.Path]::GetFullPath($Candidate).TrimEnd('\', '/')
-    $workspacePath = [IO.Path]::GetFullPath($Workspace).TrimEnd('\', '/')
-    if ($candidatePath.StartsWith('\\') -or $candidatePath.Length -gt 120 -or $candidatePath -eq [IO.Path]::GetPathRoot($candidatePath).TrimEnd('\')) {
-        throw 'BuildRoot must be a short local directory, at most 120 characters.'
+function Get-IfcLocalDirectoryPath([string]$Path) {
+    # Reject ambiguous spellings before normalization, including UNC/device
+    # namespaces, traversal, alternate streams and Windows-trimmed names.
+    if ($Path -notmatch '^[A-Za-z]:[\\/]' -or $Path -match '[;\x00-\x1f<>"|?*]' -or $Path.Substring(2).Contains(':')) {
+        throw 'Path must be an absolute local directory without ambiguous characters.'
     }
-    if ($candidatePath.Equals($workspacePath, [StringComparison]::OrdinalIgnoreCase) -or
-        $candidatePath.StartsWith($workspacePath + '\', [StringComparison]::OrdinalIgnoreCase) -or
-        $workspacePath.StartsWith($candidatePath + '\', [StringComparison]::OrdinalIgnoreCase)) {
-        throw 'BuildRoot must not overlap the workspace, dependency inputs or product runtime.'
+    $segments = $Path.Substring(3).TrimEnd('\', '/') -split '[\\/]'
+    foreach ($segment in $segments) {
+        if (!$segment -or $segment -in @('.', '..') -or $segment -match '[. ]$' -or
+            $segment -match '^(?i:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\.|$)') {
+            throw 'Path must be an unambiguous local directory without traversal or reserved names.'
+        }
+    }
+    $normalized = [IO.Path]::GetFullPath($Path).TrimEnd('\', '/')
+    Assert-IfcNoReparse $normalized
+    return $normalized
+}
+
+function Assert-IfcCandidateRoot([string]$Candidate, [string]$Workspace, [string[]]$SdkRoots = @()) {
+    $candidatePath = Get-IfcLocalDirectoryPath $Candidate
+    if ($candidatePath.Length -gt 120) { throw 'BuildRoot must be a short local directory, at most 120 characters.' }
+    foreach ($inputRoot in (@($Workspace) + $SdkRoots)) {
+        $inputPath = [IO.Path]::GetFullPath($inputRoot).TrimEnd('\', '/')
+        if ($candidatePath.Equals($inputPath, [StringComparison]::OrdinalIgnoreCase) -or
+            $candidatePath.StartsWith($inputPath + '\', [StringComparison]::OrdinalIgnoreCase) -or
+            $inputPath.StartsWith($candidatePath + '\', [StringComparison]::OrdinalIgnoreCase)) {
+            throw 'BuildRoot must not overlap the workspace, selected SDK inputs or product runtime.'
+        }
     }
     Assert-IfcNoReparse $candidatePath
     if (Test-Path -LiteralPath $candidatePath) { throw 'BuildRoot already exists; use a fresh path. Existing caches and foreign outputs are preserved.' }
+}
+
+function Get-IfcSdkRoots([string]$Workspace, [string]$KernelRoot, [string]$SupportRoot) {
+    if (!$KernelRoot) { $KernelRoot = Join-Path $Workspace '.deps/ifc-kernel/x64-windows-ifc-static' }
+    if (!$SupportRoot) { $SupportRoot = Join-Path $Workspace '.deps/ifc-support/x64-windows-ifc-static' }
+    $roots = [ordered]@{}
+    foreach ($entry in @(@{ name = 'kernel'; path = $KernelRoot }, @{ name = 'support'; path = $SupportRoot })) {
+        $prefix = Get-IfcLocalDirectoryPath $entry.path
+        if (!(Test-Path -LiteralPath $prefix -PathType Container)) { throw "Selected $($entry.name) SDK prefix is missing: $prefix" }
+        $status = Join-Path (Split-Path -Parent $prefix) 'vcpkg/status'
+        Assert-IfcNoReparse $status
+        if (!(Test-Path -LiteralPath $status -PathType Leaf)) { throw "Selected $($entry.name) SDK installed status is missing: $status" }
+        $roots[$entry.name] = $prefix
+        $roots["$($entry.name)_status"] = $status
+    }
+    return $roots
 }
 
 function Get-IfcBuildEnvironment([System.Collections.IDictionary]$Source, [string[]]$OptionNames) {
@@ -170,12 +205,13 @@ function Assert-IfcCleanGitStatus([string]$Path) {
 }
 
 $script:projectRoot = [IO.Path]::GetFullPath((Split-Path -Parent $PSScriptRoot))
-Assert-IfcCandidateRoot $BuildRoot $script:projectRoot
-$script:candidatePath = [IO.Path]::GetFullPath($BuildRoot)
+$sdkRoots = Get-IfcSdkRoots $script:projectRoot $KernelRoot $SupportRoot
+Assert-IfcCandidateRoot $BuildRoot $script:projectRoot @($sdkRoots.kernel, $sdkRoots.support)
+$script:candidatePath = Get-IfcLocalDirectoryPath $BuildRoot
 $pristineSource = Join-Path $script:projectRoot '.deps/ifc-src'
 $source = Join-Path $script:candidatePath 'source'
-$kernel = Join-Path $script:projectRoot '.deps/ifc-kernel/x64-windows-ifc-static'
-$support = Join-Path $script:projectRoot '.deps/ifc-support/x64-windows-ifc-static'
+$kernel = $sdkRoots.kernel
+$support = $sdkRoots.support
 $python = Join-Path $script:projectRoot '.deps/cad-runtime/3.13.15'
 $swig = Join-Path $script:projectRoot '.deps/ifc-tools/swigwin-4.3.1'
 $vcpkg = Join-Path $script:projectRoot '.deps/vcpkg'
@@ -183,12 +219,14 @@ $lockPath = Join-Path $script:projectRoot 'third_party/ifc-source-lock.json'
 $optionNames = @([regex]::Matches((Get-Content "$pristineSource/cmake/CMakeLists.txt" -Raw), '(?im)^option\(\s*(\w+)') | ForEach-Object { $_.Groups[1].Value })
 $script:childEnvironment = Get-IfcBuildEnvironment ([Environment]::GetEnvironmentVariables()) $optionNames
 $script:evidence = [ordered]@{ schema_version = 1; build_qualified = $false; source_closure_qualified = $false; product_runtime_replaced = $false; state = 'preflight'; started_utc = [DateTime]::UtcNow.ToString('o'); workspace = $script:projectRoot; build_root = $script:candidatePath; configuration = 'Release'; inputs = [Collections.Generic.List[object]]::new(); commands = [Collections.Generic.List[object]]::new(); outputs = @() }
+$script:evidence['sdk_roots'] = [ordered]@{ kernel = $kernel; support = $support }
 # No directory/cache is reused, deleted or reset. Reserve this run exclusively.
 [void][IO.Directory]::CreateDirectory((Split-Path -Parent $script:candidatePath))
 $reservation = "$script:candidatePath.reservation"
 $reservationStream = [IO.File]::Open($reservation, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
 try {
-    Assert-IfcCandidateRoot $script:candidatePath $script:projectRoot
+    $sdkRoots = Get-IfcSdkRoots $script:projectRoot $kernel $support
+    Assert-IfcCandidateRoot $script:candidatePath $script:projectRoot @($kernel, $support)
     [void][IO.Directory]::CreateDirectory($script:candidatePath)
     try {
         foreach ($path in @($PSCommandPath, $lockPath, "$script:projectRoot/scripts/prepare_ifc_source.py", "$script:projectRoot/.deps/ifc-source-preparation.json", "$script:projectRoot/third_party/ifc-source/vcpkg.json", "$script:projectRoot/third_party/ifc-source/support/vcpkg.json", "$script:projectRoot/third_party/ifc-source/triplets/x64-windows-ifc-static.cmake", "$python/python.exe", "$python/libs/python313.lib", "$python/include/Python.h", "$python/include/patchlevel.h", "$python/runtime-manifest.json", "$swig/swig.exe")) { Add-IfcFileEvidence $path }
@@ -221,8 +259,8 @@ try {
         Assert-IfcCleanGitStatus "$script:candidatePath/vcpkg-status.stdout.log"
         $script:evidence['vcpkg_revision'] = $managerHead
 
-        $kernelStatus = "$script:projectRoot/.deps/ifc-kernel/vcpkg/status"
-        $supportStatus = "$script:projectRoot/.deps/ifc-support/vcpkg/status"
+        $kernelStatus = $sdkRoots.kernel_status
+        $supportStatus = $sdkRoots.support_status
         Assert-IfcSdkStatus $kernelStatus 'opencascade' '7.8.1' 1
         Assert-IfcSdkStatus $supportStatus 'eigen3' '3.3.9' 1
         $supportManifest = Get-Content "$script:projectRoot/third_party/ifc-source/support/vcpkg.json" -Raw | ConvertFrom-Json
@@ -264,6 +302,11 @@ try {
             $outputs = @(Get-ChildItem "$script:candidatePath/build/ifcwrap/Release" -Filter '*.pyd' -File)
             if ($outputs.Count -ne 1) { throw 'Expected exactly one candidate Python extension.' }
             $script:evidence.outputs = @($outputs | ForEach-Object { [ordered]@{ path = $_.FullName; bytes = $_.Length; sha256 = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant() } })
+            $generatedWrapper = Get-Item -LiteralPath "$script:candidatePath/build/ifcwrap/ifcopenshell_wrapper.py"
+            Assert-IfcNoReparse $generatedWrapper.FullName
+            $script:evidence['generated_wrapper'] = [ordered]@{ path = $generatedWrapper.FullName;
+                bytes = $generatedWrapper.Length;
+                sha256 = (Get-FileHash -LiteralPath $generatedWrapper.FullName -Algorithm SHA256).Hash.ToLowerInvariant() }
         }
         $script:evidence.state = if ($ConfigureOnly) { 'configured' } else { 'built-unqualified' }
     } catch {

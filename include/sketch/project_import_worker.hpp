@@ -6,6 +6,7 @@
 #include "sketch/wall_semantics.hpp"
 #include "sketch/opening_assembly.hpp"
 #include "sketch/door_operation.hpp"
+#include "sketch/stair_semantics.hpp"
 #include "sketch/windows_import_worker.hpp"
 #include <algorithm>
 #include <cmath>
@@ -55,6 +56,38 @@ inline const char* project_import_kind_name(ProjectImportKind kind) {
 
 namespace project_import_detail {
 inline void reject() { throw std::invalid_argument("Invalid isolated project import response."); }
+
+inline bool observed_worker_project_failure(const WindowsImportWorkerReport& report) {
+    // controls_attested() deliberately requires successful completion. A
+    // negative result uses the same observed controls, but can never publish a
+    // candidate or establish why the operation failed. Any unrecognized broker
+    // diagnostic preserves unavailable guidance.
+    if (!report.launched || report.status != WindowsImportWorkerStatus::failed ||
+        report.completed || report.timed_out || report.exit_code != 4 ||
+        report.launch_error != 0 || report.job_assignment_error != 0 || !report.output.empty() ||
+        !report.app_container_verified || !report.restricted_token_verified || !report.network_denial_verified ||
+        !report.job_limits_verified || !report.job_membership_verified || !report.parent_exit_kill_verified ||
+        !report.brokered_handles_verified || !report.private_temporary_root_verified ||
+        !report.immutable_module_roots_verified || !report.fixed_search_applied || !report.proj_offline_applied)
+        return false;
+    if (report.diagnostics.empty()) return true;
+    if (report.diagnostics.size() != 1) return false;
+    const auto& code = report.diagnostics.front();
+    return code == "worker_project_failed_core" || code == "worker_project_failed_library" ||
+        code == "worker_project_failed_merge" || code == "worker_project_failed_candidate";
+}
+
+inline std::string observed_project_failure_message(const WindowsImportWorkerReport& report) {
+    std::string message = "The isolated importer could not complete this project import";
+    if (report.diagnostics.size() == 1) {
+        const auto& stage = report.diagnostics.front();
+        if (stage == "worker_project_failed_core") message += " during project parsing";
+        else if (stage == "worker_project_failed_library") message += " during CAD library processing";
+        else if (stage == "worker_project_failed_merge") message += " during import assembly";
+        else if (stage == "worker_project_failed_candidate") message += " during import validation";
+    }
+    return message + "; the document is unchanged.";
+}
 
 struct GeometryBudget {
     std::size_t segments{};
@@ -179,8 +212,8 @@ inline void validate_slab(const Entity& entity, GeometryBudget& budget) {
 // These checks deliberately use only the core protocol/analytical geometry.
 // A broker must bound authored parameters before any native solid construction.
 inline void validate_native_context(const Entity& entity) {
-    for (const auto* key : {"property_id", "building_id", "floor_id", "layer_id", "parent_id",
-        "property_ids", "building_ids", "floor_ids", "layer_ids", "parent_ids",
+    for (const auto* key : {"property_id", "building_id", "floor_id", "layer_id", "parent_id", "phase_id",
+        "property_ids", "building_ids", "floor_ids", "layer_ids", "parent_ids", "phase_ids",
         "vertical_level_binding", "level_connection"})
         if (entity.properties.contains(key)) reject();
     const auto placement = entity.properties.find("vertical_placement");
@@ -303,6 +336,95 @@ inline void validate_ifc_reference(const Entity& entity) {
     (void)text(source.at("arguments"), true, 1024 * 1024);
     if (!entity.extensions.at("ifc_vertex_properties").is_object()) reject();
 }
+
+// Bound canonical stair/rail layout work before a decoder can allocate treads,
+// posts or perform landing-pair checks. This is analytical, not solid creation.
+inline std::size_t native_stair_railing_work(const Entity& entity, const Entity* host = nullptr) {
+    const auto stair_work = [](const nlohmann::json& p) {
+        if (!p.is_object() || !p.contains("riser_count") || !p.at("riser_count").is_number_integer() ||
+            p.at("riser_count") < 1 || p.at("riser_count") > 10000) reject();
+        std::size_t landings = 0;
+        if (p.contains("landings")) {
+            if (!p.at("landings").is_array() || p.at("landings").size() > 256) reject();
+            landings = p.at("landings").size();
+        }
+        if (p.contains("flights") && (!p.at("flights").is_array() || p.at("flights").empty() ||
+            p.at("flights").size() > 256)) reject();
+        return p.at("riser_count").get<std::size_t>() + landings + 2;
+    };
+    if (entity.type == "stair") return stair_work(entity.properties);
+    if (entity.type != "railing") reject();
+    const auto positive = [](const nlohmann::json& p, const char* key) {
+        const auto value = number(p, key, true);
+        if (value > 1e6) reject();
+        return value;
+    };
+    const auto& p = entity.properties;
+    const auto spacing = positive(p, "post_spacing_m");
+    double length = 0;
+    std::size_t work = 0;
+    if (p.contains("host")) {
+        if (!host || host->type != "stair") reject();
+        work = stair_work(host->properties);
+        const auto& s = host->properties;
+        length = s.at("riser_count").get<double>() * positive(s, "going_m") + positive(s, "total_rise_m");
+        if (s.contains("landings")) for (const auto& landing : s.at("landings")) {
+            const auto gap = landing.contains("return_gap_m") ? number(landing, "return_gap_m") : 0.0;
+            if (gap < 0 || gap > 1e6) reject();
+            length += positive(landing, "depth_m") + 2 * positive(s, "width_m") + gap;
+        }
+        if (s.contains("top_landing") && !s.at("top_landing").is_null())
+            length += positive(s.at("top_landing"), "depth_m") + positive(s, "width_m");
+    } else length = positive(p, "length_m");
+    const auto posts = std::ceil(length / spacing) + 3;
+    if (!std::isfinite(posts) || posts <= 0 || posts > 10003) reject();
+    return work + static_cast<std::size_t>(posts);
+}
+
+// Hosted native rail admission requires explicit organization. An IFC candidate
+// has deliberately detached that foreign authority. Validate a private copy in
+// one collision-free organization; these entities/refs never enter the wire or
+// live project. The desktop later assigns the actual complete drawing context.
+inline std::vector<Entity> detached_ifc_validation_entities(const std::vector<Entity>& entities) {
+    std::vector<Entity> copy = entities;
+    std::set<std::string, std::less<>> used;
+    bool needs_context = false;
+    for (const auto& entity : entities) {
+        used.insert(entity.id);
+        if (entity.type != "stair" && entity.type != "railing") continue;
+        needs_context = true;
+        validate_native_context(entity);
+        if (entity.properties.contains("vertical_placement")) reject();
+        for (const auto* key : {"flights", "landings"}) {
+            const auto records = entity.properties.find(key);
+            if (records == entity.properties.end()) continue;
+            if (!records->is_array() || records->size() > 256) reject();
+            for (const auto& record : *records)
+                if (record.is_object() && record.contains("id")) used.insert(text(record.at("id"), false, 128));
+        }
+    }
+    if (!needs_context) return copy;
+    const auto unique = [&](const char* role) {
+        const std::string base = std::string{"ifc-validation-"} + role;
+        auto id = base;
+        for (std::size_t suffix = 1; used.contains(id); ++suffix) id = base + '-' + std::to_string(suffix);
+        used.insert(id);
+        return id;
+    };
+    const auto property = unique("property"), building = unique("building"),
+        floor = unique("floor"), layer = unique("layer");
+    for (auto& entity : copy) if (entity.type == "stair" || entity.type == "railing") {
+        entity.properties["property_id"] = property;
+        entity.properties["building_id"] = building;
+        entity.properties["floor_id"] = floor;
+        entity.properties["layer_id"] = layer;
+    }
+    copy.push_back({property, "property"});
+    copy.push_back({building, "building", {{"property_id", property}}});
+    copy.push_back({floor, "floor", {{"building_id", building}}});
+    copy.push_back({layer, "layer", {{"floor_id", floor}}});
+    return copy;
+}
 inline void validate(const ProjectImportCandidate& result) {
     (void)project_import_kind_name(result.kind);
     if (result.entities.size() > project_import_entity_limit ||
@@ -314,6 +436,11 @@ inline void validate(const ProjectImportCandidate& result) {
     std::set<std::string, std::less<>> entity_ids;
     std::map<std::string, Wall, std::less<>> walls;
     std::vector<std::pair<std::string, HostedOpening>> openings;
+    std::map<std::string, const Entity*, std::less<>> native_entities;
+    for (const auto& entity : result.entities)
+        if (entity.type == "stair" || entity.type == "railing") {
+            if (!native_entities.emplace(entity.id, &entity).second) reject();
+        }
     GeometryBudget geometry_budget;
     for (const auto& entity : result.entities) {
         (void)text(entity.id, false);
@@ -322,7 +449,8 @@ inline void validate(const ProjectImportCandidate& result) {
         const bool shared = entity.type == "boundary" || entity.type == "wall" || entity.type == "opening";
         const bool dxf = entity.type == "annotation_state";
         const bool ifc = entity.type == "wall" || entity.type == "slab" || entity.type == "roof" || entity.type == "room" ||
-            entity.type == "opening" || entity.type == "ifc_reference";
+            entity.type == "opening" || entity.type == "ifc_reference" ||
+            entity.type == "stair" || entity.type == "railing";
         if (!shared && !(result.kind == ProjectImportKind::dxf ? dxf : ifc)) reject();
         if (entity.properties.contains("parent_id") || entity.properties.contains("layer_id")) reject();
         if (entity.type == "boundary") {
@@ -361,6 +489,27 @@ inline void validate(const ProjectImportCandidate& result) {
             openings.emplace_back(std::move(wall_id), std::move(hosted));
         } else if (entity.type == "ifc_reference") {
             validate_ifc_reference(entity);
+        } else if (entity.type == "stair" || entity.type == "railing") {
+            validate_native_context(entity);
+            const auto& p = entity.properties;
+            if (p.contains("vertical_placement") || !p.contains("version") ||
+                !p.at("version").is_number_integer() || !p.contains("form") || !p.at("form").is_string()) reject();
+            const bool supported = entity.type == "stair"
+                ? (p.at("version") == 1 && p.at("form") == "straight_stair_flight") ||
+                    (p.at("version") == 2 && p.at("form") == "multi_flight_stair")
+                : (p.at("version") == 1 && p.at("form") == "straight_railing") ||
+                    (p.at("version") == 2 && p.at("form") == "stair_flight_railing") ||
+                    (p.at("version") == 3 && p.at("form") == "stair_landing_railing");
+            if (!supported) reject();
+            const Entity* host = nullptr;
+            if (p.contains("host")) {
+                if (!p.at("host").is_object() || !p.at("host").contains("stair_id")) reject();
+                const auto id = text(p.at("host").at("stair_id"), false, 128);
+                const auto found = native_entities.find(id);
+                if (found == native_entities.end() || found->second->type != "stair") reject();
+                host = found->second;
+            }
+            geometry_budget.charge(native_stair_railing_work(entity, host));
         }
     }
     for (auto& [wall_id, hosted] : openings) {
@@ -374,7 +523,8 @@ inline void validate(const ProjectImportCandidate& result) {
     }
     // Validate the detached graph using the same native entity, reference and
     // geometry checks as an ordinary command. No live document is mutated.
-    auto document = Document::create(result.entities);
+    auto document = Document::create(result.kind == ProjectImportKind::ifc
+        ? detached_ifc_validation_entities(result.entities) : result.entities);
     if (!document.snapshot().is_editable()) reject();
 }
 } // namespace project_import_detail
@@ -457,9 +607,8 @@ inline ProjectImportCandidate import_project_in_worker(std::span<const std::byte
     options.proj_offline_required = true;
     const auto report = broker(options);
     if (!report.controls_attested()) {
-        if (report.launched && report.exit_code == 4 &&
-            std::find(report.diagnostics.begin(), report.diagnostics.end(), "worker_exit_code_failed") != report.diagnostics.end())
-            throw std::invalid_argument("The isolated importer rejected malformed or unsupported project data; the document is unchanged.");
+        if (project_import_detail::observed_worker_project_failure(report))
+            throw std::runtime_error(project_import_detail::observed_project_failure_message(report));
         throw std::runtime_error("Isolated project import is unavailable. Install or repair the bundled vertex-import-worker in a read-only application directory; the Windows sandbox must be available.");
     }
     return decode_project_import_candidate(report, kind);

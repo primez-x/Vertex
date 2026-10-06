@@ -71,6 +71,12 @@ void validate_assistance_raster(const AssistanceRaster&);
 [[nodiscard]] std::vector<AssistanceProposal> extract_dimensions(
     const AssistanceRaster&, AssistanceEngineOptions options = {},
     std::string target_boundary_id = {}, std::string target_segment_id = {});
+// A distinct typed wall-owner operation. Recognized lengths remain source
+// observations; acceptance resolves the current physical axis and never
+// changes the wall geometry to match recognized text.
+[[nodiscard]] std::vector<AssistanceProposal> extract_wall_dimensions(
+    const AssistanceRaster&, AssistanceEngineOptions options,
+    std::string target_wall_id);
 [[nodiscard]] std::vector<AssistanceProposal> suggest_label_placements(
     std::span<const AssistanceAnchor>);
 [[nodiscard]] std::vector<AssistanceProposal> parse_natural_language(std::string_view command);

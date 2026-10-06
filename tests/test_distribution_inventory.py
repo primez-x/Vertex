@@ -28,6 +28,107 @@ def write_json(path, value):
     path.write_text(json.dumps(value), encoding="utf-8")
 
 
+class ControlledSourceValidationTests(unittest.TestCase):
+    def fixture(self):
+        stage = "build/windows-release/cad-runtime"
+        native = stage + "/Lib/site-packages/ifcopenshell/_ifcopenshell_wrapper.cp313-win_amd64.pyd"
+        module = stage + "/Lib/site-packages/ifcopenshell/__init__.py"
+        return {"id": "cad-ifcopenshell", "runtime_names": [pathlib.PurePosixPath(native).name],
+                "source_files": [{"path": path, "sha256": "a" * 64} for path in (native, module)],
+                "source": {"kind": "controlled-runtime", "runtime_root": ".deps/controlled-sdk", "staged_root": stage,
+                           "selection_path": "build/windows-release/cad-runtime-selection.json", "selection_sha256": "b" * 64,
+                           "paths": [module], "corresponding_source_paths": []}}
+
+    def test_valid_source_keeps_corresponding_sources_optional_and_separate(self):
+        component = self.fixture()
+        inventory._validate_controlled_source(component["source"], component, "controlled")
+        component["source"]["corresponding_source_paths"] = [
+            {"path": ".deps/source-closure/ifc/source", "kind": "directory", "sha256": "c" * 64}]
+        inventory._validate_controlled_source(component["source"], component, "controlled")
+
+    def test_malformed_or_ambiguous_payload_rows_are_rejected(self):
+        mutations = {
+            "foreign field": lambda c: c["source_files"][0].update(bytes=10),
+            "noncanonical path": lambda c: c["source_files"][0].update(path=c["source_files"][0]["path"].replace("/", "\\")),
+            "string path list": lambda c: c["source"].update(paths="wrong"),
+            "mapping path list": lambda c: c["source"].update(paths=[{}]),
+            "string runtime list": lambda c: c.update(runtime_names="wrong"),
+            "noncanonical runtime": lambda c: c.update(runtime_names=["/" + c["runtime_names"][0]]),
+        }
+        for label, change in mutations.items():
+            with self.subTest(label=label):
+                component = self.fixture()
+                change(component)
+                with self.assertRaises(inventory.InventoryError):
+                    inventory._validate_controlled_source(component["source"], component, "controlled")
+
+    def test_declared_payload_must_match_selected_stage_and_actual_bytes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            component = self.fixture()
+            records = []
+            for row in component["source_files"]:
+                path = root / row["path"]
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(b"selected " + path.name.encode())
+                row["sha256"] = digest(path)
+                records.append({"path": path.relative_to(root / component["source"]["staged_root"]).as_posix(),
+                                "bytes": path.stat().st_size, "sha256": digest(path), "origin": "source-built"})
+            selected = {"selection_record": {"path": component["source"]["selection_path"], "sha256": "b" * 64},
+                        "manifest_record": {"path": ".deps/controlled-sdk/controlled-runtime-manifest.json", "sha256": "d" * 64},
+                        "identity": {"source_revision": "e" * 40}, "payload": records}
+            helper = SimpleNamespace(verify_selected_stage=mock.Mock(return_value=selected))
+            with mock.patch.dict(__import__("sys").modules, {"controlled_cad_distribution": helper}):
+                public, private = inventory._controlled_runtime_context(root, component)
+                self.assertEqual(public["corresponding_source_paths"], [])
+                self.assertEqual([row["path"] for row in public["source_paths"]], component["source"]["paths"])
+                self.assertFalse(public["source_closure_qualified"])
+                self.assertTrue(public["ifcopenshell_version_informative_only"])
+                self.assertEqual(len(private["file_hashes"]), 2)
+                (root / component["source_files"][0]["path"]).write_bytes(b"tampered native")
+                with self.assertRaisesRegex(inventory.InventoryError, "hash"):
+                    inventory._controlled_runtime_context(root, component)
+
+    def test_controlled_source_tree_hash_retains_inventory_format(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            source = root / "source"
+            source.mkdir()
+            (source / "unit.cpp").write_bytes(b"preferred editable source")
+            row = {"path": "source", "kind": "directory", "sha256": inventory._tree_sha256(source)}
+            self.assertEqual(inventory._describe_controlled_source(root, row), row)
+
+    def test_controlled_preferred_source_rejects_hardlinks(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            original = root / "original.cpp"
+            original.write_bytes(b"source")
+            source = root / "source"
+            source.mkdir()
+            linked = source / "unit.cpp"
+            linked.hardlink_to(original)
+            for row in ({"path": "source/unit.cpp", "kind": "file", "sha256": digest(original)},
+                        {"path": "source", "kind": "directory", "sha256": inventory._tree_sha256(source)}):
+                with self.subTest(kind=row["kind"]), self.assertRaisesRegex(inventory.InventoryError, "hardlink"):
+                    inventory._describe_controlled_source(root, row)
+
+    def test_controlled_preferred_source_rejects_reparse_descendants(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            source = root / "source/subdir"
+            source.mkdir(parents=True)
+            (source / "unit.cpp").write_bytes(b"source")
+            row = {"path": "source", "kind": "directory", "sha256": inventory._tree_sha256(root / "source")}
+            original_lstat = pathlib.Path.lstat
+            def inspect(path, *args, **kwargs):
+                result = original_lstat(path, *args, **kwargs)
+                if path == source:
+                    return SimpleNamespace(st_mode=result.st_mode, st_file_attributes=0x400)
+                return result
+            with mock.patch.object(pathlib.Path, "lstat", inspect), self.assertRaisesRegex(inventory.InventoryError, "reparse"):
+                inventory._describe_controlled_source(root, row)
+
+
 class DistributionInventoryTests(unittest.TestCase):
     def bundled_asset_fixture(self):
         directory, root, manifest, runtime, app, dependency = self.fixture()

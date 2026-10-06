@@ -3,7 +3,8 @@ param(
     [switch]$Desktop,
     [switch]$Architecture,
     [switch]$SkipTests,
-    [string[]]$Targets = @()
+    [string[]]$Targets = @(),
+    [string]$CadRuntimeRoot
 )
 $ErrorActionPreference = 'Stop'
 if ($args.Count -gt 0) {
@@ -13,6 +14,9 @@ if ($Targets.Count -gt 0 -and !$SkipTests) {
     throw 'For a focused build, use -SkipTests and run the corresponding tests explicitly.'
 }
 $projectRoot = Split-Path -Parent $PSScriptRoot
+if ($CadRuntimeRoot -and !$Desktop) {
+    throw '-CadRuntimeRoot requires -Desktop.'
+}
 $vswherePath = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
 if (!(Test-Path -LiteralPath $vswherePath)) { throw 'Visual Studio Build Tools 2022 and the C++ workload are required.' }
 $vsRoot = & $vswherePath -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
@@ -45,6 +49,9 @@ if ($Desktop) {
         throw 'Pinned Qt 6.8.3 is missing. Run the documented Qt bootstrap first.'
     }
     $configureArguments += @('-DSKETCH_BUILD_DESKTOP=ON', "-DCMAKE_PREFIX_PATH=$qtPrefix;$nativePrefix")
+    if ($CadRuntimeRoot) {
+        $configureArguments += "-DVERTEX_CAD_RUNTIME_ROOT=$CadRuntimeRoot"
+    }
 } else {
     $configureArguments += '-DSKETCH_BUILD_DESKTOP=OFF'
 }

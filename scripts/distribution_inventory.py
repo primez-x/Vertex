@@ -42,6 +42,7 @@ SOURCE_KINDS = {
     "planegcs-provenance",
     "bootstrap-dependency",
     "locked-archive",
+    "controlled-runtime",
 }
 COMPONENT_KINDS = {
     "application",
@@ -268,6 +269,45 @@ def _validate_locked_archive_source(source: dict[str, Any], component: dict[str,
     return canonical_mapping
 
 
+def _validate_controlled_source(source: dict[str, Any], component: dict[str, Any], field: str) -> None:
+    _require(set(source) == {"kind", "runtime_root", "staged_root", "selection_path", "selection_sha256",
+                             "paths", "corresponding_source_paths"}, f"{field} has unsupported fields")
+    for key in ("runtime_root", "staged_root", "selection_path"):
+        _require(source[key] == _canonical_relative(source[key], f"{field}.{key}"), f"{field}.{key} must be canonical")
+    _validate_sha256(source["selection_sha256"], f"{field}.selection_sha256")
+    files = _validate_source_files(component.get("source_files"), f"{field}.source_files")
+    _require(bool(files) and len(files) <= 40000, f"{field} requires a bounded file table")
+    for row in component["source_files"]:
+        _require(set(row) == {"path", "sha256"}, f"{field}.source_files has unsupported fields")
+        _require(row["path"] == _canonical_relative(row["path"], f"{field}.source_files.path"),
+                 f"{field}.source_files.path must be canonical")
+    file_paths = {row["path"] for row in files}
+    _require(len({name.casefold() for name in file_paths}) == len(file_paths), f"{field} has ambiguous file paths")
+    prefix = source["staged_root"] + "/"
+    _require(all(name.startswith(prefix) for name in file_paths), f"{field} files must belong to its exact stage")
+    runtime_paths = {name for name in file_paths if pathlib.PurePosixPath(name).suffix.casefold() in {".exe", ".dll", ".pyd"}}
+    paths = _validate_path_list(source["paths"], f"{field}.paths") if source["paths"] != [] else []
+    _require(paths == source["paths"], f"{field}.paths must be canonical")
+    _require(set(paths) == file_paths - runtime_paths, f"{field}.paths must cover exactly its non-runtime payload")
+    names = component.get("runtime_names", [])
+    _require(isinstance(names, list), f"{field}.runtime_names must be a list")
+    for name in names:
+        _require(name == _canonical_name(name, f"{field}.runtime_names"), f"{field}.runtime_names must be canonical")
+    _require(len(names) == len(runtime_paths) and
+             {name.casefold() for name in names} == {pathlib.PurePosixPath(name).name.casefold() for name in runtime_paths},
+             f"{field} runtime names must match its exact file table")
+    corresponding = source["corresponding_source_paths"]
+    _require(isinstance(corresponding, list) and len(corresponding) <= 4096, f"{field} source inputs exceed bounds")
+    seen = set()
+    for row in corresponding:
+        _require(isinstance(row, dict) and set(row) == {"path", "kind", "sha256"}, f"{field} has invalid source input")
+        _require(row["path"] == _canonical_relative(row["path"], field) and row["path"].casefold() not in seen,
+                 f"{field} has duplicate/noncanonical source input")
+        seen.add(row["path"].casefold())
+        _require(row["kind"] in {"file", "directory"}, f"{field} has unknown source input kind")
+        _validate_sha256(row["sha256"], field)
+
+
 def _validate_spdx_hash_overrides(value: Any, field: str) -> dict[str, dict[str, str]]:
     """Validate explicit provenance for a known-bad SPDX file checksum.
 
@@ -406,6 +446,8 @@ def validate_manifest(manifest: Any) -> None:
                      f"{field}.source cannot set both dependency_name and asset_name")
         elif source_kind == "locked-archive":
             _validate_locked_archive_source(source, component, f"{field}.source")
+        elif source_kind == "controlled-runtime":
+            _validate_controlled_source(source, component, f"{field}.source")
         if "paths" in source and not (source_kind == "locked-archive" and source["paths"] == []):
             _validate_path_list(source.get("paths"), f"{field}.source.paths")
 
@@ -1007,6 +1049,78 @@ def _locked_archive_context(root: pathlib.Path, component: dict[str, Any]) -> tu
     return public, {"file_hashes": file_hashes}
 
 
+def _describe_controlled_source(root: pathlib.Path, row: dict[str, Any]) -> dict[str, Any]:
+    """Keep preferred-source paths ordinary while preserving tree hash format."""
+    path = root / row["path"]
+    def ordinary(item):
+        metadata = item.lstat()
+        _require(not stat.S_ISLNK(metadata.st_mode) and not (getattr(metadata, "st_file_attributes", 0) & 0x400),
+                 "Controlled source cannot cross a symlink or reparse point")
+        _require(stat.S_ISDIR(metadata.st_mode) or stat.S_ISREG(metadata.st_mode), "Controlled source must be ordinary")
+        if stat.S_ISREG(metadata.st_mode):
+            _require(metadata.st_nlink == 1, "Controlled source cannot contain a hardlink")
+            _require(metadata.st_size <= 1024 * 1024 * 1024, "Controlled source file exceeds byte bound")
+        return metadata
+    try:
+        for ancestor in (path, *path.parents):
+            ordinary(ancestor)
+        canonical, resolved = _relative_existing_path(root, row["path"], "controlled source path",
+                                                      file_only=row["kind"] == "file")
+        _require(canonical == row["path"], "Controlled source does not identify its exact declared path")
+        def snapshot():
+            files, entries, total = {}, 0, 0
+            def traversal_error(error):
+                raise error
+            paths = [resolved] if row["kind"] == "file" else []
+            if row["kind"] == "directory":
+                for directory, directories, filenames in os.walk(resolved, followlinks=False, onerror=traversal_error):
+                    entries += len(directories) + len(filenames)
+                    _require(entries <= 16384, "Controlled source entry count exceeds bound")
+                    for name in directories + filenames:
+                        ordinary(pathlib.Path(directory) / name)
+                    paths.extend(pathlib.Path(directory) / name for name in filenames)
+                    _require(len(paths) <= 4096, "Controlled source file count exceeds bound")
+            for item in paths:
+                metadata = ordinary(item)
+                total += metadata.st_size
+                _require(total <= 16 * 1024 * 1024 * 1024, "Controlled source tree exceeds byte bound")
+                files[item] = (metadata.st_dev, metadata.st_ino, metadata.st_size, metadata.st_mtime_ns, metadata.st_ctime_ns)
+            return files
+        before = snapshot()
+        actual = _describe_path(root, canonical, row["sha256"])
+        _require(actual["kind"] == row["kind"] and snapshot() == before,
+                 "Controlled corresponding-source input changed during hashing")
+        return actual
+    except (OSError, ValueError) as exc:
+        if isinstance(exc, InventoryError):
+            raise
+        _error(f"Could not validate controlled source: {exc}")
+
+
+def _controlled_runtime_context(root: pathlib.Path, component: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+    from controlled_cad_distribution import verify_selected_stage
+    source = component["source"]
+    _validate_controlled_source(source, component, f"component {component['id']}")
+    verified = verify_selected_stage(root, root / source["runtime_root"], root / source["staged_root"],
+                                     root / source["selection_path"])
+    _require(verified["selection_record"]["sha256"] == source["selection_sha256"], "Controlled build selection hash changed")
+    pins = {source["staged_root"] + "/" + row["path"]: row["sha256"] for row in verified["payload"]}
+    declared = {row["path"]: row["sha256"] for row in component["source_files"]}
+    _require(pins == declared, "Controlled component differs from the exact selected stage payload")
+    descriptions = [_describe_path(root, path, checksum) for path, checksum in sorted(pins.items())]
+    corresponding = []
+    for row in source["corresponding_source_paths"]:
+        actual = _describe_controlled_source(root, row)
+        corresponding.append(actual)
+    public = {"kind": "controlled-runtime", "source_revision": verified["identity"]["source_revision"],
+              "runtime_manifest": verified["manifest_record"], "selection": verified["selection_record"],
+              "source_paths": [row for row in descriptions if row["path"] in source["paths"]],
+              "corresponding_source_paths": corresponding,
+              "licensing_clearance": False, "source_closure_qualified": False,
+              "ifcopenshell_version_informative_only": True}
+    return public, {"file_hashes": pins}
+
+
 def _package_manager_evidence(root: pathlib.Path, manifest: dict[str, Any]) -> list[dict[str, str]]:
     result: list[dict[str, str]] = []
     for index, manager in enumerate(manifest.get("package_managers", [])):
@@ -1044,6 +1158,8 @@ def _prepare_component(root: pathlib.Path, component: dict[str, Any]) -> dict[st
         private_source = None
     elif source_kind == "locked-archive":
         source_payload, private_source = _locked_archive_context(root, component)
+    elif source_kind == "controlled-runtime":
+        source_payload, private_source = _controlled_runtime_context(root, component)
     elif source_kind == "redistributable":
         pins = component["source"].get("sha256")
         _require(isinstance(pins, dict) and bool(pins), "redistributable requires reviewed binary hashes")
@@ -1079,7 +1195,7 @@ def _prepare_component(root: pathlib.Path, component: dict[str, Any]) -> dict[st
         "notices": notices,
         "artifacts": artifacts,
     }
-    if source_kind == "locked-archive":
+    if source_kind in {"locked-archive", "controlled-runtime"}:
         component_payload["source_inputs"] = [
             row for row in source_payload["source_paths"] if row["path"] in component["source"]["paths"]]
     return {
@@ -1131,7 +1247,7 @@ def _runtime_inventory(root: pathlib.Path, evidence: dict[str, Any], prepared: d
         if owner["manifest"]["source"]["kind"] == "redistributable":
             pinned = owner["payload"]["package"]["source"]["sha256"][module_path.name.casefold()]
             _require(actual_hash == pinned, f"redistributable binary differs from reviewed hash: {module_relative}")
-        elif owner["manifest"]["source"]["kind"] == "locked-archive":
+        elif owner["manifest"]["source"]["kind"] in {"locked-archive", "controlled-runtime"}:
             pins = owner["private_source"]["file_hashes"]
             _require(module_relative in pins,
                      f"locked archive runtime path is not a declared source_file: {module_relative}")

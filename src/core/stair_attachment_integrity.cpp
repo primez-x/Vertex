@@ -16,7 +16,7 @@ using Json = nlohmann::json;
 constexpr std::size_t max_relevant_work = 2000000, max_json_nodes = 100000;
 constexpr std::size_t max_phase_members = 100000, max_alternatives = 4096;
 [[noreturn]] void invalid(const char* reason) { throw std::invalid_argument(reason); }
-enum class Form { opaque, stair_v1, stair_v2, rail_v1, rail_v2 };
+enum class Form { opaque, stair_v1, stair_v2, rail_v1, rail_v2, landing_rail_v3 };
 struct Budget { std::size_t json_nodes{}, stair_risers{}, phase_work{}; };
 
 // Only recognized forms are interpreted. A future integer version or unknown
@@ -31,13 +31,19 @@ Form form(const Entity& e) {
         invalid("Stair/railing canonical form must be a string");
     const auto& name=p.at("form").get_ref<const std::string&>();
     const bool stair_name=name=="straight_stair_flight" || name=="multi_flight_stair";
-    const bool rail_name=name=="straight_railing" || name=="stair_flight_railing";
+    const bool rail_name=name=="straight_railing" || name=="stair_flight_railing" || name=="stair_landing_railing";
     if (!stair_name && !rail_name) return Form::opaque;
     if ((stair_name && e.type!="stair") || (rail_name && e.type!="railing"))
         invalid("Canonical stair/railing form disagrees with entity type");
     if (!has_version || !p.at("version").is_number_integer())
         invalid("Known stair/railing form requires an integer version");
     const auto& version=p.at("version");
+    // The one canonical v3 addition does not reinterpret other future forms.
+    if (name=="stair_landing_railing") {
+        if(version>3) return Form::opaque;
+        if(version==3) return Form::landing_rail_v3;
+        invalid("Landing railing requires version 3");
+    }
     if (version>2) return Form::opaque;
     if (version==1 && name=="straight_stair_flight") return Form::stair_v1;
     if (version==2 && name=="multi_flight_stair") return Form::stair_v2;
@@ -86,7 +92,7 @@ void preflight(const Map& entities,Budget& budget,bool hosted_rails) {
                     ls==p.end() || !ls->is_array() || ls->size()!=fs->size()-1)
                     invalid("Invalid bounded stair topology");
             }
-        } else if (kind==Form::rail_v1 || kind==Form::rail_v2) {
+        } else if (kind==Form::rail_v1 || kind==Form::rail_v2 || kind==Form::landing_rail_v3) {
             if (e.properties.contains("flights") || e.properties.contains("landings"))
                 invalid("Railing cannot carry stair topology authority");
         } else if (hosted_rails && e.type=="model_phases") {
@@ -239,7 +245,7 @@ void validate_stair_attachment_state(const Map& entities) {
         bool hosted_rails=false, known_objects=false;
         for (const auto& [id,e]:entities) {
             const auto kind=form(e);
-            hosted_rails=hosted_rails || kind==Form::rail_v2;
+            hosted_rails=hosted_rails || kind==Form::rail_v2 || kind==Form::landing_rail_v3;
             known_objects=known_objects || kind!=Form::opaque;
         }
         if (!known_objects) return;
@@ -281,12 +287,12 @@ void validate_stair_attachment_state(const Map& entities) {
         }
         for (const auto& [id,e]:entities) {
             const auto kind=form(e);
-            if (kind!=Form::rail_v1 && kind!=Form::rail_v2) continue;
+            if (kind!=Form::rail_v1 && kind!=Form::rail_v2 && kind!=Form::landing_rail_v3) continue;
             const auto rail=decode_railing_properties(id,e.properties);
-            if (!rail.host) continue;
+            if (!rail.host && !rail.landing_host) continue;
             if (e.properties.contains("vertical_placement"))
                 invalid("Hosted railing cannot own independent vertical placement");
-            const auto s=stairs.find(rail.host->stair_id);
+            const auto s=stairs.find(rail.host?rail.host->stair_id:rail.landing_host->stair_id);
             if (s==stairs.end()) invalid("Hosted railing requires a current canonical version-2 stair");
             const auto& host=entities.at(s->first);
             const auto rc=complete_context(org(),e), hc=complete_context(org(),host);

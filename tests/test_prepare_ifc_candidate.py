@@ -272,6 +272,52 @@ class SyntheticCandidateTests(unittest.TestCase):
                 self.assertEqual(record(output / item["path"])["sha256"], item["sha256"])
                 self.assertIn("kind", item["origin"])
             self.assertEqual(json.loads((output / "candidate-manifest.json").read_text()), result)
+            wrapper = next(item for item in result["files"] if item["path"] == "ifcopenshell/ifcopenshell_wrapper.py")
+            self.assertIs(wrapper["origin"]["bound_in_original_build_evidence"], False)
+            self.assertIn("hashed at staging, not in build evidence", (output / "NOTICES.txt").read_text())
+
+    def test_original_build_wrapper_receipt_is_verified_and_reported(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root, build, output, evidence_path, evidence, _ = self.fixture(directory)
+            wrapper = build / "build/ifcwrap/ifcopenshell_wrapper.py"
+            evidence["generated_wrapper"] = record(wrapper)
+            evidence_path.write_text(json.dumps(evidence))
+            result = self.stage(root, output, evidence_path)
+            item = next(item for item in result["files"] if item["path"] == "ifcopenshell/ifcopenshell_wrapper.py")
+            self.assertIs(item["origin"]["bound_in_original_build_evidence"], True)
+            self.assertEqual(item["sha256"], evidence["generated_wrapper"]["sha256"])
+            self.assertEqual((output / item["path"]).read_bytes(), wrapper.read_bytes())
+            notice = (output / "NOTICES.txt").read_text()
+            self.assertIn("bound by the original build evidence", notice)
+            self.assertNotIn("not in build evidence", notice)
+            for flag in ("build_qualified", "source_closure_qualified", "product_runtime_replaced",
+                         "cpp_corresponding_source_delivered", "dependency_license_closure_delivered"):
+                self.assertIs(result[flag], False)
+
+    def test_original_build_wrapper_receipt_rejects_tamper_wrong_path_and_schema(self):
+        for fault in ("tampered", "missing", "wrong-path", "wrong-bytes", "wrong-hash", "extra-key", "non-object"):
+            with self.subTest(fault=fault), tempfile.TemporaryDirectory() as directory:
+                root, build, output, evidence_path, evidence, _ = self.fixture(directory)
+                wrapper = build / "build/ifcwrap/ifcopenshell_wrapper.py"
+                evidence["generated_wrapper"] = record(wrapper)
+                if fault == "tampered":
+                    wrapper.write_bytes(b"stale or changed wrapper")
+                elif fault == "missing":
+                    wrapper.unlink()
+                elif fault == "wrong-path":
+                    evidence["generated_wrapper"]["path"] = str(build / "elsewhere/ifcopenshell_wrapper.py")
+                elif fault == "wrong-bytes":
+                    evidence["generated_wrapper"]["bytes"] += 1
+                elif fault == "wrong-hash":
+                    evidence["generated_wrapper"]["sha256"] = "0" * 64
+                elif fault == "extra-key":
+                    evidence["generated_wrapper"]["claimed_binding"] = True
+                else:
+                    evidence["generated_wrapper"] = None
+                evidence_path.write_text(json.dumps(evidence))
+                with self.assertRaises(ValueError):
+                    self.stage(root, output, evidence_path)
+                self.assertFalse(output.exists())
 
     def test_synthetic_incomplete_and_failed_builds_write_nothing(self):
         mutations = [lambda e: e.update(state="configured"), lambda e: e.update(build_qualified=True),

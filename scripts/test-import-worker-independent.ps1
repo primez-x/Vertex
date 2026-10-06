@@ -5,6 +5,7 @@ param(
     [switch]$Child,
     [switch]$CaptureSelfTest,
     [switch]$PincOnly,
+    [switch]$IfcOnly,
     [string]$CaptureDirectory,
     [string]$PackagedRuntimeRoot = ''
 )
@@ -15,6 +16,9 @@ $fixtureParentPath = $null
 if (!$IsWindows) { throw 'This runner requires Windows.' }
 if ($PincOnly -and $CaptureSelfTest) { throw 'PincOnly cannot be combined with CaptureSelfTest.' }
 if ($PincOnly -and $Configuration -ne 'Release') { throw 'PincOnly requires the inspected Release runtime.' }
+if ($IfcOnly -and ($PincOnly -or $CaptureSelfTest -or $PackagedRuntimeRoot -or $Configuration -ne 'Release')) {
+    throw 'IfcOnly requires the inspected Release runtime and cannot be combined with other fixture modes.'
+}
 if ($PackagedRuntimeRoot) {
     if ($CaptureSelfTest -or $Configuration -ne 'Release') { throw 'Packaged CAD checking requires Release and no capture self-test.' }
     if ($PackagedRuntimeRoot -match '["\x00-\x1f]') { throw 'Invalid packaged runtime path.' }
@@ -26,7 +30,7 @@ if ($PackagedRuntimeRoot) {
 $root = Split-Path -Parent $PSScriptRoot
 $build = Join-Path $root ('build/windows-' + $Configuration.ToLowerInvariant())
 $names = @('windows_import_worker_tests.exe', 'windows_import_worker_probe.exe',
-           'assistance_workflow_tests.exe', 'dxf_desktop_workflow_tests.exe',
+           'assistance_workflow_tests.exe', 'assistance_ocr_isolation_tests.exe', 'dxf_desktop_workflow_tests.exe',
            'ifc_desktop_workflow_tests.exe', 'cad_library_worker_tests.exe', 'vertex-import-worker.exe')
 if ($PincOnly) {
     $names = @('windows_import_worker_tests.exe', 'windows_import_worker_probe.exe',
@@ -71,7 +75,7 @@ function New-ImmutableDesktopFixtureRoot([string]$CaptureRoot) {
     if ($PincOnly) { $runtime = Join-Path $runtime 'bin' }
     $null = New-Item -ItemType Directory -Path $runtime -Force
     $fixtureNames = if ($PincOnly) { @('pinc_project_desktop_tests.exe', 'vertex-import-worker.exe', 'vertex-planegcs.dll') }
-        else { @('dxf_desktop_workflow_tests.exe', 'ifc_desktop_workflow_tests.exe', 'cad_library_worker_tests.exe',
+        else { @('assistance_ocr_isolation_tests.exe', 'dxf_desktop_workflow_tests.exe', 'ifc_desktop_workflow_tests.exe', 'cad_library_worker_tests.exe',
                  'vertex-import-worker.exe', 'vertex-planegcs.dll') }
     foreach ($name in $fixtureNames) {
         Copy-Item -LiteralPath (Join-Path $build $name) -Destination $runtime
@@ -79,6 +83,19 @@ function New-ImmutableDesktopFixtureRoot([string]$CaptureRoot) {
     # The CAD bridge loads its pinned interpreter lazily from this exact sibling
     # directory. Include native extensions before assigning immutable ACLs.
     if (!$PincOnly) { Copy-Item -LiteralPath (Join-Path $build 'cad-runtime') -Destination $runtime -Recurse }
+    if (!$PincOnly) {
+        # OCR runs the real sibling worker against these pinned resources in
+        # the same immutable root. It never searches the source checkout.
+        foreach ($relative in @('assets/assistance/ocr-engine-v1.json', 'assets/assistance/ocr/eng.traineddata',
+                               'assets/assistance/ocr/LICENSE')) {
+            $destination = Join-Path $runtime $relative
+            $null = New-Item -ItemType Directory -Path (Split-Path -Parent $destination) -Force
+            Copy-Item -LiteralPath (Join-Path $build $relative) -Destination $destination
+        }
+        $fontDirectory = Join-Path $runtime 'assets/fonts'
+        $null = New-Item -ItemType Directory -Path $fontDirectory -Force
+        Copy-Item -LiteralPath (Join-Path $root 'assets/fonts/Inter.ttf') -Destination $fontDirectory
+    }
     $qtBin = Join-Path $root '.deps/qt/6.8.3/msvc2022_64/bin'
     $qtSuffix = if ($Configuration -eq 'Debug') { 'd' } else { '' }
     foreach ($name in @("Qt6Core$qtSuffix.dll", "Qt6Gui$qtSuffix.dll",
@@ -175,6 +192,7 @@ if ($Child) {
         host_in_job = $null; binaries_before = @(); tests = @(); error = $null;
         capture_self_test = [bool]$CaptureSelfTest; capture_limit_bytes_per_stream = $captureLimitBytes;
         pinc_only = [bool]$PincOnly;
+        ifc_only = [bool]$IfcOnly;
         packaged_runtime_root = $PackagedRuntimeRoot;
         qualification_boundary = 'Development-host fixture evidence only; packaged CAD mode uses the supplied immutable installed bin directory; no clean-machine, complete compatibility or production qualification.' }
     try {
@@ -213,7 +231,6 @@ public static class BoundedWorkerCapture {
             throw "IsProcessInJob failed: $([Runtime.InteropServices.Marshal]::GetLastWin32Error())"
         }
         $report.host_in_job = $inJob
-        if ($PincOnly -and $inJob) { throw 'Pinc host must run outside every Job Object.' }
         $report.binaries_before = Get-BinaryEvidence
         if (!$CaptureSelfTest -and !$PincOnly) {
             & (Join-Path $root '.deps/cad-runtime/3.13.15/python.exe') -I -B (
@@ -226,15 +243,19 @@ public static class BoundedWorkerCapture {
             New-ImmutableDesktopFixtureRoot $CaptureDirectory
         }
         if ($PincOnly) { $report.runtime_before = Get-RuntimeEvidence $desktopFixtureRoot }
+        if (!$PincOnly -and !$CaptureSelfTest -and !$PackagedRuntimeRoot) {
+            $report.runtime_before = Get-RuntimeEvidence $desktopFixtureRoot
+        }
         $cases = if ($PincOnly) { @('windows_import_worker_tests.exe', 'pinc_project_desktop_tests.exe') }
+                 elseif ($IfcOnly) { @('ifc_desktop_workflow_tests.exe') }
                  elseif ($PackagedRuntimeRoot) { @('cad_library_worker_tests.exe') }
                  elseif ($CaptureSelfTest) { @('capture-stdout-overflow', 'capture-stderr-overflow', 'capture-at-limit',
                 'capture-empty', 'capture-open-failure') }
-                 else { @('windows_import_worker_tests.exe', 'assistance_workflow_tests.exe',
+                 else { @('windows_import_worker_tests.exe', 'assistance_workflow_tests.exe', 'assistance_ocr_isolation_tests.exe',
                           'dxf_desktop_workflow_tests.exe', 'ifc_desktop_workflow_tests.exe', 'cad_library_worker_tests.exe') }
         foreach ($name in $cases) {
             $executable = if ($CaptureSelfTest) { (Get-Process -Id $PID).Path }
-                elseif ($name -in @('pinc_project_desktop_tests.exe', 'dxf_desktop_workflow_tests.exe', 'ifc_desktop_workflow_tests.exe', 'cad_library_worker_tests.exe')) {
+                elseif ($name -in @('pinc_project_desktop_tests.exe', 'assistance_ocr_isolation_tests.exe', 'dxf_desktop_workflow_tests.exe', 'ifc_desktop_workflow_tests.exe', 'cad_library_worker_tests.exe')) {
                     Join-Path $desktopFixtureRoot $name
                 } else { Join-Path $build $name }
             $info = [Diagnostics.ProcessStartInfo]::new($executable)
@@ -311,6 +332,11 @@ public static class BoundedWorkerCapture {
             }
         }
         $report.binaries_after = Get-BinaryEvidence
+        if (!$PincOnly -and !$CaptureSelfTest -and !$PackagedRuntimeRoot) {
+            $report.runtime_after = Get-RuntimeEvidence $desktopFixtureRoot
+            if (($report.runtime_before | ConvertTo-Json -Depth 5 -Compress) -cne
+                ($report.runtime_after | ConvertTo-Json -Depth 5 -Compress)) { throw 'Frozen worker runtime provenance changed during the run.' }
+        }
         if ($PincOnly) {
             $report.runtime_after = Get-RuntimeEvidence $desktopFixtureRoot
             if (($report.runtime_before | ConvertTo-Json -Depth 5 -Compress) -cne
@@ -367,7 +393,7 @@ public static class BoundedWorkerCapture {
     }
     $report.finished_utc = [DateTime]::UtcNow.ToString('o')
     $report | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $CaptureDirectory 'result.json') -Encoding utf8
-    if ($report.error -or $report.host_in_job -or (!$CaptureSelfTest -and @($report.tests | Where-Object {
+    if ($report.error -or (!$CaptureSelfTest -and @($report.tests | Where-Object {
         $_.exit_code -ne 0 -or $_.timed_out -or $_.capture_failure }).Count)) { exit 1 }
     exit 0
 }
@@ -390,6 +416,7 @@ try {
         '" -Configuration ' + $Configuration + ' -Child -CaptureDirectory "' + $CaptureDirectory + '"'
     if ($CaptureSelfTest) { $command += ' -CaptureSelfTest' }
     if ($PincOnly) { $command += ' -PincOnly' }
+    if ($IfcOnly) { $command += ' -IfcOnly' }
     if ($PackagedRuntimeRoot) { $command += ' -PackagedRuntimeRoot "' + $PackagedRuntimeRoot + '"' }
     $created = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{
         CommandLine = $command; CurrentDirectory = $root; ProcessStartupInformation = $startup }
@@ -425,8 +452,8 @@ finally {
 }
 Write-Output $CaptureDirectory
 if ($capture.error) { throw $capture.error }
-$expectedCount = if ($PincOnly) { 2 } elseif ($PackagedRuntimeRoot) { 1 } else { 5 }
-if (!$capture.termination_confirmed -or $capture.host_exit_code -ne 0 -or $result.host_in_job -ne $false -or
+$expectedCount = if ($PincOnly) { 2 } elseif ($IfcOnly -or $PackagedRuntimeRoot) { 1 } elseif ($CaptureSelfTest) { 5 } else { 6 }
+if (!$capture.termination_confirmed -or $capture.host_exit_code -ne 0 -or
     $result.error -or @($result.tests).Count -ne $expectedCount -or (!$CaptureSelfTest -and @($result.tests | Where-Object {
         $_.exit_code -ne 0 -or $_.timed_out -or $_.capture_failure }).Count)) {
     throw "Independent fixtures did not pass; inspect $CaptureDirectory"

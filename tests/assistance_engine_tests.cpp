@@ -176,12 +176,56 @@ void centered_reference_transform() {
     invalid([&] { (void)assistance_source_point_to_model({std::numeric_limits<double>::quiet_NaN(), 1}, 32, 18); });
 }
 
+void wall_dimension_proposals() {
+    auto raster = fixture();
+    raster.text_producer = "offline-recognizer-v1";
+    raster.text_runs.front().confidence = 0.23;
+    const auto retained = raster.source_text;
+    const auto wall = sketch::extract_wall_dimensions(raster, {}, "physical-wall");
+    const auto boundary = sketch::extract_dimensions(raster, {}, "physical-wall");
+    require(wall.size() == 2 && wall == sketch::extract_wall_dimensions(raster, {}, "physical-wall"),
+            "wall dimension proposals must be deterministic recognized observations");
+    require(wall.front().id != boundary.front().id && wall.front().id !=
+                sketch::extract_wall_dimensions(raster, {}, "other-wall").front().id,
+            "typed wall target and owner identity must affect proposal identity");
+    for (std::size_t index = 0; index < wall.size(); ++index) {
+        const auto& value = wall[index];
+        const auto& args = value.preview.arguments;
+        require(value.kind == sketch::AssistanceKind::dimension_extraction &&
+                    value.preview.command_type == "add_wall_dimension_suggestion" &&
+                    value.preview.affected_entity_ids == std::vector<std::string>{value.id, "physical-wall"},
+                "wall operation must carry exactly the proposal and physical owner affected IDs");
+        require(args.size() == 5 && args.at("target_wall_id") == "physical-wall" &&
+                    args.at("length_metres") == boundary[index].preview.arguments.at("length_metres") &&
+                    args.at("length_expression") == boundary[index].preview.arguments.at("length_expression") &&
+                    args.at("source_text") == value.source.original_text && args.contains("source_offset"),
+                "wall proposal must carry an observation and typed owner without invented segment geometry");
+        require(value.source == boundary[index].source && value.producer == raster.text_producer &&
+                    value.resources == boundary[index].resources && value.source.confidence == 0.23,
+                "wall extraction must preserve raster source selection, confidence and provenance");
+        require(sketch::decode_assistance_proposal(sketch::encode_assistance_proposal(value)) == value,
+                "typed wall operation must round trip the proposal envelope");
+        sketch::validate_assistance_proposal(value);
+    }
+    require(raster.source_text == retained, "wall proposal extraction must not mutate source observations");
+    raster.text_runs.clear();
+    require(sketch::extract_wall_dimensions(raster, {}, "physical-wall").empty(),
+            "unlocated wall observations must not invent source bounds");
+    invalid([&] { (void)sketch::extract_wall_dimensions(raster, {}, ""); });
+    invalid([&] { (void)sketch::extract_wall_dimensions(raster, {}, "unsafe/wall"); });
+    invalid([&] { (void)sketch::extract_wall_dimensions(raster, {}, std::string(129, 'x')); });
+    sketch::AssistanceEngineOptions options;
+    options.image_scale = 0;
+    invalid([&] { (void)sketch::extract_wall_dimensions(raster, options, "physical-wall"); });
+}
+
 }  // namespace
 
 int main() {
     sketch::testing::noninteractive_errors();
     try {
         centered_reference_transform();
+        wall_dimension_proposals();
         const auto raster = fixture();
         sketch::validate_assistance_raster(raster);
 

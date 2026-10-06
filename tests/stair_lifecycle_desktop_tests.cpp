@@ -248,7 +248,11 @@ void multiflight_creation_and_property_edit() {
     ready(window); capture(control<QWidget>(window, "architecturalPlanCanvas"), "stair-multiflight-plan.png");
 }
 void hosted_upgrade_geometry_failure_and_roundtrip() {
-    MainWindow window(fixture(true)); prepare(window); const auto before = window.document().snapshot();
+    auto document = fixture(true);
+    auto shorthand = document->snapshot().entities().at("legacy");
+    shorthand.properties.erase("property_id"); shorthand.properties.erase("building_id");
+    document->apply(ApplyEntityChanges{document->revision(), {EntityChange::upsert(shorthand)}, {}, "legacy authored organization shorthand"});
+    MainWindow window(document); prepare(window); const auto before = window.document().snapshot();
     BuildingObjectDialog creator(before, std::nullopt, true);
     form(creator, "railing", "stair_flight_railing");
     choose(control<QComboBox>(creator, "buildingObjectStairHost"), "legacy");
@@ -278,6 +282,7 @@ void hosted_upgrade_geometry_failure_and_roundtrip() {
     const auto upgraded = created.entities().at("legacy");
     auto expected = old_host;
     for (const auto* key : {"version", "form", "flights", "landings"}) expected.properties[key] = upgraded.properties.at(key);
+    expected.properties["property_id"] = "p"; expected.properties["building_id"] = "b";
     require(upgraded == expected, "v1 upgrade must preserve every old field, unknown nested field and quantity receipt");
     const auto old_layout = derive_stair_layout(stair(before, "legacy")), layout = derive_stair_layout(stair(created, "legacy"));
     for (std::size_t i = 0; i < old_layout.flights.front().treads.size(); ++i) for (std::size_t corner = 0; corner < 4; ++corner) {
@@ -482,6 +487,204 @@ void clipboard_lifecycle() {
             "standalone rail paste must retain exact current host/flight and opaque anchor metadata");
     atomic(window, before_rail_paste, rail_pasted);
 }
+
+void landing_guard_full_controller_lifecycle() {
+    auto document = fixture(true, true);
+    const auto legacy_source = document->snapshot();
+    auto canonical_host = legacy_source.entities().at("legacy");
+    auto topology = stair(legacy_source, "legacy");
+    topology.level_connection.reset();
+    topology.flights = {{"landing-lower", 4}, {"landing-upper", 6}};
+    topology.landings = {{"landing-turn", 1.2, 0.15, StairTurn::left_quarter, 0}};
+    canonical_host.properties.update(encode_stair_properties(topology));
+    canonical_host.properties.erase("level_connection");
+    canonical_host.properties["landings"][0]["vendor"] = {{"literal", "legacy"}};
+    document->apply(ApplyEntityChanges{legacy_source.revision(), {EntityChange::upsert(canonical_host)}, {}, "canonical landing fixture"});
+    MainWindow window(document); prepare(window);
+    std::array<std::string, 2> rails;
+    for (std::size_t role = 0; role < rails.size(); ++role) {
+        const auto before = window.document().snapshot();
+        modal(window, "createBuildingObject", [&](BuildingObjectDialog& dialog) {
+            form(dialog, "railing", "stair_landing_railing");
+            choose(control<QComboBox>(dialog, "buildingObjectStairHost"), "legacy");
+            control<QComboBox>(dialog, "buildingObjectStairHostLanding").setCurrentIndex(static_cast<int>(role));
+            field(dialog, "buildingObjectPostSpacing", "800 mm");
+            control<QPushButton>(dialog, "buildingObjectRailingPreview").click();
+            require(dialog.lastError().isEmpty(), "actual landing preview must validate its current native host");
+            capture(dialog, role == 0 ? "stair-connecting-landing-dialog.png" : "stair-top-landing-dialog.png");
+            control<QPushButton>(dialog, "buildingObjectSubmit").click();
+            require(dialog.result() == QDialog::Accepted, "actual modal must submit each landing role");
+        });
+        const auto after = window.document().snapshot(); rails[role] = added_id(before, after, "railing");
+        const auto rail = decode_railing_properties(rails[role], after.entities().at(rails[role]).properties);
+        require(rail.landing_host && rail.landing_host->role == (role == 0 ? StairLandingRole::connecting : StairLandingRole::top),
+                "controller must retain the selected landing role");
+        for (const auto* key : {"property_id", "building_id", "floor_id", "layer_id"})
+            require(after.entities().at(rails[role]).properties.at(key) == canonical_host.properties.at(key),
+                    "landing guard must inherit its host organization");
+        const auto phases = ModelPhases::from_json(after.entities().at("phases").properties.at("model"));
+        require(phases.state(std::nullopt).at(rails[role]) == ModelPhase::existing &&
+                    phases.state(std::optional<std::string>{"remove"}).at(rails[role]) == ModelPhase::demolished,
+                "landing guard must mirror all host phase alternatives");
+        atomic(window, before, after, 54);
+        (void)actual_plan(window, rails[role]);
+        require(!geometry(window).solids.at(rails[role]).shape.IsNull(), "each landing role must reach actual 3D geometry");
+    }
+    auto source = window.document().snapshot();
+    auto decorated = source.entities().at(rails[0]);
+    decorated.properties["host"]["future_anchor"] = {{"literal", "legacy"}, {"opaque", 7}};
+    decorated.extensions["vendor"] = "landing guard";
+    window.document().apply(ApplyEntityChanges{source.revision(), {EntityChange::upsert(decorated)}, {}, "opaque landing metadata"});
+    require(window.selectEntity(QString::fromStdString(rails[0])), "select actual landing guard for property edit");
+    source = window.document().snapshot(); const auto spacing = source.entities().at(rails[0]).properties.at("quantity_entries").at("/post_spacing_m");
+    modal(window, "editBuildingObject", [&](BuildingObjectDialog& dialog) {
+        field(dialog, "buildingObjectHeight", "1000 mm"); control<QPushButton>(dialog, "buildingObjectSubmit").click();
+        require(dialog.result() == QDialog::Accepted, "actual landing guard edit must accept");
+    });
+    auto after = window.document().snapshot();
+    require(after.entities().at(rails[0]).properties.at("host") == source.entities().at(rails[0]).properties.at("host") &&
+                after.entities().at(rails[0]).properties.at("quantity_entries").at("/post_spacing_m") == spacing,
+            "controller property edit must preserve exact landing witness metadata and unchanged receipt");
+    atomic(window, source, after, 54);
+    const auto before_transform = window.document().snapshot();
+    const auto old_bounds = bounds(geometry(window).solids.at(rails[0]).shape);
+    require(window.selectEntity("legacy") && window.transformSelectedArchitecturalObject("0", "2 m", "3 m", "0 m", "1", false),
+            "host translation must move both landing roles");
+    after = window.document().snapshot();
+    for (const auto& id : rails) require(after.entities().at(id) == before_transform.entities().at(id),
+            "host translation must retain exact authored landing attachments");
+    const auto moved_bounds = bounds(geometry(window).solids.at(rails[0]).shape);
+    for (std::size_t i = 0; i < old_bounds.size(); ++i) require_near(moved_bounds[i], old_bounds[i] + (i % 3 == 0 ? 2 : i % 3 == 1 ? 3 : 0));
+    atomic(window, before_transform, after, 54);
+    source = window.document().snapshot();
+    require(window.selectEntity("legacy") && window.transformSelectedArchitecturalObject("0", "0 m", "0 m", "0 m", "1.5", true),
+            "host graph clone with scaling must include landing guards");
+    after = window.document().snapshot(); const auto clone_host = added_id(source, after, "stair");
+    std::vector<std::string> clone_rails;
+    const auto cloned_stair = stair(after, clone_host);
+    for (const auto& [id, entity] : after.entities()) if (entity.type == "railing" && !source.entities().contains(id)) {
+        const auto rail = decode_railing_properties(id, entity.properties);
+        require(rail.landing_host && rail.landing_host->stair_id == clone_host &&
+                    rail.landing_host->incoming_flight_id == (rail.landing_host->role == StairLandingRole::top ? cloned_stair.flights.back().id : cloned_stair.flights.front().id),
+                "cloned landing guard must remap its stable stair and incoming flight witnesses");
+        if (rail.landing_host->role == StairLandingRole::connecting)
+            require(rail.landing_host->landing_id == cloned_stair.landings.front().id &&
+                        rail.landing_host->outgoing_flight_id == cloned_stair.flights.back().id &&
+                        entity.properties.at("host").at("future_anchor") == source.entities().at(rails[0]).properties.at("host").at("future_anchor"),
+                    "connecting clone must remap only typed child IDs while retaining opaque anchor content");
+        const auto& old = source.entities().at(rail.landing_host->role == StairLandingRole::top ? rails[1] : rails[0]);
+        require_near(rail.height, old.properties.at("height_m").get<double>() * 1.5);
+        require_near(rail.thickness, old.properties.at("thickness_m").get<double>() * 1.5);
+        require_near(rail.post_spacing, old.properties.at("post_spacing_m").get<double>() * 1.5);
+        require(entity.properties.at("host").at("start_fraction") == old.properties.at("host").at("start_fraction") &&
+                    entity.properties.at("host").at("end_fraction") == old.properties.at("host").at("end_fraction"),
+                "scaled clone must preserve authored edge coverage percentages");
+        clone_rails.push_back(id); (void)actual_plan(window, id);
+    }
+    require(clone_rails.size() == 2, "host graph clone must retain both landing roles"); atomic(window, source, after, 54);
+    require(window.selectEntity(QString::fromStdString(clone_host)) && window.copySelection(), "copy cloned landing guard graph");
+    source = window.document().snapshot(); require(window.pasteSelection(), "actual paste must remap complete landing graph");
+    after = window.document().snapshot(); const auto paste_host = added_id(source, after, "stair");
+    const auto pasted_stair = stair(after, paste_host); std::size_t pasted_rails{};
+    for (const auto& [id, entity] : after.entities()) if (entity.type == "railing" && !source.entities().contains(id)) {
+        const auto rail = decode_railing_properties(id, entity.properties); ++pasted_rails;
+        require(rail.landing_host && rail.landing_host->stair_id == paste_host &&
+                    rail.landing_host->incoming_flight_id == (rail.landing_host->role == StairLandingRole::top ? pasted_stair.flights.back().id : pasted_stair.flights.front().id),
+                "pasted landing guard must point to its freshly allocated stair topology");
+        if (rail.landing_host->role == StairLandingRole::connecting)
+            require(rail.landing_host->landing_id == pasted_stair.landings.front().id &&
+                        rail.landing_host->outgoing_flight_id == pasted_stair.flights.back().id,
+                    "paste must remap connecting landing and both ordered flight witnesses");
+        (void)actual_plan(window, id);
+    }
+    require(pasted_rails == 2, "pasted host graph must contain both dependent landing roles"); atomic(window, source, after, 54);
+    QTemporaryDir directory; require(directory.isValid(), "isolated landing guard archive directory");
+    const auto path = directory.filePath("landing-guards.bldproj"); const auto saved = window.document().snapshot();
+    require(window.saveProjectAs(path) && window.createNewProject(), "save complete v3 landing lifecycle and release writer lease");
+    MainWindow reopened; prepare(reopened, false); require(reopened.openProject(path) && reopened.document().is_editable(), "v3 landing archive must reopen editable");
+    const auto restored = reopened.document().snapshot();
+    require(restored.entities() == saved.entities() && restored.assets() == saved.assets() && restored.history().size() == saved.history().size() &&
+                ProjectStore::required_format_version(restored) == 54,
+            "save/reopen must preserve exact v3 landing graph and retained history floor");
+    require(reopened.undoCommand() && reopened.document().snapshot().entities() == source.entities() && reopened.redoCommand() &&
+                reopened.document().snapshot().entities() == saved.entities(), "reopened landing clipboard command must undo and redo exactly");
+    (void)geometry(reopened);
+    for (const auto& id : rails) (void)actual_plan(reopened, id);
+}
+void authored_stair_host_context_lifecycle() {
+    for (const bool legacy_shorthand : {false, true}) {
+        MainWindow window(fixture()); prepare(window);
+        const auto initial = window.document().snapshot();
+        modal(window, "createBuildingObject", [&](BuildingObjectDialog& dialog) {
+            form(dialog, "stair", "multi_flight_stair");
+            control<QTableWidget>(dialog, "buildingObjectStairFlights").item(0, 0)->setText("5");
+            control<QPushButton>(dialog, "buildingObjectAddStairFlight").click();
+            control<QTableWidget>(dialog, "buildingObjectStairFlights").item(1, 0)->setText("7");
+            field(dialog, "buildingObjectTotalRise", "3 m");
+            field(dialog, "buildingObjectGoing", "300 mm");
+            control<QCheckBox>(dialog, "buildingObjectLandingEnabled").setChecked(true);
+            field(dialog, "buildingObjectLandingDepth", "1200 mm");
+            control<QPushButton>(dialog, "buildingObjectSubmit").click();
+            require(dialog.result() == QDialog::Accepted, "MainWindow authored v2 stair must submit");
+        });
+        const auto authored = window.document().snapshot(); const auto host_id = only_id(authored, "stair");
+        require(stair(authored, host_id).flights.size() == 2 && stair(authored, host_id).landings.size() == 1,
+                "controller regression must author a v2 stair with flight and landing anchors");
+        for (const auto& [key, value] : std::array<std::pair<const char*, const char*>, 4>{{
+                 {"property_id", "p"}, {"building_id", "b"}, {"floor_id", "f"}, {"layer_id", "l"}}})
+            require(authored.entities().at(host_id).properties.at(key) == value,
+                    "new MainWindow stair must persist complete resolved organization");
+        atomic(window, initial, authored, 51);
+        if (legacy_shorthand) {
+            auto host = window.document().snapshot().entities().at(host_id);
+            host.properties.erase("property_id"); host.properties.erase("building_id");
+            host.extensions["vendor"] = {{"opaque", "legacy authored context"}};
+            host.properties["flights"][0]["future_child"] = {{"literal", host_id}};
+            window.document().apply(ApplyEntityChanges{window.document().revision(), {EntityChange::upsert(host)}, {}, "v2 authored organization shorthand"});
+        }
+        std::array<std::string, 2> rails;
+        auto before_last = window.document().snapshot();
+        for (std::size_t role = 0; role < rails.size(); ++role) {
+            const auto before = window.document().snapshot(); before_last = before;
+            modal(window, "createBuildingObject", [&](BuildingObjectDialog& dialog) {
+                form(dialog, "railing", role == 0 ? "stair_flight_railing" : "stair_landing_railing");
+                choose(control<QComboBox>(dialog, "buildingObjectStairHost"), QString::fromStdString(host_id));
+                field(dialog, "buildingObjectPostSpacing", "500 mm");
+                control<QPushButton>(dialog, "buildingObjectSubmit").click();
+                require(dialog.result() == QDialog::Accepted, "authored stair flight and landing rail creator must submit");
+            });
+            const auto after = window.document().snapshot(); rails[role] = added_id(before, after, "railing");
+            auto expected_host = before.entities().at(host_id);
+            expected_host.properties["property_id"] = "p"; expected_host.properties["building_id"] = "b";
+            require(after.entities().at(host_id) == expected_host,
+                    "rail admission must only fill missing host hierarchy and retain exact geometry and opaque metadata");
+            const auto& rail = after.entities().at(rails[role]);
+            for (const auto* key : {"property_id", "building_id", "floor_id", "layer_id"})
+                require(rail.properties.at(key) == expected_host.properties.at(key),
+                        "authored stair rail must persist its host's complete organization");
+            const auto decoded = decode_railing_properties(rail.id, rail.properties);
+            require(role == 0 ? decoded.host && decoded.host->stair_id == host_id :
+                               decoded.landing_host && decoded.landing_host->stair_id == host_id,
+                    "authored rail must retain the selected typed stair anchor");
+            atomic(window, before, after, role == 0 ? 52 : 54);
+            (void)actual_plan(window, rails[role]);
+            require(!geometry(window).solids.at(rails[role]).shape.IsNull(),
+                    "authored stair flight and landing rails must prepare real native geometry");
+        }
+        QTemporaryDir directory; require(directory.isValid(), "isolated authored stair archive directory");
+        const auto path = directory.filePath("authored-stair-context.bldproj"); const auto saved = window.document().snapshot();
+        require(window.saveProjectAs(path) && window.createNewProject(), "save authored stair context and release writer lease");
+        MainWindow reopened; prepare(reopened, false);
+        require(reopened.openProject(path) && reopened.document().is_editable(), "authored stair archive must reopen editable");
+        const auto restored = reopened.document().snapshot();
+        require(restored.entities() == saved.entities() && restored.assets() == saved.assets() &&
+                    restored.history().size() == saved.history().size() && ProjectStore::required_format_version(restored) == 54,
+                "save/reopen must retain authored stair hierarchy, both rails, assets and history");
+        require(reopened.undoCommand() && reopened.document().snapshot().entities() == before_last.entities() &&
+                    reopened.redoCommand() && reopened.document().snapshot().entities() == saved.entities(),
+                "reopened authored landing rail command must undo and redo exact source maps");
+    }
+}
 void actual_modal_source_guards() {
     for (int change = 0; change < 4; ++change) {
         MainWindow window(fixture(true)); prepare(window); require(window.selectEntity("legacy"), "guard source selection");
@@ -512,7 +715,8 @@ int main(int argc, char** argv) {
     QCoreApplication::setApplicationName("Vertex-stair-lifecycle-" + QUuid::createUuid().toString(QUuid::WithoutBraces));
     try {
         multiflight_creation_and_property_edit(); hosted_upgrade_geometry_failure_and_roundtrip();
-        inactive_demolition_membership(); clipboard_lifecycle(); actual_modal_source_guards();
+        inactive_demolition_membership(); clipboard_lifecycle(); landing_guard_full_controller_lifecycle();
+        authored_stair_host_context_lifecycle(); actual_modal_source_guards();
     } catch (const std::exception& error) { std::cerr << "stair_lifecycle_desktop_tests: " << error.what() << '\n'; return 1; }
     std::cout << "Stair lifecycle desktop tests passed\n"; return 0;
 }

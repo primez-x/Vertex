@@ -84,6 +84,150 @@ class SourceClosureTests(unittest.TestCase):
         component["source_inputs"] = [self.record("assets/model.traineddata")]
         self.write_json("inventory.json", self.inventory)
 
+    def controlled_runtime_fixture(self):
+        self.write("staged/ifcopenshell/ifcopenshell_wrapper.py", b"controlled generated wrapper")
+        self.write_json("receipts/sdk.json", {"source_revision": "a" * 40})
+        self.write_json("receipts/selection.json", {"selected": "controlled"})
+        self.write("dependency-src/unit.cpp", b"preferred editable source")
+        self.write("dependency-recipe/build.cmake", b"controlled build recipe")
+        component = self.inventory["components"][0]
+        component["package"].update(name="ifcopenshell", version="0.8.5")
+        component["source_inputs"] = [self.record("staged/ifcopenshell/ifcopenshell_wrapper.py")]
+        component["package"]["source"] = {
+            "kind": "controlled-runtime", "source_revision": "a" * 40,
+            "runtime_manifest": self.record("receipts/sdk.json"),
+            "selection": self.record("receipts/selection.json"),
+            "source_paths": component["source_inputs"],
+            "corresponding_source_paths": [
+                {"path": "dependency-src", "kind": "directory",
+                 "sha256": audit.source_tree_hash(self.root, "dependency-src")},
+                {**self.record("dependency-recipe/build.cmake"), "kind": "file"}],
+            "licensing_clearance": False, "source_closure_qualified": False,
+            "ifcopenshell_version_informative_only": True}
+        self.write_json("inventory.json", self.inventory)
+
+    def test_controlled_runtime_binds_declared_sources_without_wheel_metadata(self):
+        self.controlled_runtime_fixture()
+        with mock.patch.object(audit, "cached_source", side_effect=AssertionError("wheel metadata consulted")):
+            result = self.run_audit()["components"][0]
+        self.assertEqual(result["source_status"], "exact_local_source_present")
+        self.assertEqual([row["path"] for row in result["sources"][0]["local_files"]],
+                         ["dependency-src", "dependency-recipe/build.cmake"])
+        self.assertEqual(result["provenance"]["sha256"], self.sha("receipts/sdk.json"))
+        self.assertEqual(result["sources"][0]["provenance"]["sha256"], self.sha("receipts/selection.json"))
+        self.assertNotIn("binary_archive", result)
+        self.assertNotIn("upstream_metadata", result)
+        self.assertFalse(result["corresponding_source_qualified"])
+        self.assertFalse(result["licensing_clearance"])
+        self.assertIn("controlled_runtime_transitive_source_closure_not_qualified", result["remaining"])
+
+    def test_controlled_runtime_empty_or_missing_sources_remain_missing(self):
+        self.controlled_runtime_fixture()
+        source = self.inventory["components"][0]["package"]["source"]
+        for entries in ([], [{**self.record("dependency-recipe/build.cmake"),
+                              "path": "dependency-recipe/missing.cmake", "kind": "file"}]):
+            with self.subTest(entries=entries):
+                source["corresponding_source_paths"] = entries
+                self.write_json("inventory.json", self.inventory)
+                result = self.run_audit()["components"][0]
+                self.assertEqual(result["source_status"], "missing_source")
+                self.assertEqual(result["sources"][0]["local_files"], [])
+                self.assertIn("exact_corresponding_source_missing", result["remaining"])
+                if not entries:
+                    self.assertIn("controlled_runtime_corresponding_source_paths_not_declared", result["remaining"])
+
+    def test_controlled_runtime_changed_or_undeclared_sources_remain_missing(self):
+        self.controlled_runtime_fixture()
+        source = self.inventory["components"][0]["package"]["source"]
+        self.write("dependency-src/unit.cpp", b"changed preferred source")
+        self.write("dependency-recipe/build.cmake", b"changed recipe")
+        result = self.run_audit()["components"][0]
+        self.assertEqual(result["source_status"], "missing_source")
+        self.assertEqual(result["sources"][0]["missing_or_changed_paths"],
+                         ["dependency-src", "dependency-recipe/build.cmake"])
+        del source["corresponding_source_paths"]
+        self.write_json("inventory.json", self.inventory)
+        result = self.run_audit()["components"][0]
+        self.assertEqual(result["sources"][0]["local_files"], [])
+        self.assertIn("controlled_runtime_corresponding_source_paths_not_declared", result["remaining"])
+
+    def test_controlled_runtime_uses_frozen_stage_mapping_and_live_dependency_sources(self):
+        self.controlled_runtime_fixture()
+        self.frozen_bundle()
+        self.write("staged/ifcopenshell/ifcopenshell_wrapper.py", b"later staged payload")
+        result = self.run_audit(bundle_root="bundle")["components"][0]
+        self.assertEqual(result["assets"][0]["path"], "bundle/assets/asset-0.bin")
+        self.assertEqual(result["sources"][0]["local_files"][0]["path"], "dependency-src")
+        self.assertEqual(result["source_status"], "exact_local_source_present")
+
+    def test_controlled_runtime_rechecks_all_provenance_and_source_inputs(self):
+        for changed in ("receipts/sdk.json", "receipts/selection.json",
+                        "staged/ifcopenshell/ifcopenshell_wrapper.py",
+                        "dependency-src/unit.cpp", "dependency-recipe/build.cmake"):
+            with self.subTest(changed=changed):
+                self.controlled_runtime_fixture()
+                original = audit.file_record
+                fired = False
+                def drift(*args, **kwargs):
+                    nonlocal fired
+                    result = original(*args, **kwargs)
+                    if args[1] == "dependency-recipe/build.cmake" and not fired:
+                        fired = True
+                        self.write(changed, b"late changed input")
+                    return result
+                with mock.patch.object(audit, "file_record", side_effect=drift):
+                    with self.assertRaisesRegex(ValueError, "hash"):
+                        self.run_audit()
+
+    def test_controlled_runtime_rejects_unsafe_receipts_and_source_tree_limits(self):
+        self.controlled_runtime_fixture()
+        source = self.inventory["components"][0]["package"]["source"]
+        original = copy.deepcopy(source)
+        for field in ("runtime_manifest", "selection", "source_paths", "corresponding_source_paths"):
+            with self.subTest(field=field):
+                source.clear()
+                source.update(copy.deepcopy(original))
+                row = source[field][0] if isinstance(source[field], list) else source[field]
+                row["path"] = "../private"
+                self.write_json("inventory.json", self.inventory)
+                with self.assertRaises(ValueError):
+                    self.run_audit()
+        source.clear()
+        source.update(original)
+        self.write("dependency-src/second.cpp", b"second source")
+        source["corresponding_source_paths"][0]["sha256"] = audit.source_tree_hash(self.root, "dependency-src")
+        source["corresponding_source_paths"] = source["corresponding_source_paths"][:1]
+        self.write_json("inventory.json", self.inventory)
+        with mock.patch.object(audit, "MAX_FILES", 1):
+            with self.assertRaisesRegex(ValueError, "file count"):
+                self.run_audit()
+
+    def test_controlled_runtime_links_and_stale_receipt_bytes_fail_closed(self):
+        self.controlled_runtime_fixture()
+        original_lstat = Path.lstat
+        for name in ("receipts/sdk.json", "receipts/selection.json",
+                     "staged/ifcopenshell/ifcopenshell_wrapper.py",
+                     "dependency-src", "dependency-src/unit.cpp", "dependency-recipe/build.cmake"):
+            with self.subTest(link=name):
+                def reparse(path, *args, **kwargs):
+                    if path == self.root / name:
+                        return SimpleNamespace(st_mode=stat.S_IFLNK, st_file_attributes=0)
+                    return original_lstat(path, *args, **kwargs)
+                with mock.patch.object(Path, "lstat", reparse):
+                    with self.assertRaisesRegex(ValueError, "link|reparse"):
+                        self.run_audit()
+        source = self.inventory["components"][0]["package"]["source"]
+        for field in ("runtime_manifest", "selection", "source_paths", "corresponding_source_paths"):
+            with self.subTest(bytes=field):
+                original = copy.deepcopy(source)
+                row = source[field][-1] if isinstance(source[field], list) else source[field]
+                row["bytes"] = 0
+                self.write_json("inventory.json", self.inventory)
+                with self.assertRaisesRegex(ValueError, "bytes"):
+                    self.run_audit()
+                source.clear()
+                source.update(original)
+
     def test_model_artifact_is_bound_without_claiming_training_source(self):
         self.model_asset_fixture()
         result = self.run_audit()["components"][0]

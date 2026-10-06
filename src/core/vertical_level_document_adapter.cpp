@@ -124,7 +124,8 @@ VerticalLevelEditCandidate prepare_vertical_level_edit(const DocumentSnapshot& s
             if (canonical_form(entity,"stair",2,"multi_flight_stair")) {
                 const auto effective=resolve_vertical_placement(snapshot,entity);
                 (void)make_building_shape(decode_building_entity(effective),snapshot.entities());
-            } else if (canonical_form(entity,"railing",2,"stair_flight_railing")) {
+            } else if (canonical_form(entity,"railing",2,"stair_flight_railing") ||
+                       canonical_form(entity,"railing",3,"stair_landing_railing")) {
                 (void)make_building_shape(decode_building_entity(entity),snapshot.entities());
             }
         }

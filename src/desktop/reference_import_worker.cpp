@@ -241,6 +241,12 @@ int main(int argc, char** argv) {
                 sketch::desktop::assistanceOcrApplicationRoot());
             if (std::fwrite(output.data(), 1, output.size(), stdout) != output.size()) return 5;
             return std::fflush(stdout) == 0 ? 0 : 5;
+        } catch (const sketch::desktop::AssistanceOcrFailure& error) {
+            // The broker admits only this bounded failure grammar as diagnostics;
+            // failed output is never a candidate OCR reply.
+            std::fprintf(stderr, "VERTEX_OCR_FAILURE_V1:%s:%u\n", error.stage_code(), error.os_error());
+            std::fflush(stderr);
+            return 4;
         } catch (...) { return 4; }
     }
     if (args[1] == "pinc") {
@@ -293,6 +299,7 @@ int main(int argc, char** argv) {
     }
     if (args[1] == "dxf" || args[1] == "ifc") {
         if (page != 0) return 2;
+        const char* stage = "core";
         try {
             sketch::ProjectImportCandidate candidate;
             const std::string_view bytes(input.constData(), static_cast<std::size_t>(input.size()));
@@ -312,10 +319,13 @@ int main(int argc, char** argv) {
                 } else {
                     const auto runtime = std::filesystem::path(
                         QCoreApplication::applicationDirPath().toStdWString()) / "cad-runtime";
+                    stage = "library";
                     const auto normalized = sketch::desktop::call_cad_library(runtime, "normalize_dxf", bytes);
                     const auto text = sketch::project_import_detail::text(
                         normalized.at("normalized_text"), false, 16 * 1024 * 1024);
+                    stage = "core";
                     copy_result(sketch::import_project_dxf(text));
+                    stage = "merge";
                     append_library_diagnostics(candidate, normalized);
                     candidate.source_retention_required = true;
                 }
@@ -324,15 +334,33 @@ int main(int argc, char** argv) {
                 copy_result(sketch::import_project_ifc(bytes));
                 const auto runtime = std::filesystem::path(
                     QCoreApplication::applicationDirPath().toStdWString()) / "cad-runtime";
-                merge_ifc_sections(candidate,
-                    sketch::desktop::call_cad_library(runtime, "project_ifc", bytes));
+                stage = "merge";
+                std::vector<std::uint64_t> admitted;
+                for (const auto& entity : candidate.entities) {
+                    if (entity.type != "stair" && entity.type != "railing") continue;
+                    const auto& proof = entity.extensions.at("ifc_source");
+                    const auto& id = proof.at("record_id");
+                    if (!id.is_number_integer() || id <= 0 ||
+                        proof.at("record_type") != (entity.type == "stair" ? "IFCSTAIR" : "IFCRAILING"))
+                        throw std::invalid_argument("Invalid admitted native IFC product identity");
+                    admitted.push_back(id.get<std::uint64_t>());
+                }
+                stage = "library";
+                const auto result = sketch::desktop::call_cad_library(runtime, "project_ifc", bytes, admitted);
+                stage = "merge";
+                merge_ifc_sections(candidate, result);
             }
             // Serialize fully before writing: malformed input and candidate
             // validation failures never publish a partial result.
+            stage = "candidate";
             const auto output = sketch::encode_project_import_candidate(candidate);
             if (std::fwrite(output.data(), 1, output.size(), stdout) != output.size()) return 5;
             return std::fflush(stdout) == 0 ? 0 : 5;
         } catch (...) {
+            // Only a fixed stage crosses the worker boundary; source content
+            // and arbitrary library/exception text must never leave this catch.
+            std::fprintf(stderr, "VERTEX_PROJECT_FAILURE_V1:%s\n", stage);
+            std::fflush(stderr);
             return 4;
         }
     }

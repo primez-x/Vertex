@@ -505,6 +505,14 @@ def prepare(root: pathlib.Path, evidence_path: pathlib.Path, output: pathlib.Pat
     validate_pe(extension)
     wrapper = build / "build/ifcwrap/ifcopenshell_wrapper.py"
     wrapper_record = digest(wrapper)
+    wrapper_bound = "generated_wrapper" in evidence
+    if wrapper_bound:
+        original_wrapper = evidence["generated_wrapper"]
+        if (not isinstance(original_wrapper, dict) or set(original_wrapper) != {"path", "bytes", "sha256"} or
+                not same_path(original_wrapper["path"], wrapper) or
+                checked_record(original_wrapper) != wrapper_record):
+            raise ValueError("Generated wrapper differs from the exact original build receipt")
+        verify_file(wrapper, original_wrapper)
     table = source_table(root / SOURCE, preparation["source"]["files"])
     plan = []
 
@@ -537,7 +545,7 @@ def prepare(root: pathlib.Path, evidence_path: pathlib.Path, output: pathlib.Pat
             {"kind": "locked-source", **lock["source"], "path": name})
     add("ifcopenshell/" + extension.name, extension, outputs[0], {"kind": "bound-build-output", "path": str(extension)})
     add("ifcopenshell/ifcopenshell_wrapper.py", wrapper, wrapper_record,
-        {"kind": "generated-build-output", "path": str(wrapper), "bound_in_original_build_evidence": False})
+        {"kind": "generated-build-output", "path": str(wrapper), "bound_in_original_build_evidence": wrapper_bound})
     for name, path, item in (("source-lock.json", lock_path, inputs[lock_path]),
                              ("source-preparation.json", preparation_path, inputs[preparation_path]),
                              ("build-recipe.ps1", effective_recipe, inputs[recipe_path]),
@@ -546,12 +554,15 @@ def prepare(root: pathlib.Path, evidence_path: pathlib.Path, output: pathlib.Pat
     for name, path in zip(("source-derivation.json", "source-derivation-verifier.py",
                            "opaque-coordinate-output.i"), derivation_inputs):
         add("provenance/" + name, path, inputs[path], {"kind": "local-evidence", "path": str(path)})
+    wrapper_notice = ("The generated wrapper is bound by the original build evidence and was reverified at staging.\n"
+                      if wrapper_bound else
+                      "The generated wrapper was hashed at staging, not in build evidence.\n")
     notice = ("Unqualified local IFC Python candidate; no wheel or PyPI archive provenance is claimed.\n"
               "Contains locked upstream Python package source, its selected mvd/simple_spf submodules,\n"
               "the generated wrapper and the bound Release extension. Original licenses are preserved.\n"
               "C++ corresponding source and dependency license closure are NOT delivered or qualified\n"
               "by this stage. Native load, dependency closure, functionality and source closure require\n"
-              "separate verification. The generated wrapper was hashed at staging, not in build evidence.\n")
+              "separate verification. " + wrapper_notice)
     notice_bytes = notice.encode("utf-8")
     result = {"schema_version": 1, "purpose": "isolated-source-built-python-import-candidate",
               "build_qualified": False, "source_closure_qualified": False, "product_runtime_replaced": False,
@@ -596,6 +607,7 @@ def prepare(root: pathlib.Path, evidence_path: pathlib.Path, output: pathlib.Pat
     result["files"].sort(key=lambda item: item["path"])
     if derivation_inputs:
         validate_build_source(root, build, evidence, inputs, by_name)
+    verify_file(wrapper, wrapper_record)
     validate_inventory(output, result["files"])
     with (output / "candidate-manifest.json").open("x", encoding="utf-8", newline="\n") as stream:
         stream.write(json.dumps(result, indent=2) + "\n")

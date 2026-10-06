@@ -322,9 +322,40 @@ void retired_owner_opaque_bridge() {
     ledger.validate_transition(fresh,reordered); ledger.reserve_state(reordered);
     ledger.reserve_state(original); ledger.reserve_state(known_v1); ledger.reserve_state(fresh);
 }
+void landing_admission_and_future_forms() {
+    auto original=fixture();
+    Railing rail{"rail",{},0,0,.9,.04,.3};
+    rail.landing_host=StairLandingRailingHost{"stair",StairLandingRole::connecting,"turn","lower","upper",0,0,1};
+    original.at("rail").properties=encode_railing_properties(rail);context(original.at("rail"));
+    validate_stair_attachment_state(original);
+    for(const char* key:{"incoming_flight_id","outgoing_flight_id","landing_id"}) {
+        auto m=original;m.at("rail").properties["host"][key]="missing";
+        const auto before=m;reject([&]{validate_stair_attachment_state(m);});require(m==before,"landing refusal mutated original map");
+    }
+    auto m=original;std::swap(m.at("stair").properties["flights"][0],m.at("stair").properties["flights"][1]);
+    reject([&]{validate_stair_attachment_state(m);});
+    // An explicit atomic rehost is admitted against the new ordered topology.
+    m.at("rail").properties["host"]["incoming_flight_id"]="upper";
+    m.at("rail").properties["host"]["outgoing_flight_id"]="lower";validate_stair_attachment_state(m);
+    m=original;m.at("rail").properties["host"]["edge_index"]=3;reject([&]{validate_stair_attachment_state(m);});
+    m=original;m.at("rail").properties["host"]["edge_index"]=2;reject([&]{validate_stair_attachment_state(m);});
+    m=original;m.at("rail").properties["version"]=2;reject([&]{validate_stair_attachment_state(m);});
+    m=original;m.at("rail").properties["host"].erase("role");reject([&]{validate_stair_attachment_state(m);});
+    m=original;m.at("rail").properties["version"]=4;m.at("rail").properties["host"]="opaque future";
+    m.erase("stair");validate_stair_attachment_state(m);
+    for(const char* form:{"stair_flight_railing","straight_railing","unknown_railing"}) {
+        m=original;m.at("rail").properties={{"form",form},{"version",3},{"host","opaque"}};
+        m.erase("stair");validate_stair_attachment_state(m);
+    }
+    m=original;m.at("stair").properties["version"]=3;reject([&]{validate_stair_attachment_state(m);});
+    m.erase("rail");m.at("stair").properties["flights"]="opaque v3";validate_stair_attachment_state(m);
+    m=original;m.at("stair").properties["base_position_m"]={3,-2,7};m.at("stair").properties["orientation_rad"]=.4;
+    m.at("stair").properties["going_m"]=.45;m.at("stair").properties["width_m"]=1.1;
+    validate_stair_attachment_state(m);
+}
 } // namespace
 int main() {
-    try { attachment_failures(); compatibility(); phases(); levels(); identities(); unrelated_history_and_identity_only_work(); incremental_ledger(); retired_owner_opaque_bridge(); }
+    try { attachment_failures(); compatibility(); phases(); levels(); identities(); unrelated_history_and_identity_only_work(); incremental_ledger(); retired_owner_opaque_bridge(); landing_admission_and_future_forms(); }
     catch(const std::exception& e) { std::cerr<<e.what()<<'\n'; return 1; }
     std::cout<<"stair attachment and identity checks passed\n"; return 0;
 }

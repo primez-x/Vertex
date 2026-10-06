@@ -139,7 +139,7 @@ double building_frame(const BuildingObject& object) {
 
 Entity resize_building(const Entity& original, const Resize& resize) {
     auto object = decode_building_entity(original);
-    if (const auto* railing=std::get_if<Railing>(&object); railing && railing->host)
+    if (const auto* railing=std::get_if<Railing>(&object); railing && (railing->host || railing->landing_host))
         throw std::invalid_argument("Hosted railing plan dimensions follow its stair; resize the host stair instead");
     if (const auto* stair=std::get_if<StairFlight>(&object);
         stair && (stair->flights.size()>1 || !stair->landings.empty()))
@@ -459,10 +459,11 @@ ApplyEntityChanges plan_axis_resize_command(const DocumentSnapshot& source, cons
             for (const auto& [id,entity] : preview.entities()) {
                 const auto& p=entity.properties;
                 if (entity.type!="railing" || !p.is_object() || !p.contains("version") ||
-                    !p.at("version").is_number_integer() || p.at("version")!=2 ||
-                    !p.contains("form") || p.at("form")!="stair_flight_railing") continue;
+                    !p.at("version").is_number_integer() || !p.contains("form") ||
+                    !((p.at("version")==2 && p.at("form")=="stair_flight_railing") ||
+                      (p.at("version")==3 && p.at("form")=="stair_landing_railing"))) continue;
                 const auto rail=decode_railing_properties(id,entity.properties);
-                if (rail.host->stair_id==entity_id)
+                if ((rail.host?rail.host->stair_id:rail.landing_host->stair_id)==entity_id)
                     (void)make_building_shape(rail,preview.entities());
             }
         }

@@ -1,6 +1,7 @@
 #include "sketch/desktop/main_window.hpp"
 #include "sketch/desktop/application_platform.hpp"
 #include "sketch/boundary_dimension.hpp"
+#include "sketch/document_digest.hpp"
 #include "sketch/measurement_linework.hpp"
 #include "sketch/constraint_authoring.hpp"
 #include "sketch/wall_measurement.hpp"
@@ -694,6 +695,177 @@ void mixed_wall_anchor_move_keeps_whole_transaction_admission() {
     exact_history(window,before,after);
 }
 
+void actual_creator_physical_wall_sources_and_placement() {
+    MainWindow window(fixture());prepare(window);
+    const auto boundary=window.createBoundary({{{30,0},{34,0},0},{{34,0},{34,3},0},
+        {{34,3},{30,3},0},{{30,3},{30,0},0}});
+    const auto straight=window.createStraightWall({15,0},{20,0});
+    const auto curved=window.createCurvedWall({22,0},{24,0},"180 deg");
+    require(!boundary.isEmpty()&&!straight.isEmpty()&&!curved.isEmpty(),"creator fixture requires actual boundary and wall sources");
+    for(const auto& wall:{straight,curved})
+        require(window.selectEntity(wall)&&window.editSelectedThickness("200 mm"),"creator wall fixture must have explicit physical thickness");
+    require(window.selectEntity(straight),"select straight wall as actual creator default");
+    creator(window,[&](QDialog& dialog) {
+        auto& owner=control<QComboBox>(dialog,"dimensionSourceBoundary");
+        auto& kind=control<QComboBox>(dialog,"dimensionCreateKind");
+        auto& first=control<QComboBox>(dialog,"dimensionFirstSegment");
+        auto& second=control<QComboBox>(dialog,"dimensionSecondSegment");
+        auto& vertex=control<QComboBox>(dialog,"dimensionVertex");
+        auto& automatic=control<QCheckBox>(dialog,"dimensionAutomaticPlacement");
+        auto& x=control<QLineEdit>(dialog,"dimensionCreateX");
+        auto& y=control<QLineEdit>(dialog,"dimensionCreateY");
+        auto& add=control<QPushButton>(dialog,"addLengthDimension");
+        const auto enabled=[&](const QString& name) {
+            const auto index=kind.findData(name);
+            return index>=0&&(kind.model()->flags(kind.model()->index(index,0))&Qt::ItemIsEnabled);
+        };
+        const auto wall_controls=[&] {
+            require(kind.currentData()==QStringLiteral("length")&&enabled("length")&&!enabled("chain")&&
+                !enabled("angle")&&!enabled("area")&&first.isHidden()&&second.isHidden()&&vertex.isHidden()&&
+                first.count()==0&&second.count()==0&&vertex.count()==0&&add.isVisible()&&add.isEnabled()&&
+                control<QPushButton>(dialog,"addAngleDimension").isHidden()&&
+                control<QPushButton>(dialog,"addAreaDimension").isHidden(),
+                "wall creator must expose axis length only without fabricated edge or vertex controls");
+        };
+        require(owner.currentData()==straight,"real creator must default to selected physical wall");
+        for(const auto& wall:{straight,curved}) {
+            choose(owner,wall);wall_controls();
+            for(const bool automatic_placement:{true,false}) {
+                automatic.setChecked(automatic_placement);QApplication::processEvents();
+                require(!automatic.isHidden()&&x.isHidden()==automatic_placement&&y.isHidden()==automatic_placement,
+                    "wall creator must expose coordinates only for manual placement");
+                x.setText("27.25");y.setText("-3.5");
+                const auto before=window.document().snapshot();
+                const auto old_dimensions=dimensions(before,wall.toStdString());
+                add.click();
+                const auto after=window.document().snapshot();const auto items=dimensions(after,wall.toStdString());
+                if(items.size()!=old_dimensions.size()+1)
+                    throw std::runtime_error("creator failed to add physical wall dimension: "+
+                        control<QLabel>(dialog,"dimensionCreatorStatus").text().toStdString());
+                const auto added=std::find_if(items.begin(),items.end(),[&](const auto& item){return !before.entities().contains(item.id);});
+                require(added!=items.end()&&after.revision()==before.revision()+1&&
+                    after.history().size()==before.history().size()+1&&after.entities().size()==before.entities().size()+1&&
+                    after.assets()==before.assets(),"creator wall dimension must add one entity in one atomic history command");
+                for(const auto& [id,entity]:before.entities())
+                    require(after.entities().at(id)==entity,"creator wall dimension must preserve every source entity");
+                const auto& entity=after.entities().at(added->id);
+                require(added->kind==BoundaryDimensionKind::wall_axis_length&&added->segment_id.empty()&&
+                    entity.properties.at("dimension_version")==4&&
+                    entity.properties.at("target")==Json{{"entity_id",wall.toStdString()}}&&
+                    entity.properties.at("floor_id")=="f"&&entity.properties.at("layer_id")=="l",
+                    "creator wall dimension must persist canonical owner-only v4 semantics and source organization");
+                require_near(added->resolve(after).segment_length_metres,wall==straight?5.0:std::numbers::pi);
+                if(automatic_placement) {
+                    require(added->placement==BoundaryDimensionPlacement::automatic&&added->automatic_placement_version==2,
+                        "automatic wall creator must retain version two placement origin");
+                    require_near(added->text_position.x,wall==straight?17.5:23.0);
+                    require_near(added->text_position.y,wall==straight?0.35:-0.65);
+                } else {
+                    require(added->placement==BoundaryDimensionPlacement::manual&&!added->automatic_placement_version&&
+                        !entity.properties.contains("automatic_placement_version"),"manual wall creator must retain explicit manual origin");
+                    require_near(added->text_position.x,27.25);require_near(added->text_position.y,-3.5);
+                }
+            }
+        }
+        choose(owner,"open");
+        require(enabled("length")&&enabled("chain")&&enabled("angle")&&!enabled("area")&&
+            !first.isHidden()&&first.count()==2,"switching from walls must restore measured-line targets and kinds");
+        choose(kind,"angle");
+        require(!second.isHidden()&&!vertex.isHidden()&&control<QPushButton>(dialog,"addAngleDimension").isEnabled(),
+            "measured-line angle controls must recover after a wall source");
+        choose(owner,boundary);
+        require(enabled("length")&&enabled("chain")&&enabled("angle")&&enabled("area")&&first.count()==4,
+            "switching from walls must restore every ordinary boundary dimension kind");
+        choose(kind,"area");require(control<QPushButton>(dialog,"addAreaDimension").isVisible(),
+            "ordinary boundary area creation must remain available after wall selection");
+        choose(owner,curved);wall_controls();automatic.setChecked(true);
+        capture(dialog,"physical-wall-dimension-creator.png");
+    });
+    require(dimensions(window.document().snapshot(),straight.toStdString()).size()==2&&
+        dimensions(window.document().snapshot(),curved.toStdString()).size()==2,
+        "real creator must save automatic and manual dimensions independently on each wall source");
+}
+
+void physical_wall_axis_dimension_lifecycle() {
+    QTemporaryDir temporary;require(temporary.isValid(),"wall axis lifecycle needs output directory");
+    MainWindow window(fixture());prepare(window);
+    const auto straight=window.createStraightWall({15,0},{18,4});
+    const auto curved=window.createCurvedWall({22,0},{24,0},"180 deg");
+    require(!straight.isEmpty()&&!curved.isEmpty(),"wall axis dimension fixture must create actual physical sources");
+    const auto before_create=window.document().snapshot();
+    const auto straight_id=window.createLengthDimension(straight,{}, {17,3});
+    if(straight_id.isEmpty())throw std::runtime_error("create straight wall axis dimension: "+window.lastError().toStdString());
+    const auto created=window.document().snapshot();exact_history(window,before_create,created);
+    const auto& encoded=created.entities().at(straight_id.toStdString());
+    const Json expected{{"dimension_version",4},{"dimension_kind","wall_axis_length"},
+        {"target",{{"entity_id",straight.toStdString()}}},{"text_position",{17,3}},
+        {"placement_origin","manual"},{"floor_id","f"},{"layer_id","l"}};
+    require(encoded.properties==expected && encoded.type=="dimension" && !encoded.required && encoded.extensions.empty(),
+        "actual wall dimension creation must persist the canonical owner-only v4 envelope and source context");
+    require_near(dimension(created,straight_id.toStdString()).resolve(created).segment_length_metres,5);
+    require(created.entities().at(straight.toStdString())==before_create.entities().at(straight.toStdString()),
+        "wall dimension creation cannot upgrade or rewrite its physical source");
+    styled(window,straight_id,{17,3});
+    const auto curved_id=window.createLengthDimension(curved,{}, {23,-2});styled(window,curved_id,{23,-2});
+    const auto source=window.document().snapshot();
+    const auto curved_dimension=dimension(source,curved_id.toStdString());
+    require(curved_dimension.kind==BoundaryDimensionKind::wall_axis_length&&curved_dimension.segment_id.empty(),
+        "supported arc wall creation must retain physical axis semantics without synthetic boundary edges");
+    require_near(curved_dimension.resolve(source).segment_length_metres,std::numbers::pi);
+    const auto projection=[&](const QString& id,const QString& text) {
+        const auto& surface=canvas(window);
+        const auto label=std::find_if(surface.labels().begin(),surface.labels().end(),[&](const auto& value){return value.id==id;});
+        require(label!=surface.labels().end()&&label->text==text&&label->color==QColor("#713ba2")&&label->bold,
+            "real wall dimension label must render the current true axis length and persisted presentation");
+        const auto line=std::find_if(surface.entities().begin(),surface.entities().end(),[&](const auto& value){return value.id==id;});
+        require(line!=surface.entities().end()&&line->type==QStringLiteral("dimension_line")&&line->dimension_end_ticks,
+            "physical wall dimension must render a measurable overlay with endpoint ticks");
+    };
+    projection(straight_id,"5.000 m");projection(curved_id,"3.142 m");
+    const auto before_refusal=window.document().snapshot();
+    require(window.createLengthDimension(straight,"invented-edge",{0,0}).isEmpty()&&
+        window.createAreaDimension(straight,{0,0}).isEmpty()&&
+        window.createLengthDimension(curved,{}, {0,0},before_refusal.revision()-1).isEmpty()&&
+        document_snapshot_digest(window.document().snapshot())==document_snapshot_digest(before_refusal),
+        "wall source rejects edge or area semantics and stale creation without mutation");
+    require(window.selectEntity(straight),"select straight wall for actual length edit");
+    if(!window.editSelectedLength(QStringLiteral("10 m")))
+        throw std::runtime_error("edit straight wall with live axis dimension: "+window.lastError().toStdString());
+    const auto straight_changed=window.document().snapshot();
+    require(straight_changed.entities().at(straight_id.toStdString())==before_refusal.entities().at(straight_id.toStdString()),
+        "straight wall edits retain the placed dimension entity rather than a cached value");
+    require_near(dimension(straight_changed,straight_id.toStdString()).resolve(straight_changed).segment_length_metres,10);
+    projection(straight_id,"10.000 m");exact_history(window,before_refusal,straight_changed);
+    // Undo/Redo restores the entities but advances the retained history head.
+    const auto before_curve_edit=window.document().snapshot();
+    require(window.selectEntity(curved),"select supported curved wall for actual curve edit");
+    if(!window.editSelectedCurvedWall({22,0},{26,0},"180 deg",before_curve_edit.revision()))
+        throw std::runtime_error("edit curved wall with live axis dimension: "+window.lastError().toStdString());
+    const auto edited=window.document().snapshot();
+    require(edited.entities().at(curved_id.toStdString())==straight_changed.entities().at(curved_id.toStdString()),
+        "curved wall edit must preserve owner identity, placement and presentation");
+    require_near(dimension(edited,curved_id.toStdString()).resolve(edited).segment_length_metres,2*std::numbers::pi);
+    projection(curved_id,"6.283 m");exact_history(window,before_curve_edit,edited);
+    const auto svg=temporary.filePath("physical-wall-dimensions.svg");
+    require(window.exportDraftSvg(svg),"live physical wall dimensions must export through the actual SVG path");
+    QFile input(svg);require(input.open(QIODevice::ReadOnly),"wall dimension SVG must reopen");
+    QXmlStreamReader xml(input.readAll());QString svg_text;
+    while(!xml.atEnd()){xml.readNext();if(xml.isCharacters())svg_text+=xml.text().toString();}
+    require(!xml.hasError()&&svg_text.contains("10.000 m")&&svg_text.contains("6.283 m"),
+        "wall dimension output must include both live axis lengths");
+    const auto project=temporary.filePath("physical-wall-dimensions.bldproj");
+    require(window.saveProjectAs(project)&&window.createNewProject(),"wall dimension lifecycle must save and release writer ownership");
+    MainWindow reopened;prepare(reopened);
+    require(reopened.openProject(project)&&reopened.document().is_editable()&&
+        reopened.document().snapshot().entities()==edited.entities(),"physical wall dimensions must reopen editable with exact v4 entities");
+    require(reopened.selectEntity(curved)&&reopened.editSelectedCurvedWall({22,0},{24,0},"180 deg",reopened.document().revision()),
+        "reopened wall axis owner must remain editable through the native curved wall API");
+    const auto reopened_source=reopened.document().snapshot();
+    require_near(dimension(reopened_source,curved_id.toStdString()).resolve(reopened_source).segment_length_metres,std::numbers::pi);
+    require(reopened_source.entities().at(curved_id.toStdString())==edited.entities().at(curved_id.toStdString()),
+        "reopened wall edits retain dimension presentation and stable binding");
+}
+
 void transform_clipboard_output_delete_and_reopen() {
     QTemporaryDir temporary;require(temporary.isValid(),"native dimension workflow needs output directory");MainWindow window(fixture());prepare(window);
     const auto length=window.createLengthDimension("open","open:e2",{4,2});styled(window,length,{4,2});
@@ -796,6 +968,6 @@ int main(int argc,char** argv){sketch::testing::noninteractive_errors();QStandar
         saved_dimension_canvas_drag(13,true);
         mixed_complete_partial_canvas_drag(false);mixed_complete_partial_canvas_drag(true);
         mixed_complete_partial_canvas_drag(false,false);mixed_complete_partial_canvas_drag(true,false);
-        actual_creator_terminal_arc_and_revisits();connected_edit_updates_saved_values();transformed_clone_is_independent();actual_transform_preview_cancel_and_apply();mixed_canvas_move_retains_placed_dimensions();mixed_wall_anchor_move_keeps_whole_transaction_admission();automatic_placement_uses_active_workspace_scale();transform_clipboard_output_delete_and_reopen();}
+        actual_creator_terminal_arc_and_revisits();connected_edit_updates_saved_values();transformed_clone_is_independent();actual_transform_preview_cancel_and_apply();mixed_canvas_move_retains_placed_dimensions();mixed_wall_anchor_move_keeps_whole_transaction_admission();automatic_placement_uses_active_workspace_scale();actual_creator_physical_wall_sources_and_placement();physical_wall_axis_dimension_lifecycle();transform_clipboard_output_delete_and_reopen();}
     catch(const std::exception& error){std::cerr<<"measurement_linework_dimensions_desktop_tests: "<<error.what()<<'\n';return 1;}
     std::cout<<"Measured dimension desktop tests passed\n";return 0;}

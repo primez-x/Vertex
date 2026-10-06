@@ -471,6 +471,16 @@ void test_multi_flight_solids_and_hosted_posts() {
     double expected=(1.2-0.04)*0.04*0.04;
     for(const auto& post:layout.posts)expected+=0.04*0.04*(post.top.z-post.base.z);
     near(solid_volume(rail_shape),expected,1e-9,"independent sloped rail and vertical post volume");
+    rail.host.reset();rail.landing_host=StairLandingRailingHost{"multi",StairLandingRole::connecting,"return","lower","upper",0,0,1};
+    const auto landing_shape=make_hosted_railing(rail,stair);
+    valid_solid(landing_shape,"landing rail and square posts are actual solids");
+    const auto landing_layout=derive_hosted_railing_layout(rail,stair);
+    require(solid_count(landing_shape)==static_cast<int>(landing_layout.posts.size()+1),"landing rail has one solid for every post");
+    near(solid_volume(landing_shape),(1.2-.04)*.04*.04+landing_layout.posts.size()*.04*.04*.9,1e-9,"independent horizontal landing guard volume");
+    const auto landing_bounds=bounds(landing_shape);
+    near(landing_bounds.zmin,2.8,1e-7,"landing posts start at actual landing surface");
+    near(landing_bounds.zmax,3.7,1e-7,"landing guard reaches authored height");
+    rejected([&]{(void)make_railing(rail);},"landing independent native dispatch refused");
 }
 
 int main() {

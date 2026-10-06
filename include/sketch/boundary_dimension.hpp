@@ -11,7 +11,7 @@
 
 namespace sketch {
 
-enum class BoundaryDimensionFormat { supported_v1, supported_v2, supported_v3, unsupported_version };
+enum class BoundaryDimensionFormat { supported_v1, supported_v2, supported_v3, unsupported_version, supported_v4 };
 
 struct BoundaryDimensionVersion {
     BoundaryDimensionFormat format{};
@@ -24,8 +24,10 @@ enum class BoundaryDimensionPlacement { manual, automatic };
 // Placed dimensions share one persisted presentation contract while keeping
 // their analytical target explicit. Segment lengths reference one stable
 // edge or an ordered physical edge chain; angles reference two stable edges and their common vertex; areas
-// reference the complete closed boundary.
-enum class BoundaryDimensionKind { segment_length, angle, area };
+// reference the complete closed boundary. Wall axis length references only a
+// physical wall owner and measures its current straight or curved centreline.
+// It does not represent an appraisal exterior-face measurement.
+enum class BoundaryDimensionKind { segment_length, angle, area, wall_axis_length };
 
 [[nodiscard]] std::string_view boundary_dimension_kind_name(BoundaryDimensionKind kind);
 
@@ -57,6 +59,8 @@ struct BoundaryDimensionPresentation {
 
 struct BoundaryDimension {
     std::string id;
+    // Stable owner identity; v4 wall_axis_length uses the actual physical wall
+    // ID here and leaves all segment/vertex/chain fields empty.
     std::string boundary_id;
     std::string segment_id;
     Vec2 text_position;
@@ -82,7 +86,8 @@ struct BoundaryDimension {
     }
 
     // Resolves stable analytical targets from identified boundaries or replayed
-    // measured strokes. Area dimensions require an identified boundary owner.
+    // measured strokes, or a physical wall axis for wall_axis_length. Area
+    // dimensions require an identified boundary owner.
     [[nodiscard]] BoundaryDimensionResolution resolve(const Entity& boundary_entity) const;
     [[nodiscard]] BoundaryDimensionResolution resolve(
         const std::map<std::string, Entity, std::less<>>& entities) const;
@@ -90,7 +95,8 @@ struct BoundaryDimension {
 };
 
 // Unsupported future versions or dimension kinds remain opaque and retain
-// their complete source entity. Malformed known v1/v2/v3 data throws
+// their complete source entity. Only v4/wall_axis_length adds new support;
+// v4 prior kinds remain opaque. Malformed known v1/v2/v3 and typed v4 data throws
 // std::invalid_argument rather than being partially decoded.
 struct BoundaryDimensionDecodeResult {
     std::optional<BoundaryDimension> dimension;
@@ -115,6 +121,10 @@ struct BoundaryDimensionDecodeResult {
 // stable vertex IDs. This view does not confer closed-area semantics on strokes.
 // Unsupported or malformed owners throw std::invalid_argument.
 [[nodiscard]] IdentifiedBoundary resolve_dimension_geometry_owner(const Entity& entity);
+// Current supported physical wall centreline only. Reuses native wall decoding
+// and validates authored geometry/provenance; never supplies boundary/area IDs.
+// Malformed or unsupported owners throw std::invalid_argument.
+[[nodiscard]] Segment resolve_dimension_wall_axis_owner(const Entity& entity);
 // Structural retained-target admission only: verifies identified edges/vertices,
 // chains and topology without certifying current physical-room source geometry
 // or returning a quantity. Stale physical rooms may remain stored and editable.

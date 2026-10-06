@@ -16,6 +16,7 @@
 #include <QDialog>
 #include <QDir>
 #include <QLabel>
+#include <QLayout>
 #include <QListWidget>
 #include <QLineEdit>
 #include <QPushButton>
@@ -135,6 +136,108 @@ void empty(QDialog& dialog) {
     require(control<QListWidget>(dialog, "assistanceProposalList")->count() == 0 &&
         !control<QPushButton>(dialog, "assistanceAccept")->isEnabled(),
         "changed options must clear suggestions and disable acceptance");
+}
+void contour_review(const QString& directory, bool ring) {
+    MainWindow window;
+    QImage pixels(32, 32, QImage::Format_ARGB32);
+    pixels.fill(Qt::white);
+    for (int y = 3; y <= 22; ++y)
+        for (int x = 3; x <= 24; ++x)
+            if (ring ? (x == 3 || x == 24 || y == 3 || y == 22) : (x <= 8 || y >= 17))
+                pixels.setPixelColor(x, y, Qt::black);
+    const auto path = QDir(directory).filePath(ring ? "review-ring.png" : "review-concave.png");
+    require(pixels.save(path, "PNG"), "contour source pixels must save");
+    const auto id = testing::importOrSeedTrustedReferenceFixture(window, path, pixels);
+    auto named_reference = window.document().snapshot().entities().at(id.toStdString());
+    const std::string source_name = ring ? "Outlined plan" : "Concave plan";
+    named_reference.properties["name"] = source_name;
+    window.document().apply(ApplyEntityChanges{window.document().revision(),
+        {EntityChange::upsert(std::move(named_reference))}, {}, "Name the trace review source"});
+    require(window.calibrateReference(id, "0", "0", "20", "0", "1 m"),
+            "contour review source must calibrate through the real API");
+    require(window.editReferenceTransform(id, "6", "-3", "0.05", "1.7", "37", "0.65",
+                true, ring, true), "contour review must retain a nontrivial source transform");
+    window.setAssistanceEnabled(true);
+    const auto before = document_snapshot_digest(window.document().snapshot());
+    const auto proposals = window.suggestReferenceAssistance(id, AssistanceKind::edge_tracing);
+    require(proposals.size() == 1, "connected contour fixture must produce one proposal");
+    const auto& arguments = proposals.front().preview.arguments;
+    require(arguments.at("points").size() == (ring ? 4u : 6u) &&
+                arguments.at("holes").size() == (ring ? 1u : 0u),
+            "real proposal must preserve the known concavity or enclosed void");
+    QTransform source_to_model;
+    source_to_model.translate(6, -3);
+    source_to_model.rotate(37);
+    source_to_model.scale(-0.085, ring ? -0.085 : 0.085);
+    source_to_model.translate(-16, -16);
+    const std::vector<QPointF> corners = ring
+        ? std::vector<QPointF>{{3,3}, {25,3}, {25,23}, {3,23}}
+        : std::vector<QPointF>{{3,3}, {9,3}, {9,17}, {25,17}, {25,23}, {3,23}};
+    for (const auto& corner : corners) {
+        const auto expected = source_to_model.map(corner);
+        bool found = false;
+        for (const auto& point : arguments.at("points"))
+            found |= std::abs(point.at(0).get<double>() - expected.x()) < 1e-10 &&
+                     std::abs(point.at(1).get<double>() - expected.y()) < 1e-10;
+        require(found, "real contour must use independently transformed source corners");
+    }
+    drive(window, [&](QDialog& dialog) {
+        auto* kind = control<QComboBox>(dialog, "assistanceKind");
+        kind->setCurrentIndex(kind->findData(static_cast<int>(AssistanceKind::edge_tracing)));
+        choose(control<QComboBox>(dialog, "assistanceReference"), id);
+        generate(dialog);
+        dialog.layout()->activate();
+        QApplication::processEvents();
+        require(control<QListWidget>(dialog, "assistanceProposalList")->currentItem()->text()
+                    .contains(QString::fromStdString(source_name)) &&
+                control<QLabel>(dialog, "assistanceReviewDetails")->text()
+                    .contains(QString::fromStdString(source_name)),
+                "trace review must identify the selected plan by its readable source name");
+        auto* canvas = control<PlanCanvas>(dialog, "assistanceReviewCanvas");
+        require(canvas->isVisible() && canvas->references().size() == 1,
+                "contour review must visibly retain its source reference");
+        const auto& reference = canvas->references().front();
+        require(same_point(reference.position, {6,-3}) && reference.metres_per_source_unit == 0.05 &&
+                    reference.scale == 1.7 && reference.rotation_degrees == 37 &&
+                    reference.flip_horizontal && reference.flip_vertical == ring &&
+                    reference.intensity == 0.65 && reference.visible,
+                "review reference must exactly retain calibrated source placement and presentation");
+        require(reference.image.size() == pixels.size(), "review must retain source image dimensions");
+        for (int y = 0; y < pixels.height(); ++y)
+            for (int x = 0; x < pixels.width(); ++x)
+                require(reference.image.pixelColor(x,y) == pixels.pixelColor(x,y),
+                        "review must retain every selected source pixel");
+        require(canvas->entities().size() == 1 + arguments.at("holes").size(),
+                "review must contain one actual outer contour and each distinct hole boundary");
+        const auto check_contour = [&](const CanvasEntity& entity, const nlohmann::json& points) {
+            require(entity.type == "boundary" && entity.stroke_color == QColor("#1671f5") &&
+                        entity.segments.size() == points.size(),
+                    "review must show blue actual contour boundaries without a bounding-box substitute");
+            for (std::size_t i = 0; i < points.size(); ++i) {
+                const auto point = [&](std::size_t index) {
+                    return Vec2{points.at(index).at(0).get<double>(), points.at(index).at(1).get<double>()};
+                };
+                require(same_point(entity.segments[i].start, point(i)) &&
+                            same_point(entity.segments[i].end, point((i+1) % points.size())) &&
+                            entity.segments[i].sweep_radians == 0,
+                        "review segments must exactly match the proposed model contour in order");
+            }
+        };
+        check_contour(canvas->entities().front(), arguments.at("points"));
+        for (std::size_t hole = 0; hole < arguments.at("holes").size(); ++hole)
+            check_contour(canvas->entities()[hole+1], arguments.at("holes").at(hole));
+        require(document_snapshot_digest(window.document().snapshot()) == before,
+                "generating and previewing actual contours must not mutate the source");
+        const auto capture = qEnvironmentVariable("VERTEX_TEST_CAPTURE_DIR");
+        if (!capture.isEmpty()) {
+            require(QDir().mkpath(capture), "contour capture directory must exist");
+            require(dialog.grab().save(QDir(capture).filePath(ring
+                        ? "assistance-ring-contour-review.png" : "assistance-concave-contour-review.png")),
+                    "actual transformed contour dialog capture must save");
+        }
+    });
+    require(document_snapshot_digest(window.document().snapshot()) == before,
+            "Cancel after contour review must preserve the complete source document");
 }
 void label_and_command_review(const QString& directory) {
     MainWindow window;
@@ -352,6 +455,8 @@ int main(int argc, char** argv) {
         QTemporaryDir directory;
         require(directory.isValid(), "fixture directory must initialize");
         workflow(directory.path());
+        contour_review(directory.path(), false);
+        contour_review(directory.path(), true);
         label_and_command_review(directory.path());
         std::cout << "Assistance review dialog trusted-fixture interactions passed\n";
         return 0;

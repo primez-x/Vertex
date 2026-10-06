@@ -47,6 +47,17 @@ struct StairRailingHost {
     double start_fraction{};
     double end_fraction{1.0};
 };
+enum class StairLandingRole { connecting, top };
+struct StairLandingRailingHost {
+    std::string stair_id;
+    StairLandingRole role{StairLandingRole::connecting};
+    std::string landing_id;
+    std::string incoming_flight_id;
+    std::string outgoing_flight_id;
+    std::size_t edge_index{};
+    double start_fraction{};
+    double end_fraction{1.0};
+};
 struct Railing {
     std::string id;
     Vec3 base_position{};
@@ -56,6 +67,7 @@ struct Railing {
     double thickness{};
     double post_spacing{};
     std::optional<StairRailingHost> host;
+    std::optional<StairLandingRailingHost> landing_host;
 };
 using StairPolygon = std::array<Vec3, 4>;
 struct StairTreadLayout {
@@ -85,6 +97,12 @@ struct HostedRailingLayout {
     double orientation_radians{};
     std::vector<StairRailPostLayout> posts;
 };
+struct StairLandingEdgeInterval { double start_fraction{}, end_fraction{}; };
+struct StairLandingEdgeLayout {
+    Vec3 edge_start, edge_end, inward_normal;
+    double normal_span{};
+    std::vector<StairLandingEdgeInterval> exposed_intervals;
+};
 
 // All dimensions use metres. Throws invalid_argument on invalid authoring data.
 void validate_stair(const StairFlight& stair);
@@ -96,6 +114,11 @@ void validate_railing(const Railing& railing);
 // Posts stay wholly on tread footprints; spacing is along the 3D pitch line.
 [[nodiscard]] HostedRailingLayout derive_hosted_railing_layout(
     const Railing& railing, const StairFlight& current_host);
+// Original CCW landing edge, with actual adjacent-flight contacts subtracted.
+// Witness IDs must match the current ordered topology. Fractions are measured
+// on that original edge; authored rail coverage must fit one exposed interval.
+[[nodiscard]] StairLandingEdgeLayout derive_stair_landing_edge(
+    const StairFlight& current_host, const StairLandingRailingHost& host);
 [[nodiscard]] std::vector<std::string> stair_child_ids(const StairFlight& stair);
 [[nodiscard]] nlohmann::json encode_stair_properties(const StairFlight& stair);
 [[nodiscard]] StairFlight decode_stair_properties(std::string_view id, const nlohmann::json& properties);

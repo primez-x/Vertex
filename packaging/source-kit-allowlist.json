@@ -1591,6 +1591,10 @@
     },
     {
       "category": "docs",
+      "path": "docs/dependencies/msvc-runtime.md"
+    },
+    {
+      "category": "docs",
       "path": "docs/dependencies/native-build.md"
     },
     {
@@ -1612,6 +1616,10 @@
     {
       "category": "docs",
       "path": "docs/dependencies/project-package.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/dependencies/qt-notices.md"
     },
     {
       "category": "docs",
@@ -3855,6 +3863,10 @@
     },
     {
       "category": "source",
+      "path": "scripts/controlled_cad_distribution.py"
+    },
+    {
+      "category": "source",
       "path": "scripts/delivery_registry.py"
     },
     {
@@ -3884,6 +3896,10 @@
     {
       "category": "source",
       "path": "scripts/inspect-runtime.ps1"
+    },
+    {
+      "category": "source",
+      "path": "scripts/inspect_selected_cad_runtime.py"
     },
     {
       "category": "source",
@@ -3935,11 +3951,27 @@
     },
     {
       "category": "source",
+      "path": "scripts/qualification/compose_controlled_cad_runtime.py"
+    },
+    {
+      "category": "source",
       "path": "scripts/qualification/compose_dependency_source_kit.py"
     },
     {
       "category": "source",
       "path": "scripts/qualification/dependency_source_closure.py"
+    },
+    {
+      "category": "source",
+      "path": "scripts/qualification/materialize_ifc_corresponding_source.py"
+    },
+    {
+      "category": "source",
+      "path": "scripts/qualification/materialize_qt_notices.py"
+    },
+    {
+      "category": "source",
+      "path": "scripts/rebuild_ifc_boost_thread.py"
     },
     {
       "category": "source",
@@ -3964,6 +3996,10 @@
     {
       "category": "source",
       "path": "scripts/source_provenance_audit.py"
+    },
+    {
+      "category": "source",
+      "path": "scripts/stage_cad_runtime.py"
     },
     {
       "category": "source",
@@ -4860,6 +4896,10 @@
     {
       "category": "source",
       "path": "tests/assistance_engine_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/assistance_ocr_isolation_tests.cpp"
     },
     {
       "category": "source",
@@ -5795,7 +5835,15 @@
     },
     {
       "category": "source",
+      "path": "tests/test_compose_controlled_cad_runtime.py"
+    },
+    {
+      "category": "source",
       "path": "tests/test_compose_dependency_source_kit.py"
+    },
+    {
+      "category": "source",
+      "path": "tests/test_controlled_cad_distribution.py"
     },
     {
       "category": "source",
@@ -5823,7 +5871,19 @@
     },
     {
       "category": "source",
+      "path": "tests/test_inspect_selected_cad_runtime.py"
+    },
+    {
+      "category": "source",
       "path": "tests/test_installed_runtime.py"
+    },
+    {
+      "category": "source",
+      "path": "tests/test_materialize_ifc_corresponding_source.py"
+    },
+    {
+      "category": "source",
+      "path": "tests/test_materialize_qt_notices.py"
     },
     {
       "category": "source",
@@ -5871,6 +5931,10 @@
     },
     {
       "category": "source",
+      "path": "tests/test_rebuild_ifc_boost_thread.py"
+    },
+    {
+      "category": "source",
       "path": "tests/test_reference_import_boundary.py"
     },
     {
@@ -5884,6 +5948,10 @@
     {
       "category": "source",
       "path": "tests/test_source_provenance_audit.py"
+    },
+    {
+      "category": "source",
+      "path": "tests/test_stage_cad_runtime.py"
     },
     {
       "category": "source",

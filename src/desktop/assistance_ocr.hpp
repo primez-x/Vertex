@@ -4,6 +4,8 @@
 #include "sketch/windows_import_worker.hpp"
 #include <filesystem>
 #include <functional>
+#include <cstdint>
+#include <stdexcept>
 
 namespace sketch::desktop {
 
@@ -19,6 +21,25 @@ inline constexpr const char* assistanceOcrModelPath = "assets/assistance/ocr/eng
 inline constexpr const char* assistanceOcrEnginePath = "assets/assistance/ocr-engine-v1.json";
 inline constexpr const char* assistanceOcrLicensePath = "assets/assistance/ocr/LICENSE";
 inline constexpr const char* assistanceOcrProducer = "tesseract-5.5.2/eng-tessdata-fast-4.1.0";
+
+enum class AssistanceOcrFailureStage {
+    frame_decode, resource_metadata, resource_read, resource_validation, resource_hash,
+    model_read, model_hash, engine_version, engine_init, engine_languages, recognition, reply
+};
+// Diagnostic values are fixed stage identifiers and an optional numeric OS
+// error. No resource path, model bytes, recognized text or parser excerpt is
+// retained. This exception never represents a successful worker reply.
+class AssistanceOcrFailure final : public std::runtime_error {
+public:
+    explicit AssistanceOcrFailure(AssistanceOcrFailureStage stage, std::uint32_t os_error = 0)
+        : std::runtime_error("Offline assistance OCR recognition failed."), stage_(stage), os_error_(os_error) {}
+    [[nodiscard]] AssistanceOcrFailureStage stage() const noexcept { return stage_; }
+    [[nodiscard]] const char* stage_code() const noexcept;
+    [[nodiscard]] std::uint32_t os_error() const noexcept { return os_error_; }
+private:
+    AssistanceOcrFailureStage stage_;
+    std::uint32_t os_error_;
+};
 
 struct AssistanceOcrResult {
     std::string text;
@@ -43,7 +64,18 @@ using AssistanceOcrBroker = std::function<WindowsImportWorkerReport(const Window
 [[nodiscard]] AssistanceOcrResult validateAssistanceOcrReply(std::span<const std::byte> reply);
 // Verifies every fixed resource below the trusted application root. Failure
 // means unavailable, never a download, environment lookup or alternative model.
+// Windows requires the actual stored spelling of every directory/file component;
+// only the DOS drive letter is case-normalized. Caller paths are never resolved
+// to a different spelling before admission, which could conceal a redirect.
 [[nodiscard]] std::vector<AssistanceResource> verifiedAssistanceOcrResources(
+    const std::filesystem::path& application_root);
+struct AssistanceOcrVerifiedBundle {
+    std::vector<AssistanceResource> resources;
+    std::vector<char> model;
+};
+// Worker admission returns the exact verified in-memory model, avoiding a
+// second pathname open between resource verification and engine initialization.
+[[nodiscard]] AssistanceOcrVerifiedBundle loadVerifiedAssistanceOcrBundle(
     const std::filesystem::path& application_root);
 [[nodiscard]] AssistanceOcrResult recognizeAssistanceRaster(
     const AssistanceRaster& raster, WindowsImportWorkerOptions options,

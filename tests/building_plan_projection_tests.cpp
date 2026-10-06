@@ -293,6 +293,13 @@ void test_multi_flight_and_hosted_plan() {
     try { (void)project_building_plan(rail, sources); }
     catch (const std::invalid_argument&) { refused = true; }
     require(refused, "hosted plan must refuse absent stair geometry");
+    stair=StairFlight{"multi-plan",{},0,8,2,.25,1};
+    stair.flights={{"first",4},{"second",4}};stair.landings={{"landing",1.2,.15,StairTurn::left_quarter,0}};
+    rail.host.reset();rail.landing_host=StairLandingRailingHost{"multi-plan",StairLandingRole::connecting,"landing","first","second",0,0,1};
+    sources[host.id]=encode_building_entity(stair);
+    require_same_extents(projected_bounds(project_building_plan(rail,sources)),{1,0,2.2,.05},"landing guard original-edge section footprint");
+    stair.base_position={3,4,7};sources[host.id]=encode_building_entity(stair);
+    require_same_extents(projected_bounds(project_building_plan(rail,sources)),{4,4,5.2,4.05},"landing guard plan follows host rigid placement");
 }
 
 void test_roof_forms_have_exact_edge_sets() {

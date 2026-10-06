@@ -29,6 +29,7 @@ sketch::WindowsImportWorkerReport attested(std::vector<std::byte> output) {
     r.status = sketch::WindowsImportWorkerStatus::completed;
     r.completed = r.launched = r.app_container_verified = r.restricted_token_verified =
         r.network_denial_verified = r.job_limits_verified = r.parent_exit_kill_verified =
+        r.job_membership_verified =
         r.brokered_handles_verified = r.private_temporary_root_verified =
         r.immutable_module_roots_verified = r.fixed_search_applied = r.proj_offline_applied = true;
     r.output = std::move(output); return r;

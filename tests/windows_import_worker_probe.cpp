@@ -26,11 +26,17 @@ int wmain(int argc, wchar_t** argv) {
         Sleep(milliseconds);
         return 0;
     }
-    if (argc > 1 && std::wstring_view(argv[1]) != L"--echo") return 6;
+    // A test-only negative reply uses the production argument shape. Its first
+    // input byte selects an exit code; the remainder is untrusted worker output.
+    const bool failure_fixture = argc == 3 &&
+        (std::wstring_view(argv[1]) == L"ifc" || std::wstring_view(argv[1]) == L"dxf" ||
+         std::wstring_view(argv[1]) == L"ocr" || std::wstring_view(argv[1]) == L"unknown");
+    if (!failure_fixture && argc > 1 && std::wstring_view(argv[1]) != L"--echo") return 6;
     const HANDLE input = GetStdHandle(STD_INPUT_HANDLE);
     const HANDLE output = GetStdHandle(STD_OUTPUT_HANDLE);
     if (!input || input == INVALID_HANDLE_VALUE || !output || output == INVALID_HANDLE_VALUE) return 2;
     std::array<unsigned char, 64 * 1024> buffer{};
+    int selected_exit = failure_fixture ? -1 : 0;
     for (;;) {
         DWORD received = 0;
         if (!ReadFile(input, buffer.data(), static_cast<DWORD>(buffer.size()), &received, nullptr)) {
@@ -39,6 +45,11 @@ int wmain(int argc, wchar_t** argv) {
         }
         if (received == 0) break;
         DWORD offset = 0;
+        if (selected_exit == -1) {
+            if (buffer[0] != '0' && buffer[0] != '4' && buffer[0] != '5') return 6;
+            selected_exit = buffer[0] - '0';
+            offset = 1;
+        }
         while (offset < received) {
             DWORD written = 0;
             if (!WriteFile(output, buffer.data() + offset, received - offset, &written, nullptr) || written == 0)
@@ -47,5 +58,5 @@ int wmain(int argc, wchar_t** argv) {
         }
     }
     FlushFileBuffers(output);
-    return 0;
+    return selected_exit < 0 ? 6 : selected_exit;
 }
