@@ -1,0 +1,1279 @@
+{
+  "schema_version": 1,
+  "assessment_date": "2026-10-05",
+  "metric": "equal_requirement_weight_delivery_maturity_index",
+  "not_effort_or_schedule_percentage": true,
+  "not_production_certification": true,
+  "scope": "Full accepted Windows residential/light-commercial measurement and architectural/3D plan; public GPL ownership",
+  "ledger_path": "docs/requirements/apex-parity.json",
+  "ledger_sha256": "50772b2d1be241af9a4cab662b8e9a0a5248d91e7679883d424b37fe4c4b196f",
+  "source_baseline_commit": "0e26571106e237ebbd2481786158fe80e542d923",
+  "pending_fast_input_and_inline_labels_excluded": true,
+  "rubric": {
+    "0": "no usable implementation evidence",
+    "1": "source/discovery/partial checkpoint",
+    "2": "focused behavior evidence for implemented portions",
+    "3": "meaningful installed workflow evidence for implemented portions",
+    "4": "full acceptance including required external qualification"
+  },
+  "points_min": 269,
+  "points_max": 285,
+  "points_possible": 520,
+  "percent_min": 51.73076923076923,
+  "percent_max": 54.80769230769231,
+  "percent_midpoint": 53.26923076923077,
+  "uncertainty_is_not_statistical_confidence_interval": true,
+  "full_acceptance_rows": 0,
+  "review_assignments": [
+    "completion_scope_weighting_20261005",
+    "completion_2d_appraisal_evidence_20261005",
+    "completion_architecture_delivery_evidence_20261005"
+  ],
+  "explanation": "overall-completion-assessment-2026-10-05.md",
+  "groups": [
+    {
+      "domain": "foundation",
+      "rows": 16,
+      "points_min": 41,
+      "points_max": 41,
+      "points_possible": 64
+    },
+    {
+      "domain": "architecture",
+      "rows": 31,
+      "points_min": 65,
+      "points_max": 65,
+      "points_possible": 124
+    },
+    {
+      "domain": "delivery",
+      "rows": 10,
+      "points_min": 22,
+      "points_max": 22,
+      "points_possible": 40
+    },
+    {
+      "domain": "measurement",
+      "rows": 27,
+      "points_min": 55,
+      "points_max": 65,
+      "points_possible": 108
+    },
+    {
+      "domain": "interaction",
+      "rows": 13,
+      "points_min": 27,
+      "points_max": 31,
+      "points_possible": 52
+    },
+    {
+      "domain": "compatibility_exchange",
+      "rows": 8,
+      "points_min": 11,
+      "points_max": 11,
+      "points_possible": 32
+    },
+    {
+      "domain": "output_quality",
+      "rows": 12,
+      "points_min": 22,
+      "points_max": 22,
+      "points_possible": 48
+    },
+    {
+      "domain": "assistance",
+      "rows": 5,
+      "points_min": 10,
+      "points_max": 10,
+      "points_possible": 20
+    },
+    {
+      "domain": "recovery_security",
+      "rows": 8,
+      "points_min": 16,
+      "points_max": 18,
+      "points_possible": 32
+    }
+  ],
+  "rows": [
+    {
+      "id": "CORE-OFF-001",
+      "requirement": "Drawing, editing, calculating, saving, recovering, printing, and exporting work with networking disabled.",
+      "domain": "foundation",
+      "equal_weight": 1,
+      "maturity_min": 2,
+      "maturity_max": 2,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "CORE-OFF-002",
+      "requirement": "The application has no account, activation server, subscription, or online entitlement dependency.",
+      "domain": "foundation",
+      "equal_weight": 1,
+      "maturity_min": 2,
+      "maturity_max": 2,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "CORE-OFF-003",
+      "requirement": "Installation is offline-capable and bundles required runtime components, fonts, help, libraries, resources, and optional local-assistance assets.",
+      "domain": "foundation",
+      "equal_weight": 1,
+      "maturity_min": 3,
+      "maturity_max": 3,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "CORE-OWN-001",
+      "requirement": "Publish the original application source under GPL-3.0-or-later with reproducible Windows build instructions, fixtures, and build configuration.",
+      "domain": "foundation",
+      "equal_weight": 1,
+      "maturity_min": 2,
+      "maturity_max": 2,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "CORE-OWN-002",
+      "requirement": "Provide a documented, versioned .bldproj project format whose geometry, classifications, assets, metadata, history, and migrations are inspectable locally.",
+      "domain": "foundation",
+      "equal_weight": 1,
+      "maturity_min": 3,
+      "maturity_max": 3,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "CORE-SCOPE-001",
+      "requirement": "The production application targets Windows 11 x64, supports imperial and metric units, and serves residential and light-commercial projects.",
+      "domain": "foundation",
+      "equal_weight": 1,
+      "maturity_min": 3,
+      "maturity_max": 3,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "CORE-SCOPE-002",
+      "requirement": "Measurement and Architectural are separate workspaces over one shared project and authoritative document model.",
+      "domain": "foundation",
+      "equal_weight": 1,
+      "maturity_min": 2,
+      "maturity_max": 2,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "CORE-DOC-001",
+      "requirement": "One semantic document model is authoritative for property/site, buildings, storeys, levels, layers, objects, boundaries, annotations, schedules, sheets, phases, and alternatives.",
+      "domain": "foundation",
+      "equal_weight": 1,
+      "maturity_min": 3,
+      "maturity_max": 3,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "CORE-DOC-002",
+      "requirement": "Typed links distinguish architectural walls, room boundaries, and appraisal measurement boundaries, with explicit ownership and no unconstrained bidirectional cycles.",
+      "domain": "foundation",
+      "equal_weight": 1,
+      "maturity_min": 2,
+      "maturity_max": 2,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "CORE-DOC-003",
+      "requirement": "Save serializes an immutable snapshot at revision R into a validated standalone project while preserving the prior destination file.",
+      "domain": "foundation",
+      "equal_weight": 1,
+      "maturity_min": 3,
+      "maturity_max": 3,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "CORE-DOC-004",
+      "requirement": "Every authoritative output carries an OutputFingerprint for document revision, profiles, assets, fonts, views, and processing components.",
+      "domain": "foundation",
+      "equal_weight": 1,
+      "maturity_min": 3,
+      "maturity_max": 3,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "CORE-DOC-005",
+      "requirement": "All edits use typed serialized commands over immutable snapshots; accepted compound operations commit atomically and are reversible.",
+      "domain": "foundation",
+      "equal_weight": 1,
+      "maturity_min": 3,
+      "maturity_max": 3,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "CORE-DOC-006",
+      "requirement": "Entered quantities and units remain distinct from derived values, with analytical geometry, explicit tolerances, and display rounding that never changes measurement truth.",
+      "domain": "foundation",
+      "equal_weight": 1,
+      "maturity_min": 3,
+      "maturity_max": 3,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "CORE-DOC-007",
+      "requirement": "BRep geometry, meshes, projections, render pixels, and calculation caches are derived data and cannot become independent document authorities.",
+      "domain": "foundation",
+      "equal_weight": 1,
+      "maturity_min": 3,
+      "maturity_max": 3,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "CORE-DOC-008",
+      "requirement": "Migrations are copy-based and reversible, preserve originals and unknown data, and block unsafe editing or authoritative output for unsupported required features.",
+      "domain": "foundation",
+      "equal_weight": 1,
+      "maturity_min": 2,
+      "maturity_max": 2,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "CORE-DOC-009",
+      "requirement": "Provide a documented JSON-and-assets exchange representation plus local inspect, validate, extract, and migrate CLI operations.",
+      "domain": "foundation",
+      "equal_weight": 1,
+      "maturity_min": 2,
+      "maturity_max": 2,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "CORE-DOC-010",
+      "requirement": "Apex exchange, CAD exchange, devices, georeferencing, and appraisal integrations attach through replaceable versioned adapters.",
+      "domain": "architecture",
+      "equal_weight": 1,
+      "maturity_min": 2,
+      "maturity_max": 2,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "COMP-LIC-001",
+      "requirement": "Qualify exact source revisions, build options, transitive dependencies, and distribution obligations for every shipped component before release.",
+      "domain": "delivery",
+      "equal_weight": 1,
+      "maturity_min": 2,
+      "maturity_max": 2,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "COMP-LIC-002",
+      "requirement": "GPL-3.0-or-later first-party application code remains clearly separated from third-party code, with contribution and license provenance suitable for public distribution.",
+      "domain": "delivery",
+      "equal_weight": 1,
+      "maturity_min": 2,
+      "maturity_max": 2,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "COMP-LIC-003",
+      "requirement": "The baseline excludes GPL/AGPL application dependencies, noncommercial restrictions, and mandatory paid runtime SDKs; applicable LGPL components meet their obligations.",
+      "domain": "delivery",
+      "equal_weight": 1,
+      "maturity_min": 2,
+      "maturity_max": 2,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "COMP-GEO-001",
+      "requirement": "Use a qualified Open CASCADE Technology layer for solid geometry, tessellation, and visualization with the original application model above it.",
+      "domain": "delivery",
+      "equal_weight": 1,
+      "maturity_min": 3,
+      "maturity_max": 3,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "COMP-GEO-002",
+      "requirement": "Use PlaneGCS/Eigen behind an application-owned planar constraint adapter; Ceres is not the planar solver substitute.",
+      "domain": "delivery",
+      "equal_weight": 1,
+      "maturity_min": 2,
+      "maturity_max": 2,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "COMP-IO-001",
+      "requirement": "Use isolated local workers for reviewed IFC and DXF parsing/export components, with adapter manifests and no dependency on a hosted service.",
+      "domain": "delivery",
+      "equal_weight": 1,
+      "maturity_min": 2,
+      "maturity_max": 2,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "COMP-IO-002",
+      "requirement": "Use reviewed Qt PDF and Print Support modules for vector output and printing, with an explicit module allowlist.",
+      "domain": "delivery",
+      "equal_weight": 1,
+      "maturity_min": 2,
+      "maturity_max": 2,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "COMP-IO-003",
+      "requirement": "Use PROJ with bundled local resources and networking disabled for georeferencing.",
+      "domain": "delivery",
+      "equal_weight": 1,
+      "maturity_min": 2,
+      "maturity_max": 2,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "GEO-BASE-001",
+      "requirement": "Represent lines, arcs, holes, winding, tangency, and topology as analytical geometry rather than screen strokes.",
+      "domain": "architecture",
+      "equal_weight": 1,
+      "maturity_min": 2,
+      "maturity_max": 2,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "GEO-BASE-002",
+      "requirement": "Construct and edit true curves using chord length, arc length, arc height, and angle inputs.",
+      "domain": "architecture",
+      "equal_weight": 1,
+      "maturity_min": 2,
+      "maturity_max": 2,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "GEO-BASE-003",
+      "requirement": "Support rise-and-run entry, relative turns, explicit angles, and unit-aware direction input.",
+      "domain": "architecture",
+      "equal_weight": 1,
+      "maturity_min": 2,
+      "maturity_max": 2,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "GEO-BASE-004",
+      "requirement": "Provide alignment, snapping, point jumping, automatic closure, and bay-window completion while retaining exact geometry.",
+      "domain": "architecture",
+      "equal_weight": 1,
+      "maturity_min": 2,
+      "maturity_max": 2,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "GEO-CON-001",
+      "requirement": "Support editable parallel, perpendicular, horizontal, vertical, coincident, and fixed-length relationships.",
+      "domain": "architecture",
+      "equal_weight": 1,
+      "maturity_min": 2,
+      "maturity_max": 2,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "GEO-CON-002",
+      "requirement": "Preview dimension changes with an explicit anchored endpoint and an explicit choice about moving connected geometry.",
+      "domain": "architecture",
+      "equal_weight": 1,
+      "maturity_min": 2,
+      "maturity_max": 2,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "GEO-CON-003",
+      "requirement": "Detect redundant, contradictory, underconstrained, and near-singular constraint states with understandable diagnostics; never silently relax locked measurements.",
+      "domain": "architecture",
+      "equal_weight": 1,
+      "maturity_min": 2,
+      "maturity_max": 2,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "GEO-CON-004",
+      "requirement": "Prevent unintended mirrored solutions, winding changes, topology changes, and unstable alternate branches during solve.",
+      "domain": "architecture",
+      "equal_weight": 1,
+      "maturity_min": 2,
+      "maturity_max": 2,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "GEO-CON-005",
+      "requirement": "Failed geometric edits preserve the previous valid document state and produce a reversible error result.",
+      "domain": "architecture",
+      "equal_weight": 1,
+      "maturity_min": 2,
+      "maturity_max": 2,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "GEO-CON-006",
+      "requirement": "Model levels and floor-to-floor relationships through an explicit vertical dependency graph.",
+      "domain": "architecture",
+      "equal_weight": 1,
+      "maturity_min": 2,
+      "maturity_max": 2,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "APX-WF-001",
+      "requirement": "Provide a modern Draw First workflow with the documented Apex behavior and equivalent efficient completion path.",
+      "domain": "measurement",
+      "equal_weight": 1,
+      "maturity_min": 2,
+      "maturity_max": 3,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "APX-WF-002",
+      "requirement": "Provide a modern Define First workflow with the documented Apex behavior and equivalent efficient completion path.",
+      "domain": "measurement",
+      "equal_weight": 1,
+      "maturity_min": 2,
+      "maturity_max": 2,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "APX-WF-003",
+      "requirement": "Build areas from existing geometry and preserve unfinished sketches for later completion.",
+      "domain": "measurement",
+      "equal_weight": 1,
+      "maturity_min": 2,
+      "maturity_max": 2,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "APX-KEY-001",
+      "requirement": "Support keyboard distance-and-direction entry with predictable focus, commit, cancel, and repeat behavior.",
+      "domain": "measurement",
+      "equal_weight": 1,
+      "maturity_min": 2,
+      "maturity_max": 2,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "APX-KEY-002",
+      "requirement": "Accept fractional inches, feet-and-inches, metric units, and unit-aware precision input without lossy intermediate rounding.",
+      "domain": "measurement",
+      "equal_weight": 1,
+      "maturity_min": 2,
+      "maturity_max": 3,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "APX-KEY-003",
+      "requirement": "Preserve efficient keyboard semantics and provide an Apex-compatible shortcut preset alongside customizable shortcuts.",
+      "domain": "measurement",
+      "equal_weight": 1,
+      "maturity_min": 2,
+      "maturity_max": 2,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "APX-KEY-004",
+      "requirement": "Support point jumping, automatic closure, and bay-window completion as explicit geometry operations.",
+      "domain": "measurement",
+      "equal_weight": 1,
+      "maturity_min": 2,
+      "maturity_max": 2,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "APX-CURVE-001",
+      "requirement": "Expose curved wall and boundary construction through actual curve geometry, including chord, arc length, arc height, and angle definitions.",
+      "domain": "measurement",
+      "equal_weight": 1,
+      "maturity_min": 2,
+      "maturity_max": 3,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "APX-EDIT-001",
+      "requirement": "Support selection and clipboard operations for geometry, areas, annotations, and architectural objects.",
+      "domain": "measurement",
+      "equal_weight": 1,
+      "maturity_min": 2,
+      "maturity_max": 2,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "APX-EDIT-002",
+      "requirement": "Support rotation and flipping of supported geometry, areas, references, annotations, and architectural objects with explicit pivot behavior.",
+      "domain": "measurement",
+      "equal_weight": 1,
+      "maturity_min": 2,
+      "maturity_max": 2,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "APX-EDIT-003",
+      "requirement": "Support vertex insertion and cloning for applicable boundaries, walls, and objects without breaking constraints or area topology.",
+      "domain": "measurement",
+      "equal_weight": 1,
+      "maturity_min": 2,
+      "maturity_max": 2,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "APX-EDIT-004",
+      "requirement": "Support reopening, redefining, and deleting areas and supported objects while retaining explicit history and relationships.",
+      "domain": "measurement",
+      "equal_weight": 1,
+      "maturity_min": 2,
+      "maturity_max": 2,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "APX-EDIT-005",
+      "requirement": "Every committed operation, including classification, calibration, and compound edits, supports complete undo and redo.",
+      "domain": "measurement",
+      "equal_weight": 1,
+      "maturity_min": 2,
+      "maturity_max": 3,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "APX-AREA-001",
+      "requirement": "Detect, aggregate, and subtract areas from analytical boundaries with explicit grouping and hole behavior.",
+      "domain": "measurement",
+      "equal_weight": 1,
+      "maturity_min": 2,
+      "maturity_max": 3,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "APX-AREA-002",
+      "requirement": "Support classifications, base area, factors, net area, and explicit measurement profiles.",
+      "domain": "measurement",
+      "equal_weight": 1,
+      "maturity_min": 2,
+      "maturity_max": 2,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "APX-AREA-003",
+      "requirement": "Report perimeter, living-area totals, building totals, and other required area aggregates with configurable rounding.",
+      "domain": "measurement",
+      "equal_weight": 1,
+      "maturity_min": 2,
+      "maturity_max": 3,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "APX-AREA-004",
+      "requirement": "Make every total inspectable through boundary, deduction, classification, factor, rounding, and provenance details, including documented Auto-Subtract behavior.",
+      "domain": "measurement",
+      "equal_weight": 1,
+      "maturity_min": 2,
+      "maturity_max": 2,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "APX-ANNO-001",
+      "requirement": "Provide editable text and label libraries with per-instance content, style, placement, and visibility.",
+      "domain": "measurement",
+      "equal_weight": 1,
+      "maturity_min": 2,
+      "maturity_max": 3,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "APX-ANNO-002",
+      "requirement": "Provide editable dimensions with placement, visibility, styles, references, and independent output-scale behavior.",
+      "domain": "measurement",
+      "equal_weight": 1,
+      "maturity_min": 2,
+      "maturity_max": 2,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "APX-ANNO-003",
+      "requirement": "Support editable drawing styles, fills, and visibility controls for areas, objects, and output views.",
+      "domain": "measurement",
+      "equal_weight": 1,
+      "maturity_min": 2,
+      "maturity_max": 2,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "APX-SYM-001",
+      "requirement": "Provide a comprehensive, editable, size-adjustable symbol library for residential and light-commercial drawings, with at least 300 distinct usable families spanning plumbing, furniture, fixtures, appliances, accessibility, lighting, doors/windows, structural/site, and commercial equipment.",
+      "domain": "measurement",
+      "equal_weight": 1,
+      "maturity_min": 2,
+      "maturity_max": 3,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "APX-TRACE-001",
+      "requirement": "Import PDF and raster reference images as project assets for tracing and calibrated presentation.",
+      "domain": "measurement",
+      "equal_weight": 1,
+      "maturity_min": 3,
+      "maturity_max": 3,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "APX-TRACE-002",
+      "requirement": "Calibrate a reference image against a known measurement and preserve calibration provenance.",
+      "domain": "measurement",
+      "equal_weight": 1,
+      "maturity_min": 2,
+      "maturity_max": 2,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "APX-TRACE-003",
+      "requirement": "Trace over references and support resize, rotate, flip, intensity adjustment, and show/hide controls without changing source assets.",
+      "domain": "measurement",
+      "equal_weight": 1,
+      "maturity_min": 2,
+      "maturity_max": 2,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "APX-DOC-001",
+      "requirement": "Support multipage projects with subject information, area attributes, page-level presentation, and shared project data.",
+      "domain": "measurement",
+      "equal_weight": 1,
+      "maturity_min": 2,
+      "maturity_max": 3,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "APX-DOC-002",
+      "requirement": "Support local save, import, export, and declared legacy-version exchange workflows with fidelity reports.",
+      "domain": "measurement",
+      "equal_weight": 1,
+      "maturity_min": 2,
+      "maturity_max": 2,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "APX-DOC-003",
+      "requirement": "Provide page layouts, print preview, PDF output, and image output with independent output scale.",
+      "domain": "measurement",
+      "equal_weight": 1,
+      "maturity_min": 2,
+      "maturity_max": 3,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "APX-UI-001",
+      "requirement": "Provide pan, zoom, grid, independent output scale, and responsive overview navigation without rebuilding the whole interface.",
+      "domain": "interaction",
+      "equal_weight": 1,
+      "maturity_min": 2,
+      "maturity_max": 3,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "APX-UI-002",
+      "requirement": "Provide visibility filters, overview map, light/dark themes, and saved workspace configurations.",
+      "domain": "interaction",
+      "equal_weight": 1,
+      "maturity_min": 2,
+      "maturity_max": 3,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "APX-UI-003",
+      "requirement": "Provide a searchable command palette, shortcut editing, and view tabs without duplicating primary commands in a second toolbar menu.",
+      "domain": "interaction",
+      "equal_weight": 1,
+      "maturity_min": 2,
+      "maturity_max": 2,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "APX-INPUT-001",
+      "requirement": "Support mouse, keyboard, active pen, and touch input for precision drawing and editing.",
+      "domain": "interaction",
+      "equal_weight": 1,
+      "maturity_min": 2,
+      "maturity_max": 2,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "APX-INPUT-002",
+      "requirement": "Support DISTO measurement input through an adapter that targets an explicitly selected field and retains units and provenance.",
+      "domain": "interaction",
+      "equal_weight": 1,
+      "maturity_min": 2,
+      "maturity_max": 2,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "APX-SPEC-001",
+      "requirement": "Provide survey and metes-and-bounds workflows with traverse geometry, acreage calculation, closure diagnostics, and output.",
+      "domain": "interaction",
+      "equal_weight": 1,
+      "maturity_min": 2,
+      "maturity_max": 2,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "APX-SPEC-002",
+      "requirement": "Provide the Pro georeferencing workflow with explicit coordinate reference, control points, residuals, and offline resources.",
+      "domain": "interaction",
+      "equal_weight": 1,
+      "maturity_min": 2,
+      "maturity_max": 2,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "APX-INT-001",
+      "requirement": "Provide appraisal-software integrations through isolated, versioned adapters with explicit field mapping and failure behavior.",
+      "domain": "interaction",
+      "equal_weight": 1,
+      "maturity_min": 2,
+      "maturity_max": 2,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "APX-INT-002",
+      "requirement": "Document and implement caller protocols for external integrations without coupling them to the drawing engine.",
+      "domain": "interaction",
+      "equal_weight": 1,
+      "maturity_min": 2,
+      "maturity_max": 2,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "APX-NATIVE-AX5-001",
+      "requirement": "Import and preserve supported native Apex v5 projects with geometry, curves, classifications, dimensions, labels, symbols, imagery, and metadata where representable.",
+      "domain": "compatibility_exchange",
+      "equal_weight": 1,
+      "maturity_min": 1,
+      "maturity_max": 1,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "APX-NATIVE-AX7-001",
+      "requirement": "Import, edit, and preserve supported native Apex v7 projects with geometry, curves, classifications, dimensions, labels, symbols, imagery, and metadata where representable.",
+      "domain": "compatibility_exchange",
+      "equal_weight": 1,
+      "maturity_min": 1,
+      "maturity_max": 1,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "APX-NATIVE-LEGACY-001",
+      "requirement": "Export declared legacy Apex-compatible versions with explicit subset, loss, and round-trip behavior.",
+      "domain": "compatibility_exchange",
+      "equal_weight": 1,
+      "maturity_min": 1,
+      "maturity_max": 1,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "APX-COMPAT-001",
+      "requirement": "Audit Apex Standard, Pro, and enabled modules rather than infer feature scope from purchase price or public documentation alone.",
+      "domain": "compatibility_exchange",
+      "equal_weight": 1,
+      "maturity_min": 1,
+      "maturity_max": 1,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "APX-COMPAT-002",
+      "requirement": "Compare representative Apex projects and expected outputs across geometry, curves, classifications, dimensions, labels, symbols, imagery, metadata, calculations, and print/export.",
+      "domain": "compatibility_exchange",
+      "equal_weight": 1,
+      "maturity_min": 1,
+      "maturity_max": 1,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "ARCH-MOD-001",
+      "requirement": "Author straight, curved, sloped, and composite walls with joins, thickness, materials, and stable semantic identity.",
+      "domain": "architecture",
+      "equal_weight": 1,
+      "maturity_min": 3,
+      "maturity_max": 3,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "ARCH-MOD-002",
+      "requirement": "Author hosted doors, windows, and openings with type/instance properties and wall relationships.",
+      "domain": "architecture",
+      "equal_weight": 1,
+      "maturity_min": 3,
+      "maturity_max": 3,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "ARCH-MOD-003",
+      "requirement": "Author floors, ceilings, foundations, and their materials, levels, boundaries, and quantities.",
+      "domain": "architecture",
+      "equal_weight": 1,
+      "maturity_min": 3,
+      "maturity_max": 3,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "ARCH-MOD-004",
+      "requirement": "Author beams and columns suitable for residential and light-commercial building documentation.",
+      "domain": "architecture",
+      "equal_weight": 1,
+      "maturity_min": 2,
+      "maturity_max": 2,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "ARCH-MOD-005",
+      "requirement": "Author flat, shed, gable, and hip roof forms with slopes, joins, openings where supported, and materials.",
+      "domain": "architecture",
+      "equal_weight": 1,
+      "maturity_min": 2,
+      "maturity_max": 2,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "ARCH-MOD-006",
+      "requirement": "Author stairs, landings, and railings with level connections and editable dimensions.",
+      "domain": "architecture",
+      "equal_weight": 1,
+      "maturity_min": 2,
+      "maturity_max": 2,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "ARCH-MOD-007",
+      "requirement": "Provide levels, reference grids, floor-to-floor alignment, and basic site/terrain tools.",
+      "domain": "architecture",
+      "equal_weight": 1,
+      "maturity_min": 2,
+      "maturity_max": 2,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "ARCH-MOD-008",
+      "requirement": "Provide reusable assemblies with separate type and instance properties, materials, and quantity behavior.",
+      "domain": "architecture",
+      "equal_weight": 1,
+      "maturity_min": 2,
+      "maturity_max": 2,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "ARCH-MOD-009",
+      "requirement": "Model rooms and architectural boundaries separately from appraisal measurement boundaries, with explicit relationships where desired.",
+      "domain": "architecture",
+      "equal_weight": 1,
+      "maturity_min": 2,
+      "maturity_max": 2,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "ARCH-MOD-010",
+      "requirement": "Support existing, demolished, and proposed phases across the model, views, calculations, schedules, and sheets.",
+      "domain": "architecture",
+      "equal_weight": 1,
+      "maturity_min": 2,
+      "maturity_max": 2,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "ARCH-MOD-011",
+      "requirement": "Support mutually exclusive remodeling alternatives over a shared existing model with clear comparison state.",
+      "domain": "architecture",
+      "equal_weight": 1,
+      "maturity_min": 2,
+      "maturity_max": 2,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "ARCH-3D-001",
+      "requirement": "Provide editable 3D authoring over the same semantic objects used by measurement and 2D documentation.",
+      "domain": "architecture",
+      "equal_weight": 1,
+      "maturity_min": 2,
+      "maturity_max": 2,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "ARCH-VIEW-001",
+      "requirement": "Provide coordinated plans, elevations, and sections that edit and display the same building objects.",
+      "domain": "architecture",
+      "equal_weight": 1,
+      "maturity_min": 2,
+      "maturity_max": 2,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "ARCH-VIEW-002",
+      "requirement": "Sections support cut depth, line treatment, material hatching, annotations, and detail overlays.",
+      "domain": "architecture",
+      "equal_weight": 1,
+      "maturity_min": 2,
+      "maturity_max": 2,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "ARCH-SCH-001",
+      "requirement": "Provide door/window, room, and material schedules with the required marks, properties, dimensions, counts, areas, deductions, and net quantities.",
+      "domain": "architecture",
+      "equal_weight": 1,
+      "maturity_min": 2,
+      "maturity_max": 2,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "ARCH-SCH-002",
+      "requirement": "Editable schedule cells issue normal document commands; calculated cells are read-only and expose their source.",
+      "domain": "architecture",
+      "equal_weight": 1,
+      "maturity_min": 2,
+      "maturity_max": 2,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "ARCH-SHEET-001",
+      "requirement": "Provide coordinated sheets with title blocks, revisions, callouts, schedules, and independently scaled viewports.",
+      "domain": "architecture",
+      "equal_weight": 1,
+      "maturity_min": 2,
+      "maturity_max": 2,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "ARCH-EDIT-001",
+      "requirement": "Every supported architectural object supports creation, selection, property editing, appropriate transforms, duplication, deletion, undo/redo, and save/reopen.",
+      "domain": "architecture",
+      "equal_weight": 1,
+      "maturity_min": 2,
+      "maturity_max": 2,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "ARCH-REL-001",
+      "requirement": "Plans, elevations, sections, 3D, calculations, schedules, and sheets use explicit stable references to the same semantic objects.",
+      "domain": "architecture",
+      "equal_weight": 1,
+      "maturity_min": 2,
+      "maturity_max": 2,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "ARCH-OUTPUT-001",
+      "requirement": "Support complete residential and light-commercial remodel documentation from existing conditions through alternatives and coordinated output.",
+      "domain": "architecture",
+      "equal_weight": 1,
+      "maturity_min": 2,
+      "maturity_max": 2,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "UX-WORK-001",
+      "requirement": "Use a canvas-centered workspace with compact tool rail, expandable navigator, contextual inspector, and cursor-adjacent measurement panel.",
+      "domain": "interaction",
+      "equal_weight": 1,
+      "maturity_min": 3,
+      "maturity_max": 3,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "UX-WORK-002",
+      "requirement": "Selecting a wall, area, reference, or architectural object exposes its relevant dimensions, relationships, styling, calibration, classifications, or calculations without unrelated modal dialogs.",
+      "domain": "interaction",
+      "equal_weight": 1,
+      "maturity_min": 2,
+      "maturity_max": 3,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "UX-WORK-003",
+      "requirement": "Provide split plan/3D views, view tabs, saved workspaces, light/dark themes, and a high-contrast field mode.",
+      "domain": "interaction",
+      "equal_weight": 1,
+      "maturity_min": 2,
+      "maturity_max": 3,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "UX-ACCESS-001",
+      "requirement": "Support keyboard navigation, predictable focus, accessible properties and commands, high contrast, and layouts from 1366x768 through 4K at 100%, 150%, and 200% scaling.",
+      "domain": "output_quality",
+      "equal_weight": 1,
+      "maturity_min": 2,
+      "maturity_max": 2,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "UX-INPUT-001",
+      "requirement": "Provide pen/touch-specific controls and an on-screen measurement keypad while preserving keyboard precision paths.",
+      "domain": "interaction",
+      "equal_weight": 1,
+      "maturity_min": 2,
+      "maturity_max": 2,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "ASSIST-001",
+      "requirement": "Provide optional offline suggested tracing from plans or reference images.",
+      "domain": "assistance",
+      "equal_weight": 1,
+      "maturity_min": 2,
+      "maturity_max": 2,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "ASSIST-002",
+      "requirement": "Provide optional offline dimension extraction from supported plans and references.",
+      "domain": "assistance",
+      "equal_weight": 1,
+      "maturity_min": 2,
+      "maturity_max": 2,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "ASSIST-003",
+      "requirement": "Provide optional assisted label placement and natural-language commands through the same command and permission model as manual edits.",
+      "domain": "assistance",
+      "equal_weight": 1,
+      "maturity_min": 2,
+      "maturity_max": 2,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "ASSIST-004",
+      "requirement": "Assistance never silently invents measurements, changes classifications, or modifies accepted geometry; disabling it does not affect deterministic workflows.",
+      "domain": "assistance",
+      "equal_weight": 1,
+      "maturity_min": 2,
+      "maturity_max": 2,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "ASSIST-005",
+      "requirement": "Distributed assistance assets and processing libraries have offline resource paths, provenance, and license records.",
+      "domain": "assistance",
+      "equal_weight": 1,
+      "maturity_min": 2,
+      "maturity_max": 2,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "REC-001",
+      "requirement": "Provide local autosave, recoverable history, and crash/power-loss recovery with explicit edited, autosaved, and saved states.",
+      "domain": "recovery_security",
+      "equal_weight": 1,
+      "maturity_min": 2,
+      "maturity_max": 2,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "REC-002",
+      "requirement": "Provide named revisions and comparison views for semantic, geometric, calculation, and presentation changes.",
+      "domain": "recovery_security",
+      "equal_weight": 1,
+      "maturity_min": 2,
+      "maturity_max": 2,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "REC-003",
+      "requirement": "Provide portable project packages and reusable templates containing required assets, profiles, and documentation references.",
+      "domain": "recovery_security",
+      "equal_weight": 1,
+      "maturity_min": 2,
+      "maturity_max": 2,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "REC-004",
+      "requirement": "Detect external changes and enforce exclusive editing ownership, with read-only or independent-copy behavior for a second opening.",
+      "domain": "recovery_security",
+      "equal_weight": 1,
+      "maturity_min": 2,
+      "maturity_max": 2,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "REC-005",
+      "requirement": "Failure-injection tests cover transaction, serialization, flush, replacement, recovery, migration, disk exhaustion, file locks, damaged assets, stale recovery, and newer schemas.",
+      "domain": "recovery_security",
+      "equal_weight": 1,
+      "maturity_min": 2,
+      "maturity_max": 2,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "IO-IFC-001",
+      "requirement": "Support the declared IFC4 ADD2 TC1 Reference View 1.2 interchange target with editable reconstruction where reliable and identifiable reference preservation otherwise.",
+      "domain": "compatibility_exchange",
+      "equal_weight": 1,
+      "maturity_min": 2,
+      "maturity_max": 2,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "IO-DXF-001",
+      "requirement": "Support a declared DXF R2013 subset covering lines, arcs, polylines, text, dimensions, hatches, and blocks.",
+      "domain": "compatibility_exchange",
+      "equal_weight": 1,
+      "maturity_min": 2,
+      "maturity_max": 2,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "IO-PDF-001",
+      "requirement": "Treat PDF and raster underlays as calibrated reference assets, and distinguish editable extraction from simple tracing or image display.",
+      "domain": "compatibility_exchange",
+      "equal_weight": 1,
+      "maturity_min": 2,
+      "maturity_max": 2,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "IO-OUTPUT-001",
+      "requirement": "Preview, PDF, SVG, and printing consume one vector scene; raster imagery and shaded 3D are explicitly identified raster content.",
+      "domain": "output_quality",
+      "equal_weight": 1,
+      "maturity_min": 2,
+      "maturity_max": 2,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "IO-OUTPUT-002",
+      "requirement": "Support Letter, Legal, Tabloid, A4, A3, and architectural sheet sizes with independent scale and printer calibration verification.",
+      "domain": "output_quality",
+      "equal_weight": 1,
+      "maturity_min": 2,
+      "maturity_max": 2,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "IO-OUTPUT-003",
+      "requirement": "Block authoritative output or clearly mark drafts when calculations, required references, assets, or fingerprints are stale or incomplete.",
+      "domain": "output_quality",
+      "equal_weight": 1,
+      "maturity_min": 2,
+      "maturity_max": 2,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "SEC-WORKER-001",
+      "requirement": "Run untrusted import workers in Windows AppContainer without network capabilities, with Job Object limits, brokered inputs, controlled temporary storage, and fixed search paths.",
+      "domain": "recovery_security",
+      "equal_weight": 1,
+      "maturity_min": 2,
+      "maturity_max": 3,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "SEC-WORKER-002",
+      "requirement": "Contain malformed imports, path traversal, decompression bombs, DLL/module planting, child-process escape, timeouts, and worker crashes.",
+      "domain": "recovery_security",
+      "equal_weight": 1,
+      "maturity_min": 2,
+      "maturity_max": 3,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "SEC-PROJ-001",
+      "requirement": "Disable PROJ networking and custom network callbacks; missing coordinate resources produce a local diagnostic instead of an attempted download.",
+      "domain": "recovery_security",
+      "equal_weight": 1,
+      "maturity_min": 2,
+      "maturity_max": 2,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "OPS-PERF-001",
+      "requirement": "Target 95th-percentile navigation frame time at or below 16.7 ms on agreed reference hardware for representative workloads.",
+      "domain": "output_quality",
+      "equal_weight": 1,
+      "maturity_min": 1,
+      "maturity_max": 1,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "OPS-PERF-002",
+      "requirement": "Target input feedback at or below 50 ms and ordinary edits at or below 250 ms, with expensive regeneration in cancellable background work.",
+      "domain": "output_quality",
+      "equal_weight": 1,
+      "maturity_min": 2,
+      "maturity_max": 2,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "OPS-PERF-003",
+      "requirement": "Target representative project open/save at or below five seconds while preserving snapshot and asset integrity.",
+      "domain": "output_quality",
+      "equal_weight": 1,
+      "maturity_min": 2,
+      "maturity_max": 2,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "OPS-QA-001",
+      "requirement": "Validate geometry, calculations, constraints, units, factors, rounding, topology, and persistence through independent analytical fixtures.",
+      "domain": "output_quality",
+      "equal_weight": 1,
+      "maturity_min": 2,
+      "maturity_max": 2,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "OPS-QA-002",
+      "requirement": "Pass an integrated residential production fixture exercising measurement, architectural authoring, editable 3D, plans, elevations, sections, schedules, alternatives, revisions, sheets, save/reopen, print, and export.",
+      "domain": "output_quality",
+      "equal_weight": 1,
+      "maturity_min": 2,
+      "maturity_max": 2,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "OPS-QA-003",
+      "requirement": "Pass an integrated light-commercial production fixture exercising multiple levels, assemblies, structural objects, schedules, quantities, sheets, and coordinated views.",
+      "domain": "output_quality",
+      "equal_weight": 1,
+      "maturity_min": 2,
+      "maturity_max": 2,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "OPS-QA-004",
+      "requirement": "Complete Create, measure, model in 3D, use optional assistance, edit, calculate, revise, save, reopen, recover, print, and export on a clean offline Windows machine.",
+      "domain": "output_quality",
+      "equal_weight": 1,
+      "maturity_min": 1,
+      "maturity_max": 1,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "OPS-QA-005",
+      "requirement": "Verify real pen/touch input, keyboard navigation, focus behavior, accessible properties, themes, high contrast, and supported DPI layouts.",
+      "domain": "output_quality",
+      "equal_weight": 1,
+      "maturity_min": 2,
+      "maturity_max": 2,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "OPS-PACK-001",
+      "requirement": "Deliver signed or otherwise integrity-verifiable offline installer and portable Windows packages with no hidden network prerequisite.",
+      "domain": "delivery",
+      "equal_weight": 1,
+      "maturity_min": 3,
+      "maturity_max": 3,
+      "full_acceptance_proven": false
+    },
+    {
+      "id": "OPS-PACK-002",
+      "requirement": "Deliver offline help, keyboard/workflow reference, source/build kit, dependency sources/notices/SBOM, format and adapter documentation, fixtures, and verification reports.",
+      "domain": "delivery",
+      "equal_weight": 1,
+      "maturity_min": 2,
+      "maturity_max": 2,
+      "full_acceptance_proven": false
+    }
+  ],
+  "supplemental_pinc": {
+    "rows": 13,
+    "points_min": 21,
+    "points_max": 29,
+    "points_possible": 52,
+    "not_added_to_main_denominator_due_to_behavioral_overlap": true,
+    "paired_operations": 134,
+    "paired_operation_qualification_complete": false
+  }
+}
