@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param(
     [switch]$VerifyOnly,
+    [switch]$Offline,
     [string]$PythonPath = 'C:\Program Files\Python312\python.exe'
 )
 
@@ -83,32 +84,39 @@ function Test-QtInstallation {
     Write-Host "Components: $($components -join ', ')"
 }
 
-if (-not $VerifyOnly) {
-    Assert-File $pythonPath 'Python 3.12 interpreter'
-
-    New-Item -ItemType Directory -Force -Path $toolingRoot, $qtRoot, $downloadRoot | Out-Null
-    if (-not (Test-Path -LiteralPath $venvPython -PathType Leaf)) {
-        Invoke-Checked $pythonPath @('-m', 'venv', $venvRoot)
+$qtAlreadyReady = $false
+if ($Offline) {
+    try {
+        Test-QtInstallation
+        $qtAlreadyReady = $true
+    } catch {
+        throw "Offline mode requires a complete existing Qt $qtVersion SDK at '$qtPrefix'; it will not install or repair Qt. $($_.Exception.Message)"
     }
-    Assert-File $venvPython 'project-local Qt tooling Python'
-
-    Invoke-Checked $venvPython @(
-        '-m', 'pip', 'install', '--disable-pip-version-check', '--upgrade',
-        "aqtinstall==$aqtVersion"
-    )
-
-    $qtAlreadyReady = $false
+} elseif (-not $VerifyOnly) {
     if (Test-Path -LiteralPath $qtPrefix -PathType Container) {
         try {
             Test-QtInstallation
             $qtAlreadyReady = $true
-            Write-Host 'Existing Qt installation is complete; skipping reinstallation.'
+            Write-Host 'Existing Qt installation is complete; skipping tooling setup and reinstallation.'
         } catch {
             Write-Host "Existing Qt installation is incomplete; aqt will repair it. $($_.Exception.Message)"
         }
     }
 
     if (-not $qtAlreadyReady) {
+        Assert-File $pythonPath 'Python 3.12 interpreter'
+
+        New-Item -ItemType Directory -Force -Path $toolingRoot, $qtRoot, $downloadRoot | Out-Null
+        if (-not (Test-Path -LiteralPath $venvPython -PathType Leaf)) {
+            Invoke-Checked $pythonPath @('-m', 'venv', $venvRoot)
+        }
+        Assert-File $venvPython 'project-local Qt tooling Python'
+
+        Invoke-Checked $venvPython @(
+            '-m', 'pip', 'install', '--disable-pip-version-check', '--upgrade',
+            "aqtinstall==$aqtVersion"
+        )
+
         $aqtInstallArguments = @(
             '-m', 'aqt', 'install-qt',
             'windows', 'desktop', $qtVersion, $qtArchitecture,
@@ -128,4 +136,6 @@ if (-not $VerifyOnly) {
     }
 }
 
-Test-QtInstallation
+if (-not $qtAlreadyReady) {
+    Test-QtInstallation
+}

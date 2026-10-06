@@ -436,8 +436,25 @@ the diagnosed Qt/Python `slots` macro collision; Build-04 contains its fix.
 The next frozen candidate is staged at artifacts/packages/vertex-candidate.pending
 from source commit 3ff0431e1d389dbd8955e308ebf16a9a094c7855. The built-in Windows
 PowerShell 5.1 verifier passed all 25,735 declared files. The complete handoff
-audit and delivered source-receipt replay also passed. Installation and installed
-workflows are still pending; the existing candidate below remains active.
+audit and delivered source-receipt replay also passed. Installation passed with
+the same built-in shell and all 5,106 runtime files. Six installed source/save/
+reopen processes passed across both workspaces and both architectural markets,
+including normal PNG decoding, persisted references and matching project,
+2D-capture and native-3D hashes. The independently launched packaged CAD worker
+passed against the installed immutable runtime. The existing candidate below
+remains active until the checked directory cutover.
+
+The separate private main-application network-policy experiment confirmed the
+existing AppContainer profile/current user, absent loopback exemption, exact
+suspended image, zero capabilities, low integrity and one-process job before
+launch. Its first attempt stopped before resume on a harness boolean-buffer
+size assumption; that diagnostic is retained. After correction, the application
+refused saving with `cannot identify project destination filesystem, Windows
+error 5`. Captured diagnostics identify the filesystem query, rather than
+establishing a global-mutex failure. All task-owned processes terminated and
+runtime hashes remained unchanged. No product guard, installed ACL, profile or
+firewall setting was relaxed. This route fails the workflow gate and leaves
+network-denied, clean-machine and production qualification false.
 
 Subsequent source-delivery metadata corrections preserve literal Qt `+` tokens,
 qconfig replacement/append assignment order, architecture/ABI and MSVC version
@@ -448,6 +465,15 @@ are refused. The original Red receipts reproduce all three qconfig defects and
 the comma-reference defects. Green checks pass 43 source-closure, 21 notice and
 35 composer cases. These changes do not rebuild the application or alter this
 frozen package, and confer no source, license or production qualification.
+
+The prepared Qt SDK bootstrap now verifies before requiring Python or aqt.
+Explicit `-Offline` refuses missing/incomplete SDKs before provisioning. Five
+built-in PowerShell probes pass: the prior control flow fails with a deliberately
+missing Python interpreter; both updated prepared-SDK routes succeed; missing
+and incomplete offline fixtures refuse without changing their content or
+creating tooling. The baseline fixture substitutes only its repository root so
+it uses the same prepared SDK. This establishes SDK preflight behavior, not a
+full offline dependency-source rebuild.
 
 One package is at artifacts/packages/vertex-candidate; its verified installation
 is artifacts/installed/candidate. Run bin/vertex.exe from that installation.

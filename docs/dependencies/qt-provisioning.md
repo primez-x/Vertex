@@ -19,11 +19,19 @@ From the repository root, run:
 pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\bootstrap-qt.ps1
 ```
 
-The script uses `C:\Program Files\Python312\python.exe` by default, creates only the project-local virtual environment, downloads the pinned Qt archives, and keeps them in `.deps/downloads`. Use `-PythonPath <path>` when Python 3.12 is installed elsewhere. It does not use the Qt online installer or require an account or subscription. To check an already-installed prefix without network access, run:
+If installation or repair is needed, the script uses `C:\Program Files\Python312\python.exe` by default, creates only the project-local virtual environment, and keeps the pinned Qt archives in `.deps/downloads`. Use `-PythonPath <path>` when Python 3.12 is installed elsewhere. It does not use the Qt online installer or require an account or subscription. To check an already-installed prefix without network access, run:
 
 ```powershell
 pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\bootstrap-qt.ps1 -VerifyOnly
 ```
+
+The normal command checks for a complete prepared SDK before requiring Python or setting up the aqt tooling environment. If that SDK is complete, it skips tooling setup and installation. If it is missing or incomplete, the normal command requires Python and installs or repairs the pinned SDK. To explicitly require an existing complete SDK and prohibit installation or network fallback, run:
+
+```powershell
+pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\bootstrap-qt.ps1 -Offline
+```
+
+`-Offline` verifies only the prepared binary SDK and fails if any required Qt files are missing. It does not require Python and never provisions a missing or incomplete SDK.
 
 Pass the prefix to CMake with `-DCMAKE_PREFIX_PATH=<repository>/.deps/qt/6.8.3/msvc2022_64`. The existing Build Tools installation provides CMake 3.31.6, Ninja 1.12.1, and MSVC 19.44 x64 under `C:\BuildTools`.
 
@@ -64,7 +72,7 @@ For an offline source kit, use the official [Qt 6.8.3 source directory](https://
 51acbdb32aa5e74cd8f7a2b30acef90739369ad10b665a2d4dd7ba446c1069b0
 ```
 
-The source archive is a provenance and rebuild input; it is not required by the prebuilt SDK bootstrap. The source archive and the installed modules must still be audited as a complete dependency set before production distribution.
+The source archive is a provenance and rebuild input; it is not required by the prebuilt SDK bootstrap. `-Offline` verifies this prepared binary SDK only. It does not verify that the source archive or transitive dependency sources are complete, and it does not prove a full offline source rebuild. The source archive and the installed modules must still be audited as a complete dependency set before production distribution.
 
 ## Licensing
 
