@@ -82,14 +82,39 @@ Source/runtime SHA-256 at this build:
 | --- | --- |
 | `src/desktop/main_window.cpp` | `e1adb6f5bf9d3358ca49df198581420367b332138abb52bb8766a86622174901` |
 | `src/desktop/pinc_project_admission.cpp` | `9050c9bdf8ea3df1d379f8cff6c022f89ba389803b50f7a3c717de17982a77ab` |
-| `vertex.exe` | `ce0876064858afde34036f62713f2716584e514812990e2797d50dde08ab3249` |
+| `vertex.exe` (qualified installed footer build) | `52e32397e37238514e2325c16c84904c266b1c807a335998def511abc4533e09` |
 | `vertex-import-worker.exe` | `57eae405bb327c9f69fad2987b3c7f730b3ebb1a821ffeb672036b0bf59ef906` |
 
 ## Delivery and remaining scope
 
-Installed-bundle qualification is recorded after staging. The source build and
-protected import fixture alone do not prove a clean-machine installation or the
-published installed application's Pinc workflow.
+The source checkpoint `16698a2d68b3b1eb65bb6206d3292583dca44ea9` is packaged in
+`artifacts/packages/vertex-offline-20261005-pinc-import-footer` and installed at
+`artifacts/installed/vertex-20261005-pinc-import-footer`. The Desktop Vertex
+shortcut points to its verified executable. The package declares 4,148 files,
+including 2,645 runtime files and 1,496 source-kit files; installation and all
+six sampled installed source/reopen runs pass. Project, application screenshot
+and native model-image hashes match for each sample pair. Evidence is in
+`artifacts/pinc-import-20261005/footer-install-results.json` and
+`installed-footer-runtime/run-20261005-185818-abbfc0c3/report.json` beneath the
+same evidence directory.
+
+The preceding installed candidate failed an exact image comparison: six pixels
+in the red draft footer differed, while model pixels, project bytes and semantic
+fingerprints matched. Image stamping now lays out text and fills unhinted font
+outlines, avoiding cached platform glyph bitmaps. The existing content-output
+check covers model/alpha preservation, multiline wrapping, visible footer text
+and byte-identical output after intervening font-cache activity. It and the
+Pinc desktop scenario pass; the actual installed source/reopen comparison also
+passes without weakening its exact image check. The focused build and results
+are `footer-outline-build.{json,log}` and `footer-outline-tests.{json,log}` in the
+evidence directory. The inspected native image retains a legible footer outside
+the unchanged model pixels.
+
+Installed samples use the developer host and private test profiles; they do
+not deny networking, isolate the registry or prove clean-machine installation.
+The Pinc import scenario exercises native widgets in its separate protected
+fixture runtime, not a full manual comparison of the published installed app.
+Package, license and production qualification remain incomplete.
 
 Representative historical `.pinc` migration, paired verification of all 134
 inventoried operations, complete symbol/default-size/hosting comparisons and

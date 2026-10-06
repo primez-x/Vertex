@@ -7,14 +7,12 @@ Source presence is not runtime qualification. PincSketch's own QA report leaves
 4.3 mouse-level rendering unverified. Its 4.2 title/project format and 4.3 package
 labels are recorded rather than silently reconciled.
 
-The installed Desktop checkpoint remains `vertex-20261005-area-callouts`; its
-shortcut points to the verified executable. Current source has since gained a
-Pinc import command and passed bounded synthetic-fixture desktop qualification,
-recorded in the [current import verification](../verification/pinc-desktop-import-2026-10-05.md).
-That source build is not yet installed. The installed checkpoint retains the
-independent name/calculation callouts and text alignment. Eleven affected native
-checks and six installed-runtime samples passed for that checkpoint; these are
-bounded checks, not complete user workflow certification. Reviewed same-ID room
+The installed Desktop checkpoint is `vertex-20261005-pinc-import-footer`; its
+shortcut points to the verified executable. It includes the Pinc import command
+and independent name/calculation callouts. Bounded synthetic-fixture desktop
+qualification and all six installed source/reopen samples pass, recorded in the
+[current import verification](../verification/pinc-desktop-import-2026-10-05.md).
+These are bounded checks, not complete user workflow certification. Reviewed same-ID room
 repair and all 22 named drawing choices are implemented, while automatic room
 correspondence, multi-room dispositions, physical-room dimensions and complete
 appraisal-preset fact-review shortcuts remain open. This does not establish full
@@ -61,8 +59,8 @@ That fixture uses source-derived generic measurement areas, not ANSI facts, and
 retains authored names, styles, alignment, size and pinned-SVG transforms. It
 checks endpoint-coincident joints, an 8 ft to 10 ft connected edit producing a
 72 sq ft slanted face, live PDF output, reopen and Undo, ordered page-canvas
-focus, a screen-only previous-page ghost and a two-page PDF. Later-page native
-symbol/label ownership, long rotated text, distant-callout fitting, and a
+focus, a screen-only previous-page ghost and a two-page PDF. Subsequently authored
+native symbols/labels preserve page ownership; long rotated text, distant-callout fitting, and a
 pre-publication known-artwork-fidelity note also passed against the fixture.
 Visual wall association in the import does not establish semantic physical-wall
 hosting.
@@ -75,14 +73,14 @@ This is bounded synthetic-fixture evidence, not certification against all 134
 paired operations. Original historical Pinc project files were not supplied.
 All 80 named symbol kinds have stable crosswalk rows, but complete artwork,
 default-size and hosting-quality comparisons remain open. The installed Desktop
-checkpoint remains the earlier `vertex-20261005-area-callouts` build until the
-qualified source is installed.
+checkpoint now includes this implementation; the full paired-operation review
+and clean-machine qualification remain open.
 
 ## Matching capabilities and actual differences
 
 | Workflow | Vertex implementation/access | Comparison and required action |
 | --- | --- | --- |
-| New/Open/Save/Save As; editable local projects | Main action bar; `main_window.cpp` file workflows; `ProjectStore` | Present. Vertex also preserves typed history, asset integrity, migrations and recovery. Current source imports `.pinc` through a separate command; the installed Desktop checkpoint remains earlier. |
+| New/Open/Save/Save As; editable local projects | Main action bar; `main_window.cpp` file workflows; `ProjectStore` | Present. Vertex also preserves typed history, asset integrity, migrations and recovery. Current source and installed Desktop checkpoint include `.pinc` import through a separate command. |
 | Undo/Redo, selection, copy/paste/delete | Unified canvas and action bar; clipboard/dependency helpers | Present. Mixed-source movement remains under active remediation; ordinary selection is not proof every compound group works. |
 | Exterior/interior drawing; preview; grid/point/edge/alignment snapping | Wall drawing mode; `plan_canvas.cpp`, `constraint_authoring.cpp` | Present. Retain Vertex's physical thickness and unified surface rather than adopting separate Select/Draw/Pan modes. |
 | Closed-space detection; shared edges; classification | Tools > Detect closed areas; wall-closure review; `measurement_area_definition` | Present with a more interrupted classification workflow. Imported generic measurement areas retain Pinc-authored names but do not create ANSI facts. Add the spatial palette workflow below. Classification retention after changed geometry needs direct comparison cases. |
@@ -103,7 +101,7 @@ qualified source is installed.
 | Short geometric calculation arithmetic | Details and printed audit use `derive_area_arithmetic` through one shared formatter | Added rectangle/strip multiplication, triangle base/height and signed chord/arc derivation, reconciled to current gross. Native known-answer, concave/major-arc, reversed-winding and fractional ANSI-rounding checks pass. |
 | Portrait report guide and appraisal-ready cropped PDF | Tools > Sketch composition guide; Tools > Export sketch PDF; regular sheet/report output retained | Added an optional guide showing the actual content crop and a dedicated vector PDF with 2 mm padding. Navigation, grid, tracing images and interaction overlays are excluded. This crop is not a certified architectural scale. Pinc's useful crop workflow is retained without manufacturing a raster screenshot. |
 | Stroke widths independent of screen zoom | Shared scene/output renderer and symbol palette | Present architecture; qualify actual symbols at varied zoom/output scales. Source inventory alone cannot certify output. |
-| Legacy Pinc version-2 opening | `Commands > Import PincSketch project`; separate protected worker | Implemented in current source and exercised against a synthetic fixture, with cancellation, independent unsaved-project admission and exact source preservation. Not yet installed; original historical projects and full paired-operation qualification remain unavailable. Native Save As blocks `.pinc`. This does not replace Apex compatibility. |
+| Legacy Pinc version-2 opening | `Commands > Import PincSketch project`; separate protected worker | Implemented in current source and installed checkpoint; exercised against a synthetic fixture, with cancellation, independent unsaved-project admission and exact source preservation. Original historical projects and full paired-operation qualification remain unavailable. Native Save As blocks `.pinc`. This does not replace Apex compatibility. |
 
 ## Required additions and improvements
 

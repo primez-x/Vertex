@@ -10,8 +10,13 @@ Source originals remain unchanged. Page focus is separate from explicit visibili
 filters, and generated portrait output fits painted content with reserved footer
 space. The [checkpoint record](verification/pinc-desktop-import-2026-10-05.md)
 states the actual native/runtime evidence and remaining limits. This does not
-certify all Pinc operations, Apex parity or production readiness. Installed
-delivery is recorded separately after bundle qualification.
+certify all Pinc operations, Apex parity or production readiness. The current
+offline bundle and installed runtime are `vertex-offline-20261005-pinc-import-footer`
+and `vertex-20261005-pinc-import-footer`; the Desktop shortcut points to that
+verified executable. Six installed source/reopen samples pass, including exact
+image equality after repairing cache-dependent draft-footer text rendering.
+This remains developer-host evidence, with clean-machine and full production
+qualification open.
 
 ## Source-bound physical rooms (2026-10-04)
 
