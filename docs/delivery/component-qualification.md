@@ -37,9 +37,15 @@ certifies the installed runtime.
   deterministic restyling, and distinguishes independently authored additions.
   The inspected catalog contains 345 SVGs, including 320 imported identities.
 - [source-kit-allowlist.json](../../packaging/source-kit-allowlist.json) selects
-  1,498 application/build/docs/license/fixture files, including all 350 current
+  1,498 application/build/docs/license/fixture files at initial audit, including all 350 current
   architectural-library files. The source-kit and distribution tools explicitly
   leave corresponding-source and redistribution qualification incomplete.
+
+Root's subsequent candidate integration refreshed and verified all 1,510 tracked
+application/build/docs/license/fixture files. The identified candidate's source
+kit uses commit 387ab41b271a23e0dedb8015a175c77343be4eb9. This closes the stale
+application allowlist portion of D02-Q03/Q08; exact dependency source, build,
+notice and redistribution obligations below remain open.
 
 ## Specific remaining facts and smallest fixes
 

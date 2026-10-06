@@ -2,7 +2,7 @@
   "schema_version": 1,
   "registry_id": "vertex-production-delivery",
   "authority": "docs/delivery/plan.md",
-  "current_package": "D03",
+  "current_package": "D04",
   "scope": {
     "platform": "Windows 11 x64",
     "units": [
@@ -48054,7 +48054,7 @@
     }
   ],
   "product_source_fingerprint": "94ea4ad712e5f84682d66848a51079d0b7dc9e0c01dc947136eae750c4eb9e6b",
-  "current_build_binding": null,
+  "current_build_binding": "f7abb108576eae9c089b8b469cc1730d8397a02b9a635269b9715d16950c60ce",
   "coverage_counts": {
     "apex_requirements": 130,
     "pinc_adoption_requirements": 13,

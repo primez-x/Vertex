@@ -9,7 +9,7 @@ claimed by this record.
 - D00 relocation: source copy and equivalence complete. Git refs/status/HEAD,
   tracked and untracked content hashes, and 219,440 file sizes matched. Private
   migration receipts are under ignored artifacts/reset-delivery. Old installed
-  application remains available; candidate cutover is pending. One complete
+  application remains available. One complete
   rollback package/runtime is copied into the stable artifacts directories;
   every copied file hash and their executable identities match the originals.
 - Historical evidence: reports/captures/fixtures copied separately from old
@@ -23,14 +23,15 @@ claimed by this record.
 - Authoritative registry: complete source coverage, single package ownership,
   definition/source/candidate applicability, historical evidence retention and
   atomic publication implemented. Bundled help is included in product inputs.
-  Bookkeeping verification is separate from product acceptance; no row is finally
-  accepted.
+  Fifteen bookkeeping checks pass; this is separate from product acceptance.
+  No row is finally accepted.
 - Compatibility acquisition: exact retained installer metadata and native
   transport seams documented. Original native/caller/device evidence is still
   unavailable; no compatibility certification is claimed.
 - Relocated Release application and affected targets: fresh build and subsequent
-  affected builds passed. The original three failures are resolved in focused
-  checks. Wall continuation no longer hides and reopens the focused input, which
+  affected builds passed. The original three failure checks now pass. The witness
+  refusal failure has not reproduced; its additional diagnostics remain.
+  Wall continuation no longer hides and reopens the focused input, which
   had allowed a queued hierarchy event to select the property during pen-up.
   Later fixture corrections preserve exact positions and no-mutation assertions:
   persistent Snap state, actual focused receivers, hybrid-mode corner selection,
@@ -53,19 +54,46 @@ claimed by this record.
 
 ## Next actions, in order
 
-1. Refresh tracked source-kit completeness and registry applicability; prepare
-   one candidate and verify installed save/reopen/output plus selected appearance.
-   Keep the rollback and record exact candidate identity.
-2. Commit/push this reviewed batch and verify its remote identity.
-3. Implement translation-only joint rigid/partial hard-connected solving before
+1. Implement translation-only joint rigid/partial hard-connected solving before
    persisted tangency. Existing independent composition still refuses intersecting
    dependency closures; do not remove that safeguard. Use one connected solve,
    exact selected targets and replay authority, preserving genuine fixed conflicts.
-4. Complete reviewed multi-room split/merge/new/retire dispositions and remaining
+2. Complete reviewed multi-room split/merge/new/retire dispositions and remaining
    architectural lifecycles. Bind hierarchy Add actions to the clicked branch;
    current multi-property floor/layer targeting still needs correction.
-5. Continue ordinary drawing acceptance, D01 acquisition and D02 distribution
+3. Continue ordinary drawing acceptance, D01 acquisition and D02 distribution
    qualification. A development candidate does not satisfy the production gate.
+
+## Identified human-test candidate
+
+One package is at artifacts/packages/vertex-candidate; its verified installation
+is artifacts/installed/candidate. Run bin/vertex.exe from that installation.
+The previous installation and one complete stable rollback remain available.
+The existing desktop shortcut still points to the previous build.
+
+- Product/source-kit commit: 387ab41b271a23e0dedb8015a175c77343be4eb9.
+- Runtime manifest SHA-256:
+  f7abb108576eae9c089b8b469cc1730d8397a02b9a635269b9715d16950c60ce.
+- Application SHA-256:
+  6221781b06c2a4be8d0c9f4842543fbb9b3fb7a36df98ccc31b32057021aa556.
+- Source-kit allowlist: 1,510 of 1,510 required tracked files; completeness
+  check passed. Dependency corresponding-source qualification remains open.
+- Packaging, manifest verification and installation completed successfully.
+  The missing CLI build prerequisite was filled before resuming the failed
+  inspection stage; its original failed receipt remains preserved.
+- Six independent installed processes passed source/save/reopen checks across
+  measurement residential, architectural residential and light commercial.
+  Saved PNG references reopened; project and 2D/3D capture hashes matched.
+  The developer build/dependency directories were removed from PATH.
+- This was a developer-machine smoke, with inherited environment and system
+  hooks. Networking was not denied, the Windows registry was not isolated,
+  and clean-machine, physical-output, performance and human acceptance were
+  not established. The installed report explicitly says production_qualified=false.
+
+Private detailed evidence is under
+artifacts/reset-delivery/installed-candidate/run-20261005-214544-d939b877.
+Candidate acceptance metadata can advance separately from the frozen source kit;
+documentation-only updates do not trigger another package.
 
 ## Focused evidence for this batch
 
