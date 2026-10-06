@@ -139,6 +139,11 @@ double building_frame(const BuildingObject& object) {
 
 Entity resize_building(const Entity& original, const Resize& resize) {
     auto object = decode_building_entity(original);
+    if (const auto* railing=std::get_if<Railing>(&object); railing && railing->host)
+        throw std::invalid_argument("Hosted railing plan dimensions follow its stair; resize the host stair instead");
+    if (const auto* stair=std::get_if<StairFlight>(&object);
+        stair && (stair->flights.size()>1 || !stair->landings.empty()))
+        throw std::invalid_argument("Multi-flight and turned stairs require family dimension edits; independent plan-axis resizing is unsupported");
     std::optional<Bounds2> original_bounds;
     if (original.type == "roof" || original.type == "railing")
         original_bounds = plan_axis_resize_bounds(original);
@@ -222,7 +227,12 @@ Entity resize_building(const Entity& original, const Resize& resize) {
     },object);
     const auto canonical = encode_building_entity(object,original.extensions);
     Entity result = original;
-    for (const auto& [key,value] : canonical.properties.items()) result.properties[key] = value;
+    for (const auto& [key,value] : canonical.properties.items()) {
+        if (key=="flights" || key=="landings") continue; // Stable records and their metadata are unchanged.
+        if (key=="top_landing" && result.properties.contains(key) && result.properties.at(key).is_object() && value.is_object()) {
+            for (const auto& [field,dimension] : value.items()) result.properties[key][field]=dimension;
+        } else result.properties[key] = value;
+    }
     result.properties.erase("transform");
     return result;
 }
@@ -319,6 +329,8 @@ void validate_dependent_geometry(const DocumentSnapshot& preview, const std::str
 } // namespace
 
 double plan_axis_resize_frame(const Entity& entity) {
+    if (entity.type=="railing" && entity.properties.contains("host"))
+        throw std::invalid_argument("Hosted railing plan frame follows its stair; select the host stair instead");
     if (entity.type == "wall") return wall_frame(entity);
     if (entity.type == "room" || entity.type == "slab") {
         Boundary boundary;
@@ -357,7 +369,7 @@ double plan_axis_resize_frame(const Entity& entity) {
     const char* key = nullptr;
     if (entity.type == "column" && (form == "rectangular_column" || form == "circular_column"))
         key = "rotation_rad";
-    else if ((entity.type == "stair" && form == "straight_stair_flight") ||
+    else if ((entity.type == "stair" && (form == "straight_stair_flight" || form == "multi_flight_stair")) ||
              (entity.type == "railing" && form == "straight_railing") ||
              (entity.type == "roof" && (form == "sloped_roof_panel" || form == "gable_roof" || form == "hip_roof")))
         key = "orientation_rad";
@@ -443,6 +455,17 @@ ApplyEntityChanges plan_axis_resize_command(const DocumentSnapshot& source, cons
     if (!command.entity_changes.empty()) {
         const auto preview = Document::preview_command(source,command);
         validate_dependent_geometry(preview,entity_id);
+        if (original.type=="stair") {
+            for (const auto& [id,entity] : preview.entities()) {
+                const auto& p=entity.properties;
+                if (entity.type!="railing" || !p.is_object() || !p.contains("version") ||
+                    !p.at("version").is_number_integer() || p.at("version")!=2 ||
+                    !p.contains("form") || p.at("form")!="stair_flight_railing") continue;
+                const auto rail=decode_railing_properties(id,entity.properties);
+                if (rail.host->stair_id==entity_id)
+                    (void)make_building_shape(rail,preview.entities());
+            }
+        }
     }
     return command;
 }

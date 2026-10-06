@@ -28,6 +28,14 @@
 #include "sketch/roof_join_semantics.hpp"
 #include "sketch/slab_semantics.hpp"
 #include "sketch/survey_source_version.hpp"
+#include "sketch/document_digest.hpp"
+#include "sketch/stair_attachment_integrity.hpp"
+#ifdef VERTEX_HAS_PHYSICAL_ROOM_REVIEW
+#include "sketch/physical_wall_room_review.hpp"
+#endif
+#ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
+#include "sketch/joint_translation_replay.hpp"
+#endif
 
 #ifdef _WIN32
 #ifndef NOMINMAX
@@ -188,12 +196,12 @@ std::optional<StairConnectionReference> stair_connection_reference(const Entity&
                        "level_connection requires a stair entity");
     }
     const auto& value = found.value();
-    if (!value.is_object() || value.size() != 5 ||
+    if (!value.is_object() ||
         !value.contains("version") || !value.contains("graph_id") ||
         !value.contains("link_id") || !value.contains("lower_level_id") ||
         !value.contains("upper_level_id")) {
         document_error(DocumentErrorCode::invalid_entity,
-                       "stair level_connection must contain exactly version, graph_id, link_id, lower_level_id, and upper_level_id");
+                       "stair level_connection requires version, graph_id, link_id, lower_level_id, and upper_level_id");
     }
     const auto& version = value.at("version");
     if ((!version.is_number_integer() && !version.is_number_unsigned()) || version != 1) {
@@ -773,6 +781,11 @@ std::optional<std::string> validate_measurement_linework_integrity(
 
 std::optional<std::string> validate_state(const std::map<std::string, Entity, std::less<>>& entities,
                     const std::map<std::string, Asset, std::less<>>& assets) {
+    try {
+        validate_stair_attachment_state(entities);
+    } catch (const std::exception& error) {
+        document_error(DocumentErrorCode::invalid_entity, error.what());
+    }
     std::optional<std::string> unsupported_relationship;
     std::map<std::string, RoomReference, std::less<>> room_references;
     std::vector<RoomRelation> room_relations;
@@ -1568,7 +1581,11 @@ Asset Asset::create(std::string media_type, std::vector<std::byte> bytes,
 void validate_physical_room_source_transition(
     const std::map<std::string, Entity, std::less<>>& before,
     const std::map<std::string, Entity, std::less<>>& after,
-    const BoundaryGeometryEdit* reviewed_edit=nullptr) {
+    const BoundaryGeometryEdit* reviewed_edit=nullptr,
+    const ApplyBoundaryConstraintChanges* reviewed_batch=nullptr) {
+    // The dedicated batch replay reconstructs the complete result from its
+    // semantic decisions, including all retained owners, before publication.
+    if (reviewed_batch && reviewed_batch->room_review_completion && !reviewed_batch->room_review_intent.is_null()) return;
     if (reviewed_edit && reviewed_edit->physical_wall_room_repair) {
         const auto descriptor=validate_physical_wall_room_repair(before,*reviewed_edit);
         const auto replacement=after.find(reviewed_edit->boundary_id);
@@ -1690,6 +1707,42 @@ static bool has_rigid_group_completion(const ApplyBoundaryConstraintChanges& com
     return command.rigid_group_completion || command.rigid_group_transform.has_value();
 }
 
+static bool has_joint_translation_completion(const ApplyBoundaryConstraintChanges& command) {
+    return command.joint_translation_completion || command.joint_translation.has_value();
+}
+
+static bool has_room_review_completion(const ApplyBoundaryConstraintChanges& command) {
+    return command.room_review_completion || !command.room_review_intent.is_null();
+}
+
+static void validate_room_review_mode(const ApplyBoundaryConstraintChanges& command, bool admission) {
+    if (!has_room_review_completion(command)) return;
+    if (!command.room_review_completion || (admission && command.room_review_intent.is_null()))
+        throw std::invalid_argument("Room review requires its explicit semantic intent and completion mode");
+    if (!command.boundary_edits.empty() || !command.wall_edits.empty() || !command.entity_changes.empty() ||
+        !command.physical_entity_changes.empty() || !command.exterior_source_edits.empty() ||
+        !command.supplemental_entity_changes.empty() || !command.supplemental_asset_changes.empty() ||
+        !command.measured_stroke_edits.empty() || !command.dimension_placement_moves.empty() ||
+        command.exterior_source_completion || command.supplemental_source_completion ||
+        command.supplemental_asset_reference_completion || command.rigid_wall_transform_completion ||
+        command.measured_source_completion || command.dimension_placement_completion ||
+        command.rigid_group_completion || command.rigid_group_transform || command.wall_split ||
+        command.exterior_corner_move || command.exterior_segment_resize || command.exterior_segment_arc ||
+        has_joint_translation_completion(command))
+        throw std::invalid_argument("Room review cannot borrow another command's edit authority");
+}
+
+static void validate_joint_translation_mode(const ApplyBoundaryConstraintChanges& command, bool admission) {
+    if (!has_joint_translation_completion(command)) return;
+    if (!command.joint_translation_completion)
+        throw std::invalid_argument("Joint translation requires its explicit completion mode");
+    if (command.rigid_group_completion || command.rigid_group_transform || command.wall_split ||
+        command.exterior_corner_move || command.exterior_segment_resize || command.exterior_segment_arc)
+        throw std::invalid_argument("Joint translation cannot borrow an independent edit authority");
+    if (admission && !command.joint_translation)
+        throw std::invalid_argument("Joint translation requires its selected-source intent");
+}
+
 static void validate_rigid_group_intent(const ApplyBoundaryConstraintChanges& command, bool admission) {
     if (!has_rigid_group_completion(command)) return;
     if (!command.rigid_group_completion)
@@ -1761,6 +1814,28 @@ static void complete_dimension_placements(const std::map<std::string, Entity, st
         // Automatic source reflow is an intentional predecessor. Preserve its
         // surviving entity, style and opaque metadata while changing placement.
         current->second = encode_boundary_dimension_entity(b, &current->second);
+    }
+}
+
+static void retain_joint_callout_placement(const std::map<std::string, Entity, std::less<>>& source,
+    std::map<std::string, Entity, std::less<>>& candidate, const JointTranslationIntent& intent) {
+    std::set<std::string, std::less<>> rigid(intent.rigid_boundary_ids.begin(), intent.rigid_boundary_ids.end());
+    rigid.insert(intent.rigid_stroke_ids.begin(), intent.rigid_stroke_ids.end());
+    for (const auto& [id, entity] : source) {
+        if (!can_recognize_boundary_dimension_entity_type(entity.type)) continue;
+        const auto decoded = decode_boundary_dimension_entity(entity);
+        if (!decoded.supported()) throw std::invalid_argument(decoded.unsupported_reason);
+        if (!rigid.contains(decoded.dimension->boundary_id)) continue;
+        const auto found = candidate.find(id);
+        if (found == candidate.end()) throw std::invalid_argument("Joint translation retired a rigid-owner callout");
+        auto placed = *decoded.dimension;
+        placed.text_position = {placed.text_position.x + intent.offset.x, placed.text_position.y + intent.offset.y};
+        if (!std::isfinite(placed.text_position.x) || !std::isfinite(placed.text_position.y))
+            throw std::invalid_argument("Joint translation callout position overflows");
+        // A whole-owner move keeps automatic/manual placement provenance. The
+        // ordinary placement lane's manual conversion applies to independent
+        // callout drags, not this source-reconstructed rigid movement.
+        found->second = encode_boundary_dimension_entity(placed, &entity);
     }
 }
 
@@ -1889,7 +1964,7 @@ void validate_completed_constraint_change(const std::map<std::string, Entity, st
     // Mixed transactions validate both original-source replays and the final
     // merged state in completed_boundary_constraint_entities. The legacy
     // validator must never apply partial authority to the rigid lane.
-    if (has_rigid_group_completion(command)) return;
+    if (has_rigid_group_completion(command) || has_joint_translation_completion(command) || has_room_review_completion(command)) return;
     try { validate_exterior_resize_related_edits(command); }
     catch (const std::exception& error) { document_error(DocumentErrorCode::constraint_violation,error.what()); }
     if(command.wall_split) {
@@ -1983,7 +2058,7 @@ static void validate_exterior_source_redraw(const BoundaryGeometryEdit& edit) {
         edit.fresh_topology || !edit.replacement_authoring.is_null() || !edit.replacement_properties.empty() ||
         !edit.replacement_dimension_ids.empty() || !edit.replacement_child_mapping.empty() ||
         !edit.replacement_removed_reference_ids.empty())
-        throw std::invalid_argument("Automatic exterior source updates require retained-topology version-three redraws");
+        throw std::invalid_argument("Automatic exterior source updates require typed retained-topology redraws");
 }
 
 static void validate_wall_split_lifetime(const WallSplitIntent& intent,
@@ -2003,6 +2078,36 @@ static void validate_wall_split_lifetime(const WallSplitIntent& intent,
                 throw std::invalid_argument("Wall split child identity was already used in retained history: "+id);
     }
 }
+
+#ifdef VERTEX_HAS_PHYSICAL_ROOM_REVIEW
+static void validate_room_review_lifetime(const nlohmann::json& encoded,
+    const std::vector<RevisionRecord>& history,std::size_t preceding_records) {
+    const auto intent=decode_physical_wall_room_review_intent(encoded);
+    std::set<std::string,std::less<>> fresh;
+    const auto reserve=[&](const std::string& id) {
+        if (!is_valid_identifier(id) || !fresh.insert(id).second)
+            throw std::invalid_argument("Room review fresh identities are invalid or overlap");
+    };
+    for (const auto& decision:intent.fresh) {
+        if (decision.disposition==PhysicalWallRoomFreshDisposition::unclassified) continue;
+        if (decision.disposition==PhysicalWallRoomFreshDisposition::create) reserve(decision.room_id);
+        for (const auto& id:decision.fresh_ids.segment_ids) reserve(id);
+        for (const auto& id:decision.fresh_ids.vertex_ids) reserve(id);
+    }
+    for (const auto& decision:intent.retained)
+        for (const auto& id:decision.replacement_dimension_ids) reserve(id);
+    for (std::size_t index=0;index<preceding_records;++index) {
+        for (const auto& [id,entity]:history[index].entities) {
+            if (fresh.contains(id)) throw std::invalid_argument("Room review identity was already used in retained history: "+id);
+            if (!can_recognize_boundary_entity_type(entity.type) ||
+                inspect_boundary_entity_version(entity).format!=BoundaryEntityFormat::identified_v1) continue;
+            for (const auto& edge:decode_identified_boundary_entity(entity).segments)
+                if (fresh.contains(edge.segment_id) || fresh.contains(edge.start_vertex_id) || fresh.contains(edge.end_vertex_id))
+                    throw std::invalid_argument("Room review child identity was already used in retained history: "+id);
+        }
+    }
+}
+#endif
 
 std::map<std::string, Entity, std::less<>> boundary_constraint_entities(
     const std::map<std::string, Entity, std::less<>>& source,
@@ -2217,7 +2322,16 @@ std::map<std::string, Entity, std::less<>> boundary_constraint_entities(
             if (command.exterior_corner_move || command.exterior_segment_resize || command.exterior_segment_arc) validate_exterior_corner_physical_contacts(source, result);
             if (command.exterior_source_edits.empty())
                 throw std::invalid_argument("Exterior source completion requires explicit redraws");
-            const auto expected = exterior_wall_measurement_source_updates(source, result);
+            std::map<std::string, Vec2, std::less<>> rigid_source_offsets;
+            for (const auto& edit : command.exterior_source_edits) {
+                if (!edit.wall_source_translation) continue;
+                validate_exterior_source_redraw(edit);
+                const auto& encoded_offset = edit.wall_source_translation->at("offset");
+                const Vec2 offset{encoded_offset.at(0).get<double>(), encoded_offset.at(1).get<double>()};
+                if (!rigid_source_offsets.emplace(edit.boundary_id, offset).second)
+                    throw std::invalid_argument("Physical source translation owner is repeated");
+            }
+            const auto expected = exterior_wall_measurement_source_updates(source, result, true, rigid_source_offsets);
             if (expected != command.exterior_source_edits)
                 throw std::invalid_argument("Exterior source redraws differ from complete physical-wall lineage reconstruction");
             for (const auto& update : expected)
@@ -2485,29 +2599,7 @@ std::map<std::string, Entity, std::less<>> boundary_transform_entities(
     }
     protected_ids = owners;
     const auto source_current = [&](const auto& entities, const Entity& owner) {
-        try {
-            const auto ids = exterior_wall_measurement_source_ids(owner);
-            const auto derived = derive_exterior_wall_measurement(entities,ids);
-            auto recorded = owner.properties.at("wall_measurement_source");
-            auto& walls = recorded.at("walls");
-            std::sort(walls.begin(), walls.end(), [](const auto& a, const auto& b) {
-                return a.at("id").template get<std::string>() < b.at("id").template get<std::string>();
-            });
-            if (recorded != derived.source)
-                return false;
-            const auto actual = boundary_geometry(decode_identified_boundary_entity(owner));
-            const auto aligned = uniquely_aligned_rigid_exterior(actual,derived.boundary,PlanarTransform{});
-            for (std::size_t i = 0; i < actual.size(); ++i) {
-                const auto& a = actual[i];
-                const auto& b = aligned[i];
-                if (a.start.x != b.start.x || a.start.y != b.start.y || a.end.x != b.end.x ||
-                    a.end.y != b.end.y || a.sweep_radians != b.sweep_radians)
-                    return false;
-            }
-            return true;
-        } catch (const std::exception&) {
-            return false;
-        }
+        return wall_measurement_source_current(entities, owner);
     };
     for (const auto& [id, entity] : source) {
         if (can_recognize_boundary_dimension_entity_type(entity.type)) {
@@ -2715,6 +2807,123 @@ std::map<std::string, Entity, std::less<>> completed_boundary_constraint_entitie
     const BoundaryIdentityHistory& history,
     const std::map<std::string, Entity, std::less<>>& source,
     const ApplyBoundaryConstraintChanges& command, bool retained_replay = false) {
+    if (has_room_review_completion(command)) {
+        try {
+            validate_room_review_mode(command, true);
+            (void)command_to_json(Command{command});
+#ifdef VERTEX_HAS_PHYSICAL_ROOM_REVIEW
+            const auto replay=replay_physical_wall_room_review(source,command.room_review_intent);
+            validate_boundary_identity_transition(history,source,replay.entities);
+            (void)validate_constraint_integrity(replay.entities);
+            return replay.entities;
+#else
+            throw std::invalid_argument("Room review requires the production physical-wall engine");
+#endif
+        } catch (const DocumentError&) { throw; }
+        catch (const std::exception& error) { document_error(DocumentErrorCode::invalid_entity,error.what()); }
+    }
+    if (has_joint_translation_completion(command)) {
+        try {
+            validate_joint_translation_mode(command, true);
+            (void)command_to_json(Command{command});
+#ifdef VERTEX_HAS_CONSTRAINT_AUTHORING
+            auto submitted = command;
+            submitted.joint_translation.reset();
+            submitted.joint_translation_completion = false;
+            auto reconstructed = reconstruct_joint_translation(source, *command.joint_translation);
+            reconstructed.expected_revision = command.expected_revision;
+            reconstructed.message = command.message;
+            for (const auto& change : submitted.supplemental_entity_changes) {
+                auto generated = std::find_if(reconstructed.supplemental_entity_changes.begin(),
+                    reconstructed.supplemental_entity_changes.end(), [&](const auto& item) {
+                        return (item.kind == EntityChangeKind::upsert ? item.entity.id : item.entity_id) ==
+                               (change.kind == EntityChangeKind::upsert ? change.entity.id : change.entity_id);
+                    });
+                if (generated != reconstructed.supplemental_entity_changes.end() && generated->kind == change.kind &&
+                    (change.kind == EntityChangeKind::upsert ? exact_entity_payload(generated->entity,change.entity) :
+                                                             generated->entity_id == change.entity_id)) continue;
+                if (change.kind != EntityChangeKind::upsert || !submitted.supplemental_source_completion)
+                    throw std::invalid_argument("Joint presentation movement requires existing placement-only supplements");
+                const auto found = source.find(change.entity.id);
+                if (found == source.end() || found->second.type != change.entity.type ||
+                    (change.entity.type != kAnnotationEntityType && change.entity.type != "reference_asset"))
+                    throw std::invalid_argument("Joint presentation movement supports existing labels, symbols and references only");
+                const auto& original = found->second;
+                const auto& baseline = generated == reconstructed.supplemental_entity_changes.end() ? original : generated->entity;
+                auto retained = change.entity;
+                const auto view_offset = command.joint_translation->presentation_offset.value_or(command.joint_translation->offset);
+                const auto check_position = [&](const nlohmann::json& previous, const nlohmann::json& proposed, Vec2 offset) {
+                    if (!previous.is_array() || !proposed.is_array() || previous.size() != 2 || proposed.size() != 2)
+                        throw std::invalid_argument("Joint presentation position is malformed");
+                    for (std::size_t index = 0; index < 2; ++index) {
+                        if (!previous[index].is_number() || !proposed[index].is_number())
+                            throw std::invalid_argument("Joint presentation position must be numeric");
+                        const double value = proposed[index].get<double>();
+                        const double expected_value = previous[index].get<double>() + (index == 0 ? offset.x : offset.y);
+                        if (!std::isfinite(value) || value != expected_value)
+                            throw std::invalid_argument("Joint presentation position differs from its selected translation");
+                    }
+                };
+                if (change.entity.type == "reference_asset") {
+                    check_position(original.properties.at("position_m"),change.entity.properties.at("position_m"),view_offset);
+                    retained.properties["position_m"] = baseline.properties.at("position_m");
+                } else {
+                    validate_annotation_entity(change.entity);
+                    const auto& prior_state = original.properties.at("state");
+                    auto& next_state = retained.properties.at("state");
+                    for (const auto* kind : {"labels", "symbols"}) {
+                        const auto& prior = prior_state.at(kind);
+                        auto& next = next_state.at(kind);
+                        const auto& generated_rows = baseline.properties.at("state").at(kind);
+                        if (prior.size() != next.size() || generated_rows.size() != prior.size())
+                            throw std::invalid_argument("Joint presentation movement cannot add, remove or reorder instances");
+                        for (std::size_t index = 0; index < prior.size(); ++index) {
+                            const auto& before = prior[index].at("placement");
+                            auto& after = next[index].at("placement");
+                            if (prior[index].at("id") != next[index].at("id"))
+                                throw std::invalid_argument("Joint presentation movement must retain instance identities");
+                            if (before.at("x") != after.at("x") || before.at("y") != after.at("y")) {
+                                const auto offset = std::string_view(kind) == "labels" && prior[index].value("model_plan",false)
+                                    ? command.joint_translation->offset : view_offset;
+                                check_position(nlohmann::json::array({before.at("x"),before.at("y")}),
+                                               nlohmann::json::array({after.at("x"),after.at("y")}),offset);
+                            }
+                            after["x"] = generated_rows[index].at("placement").at("x");
+                            after["y"] = generated_rows[index].at("placement").at("y");
+                        }
+                    }
+                }
+                if (!exact_entity_payload(retained,baseline))
+                    throw std::invalid_argument("Joint presentation movement cannot change styling, contents, sizing or metadata");
+                if (generated == reconstructed.supplemental_entity_changes.end())
+                    reconstructed.supplemental_entity_changes.push_back(change);
+                else *generated = change;
+                reconstructed.supplemental_source_completion = true;
+            }
+            auto expected = boundary_constraint_entities(source, reconstructed, retained_replay);
+            auto actual = boundary_constraint_entities(source, submitted, retained_replay);
+            if (actual.size() != expected.size())
+                throw std::invalid_argument("Joint translation proof differs from its reconstructed source intent");
+            for (const auto& [id, entity] : expected) {
+                const auto found = actual.find(id);
+                if (found == actual.end() || !exact_entity_payload(entity, found->second))
+                    throw std::invalid_argument("Joint translation proof differs from its reconstructed source intent: " + id);
+            }
+            retain_joint_callout_placement(source, actual, *command.joint_translation);
+            for (const auto& [id, entity] : source) {
+                if (entity.type != "constraint") continue;
+                const auto found = actual.find(id);
+                if (found == actual.end() || !exact_entity_payload(entity, found->second))
+                    throw std::invalid_argument("Joint translation cannot change a persisted relation: " + id);
+            }
+            validate_boundary_identity_transition(history, source, actual);
+            return actual;
+#else
+            throw std::invalid_argument("Joint translation requires the production constraint engine");
+#endif
+        } catch (const DocumentError&) { throw; }
+        catch (const std::exception& error) { document_error(DocumentErrorCode::invalid_entity, error.what()); }
+    }
     if (!has_rigid_group_completion(command))
         return boundary_constraint_entities(source, command, retained_replay);
     try {
@@ -2924,6 +3133,57 @@ Vec2 command_vec2_from_json(const nlohmann::json& value, std::string_view contex
     command_exact_fields(value, {"x", "y"}, DocumentErrorCode::invalid_entity, context);
     return {command_number(value.at("x"), std::string(context) + ".x"),
             command_number(value.at("y"), std::string(context) + ".y")};
+}
+
+nlohmann::json joint_translation_to_json(const JointTranslationIntent& intent) {
+    if (!std::isfinite(intent.offset.x) || !std::isfinite(intent.offset.y) ||
+        (intent.offset.x == 0.0 && intent.offset.y == 0.0))
+        throw std::invalid_argument("Joint translation requires a finite nonzero offset");
+    if (intent.presentation_offset && (!std::isfinite(intent.presentation_offset->x) || !std::isfinite(intent.presentation_offset->y)))
+        throw std::invalid_argument("Joint presentation offset must be finite");
+    std::set<std::string, std::less<>> selected;
+    const auto validate_ids = [&](const std::vector<std::string>& ids) {
+        for (const auto& id : ids)
+            if (!is_valid_identifier(id) || !selected.insert(id).second)
+                throw std::invalid_argument("Joint translation selected IDs are invalid or repeated");
+    };
+    validate_ids(intent.rigid_boundary_ids);
+    validate_ids(intent.rigid_stroke_ids);
+    validate_ids(intent.partial_wall_ids);
+    validate_ids(intent.dimension_ids);
+    if (selected.size() > 4096 || intent.partial_wall_ids.empty() ||
+        (intent.rigid_boundary_ids.empty() && intent.rigid_stroke_ids.empty()))
+        throw std::invalid_argument("Joint translation requires bounded rigid and partial selections");
+    return {{"version", 1}, {"offset", command_vec2_to_json(intent.offset)},
+        {"rigid_boundary_ids", intent.rigid_boundary_ids}, {"rigid_stroke_ids", intent.rigid_stroke_ids},
+        {"partial_wall_ids", intent.partial_wall_ids}, {"move_connected_objects", intent.move_connected_objects},
+        {"dimension_ids", intent.dimension_ids},
+        {"presentation_offset", intent.presentation_offset ? command_vec2_to_json(*intent.presentation_offset) : nlohmann::json(nullptr)}};
+}
+
+JointTranslationIntent joint_translation_from_json(const nlohmann::json& value) {
+    command_exact_fields(value, {"version", "offset", "rigid_boundary_ids", "rigid_stroke_ids",
+        "partial_wall_ids", "move_connected_objects", "dimension_ids", "presentation_offset"}, DocumentErrorCode::invalid_entity, "joint translation intent");
+    if (!value.at("version").is_number_integer() || value.at("version") != 1 ||
+        !value.at("move_connected_objects").is_boolean())
+        throw std::invalid_argument("Unsupported joint translation intent or movement flag");
+    JointTranslationIntent result;
+    result.offset = command_vec2_from_json(value.at("offset"), "joint translation offset");
+    if (!value.at("presentation_offset").is_null())
+        result.presentation_offset = command_vec2_from_json(value.at("presentation_offset"), "joint presentation offset");
+    const auto read_ids = [&](const char* key, std::vector<std::string>& ids) {
+        const auto& values = value.at(key);
+        if (!values.is_array() || values.size() > 4096)
+            throw std::invalid_argument("Joint translation selected IDs must be a bounded array");
+        for (const auto& id : values) ids.push_back(command_string(id, key, kMaximumIdBytes));
+    };
+    read_ids("rigid_boundary_ids", result.rigid_boundary_ids);
+    read_ids("rigid_stroke_ids", result.rigid_stroke_ids);
+    read_ids("partial_wall_ids", result.partial_wall_ids);
+    read_ids("dimension_ids", result.dimension_ids);
+    result.move_connected_objects = value.at("move_connected_objects").get<bool>();
+    (void)joint_translation_to_json(result);
+    return result;
 }
 
 nlohmann::json command_transform_to_json(const PlanarTransform& transform) {
@@ -3205,6 +3465,39 @@ nlohmann::json command_to_json(const Command& command) {
             }
             return encoded;
         } else if constexpr (std::is_same_v<T, ApplyBoundaryConstraintChanges>) {
+            if (has_room_review_completion(typed)) {
+                try {
+                    validate_room_review_mode(typed,false);
+#ifdef VERTEX_HAS_PHYSICAL_ROOM_REVIEW
+                    if (!typed.room_review_intent.is_null())
+                        (void)decode_physical_wall_room_review_intent(typed.room_review_intent);
+#endif
+                    auto encoded=nlohmann::json{{"version",18},{"kind","apply_boundary_constraint_changes"},
+                        {"expected_revision",typed.expected_revision},{"message",typed.message},
+                        {"room_review_completion",true},{"room_review_intent",typed.room_review_intent}};
+                    if (encoded.dump().size()>1024*1024)
+                        throw std::invalid_argument("Room review exceeds the persisted intent budget");
+                    return encoded;
+                } catch (const DocumentError&) { throw; }
+                catch (const std::exception& error) { document_error(DocumentErrorCode::invalid_entity,error.what()); }
+            }
+            if (has_joint_translation_completion(typed)) {
+                try {
+                    validate_joint_translation_mode(typed, false);
+                    auto proof = typed;
+                    proof.joint_translation.reset();
+                    proof.joint_translation_completion = false;
+                    auto encoded = nlohmann::json{{"version", 17}, {"kind", "apply_boundary_constraint_changes"},
+                        {"expected_revision", typed.expected_revision}, {"message", typed.message},
+                        {"joint_translation_completion", true},
+                        {"joint_translation", typed.joint_translation ? joint_translation_to_json(*typed.joint_translation) : nlohmann::json(nullptr)},
+                        {"proof", command_to_json(Command{proof})}};
+                    if (encoded.dump().size() > 1024 * 1024)
+                        throw std::invalid_argument("Joint translation exceeds the persisted proof budget");
+                    return encoded;
+                } catch (const DocumentError&) { throw; }
+                catch (const std::exception& error) { document_error(DocumentErrorCode::invalid_entity, error.what()); }
+            }
             if (std::any_of(typed.boundary_edits.begin(),typed.boundary_edits.end(),[](const auto& edit){return edit.physical_wall_room_repair.has_value();}) ||
                 std::any_of(typed.exterior_source_edits.begin(),typed.exterior_source_edits.end(),[](const auto& edit){return edit.physical_wall_room_repair.has_value();}))
                 document_error(DocumentErrorCode::invalid_entity,"Physical room repair requires its exclusive same-ID boundary command");
@@ -3449,7 +3742,7 @@ Command command_from_json(const nlohmann::json& value,
     try {
         if (!value.is_object() || !value.contains("version") || !value.contains("kind") ||
             !value.at("version").is_number_integer() ||
-            (value.at("version") != 1 && value.at("version") != 2 && value.at("version") != 3 && value.at("version") != 4 && value.at("version") != 5 && value.at("version") != 6 && value.at("version") != 7 && value.at("version") != 8 && value.at("version") != 9 && value.at("version") != 10 && value.at("version") != 11 && value.at("version") != 12 && value.at("version") != 13 && value.at("version") != 14 && value.at("version") != 15 && value.at("version") != 16) ||
+            (value.at("version") != 1 && value.at("version") != 2 && value.at("version") != 3 && value.at("version") != 4 && value.at("version") != 5 && value.at("version") != 6 && value.at("version") != 7 && value.at("version") != 8 && value.at("version") != 9 && value.at("version") != 10 && value.at("version") != 11 && value.at("version") != 12 && value.at("version") != 13 && value.at("version") != 14 && value.at("version") != 15 && value.at("version") != 16 && value.at("version") != 17 && value.at("version") != 18) ||
             !value.at("kind").is_string()) {
             document_error(DocumentErrorCode::invalid_entity, "serialized command envelope is invalid");
         }
@@ -3505,6 +3798,45 @@ Command command_from_json(const nlohmann::json& value,
             return result;
         }
         if (kind == "apply_boundary_constraint_changes") {
+            if (value.at("version")==18) {
+                command_exact_fields(value,{"version","kind","expected_revision","message","room_review_completion","room_review_intent"},
+                    DocumentErrorCode::invalid_entity,"serialized physical-room review");
+                if (value.dump().size()>1024*1024 || !value.at("room_review_completion").is_boolean() ||
+                    !value.at("room_review_completion").get<bool>())
+                    throw std::invalid_argument("Room review mode or intent budget is invalid");
+                const auto ordinary=std::get<ApplyEntityChanges>(command_from_json(nlohmann::json{
+                    {"version",1},{"kind","apply_entity_changes"},{"expected_revision",value.at("expected_revision")},
+                    {"message",value.at("message")},{"entity_changes",nlohmann::json::array()},{"asset_changes",nlohmann::json::array()}}));
+                ApplyBoundaryConstraintChanges result;
+                result.expected_revision=ordinary.expected_revision;
+                result.message=ordinary.message;
+                result.room_review_completion=true;
+                result.room_review_intent=value.at("room_review_intent");
+                (void)command_to_json(Command{result});
+                return result;
+            }
+            if (value.at("version") == 17) {
+                command_exact_fields(value, {"version", "kind", "expected_revision", "message",
+                    "joint_translation_completion", "joint_translation", "proof"},
+                    DocumentErrorCode::invalid_entity, "serialized joint translation");
+                if (value.dump().size() > 1024 * 1024 || !value.at("joint_translation_completion").is_boolean() ||
+                    !value.at("joint_translation_completion").get<bool>())
+                    throw std::invalid_argument("Joint translation mode or proof budget is invalid");
+                const auto& proof = value.at("proof");
+                if (!proof.is_object() || !proof.contains("version") || !proof.at("version").is_number_integer() ||
+                    proof.at("version").get<int>() < 1 || proof.at("version").get<int>() >= 16 ||
+                    !proof.contains("kind") || proof.at("kind") != kind)
+                    throw std::invalid_argument("Joint translation requires one ordinary geometry proof");
+                auto result = std::get<ApplyBoundaryConstraintChanges>(command_from_json(proof, asset_resolver));
+                if (result.expected_revision != command_revision(value.at("expected_revision"), "joint translation revision") ||
+                    !value.at("message").is_string() || result.message != value.at("message").get<std::string>())
+                    throw std::invalid_argument("Joint translation proof has a different revision or message");
+                result.joint_translation_completion = true;
+                if (!value.at("joint_translation").is_null())
+                    result.joint_translation = joint_translation_from_json(value.at("joint_translation"));
+                (void)command_to_json(Command{result});
+                return result;
+            }
             if (value.at("version") == 16) {
                 command_exact_fields(value,{"version","kind","expected_revision","message","entity_changes","boundary_edits","wall_edits",
                     "physical_entity_changes","exterior_source_edits","supplemental_entity_changes","supplemental_asset_changes",
@@ -3768,8 +4100,9 @@ Command command_from_json(const nlohmann::json& value,
                     if (!value.at("exterior_source_edits").is_array() || value.at("exterior_source_edits").empty())
                         document_error(DocumentErrorCode::invalid_entity,"Exterior source completion requires explicit redraws");
                     for (const auto& edit : value.at("exterior_source_edits")) {
-                        if (!edit.is_object() || !edit.contains("version") || edit.at("version") != 3)
-                            throw std::invalid_argument("Automatic exterior source updates require version-three redraws");
+                        if (!edit.is_object() || !edit.contains("version") ||
+                            (edit.at("version") != 3 && edit.at("version") != 8))
+                            throw std::invalid_argument("Automatic exterior source updates require typed retained-topology redraws");
                         const auto decoded = decode_boundary_geometry_edit(edit);
                         validate_exterior_source_redraw(decoded);
                         result.exterior_source_edits.push_back(decoded);
@@ -3961,6 +4294,7 @@ Document Document::create(std::vector<Entity> initial_entities, std::vector<Asse
     }
     document.unsupported_constraint_history_reason_ = validate_state(initial.entities, initial.assets);
     record_boundary_identities(document.boundary_identity_history_, initial.entities);
+    document.stair_identity_history_.reserve_state(initial.entities);
     document.history_.push_back(std::move(initial));
     document.update_editability();
     return document;
@@ -4117,6 +4451,18 @@ Revision Document::apply(const Command& command) {
                     ? "Apply boundary constraints" : typed_command.message;
                 validate_action(next.action);
                 if(typed_command.wall_split)validate_wall_split_lifetime(*typed_command.wall_split,history_,history_.size());
+#ifdef VERTEX_HAS_PHYSICAL_ROOM_REVIEW
+                if (has_room_review_completion(typed_command)) {
+                    validate_room_review_mode(typed_command,true);
+                    const auto intent=decode_physical_wall_room_review_intent(typed_command.room_review_intent);
+                    const auto captured=snapshot();
+                    if (intent.source_snapshot_digest!=document_snapshot_digest(captured) ||
+                        intent.source_authoring_digest!=document_authoring_source_digest_v2(captured) ||
+                        intent.source_saved_revision!=captured.saved_revision_optional())
+                        document_error(DocumentErrorCode::stale_revision,"Physical-room review source snapshot changed");
+                    validate_room_review_lifetime(typed_command.room_review_intent,history_,history_.size());
+                }
+#endif
                 next.boundary_constraint_changes = typed_command;
                 next.entities = completed_boundary_constraint_entities(boundary_identity_history_, current.entities, typed_command);
                 next.assets = boundary_constraint_assets(current.assets, typed_command);
@@ -4187,9 +4533,20 @@ Revision Document::apply(const Command& command) {
             // detach their holes or their physical-wall evidence. Deletion is
             // explicit; supported source refresh will need typed authority.
             validate_physical_room_source_transition(current.entities, next.entities,
-                next.boundary_geometry_edit ? &*next.boundary_geometry_edit : nullptr);
+                next.boundary_geometry_edit ? &*next.boundary_geometry_edit : nullptr,
+                next.boundary_constraint_changes ? &*next.boundary_constraint_changes : nullptr);
+            auto next_stair_identity_history = stair_identity_history_;
+            try {
+                next_stair_identity_history.initialize_if_needed(history_, current.entities, next.entities);
+                if constexpr (!std::is_same_v<CommandType, NameRevision>)
+                    next_stair_identity_history.validate_transition(current.entities, next.entities);
+                next_stair_identity_history.reserve_state(next.entities);
+            } catch (const std::exception& error) {
+                document_error(DocumentErrorCode::invalid_entity, error.what());
+            }
             history_.push_back(std::move(next));
             boundary_identity_history_ = std::move(next_identity_history);
+            stair_identity_history_ = std::move(next_stair_identity_history);
             head_revision_ = history_.back().revision;
             if (next_unsupported_constraints)
                 unsupported_constraint_history_reason_ = std::move(next_unsupported_constraints);
@@ -4226,7 +4583,10 @@ Revision Document::undo(Revision expected_revision) {
     next.undo_stack.pop_back();
     next.redo_stack = current.redo_stack;
     next.redo_stack.push_back(head_revision_);
+    auto next_stair_identity_history = stair_identity_history_;
+    next_stair_identity_history.reserve_state(next.entities);
     history_.push_back(std::move(next));
+    stair_identity_history_ = std::move(next_stair_identity_history);
     head_revision_ = history_.back().revision;
     update_editability();
     return head_revision_;
@@ -4256,7 +4616,10 @@ Revision Document::redo(Revision expected_revision) {
     next.undo_stack.push_back(head_revision_);
     next.redo_stack = current.redo_stack;
     next.redo_stack.pop_back();
+    auto next_stair_identity_history = stair_identity_history_;
+    next_stair_identity_history.reserve_state(next.entities);
     history_.push_back(std::move(next));
+    stair_identity_history_ = std::move(next_stair_identity_history);
     head_revision_ = history_.back().revision;
     update_editability();
     return head_revision_;
@@ -4312,6 +4675,7 @@ Document Document::restore(DocumentSnapshot snapshot) {
     std::map<std::string, Revision, std::less<>> expected_names;
     std::optional<std::string> unsupported_constraint_history;
     BoundaryIdentityHistory identity_history;
+    StairIdentityHistory stair_identity_history;
     for (std::size_t index = 0; index < snapshot.history_.size(); ++index) {
         const auto& record = snapshot.history_[index];
         validate_action(record.action);
@@ -4332,6 +4696,7 @@ Document Document::restore(DocumentSnapshot snapshot) {
                                "revision zero is not a valid create record");
             }
             record_boundary_identities(identity_history, record.entities);
+            stair_identity_history.reserve_state(record.entities);
             continue;
         }
 
@@ -4368,7 +4733,8 @@ Document Document::restore(DocumentSnapshot snapshot) {
         // source-state and stack checks below validate navigation; mutation
         // rules must not reject restoration of a shorter derivation prefix.
         if (record.boundary_constraint_changes && (record.boundary_constraint_changes->wall_split || has_exterior_source_completion(*record.boundary_constraint_changes) ||
-            has_rigid_wall_transform(*record.boundary_constraint_changes) || has_rigid_group_completion(*record.boundary_constraint_changes)))
+            has_rigid_wall_transform(*record.boundary_constraint_changes) || has_rigid_group_completion(*record.boundary_constraint_changes) ||
+            has_joint_translation_completion(*record.boundary_constraint_changes) || has_room_review_completion(*record.boundary_constraint_changes)))
             validate_completed_constraint_change(previous.entities, record.entities, *record.boundary_constraint_changes, true);
         else validate_constraint_change(previous.entities, record.entities,
                 record.boundary_constraint_changes.has_value(), !record.source_revision.has_value(),
@@ -4440,11 +4806,22 @@ Document Document::restore(DocumentSnapshot snapshot) {
             document_error(DocumentErrorCode::invalid_history,
                            "apply-command navigation transition is impossible");
         }
-        // An exact, validated history navigation may undo an identity upgrade.
-        // Ordinary Apply records must never masquerade as that downgrade.
+        // Exact history navigation may undo a protected boundary identity
+        // upgrade. Authored boundary changes cannot claim that authority.
         if (!record.source_revision.has_value()) {
+            if (!record.name) {
+                try {
+                    stair_identity_history.initialize_if_needed(
+                        std::span<const RevisionRecord>(snapshot.history_.data(), index),
+                        previous.entities, record.entities);
+                    stair_identity_history.validate_transition(previous.entities, record.entities);
+                } catch (const std::exception& error) {
+                    document_error(DocumentErrorCode::invalid_history, error.what());
+                }
+            }
             validate_physical_room_source_transition(previous.entities, record.entities,
-                record.boundary_geometry_edit ? &*record.boundary_geometry_edit : nullptr);
+                record.boundary_geometry_edit ? &*record.boundary_geometry_edit : nullptr,
+                record.boundary_constraint_changes ? &*record.boundary_constraint_changes : nullptr);
             if (record.boundary_transforms) {
                 const auto& proof = *record.boundary_transforms;
                 const auto action = proof.message.empty() ? "Transform boundaries" : proof.message;
@@ -4530,6 +4907,15 @@ Document Document::restore(DocumentSnapshot snapshot) {
                 auto expected = previous;
                 try {
                     if(proof.wall_split)validate_wall_split_lifetime(*proof.wall_split,snapshot.history_,index);
+#ifdef VERTEX_HAS_PHYSICAL_ROOM_REVIEW
+                    if (has_room_review_completion(proof)) {
+                        const auto intent=decode_physical_wall_room_review_intent(proof.room_review_intent);
+                        if (intent.source_authoring_digest!=document_authoring_source_digest_v2_at_revision(snapshot,previous.revision) ||
+                            intent.source_snapshot_digest!=document_snapshot_digest_at_revision(snapshot,previous.revision,intent.source_saved_revision))
+                            throw std::invalid_argument("Physical-room review retained source authority changed");
+                        validate_room_review_lifetime(proof.room_review_intent,snapshot.history_,index);
+                    }
+#endif
                     expected.entities = completed_boundary_constraint_entities(identity_history, previous.entities, proof, true);
                     expected.assets = boundary_constraint_assets(previous.assets, proof);
                     validate_boundary_identity_transition(identity_history, proof.wall_split ?
@@ -4544,6 +4930,11 @@ Document Document::restore(DocumentSnapshot snapshot) {
                                             record.action == "Propagate room relationships");
             record_boundary_identity_transition(identity_history, previous.entities, record.entities);
         } else record_boundary_identities(identity_history, record.entities);
+        try {
+            stair_identity_history.reserve_state(record.entities);
+        } catch (const std::exception& error) {
+            document_error(DocumentErrorCode::invalid_history, error.what());
+        }
     }
     if (expected_names != snapshot.named_revisions_) {
         document_error(DocumentErrorCode::invalid_history,
@@ -4559,6 +4950,7 @@ Document Document::restore(DocumentSnapshot snapshot) {
         document.session_read_only_reason_ = snapshot.read_only_reason_;
     }
     document.boundary_identity_history_ = std::move(identity_history);
+    document.stair_identity_history_ = std::move(stair_identity_history);
     document.update_editability();
     return document;
 }

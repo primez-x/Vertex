@@ -1,4 +1,139 @@
-# Vertex project formats v1 through v46
+# Vertex project formats v1 through v53
+
+## Exact physical-source translation lineage (v53)
+
+A measured exterior translated with its physical walls can retain
+`wall_measurement_source.version: 2`. Its frozen kernel, original wall
+baselines/thickness/context, original analytical outline, and flat ordered
+translation list reproduce exact coordinates without summing offsets or
+subtracting a translation to guess original values. Captured physics must
+independently derive the original outline. Each translation is replayed over
+both the physical baselines and the outline; live source-currentness also
+requires exact current wall records. Intrinsic lineage remains valid when a
+physical source has subsequently changed or disappeared, so stale values are
+withheld without discarding valid history.
+
+Typed boundary edit v8 retains the exact translation offset and includes
+genesis captures only when upgrading a v1 source. Further translations append
+to the existing validated lineage. The document reconstructs the complete
+submitted edit from its actual source and physical result. Ordinary shape,
+thickness, or source replacement derives a fresh v1 source. Limits are 2,048
+captured walls, 4,096 finite nonzero translations and a bounded encoded proof.
+The combined replay budget is 8,388,608 wall-pair checks:
+`W * (W - 1) / 2 * (T + 2)`, where `W` is the captured wall count and `T`
+the retained translation count. The independent limits cannot be multiplied
+into an unbounded replay workload. Exhaustion refuses the edit atomically
+rather than changing coordinates.
+
+Native format 53 and extraction 51 cover this authority in every retained
+revision, including undone/deleted history and recovery. Lower format labels
+are rejected even when their logical digest has been recomputed.
+
+## Typed stair topology and owned flight railings (v51/v52)
+
+Canonical `stair` properties with `version: 2` and `form: multi_flight_stair`
+require native format 51 and extraction 49. Flights and connecting landings have
+stable child identities owned by the stair. A retained child ID cannot be reused
+for another owner or role, or become an entity ID; retirement and abandoned
+Redo history preserve that lifetime. Ordinary Undo/Redo restores the original
+identities. New topology and clones allocate new identities.
+
+Canonical `railing` properties with `version: 2` and
+`form: stair_flight_railing` require native format 52 and extraction 50. The rail
+owns a reference to its current stair and typed flight, side, and ordered
+start/end station fractions. Geometry follows that flight's tread pitch line;
+it has no independent base position, orientation, length, or vertical placement.
+The host and rail require complete compatible property/building/floor/layer
+organization and compatible phase membership. Attachment and identity checks
+apply to restored document history as well as current edits.
+
+These reader floors inspect every retained revision, including deleted stairs,
+removed rails, undone commands and abandoned branches. Both native markers and
+the logical digest carry the selected floor; recomputing a digest after lowering
+markers does not permit opening that history with an older reader. Version-1
+straight stairs and independent railings, and unrelated opaque forms, retain
+their previous reader floors. No SQLite columns change.
+
+## Source-qualified physical-room dimensions (v50)
+
+Existing dimension versions 1–3 can target an identified physical-wall-derived
+room. Structural admission retains stable edge, corner and chain references;
+it does not certify a stored room outline as current. Numeric resolution requires
+the complete current entity map or snapshot. It rederives clear spaces from the
+physical walls, checks exact source lineage, outer geometry, holes, drawing
+context, active phase and effective plane, and subtracts holes from clear area.
+A changed source withholds numeric values until explicit room review.
+
+Any such dimension anywhere in retained history requires native format 50 and
+extraction 48, including undone or deleted dimensions. This changes neither
+SQLite tables nor the dimension schema. Entity-only numeric resolution remains
+unsupported for physical rooms; anonymous legacy or unqualified room geometry
+cannot substitute for the physical source.
+
+## Atomic reviewed physical-room dispositions (v49)
+
+Command envelope 18 carries a strict version-one semantic review intent and an
+explicit completion marker. It contains complete retained-room and fresh-space
+decisions for one captured physical context and plane, explicit identities and
+metadata for created rooms, interior witnesses, retained descriptor digests,
+complete Keep/Remove choices for affected supported references, explicit child
+mapping for kept edge/corner references, fresh automatic dimension IDs, and
+acknowledged room-relationship removals. Complete reviewed retained owners can
+exchange destinations; ordinary single-room repair still refuses an occupied
+destination. Regenerated automatic dimensions preserve their template's style,
+context and opaque metadata while taking fresh identities and analytical targets.
+Heterogeneous kept automatic templates refuse rather than silently choosing one
+style. Unknown incoming references to removed dimensions or constraints also
+refuse. The new batch policy does not reinterpret older ordinary-command proofs.
+
+The authoritative replay rederives physical clear spaces and all resulting
+entities from the preceding source. Ordinary geometry, entity or asset lanes
+cannot be combined with this authority. Live application checks the full captured
+snapshot. Historical replay validates the exact preceding entity map, a version-2
+authoring-source digest, and the complete captured snapshot reconstructed from
+the retained prefix and captured saved revision. Both include every typed proof,
+assets, names and navigation. The frozen version-1 authoring digest retains its
+original representation and does not authorize this review. New identities cannot
+reuse retained history. Opaque references in JSON keys or values refuse when
+retirement or child replacement would detach them. Cancel
+publishes nothing; the complete accepted batch is one history event. Native
+format 49 and extraction 47 retain this authority after Undo/Redo and reopen.
+
+## Persistent analytical tangent junctions (v48)
+
+Constraint entity version 5 is exclusive to the `tangent` relation. Its four
+bindings are the first contact, first opposite endpoint, second contact, and
+second opposite endpoint. Each pair identifies one full native segment with
+opposite endpoint roles. At least one segment is a circular arc. Signed sweeps
+and endpoint derivatives come from authoritative owner geometry.
+
+A smooth junction requires coincident contacts and opposite outward tangent
+directions within the defined linear and angular tolerances. Chord parallelism
+does not establish tangency. The solver enforces this relation during subsequent
+edits; existing fixed anchors remain hard constraints. Earlier entity versions
+cannot interpret tangent, and v5 cannot reinterpret earlier relations. Native
+format 48 and extraction 46 cover the head and retained history.
+
+## Joint connected translation (v47)
+
+Command envelope 17 carries a version-one joint translation intent and one
+ordinary geometry proof. It records the selected rigid boundary and measured
+stroke IDs, selected partial physical-wall IDs, finite nonzero offset, and
+connected-movement choice, selected dimension IDs, and nullable finite
+`presentation_offset`. The analytical offset applies to model geometry and
+model-space labels; a separate presentation offset can move selected overlay
+symbols, labels and references through a projected view. All selected points participate in one hard-connected
+solve. Persisted fixed anchors and relations retain their original authority.
+
+Replay reconstructs that solve from the preceding source, rederives measured
+owners and callouts, and requires the submitted proof to produce the exact same
+entities. Existing annotation/reference supplements may change placement only;
+their types, child identities, size, content, styling, context and opaque data
+remain unchanged. Geometry supplements cannot borrow presentation authority.
+Independent disjoint composition remains envelope 16. A missing intent,
+false completion marker, nested authority, changed relation, or forged result is
+refused. Native format 47 and extraction 45 apply to retained history, including
+undone edits and stripped proofs; earlier readers cannot ignore this intent.
 
 ## Scoped annotations and explicit presentation (v46)
 
@@ -1383,7 +1518,7 @@ unknown project `format_version` is rejected rather than opened unsafely.
 ## SQLite schema
 
 The SQLite `application_id` is `0x50535444` (`PSTD`). `user_version` and metadata
-`format_version` are equal and range from `1` through `37`, according to the
+`format_version` are equal and range from `1` through `53`, according to the
 retained semantics. The baseline application tables below are shared; later
 versions add the proof columns and recovery data documented in this file.
 

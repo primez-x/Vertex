@@ -20,6 +20,23 @@ namespace {
 
 using EntityState = std::map<std::string, Entity, std::less<>>;
 
+bool canonical_form(const Entity& entity, std::string_view type, int version, std::string_view form) {
+    const auto& p=entity.properties;
+    return entity.type==type && p.is_object() && p.contains("version") &&
+        p.at("version").is_number_integer() && p.at("version")==version &&
+        p.contains("form") && p.at("form").is_string() &&
+        p.at("form").get_ref<const std::string&>()==form;
+}
+
+bool canonical_stair(const Entity& entity) {
+    return canonical_form(entity,"stair",1,"straight_stair_flight") ||
+        canonical_form(entity,"stair",2,"multi_flight_stair");
+}
+
+bool canonical_hosted_railing(const Entity& entity) {
+    return canonical_form(entity,"railing",2,"stair_flight_railing");
+}
+
 std::string join_member_type(ArchitecturalJoinKind kind) {
     switch (kind) {
     case ArchitecturalJoinKind::wall: return "wall";
@@ -160,7 +177,14 @@ BuildingObject transform_building_object(BuildingObject object,
                     value.top_landing->depth *= transform.scale;
                     value.top_landing->thickness *= transform.scale;
                 }
+                for (auto& landing : value.landings) {
+                    landing.depth *= transform.scale;
+                    landing.thickness *= transform.scale;
+                    landing.return_gap *= transform.scale;
+                }
             } else if constexpr (std::is_same_v<Object, Railing>) {
+                if (value.host) throw std::invalid_argument(
+                    "Hosted railing placement follows its stair; transform the host stair instead");
                 value.base_position = transform_point(value.base_position, transform);
                 value.orientation_radians += transform.rotation_z_radians;
                 value.length *= transform.scale;
@@ -468,6 +492,7 @@ std::optional<Entity> try_transform_shared_solid(EntityState& entities,
 Entity transform_building_entity(const Entity& source,
                                  const ArchitecturalTransform& transform) {
     if (source.type == "stair" && source.properties.contains("level_connection") &&
+        !source.properties.at("level_connection").is_null() &&
         std::abs(transform.scale - 1.0) > 1e-9) {
         // A connected stair's total rise is tied to the graph's floor-to-floor
         // height.  Scaling only the stair would silently break that relation;
@@ -479,6 +504,23 @@ Entity transform_building_entity(const Entity& source,
     const auto canonical = encode_building_entity(transformed, source.extensions);
     Entity result = source;
     result.properties = canonical.properties;
+    // Canonical codecs describe geometry, while child records may also carry
+    // opaque source and quantity metadata. Keep those records and update only
+    // the fields owned by the codec, without recursively rewriting strings.
+    for (const auto* key : {"flights", "landings"}) {
+        if (!canonical.properties.contains(key)) continue;
+        auto records = source.properties.at(key);
+        const auto& encoded = canonical.properties.at(key);
+        for (std::size_t i=0; i<encoded.size(); ++i)
+            for (const auto& [field,value] : encoded.at(i).items()) records.at(i)[field]=value;
+        result.properties[key]=std::move(records);
+    }
+    if (source.type=="stair" && source.properties.contains("top_landing") && source.properties.at("top_landing").is_object() &&
+        canonical.properties.at("top_landing").is_object()) {
+        result.properties["top_landing"] = source.properties.at("top_landing");
+        for (const auto& [key,value] : canonical.properties.at("top_landing").items())
+            result.properties["top_landing"][key]=value;
+    }
     // Retain application-owned properties such as marks, material
     // assignments, quantity receipts, and future extensions while replacing
     // every canonical building field with the transformed value.  A legacy
@@ -492,12 +534,59 @@ Entity transform_building_entity(const Entity& source,
     return result;
 }
 
+std::vector<std::string> hosted_railing_ids(const EntityState& entities, const std::string& stair_id) {
+    std::vector<std::string> result;
+    for (const auto& [id,entity] : entities) {
+        if (!canonical_hosted_railing(entity)) continue;
+        const auto railing=decode_railing_properties(id,entity.properties);
+        if (railing.host && railing.host->stair_id==stair_id) result.push_back(id);
+    }
+    return result;
+}
+
+void invalidate_changed_receipts(const Entity& before, Entity& after) {
+    const auto entries=before.properties.find("quantity_entries");
+    if (entries==before.properties.end() || !entries->is_object()) return;
+    for (const auto& [pointer,value] : entries->items()) {
+        (void)value;
+        try {
+            const nlohmann::json::json_pointer path(pointer);
+            if (before.properties.contains(path) &&
+                (!after.properties.contains(path) || before.properties.at(path)!=after.properties.at(path)))
+                after.properties["quantity_entries"].erase(pointer);
+        } catch (const nlohmann::json::exception&) { /* Preserve opaque legacy paths. */ }
+    }
+}
+
 EntityState apply_operations(const DocumentSnapshot& source,
                              const ArchitecturalTransaction& transaction) {
     auto entities = copy_entities(source);
     const auto& initial = transaction.existing_ids();
     for (const auto& id : initial) {
         if (!entities.contains(id)) throw std::invalid_argument("architectural transaction source is stale");
+    }
+    std::map<std::string,std::vector<ArchitecturalTransform>,std::less<>> transforms;
+    for (const auto& operation : transaction.operations())
+        if (operation.action==ArchitecturalAction::transform)
+            transforms[operation.object_id].push_back(*operation.transform);
+    std::set<std::string,std::less<>> cascade_deleted_rails;
+    std::map<std::string,std::string,std::less<>> selected_rail_clones;
+    std::map<std::string,std::size_t,std::less<>> stair_clone_counts;
+    for (const auto& operation : transaction.operations()) {
+        const auto original=entities.find(operation.object_id);
+        if (operation.action==ArchitecturalAction::duplicate && original!=entities.end() &&
+            canonical_form(original->second,"stair",2,"multi_flight_stair"))
+            ++stair_clone_counts[operation.object_id];
+    }
+    for (const auto& operation : transaction.operations()) {
+        const auto original=entities.find(operation.object_id);
+        if (operation.action!=ArchitecturalAction::duplicate || original==entities.end() ||
+            !canonical_hosted_railing(original->second)) continue;
+        const auto rail=decode_railing_properties(original->first,original->second.properties);
+        const auto host=stair_clone_counts.find(rail.host->stair_id);
+        if (host==stair_clone_counts.end()) continue;
+        if (host->second!=1 || !selected_rail_clones.emplace(operation.object_id,operation.duplicate_id).second)
+            throw std::invalid_argument("Selected stair and railing clones require one unambiguous host clone");
     }
     for (const auto& operation : transaction.operations()) {
         switch (operation.action) {
@@ -524,6 +613,28 @@ EntityState apply_operations(const DocumentSnapshot& source,
             auto found = entities.find(operation.object_id);
             if (found == entities.end() || !operation.transform)
                 throw std::invalid_argument("architectural transform target is missing");
+            if (canonical_hosted_railing(found->second)) {
+                const auto railing=decode_railing_properties(found->first,found->second.properties);
+                const auto host=transforms.find(railing.host->stair_id);
+                const auto own=transforms.find(found->first);
+                if (host==transforms.end() || host->second.size()!=1 || own->second.size()!=1 ||
+                    transform_json(host->second.front())!=transform_json(*operation.transform))
+                    throw std::invalid_argument("Hosted railing placement follows its stair; select the host with the same transform");
+                // Its host applies placement and scales authored rail dimensions once,
+                // independently of selected-operation order.
+                break;
+            }
+            if (canonical_stair(found->second)) {
+                if (transforms.at(found->first).size()!=1)
+                    throw std::invalid_argument("A stair requires one unambiguous transform per transaction");
+                for (const auto& rail_id : hosted_railing_ids(entities,found->first)) {
+                    auto& rail=entities.at(rail_id);
+                    const auto before=rail;
+                    for (const auto* field : {"height_m","thickness_m","post_spacing_m"})
+                        scale_property(rail.properties,field,nullptr,operation.transform->scale);
+                    invalidate_changed_receipts(before,rail);
+                }
+            }
             if (can_recognize_building_entity_type(found->second.type)) {
                 found->second = transform_building_entity(found->second, *operation.transform);
             } else if (const auto transformed =
@@ -537,11 +648,35 @@ EntityState apply_operations(const DocumentSnapshot& source,
             break;
         }
         case ArchitecturalAction::duplicate: {
+            // A selected dependent clone is created with the host, including
+            // its remapped flight identity, regardless of selection order.
+            if (selected_rail_clones.contains(operation.object_id)) break;
             auto found = entities.find(operation.object_id);
             if (found == entities.end()) throw std::invalid_argument("architectural duplicate source is missing");
             if (entities.contains(operation.duplicate_id)) throw std::invalid_argument("architectural duplicate ID already exists");
             auto copy = found->second;
             copy.id = operation.duplicate_id;
+            if (canonical_form(copy,"stair",2,"multi_flight_stair")) {
+                std::map<std::string,std::string,std::less<>> children;
+                for (const auto* key : {"flights","landings"}) {
+                    for (auto& record : copy.properties.at(key)) {
+                        const auto old=record.at("id").get<std::string>();
+                        const auto fresh=make_stable_id();
+                        children.emplace(old,fresh); record["id"]=fresh;
+                    }
+                }
+                for (const auto& rail_id : hosted_railing_ids(entities,found->first)) {
+                    auto rail=entities.at(rail_id);
+                    const auto selected=selected_rail_clones.find(rail_id);
+                    rail.id=selected==selected_rail_clones.end()?make_stable_id():selected->second;
+                    if (entities.contains(rail.id)) throw std::invalid_argument("Hosted railing duplicate identity already exists");
+                    auto& host=rail.properties.at("host");
+                    host["stair_id"]=copy.id;
+                    host["flight_id"]=children.at(host.at("flight_id").get<std::string>());
+                    const auto rail_id_copy=rail.id;
+                    entities.emplace(rail_id_copy,std::move(rail));
+                }
+            }
             entities.emplace(copy.id, std::move(copy));
             if (found->second.type == "wall") {
                 const auto children = hosted_opening_ids(entities, operation.object_id);
@@ -561,7 +696,13 @@ EntityState apply_operations(const DocumentSnapshot& source,
         }
         case ArchitecturalAction::erase: {
             const auto found = entities.find(operation.object_id);
+            if (found==entities.end() && cascade_deleted_rails.contains(operation.object_id)) break;
             if (found == entities.end()) throw std::invalid_argument("architectural delete target is missing");
+            if (canonical_stair(found->second)) {
+                for (const auto& id : hosted_railing_ids(entities,found->first)) {
+                    entities.erase(id); cascade_deleted_rails.insert(id);
+                }
+            }
             if (found->second.type == "wall") {
                 for (const auto& child_id : hosted_opening_ids(entities, operation.object_id)) {
                     entities.erase(child_id);
@@ -591,7 +732,20 @@ ApplyEntityChanges make_command(const DocumentSnapshot& source, const Architectu
             command.entity_changes.push_back(EntityChange::erase(id));
         } else if (after != candidate.end() &&
                    (before == source.entities().end() || before->second != after->second)) {
-            command.entity_changes.push_back(EntityChange::upsert(after->second));
+            auto changed=after->second;
+            if (before!=source.entities().end() &&
+                (canonical_stair(changed) || canonical_hosted_railing(changed)))
+                invalidate_changed_receipts(before->second,changed);
+            command.entity_changes.push_back(EntityChange::upsert(std::move(changed)));
+        }
+    }
+    if (!command.entity_changes.empty()) {
+        const auto preview=Document::preview_command(source,command);
+        for (const auto& [id,entity] : preview.entities()) {
+            (void)id;
+            if (!canonical_stair(entity) && !canonical_hosted_railing(entity)) continue;
+            const auto effective=resolve_vertical_placement(preview,entity);
+            (void)make_building_shape(decode_building_entity(effective),preview.entities());
         }
     }
     return command;

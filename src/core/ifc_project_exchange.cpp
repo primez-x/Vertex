@@ -6,6 +6,7 @@
 #include "sketch/door_operation.hpp"
 #include "sketch/opening_assembly.hpp"
 #include "sketch/project_organization.hpp"
+#include "sketch/project_import_worker.hpp"
 #include "sketch/ifc_native_geometry.hpp"
 #include "sketch/hosted_opening_geometry.hpp"
 
@@ -565,7 +566,8 @@ void retain_properties(const Entity& entity, int product_id, ExportContext& cont
         const bool retained_room=native!=entity.properties.end() && native->is_object() &&
             native->value("type",std::string{})=="room_boundary" && native->contains("extensions") &&
             native->at("extensions").is_object() && native->at("extensions").contains("physical_wall_room");
-        if (((entity.type == "room_boundary" && entity.extensions.contains("physical_wall_room")) || retained_room) &&
+        if (((entity.type == "room_boundary" && entity.extensions.contains("physical_wall_room")) || retained_room ||
+             ((entity.type == "roof" || entity.type == "room") && entity.properties.contains("_vertex_ifc_entity"))) &&
             context.limits.max_string_bytes >= 512 && payload.size() <= 8*1024*1024) {
             const auto chunk_size = context.limits.max_string_bytes / 2;
             const auto chunks = (payload.size() + chunk_size - 1) / chunk_size;
@@ -816,6 +818,88 @@ Entity mesh_metadata(const Entity& entity, std::string_view role) {
     return retained;
 }
 
+std::string roof_enum(const Json& properties) {
+    const auto form = properties.value("form", std::string{});
+    if (form == "sloped_roof_panel") return ".SHED_ROOF.";
+    if (form == "gable_roof") return ".GABLE_ROOF.";
+    if (form == "hip_roof") return ".HIP_ROOF.";
+    return ".NOTDEFINED.";
+}
+
+bool detach_native_context(Json& properties) {
+    bool detached = false;
+    for (const auto* key : {"property_id", "building_id", "floor_id", "layer_id", "parent_id",
+        "property_ids", "building_ids", "floor_ids", "layer_ids", "parent_ids",
+        "vertical_level_binding", "level_connection"})
+        detached = properties.erase(key) != 0 || detached;
+    const auto placement = properties.find("vertical_placement");
+    if (placement != properties.end() && placement->is_object() &&
+        placement->value("mode", std::string{}) == "level") {
+        properties.erase(placement);
+        detached = true;
+    }
+    return detached;
+}
+
+void export_native_roof_or_room(const DocumentSnapshot& document, const Entity& entity,
+    ExportContext& context, std::vector<IfcProjectDiagnostic>& diagnostics) {
+    try {
+        const bool roof = entity.type == "roof";
+        auto meshes = roof
+            ? ifc_native_roof_mesh(entity, context.limits.max_mesh_vertices - context.mesh_vertices,
+                context.limits.max_mesh_triangles - context.mesh_triangles)
+            : ifc_native_room_mesh(entity, context.limits.max_mesh_vertices - context.mesh_vertices,
+                context.limits.max_mesh_triangles - context.mesh_triangles);
+        // World metre meshes use an identity occurrence placement. The native
+        // bridge resolves no placement, so level offsets are applied once.
+        const auto shape = mesh_shape(meshes, context);
+        const auto product = context.builder.add(roof ? "IFCROOF" : "IFCSPACE",
+            context.root(entity.id, entity.id) + ",$," + ref(context.placement) + "," + ref(shape) +
+            (roof ? ",$," + roof_enum(entity.properties) : ",$,.ELEMENT.,.INTERNAL.,$"));
+        context.product_ids[entity.id] = product;
+        if (roof) context.contained_products.push_back(product);
+        else context.aggregate(context.storey, product, "storey-space:" + entity.id);
+        auto retained = mesh_metadata(entity, roof ? "roof" : "room");
+        const auto& authored = document.entities().at(entity.id);
+        auto extensions = authored.extensions;
+        auto authored_properties = authored.properties;
+        bool authored_required = authored.required;
+        // Imported provenance is already retained below. Re-export must not
+        // recursively wrap it, or overwrite human strings that resemble IDs.
+        const auto prior = extensions.find("ifc_vertex_properties");
+        if (prior != extensions.end() && prior->is_object() && prior->contains("_vertex_ifc_entity")) {
+            const auto source = prior->at("_vertex_ifc_entity");
+            if (source.is_object() && source.contains("extensions") && source.at("extensions").is_object()) {
+                auto prior_active = *prior;
+                prior_active.erase("_vertex_ifc_mesh"); prior_active.erase("_vertex_ifc_entity");
+                detach_native_context(prior_active);
+                if (prior_active == authored.properties && source.contains("properties") && source.at("properties").is_object()) {
+                    authored_properties = source.at("properties");
+                    if (source.contains("required") && source.at("required").is_boolean())
+                        authored_required = source.at("required").get<bool>();
+                    // Keep original context as resolved source metadata only.
+                    // The next import compares this envelope, then detaches it.
+                    auto detached = authored_properties;
+                    detach_native_context(detached);
+                    for (const auto& [key, value] : authored_properties.items())
+                        if (!detached.contains(key)) retained.properties[key] = value;
+                }
+                extensions.erase("ifc_vertex_properties");
+                extensions.erase("ifc_source");
+                for (const auto* key : {"ifc_source", "ifc_vertex_properties"})
+                    if (source.at("extensions").contains(key)) extensions[key] = source.at("extensions").at(key);
+            }
+        }
+        retained.properties["_vertex_ifc_entity"] = {{"version",1},{"type",entity.type},
+            {"required",authored_required},{"properties",std::move(authored_properties)},{"extensions",std::move(extensions)}};
+        retain_properties(retained, product, context, diagnostics);
+    } catch (const std::exception& error) {
+        add_diagnostic(diagnostics, entity.id, entity.type,
+            std::string_view(error.what()) == "ifc_mesh_budget_exceeded"
+                ? "native_mesh_budget_exceeded" : "native_roof_or_room_geometry_not_representable");
+    }
+}
+
 void export_fill(const DocumentSnapshot& document, const Entity& entity, int void_id,
     ExportContext& context, std::vector<IfcProjectDiagnostic>& diagnostics) {
     if (!entity.properties.contains("opening_assembly")) return;
@@ -901,8 +985,19 @@ void export_product(const DocumentSnapshot& document, const Entity& entity,
     double local_elevation = 0.0;
 
 #ifdef SKETCH_IFC_NATIVE_GEOMETRY
+    if (type == "roof" || type == "room") {
+        export_native_roof_or_room(document, entity, context, diagnostics);
+        return;
+    }
     if ((type == "wall" || type == "opening") &&
         export_curved_native(document, entity, context, diagnostics)) return;
+#endif
+
+#ifndef SKETCH_IFC_NATIVE_GEOMETRY
+    if (type == "roof" || type == "room") {
+        add_diagnostic(diagnostics, entity.id, type, "native_roof_or_room_runtime_unavailable");
+        return;
+    }
 #endif
 
     if (type == "wall") {
@@ -975,7 +1070,14 @@ void export_product(const DocumentSnapshot& document, const Entity& entity,
         }
         boundary = *decoded;
         if (source_bound) physical_holes = physical_room->holes;
-        product_type = "IFCBUILDINGELEMENTPROXY";
+        product_type = source_bound ? "IFCSPACE" : "IFCBUILDINGELEMENTPROXY";
+#ifdef SKETCH_PHYSICAL_ROOMS
+        if (source_bound) {
+            const auto drawing = organize_project(document.entities()).drawing_context(entity.id);
+            require(drawing.has_value());
+            local_elevation = validate_retained_physical_wall_room_lineage(entity, *drawing).effective_elevation_m;
+        }
+#endif
     } else if (type == "opening") {
         if (!entity.properties.is_object()) {
             add_diagnostic(diagnostics, entity.id, type,
@@ -1174,6 +1276,10 @@ void export_product(const DocumentSnapshot& document, const Entity& entity,
         product_id = context.builder.add(product_type,
             global_id + "," + ref(context.owner_history) + "," + name + "," +
             description + ",$," + placement + "," + ref(product_shape) + ",$,.FLOOR.");
+    } else if (product_type == "IFCSPACE") {
+        product_id = context.builder.add(product_type,
+            global_id + "," + ref(context.owner_history) + "," + name + "," +
+            description + ",$," + placement + "," + ref(product_shape) + ",$,.ELEMENT.,.INTERNAL.,$");
     } else if (product_type == "IFCOPENINGELEMENT") {
         product_id = context.builder.add(product_type,
             global_id + "," + ref(context.owner_history) + "," + name + "," +
@@ -1184,7 +1290,8 @@ void export_product(const DocumentSnapshot& document, const Entity& entity,
             description + ",$," + placement + "," + ref(product_shape) + ",$,.NOTDEFINED.");
     }
     if (product_id > 0) context.product_ids[entity.id] = product_id;
-    if (type != "opening") context.contained_products.push_back(product_id);
+    if (product_type == "IFCSPACE") context.aggregate(context.storey, product_id, "storey-space:" + entity.id);
+    else if (type != "opening") context.contained_products.push_back(product_id);
     if (type == "wall") export_wall_construction(entity, product_id, context, diagnostics);
     if (type == "wall" || type == "slab" || type == "opening") {
         retain_properties(entity, product_id, context, diagnostics);
@@ -1609,7 +1716,9 @@ std::optional<Segment> reconstructed_wall_axis(const GeometryResult& geometry, c
     return axis;
 }
 
-bool metre_units(const ParsedStep& parsed, std::size_t& count, const IfcExchangeLimits& limits) {
+// Retain the earlier declaration policy for legacy wall/slab/axis exchange.
+// Roof/room native activation uses the actual project assignment below.
+bool declared_metre_units(const ParsedStep& parsed, std::size_t& count, const IfcExchangeLimits& limits) {
     bool found = false;
     for (const auto& record : parsed.records) {
         if (record.type == "IFCCONVERSIONBASEDUNIT") return false;
@@ -1622,6 +1731,40 @@ bool metre_units(const ParsedStep& parsed, std::size_t& count, const IfcExchange
     }
     return found;
 }
+
+#ifdef SKETCH_IFC_NATIVE_GEOMETRY
+bool metre_units(const ParsedStep& parsed, std::size_t& count, const IfcExchangeLimits& limits) {
+    const StepRecord* project = nullptr;
+    for (const auto& record : parsed.records) if (record.type == "IFCPROJECT") {
+        if (project) return false; // Multiple project owners are outside this subset.
+        project = &record;
+    }
+    if (!project) return false;
+    const auto project_fields = split_top_level(project->args, count, limits);
+    if (project_fields.size() != 9) return false;
+    const auto assignment_id = reference(project_fields[8]);
+    if (!assignment_id) return false;
+    const auto* assignment = find_record(parsed, *assignment_id);
+    if (!assignment || assignment->type != "IFCUNITASSIGNMENT") return false;
+    const auto assignment_fields = split_top_level(assignment->args, count, limits);
+    if (assignment_fields.size() != 1) return false;
+    const auto units = trim(assignment_fields[0]);
+    if (units.size() < 2 || units.front() != '(' || units.back() != ')') return false;
+    bool found = false;
+    for (const auto& value : split_top_level(inner_list(units), count, limits)) {
+        const auto unit_id = reference(value);
+        if (!unit_id) return false;
+        const auto* unit = find_record(parsed, *unit_id);
+        if (!unit || unit->type != "IFCSIUNIT") return false;
+        const auto fields = split_top_level(unit->args, count, limits);
+        if (fields.size() != 4 || fields[0] != "*") return false;
+        if (upper(fields[1]) != ".LENGTHUNIT.") continue;
+        if (found || fields[2] != "$" || upper(fields[3]) != ".METRE.") return false;
+        found = true;
+    }
+    return found;
+}
+#endif
 
 std::optional<std::vector<IfcNativeMesh>> product_meshes(const ParsedStep& parsed,
     const StepRecord& product, std::size_t& count, const IfcExchangeLimits& limits,
@@ -1704,7 +1847,8 @@ std::optional<std::vector<IfcNativeMesh>> product_meshes(const ParsedStep& parse
         result.push_back(std::move(mesh));
     }
     if (result.empty()) return std::nullopt;
-    if (product.type == "IFCDOOR" || product.type == "IFCWINDOW") {
+    if (product.type == "IFCDOOR" || product.type == "IFCWINDOW" ||
+        product.type == "IFCROOF" || product.type == "IFCSPACE") {
         const auto frame = product_frame(parsed, fields, count, limits);
         if (!frame) return std::nullopt;
         for (auto& mesh : result)
@@ -1736,6 +1880,127 @@ bool native_mesh_role(const Json& properties, std::string_view role) {
 }
 
 #ifdef SKETCH_IFC_NATIVE_GEOMETRY
+bool matching_meshes(const std::vector<IfcNativeMesh>& source, const std::vector<IfcNativeMesh>& expected);
+
+struct NativeReconstructionLedger {
+    project_import_detail::GeometryBudget geometry;
+    std::size_t vertices;
+    std::size_t triangles;
+    std::size_t attempts{1024};
+
+    [[noreturn]] static void exhausted() {
+        throw std::invalid_argument("ifc_native_reconstruction_budget_exceeded");
+    }
+    void begin_attempt() {
+        if (!attempts) exhausted();
+        --attempts; // Failed or mismatching carriers never refund work.
+    }
+    std::size_t reserve(const Entity& candidate) {
+        // Analytical validators charge the shared ledger before topology work.
+        // Keep charges already consumed even if later semantic checks fail.
+        if (candidate.type == "roof") project_import_detail::validate_roof(candidate, geometry);
+        else project_import_detail::validate_room(candidate, geometry);
+        const auto available = std::min(vertices, triangles) / 64;
+        std::size_t work = 0;
+        const auto charge = [&](std::size_t count) {
+            if (work > available || count > available - work) exhausted();
+            work += count;
+        };
+        if (candidate.type == "roof") {
+            const auto& p = candidate.properties;
+            const auto form = p.at("form").get<std::string>();
+            charge(form == "sloped_roof_panel" ? 1 : form == "gable_roof" ? 2 : 4);
+            if (p.contains("roof_openings")) charge(p.at("roof_openings").size() * 4);
+        } else {
+            const auto charge_boundary = [&](const Json& boundary) {
+                charge(boundary.size());
+                for (const auto& edge : boundary) {
+                    const auto angle = std::abs(edge.at("sweep_radians").get<double>());
+                    if (angle <= 1e-7) continue;
+                    const auto& a = edge.at("start"); const auto& b = edge.at("end");
+                    const auto radius = std::hypot(b[0].get<double>() - a[0].get<double>(),
+                        b[1].get<double>() - a[1].get<double>()) / (2 * std::abs(std::sin(angle * .5)));
+                    const auto step = 2 * std::acos(std::clamp(1 - ifc_native_mesh_deviation_m * .5 / radius, -1.0, 1.0));
+                    const auto needed = std::ceil(angle / step);
+                    if (!std::isfinite(needed) || needed < 1 || needed > static_cast<double>(available - work)) exhausted();
+                    charge(static_cast<std::size_t>(needed));
+                }
+            };
+            const auto& p = candidate.properties;
+            charge_boundary(p.at(p.contains("boundary") ? "boundary" : "segments"));
+            if (p.contains("holes")) for (const auto& hole : p.at("holes")) charge_boundary(hole);
+        }
+        // Reserve a conservative per-edge/station/cut allowance before the
+        // kernel, and pass that allowance as its actual tessellation ceiling.
+        // Cumulative failed regeneration cannot consume a fresh exchange cap.
+        const auto storage = work * 64;
+        vertices -= storage; triangles -= storage;
+        return storage;
+    }
+};
+
+std::optional<Entity> reconstructed_native_roof_or_room(const ParsedStep& parsed,
+    const StepRecord& record, const Json& metadata, const std::vector<IfcNativeMesh>& meshes,
+    std::size_t& count, const IfcExchangeLimits& limits, NativeReconstructionLedger& ledger) {
+    const bool roof = record.type == "IFCROOF";
+    if (!native_mesh_role(metadata, roof ? "roof" : "room")) return std::nullopt;
+    ledger.begin_attempt();
+    const auto source = metadata.find("_vertex_ifc_entity");
+    if (source == metadata.end() || !source->is_object() || source->size() != 5 ||
+        !source->contains("version") || !source->at("version").is_number_integer() || source->at("version") != 1 ||
+        !source->contains("type") || source->at("type") != (roof ? "roof" : "room") ||
+        !source->contains("required") || !source->at("required").is_boolean() ||
+        !source->contains("properties") || !source->at("properties").is_object() ||
+        !source->contains("extensions") || !source->at("extensions").is_object()) return std::nullopt;
+    const auto fields = split_top_level(record.args, count, limits);
+    if (roof ? fields.size() != 9 || fields[8] != roof_enum(metadata)
+             : fields.size() != 11 || fields[8] != ".ELEMENT." || fields[9] != ".INTERNAL." || fields[10] != "$")
+        return std::nullopt;
+    auto properties = metadata;
+    properties.erase("_vertex_ifc_mesh");
+    properties.erase("_vertex_ifc_entity");
+    auto authored_properties = source->at("properties");
+    auto resolved_properties = properties;
+    const auto placement = authored_properties.find("vertical_placement");
+    if (placement != authored_properties.end() && placement->is_object() &&
+        placement->value("mode",std::string{}) == "level") {
+        // Original level-relative Z remains retained source data. Only the
+        // already resolved Z may differ; all other authored facts must agree.
+        authored_properties.erase("vertical_placement"); resolved_properties.erase("vertical_placement");
+        if (roof) {
+            for (auto* value : {&authored_properties,&resolved_properties}) {
+                if (!value->contains("base_position_m") || !value->at("base_position_m").is_array() ||
+                    value->at("base_position_m").size() != 3 || !value->at("base_position_m").at(2).is_number()) return std::nullopt;
+                (*value)["base_position_m"][2] = 0;
+            }
+        } else {
+            for (auto* value : {&authored_properties,&resolved_properties}) {
+                if (value->contains("elevation_m")) (*value)["elevation_m"] = 0;
+                if (value->contains("elevation")) (*value)["elevation"] = 0;
+            }
+        }
+    }
+    if (authored_properties != resolved_properties) return std::nullopt;
+    Entity candidate{"ifc-" + std::to_string(record.id), roof ? "roof" : "room", properties,
+        false, source->at("extensions")};
+    // Charge shared analytical and construction work before entering the
+    // kernel, including candidates that will fail the exact mesh comparison.
+    detach_native_context(candidate.properties);
+    const auto storage = ledger.reserve(candidate);
+    const auto expected = roof ? ifc_native_roof_mesh(candidate, storage, storage)
+                               : ifc_native_room_mesh(candidate, storage, storage);
+    if (!matching_meshes(meshes, expected)) return std::nullopt;
+    // A resolved world-space import has no reconstructed native level graph.
+    // Preserve its original placement/context in the source envelope, while
+    // avoiding a second application of that level offset in the imported model.
+    candidate.extensions["ifc_source"] = {{"record_id",record.id},{"record_type",record.type},{"arguments",record.args}};
+    candidate.extensions["ifc_vertex_properties"] = metadata;
+    // Retained metadata cannot bypass the ordinary document boundary (for
+    // example reserved extensions or unsupported/dangling active references).
+    if (!Document::create({candidate}).snapshot().is_editable()) return std::nullopt;
+    return candidate;
+}
+
 bool matching_meshes(const std::vector<IfcNativeMesh>& source, const std::vector<IfcNativeMesh>& expected) {
     if (source.size() != expected.size()) return false;
     for (std::size_t i = 0; i < source.size(); ++i) {
@@ -1835,7 +2100,12 @@ IfcProjectImportResult import_project_ifc(std::string_view bytes,
     std::size_t argument_count = parsed.argument_count;
     std::set<int> retained_metadata_records;
     const auto metadata_by_id = vertex_properties(parsed, argument_count, limits, retained_metadata_records);
-    const auto supported_units = metre_units(parsed, argument_count, limits);
+    const auto supported_units = declared_metre_units(parsed, argument_count, limits);
+#ifdef SKETCH_IFC_NATIVE_GEOMETRY
+    const auto native_project_units = metre_units(parsed, argument_count, limits);
+    NativeReconstructionLedger native_ledger{{0, 0, "ifc_native_reconstruction_budget_exceeded"},
+        limits.max_mesh_vertices, limits.max_mesh_triangles};
+#endif
     std::map<int, std::vector<IfcNativeMesh>> meshes_by_id;
     std::size_t mesh_vertices = 0, mesh_triangles = 0;
     for (const auto& record : parsed.records) {
@@ -1847,6 +2117,38 @@ IfcProjectImportResult import_project_ifc(std::string_view bytes,
     for (const auto& record : parsed.records) {
         if (is_product(record.type)) {
 #ifdef SKETCH_IFC_NATIVE_GEOMETRY
+            if (record.type == "IFCROOF" || record.type == "IFCSPACE") {
+                bool reconstructed = false;
+                if (!native_project_units && metadata_by_id.contains(record.id) &&
+                    native_mesh_role(metadata_by_id.at(record.id), record.type == "IFCROOF" ? "roof" : "room"))
+                    add_diagnostic(result.diagnostics, "#" + std::to_string(record.id), record.type,
+                        "native_project_length_units_not_reconstructed");
+                if (native_project_units && meshes_by_id.contains(record.id) && metadata_by_id.contains(record.id)) {
+                    try {
+                        if (auto candidate = reconstructed_native_roof_or_room(parsed, record,
+                            metadata_by_id.at(record.id), meshes_by_id.at(record.id), argument_count, limits, native_ledger)) {
+                            const auto& native = metadata_by_id.at(record.id);
+                            auto context = native;
+                            if (detach_native_context(context) ||
+                                native.at("_vertex_ifc_entity").at("required").get<bool>())
+                                add_diagnostic(result.diagnostics, "#" + std::to_string(record.id), record.type,
+                                    "native_context_retained_not_reconstructed");
+                            result.entities.push_back(std::move(*candidate));
+                            reconstructed = true;
+                        }
+                    } catch (const std::exception& error) {
+                        if (std::string_view(error.what()) == "ifc_native_reconstruction_budget_exceeded" ||
+                            std::string_view(error.what()) == "ifc_mesh_budget_exceeded")
+                            add_diagnostic(result.diagnostics, "#" + std::to_string(record.id), record.type,
+                                "native_roof_or_room_reconstruction_budget_exceeded");
+                    }
+                }
+                if (reconstructed) continue;
+                if (metadata_by_id.contains(record.id) &&
+                    native_mesh_role(metadata_by_id.at(record.id), record.type == "IFCROOF" ? "roof" : "room"))
+                    add_diagnostic(result.diagnostics, "#" + std::to_string(record.id), record.type,
+                        "native_roof_or_room_geometry_metadata_inconsistent");
+            }
             if (supported_units && record.type == "IFCWALL" && meshes_by_id.contains(record.id) &&
                 metadata_by_id.contains(record.id) && native_mesh_role(metadata_by_id.at(record.id), "wall")) {
                 const auto& metadata = metadata_by_id.at(record.id);
@@ -2218,6 +2520,47 @@ IfcProjectImportResult import_project_ifc(std::string_view bytes,
         if (record.type == "IFCRELFILLSELEMENT" && !reconstructed_fill_relations.contains(record.id))
             add_diagnostic(result.diagnostics, "#" + std::to_string(record.id), record.type,
                 "fill_semantics_not_reconstructed");
+#ifdef SKETCH_IFC_NATIVE_GEOMETRY
+    // Reserve the existing candidates' cost first, then admit native additions
+    // against one file-wide budget. A declined native carrier stays retained;
+    // it cannot make an otherwise usable worker response exceed admission cost.
+    project_import_detail::GeometryBudget candidate_budget;
+    for (const auto& entity : result.entities) {
+        if (entity.type != "slab" && entity.type != "boundary") continue;
+        // Reserve analytical work by count, without changing admission of
+        // existing conservative generic projections (for example an unbound
+        // retraced opening). The isolated-response validator still checks all
+        // geometry before transport; native roof/room admission remains strict.
+        auto topology_segments = entity.properties.at("boundary").size();
+        candidate_budget.charge(topology_segments);
+        if (entity.type == "slab") {
+            for (const auto& hole : entity.properties.at("holes")) {
+                candidate_budget.charge(hole.size());
+                topology_segments += hole.size();
+            }
+            candidate_budget.charge_cross(topology_segments);
+        }
+    }
+    for (auto& entity : result.entities) {
+        if (entity.type != "roof" && entity.type != "room") continue;
+        auto proposed = candidate_budget;
+        try {
+            if (entity.type == "roof") project_import_detail::validate_roof(entity, proposed);
+            else project_import_detail::validate_room(entity, proposed);
+            candidate_budget = proposed;
+        } catch (const std::exception&) {
+            const auto source = entity.extensions.at("ifc_source");
+            const auto metadata = entity.extensions.at("ifc_vertex_properties");
+            const auto record_id = source.at("record_id").get<int>();
+            const auto kind = source.at("record_type").get<std::string>();
+            entity.type = "ifc_reference";
+            entity.properties = {{"ifc_name",entity.id},{"ifc_type",kind}};
+            entity.extensions = {{"ifc_source",source},{"ifc_vertex_properties",metadata}};
+            add_diagnostic(result.diagnostics, "#" + std::to_string(record_id), kind,
+                "native_roof_or_room_candidate_budget_exceeded");
+        }
+    }
+#endif
     result.source_retention_required = !result.diagnostics.empty();
     return result;
 }

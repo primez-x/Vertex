@@ -1,4 +1,5 @@
 #include "sketch/desktop/main_window.hpp"
+#include "sketch/desktop/application_platform.hpp"
 #include "sketch/boundary_dimension.hpp"
 #include "sketch/measurement_linework.hpp"
 #include "sketch/constraint_authoring.hpp"
@@ -10,6 +11,7 @@
 #include <QAction>
 #include <QAbstractItemModel>
 #include <QApplication>
+#include <QBuffer>
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDialog>
@@ -24,9 +26,12 @@
 #include <QKeyEvent>
 #include <QLineEdit>
 #include <QMouseEvent>
+#include <QPainter>
+#include <QPdfWriter>
 #include <QPdfDocument>
 #include <QPdfSelection>
 #include <QPushButton>
+#include <QRawFont>
 #include <QStandardPaths>
 #include <QTemporaryDir>
 #include <QTimer>
@@ -45,6 +50,20 @@ namespace {
 using namespace sketch;using namespace sketch::desktop;using Json=nlohmann::json;
 void require(bool value,const char* message){if(!value)throw std::runtime_error(message);}
 void require_near(double a,double b){if(std::abs(a-b)>=1e-9)throw std::runtime_error("actual measured dimension "+std::to_string(a)+" differs from analytical expectation "+std::to_string(b));}
+Json pdf_font_evidence(const QFont& font) {
+    QByteArray bytes;QBuffer buffer(&bytes);require(buffer.open(QIODevice::WriteOnly),"PDF font probe must stage");
+    const QString text=QStringLiteral("Vertex PDF font probe: 3.000 m 90.0°");
+    {QPdfWriter writer(&buffer);writer.setResolution(144);QPainter painter(&writer);
+        require(painter.isActive(),"PDF font probe must start");painter.setFont(font);
+        painter.drawText(QRectF(30,30,1000,100),Qt::AlignLeft|Qt::AlignTop,text);
+        require(painter.end(),"PDF font probe must finish");}
+    buffer.close();require(buffer.open(QIODevice::ReadOnly),"PDF font probe must reopen");
+    QPdfDocument pdf;pdf.load(&buffer);const auto raw=QRawFont::fromFont(font);
+    const auto extracted=pdf.pageCount()>0?pdf.getAllText(0).text().simplified():QString{};
+    return {{"requested_family",font.family().toStdString()},{"resolved_family",raw.familyName().toStdString()},
+        {"raw_font_valid",raw.isValid()},{"page_count",pdf.pageCount()},{"text",extracted.toStdString()},
+        {"expected_text",text.toStdString()},{"expected_text_present",extracted.contains(text)}};
+}
 bool same(Vec2 a,Vec2 b){return a.x==b.x&&a.y==b.y;}
 Entity stroke(const std::string& id,const std::vector<Vec2>& points,bool arc=false,bool closed=false) {
     MeasurementLinework model;model.stroke_id=id;model.anchor=points.front();model.closed=closed;
@@ -370,8 +389,11 @@ void mixed_complete_partial_canvas_drag(bool reverse,bool select_whole_callout=t
     if(after.revision()!=before.revision()+1)throw std::runtime_error("Mixed complete and partial exterior drag refused: "+window.lastError().toStdString());
     require(!proposal.empty(),"Mixed move has an admitted geometry preview");
     require(after.history().back().boundary_constraint_changes &&
-        command_to_json(*after.history().back().boundary_constraint_changes).at("version")==16,
-        "Mixed drag retains its typed atomic composition proof");
+        command_to_json(*after.history().back().boundary_constraint_changes).at("version")==17 &&
+        after.history().back().boundary_constraint_changes->joint_translation_completion &&
+        after.history().back().boundary_constraint_changes->joint_translation &&
+        !after.history().back().boundary_constraint_changes->rigid_group_transform,
+        "Mixed drag retains its independently reconstructed joint translation proof");
     require(wall_measurement_source_current(after,after.entities().at(whole.toStdString())) &&
         wall_measurement_source_current(after,after.entities().at(partial.toStdString())),"Both exteriors stay current after mixed movement");
     for(const auto& old:dimensions(before,whole.toStdString())) {
@@ -395,7 +417,9 @@ void mixed_complete_partial_canvas_drag(bool reverse,bool select_whole_callout=t
         }
     }
     exact_history(window,before,after);capture(window,QStringLiteral("mixed-complete-partial-%1-%2-applied.png").arg(reverse).arg(select_whole_callout));
-    const auto path=temporary.filePath("mixed-exteriors.bldproj");require(window.saveProjectAs(path) && window.createNewProject(),"Save mixed proof and release writer lease");
+    const auto path=temporary.filePath("mixed-exteriors.bldproj");
+    if (!window.saveProjectAs(path)) throw std::runtime_error("Save mixed proof: "+window.lastError().toStdString());
+    if (!window.createNewProject()) throw std::runtime_error("Release mixed proof writer lease: "+window.lastError().toStdString());
     MainWindow reopened;prepare(reopened);require(reopened.openProject(path) && reopened.document().is_editable() &&
         reopened.document().snapshot().entities()==after.entities() && reopened.undoCommand() && reopened.document().snapshot().entities()==before.entities() &&
         reopened.redoCommand() && reopened.document().snapshot().entities()==after.entities(),"Mixed proof reopens editable with exact one-step history");
@@ -553,27 +577,120 @@ void mixed_wall_anchor_move_keeps_whole_transaction_admission() {
     MainWindow window(fixture());prepare(window);
     const auto length=window.createLengthDimension("open","open:e2",{4,2});styled(window,length,{4,2});
     const auto wall=window.createStraightWall({2,3},{4,3});require(!wall.isEmpty(),"mixed movement fixture needs real wall");
+    const auto neighbor=window.createStraightWall({4,3},{6,3});require(!neighbor.isEmpty(),"mixed movement fixture needs an unselected anchored neighbor");
     PersistentConstraint join;join.id="stroke-wall-join";join.relation=ConstraintRelationKind::coincident;
     join.bindings={{"open",WallEndpointRole::end,"open:e2","open:v2"},{wall.toStdString(),WallEndpointRole::start}};
+    PersistentConstraint neighbor_join;neighbor_join.id="wall-neighbor-join";neighbor_join.relation=ConstraintRelationKind::coincident;
+    neighbor_join.bindings={{wall.toStdString(),WallEndpointRole::end},{neighbor.toStdString(),WallEndpointRole::start}};
     PersistentConstraint anchor;anchor.id="wall-anchor";anchor.relation=ConstraintRelationKind::fixed_anchor;
-    anchor.bindings={{wall.toStdString(),WallEndpointRole::start}};anchor.anchor=Vec2{2,3};
+    anchor.bindings={{neighbor.toStdString(),WallEndpointRole::end}};anchor.anchor=Vec2{6,3};
     window.document().apply(ApplyEntityChanges{.expected_revision=window.document().revision(),
-        .entity_changes={EntityChange::upsert(encode_constraint_entity(join)),EntityChange::upsert(encode_constraint_entity(anchor))},.message="Retain mixed hard relations"});
-    require(window.selectEntity("open")&&window.selectEntity(wall,true),"select stroke and anchored wall together");
-    auto& surface=canvas(window);surface.setSnapEnabled(false);surface.setOverviewMapEnabled(false);surface.setViewTransform({2,2},60);
-    const auto before=window.document().snapshot();const QPointF start=QRectF(surface.rect()).center()+QPointF(60,-60),end=start+QPointF(90,-60);
+        .entity_changes={EntityChange::upsert(encode_constraint_entity(join)),EntityChange::upsert(encode_constraint_entity(neighbor_join)),
+            EntityChange::upsert(encode_constraint_entity(anchor))},.message="Retain mixed hard relations"});
+    require(window.selectEntity("open")&&window.selectEntity(wall,true),"select stroke and wall connected to an anchored neighbor together");
+    control<QToolButton>(window,"snapTool").setChecked(false);
+    auto& surface=canvas(window);surface.setSnapEnabled(false);surface.setOverviewMapEnabled(false);surface.setViewTransform({2,2},64);
+    QApplication::processEvents();
+    std::set<QString> projected_selection;
+    for (const auto& entity:surface.entities()) if (entity.selected) projected_selection.insert(entity.id);
+    require(projected_selection==std::set<QString>{"open",wall},"anchored mixed move must start with both owners selected in the real canvas projection");
+    const auto bounds=surface.selectionBounds();require(bounds.has_value(),"anchored mixed move must have a real selection frame");
+    // Use exactly representable model coordinates inside the actual frame.
+    // Label footprints can give the frame center fractional pixels, whose
+    // independent screen-to-model subtractions need not yield these same bits.
+    const auto before=window.document().snapshot();
+    const QPointF start=QRectF(surface.rect()).center()+QPointF(64,-64),end=start+QPointF(96,-64);
+    require(bounds->contains(start),"exact anchored mixed press must be inside the actual selected frame");
+    ConstraintAuthoringIntent intent;intent.joint_translation=JointTranslationIntent{{1.5,1},{},{"open"},{wall.toStdString()},true};
+    const auto expected_preview=preview_constraint_authoring(before,intent);
+    if (!expected_preview.accepted()) {
+        std::string diagnostic="anchored partial-neighbor fixture preview rejected:";
+        for (const auto& message:expected_preview.diagnostics()) diagnostic+=" "+message;
+        throw std::runtime_error(diagnostic);
+    }
+    auto locked=Document::fork(before);
+    auto selected_anchor=anchor;selected_anchor.id="selected-wall-anchor";
+    selected_anchor.bindings={{wall.toStdString(),WallEndpointRole::start}};selected_anchor.anchor=Vec2{2,3};
+    locked.apply(ApplyEntityChanges{.expected_revision=locked.revision(),
+        .entity_changes={EntityChange::upsert(encode_constraint_entity(selected_anchor))},.message="Fix selected endpoint for refusal"});
+    const auto locked_source=locked.snapshot();const auto refusal=preview_constraint_authoring(locked_source,intent);
+    require(!refusal.accepted() && refusal.candidate_entities()==locked_source.entities() &&
+        std::any_of(refusal.diagnostics().begin(),refusal.diagnostics().end(),[](const auto& message) {
+            return message.find("conflicts with a saved fixed position")!=std::string::npos;
+        }) && locked.snapshot().entities()==locked_source.entities() && locked.revision()==locked_source.revision(),
+        "mixed selected fixed endpoint must still reject the exact requested offset without mutation");
+    const auto serial=surface.entitiesMovePreviewSerial();
     QMouseEvent down(QEvent::MouseButtonPress,start,surface.mapToGlobal(start.toPoint()),Qt::LeftButton,Qt::LeftButton,Qt::NoModifier);
     QMouseEvent drag(QEvent::MouseMove,end,surface.mapToGlobal(end.toPoint()),Qt::NoButton,Qt::LeftButton,Qt::NoModifier);
     QMouseEvent up(QEvent::MouseButtonRelease,end,surface.mapToGlobal(end.toPoint()),Qt::LeftButton,Qt::NoButton,Qt::NoModifier);
-    QApplication::sendEvent(&surface,&down);QApplication::sendEvent(&surface,&drag);QApplication::sendEvent(&surface,&up);
-    QElapsedTimer completion;completion.start();while(surface.entitiesMovePreviewPending()&&completion.elapsed()<3000)QApplication::processEvents(QEventLoop::AllEvents,30);
-    QApplication::processEvents();
+    const auto settle=[&] {
+        QElapsedTimer completion;completion.start();
+        while(surface.entitiesMovePreviewPending()&&completion.elapsed()<5000)QApplication::processEvents(QEventLoop::AllEvents,30);
+        QApplication::processEvents();
+        require(!surface.entitiesMovePreviewPending(),"anchored mixed move must finish its exact preview admission");
+    };
+    QApplication::sendEvent(&surface,&down);QApplication::sendEvent(&surface,&drag);settle();
+    require(surface.entitiesMovePreviewSerial()>serial,"anchored mixed drag must enter object movement and request an exact preview");
+    const auto proposal=surface.entitiesMovePreview();
+    if (proposal.empty()) throw std::runtime_error("anchored mixed move exact preview was rejected: "+window.lastError().toStdString());
+    for (const auto& id:{QStringLiteral("open"),wall}) require(std::any_of(proposal.begin(),proposal.end(),[&](const auto& entity) {
+        return entity.id==id;
+    }),"anchored mixed move preview must admit both selected owners together");
+    const auto open_proposal=std::find_if(proposal.begin(),proposal.end(),[](const auto& entity) { return entity.id==QStringLiteral("open"); });
+    require(!open_proposal->segments.empty(),"anchored mixed stroke preview must contain its retained edges");
+    const Vec2 admitted_offset=open_proposal->segments.front().start;
+    const auto diagnostic_state=[&] {
+        const auto center=surface.viewCenter();
+        return Json{{"revision",window.document().revision()},{"preview_serial",surface.entitiesMovePreviewSerial()},
+            {"pending",surface.entitiesMovePreviewPending()},{"last_error",window.lastError().toStdString()},
+            {"snap_checked",control<QToolButton>(window,"snapTool").isChecked()},
+            {"view_center",{center.x,center.y}},{"scale",surface.viewScale()},
+            {"selection_bounds",{bounds->x(),bounds->y(),bounds->width(),bounds->height()}},
+            {"start",{start.x(),start.y()}},{"end",{end.x(),end.y()}},
+            {"desired_offset",{1.5,1.0}},{"admitted_offset",{admitted_offset.x,admitted_offset.y}}};
+    };
+    const auto before_release=diagnostic_state();
+    if (!same(admitted_offset,{1.5,1})) throw std::runtime_error("anchored mixed preview changed the exact unsnapped offset: "+before_release.dump());
+    require(window.document().snapshot().entities()==before.entities(),"anchored mixed move preview cannot commit early");
+    QApplication::sendEvent(&surface,&up);settle();
     const auto after=window.document().snapshot();
     if(after.revision()==before.revision())throw std::runtime_error("mixed anchored wall Move did not commit: "+window.lastError().toStdString());
     const auto placement=dimension(after,length.toStdString());require_near(placement.text_position.x,5.5);require_near(placement.text_position.y,3);
-    const auto lock=decode_constraint_entity(after.entities().at("wall-anchor"));require(lock.supported()&&lock.constraint->anchor.has_value(),"moved wall retains its fixed anchor");
-    require_near(lock.constraint->anchor->x,3.5);require_near(lock.constraint->anchor->y,4);
-    require(after.entities().at("stroke-wall-join")==before.entities().at("stroke-wall-join"),"mixed movement preserves coincidence identity");
+    if (after.entities()!=expected_preview.candidate_entities()) {
+        auto detail=Json{{"before_release",before_release},{"after_release",diagnostic_state()},
+            {"source_revision",before.revision()},{"actual_revision",after.revision()},
+            {"expected_entity_count",expected_preview.candidate_entities().size()},{"actual_entity_count",after.entities().size()}};
+        if (after.history().back().boundary_constraint_changes) {
+            const auto proof=command_to_json(*after.history().back().boundary_constraint_changes);
+            detail["command_version"]=proof.at("version");
+            if (proof.contains("joint_translation")) detail["joint_translation"]=proof.at("joint_translation");
+        }
+        for (const auto& [id,expected]:expected_preview.candidate_entities()) {
+            const auto actual=after.entities().find(id);
+            if (actual==after.entities().end()) { detail["missing_entity"]=id;break; }
+            if (actual->second==expected) continue;
+            detail["first_differing_entity"]=id;
+            detail["properties_diff"]=Json::diff(expected.properties,actual->second.properties);
+            detail["extensions_diff"]=Json::diff(expected.extensions,actual->second.extensions);
+            detail["expected_type"]=expected.type;detail["actual_type"]=actual->second.type;
+            detail["expected_required"]=expected.required;detail["actual_required"]=actual->second.required;
+            break;
+        }
+        throw std::runtime_error("actual mixed canvas move differs from the independently admitted anchored-neighbor candidate: "+detail.dump());
+    }
+    for (const auto* id:{"stroke-wall-join","wall-neighbor-join","wall-anchor"})
+        require(after.entities().at(id)==before.entities().at(id),"mixed movement preserves saved coincidence and fixed-anchor identities and positions");
+    const auto& partial=after.entities().at(neighbor.toStdString()).properties.at("baseline");
+    require(partial.at("start")[0]==5.5 && partial.at("start")[1]==4 && partial.at("end")[0]==6 && partial.at("end")[1]==3,
+        "unselected anchored neighbor must follow the exact selected contact while retaining its fixed far endpoint");
+    for (const auto& expected:proposal) {
+        const auto actual=std::find_if(surface.entities().begin(),surface.entities().end(),[&](const auto& entity) { return entity.id==expected.id; });
+        require(actual!=surface.entities().end() && actual->segments.size()==expected.segments.size(),"anchored mixed move must commit every admitted owner");
+        for (std::size_t i=0;i<expected.segments.size();++i) {
+            require(same(actual->segments[i].start,expected.segments[i].start) && same(actual->segments[i].end,expected.segments[i].end) &&
+                actual->segments[i].sweep_radians==expected.segments[i].sweep_radians,"anchored mixed move committed geometry must exactly match its admitted preview");
+        }
+    }
     exact_history(window,before,after);
 }
 
@@ -590,13 +707,40 @@ void transform_clipboard_output_delete_and_reopen() {
     require_near(moved_length.text_position.x,4.5);require_near(moved_length.text_position.y,2.5);require_near(moved_angle.text_position.x,1.5);require_near(moved_angle.text_position.y,-.5);
     require(moved_length.presentation==dimension(before,length.toStdString()).presentation&&moved_angle.presentation==dimension(before,angle.toStdString()).presentation,"rigid placement completion retains persisted style");
     exact_history(window,before,after);canvas(window).fitView();QApplication::processEvents();
-    std::vector<QString> texts;for(const auto& item:{moved_length,moved_angle,dimension(after,arc_length.toStdString()),dimension(after,arc_angle.toStdString())}){const auto found=std::find_if(canvas(window).labels().begin(),canvas(window).labels().end(),[&](const auto& label){return label.id==QString::fromStdString(item.id);});
-        require(found!=canvas(window).labels().end()&&found->color==QColor("#713ba2")&&found->bold,"real canvas projects saved measured dimension style");texts.push_back(found->text);}
+    std::vector<std::pair<std::string,QString>> texts;for(const auto& item:{moved_length,moved_angle,dimension(after,arc_length.toStdString()),dimension(after,arc_angle.toStdString())}){const auto found=std::find_if(canvas(window).labels().begin(),canvas(window).labels().end(),[&](const auto& label){return label.id==QString::fromStdString(item.id);});
+        require(found!=canvas(window).labels().end()&&found->color==QColor("#713ba2")&&found->bold,"real canvas projects saved measured dimension style");texts.emplace_back(item.id,found->text);}
     const auto svg=temporary.filePath("measured-dimensions.svg"),pdf=temporary.filePath("measured-dimensions.pdf");require(window.exportDraftSvg(svg)&&window.exportDraftPdf(pdf),"actual plan export must include measured dimension projection");
-    QFile input(svg);require(input.open(QIODevice::ReadOnly),"SVG must reopen");QXmlStreamReader xml(input.readAll());QString svg_text;
+    QFile input(svg);require(input.open(QIODevice::ReadOnly),"SVG must reopen");const auto svg_bytes=input.readAll();QXmlStreamReader xml(svg_bytes);QString svg_text;
     while(!xml.atEnd()){xml.readNext();if(xml.isCharacters())svg_text+=xml.text().toString();}require(!xml.hasError(),"SVG must be valid XML");
     QPdfDocument output;require(output.load(pdf)==QPdfDocument::Error::None&&output.pageCount()>0,"actual dimension PDF must reopen");const auto pdf_text=output.getAllText(0).text().simplified();
-    for(const auto& text:texts)require(svg_text.contains(text)&&pdf_text.contains(text.simplified()),"SVG and PDF must contain persisted measured dimension text");
+    auto text_evidence=Json::array();bool all_text_present=true;
+    for(const auto& [id,text]:texts) {
+        const auto svg_has=svg_text.contains(text),pdf_has=pdf_text.contains(text.simplified());
+        all_text_present=all_text_present && svg_has && pdf_has;
+        const auto item=dimension(after,id);const auto resolved=item.resolve(after.entities());
+        text_evidence.push_back({{"id",id},{"source",item.boundary_id},{"kind",std::string(boundary_dimension_kind_name(item.kind))},
+            {"text",text.toStdString()},{"svg_has",svg_has},{"pdf_has",pdf_has},
+            {"length_m",resolved.segment_length_metres},{"angle_radians",resolved.angle_radians},
+            {"placement",{item.text_position.x,item.text_position.y}}});
+    }
+    if (!all_text_present) {
+        const Json evidence{{"dimensions",text_evidence},{"svg_text",svg_text.toStdString()},
+            {"pdf_text",pdf_text.toStdString()},{"pdf_page_count",output.pageCount()},
+            {"platform",QGuiApplication::platformName().toStdString()},{"platform_environment",qEnvironmentVariable("QT_QPA_PLATFORM").toStdString()},
+            {"application_font_probe",pdf_font_evidence(QApplication::font())},
+            {"system_font_probe",pdf_font_evidence(QFont(QStringLiteral("Arial"),10))},
+            {"document_revision",after.revision()},{"snapshot_changed_during_export",window.document().snapshot().entities()!=after.entities()}};
+        const auto directory=qEnvironmentVariable("VERTEX_TEST_CAPTURE_DIR");
+        if (!directory.isEmpty()) {
+            require(QDir().mkpath(directory),"dimension export diagnostic directory must exist");
+            QFile saved_svg(QDir(directory).filePath("measured-dimensions-failed.svg"));
+            require(saved_svg.open(QIODevice::WriteOnly) && saved_svg.write(svg_bytes)==svg_bytes.size(),"failed dimension SVG diagnostic must save");
+            QFile pdf_input(pdf);require(pdf_input.open(QIODevice::ReadOnly),"failed dimension PDF diagnostic must reopen");
+            const auto pdf_bytes=pdf_input.readAll();QFile saved_pdf(QDir(directory).filePath("measured-dimensions-failed.pdf"));
+            require(saved_pdf.open(QIODevice::WriteOnly) && saved_pdf.write(pdf_bytes)==pdf_bytes.size(),"failed dimension PDF diagnostic must save");
+        }
+        throw std::runtime_error("SVG and PDF must contain persisted measured dimension text: "+evidence.dump());
+    }
     capture(window,"styled-measured-dimensions.png");const auto capture_dir=qEnvironmentVariable("VERTEX_TEST_CAPTURE_DIR");
     if(!capture_dir.isEmpty()) {
         const auto paper=output.pagePointSize(0);
@@ -633,9 +777,16 @@ void transform_clipboard_output_delete_and_reopen() {
     }
 }
 }
-int main(int argc,char** argv){sketch::testing::noninteractive_errors();QStandardPaths::setTestModeEnabled(true);QApplication app(argc,argv);
+int main(int argc,char** argv){sketch::testing::noninteractive_errors();QStandardPaths::setTestModeEnabled(true);sketch::desktop::configure_application_platform();QApplication app(argc,argv);
     QCoreApplication::setApplicationName("Vertex-measured-dimensions-"+QUuid::createUuid().toString(QUuid::WithoutBraces));
     try{require(QFontDatabase::addApplicationFont(":/fonts/Inter.ttf")>=0,"bundled Inter must load");app.setFont(QFont("Inter",10));
+        if(QCoreApplication::arguments().contains(QStringLiteral("--pdf-font-probe"))) {
+            const Json evidence{{"platform",QGuiApplication::platformName().toStdString()},
+                {"platform_environment",qEnvironmentVariable("QT_QPA_PLATFORM").toStdString()},
+                {"application_font",pdf_font_evidence(QApplication::font())},
+                {"system_font",pdf_font_evidence(QFont(QStringLiteral("Arial"),10))}};
+            std::cout<<evidence.dump()<<'\n';return 0;
+        }
         for(int kind=0;kind<5;++kind)saved_dimension_canvas_drag(kind);
         saved_dimension_canvas_drag(3,true);saved_dimension_canvas_drag(4,true);
         saved_dimension_canvas_drag(5,true);saved_dimension_canvas_drag(6,true);

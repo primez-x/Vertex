@@ -1,5 +1,8 @@
 #include "sketch/vertical_level_document_adapter.hpp"
 #include "sketch/document_digest.hpp"
+#include "sketch/stair_semantics.hpp"
+#include "sketch/building_entity.hpp"
+#include "sketch/project_organization.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -9,6 +12,14 @@ namespace sketch {
 namespace {
 [[noreturn]] void invalid(const std::string& message) {
     throw DocumentError(DocumentErrorCode::invalid_entity, message);
+}
+
+bool canonical_form(const Entity& entity, std::string_view type, int version, std::string_view form) {
+    const auto& p=entity.properties;
+    return entity.type==type && p.is_object() && p.contains("version") &&
+        p.at("version").is_number_integer() && p.at("version")==version &&
+        p.contains("form") && p.at("form").is_string() &&
+        p.at("form").get_ref<const std::string&>()==form;
 }
 
 const FloorToFloorLink& connected_link(const VerticalLevelGraph& graph,
@@ -35,6 +46,12 @@ double finite_number(const nlohmann::json& properties, const char* field, bool p
 
 void validate_straight_stair(const Entity& stair, double new_rise) {
     const auto& p = stair.properties;
+    if (p.at("version").is_number_integer() && p.at("version")==2) {
+        auto decoded=decode_stair_properties(stair.id,p);
+        decoded.total_rise=new_rise;
+        (void)derive_stair_layout(decoded);
+        return;
+    }
     if (!p.at("version").is_number_integer() || p.at("version") != 1 ||
         p.at("form") != "straight_stair_flight")
         invalid("Level propagation supports only version-1 canonical straight stairs: " + stair.id);
@@ -102,6 +119,15 @@ VerticalLevelEditCandidate prepare_vertical_level_edit(const DocumentSnapshot& s
             changes.push_back({id, old_rise, rise});
         }
         auto snapshot = Document::preview_command(source, command);
+        for (const auto& [id,entity] : snapshot.entities()) {
+            (void)id;
+            if (canonical_form(entity,"stair",2,"multi_flight_stair")) {
+                const auto effective=resolve_vertical_placement(snapshot,entity);
+                (void)make_building_shape(decode_building_entity(effective),snapshot.entities());
+            } else if (canonical_form(entity,"railing",2,"stair_flight_railing")) {
+                (void)make_building_shape(decode_building_entity(entity),snapshot.entities());
+            }
+        }
         return VerticalLevelEditCandidate(std::move(snapshot), std::move(command),
             document_snapshot_digest(source), std::move(changes));
     } catch (const nlohmann::json::exception& error) {

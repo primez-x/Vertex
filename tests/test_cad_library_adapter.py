@@ -420,11 +420,21 @@ class IfcAdapterTests(unittest.TestCase):
         self.assertEqual(sorted(round(area(loop),6) for loop in loops),[1.,1.])
 
     def test_native_metadata_product_is_left_for_native_path(self):
+        for envelope in ("Pset_VertexExchange_v1", "Pset_VertexExchange_v2"):
+            with self.subTest(envelope=envelope):
+                model, context = ifc_model()
+                product = add_swept(model,context)
+                pset = model.create_entity("IfcPropertySet", GlobalId=ifcopenshell.guid.new(), Name=envelope, HasProperties=[])
+                model.create_entity("IfcRelDefinesByProperties", GlobalId=ifcopenshell.guid.new(), RelatedObjects=[product], RelatingPropertyDefinition=pset)
+                with patch("ifcopenshell.geom.create_shape", side_effect=AssertionError("Native metadata must not be re-sectioned")):
+                    self.assertEqual(adapter.project_ifc(model.to_string().encode())["boundaries"],[])
+
+    def test_unknown_native_metadata_is_not_silently_excluded(self):
         model, context = ifc_model()
         product = add_swept(model,context)
-        pset = model.create_entity("IfcPropertySet", GlobalId=ifcopenshell.guid.new(), Name="Pset_VertexExchange_v1", HasProperties=[])
+        pset = model.create_entity("IfcPropertySet", GlobalId=ifcopenshell.guid.new(), Name="Pset_VertexExchange_v3", HasProperties=[])
         model.create_entity("IfcRelDefinesByProperties", GlobalId=ifcopenshell.guid.new(), RelatedObjects=[product], RelatingPropertyDefinition=pset)
-        self.assertEqual(adapter.project_ifc(model.to_string().encode())["boundaries"],[])
+        self.assertEqual(len(adapter.project_ifc(model.to_string().encode())["boundaries"]),1)
 
     def test_large_world_translation_keeps_hole_roles(self):
         model,context=ifc_model()

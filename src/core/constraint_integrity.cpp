@@ -226,6 +226,14 @@ std::optional<std::string> validate_constraint_integrity(const Entities& entitie
                 satisfied = constraint.anchor.has_value() &&
                     length(difference(points.at(0), *constraint.anchor)) <= linear_tolerance;
                 break;
+            case ConstraintRelationKind::tangent: {
+                const auto segments=resolve_constraint_tangent_segments(constraint,entities);
+                const auto residual=constraint_tangent_angular_residual(segments[0],constraint.bindings[0].role,
+                    segments[1],constraint.bindings[2].role);
+                satisfied=length(difference(points.at(0),points.at(2)))<=linear_tolerance &&
+                    std::isfinite(residual) && residual<=angular_tolerance;
+                break;
+            }
             case ConstraintRelationKind::parallel:
             case ConstraintRelationKind::perpendicular: {
                 const auto first = direction(points.at(0), points.at(1));

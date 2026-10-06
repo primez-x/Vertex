@@ -9,6 +9,7 @@
 #include <deque>
 #include <limits>
 #include <map>
+#include <numbers>
 #include <set>
 #include <stdexcept>
 #include <string>
@@ -62,6 +63,46 @@ public:
     }
 private:
     std::vector<double> coefficients_;
+};
+
+class TangentEquation final : public GCS::Constraint {
+public:
+    TangentEquation(const GCS::Point& a,const GCS::Point& b,const GCS::Point& c,const GCS::Point& d,
+        const TangentConstraint& value)
+        : first_offset_(value.first_at_start ? -value.first_sweep_radians/2
+              : value.first_sweep_radians/2+std::numbers::pi),
+          second_offset_(value.second_at_start ? -value.second_sweep_radians/2
+              : value.second_sweep_radians/2+std::numbers::pi) {
+        pvec={a.x,a.y,b.x,b.y,c.x,c.y,d.x,d.y};origpvec=pvec;
+    }
+    void errorgrad(double* error,double* gradient,double* parameter) override {
+        // PlaneGCS may redirect shared coordinates in a subsystem. Read and
+        // differentiate pvec itself, accumulating every aliased contribution.
+        const double dx1=*pvec[2]-*pvec[0],dy1=*pvec[3]-*pvec[1];
+        const double dx2=*pvec[6]-*pvec[4],dy2=*pvec[7]-*pvec[5];
+        const double length1=std::hypot(dx1,dy1),length2=std::hypot(dx2,dy2);
+        if (!(length1>0) || !(length2>0)) {
+            if (error) *error=std::numbers::pi;
+            if (gradient) *gradient=0;
+            return;
+        }
+        if (error) *error=std::remainder(std::atan2(dy2,dx2)+second_offset_
+            -std::atan2(dy1,dx1)-first_offset_-std::numbers::pi,2*std::numbers::pi);
+        if (gradient) {
+            double derivative=0;
+            const auto accumulate=[&](std::size_t i,double dx,double dy,double length,double sign) {
+                const double x=(dx/length)/length,y=(dy/length)/length;
+                if (parameter==pvec[i]) derivative+=sign*y;
+                if (parameter==pvec[i+1]) derivative-=sign*x;
+                if (parameter==pvec[i+2]) derivative-=sign*y;
+                if (parameter==pvec[i+3]) derivative+=sign*x;
+            };
+            accumulate(0,dx1,dy1,length1,-1);accumulate(4,dx2,dy2,length2,1);
+            *gradient=derivative;
+        }
+    }
+private:
+    double first_offset_,second_offset_;
 };
 
 const ConstraintId& constraint_id(const PlanarConstraint& constraint) {
@@ -285,6 +326,18 @@ bool validate_request(const ConstraintSolveRequest& request,
                 else if constexpr (std::is_same_v<Item, ParallelConstraint>
                                    || std::is_same_v<Item, PerpendicularConstraint>) {
                     return validate_segment_ids(item, point_indices, request.points, message);
+                }
+                else if constexpr (std::is_same_v<Item, TangentConstraint>) {
+                    if (!validate_segment_ids(item,point_indices,request.points,message)) return false;
+                    const auto valid_sweep=[](double sweep) {
+                        return std::isfinite(sweep) && std::abs(sweep)<2*std::numbers::pi;
+                    };
+                    if (!valid_sweep(item.first_sweep_radians) || !valid_sweep(item.second_sweep_radians) ||
+                        (item.first_sweep_radians==0 && item.second_sweep_radians==0)) {
+                        message="tangent requires finite signed sweeps below a full circle and at least one curve";
+                        return false;
+                    }
+                    return true;
                 }
                 else if constexpr (std::is_same_v<Item, AffineStationConstraint>) {
                     if (!point_indices.contains(item.point) || !point_indices.contains(item.start) || !point_indices.contains(item.end)) {
@@ -513,6 +566,15 @@ static ConstraintPreview planar_constraint_preview(const ConstraintSolveRequest&
                                                           solver_point(item.second_start),
                                                           solver_point(item.second_end), tag);
                     }
+                    else if constexpr (std::is_same_v<Item, TangentConstraint>) {
+                        const auto& first_contact=item.first_at_start ? item.first_start : item.first_end;
+                        const auto& second_contact=item.second_at_start ? item.second_start : item.second_end;
+                        if (first_contact!=second_contact)
+                            system.addConstraintP2PCoincident(solver_point(first_contact),solver_point(second_contact),tag);
+                        auto* relation=new TangentEquation(solver_point(item.first_start),solver_point(item.first_end),
+                            solver_point(item.second_start),solver_point(item.second_end),item);
+                        relation->setTag(tag);relation->setDriving(true);system.addConstraint(relation);
+                    }
                     else if constexpr (std::is_same_v<Item, AffineStationConstraint>) {
                         auto& point = solver_point(item.point);
                         auto& start = solver_point(item.start);
@@ -648,6 +710,23 @@ static ConstraintPreview planar_constraint_preview(const ConstraintSolveRequest&
                             solved(item.first_start), solved(item.first_end),
                             solved(item.second_start), solved(item.second_end), true);
                         angular_residual = residual.value;
+                    }
+                    else if constexpr (std::is_same_v<Item, TangentConstraint>) {
+                        const auto& a=solved(item.first_start);const auto& b=solved(item.first_end);
+                        const auto& c=solved(item.second_start);const auto& d=solved(item.second_end);
+                        linear_residual=stable_distance(item.first_at_start ? a : b,item.second_at_start ? c : d);
+                        const auto first_length=stable_distance(a,b),second_length=stable_distance(c,d);
+                        if (!std::isfinite(first_length) || !std::isfinite(second_length) ||
+                            !(first_length>0) || !(second_length>0))
+                            angular_residual=std::numeric_limits<double>::infinity();
+                        else {
+                            const double first_offset=item.first_at_start ? -item.first_sweep_radians/2
+                                : item.first_sweep_radians/2+std::numbers::pi;
+                            const double second_offset=item.second_at_start ? -item.second_sweep_radians/2
+                                : item.second_sweep_radians/2+std::numbers::pi;
+                            angular_residual=std::abs(std::remainder(std::atan2(d.y-c.y,d.x-c.x)+second_offset
+                                -std::atan2(b.y-a.y,b.x-a.x)-first_offset-std::numbers::pi,2*std::numbers::pi));
+                        }
                     }
                     else if constexpr (std::is_same_v<Item, AffineStationConstraint>) {
                         const auto& start = solved(item.start); const auto& end = solved(item.end);

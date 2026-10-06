@@ -3,6 +3,8 @@
 #include "sketch/document_solid.hpp"
 
 #include <nlohmann/json.hpp>
+#include <BRepBndLib.hxx>
+#include <Bnd_Box.hxx>
 
 #include <cmath>
 #include <iostream>
@@ -441,6 +443,40 @@ void test_room_volume_document_decoder_uses_shared_kernel() {
             "non-positive room height must fail closed at the document boundary");
 }
 
+void test_multi_flight_hosted_codec_and_current_map() {
+    using namespace sketch;
+    StairFlight stair{"multi",{},0,8,1.6,0.3,1.0};
+    stair.flights={{"lower",4},{"upper",4}};
+    stair.landings={{"turn",1.2,0.15,StairTurn::left_quarter,0}};
+    const auto encoded=encode_building_entity(stair);
+    require(encoded.properties.at("version")==2,"multi-flight is explicit v2");
+    require(encode_building_entity(decode_building_entity(encoded)).properties==encoded.properties,
+            "multi-flight entity roundtrip");
+    Railing rail{"hosted",{},0,0,0.9,0.04,0.45,
+        StairRailingHost{"multi","lower",StairRailingSide::left,0,1}};
+    const auto hosted=encode_building_entity(rail);
+    const auto object=decode_building_entity(hosted);
+    require(!hosted.properties.contains("length_m"),"hosted length never authored");
+    rejected([&]{(void)make_building_shape(object);},"entity-only hosted shape refused");
+    std::map<std::string,Entity,std::less<>> map{{encoded.id,encoded}};
+    require(solid_volume(make_building_shape(object,map))>0,"current-map hosted shape resolves");
+    const auto minimum_z = [&](const TopoDS_Shape& shape) {
+        Bnd_Box bounds; BRepBndLib::Add(shape,bounds);
+        double x0,y0,z0,x1,y1,z1; bounds.Get(x0,y0,z0,x1,y1,z1); return z0;
+    };
+    const auto original_z=minimum_z(make_building_shape(object,map));
+    map.at(encoded.id).properties["base_position_m"][2]=3.0;
+    near(minimum_z(make_building_shape(object,map))-original_z,3.0,1e-7,
+         "host geometry reads current placement instead of retained decoded coordinates");
+    map.at(encoded.id).properties["flights"][0]["id"]="replacement";
+    rejected([&]{(void)make_building_shape(object,map);},"same-map flight identity replacement refused");
+    map.clear();rejected([&]{(void)make_building_shape(object,map);},"missing current host refused");
+    auto bad=encoded;bad.properties["version"]=1;
+    rejected([&]{(void)decode_building_entity(bad);},"v1 refuses multi-flight topology");
+    bad=hosted;bad.properties["length_m"]=99;
+    rejected([&]{(void)decode_building_entity(bad);},"hosted stale independent dimensions refused");
+}
+
 int main() {
     try {
         test_all_forms_roundtrip_to_canonical_entities();
@@ -451,6 +487,7 @@ int main() {
         test_empty_object_id_uses_entity_factory_id();
         test_room_volume_document_decoder_uses_shared_kernel();
         test_roof_opening_schema();
+        test_multi_flight_hosted_codec_and_current_map();
         std::cout << "Building entity codec tests passed\n";
         return 0;
     } catch (const std::exception& error) {

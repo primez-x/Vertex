@@ -2,6 +2,7 @@
 #include "sketch/survey_source_version.hpp"
 #include "sketch/windows_project_path.hpp"
 #include "sketch/boundary_entity.hpp"
+#include "sketch/boundary_dimension.hpp"
 #include "sketch/boundary_translation.hpp"
 #include "sketch/boundary_transform.hpp"
 #include "sketch/boundary_edit.hpp"
@@ -125,8 +126,13 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
         value.at("version").is_number_integer() && value.at("version")==2 && value.contains("chord_input"); };
     for (const auto& revision : snapshot.history()) {
         if (revision.boundary_geometry_edit && typed_edit(*revision.boundary_geometry_edit)) required=std::max(required,31U);
+        if (revision.boundary_geometry_edit && revision.boundary_geometry_edit->wall_source_translation)
+            required = std::max(required, 53U);
         if (revision.boundary_constraint_changes) {
             const auto& edits=*revision.boundary_constraint_changes;
+            if (std::any_of(edits.boundary_edits.begin(), edits.boundary_edits.end(), [](const auto& edit) { return edit.wall_source_translation.has_value(); }) ||
+                std::any_of(edits.exterior_source_edits.begin(), edits.exterior_source_edits.end(), [](const auto& edit) { return edit.wall_source_translation.has_value(); }))
+                required = std::max(required, 53U);
             if (std::any_of(edits.boundary_edits.begin(),edits.boundary_edits.end(),typed_edit) ||
                 std::any_of(edits.exterior_source_edits.begin(),edits.exterior_source_edits.end(),typed_edit)) required=std::max(required,31U);
         }
@@ -148,6 +154,8 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
                 std::any_of(command.exterior_source_edits.begin(),command.exterior_source_edits.end(),[](const auto& edit){return edit.physical_wall_room_repair.has_value();}))
                 required=std::max(required,44U);
             if(command.rigid_group_completion || command.rigid_group_transform) required=std::max(required,42U);
+            if(command.joint_translation_completion || command.joint_translation) required=std::max(required,47U);
+            if(command.room_review_completion || !command.room_review_intent.is_null()) required=std::max(required,49U);
             if(command.dimension_placement_completion || !command.dimension_placement_moves.empty()) required=std::max(required,41U);
             if(command.wall_split) required=std::max(required,37U);
             if(command.exterior_segment_resize) required=std::max(required,39U);
@@ -194,6 +202,34 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
         if (revision.boundary_translations) required = std::max(required, 9U);
         for (const auto& [id, entity] : revision.entities) {
             (void)id;
+            if (const auto lineage = entity.properties.find("wall_measurement_source");
+                can_recognize_boundary_entity_type(entity.type) && lineage != entity.properties.end() &&
+                lineage->is_object() && lineage->contains("version") && lineage->at("version").is_number_integer() &&
+                lineage->at("version") == 2)
+                required = std::max(required, 53U);
+            // Canonical v2 stair forms retain their floor in every revision,
+            // including deleted entities and undone or abandoned branches.
+            if (entity.properties.is_object() &&
+                entity.properties.contains("version") && entity.properties.at("version").is_number_integer() &&
+                entity.properties.at("version") == 2) {
+                const auto form = entity.properties.value("form", nlohmann::json());
+                if (entity.type == "stair" && form == "multi_flight_stair")
+                    required = std::max(required, 51U);
+                if (entity.type == "railing" && form == "stair_flight_railing")
+                    required = std::max(required, 52U);
+            }
+            if (can_recognize_boundary_dimension_entity_type(entity.type)) {
+                const auto decoded=decode_boundary_dimension_entity(entity);
+                if (decoded.supported()) {
+                    const auto owner=revision.entities.find(decoded.dimension->boundary_id);
+                    if (owner!=revision.entities.end() && owner->second.type=="room_boundary" &&
+                        owner->second.extensions.contains("physical_wall_room")) required=std::max(required,50U);
+                }
+            }
+            if (entity.type=="constraint" && entity.properties.contains("version") &&
+                entity.properties.at("version").is_number_integer() && entity.properties.at("version")==5 &&
+                entity.properties.value("relation",std::string{})=="tangent")
+                required=std::max(required,48U);
             // Even deleted/historical consumers retain the semantic reader
             // floor: an older reader must not ignore clear-room holes.
             if (entity.type == "room_boundary" && entity.extensions.contains("physical_wall_room"))
@@ -379,7 +415,8 @@ std::uint32_t required_format_version_internal(const DocumentSnapshot& snapshot,
                         if (operation.is_object() && operation.value("kind", std::string{}) == "geometry_edit" &&
                             operation.contains("value") && operation.at("value").is_object() &&
                             operation.at("value").value("version", 0) >= 3)
-                            required = std::max(required, operation.at("value").value("version", 0) >= 7 ? 44U :
+                            required = std::max(required, operation.at("value").value("version", 0) >= 8 ? 53U :
+                                operation.at("value").value("version", 0) >= 7 ? 44U :
                                 operation.at("value").value("version", 0) >= 6 ? 30U :
                                 operation.at("value").value("version", 0) >= 5 ? 23U :
                                 operation.at("value").value("version", 0) == 4 ? 17U : 16U);
@@ -1765,6 +1802,13 @@ bool verify_sqlite_schema(sqlite3* database, bool allow_recovery = false) {
          sqlite3_column_int(user_version.get(), 0) != 43 &&
          sqlite3_column_int(user_version.get(), 0) != 44 &&
          sqlite3_column_int(user_version.get(), 0) != 45 &&
+         sqlite3_column_int(user_version.get(), 0) != 53 &&
+         sqlite3_column_int(user_version.get(), 0) != 52 &&
+         sqlite3_column_int(user_version.get(), 0) != 51 &&
+         sqlite3_column_int(user_version.get(), 0) != 50 &&
+         sqlite3_column_int(user_version.get(), 0) != 49 &&
+         sqlite3_column_int(user_version.get(), 0) != 48 &&
+         sqlite3_column_int(user_version.get(), 0) != 47 &&
          sqlite3_column_int(user_version.get(), 0) != 46 &&
          sqlite3_column_int(user_version.get(), 0) != 31 &&
          !(allow_recovery && sqlite3_column_int(user_version.get(), 0) == 4))) {
@@ -1977,12 +2021,12 @@ void verify_sqlite_content_integrity(sqlite3* database) {
 DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nullptr,
                                std::string* verified_digest = nullptr) {
     const auto format = required_metadata(database, "format_version");
-    if (format != "46" && format != "1" && format != "2" && format != "3" && format != "5" &&
+    if (format != "53" && format != "52" && format != "51" && format != "50" && format != "49" && format != "48" && format != "47" && format != "46" && format != "1" && format != "2" && format != "3" && format != "5" &&
         format != "6" && format != "7" && format != "8" && format != "9" && format != "10" && format != "11" && format != "12" && format != "13" && format != "14" && format != "15" && format != "16" && format != "17" && format != "18" && format != "19" && format != "20" && format != "21" && format != "22" && format != "23" && format != "24" && format != "25" && format != "26" && format != "27" && format != "28" && format != "29" && format != "30" && format != "31" && format != "32" && format != "33" && format != "34" && format != "35" && format != "36" && format != "37" && format != "38" && format != "39" && format != "40" && format != "41" && format != "42" && format != "43" && format != "44" && format != "45" && !(recovery && format == "4")) {
         storage_error(StorageErrorCode::unsupported_format,
                       "unsupported project format version: " + format);
     }
-    const auto format_number = format == "46" ? 46U : format == "45" ? 45U : format == "44" ? 44U : format == "43" ? 43U : format == "42" ? 42U : format == "41" ? 41U : format == "40" ? 40U : format == "39" ? 39U : format == "38" ? 38U : format == "37" ? 37U : format == "36" ? 36U : format == "35" ? 35U : format == "34" ? 34U : format == "33" ? 33U : format == "32" ? 32U : format == "31" ? 31U : format == "30" ? 30U : format == "29" ? 29U : format == "28" ? 28U : format == "27" ? 27U : format == "26" ? 26U : format == "25" ? 25U : format == "24" ? 24U : format == "23" ? 23U : format == "22" ? 22U : format == "21" ? 21U : format == "20" ? 20U : format == "19" ? 19U : format == "18" ? 18U : format == "17" ? 17U : format == "16" ? 16U : format == "15" ? 15U : format == "14" ? 14U : format == "13" ? 13U : format == "12" ? 12U : format == "11" ? 11U : format == "10" ? 10U : format == "9" ? 9U : format == "8" ? 8U : format == "7" ? 7U : (format == "6" ? 6U :
+    const auto format_number = format == "53" ? 53U : format == "52" ? 52U : format == "51" ? 51U : format == "50" ? 50U : format == "49" ? 49U : format == "48" ? 48U : format == "47" ? 47U : format == "46" ? 46U : format == "45" ? 45U : format == "44" ? 44U : format == "43" ? 43U : format == "42" ? 42U : format == "41" ? 41U : format == "40" ? 40U : format == "39" ? 39U : format == "38" ? 38U : format == "37" ? 37U : format == "36" ? 36U : format == "35" ? 35U : format == "34" ? 34U : format == "33" ? 33U : format == "32" ? 32U : format == "31" ? 31U : format == "30" ? 30U : format == "29" ? 29U : format == "28" ? 28U : format == "27" ? 27U : format == "26" ? 26U : format == "25" ? 25U : format == "24" ? 24U : format == "23" ? 23U : format == "22" ? 22U : format == "21" ? 21U : format == "20" ? 20U : format == "19" ? 19U : format == "18" ? 18U : format == "17" ? 17U : format == "16" ? 16U : format == "15" ? 15U : format == "14" ? 14U : format == "13" ? 13U : format == "12" ? 12U : format == "11" ? 11U : format == "10" ? 10U : format == "9" ? 9U : format == "8" ? 8U : format == "7" ? 7U : (format == "6" ? 6U :
         (format == "5" ? 5U : (format == "4" ? 4U : (format == "3" ? 3U :
         (format == "2" ? 2U : 1U)))));
     Statement format_marker(database, "PRAGMA user_version");
@@ -2254,7 +2298,7 @@ DocumentSnapshot read_snapshot(sqlite3* database, RecoveryLedger* recovery = nul
 
     const auto required_format = required_format_version_internal(snapshot, format_number < 28);
     if (required_format > format_number) {
-        const auto reason = required_format >= 46 ? "scoped annotations and explicit opacity or patterns" : required_format >= 45 ? "aligned text and independent live area callouts" : required_format >= 44 ? "reviewed physical room repair authority" : required_format >= 43 ? "source-bound physical clear rooms and analytic holes" : required_format >= 42 ? "typed mixed rigid group completion" : required_format >= 41 ? "typed saved-callout placement completion" : required_format >= 40 ? "source-derived exterior segment arc authority or physical line-origin curve provenance" : required_format >= 39 ? "source-derived exterior segment resize authority" : required_format >= 38 ? "logical wall-chain room relationships or future relationship models" : required_format >= 37 ? "wall split authority, physical arc-chain constraints or whole-span dimensions" : required_format >= 36 ? "saved dimensions on measured strokes" : required_format >= 35 ? "persistent measured-stroke constraints or simultaneous endpoint derivation" : required_format >= 34 ? "curved survey source provenance" : required_format >= 33 ? "grouped measured-region source evidence" : required_format >= 32 ? "finished-room appraisal rule v2" : required_format >= 31 ? "typed chord construction input" : required_format >= 30 ? "reviewed measured-area source replacement" : required_format >= 29 ? "measured stroke geometry edit derivations" : required_format >= 28 ? "measurement linework rigid transform or source lineage" : required_format >= 27 ? "verified connected wall rigid transform" : required_format >= 26 ? "compact mixed asset references" : required_format >= 25 ? "SVG symbol palette" : required_format >= 24 ? "saved-view drawing appearance" : required_format >= 23 ? "explicit automatic-angle removal during redraw" : required_format >= 22 ? "coordinated exterior corner edit" : required_format >= 21 ? "ANSI-oriented appraisal policy or measurement evidence" : required_format >= 20 ? "mixed live exterior wall-source completion" : required_format >= 19 ? "live exterior wall-source completion" : required_format >= 18 ? "boundary rigid transform group" : required_format >= 17 ? "explicit fresh-topology redefinition" : required_format >= 16 ? "reviewed exterior wall-source replacement" : required_format >= 15 ? "boundary curvature reconstruction proof" : required_format >= 14 ? "rigid curve-transform construction archive" : required_format >= 13 ? "physical curve-length input or edit proof" : required_format >= 12 ? "physical arc-length constraint" : required_format >= 11 ? "straight wall-only endpoint proof" : required_format >= 10 ? "curved endpoint constraint or wall proof" : required_format >= 9 ? "boundary translation group" : required_format >= 8 ? "boundary constraint changes" : required_format >= 7 ? "boundary geometry edit" :
+        const auto reason = required_format >= 53 ? "exact physical-source translation lineage" : required_format >= 52 ? "owned stair-flight railings" : required_format >= 51 ? "multi-flight stair topology" : required_format >= 50 ? "source-qualified physical-room dimensions" : required_format >= 49 ? "atomic reviewed physical-room dispositions" : required_format >= 48 ? "persistent analytical tangent junctions" : required_format >= 47 ? "joint hard-connected translation" : required_format >= 46 ? "scoped annotations and explicit opacity or patterns" : required_format >= 45 ? "aligned text and independent live area callouts" : required_format >= 44 ? "reviewed physical room repair authority" : required_format >= 43 ? "source-bound physical clear rooms and analytic holes" : required_format >= 42 ? "typed mixed rigid group completion" : required_format >= 41 ? "typed saved-callout placement completion" : required_format >= 40 ? "source-derived exterior segment arc authority or physical line-origin curve provenance" : required_format >= 39 ? "source-derived exterior segment resize authority" : required_format >= 38 ? "logical wall-chain room relationships or future relationship models" : required_format >= 37 ? "wall split authority, physical arc-chain constraints or whole-span dimensions" : required_format >= 36 ? "saved dimensions on measured strokes" : required_format >= 35 ? "persistent measured-stroke constraints or simultaneous endpoint derivation" : required_format >= 34 ? "curved survey source provenance" : required_format >= 33 ? "grouped measured-region source evidence" : required_format >= 32 ? "finished-room appraisal rule v2" : required_format >= 31 ? "typed chord construction input" : required_format >= 30 ? "reviewed measured-area source replacement" : required_format >= 29 ? "measured stroke geometry edit derivations" : required_format >= 28 ? "measurement linework rigid transform or source lineage" : required_format >= 27 ? "verified connected wall rigid transform" : required_format >= 26 ? "compact mixed asset references" : required_format >= 25 ? "SVG symbol palette" : required_format >= 24 ? "saved-view drawing appearance" : required_format >= 23 ? "explicit automatic-angle removal during redraw" : required_format >= 22 ? "coordinated exterior corner edit" : required_format >= 21 ? "ANSI-oriented appraisal policy or measurement evidence" : required_format >= 20 ? "mixed live exterior wall-source completion" : required_format >= 19 ? "live exterior wall-source completion" : required_format >= 18 ? "boundary rigid transform group" : required_format >= 17 ? "explicit fresh-topology redefinition" : required_format >= 16 ? "reviewed exterior wall-source replacement" : required_format >= 15 ? "boundary curvature reconstruction proof" : required_format >= 14 ? "rigid curve-transform construction archive" : required_format >= 13 ? "physical curve-length input or edit proof" : required_format >= 12 ? "physical arc-length constraint" : required_format >= 11 ? "straight wall-only endpoint proof" : required_format >= 10 ? "curved endpoint constraint or wall proof" : required_format >= 9 ? "boundary translation group" : required_format >= 8 ? "boundary constraint changes" : required_format >= 7 ? "boundary geometry edit" :
             required_format >= 6 ? "boundary transform" : required_format >= 5 ? "boundary translation" : required_format >= 3 ? "boundary_authoring" :
                             "identified boundary, dimension or boundary draft";
         storage_error(StorageErrorCode::unsupported_format,

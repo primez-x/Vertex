@@ -15,6 +15,379 @@
   ],
   "components": [
     {
+      "id": "tesseract",
+      "kind": "runtime",
+      "package": {
+        "name": "tesseract",
+        "version": "5.5.2",
+        "license": "Apache-2.0"
+      },
+      "source": {
+        "kind": "vcpkg-spdx",
+        "spdx_path": ".deps/native/x64-windows/share/tesseract/vcpkg.spdx.json",
+        "prefix_path": ".deps/native/x64-windows",
+        "package_id": "SPDXRef-port"
+      },
+      "notice_paths": [
+        ".deps/native/x64-windows/share/tesseract/copyright"
+      ],
+      "runtime_names": [
+        "tesseract55.dll"
+      ],
+      "destinations": {
+        "tesseract55.dll": "bin/tesseract55.dll"
+      }
+    },
+    {
+      "id": "libarchive",
+      "kind": "runtime",
+      "package": {
+        "name": "libarchive",
+        "version": "3.8.8",
+        "license": "LicenseRef-vcpkg-null"
+      },
+      "source": {
+        "kind": "vcpkg-spdx",
+        "spdx_path": ".deps/native/x64-windows/share/libarchive/vcpkg.spdx.json",
+        "prefix_path": ".deps/native/x64-windows",
+        "package_id": "SPDXRef-port"
+      },
+      "notice_paths": [
+        ".deps/native/x64-windows/share/libarchive/copyright"
+      ],
+      "runtime_names": [
+        "archive.dll"
+      ],
+      "destinations": {
+        "archive.dll": "bin/archive.dll"
+      },
+      "artifacts": [
+        {
+          "path": ".deps/native/x64-windows/share/libarchive/copyright",
+          "sha256": "30e556b3959e3985d66efefec5eaac51d4995053caa1d3cffe6eb916f146f229"
+        },
+        {
+          "path": ".deps/native/x64-windows/share/libarchive/vcpkg.spdx.json",
+          "sha256": "3ce7cd6796ab3953782c0cedc65950dd79d7f0fe1b5d4d44577f9e149f21b9d0"
+        }
+      ]
+    },
+    {
+      "id": "leptonica",
+      "kind": "runtime",
+      "package": {
+        "name": "leptonica",
+        "version": "1.87.0",
+        "license": "LicenseRef-vcpkg-null"
+      },
+      "source": {
+        "kind": "vcpkg-spdx",
+        "spdx_path": ".deps/native/x64-windows/share/leptonica/vcpkg.spdx.json",
+        "prefix_path": ".deps/native/x64-windows",
+        "package_id": "SPDXRef-port"
+      },
+      "notice_paths": [
+        ".deps/native/x64-windows/share/leptonica/copyright"
+      ],
+      "runtime_names": [
+        "leptonica-1.87.0.dll"
+      ],
+      "destinations": {
+        "leptonica-1.87.0.dll": "bin/leptonica-1.87.0.dll"
+      },
+      "artifacts": [
+        {
+          "path": ".deps/native/x64-windows/share/leptonica/copyright",
+          "sha256": "87829abb5bbb00b55a107365da89e9a33f86c4250169e5a1e5588505be7d5806"
+        },
+        {
+          "path": ".deps/native/x64-windows/share/leptonica/vcpkg.spdx.json",
+          "sha256": "a87a39807eb9122e568743909a684b067bf1c25782af4d37cba1b89866215684"
+        }
+      ]
+    },
+    {
+      "id": "curl",
+      "kind": "runtime",
+      "package": {
+        "name": "curl",
+        "version": "8.22.0",
+        "license": "BSD-3-Clause AND ISC AND curl"
+      },
+      "source": {
+        "kind": "vcpkg-spdx",
+        "spdx_path": ".deps/native/x64-windows/share/curl/vcpkg.spdx.json",
+        "prefix_path": ".deps/native/x64-windows",
+        "package_id": "SPDXRef-port"
+      },
+      "notice_paths": [
+        ".deps/native/x64-windows/share/curl/copyright"
+      ],
+      "runtime_names": [
+        "libcurl.dll"
+      ],
+      "destinations": {
+        "libcurl.dll": "bin/libcurl.dll"
+      }
+    },
+    {
+      "id": "liblzma",
+      "kind": "runtime",
+      "package": {
+        "name": "liblzma",
+        "version": "5.8.3",
+        "license": "LicenseRef-vcpkg-null"
+      },
+      "source": {
+        "kind": "vcpkg-spdx",
+        "spdx_path": ".deps/native/x64-windows/share/liblzma/vcpkg.spdx.json",
+        "prefix_path": ".deps/native/x64-windows",
+        "package_id": "SPDXRef-port"
+      },
+      "notice_paths": [
+        ".deps/native/x64-windows/share/liblzma/copyright"
+      ],
+      "runtime_names": [
+        "liblzma.dll"
+      ],
+      "destinations": {
+        "liblzma.dll": "bin/liblzma.dll"
+      },
+      "artifacts": [
+        {
+          "path": ".deps/native/x64-windows/share/liblzma/copyright",
+          "sha256": "616a3ad264ce29b8f1cb97e53037b139d406899ca8d1f799651e17bfa09830b8"
+        },
+        {
+          "path": ".deps/native/x64-windows/share/liblzma/vcpkg.spdx.json",
+          "sha256": "bd73d76efe9ad2b12a86d86ae699fc27645c2b62362b28e1a3feb4676645db83"
+        }
+      ]
+    },
+    {
+      "id": "lz4",
+      "kind": "runtime",
+      "package": {
+        "name": "lz4",
+        "version": "1.10.0",
+        "license": "BSD-2-Clause"
+      },
+      "source": {
+        "kind": "vcpkg-spdx",
+        "spdx_path": ".deps/native/x64-windows/share/lz4/vcpkg.spdx.json",
+        "prefix_path": ".deps/native/x64-windows",
+        "package_id": "SPDXRef-port"
+      },
+      "notice_paths": [
+        ".deps/native/x64-windows/share/lz4/copyright"
+      ],
+      "runtime_names": [
+        "lz4.dll"
+      ],
+      "destinations": {
+        "lz4.dll": "bin/lz4.dll"
+      }
+    },
+    {
+      "id": "zstd",
+      "kind": "runtime",
+      "package": {
+        "name": "zstd",
+        "version": "1.5.7",
+        "license": "(BSD-3-Clause OR GPL-2.0-only)"
+      },
+      "source": {
+        "kind": "vcpkg-spdx",
+        "spdx_path": ".deps/native/x64-windows/share/zstd/vcpkg.spdx.json",
+        "prefix_path": ".deps/native/x64-windows",
+        "package_id": "SPDXRef-port"
+      },
+      "notice_paths": [
+        ".deps/native/x64-windows/share/zstd/copyright"
+      ],
+      "runtime_names": [
+        "zstd.dll"
+      ],
+      "destinations": {
+        "zstd.dll": "bin/zstd.dll"
+      }
+    },
+    {
+      "id": "giflib",
+      "kind": "runtime",
+      "package": {
+        "name": "giflib",
+        "version": "6.1.3",
+        "license": "MIT"
+      },
+      "source": {
+        "kind": "vcpkg-spdx",
+        "spdx_path": ".deps/native/x64-windows/share/giflib/vcpkg.spdx.json",
+        "prefix_path": ".deps/native/x64-windows",
+        "package_id": "SPDXRef-port"
+      },
+      "notice_paths": [
+        ".deps/native/x64-windows/share/giflib/copyright"
+      ],
+      "runtime_names": [
+        "gif.dll"
+      ],
+      "destinations": {
+        "gif.dll": "bin/gif.dll"
+      }
+    },
+    {
+      "id": "libjpeg-turbo",
+      "kind": "runtime",
+      "package": {
+        "name": "libjpeg-turbo",
+        "version": "3.2.0",
+        "license": "BSD-3-Clause"
+      },
+      "source": {
+        "kind": "vcpkg-spdx",
+        "spdx_path": ".deps/native/x64-windows/share/libjpeg-turbo/vcpkg.spdx.json",
+        "prefix_path": ".deps/native/x64-windows",
+        "package_id": "SPDXRef-port"
+      },
+      "notice_paths": [
+        ".deps/native/x64-windows/share/libjpeg-turbo/copyright"
+      ],
+      "runtime_names": [
+        "jpeg62.dll"
+      ],
+      "destinations": {
+        "jpeg62.dll": "bin/jpeg62.dll"
+      }
+    },
+    {
+      "id": "libwebp",
+      "kind": "runtime",
+      "package": {
+        "name": "libwebp",
+        "version": "1.6.0#3",
+        "license": "BSD-3-Clause"
+      },
+      "source": {
+        "kind": "vcpkg-spdx",
+        "spdx_path": ".deps/native/x64-windows/share/libwebp/vcpkg.spdx.json",
+        "prefix_path": ".deps/native/x64-windows",
+        "package_id": "SPDXRef-port"
+      },
+      "notice_paths": [
+        ".deps/native/x64-windows/share/libwebp/copyright"
+      ],
+      "runtime_names": [
+        "libwebp.dll",
+        "libwebpmux.dll",
+        "libsharpyuv.dll"
+      ],
+      "destinations": {
+        "libwebp.dll": "bin/libwebp.dll",
+        "libwebpmux.dll": "bin/libwebpmux.dll",
+        "libsharpyuv.dll": "bin/libsharpyuv.dll"
+      }
+    },
+    {
+      "id": "openjpeg",
+      "kind": "runtime",
+      "package": {
+        "name": "openjpeg",
+        "version": "2.5.4",
+        "license": "BSD-2-Clause"
+      },
+      "source": {
+        "kind": "vcpkg-spdx",
+        "spdx_path": ".deps/native/x64-windows/share/openjpeg/vcpkg.spdx.json",
+        "prefix_path": ".deps/native/x64-windows",
+        "package_id": "SPDXRef-port"
+      },
+      "notice_paths": [
+        ".deps/native/x64-windows/share/openjpeg/copyright"
+      ],
+      "runtime_names": [
+        "openjp2.dll"
+      ],
+      "destinations": {
+        "openjp2.dll": "bin/openjp2.dll"
+      }
+    },
+    {
+      "id": "tiff",
+      "kind": "runtime",
+      "package": {
+        "name": "tiff",
+        "version": "4.7.2",
+        "license": "libtiff"
+      },
+      "source": {
+        "kind": "vcpkg-spdx",
+        "spdx_path": ".deps/native/x64-windows/share/tiff/vcpkg.spdx.json",
+        "prefix_path": ".deps/native/x64-windows",
+        "package_id": "SPDXRef-port"
+      },
+      "notice_paths": [
+        ".deps/native/x64-windows/share/tiff/copyright"
+      ],
+      "runtime_names": [
+        "tiff.dll"
+      ],
+      "destinations": {
+        "tiff.dll": "bin/tiff.dll"
+      }
+    },
+    {
+      "id": "assistance-ocr-engine",
+      "kind": "asset",
+      "package": {
+        "name": "Vertex offline OCR engine descriptor",
+        "version": "1",
+        "license": "GPL-3.0-or-later"
+      },
+      "source": {
+        "kind": "workspace",
+        "paths": [
+          "assets/assistance/ocr-engine-v1.json"
+        ]
+      },
+      "notice_paths": [
+        "LICENSE"
+      ]
+    },
+    {
+      "id": "tesseract-eng-model",
+      "kind": "asset",
+      "package": {
+        "name": "Tesseract English fast model",
+        "version": "4.1.0",
+        "license": "Apache-2.0"
+      },
+      "source": {
+        "kind": "bootstrap-dependency",
+        "dependencies_path": "third_party/dependencies.json",
+        "asset_name": "Tesseract English fast model",
+        "paths": [
+          "assets/assistance/ocr/eng.traineddata"
+        ]
+      },
+      "source_files": [
+        {
+          "path": "assets/assistance/ocr/eng.traineddata",
+          "sha256": "7d4322bd2a7749724879683fc3912cb542f19906c83bcc1a52132556427170b2"
+        }
+      ],
+      "artifacts": [
+        {
+          "path": ".deps/downloads/ocr/eng.traineddata",
+          "sha256": "7d4322bd2a7749724879683fc3912cb542f19906c83bcc1a52132556427170b2"
+        }
+      ],
+      "notice_paths": [
+        "assets/assistance/ocr/LICENSE",
+        "assets/assistance/ocr/README.upstream.md"
+      ]
+    },
+    {
       "id": "qt-runtime-config",
       "kind": "asset",
       "package": {
@@ -87,6 +460,10 @@
         "kind": "workspace",
         "paths": [
           "src/desktop/reference_import_worker.cpp",
+          "src/desktop/assistance_ocr.cpp",
+          "src/desktop/assistance_ocr.hpp",
+          "src/desktop/assistance_ocr_recognizer.cpp",
+          "src/desktop/assistance_ocr_recognizer.hpp",
           "src/desktop/reference_import.hpp",
           "src/desktop/reference_import.cpp",
           "src/desktop/cad_library_bridge.cpp",

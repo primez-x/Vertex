@@ -5,10 +5,16 @@
 #include "sketch/door_operation.hpp"
 #include "sketch/ifc_native_geometry.hpp"
 #include "sketch/project_import_worker.hpp"
+#ifdef SKETCH_IFC_NATIVE_GEOMETRY
+#include "sketch/building_entity.hpp"
+#include "sketch/physical_wall_room.hpp"
+#include "sketch/vertical_levels.hpp"
+#endif
 
 #include <algorithm>
 #include <cmath>
 #include <iostream>
+#include <limits>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -189,15 +195,50 @@ sketch::Document make_document(double elevation = 0.0) {
 }
 
 #ifdef SKETCH_IFC_NATIVE_GEOMETRY
-void verify_worker_candidate(const sketch::IfcProjectImportResult& imported) {
+void verify_worker_candidate(const sketch::IfcProjectImportResult& imported,
+                             const char* fixture = "native IFC candidate") {
     sketch::ProjectImportCandidate candidate;
     candidate.kind = sketch::ProjectImportKind::ifc;
     candidate.entities = imported.entities;
     candidate.source_retention_required = imported.source_retention_required;
     for (const auto& diagnostic : imported.diagnostics)
         candidate.diagnostics.push_back({diagnostic.source_id, diagnostic.source_kind, diagnostic.code});
-    check(!sketch::encode_project_import_candidate(candidate).empty(),
-          "native IFC candidate must satisfy the strict worker protocol before isolation transport");
+    try {
+        check(!sketch::encode_project_import_candidate(candidate).empty(),
+              "native IFC candidate must satisfy the strict worker protocol before isolation transport");
+    } catch (const std::invalid_argument& error) {
+        std::ostringstream detail;
+        detail << fixture << ": " << error.what() << "; retention=" << candidate.source_retention_required;
+        for (const auto& entity : candidate.entities) {
+            detail << "; entity=" << entity.id << '/' << entity.type << ", required=" << entity.required << ", properties=";
+            for (const auto& [key,value] : entity.properties.items()) { (void)value; detail << key << ','; }
+            detail << " extensions=";
+            for (const auto& [key,value] : entity.extensions.items()) { (void)value; detail << key << ','; }
+            if (entity.type == "roof" || entity.type == "room" || entity.type == "ifc_reference") {
+                try {
+                    sketch::project_import_detail::GeometryBudget budget;
+                    if (entity.type == "roof") sketch::project_import_detail::validate_roof(entity,budget);
+                    else if (entity.type == "room") sketch::project_import_detail::validate_room(entity,budget);
+                    else sketch::project_import_detail::validate_ifc_reference(entity);
+                    detail << " individual-admission=valid";
+                } catch (const std::exception& admission_error) {
+                    detail << " individual-admission=" << admission_error.what();
+                }
+            }
+        }
+        for (const auto& diagnostic : candidate.diagnostics)
+            detail << "; diagnostic=" << diagnostic.source_id << '/' << diagnostic.source_kind << '/' << diagnostic.code;
+        throw std::invalid_argument(detail.str());
+    }
+}
+
+void verify_worker_candidate_rejected(const sketch::Entity& entity) {
+    sketch::IfcProjectImportResult imported;
+    imported.entities = {entity};
+    bool refused = false;
+    try { verify_worker_candidate(imported); }
+    catch (const std::invalid_argument&) { refused = true; }
+    check(refused, "malformed or excessive native roof/room candidates must be refused by the worker protocol");
 }
 
 void desktop_hosted_worker_protocol() {
@@ -809,14 +850,547 @@ void closed_leaf_without_operation() {
 }
 #endif
 
+#ifdef SKETCH_IFC_NATIVE_GEOMETRY
+double independently_read_mesh_volume(const std::map<std::string, Record>& graph,
+    const Record& product) {
+    double total = 0;
+    const auto& shape = graph.at(product.fields.at(6));
+    check(shape.type == "IFCPRODUCTDEFINITIONSHAPE", "semantic product must own its actual body");
+    for (const auto& representation_id : list(shape.fields.at(2))) {
+        const auto& representation = graph.at(representation_id);
+        check(representation.type == "IFCSHAPEREPRESENTATION" && representation.fields.at(1) == "'Body'" &&
+              representation.fields.at(2) == "'Tessellation'", "roof/room body must be an IFC4 tessellation");
+        for (const auto& item_id : list(representation.fields.at(3))) {
+            const auto& mesh = graph.at(item_id);
+            check(mesh.type == "IFCTRIANGULATEDFACESET" && mesh.fields.size() == 5 && mesh.fields.at(2) == ".T.",
+                "roof/room solid must declare a closed triangulation");
+            std::vector<std::array<double,3>> points;
+            for (const auto& row : list(graph.at(mesh.fields.at(0)).fields.at(0))) {
+                const auto coordinates = list(row);
+                check(coordinates.size() == 3, "native world points require three coordinates");
+                points.push_back({std::stod(coordinates[0]),std::stod(coordinates[1]),std::stod(coordinates[2])});
+            }
+            double volume = 0;
+            std::map<std::pair<std::size_t,std::size_t>,std::pair<int,int>> incidence;
+            for (const auto& row : list(mesh.fields.at(3))) {
+                const auto indices = list(row);
+                const std::array<std::size_t,3> triangle{std::stoull(indices.at(0))-1,
+                    std::stoull(indices.at(1))-1,std::stoull(indices.at(2))-1};
+                const auto& a=points.at(triangle[0]); const auto& b=points.at(triangle[1]); const auto& c=points.at(triangle[2]);
+                volume += (a[0]*(b[1]*c[2]-b[2]*c[1])+a[1]*(b[2]*c[0]-b[0]*c[2])+a[2]*(b[0]*c[1]-b[1]*c[0]))/6;
+                for (std::size_t i=0;i<3;++i) {
+                    const auto first=triangle[i], second=triangle[(i+1)%3];
+                    auto& edge=incidence[{std::min(first,second),std::max(first,second)}];
+                    ++edge.first; edge.second += first<second ? 1 : -1;
+                }
+            }
+            check(volume > 0, "native semantic mesh must enclose positive physical volume");
+            for (const auto& [key,edge] : incidence)
+                check(edge.first == 2 && edge.second == 0, "native semantic mesh must close with opposite edge incidence");
+            total += volume;
+        }
+    }
+    return total;
+}
+
+std::string replace_ifc_record(std::string bytes, const std::string& id, const Record& record) {
+    const auto begin=bytes.find(id+'='); const auto end=bytes.find(';',begin);
+    check(begin != std::string::npos && end != std::string::npos, "replacement record must exist");
+    std::string row=id+'='+record.type+'(';
+    for (const auto& field : record.fields) { if (row.back() != '(') row+=','; row+=field; }
+    row += ");"; bytes.replace(begin,end-begin+1,row); return bytes;
+}
+
+void native_roofs_and_spaces() {
+    using namespace sketch;
+    using Json=nlohmann::json;
+    const double slope=0.5, secant=std::sqrt(1+slope*slope), thickness=.15, overhang=.2;
+    for (const auto form : {"sloped_roof_panel","gable_roof","hip_roof"}) {
+        for (const bool cut : {false,true}) {
+            const std::vector<RoofOpening> openings=cut ? std::vector<RoofOpening>{{"skylight",.5,.5,.7,.8}}
+                                                      : std::vector<RoofOpening>{};
+            Entity entity;
+            double expected;
+            std::string ifc_kind;
+            if (std::string_view(form) == "sloped_roof_panel") {
+                entity=encode_building_entity(SlopedRoofPanel{"roof",{2,3,4},.3,4,3,2,std::atan(slope),overhang,thickness,openings});
+                expected=(4+2*overhang)*(3+2*overhang)*secant*thickness;
+                ifc_kind=".SHED_ROOF.";
+            } else if (std::string_view(form) == "gable_roof") {
+                entity=encode_building_entity(GableRoof{"roof",{2,3,4},.3,8,6,1.5,std::atan(slope),overhang,thickness,openings});
+                const double inward=slope*thickness/secant;
+                expected=2*(8+2*overhang)*(3+overhang-inward/2)*thickness*secant;
+                ifc_kind=".GABLE_ROOF.";
+            } else {
+                entity=encode_building_entity(HipRoof{"roof",{2,3,4},.3,8,6,1.5,std::atan(slope),overhang,thickness,openings});
+                expected=(8+2*overhang)*(6+2*overhang)*thickness*secant;
+                ifc_kind=".HIP_ROOF.";
+            }
+            if (cut) expected-=.7*.8*thickness*secant;
+            entity.properties["name"]="roof";
+            entity.extensions["human"]={{"name","roof"},{"nested",{{"description",std::string(2400,'h')}}}};
+            if (std::string_view(form) == "gable_roof" && cut)
+                entity.extensions["human"]["nested"]["description"]=std::string(5000,'h');
+            const auto exported=export_project_ifc(Document::create({entity}).snapshot());
+            check(exported.diagnostics.empty(), "native roofs must export actual geometry and complete metadata");
+            if (std::string_view(form) == "gable_roof" && cut) {
+                check(exported.step.find("Pset_VertexExchange_v2") != std::string::npos,
+                    "long roof carrier must exercise chunked native property metadata");
+                if (const auto* directory = std::getenv("VERTEX_TEST_CAPTURE_DIR")) {
+                    std::filesystem::create_directories(directory);
+                    std::ofstream output(std::filesystem::path(directory) / "native-gable-roof-v2.ifc",std::ios::binary);
+                    output << exported.step;
+                    check(output.good(), "long roof integration capture must be written completely");
+                }
+            }
+            const auto graph=records(exported.step);
+            std::string product_id;
+            for (const auto& [id,record] : graph) if (record.type == "IFCROOF") product_id=id;
+            check(!product_id.empty() && graph.at(product_id).fields.size() == 9 &&
+                  graph.at(product_id).fields.at(8) == ifc_kind, "canonical native roof requires matching IFC4 roof type");
+            check(std::abs(independently_read_mesh_volume(graph,graph.at(product_id))-expected)<1e-7,
+                "independent roof mesh volume must agree with slope, normal thickness, overhang and vertical skylight cut");
+            bool contained=false;
+            for (const auto& [id,record] : graph) if (record.type == "IFCRELCONTAINEDINSPATIALSTRUCTURE") {
+                const auto products=list(record.fields.at(4));
+                contained=contained || std::find(products.begin(),products.end(),product_id)!=products.end();
+            }
+            check(contained, "roof must have a spatial containment relationship");
+            const auto imported=import_project_ifc(exported.step);
+            verify_worker_candidate(imported);
+            check(imported.entities.size() == 1 && imported.entities[0].type == "roof" &&
+                  imported.entities[0].properties == entity.properties &&
+                  imported.entities[0].extensions.at("human") == entity.extensions.at("human"),
+                "verified roof must reconstruct editable authored parameters and untouched nested human metadata");
+            if (std::string_view(form) == "gable_roof" && cut)
+                if (const auto* directory = std::getenv("VERTEX_TEST_CAPTURE_DIR")) {
+                    std::ofstream expected(std::filesystem::path(directory) / "native-gable-roof-v2.expected.json",std::ios::binary);
+                    expected << Json{{"source_entity_id",entity.id},{"active_entities",Json::array({
+                        {{"id",imported.entities[0].id},{"type","roof"}}})},{"diagnostic_count",imported.diagnostics.size()}}.dump(2);
+                    check(expected.good(), "roof capture expectations must be written completely");
+                }
+            auto malformed=imported.entities[0];
+            malformed.properties["version"]=3; verify_worker_candidate_rejected(malformed);
+            malformed=imported.entities[0]; malformed.properties["form"]="unsupported_roof"; verify_worker_candidate_rejected(malformed);
+            malformed=imported.entities[0]; malformed.properties["base_position_m"]={2,3}; verify_worker_candidate_rejected(malformed);
+            malformed=imported.entities[0]; malformed.properties["span_m"]=-1; verify_worker_candidate_rejected(malformed);
+            malformed=imported.entities[0]; malformed.properties["orientation_rad"]=std::numeric_limits<double>::infinity();
+            verify_worker_candidate_rejected(malformed);
+            malformed=imported.entities[0]; malformed.properties["pitch_rad"]=.25; verify_worker_candidate_rejected(malformed);
+            malformed=imported.entities[0]; malformed.properties["thickness_m"]=1e7; verify_worker_candidate_rejected(malformed);
+            malformed=imported.entities[0]; malformed.properties["version"]=2;
+            malformed.properties["roof_openings"]=Json::array({{{"id","bad"},{"x_m",1e6},{"y_m",0},{"width_m",1},{"depth_m",1}}});
+            verify_worker_candidate_rejected(malformed);
+            malformed.properties["roof_openings"]=Json::array({{{"id","cut"},{"x_m",.5},{"y_m",.5},{"width_m",.1},{"depth_m",.1}},
+                {{"id","other"},{"x_m",.5},{"y_m",.5},{"width_m",.1},{"depth_m",.1}}});
+            verify_worker_candidate_rejected(malformed);
+            malformed.properties["roof_openings"]=Json::array();
+            for (int i=0; i<257; ++i) malformed.properties["roof_openings"].push_back(
+                {{"id","cut-"+std::to_string(i)},{"x_m",.5},{"y_m",.5},{"width_m",.1},{"depth_m",.1}});
+            verify_worker_candidate_rejected(malformed);
+            const auto repeated=import_project_ifc(export_project_ifc(Document::create(imported.entities).snapshot()).step);
+            check(repeated.entities.size() == 1 && repeated.entities[0].type == "roof" &&
+                  repeated.entities[0].properties == entity.properties &&
+                  repeated.entities[0].extensions.at("ifc_vertex_properties").dump().size() ==
+                    imported.entities[0].extensions.at("ifc_vertex_properties").dump().size(),
+                "roof re-export must preserve manufacturing parameters without recursive metadata growth");
+            if (!cut) {
+                auto product=graph.at(product_id); product.fields[8]=".FLAT_ROOF.";
+                const auto wrong=import_project_ifc(replace_ifc_record(exported.step,product_id,product));
+                check(std::none_of(wrong.entities.begin(),wrong.entities.end(),[](const auto& e){return e.type == "roof";}) &&
+                    wrong.source_retention_required, "contradictory IFC roof type must remain inert with source retention");
+            }
+        }
+    }
+    const auto rectangle=[](double x,double y,double width,double depth) {
+        return Json::array({{{"start",{x,y}},{"end",{x+width,y}},{"sweep_radians",0}},
+            {{"start",{x+width,y}},{"end",{x+width,y+depth}},{"sweep_radians",0}},
+            {{"start",{x+width,y+depth}},{"end",{x,y+depth}},{"sweep_radians",0}},
+            {{"start",{x,y+depth}},{"end",{x,y}},{"sweep_radians",0}}});
+    };
+    Entity room{"room","room",{{"boundary",rectangle(2,3,4,3)},{"holes",Json::array({rectangle(3,4,1,1)})},
+        {"height_m",2.5},{"elevation_m",4.25},{"name","room"},{"classification","office"}},false,
+        {{"human",{{"note","room"},{"nested",Json::array({"roof","room"})}}}}};
+    const auto exported=export_project_ifc(Document::create({room}).snapshot());
+    check(exported.diagnostics.empty(), "authored holed room must export a genuine space");
+    const auto graph=records(exported.step);
+    std::string space_id;
+    for (const auto& [id,record] : graph) if (record.type == "IFCSPACE") space_id=id;
+    check(!space_id.empty() && graph.at(space_id).fields.size() == 11 && graph.at(space_id).fields[9] == ".INTERNAL.",
+        "room must export the IFC4 space schema");
+    check(std::abs(independently_read_mesh_volume(graph,graph.at(space_id))-27.5)<1e-7,
+        "space mesh must represent independently calculated net area times authored height");
+    bool aggregated=false;
+    for (const auto& [id,record] : graph) {
+        if (record.type == "IFCRELAGGREGATES" && record.fields[5] == "("+space_id+")")
+            aggregated=graph.at(record.fields[4]).type == "IFCBUILDINGSTOREY";
+        if (record.type == "IFCRELCONTAINEDINSPATIALSTRUCTURE")
+            check(record.fields[4].find(space_id) == std::string::npos, "spaces must decompose storeys instead of element containment");
+    }
+    check(aggregated, "space must decompose its storey");
+    const auto imported=import_project_ifc(exported.step);
+    verify_worker_candidate(imported);
+    check(imported.entities.size() == 1 && imported.entities[0].type == "room" && imported.entities[0].properties == room.properties &&
+          imported.entities[0].extensions.at("human") == room.extensions.at("human"),
+        "space must reconstruct its exact editable holed room and human metadata");
+    auto malformed_room=imported.entities[0]; malformed_room.properties.erase("height_m");
+    verify_worker_candidate_rejected(malformed_room);
+    malformed_room=imported.entities[0]; malformed_room.properties["height_m"]=-1;
+    verify_worker_candidate_rejected(malformed_room);
+    malformed_room=imported.entities[0]; malformed_room.properties["elevation_m"]=std::numeric_limits<double>::infinity();
+    verify_worker_candidate_rejected(malformed_room);
+    malformed_room=imported.entities[0]; malformed_room.properties["layer_id"]="foreign-layer";
+    verify_worker_candidate_rejected(malformed_room);
+    malformed_room=imported.entities[0]; malformed_room.properties["holes"]=Json::array({rectangle(20,20,1,1)});
+    verify_worker_candidate_rejected(malformed_room);
+    // Four individually bounded 256-edge rooms exceed the aggregate analytical
+    // pair budget. The mapper must keep excess carriers inert, while a forged
+    // worker response that activates all four is rejected before transport.
+    std::vector<Entity> many_rooms;
+    for (int room_index=0; room_index<4; ++room_index) {
+        auto many=room;
+        many.id="many-room-"+std::to_string(room_index);
+        many.properties["holes"]=Json::array(); many.properties["boundary"]=Json::array();
+        for (int edge=0; edge<256; ++edge) {
+            const auto a=2*std::acos(-1.0)*edge/256, b=2*std::acos(-1.0)*(edge+1)/256;
+            many.properties["boundary"].push_back({{"start",{10*room_index+2*std::cos(a),2*std::sin(a)}},
+                {"end",{10*room_index+2*std::cos(b),2*std::sin(b)}},{"sweep_radians",0}});
+        }
+        many_rooms.push_back(std::move(many));
+    }
+    IfcProjectImportResult forged_many; forged_many.entities=many_rooms;
+    bool aggregate_refused=false;
+    try { verify_worker_candidate(forged_many); } catch (const std::invalid_argument&) { aggregate_refused=true; }
+    check(aggregate_refused, "aggregate native room topology must be bounded across the whole worker response");
+    const auto many_step=export_project_ifc(Document::create(many_rooms).snapshot()).step;
+    const auto many_import=import_project_ifc(many_step);
+    verify_worker_candidate(many_import);
+    check(std::count_if(many_import.entities.begin(),many_import.entities.end(),[](const auto& e){return e.type == "room";}) == 3 &&
+        std::count_if(many_import.entities.begin(),many_import.entities.end(),[](const auto& e){return e.type == "ifc_reference" &&
+            e.extensions.at("ifc_vertex_properties").contains("_vertex_ifc_entity");}) == 1 &&
+        std::any_of(many_import.diagnostics.begin(),many_import.diagnostics.end(),[](const auto& d) {
+            return d.code == "native_roof_or_room_candidate_budget_exceeded" ||
+                d.code == "native_roof_or_room_reconstruction_budget_exceeded";
+        }), "overbudget IFC space must remain inert with exact authored source metadata and explicit diagnosis");
+    for (const auto& retained : many_import.entities) if (retained.type == "ifc_reference") {
+        const auto& payload=retained.extensions.at("ifc_vertex_properties").at("_vertex_ifc_entity");
+        check(std::any_of(many_rooms.begin(),many_rooms.end(),[&](const auto& authored) {
+            return payload.at("properties") == authored.properties && payload.at("extensions") == authored.extensions;
+        }), "declined space must retain its exact original authored fields and nested metadata");
+    }
+    auto mismatched_many=many_step;
+    for (const auto& [id,record] : records(many_step)) if (record.type == "IFCSHAPEREPRESENTATION" &&
+        record.fields[1] == "'Body'" && record.fields[2] == "'Tessellation'") {
+        auto tiny=record; tiny.fields[3]="(#950002)";
+        mismatched_many=replace_ifc_record(std::move(mismatched_many),id,tiny);
+    }
+    mismatched_many.insert(mismatched_many.find("ENDSEC;\nEND-ISO-10303-21;"),
+        "#950001=IFCCARTESIANPOINTLIST3D(((0.,0.,0.),(1.,0.,0.),(1.,1.,0.),(0.,1.,0.),"
+        "(0.,0.,1.),(1.,0.,1.),(1.,1.,1.),(0.,1.,1.)));\n"
+        "#950002=IFCTRIANGULATEDFACESET(#950001,$,.T.,((1,3,2),(1,4,3),(5,6,7),(5,7,8),"
+        "(1,2,6),(1,6,5),(2,3,7),(2,7,6),(3,4,8),(3,8,7),(4,1,5),(4,5,8)),$);\n");
+    const auto declined_many=import_project_ifc(mismatched_many);
+    verify_worker_candidate(declined_many,"cumulative mismatched room reconstruction attempts");
+    check(declined_many.entities.size() == 4 &&
+        std::all_of(declined_many.entities.begin(),declined_many.entities.end(),[](const auto& e){return e.type == "ifc_reference";}) &&
+        std::any_of(declined_many.diagnostics.begin(),declined_many.diagnostics.end(),[](const auto& d) {
+            return d.code == "native_roof_or_room_reconstruction_budget_exceeded";
+        }), "tiny mismatching carriers must consume cumulative native reconstruction budget before fallback");
+    for (const auto& retained : declined_many.entities) {
+        const auto& payload=retained.extensions.at("ifc_vertex_properties").at("_vertex_ifc_entity");
+        check(std::any_of(many_rooms.begin(),many_rooms.end(),[&](const auto& authored) {
+            return payload.at("properties") == authored.properties && payload.at("extensions") == authored.extensions;
+        }), "failed reconstruction attempts must retain exact original authoring after budget exhaustion");
+    }
+    malformed_room=imported.entities[0]; malformed_room.properties["boundary"]=Json::array();
+    for (int i=0; i<513; ++i) malformed_room.properties["boundary"].push_back(room.properties["boundary"][0]);
+    verify_worker_candidate_rejected(malformed_room);
+    malformed_room=imported.entities[0]; malformed_room.properties["holes"]=Json::array();
+    for (int i=0; i<257; ++i) malformed_room.properties["holes"].push_back(rectangle(3,4,1,1));
+    verify_worker_candidate_rejected(malformed_room);
+    std::string points_id;
+    for (const auto& [id,record] : graph) if (record.type == "IFCCARTESIANPOINTLIST3D") points_id=id;
+    auto points=graph.at(points_id); const auto position=points.fields[0].find("4.25");
+    check(position != std::string::npos, "room world mesh must contain its actual elevation");
+    points.fields[0].replace(position,4,"4.75");
+    const auto changed=import_project_ifc(replace_ifc_record(exported.step,points_id,points));
+    check(std::none_of(changed.entities.begin(),changed.entities.end(),[](const auto& e){return e.type == "room";}) &&
+          changed.source_retention_required, "contradictory space mesh must not activate authored room metadata");
+    // Rebase unchanged world geometry into a genuine translated/rotated local
+    // frame, then compose that frame through a parent placement.
+    auto rebased=exported.step;
+    for (const auto& [id,record] : graph) if (record.type == "IFCCARTESIANPOINTLIST3D") {
+        auto local=record; std::ostringstream coordinates; coordinates.precision(17); coordinates << '(';
+        bool first=true;
+        for (const auto& row : list(record.fields[0])) {
+            const auto p=list(row); const double dx=std::stod(p[0])-20,dy=std::stod(p[1])-30,z=std::stod(p[2])-4;
+            if (!first) coordinates << ','; first=false;
+            coordinates << '(' << dy << ',' << -dx << ',' << z << ')';
+        }
+        coordinates << ')'; local.fields[0]=coordinates.str();
+        rebased=replace_ifc_record(std::move(rebased),id,local);
+    }
+    auto local_space=graph.at(space_id); local_space.fields[5]="#900006";
+    rebased=replace_ifc_record(std::move(rebased),space_id,local_space);
+    std::string origin_id;
+    for (const auto& [id,record] : graph)
+        if (record.type == "IFCCARTESIANPOINT" && record.fields[0] == "(0.,0.,0.)") { origin_id=id; break; }
+    check(!origin_id.empty(), "export context must contain its exact world origin");
+    rebased.insert(rebased.find("ENDSEC;\nEND-ISO-10303-21;"),
+        "#900001=IFCCARTESIANPOINT((20.,30.,4.));\n#900002=IFCAXIS2PLACEMENT3D(#900001,$,$);\n"
+        "#900003=IFCLOCALPLACEMENT($,#900002);\n#900004=IFCDIRECTION((0.,1.,0.));\n"
+        "#900005=IFCAXIS2PLACEMENT3D("+origin_id+",#900007,#900004);\n#900006=IFCLOCALPLACEMENT(#900003,#900005);\n"
+        "#900007=IFCDIRECTION((0.,0.,1.));\n");
+    const auto rebased_graph=records(rebased);
+    check(rebased_graph.at("#900005").fields[1] == "#900007" &&
+        rebased_graph.at("#900005").fields[2] == "#900004",
+        "positive rigid placement must provide both the Z axis and horizontal reference direction");
+    // Independently compose this explicit parent translation and child's
+    // quarter-turn. Geometry comparison must pass because the actual world
+    // vertices are unchanged, rather than because metadata alone is trusted.
+    for (const auto& [id,record] : graph) if (record.type == "IFCCARTESIANPOINTLIST3D") {
+        const auto original_rows=list(record.fields[0]);
+        const auto local_rows=list(rebased_graph.at(id).fields[0]);
+        check(local_rows.size() == original_rows.size(), "rebasing must preserve native mesh vertices");
+        for (std::size_t i=0; i<original_rows.size(); ++i) {
+            const auto world=list(original_rows[i]), local=list(local_rows[i]);
+            check(std::abs(20-std::stod(local[1])-std::stod(world[0])) < 1e-10 &&
+                std::abs(30+std::stod(local[0])-std::stod(world[1])) < 1e-10 &&
+                std::abs(4+std::stod(local[2])-std::stod(world[2])) < 1e-10,
+                "independent rigid composition must restore every original world-space vertex");
+        }
+    }
+    const auto composed=import_project_ifc(rebased);
+    check(composed.entities.size() == 1 && composed.entities[0].type == "room" && composed.entities[0].properties == room.properties,
+        "proper composed rigid placement must preserve reliable native space geometry");
+    verify_worker_candidate(composed,"composed rigid room placement");
+    auto incomplete_axis=rebased_graph.at("#900005"); incomplete_axis.fields[1]="$";
+    const auto incomplete_frame=import_project_ifc(replace_ifc_record(rebased,"#900005",incomplete_axis));
+    check(std::none_of(incomplete_frame.entities.begin(),incomplete_frame.entities.end(),[](const auto& e){return e.type == "room";}) &&
+        incomplete_frame.source_retention_required &&
+        std::any_of(incomplete_frame.diagnostics.begin(),incomplete_frame.diagnostics.end(),[](const auto& d) {
+            return d.code == "native_roof_or_room_geometry_metadata_inconsistent";
+        }), "one-sided axis/reference direction must remain inert with explicit geometry inconsistency diagnosis");
+    verify_worker_candidate(incomplete_frame,"one-sided rigid room axis retained candidate");
+    auto moved_context=exported.step;
+    for (const auto& [id,record] : graph) if (record.type == "IFCGEOMETRICREPRESENTATIONCONTEXT") {
+        auto context=record; context.fields[4]="#900002";
+        moved_context=replace_ifc_record(std::move(moved_context),id,context);
+    }
+    moved_context.insert(moved_context.find("ENDSEC;\nEND-ISO-10303-21;"),
+        "#900001=IFCCARTESIANPOINT((20.,30.,4.));\n#900002=IFCAXIS2PLACEMENT3D(#900001,$,$);\n");
+    const auto unsupported_context=import_project_ifc(moved_context);
+    check(std::none_of(unsupported_context.entities.begin(),unsupported_context.entities.end(),[](const auto& e){return e.type == "room";}) &&
+        unsupported_context.source_retention_required, "context transformations must not activate native space semantics");
+    auto nonmetre=exported.step; const auto metre=nonmetre.find(".LENGTHUNIT.,$,.METRE.");
+    check(metre != std::string::npos,"fixture requires metre units");
+    nonmetre.replace(metre,std::string(".LENGTHUNIT.,$,.METRE.").size(),".LENGTHUNIT.,.MILLI.,.METRE.");
+    const auto unsupported_units=import_project_ifc(nonmetre);
+    check(std::none_of(unsupported_units.entities.begin(),unsupported_units.entities.end(),[](const auto& e){return e.type == "room";}),
+        "unconverted units must not activate native space semantics");
+    const auto verify_project_unit_links=[](const Entity& authored,const std::string& step) {
+        const auto unit_graph=records(step);
+        std::string project_id,unit_id;
+        for (const auto& [id,record] : unit_graph) {
+            if (record.type == "IFCPROJECT") project_id=id;
+            if (record.type == "IFCSIUNIT" && record.fields[1] == ".LENGTHUNIT.") unit_id=id;
+        }
+        check(!project_id.empty() && !unit_id.empty(), "unit fixture must have a real project and length unit");
+        const auto verify_declined=[&](const std::string& bytes,const char* fixture) {
+            const auto result=import_project_ifc(bytes);
+            verify_worker_candidate(result,fixture);
+            check(result.entities.size() == 1 && result.entities[0].type == "ifc_reference" &&
+                result.source_retention_required && std::any_of(result.diagnostics.begin(),result.diagnostics.end(),[](const auto& d) {
+                    return d.code == "native_project_length_units_not_reconstructed";
+                }) && result.entities[0].extensions.at("ifc_vertex_properties").at("_vertex_ifc_entity").at("properties") == authored.properties &&
+                result.entities[0].extensions.at("ifc_vertex_properties").at("_vertex_ifc_entity").at("extensions") == authored.extensions,
+                "unresolved actual project length units must retain the exact native carrier without activation");
+        };
+        auto missing_project=step;
+        const auto project_begin=missing_project.find(project_id+"=");
+        missing_project.erase(project_begin,missing_project.find('\n',project_begin)-project_begin+1);
+        verify_declined(missing_project,"orphan metre unit without IFC project");
+        auto project=unit_graph.at(project_id); project.fields[8]="$";
+        verify_declined(replace_ifc_record(step,project_id,project),"missing project UnitsInContext with orphan metre");
+        project.fields[8]="#960001";
+        auto unrelated=replace_ifc_record(step,project_id,project);
+        unrelated.insert(unrelated.find("ENDSEC;\nEND-ISO-10303-21;"),
+            "#960001=IFCUNITASSIGNMENT((#960002));\n#960002=IFCSIUNIT(*,.AREAUNIT.,$,.SQUARE_METRE.);\n");
+        verify_declined(unrelated,"project assignment unrelated to orphan metre length unit");
+        auto ambiguous=unit_graph.at(unit_graph.at(project_id).fields[8]);
+        ambiguous.fields[0]="("+unit_id+","+unit_id+")";
+        verify_declined(replace_ifc_record(step,unit_graph.at(project_id).fields[8],ambiguous),
+            "ambiguous duplicate project length units");
+        auto unrelated_unit=step;
+        unrelated_unit.insert(unrelated_unit.find("ENDSEC;\nEND-ISO-10303-21;"),
+            "#960002=IFCSIUNIT(*,.LENGTHUNIT.,.MILLI.,.METRE.);\n");
+        const auto linked_supported=import_project_ifc(unrelated_unit);
+        verify_worker_candidate(linked_supported,"valid linked metre assignment with unrelated orphan unit");
+        check(linked_supported.entities.size() == 1 && linked_supported.entities[0].type == authored.type &&
+            linked_supported.entities[0].properties == authored.properties &&
+            std::none_of(linked_supported.diagnostics.begin(),linked_supported.diagnostics.end(),[](const auto& d) {
+                return d.code == "native_project_length_units_not_reconstructed";
+            }), "native units must derive from the referenced project assignment rather than unrelated declarations");
+        auto alternate=unit_graph.at(project_id); alternate.fields[8]="#960001";
+        auto linked_nonmetre=replace_ifc_record(step,project_id,alternate);
+        linked_nonmetre.insert(linked_nonmetre.find("ENDSEC;\nEND-ISO-10303-21;"),
+            "#960001=IFCUNITASSIGNMENT((#960002));\n#960002=IFCSIUNIT(*,.LENGTHUNIT.,.MILLI.,.METRE.);\n");
+        verify_declined(linked_nonmetre,"unsupported referenced length scale despite orphan metre");
+    };
+    verify_project_unit_links(room,exported.step);
+    const auto unit_roof=encode_building_entity(SlopedRoofPanel{"unit-roof",{2,3,4},.3,4,3,2,
+        std::atan(.5),.2,.15,{}});
+    verify_project_unit_links(unit_roof,export_project_ifc(Document::create({unit_roof}).snapshot()).step);
+    auto curved=room; curved.properties["holes"]=Json::array();
+    const double quarter=std::acos(-1.0)/2;
+    curved.properties["boundary"]=Json::array({
+        {{"start",{2,0}},{"end",{0,2}},{"sweep_radians",quarter}},
+        {{"start",{0,2}},{"end",{-2,0}},{"sweep_radians",quarter}},
+        {{"start",{-2,0}},{"end",{0,-2}},{"sweep_radians",quarter}},
+        {{"start",{0,-2}},{"end",{2,0}},{"sweep_radians",quarter}}});
+    const auto curved_export=export_project_ifc(Document::create({curved}).snapshot());
+    const auto curved_graph=records(curved_export.step);
+    for (const auto& [id,record] : curved_graph) if (record.type == "IFCSPACE")
+        check(std::abs(independently_read_mesh_volume(curved_graph,record)-10*std::acos(-1.0))<.04,
+            "curved space tessellation must follow the actual analytical circular room within its stated deviation");
+    const auto curved_import=import_project_ifc(curved_export.step);
+    check(curved_import.entities.size() == 1 && curved_import.entities[0].type == "room" &&
+        curved_import.entities[0].properties == curved.properties, "validated curved space must reconstruct exact analytical room parameters");
+    auto captured_room=curved;
+    captured_room.id="capture-room";
+    check(captured_room.extensions.at("human").is_object() &&
+        captured_room.extensions.at("human").at("nested").is_array(),
+        "native-curved-room-v2 capture fixture must retain its authored human object and nested array");
+    captured_room.extensions["human"]["capture"]={{"description",std::string(5000,'r')}};
+    const auto room_capture=export_project_ifc(Document::create({captured_room}).snapshot());
+    check(room_capture.diagnostics.empty() && room_capture.step.find("Pset_VertexExchange_v2") != std::string::npos,
+        "curved room integration fixture must have valid native geometry and chunked authored metadata");
+    const auto captured_import=import_project_ifc(room_capture.step);
+    verify_worker_candidate(captured_import,"long chunked curved room carrier");
+    check(captured_import.entities.size() == 1 && captured_import.entities[0].type == "room" &&
+        captured_import.entities[0].properties == captured_room.properties &&
+        captured_import.entities[0].extensions.at("human") == captured_room.extensions.at("human"),
+        "long chunked room fixture must preserve exact editable authoring and nested human metadata");
+    if (const auto* directory = std::getenv("VERTEX_TEST_CAPTURE_DIR")) {
+        std::filesystem::create_directories(directory);
+        std::ofstream output(std::filesystem::path(directory) / "native-curved-room-v2.ifc",std::ios::binary);
+        output << room_capture.step;
+        check(output.good(), "long curved room integration capture must be written completely");
+        std::ofstream expected(std::filesystem::path(directory) / "native-curved-room-v2.expected.json",std::ios::binary);
+        expected << Json{{"source_entity_id",captured_room.id},{"active_entities",Json::array({
+            {{"id",captured_import.entities[0].id},{"type","room"}}})},{"diagnostic_count",captured_import.diagnostics.size()}}.dump(2);
+        check(expected.good(), "room capture expectations must be written completely");
+    }
+    auto level_room=room;
+    level_room.required=true;
+    level_room.properties["layer_id"]="layer";
+    level_room.properties["property_id"]="property";
+    level_room.properties["building_id"]="building";
+    level_room.properties["floor_id"]="floor";
+    level_room.properties["parent_id"]="layer";
+    level_room.properties["vertical_placement"]={{"version",1},{"mode","level"},{"offset_m",.5}};
+    const VerticalLevelGraph levels({{"upper",10.0}},{});
+    const auto level_document=Document::create({level_room,Entity{"property","property"},
+        Entity{"building","building",{{"property_id","property"}}},
+        Entity{"floor","floor",{{"building_id","building"},
+            {"vertical_level_binding",VerticalLevelBinding{"levels","upper"}.to_json()}}},
+        Entity{"layer","layer",{{"floor_id","floor"}}},Entity{"levels","vertical_levels",{{"model",nlohmann::json::parse(levels.serialize())}}}});
+    const auto level_export=export_project_ifc(level_document.snapshot());
+    const auto level_import=import_project_ifc(level_export.step);
+    const auto imported_level_room=std::find_if(level_import.entities.begin(),level_import.entities.end(),
+        [](const auto& e){return e.type == "room";});
+    check(imported_level_room != level_import.entities.end() && imported_level_room->properties.at("elevation_m") == 14.75 &&
+        !imported_level_room->required && !imported_level_room->properties.contains("vertical_placement") &&
+        !imported_level_room->properties.contains("layer_id") && !imported_level_room->properties.contains("property_id") &&
+        !imported_level_room->properties.contains("building_id") && !imported_level_room->properties.contains("floor_id") &&
+        !imported_level_room->properties.contains("parent_id") &&
+        imported_level_room->extensions.at("ifc_vertex_properties").at("_vertex_ifc_entity").at("properties") == level_room.properties &&
+        imported_level_room->extensions.at("ifc_vertex_properties").at("_vertex_ifc_entity").at("required") == true,
+        "resolved level geometry must import once with original context and authored relative placement retained exactly");
+    check(std::any_of(level_import.diagnostics.begin(),level_import.diagnostics.end(),[](const auto& d) {
+        return d.code == "native_context_retained_not_reconstructed";
+    }), "foreign native context must be explicitly diagnosed");
+    verify_worker_candidate(level_import,"detached source level room candidate");
+    const auto level_repeated=import_project_ifc(export_project_ifc(Document::create(level_import.entities).snapshot()).step);
+    verify_worker_candidate(level_repeated,"re-exported detached source level room candidate");
+    const auto repeated_room=std::find_if(level_repeated.entities.begin(),level_repeated.entities.end(),
+        [](const auto& e){return e.type == "room";});
+    check(repeated_room != level_repeated.entities.end() && repeated_room->properties == imported_level_room->properties &&
+        repeated_room->extensions.at("ifc_vertex_properties").at("_vertex_ifc_entity").at("properties") == level_room.properties &&
+        repeated_room->extensions.at("ifc_vertex_properties").at("_vertex_ifc_entity").at("required") == true,
+        "re-export must retain exact original context and required state without reactivating either");
+    check(level_document.snapshot().entities().at("room").properties == level_room.properties,
+        "IFC preparation must not mutate source level authoring");
+    auto invalid=room; invalid.properties.erase("height_m");
+    const auto rejected=export_project_ifc(Document::create({invalid}).snapshot());
+    check(rejected.step.find("=IFCSPACE(") == std::string::npos && !rejected.diagnostics.empty(),
+        "historical plan-only room must retain an inert reference with explicit diagnostics instead of invented height");
+    auto budget=IfcExchangeLimits{}; budget.max_mesh_vertices=10; budget.max_mesh_triangles=10;
+    const auto excessive=export_project_ifc(Document::create({room}).snapshot(),budget);
+    check(excessive.step.find("=IFCSPACE(") == std::string::npos && std::any_of(excessive.diagnostics.begin(),excessive.diagnostics.end(),
+        [](const auto& d){return d.code == "native_mesh_budget_exceeded";}), "room meshing must respect storage limits before building");
+}
+
+void current_physical_room_spaces() {
+    using namespace sketch; using Json=nlohmann::json;
+    const auto wall=[](std::string id,Vec2 a,Vec2 b) {
+        return Entity{std::move(id),"wall",{{"baseline",{{"start",{a.x,a.y}},{"end",{b.x,b.y}},{"sweep_radians",0}}},
+            {"thickness_m",.2},{"height_m",3},{"elevation_m",7.0},{"layer_id","layer"}}};
+    };
+    auto document=Document::create({Entity{"property","property"},Entity{"building","building",{{"property_id","property"}}},
+        Entity{"floor","floor",{{"building_id","building"}}},Entity{"layer","layer",{{"floor_id","floor"}}},
+        wall("bottom",{0,0},{4,0}),wall("right",{4,0},{4,3}),wall("top",{4,3},{0,3}),wall("left",{0,3},{0,0}),
+        wall("island",{1,1},{3,1})});
+    document.apply(prepare_physical_wall_rooms(document.snapshot(),"bottom",{0},"office"));
+    const auto exported=export_project_ifc(document.snapshot());
+    const auto graph=records(exported.step);
+    std::size_t spaces=0;
+    for (const auto& [id,record] : graph) if (record.type == "IFCSPACE") {
+        ++spaces;
+        const auto& placement=graph.at(record.fields[5]);
+        const auto& axis=graph.at(placement.fields[1]);
+        check(graph.at(axis.fields[0]).fields[0] == "(0.,0.,7.)", "physical space must retain its actual source-wall elevation");
+        const auto& shape=graph.at(record.fields[6]);
+        const auto& representation=graph.at(list(shape.fields[2])[0]);
+        check(representation.fields[1] == "'Footprint'" && representation.fields[2] == "'Curve3D'" &&
+            list(representation.fields[3]).size() == 2, "physical space must represent current net outer and island hole loops without invented height");
+        double area=0;
+        for (const auto& loop : list(representation.fields[3])) {
+            const auto point_ids=list(graph.at(loop).fields[0]); double signed_area=0;
+            for (std::size_t i=0;i+1<point_ids.size();++i) {
+                const auto a=list(graph.at(point_ids[i]).fields[0]),b=list(graph.at(point_ids[i+1]).fields[0]);
+                signed_area+=(std::stod(a[0])*std::stod(b[1])-std::stod(b[0])*std::stod(a[1]))/2;
+            }
+            area += loop == list(representation.fields[3])[0] ? std::abs(signed_area) : -std::abs(signed_area);
+        }
+        check(std::abs(area-10.24)<1e-7,"independent physical space net footprint must deduct the current wall island");
+    }
+    check(spaces == 1,"current physical room must export one genuine IFCSPACE");
+    auto changed=document.snapshot().entities().at("bottom"); changed.properties["thickness_m"] = .4;
+    document.apply(ApplyEntityChanges{document.revision(),{EntityChange::upsert(changed)}, {},"Thicken source"});
+    const auto stale=export_project_ifc(document.snapshot());
+    check(stale.step.find("=IFCSPACE(") == std::string::npos && std::any_of(stale.diagnostics.begin(),stale.diagnostics.end(),
+        [](const auto& d){return d.code == "physical_room_source_stale_or_runtime_unavailable";}),
+        "stale calculated physical room must retain source metadata while withholding its space geometry");
+}
+#endif
+
 void run() {
     using namespace sketch;
     const auto exported = export_project_ifc(make_document().snapshot());
 #ifdef SKETCH_IFC_NATIVE_GEOMETRY
+    native_roofs_and_spaces();
+    current_physical_room_spaces();
     check(exported.step.find("IFCDOOR(") != std::string::npos &&
           exported.step.find("IFCRELFILLSELEMENT(") != std::string::npos &&
           exported.step.find("IFCTRIANGULATEDFACESET(") != std::string::npos,
           "native door assembly must export a real fill separate from its hosted void");
+#else
+    const auto unavailable=export_project_ifc(Document::create({Entity{"roof","roof"},Entity{"room","room"}}).snapshot());
+    check(unavailable.step.find("=IFCROOF(") == std::string::npos && unavailable.step.find("=IFCSPACE(") == std::string::npos &&
+        std::count_if(unavailable.diagnostics.begin(),unavailable.diagnostics.end(),
+            [](const auto& d){return d.code == "native_roof_or_room_runtime_unavailable";}) == 2,
+        "unavailable native geometry must explicitly retain inert roof/room references");
 #endif
     verify_export_graph(exported.step);
     const auto repeated = export_project_ifc(make_document().snapshot());

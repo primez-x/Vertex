@@ -62,6 +62,63 @@ std::string entity_content(const Entity& entity,
     return canonical;
 }
 
+Entity effective_geometry_entity(const DocumentSnapshot& snapshot, const Entity& source) {
+    if (source.type == "railing") {
+        const auto object = decode_building_entity(source);
+        if (const auto* rail = std::get_if<Railing>(&object); rail && rail->host) return source;
+    }
+    return resolve_vertical_placement(snapshot, source);
+}
+
+// Cache identity retains the authored context inputs as well as effective
+// coordinates. A level graph or organizational rebind can change a dependent
+// rail even when its own persisted JSON is byte-for-byte unchanged.
+void append_placement_content(std::string& content, const DocumentSnapshot& snapshot,
+                              const Entity& source) {
+    const auto& entities = snapshot.entities();
+    const Entity* current = &source;
+    std::set<std::string, std::less<>> visited;
+    for (;;) {
+        if (!visited.insert(current->id).second) break;
+        append_entity_content(content, *current);
+        for (const auto* binding : {"vertical_level_binding", "level_connection"}) {
+            const auto value = current->properties.find(binding);
+            if (value == current->properties.end() || !value->is_object()) continue;
+            const auto graph_id = value->find("graph_id");
+            if (graph_id == value->end() || !graph_id->is_string()) continue;
+            const auto graph = entities.find(graph_id->get<std::string>());
+            if (graph != entities.end()) append_entity_content(content, graph->second);
+        }
+        const Entity* parent = nullptr;
+        for (const auto* key : {"layer_id", "floor_id", "building_id", "property_id"}) {
+            const auto reference = current->properties.find(key);
+            if (reference == current->properties.end() || !reference->is_string()) continue;
+            const auto found = entities.find(reference->get<std::string>());
+            if (found != entities.end()) { parent = &found->second; break; }
+        }
+        if (!parent) break;
+        current = parent;
+    }
+}
+
+void append_building_dependencies(std::string& content, const DocumentSnapshot& snapshot,
+                                  const Entity& effective) {
+    if (effective.type != "railing") return;
+    const auto object = decode_building_entity(effective);
+    const auto* rail = std::get_if<Railing>(&object);
+    if (!rail || !rail->host) return;
+    const auto host = snapshot.entities().find(rail->host->stair_id);
+    if (host == snapshot.entities().end() || host->second.type != "stair")
+        throw std::invalid_argument("hosted railing stair is missing");
+    const auto resolved = resolve_vertical_placement(snapshot, host->second);
+    const auto host_object = decode_building_entity(resolved);
+    const auto* stair = std::get_if<StairFlight>(&host_object);
+    if (!stair) throw std::invalid_argument("hosted railing source is not a supported stair");
+    (void)derive_hosted_railing_layout(*rail, *stair);
+    append_entity_content(content, resolved);
+    append_placement_content(content, snapshot, host->second);
+}
+
 void append_unique(std::vector<std::string>& messages, std::string message) {
     if (std::find(messages.begin(), messages.end(), message) == messages.end()) {
         messages.push_back(std::move(message));
@@ -249,7 +306,7 @@ std::optional<PreparedNativeGeometry> prepare_native_geometry(
 
         Entity geometry_entity;
         try {
-            geometry_entity = resolve_vertical_placement(snapshot, entity);
+            geometry_entity = effective_geometry_entity(snapshot, entity);
         } catch (const std::exception& error) {
             append_unique(errors, entity.type + " '" + id + "': " + error.what());
 
@@ -260,6 +317,12 @@ std::optional<PreparedNativeGeometry> prepare_native_geometry(
                                 ? openings_by_wall[id]
                                 : std::vector<const Entity*>{};
         auto content = entity_content(geometry_entity, hosted);
+        try {
+            append_building_dependencies(content, snapshot, geometry_entity);
+        } catch (const std::exception& error) {
+            append_unique(errors, entity.type + " '" + id + "': " + error.what());
+            continue;
+        }
         if (geometry_entity.type == "wall_join") {
             try {
                 const auto join = parse_wall_join(geometry_entity.properties, id);
@@ -375,7 +438,7 @@ std::optional<PreparedNativeGeometry> prepare_native_geometry(
                 }
                 shape = make_room_volume(room);
             } else {
-                shape = make_building_shape(decode_building_entity(geometry_entity));
+                shape = make_building_shape(decode_building_entity(geometry_entity), entities);
             }
             if (shape.IsNull()) {
                 append_unique(errors, entity.type + " '" + id + "' produced a null solid");
@@ -403,9 +466,9 @@ std::optional<PreparedNativeGeometry> prepare_native_geometry(
             throw std::invalid_argument("assembly host is missing");
         }
         const auto& source = host->second;
-        const auto geometry_entity = resolve_vertical_placement(snapshot, source);
+        const auto geometry_entity = effective_geometry_entity(snapshot, source);
         if (can_recognize_building_entity_type(geometry_entity.type)) {
-            return make_building_shape(decode_building_entity(geometry_entity));
+            return make_building_shape(decode_building_entity(geometry_entity), entities);
         }
         if (geometry_entity.type == "wall") {
             Wall wall;
@@ -475,6 +538,7 @@ std::optional<PreparedNativeGeometry> prepare_native_geometry(
                     if (cancelled && cancelled()) return std::nullopt;
                 if (!instance.placement) continue;
                 const auto child_id = catalog_id + ":instance:" + instance.id;
+                try {
                 const auto host = entities.find(instance.placement->host_entity_id);
                 if (host == entities.end()) {
                     append_unique(errors, "assembly instance '" + child_id +
@@ -482,7 +546,7 @@ std::optional<PreparedNativeGeometry> prepare_native_geometry(
                                          instance.placement->host_entity_id + "'");
                     continue;
                 }
-                const auto geometry_entity = resolve_vertical_placement(snapshot, host->second);
+                const auto geometry_entity = effective_geometry_entity(snapshot, host->second);
                 std::string content;
                 content.reserve(catalog_entity.properties.dump().size() +
                                 geometry_entity.properties.dump().size() + child_id.size() + 32);
@@ -495,6 +559,7 @@ std::optional<PreparedNativeGeometry> prepare_native_geometry(
                     {"rotation", placement.rotation_radians}, {"scale", placement.scale}}.dump());
                 content.push_back('\0');
                 append_entity_content(content, geometry_entity);
+                append_building_dependencies(content, snapshot, geometry_entity);
                 if (geometry_entity.type == "wall") {
                     for (const auto* opening : openings_by_wall[host->first]) {
                         if (opening != nullptr) append_entity_content(content, *opening);
@@ -535,6 +600,11 @@ std::optional<PreparedNativeGeometry> prepare_native_geometry(
                 solids.emplace(child_id, PreparedNativeSolid{std::move(content), std::move(shape),
                     presentation_color, material_color, !visible_ids || visible_ids->contains(child_id)});
                 if (progress) progress(solids.size());
+                } catch (const std::exception& error) {
+                    append_unique(errors, "assembly instance '" + child_id + "': " + error.what());
+                } catch (...) {
+                    append_unique(errors, "assembly instance '" + child_id + "': unknown OCCT failure");
+                }
             }
         } catch (const std::exception& error) {
             append_unique(errors, "assembly catalog '" + catalog_id + "': " + error.what());

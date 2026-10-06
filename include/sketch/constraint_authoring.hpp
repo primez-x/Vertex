@@ -141,6 +141,8 @@ struct ConstraintAuthoringIntent {
     std::optional<MeasuredStrokeTransformIntent> measured_stroke_transform;
     std::optional<ExteriorSegmentResizeIntent> exterior_segment_resize;
     std::optional<ExteriorSegmentArcIntent> exterior_segment_arc;
+    // One translation pins all selected lanes in the same hard-connected solve.
+    std::optional<JointTranslationIntent> joint_translation;
 };
 
 struct ConstraintWallChange {

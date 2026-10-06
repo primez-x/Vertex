@@ -36,7 +36,8 @@ private:
     std::vector<ConnectedStairRiseChange> affected_stairs_;
 };
 
-// Only connected, endpoint-preserving links may drive canonical straight stairs.
+// Only connected, endpoint-preserving links may drive canonical straight or
+// multi-flight stairs. Multi-flight topology uses the shared pure layout.
 // Graph metadata, stair placement and every unrelated field are preserved.
 [[nodiscard]] VerticalLevelEditCandidate prepare_vertical_level_edit(
     const DocumentSnapshot& source, const std::string& graph_entity_id,

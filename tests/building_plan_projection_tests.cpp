@@ -268,6 +268,33 @@ void test_rotated_stairs_have_exact_edge_sets() {
                      "rotated stair with landing");
 }
 
+void test_multi_flight_and_hosted_plan() {
+    using namespace sketch;
+    StairFlight stair{"multi-plan", {}, 0, 8, 2.0, 0.25, 1.0};
+    stair.flights = {{"first", 4}, {"second", 4}};
+    stair.landings = {{"landing", 1.0, 0.15, StairTurn::straight, 0}};
+    const auto straight = projected_bounds(project_building_plan(stair));
+    require_same_extents(straight, {0, 0, 3, 1}, "straight two-flight stair");
+    stair.landings.front().turn = StairTurn::left_quarter;
+    const auto turned = projected_bounds(project_building_plan(stair));
+    require_same_extents(turned, {0, 0, 2, 2}, "quarter-turn two-flight stair");
+    Railing rail{"plan-hosted", {}, 0, 0, 0.9, 0.05, 0.5};
+    rail.host = StairRailingHost{"multi-plan", "second", StairRailingSide::left, 0, 1};
+    auto host = encode_building_entity(stair);
+    std::map<std::string, Entity, std::less<>> sources{{host.id, host}};
+    const auto initial = projected_bounds(project_building_plan(rail, sources));
+    stair.going = 0.4;
+    sources[host.id] = encode_building_entity(stair);
+    const auto changed = projected_bounds(project_building_plan(rail, sources));
+    require(changed.max_y > initial.max_y + 0.5 && changed.min_x > initial.min_x + 0.5,
+        "unchanged hosted plan follows moved and extended second flight");
+    sources.clear();
+    bool refused = false;
+    try { (void)project_building_plan(rail, sources); }
+    catch (const std::invalid_argument&) { refused = true; }
+    require(refused, "hosted plan must refuse absent stair geometry");
+}
+
 void test_roof_forms_have_exact_edge_sets() {
     using namespace sketch;
     const SlopedRoofPanel panel{
@@ -677,6 +704,7 @@ int main() {
         test_all_eight_forms_have_exact_plan_extents();
         test_simple_solids_have_exact_edge_sets();
         test_rotated_stairs_have_exact_edge_sets();
+        test_multi_flight_and_hosted_plan();
         test_roof_forms_have_exact_edge_sets();
         test_nonhorizontal_beam_has_exact_visible_edges();
         test_translation_and_rotation_are_preserved();

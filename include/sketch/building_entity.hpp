@@ -33,13 +33,20 @@ using BuildingObject = std::variant<RectangularColumn, CircularColumn, Beam,
 
 // Decode accepts only the canonical schema emitted by encode.  Unknown
 // properties and extension metadata are ignored, while required fields,
-// finite numbers, exact coordinate arrays, version, form, and geometry are
-// validated before the variant is returned.
+// finite numbers, exact coordinate arrays, version and form are validated.
+// Hosted railings validate authored structure here and require the current
+// stair map at the geometry boundary; other forms validate derived geometry.
 [[nodiscard]] BuildingObject decode_building_entity(const Entity& entity);
 
-// Dispatch to the existing OCCT builders.  This is also the geometry gate
-// used by encoding and decoding before a caller can create an authoring
-// command.
+// Dispatch to the existing OCCT builders. Hosted railings require the map
+// overload below; their authored codec deliberately performs no host lookup.
 [[nodiscard]] TopoDS_Shape make_building_shape(const BuildingObject& object);
+// Caller resolves ordinary object placement once. entities MUST be the current
+// authored authoritative map, never a previously resolved map. Hosted Railing
+// has no independent placement; this overload resolves its current stair host
+// once from that authored map. Plain dispatch refuses hosted forms.
+[[nodiscard]] TopoDS_Shape make_building_shape(
+    const BuildingObject& object,
+    const std::map<std::string, Entity, std::less<>>& entities);
 
 }  // namespace sketch

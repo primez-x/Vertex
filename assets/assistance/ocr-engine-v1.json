@@ -1,0 +1,15 @@
+{
+  "schema": "vertex.assistance.ocr-engine",
+  "version": 1,
+  "id": "vertex-ocr-engine-v1",
+  "engine": "tesseract",
+  "engine_version": "5.5.2",
+  "model_id": "tessdata-fast-eng-v1",
+  "model_path": "assets/assistance/ocr/eng.traineddata",
+  "model_sha256": "7d4322bd2a7749724879683fc3912cb542f19906c83bcc1a52132556427170b2",
+  "model_bytes": 4113088,
+  "model_revision": "65727574dfcd264acbb0c3e07860e4e9e9b22185",
+  "language": "eng",
+  "license": "Apache-2.0",
+  "license_path": "assets/assistance/ocr/LICENSE"
+}

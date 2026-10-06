@@ -9,6 +9,7 @@
 #include "draft_image_stamp.hpp"
 #include "sketch_pdf_output.hpp"
 #include "reference_import.hpp"
+#include "assistance_ocr.hpp"
 #include "pinc_project_admission.hpp"
 #include "sketch/pinc_symbol_counterparts.hpp"
 
@@ -28,6 +29,7 @@
 #include "sketch/building_view_projection.hpp"
 #include "sketch/desktop/building_object_dialog.hpp"
 #include "sketch/desktop/constraint_dialog.hpp"
+#include "sketch/desktop/physical_wall_room_review_dialog.hpp"
 #include "sketch/desktop/boundary_input_dialog.hpp"
 #include "sketch/desktop/drawing_input_panel.hpp"
 #include "sketch/desktop/sheet_layout_dialog.hpp"
@@ -147,6 +149,7 @@
 #include <QPageSize>
 #include <QPalette>
 #include <QBuffer>
+#include <QImageReader>
 #include <QRegularExpression>
 #include <QPainter>
 #include <QPainterPath>
@@ -237,10 +240,11 @@ namespace {
 class PincProgressDialog final : public QDialog {
 public:
     PincProgressDialog(QWidget* parent, std::shared_ptr<std::atomic_bool> cancelled,
-                       const QString& operation) : QDialog(parent), cancelled_(std::move(cancelled)) {
+                       const QString& operation, const QString& title, const QString& object_name)
+        : QDialog(parent), cancelled_(std::move(cancelled)) {
         if (parent && parent->testAttribute(Qt::WA_DontShowOnScreen)) setAttribute(Qt::WA_DontShowOnScreen);
-        setWindowTitle(QStringLiteral("Import PincSketch project"));
-        setObjectName(QStringLiteral("pincImportProgress"));
+        setWindowTitle(title);
+        setObjectName(object_name);
         auto* layout=new QVBoxLayout(this);
         status_=new QLabel(operation,this);status_->setTextFormat(Qt::PlainText);layout->addWidget(status_);
         cancel_=new QPushButton(QStringLiteral("Cancel"),this);
@@ -250,7 +254,7 @@ public:
     }
     void reject() override {
         cancelled_->store(true);cancel_->setEnabled(false);
-        status_->setText(QStringLiteral("Cancelling import…"));
+        status_->setText(QStringLiteral("Cancelling…"));
     }
 protected:
     void closeEvent(QCloseEvent* event) override { reject();event->ignore(); }
@@ -261,9 +265,12 @@ private:
 
 template<class Operation>
 auto runPincOperation(QWidget* owner, const std::shared_ptr<std::atomic_bool>& cancelled,
-                      const QString& label, Operation operation) {
+                      const QString& label, Operation operation,
+                      const QString& title = QStringLiteral("Import PincSketch project"),
+                      const QString& object_name = QStringLiteral("pincImportProgress"),
+                      const char* cancellation_message = "Pinc import cancelled.") {
     auto future=std::async(std::launch::async,std::move(operation));
-    PincProgressDialog dialog(owner,cancelled,label);
+    PincProgressDialog dialog(owner,cancelled,label,title,object_name);
     QTimer poll(&dialog);
     QObject::connect(&poll,&QTimer::timeout,&dialog,[&]{
         if (future.wait_for(std::chrono::milliseconds(0))==std::future_status::ready)
@@ -273,7 +280,7 @@ auto runPincOperation(QWidget* owner, const std::shared_ptr<std::atomic_bool>& c
     // The worker has actually returned before its owned process/thread state
     // is released; closing/cancelling the dialog never publishes partial data.
     auto result=future.get();
-    if (cancelled->load()) throw std::runtime_error("Pinc import cancelled.");
+    if (cancelled->load()) throw std::runtime_error(cancellation_message);
     return result;
 }
 
@@ -395,6 +402,20 @@ void remap_clipboard_json(json& value,
 
 // Document identities are schema fields, not arbitrary strings. Unknown
 // properties and extensions are opaque user data and must survive unchanged.
+bool multi_flight_stair(const Entity& entity) {
+    const auto& p = entity.properties;
+    return entity.type == "stair" && p.is_object() && p.contains("version") &&
+        p.at("version").is_number_integer() && p.at("version") == 2 &&
+        p.contains("form") && p.at("form") == "multi_flight_stair";
+}
+
+bool hosted_stair_railing(const Entity& entity) {
+    const auto& p = entity.properties;
+    return entity.type == "railing" && p.is_object() && p.contains("version") &&
+        p.at("version").is_number_integer() && p.at("version") == 2 &&
+        p.contains("form") && p.at("form") == "stair_flight_railing";
+}
+
 void remap_entity_references(Entity& entity,
                             const std::map<std::string, std::string, std::less<>>& remap) {
     const auto reference = [&](json& object, const char* key) {
@@ -437,6 +458,14 @@ void remap_entity_references(Entity& entity,
     }
     reference(properties, "refs");
     reference(properties, "references");
+    if (multi_flight_stair(entity)) {
+        for (const auto* collection : {"flights", "landings"})
+            for (auto& child : properties.at(collection)) reference(child, "id");
+    }
+    if (hosted_stair_railing(entity)) {
+        reference(properties.at("host"), "stair_id");
+        reference(properties.at("host"), "flight_id");
+    }
     if (entity.type == kSheetViewEntityType) {
         for (auto& view : properties.at("model").at("views")) {
             reference(view,"object_ids");
@@ -766,6 +795,14 @@ std::vector<Entity> clipboard_entities_for_selection(const DocumentSnapshot& sna
                 entity.properties.value("wall_id", "") == root_id) {
                 add_unique(entity);
             }
+        }
+    }
+    if (multi_flight_stair(root->second)) {
+        for (const auto& [id, entity] : snapshot.entities()) {
+            (void)id;
+            if (hosted_stair_railing(entity) &&
+                decode_railing_properties(entity.id, entity.properties).host->stair_id == root_id)
+                add_unique(entity);
         }
     }
     const bool closed_boundary = root->second.type == "boundary" ||
@@ -1652,8 +1689,9 @@ QString format_boundary_area(double square_metres, bool metric, bool ansi) {
 }
 
 DimensionCanvasProjection project_boundary_dimension(const BoundaryDimension& dimension,
-    const Entity& boundary, bool metric, bool selected, bool ansi = false) {
-    const auto resolved=dimension.resolve(boundary);
+    const Entity& boundary, const std::map<std::string,Entity,std::less<>>& entities,
+    bool metric, bool selected, bool ansi = false) {
+    const auto resolved=dimension.resolve(entities);
     QString text;
     std::optional<Boundary> overlay;
     if (resolved.kind==BoundaryDimensionKind::segment_length) {
@@ -4019,8 +4057,20 @@ void ensure_project_scaffold(Document& document) {
 bool is_building_quantity_path(const std::string& pointer) {
     for (const auto* scalar : {"/width_m", "/depth_m", "/height_m", "/radius_m", "/total_rise_m",
              "/going_m", "/run_m", "/span_m", "/rise_m", "/overhang_m", "/thickness_m", "/length_m",
-             "/top_landing/depth_m", "/top_landing/thickness_m"})
+             "/post_spacing_m", "/top_landing/depth_m", "/top_landing/thickness_m"})
         if (pointer == scalar) return true;
+    if (pointer.starts_with("/landings/")) {
+        const auto separator = pointer.find('/', 10);
+        if (separator != std::string::npos) {
+            const auto index = pointer.substr(10, separator - 10);
+            std::size_t row{};
+            const auto [end, error] = std::from_chars(index.data(), index.data() + index.size(), row);
+            const auto key = pointer.substr(separator + 1);
+            if (!index.empty() && (index.size() == 1 || index.front() != '0') &&
+                error == std::errc{} && end == index.data() + index.size() && row < 256 &&
+                (key == "depth_m" || key == "thickness_m" || key == "return_gap_m")) return true;
+        }
+    }
     for (const auto* vector : {"/base_center_m/", "/base_position_m/", "/start_m/", "/end_m/"}) {
         const std::string_view prefix(vector);
         if (pointer.starts_with(prefix) && pointer.size() == prefix.size() + 1 &&
@@ -4074,8 +4124,24 @@ std::optional<json> merged_quantity_entries(const Entity* original, const Entity
             result[pointer] = receipt;
             continue;
         }
-        const bool inherited = old_entries && old_entries->is_object() && old_entries->contains(pointer) &&
-            old_entries->at(pointer) == receipt;
+        auto original_pointer = pointer;
+        if (original && pointer.starts_with("/landings/") && is_building_quantity_path(pointer) &&
+            canonical_properties.contains("landings") && original->properties.contains("landings")) {
+            const auto separator = pointer.find('/', 10);
+            const auto row = static_cast<std::size_t>(std::stoul(pointer.substr(10, separator - 10)));
+            const auto& next = canonical_properties.at("landings");
+            const auto& before = original->properties.at("landings");
+            if (next.is_array() && row < next.size() && before.is_array()) {
+                const auto id = next.at(row).at("id");
+                for (std::size_t old_row = 0; old_row < before.size(); ++old_row)
+                    if (before.at(old_row).is_object() && before.at(old_row).value("id", json{}) == id) {
+                        original_pointer = "/landings/" + std::to_string(old_row) + pointer.substr(separator);
+                        break;
+                    }
+            }
+        }
+        const bool inherited = old_entries && old_entries->is_object() && old_entries->contains(original_pointer) &&
+            old_entries->at(original_pointer) == receipt;
         if (!inherited)
             throw std::invalid_argument("Quantity entry does not match its canonical dimension: " + pointer);
         if (!is_building_quantity_path(pointer)) {
@@ -4086,11 +4152,11 @@ std::optional<json> merged_quantity_entries(const Entity* original, const Entity
         // dimension change invalidates its old receipt instead of retaining a
         // measurement expression that now describes a different value.
         try {
-            const json::json_pointer path(pointer);
-            const bool before = original->properties.contains(path);
-            const bool after = canonical_properties.contains(path);
+            const json::json_pointer before_path(original_pointer), after_path(pointer);
+            const bool before = original->properties.contains(before_path);
+            const bool after = canonical_properties.contains(after_path);
             if ((!before && !after) ||
-                (before && after && original->properties.at(path) == canonical_properties.at(path)))
+                (before && after && original->properties.at(before_path) == canonical_properties.at(after_path)))
                 result[pointer] = receipt;
         } catch (const std::exception&) {
             // An unrecognized pointer is metadata, not an authoritative entry.
@@ -4098,6 +4164,53 @@ std::optional<json> merged_quantity_entries(const Entity* original, const Entity
         }
     }
     return result;
+}
+
+// Canonical geometry replaces only understood fields. Retain opaque members of
+// nested objects and stable-ID records instead of losing them through update().
+json merge_canonical_metadata(const json& retained, const json& edited, const json& canonical) {
+    if (canonical.is_object()) {
+        auto result = retained.is_object() ? retained : json::object();
+        if (edited.is_object()) result.update(edited);
+        for (const auto& [key, value] : canonical.items()) {
+            result[key] = merge_canonical_metadata(
+                retained.is_object() && retained.contains(key) ? retained.at(key) : json{},
+                edited.is_object() && edited.contains(key) ? edited.at(key) : json{}, value);
+        }
+        return result;
+    }
+    if (canonical.is_array() && !canonical.empty() && canonical.front().is_object() &&
+        canonical.front().contains("id")) {
+        auto result = json::array();
+        const auto record = [](const json& array, const json& id) -> json {
+            if (array.is_array()) for (const auto& item : array)
+                if (item.is_object() && item.contains("id") && item.at("id") == id) return item;
+            return {};
+        };
+        for (const auto& item : canonical) {
+            if (!item.is_object() || !item.contains("id")) return canonical;
+            result.push_back(merge_canonical_metadata(record(retained, item.at("id")),
+                record(edited, item.at("id")), item));
+        }
+        return result;
+    }
+    return canonical;
+}
+
+Entity effective_building_geometry_entity(const DocumentSnapshot& snapshot, const Entity& entity) {
+    return hosted_stair_railing(entity) ? entity : resolve_vertical_placement(snapshot, entity);
+}
+
+std::string building_plan_source_key(const DocumentSnapshot& snapshot, const Entity& effective) {
+    std::string key = effective.type + '\n' + effective.properties.dump();
+    if (hosted_stair_railing(effective)) {
+        const auto rail = decode_railing_properties(effective.id, effective.properties);
+        const auto host = snapshot.entities().find(rail.host->stair_id);
+        if (host == snapshot.entities().end()) throw std::invalid_argument("Stair railing host is missing.");
+        key += '\n' + host->second.properties.dump() + '\n' +
+            resolve_vertical_placement(snapshot, host->second).properties.dump();
+    }
+    return key;
 }
 
 }  // namespace
@@ -5971,7 +6084,55 @@ public:
     }
 
     Command makeSelectionGeometryTranslationCommand(const DocumentSnapshot& source,
-        QStringList model_ids, Vec2 offset, std::vector<EntityChange> changes = {}) {
+        QStringList model_ids, Vec2 offset, std::vector<EntityChange> changes = {},
+        std::optional<Vec2> presentation_delta = std::nullopt) {
+        const auto movement_error = [](const ConstraintAuthoringPreview& preview) {
+            std::string message;
+            for (const auto& diagnostic : preview.diagnostics()) {
+                if (!message.empty()) message += '\n';
+                message += diagnostic;
+            }
+            return message.empty() ? std::string{"The connected selection cannot move with its current constraints."} : message;
+        };
+        const auto presentation_offset = presentation_delta ? presentation_delta : [&]() -> std::optional<Vec2> {
+            for (const auto& change : changes) {
+                if (change.kind != EntityChangeKind::upsert) continue;
+                const auto found = source.entities().find(change.entity.id);
+                if (found == source.entities().end()) continue;
+                if (change.entity.type == "reference_asset") {
+                    const auto old = read_point(found->second.properties.at("position_m"));
+                    const auto next = read_point(change.entity.properties.at("position_m"));
+                    if (old && next) return Vec2{next->x-old->x,next->y-old->y};
+                } else if (change.entity.type == kAnnotationEntityType) {
+                    for (const auto* kind : {"symbols", "labels"}) {
+                        const auto& old = found->second.properties.at("state").at(kind);
+                        const auto& next = change.entity.properties.at("state").at(kind);
+                        if (old.size() != next.size()) throw std::invalid_argument("The selected annotation instances changed.");
+                        for (std::size_t index = 0; index < old.size(); ++index) {
+                            if (std::string_view(kind) == "labels" && old[index].value("model_plan",false)) continue;
+                            const auto& a = old[index].at("placement");
+                            const auto& b = next[index].at("placement");
+                            if (a.at("x") != b.at("x") || a.at("y") != b.at("y"))
+                                return Vec2{b.at("x").get<double>()-a.at("x").get<double>(),
+                                            b.at("y").get<double>()-a.at("y").get<double>()};
+                        }
+                    }
+                }
+            }
+            return std::nullopt;
+        }();
+        const auto append_presentations = [&](Command movement) {
+            auto* connected = std::get_if<ApplyBoundaryConstraintChanges>(&movement);
+            if (!connected || !connected->joint_translation_completion)
+                throw std::invalid_argument("The connected selection did not produce translation authority.");
+            for (const auto& change : changes) {
+                if (change.kind == EntityChangeKind::upsert && can_recognize_boundary_dimension_entity_type(change.entity.type)) continue;
+                connected->supplemental_entity_changes.push_back(change);
+                connected->supplemental_source_completion = true;
+            }
+            (void)Document::preview_command(source,movement);
+            return movement;
+        };
         const auto discard_source_owned_dimension_moves = [&] {
             // Source translation already moves attached callouts, retaining
             // their placement provenance. An explicit selection must not add
@@ -5988,6 +6149,29 @@ public:
         if(changes.empty() && !model_ids.isEmpty() &&
            std::all_of(model_ids.begin(),model_ids.end(),[&](const auto& id){return source.entities().at(id.toStdString()).type=="measurement_linework";}))
             return measuredStrokeTransformCommand(source,model_ids,PlanarTransform{{},0.0,false,false,offset});
+        if(std::any_of(model_ids.begin(),model_ids.end(),[&](const auto& id){return source.entities().at(id.toStdString()).type=="measurement_linework";}) &&
+           std::any_of(model_ids.begin(),model_ids.end(),[&](const auto& id){return source.entities().at(id.toStdString()).type=="wall";}) &&
+           std::all_of(model_ids.begin(),model_ids.end(),[&](const auto& id){const auto& type=source.entities().at(id.toStdString()).type;
+               return type=="wall" || type=="measurement_linework";})) {
+            JointTranslationIntent joint;
+            joint.offset=offset;
+            joint.presentation_offset=presentation_offset;
+            for(const auto& id:model_ids) {
+                const auto& entity=source.entities().at(id.toStdString());
+                if(entity.type=="wall") joint.partial_wall_ids.push_back(entity.id);
+                else joint.rigid_stroke_ids.push_back(entity.id);
+            }
+            for(const auto& change:changes) {
+                if(change.kind!=EntityChangeKind::upsert || !can_recognize_boundary_dimension_entity_type(change.entity.type)) continue;
+                joint.dimension_ids.push_back(change.entity.id);
+            }
+            ConstraintAuthoringIntent intent;
+            intent.joint_translation=std::move(joint);
+            intent.message="Move connected selection";
+            const auto preview=preview_constraint_authoring(source,intent);
+            if(!preview.accepted()) throw std::invalid_argument(movement_error(preview));
+            return append_presentations(constraint_authoring_verified_command(source,preview,nullptr));
+        }
         std::vector<Entity> selected_roots;
         for (const auto& id : model_ids) {
             const auto found = source.entities().find(id.toStdString());
@@ -6030,7 +6214,7 @@ public:
                 for(const auto& entity:clipboard_entities_for_selection(source,root.id))rigid_seed.push_back(entity);
             for(const auto& id:model_ids)if(source.entities().at(id.toStdString()).type=="measurement_linework")
                 rigid_seed.push_back(source.entities().at(id.toStdString()));
-            auto rigid_graph=independentAreaCopyGraph(source,std::move(rigid_seed));includeMeasuredAreaSources(source,rigid_graph);
+            auto rigid_graph=independentAreaCopyGraph(source,std::move(rigid_seed),false);includeMeasuredAreaSources(source,rigid_graph);
             if(std::any_of(rigid_graph.begin(),rigid_graph.end(),[&](const auto& entity) {
                 return is_closed_boundary_entity(entity.type) && !rigid_owners.contains(entity.id) && !model_ids.contains(id_from(entity.id));
             }))throw std::invalid_argument("Select the measured area's deductions together before moving its perimeter in a mixed group.");
@@ -6043,30 +6227,29 @@ public:
             for(const auto& id:model_ids)if(source.entities().at(id.toStdString()).type=="wall" && !rigid_geometry.contains(id.toStdString()))
                 partial_ids.push_back(id);
             if(!partial_ids.isEmpty()) {
-                auto rigid=makeSelectionGeometryTransformCommand(source,rigid_ids,PlanarTransform{{},0,false,false,offset});
-                const auto* whole=std::get_if<TransformBoundaries>(&rigid);
-                if(!whole)throw std::invalid_argument("The complete measured source needs an identified rigid movement proof.");
-                auto movement=wallGeometryCommand(source,wallTranslationIntent(source,partial_ids,offset).targets,"Move mixed measured sources");
+                JointTranslationIntent joint;
+                joint.offset=offset;
+                joint.presentation_offset=presentation_offset;
+                for(const auto& id:rigid_ids) {
+                    const auto& entity=source.entities().at(id.toStdString());
+                    if(is_closed_boundary_entity(entity.type)) joint.rigid_boundary_ids.push_back(entity.id);
+                    else if(entity.type=="measurement_linework") joint.rigid_stroke_ids.push_back(entity.id);
+                }
+                for(const auto& id:partial_ids) joint.partial_wall_ids.push_back(id.toStdString());
+                for(const auto& change:changes) {
+                    if(change.kind!=EntityChangeKind::upsert || !can_recognize_boundary_dimension_entity_type(change.entity.type)) continue;
+                    const auto decoded=decode_boundary_dimension_entity(source.entities().at(change.entity.id));
+                    if(!decoded.supported()) throw std::invalid_argument(decoded.unsupported_reason);
+                    if(!rigid_geometry.contains(decoded.dimension->boundary_id)) joint.dimension_ids.push_back(change.entity.id);
+                }
+                ConstraintAuthoringIntent intent;
+                intent.joint_translation=std::move(joint);
+                intent.message="Move connected selection";
+                const auto preview=preview_constraint_authoring(source,intent);
+                if(!preview.accepted()) throw std::invalid_argument(movement_error(preview));
+                auto movement=append_presentations(constraint_authoring_verified_command(source,preview,nullptr));
                 auto* connected=std::get_if<ApplyBoundaryConstraintChanges>(&movement);
                 if(!connected)throw std::invalid_argument("The partial perimeter did not produce connected geometry authority.");
-                connected->rigid_group_transform=*whole;connected->rigid_group_completion=true;
-                for(const auto& change:changes) {
-                    if(change.kind!=EntityChangeKind::upsert || !can_recognize_boundary_dimension_entity_type(change.entity.type)) {
-                        connected->supplemental_entity_changes.push_back(change);continue;
-                    }
-                    const auto& original=source.entities().at(change.entity.id);
-                    const auto decoded=decode_boundary_dimension_entity(original);
-                    if(!decoded.supported())throw std::invalid_argument(decoded.unsupported_reason);
-                    if(rigid_geometry.contains(decoded.dimension->boundary_id))continue;
-                    auto expected=*decoded.dimension;
-                    expected.text_position={expected.text_position.x+offset.x,expected.text_position.y+offset.y};
-                    expected.placement=BoundaryDimensionPlacement::manual;expected.automatic_placement_version.reset();
-                    if(encode_boundary_dimension_entity(expected,&original)!=change.entity)
-                        throw std::invalid_argument("A mixed callout move cannot change its analytical target, styling or metadata.");
-                    connected->dimension_placement_moves.push_back({change.entity.id,offset});
-                }
-                connected->dimension_placement_completion=!connected->dimension_placement_moves.empty();
-                if(!connected->supplemental_entity_changes.empty())connected->supplemental_source_completion=true;
                 (void)Document::preview_command(source,movement);
                 return movement;
             }
@@ -9172,7 +9355,7 @@ public:
                         const auto decoded=decode_boundary_dimension_entity(entity);
                         if (!decoded.supported()) throw std::invalid_argument(decoded.unsupported_reason);
                         auto projection=project_boundary_dimension(*decoded.dimension,
-                            snapshot.entities().at(decoded.dimension->boundary_id),m_metric_units,selected,
+                            snapshot.entities().at(decoded.dimension->boundary_id),snapshot.entities(),m_metric_units,selected,
                             ansi_boundary_dimensions(snapshot, snapshot.entities().at(decoded.dimension->boundary_id)));
                         if (projection.line) {
                             if (!selected) projection.line->type=QStringLiteral("source");
@@ -13757,8 +13940,19 @@ public:
         if (asset == snapshot.assets().end()) throw std::invalid_argument("Reference render asset is missing.");
         const QByteArray raw(reinterpret_cast<const char*>(asset->second.bytes.data()),
                              static_cast<qsizetype>(asset->second.bytes.size()));
-        const auto image = QImage::fromData(raw).convertToFormat(QImage::Format_Grayscale8);
-        if (image.isNull() || image.width() <= 0 || image.height() <= 0) {
+        QBuffer input;
+        input.setData(raw);
+        if (!input.open(QIODevice::ReadOnly)) throw std::invalid_argument("Reference render asset is unavailable.");
+        QImageReader reader(&input);
+        reader.setDecideFormatFromContent(true);
+        reader.setAutoTransform(false);
+        const auto dimensions = reader.size();
+        if (!dimensions.isValid() || dimensions.width() <= 0 || dimensions.height() <= 0 ||
+            dimensions.width() > 8192 || dimensions.height() > 8192 ||
+            std::uint64_t(dimensions.width()) * std::uint64_t(dimensions.height()) > 16 * 1024 * 1024)
+            throw std::invalid_argument("Reference exceeds the supported assistance raster size.");
+        const auto image = reader.read().convertToFormat(QImage::Format_Grayscale8);
+        if (image.isNull() || image.size() != dimensions) {
             throw std::invalid_argument("Reference render asset is not a decodable raster.");
         }
         AssistanceRaster raster;
@@ -13793,13 +13987,19 @@ public:
     }
 
     [[nodiscard]] std::vector<AssistanceProposal> suggestReferenceAssistance(
-        const QString& reference_id, AssistanceKind kind) {
+        const QString& reference_id, AssistanceKind kind,
+        const QString& target_boundary_id = {}, const QString& target_segment_id = {},
+        bool recognize_image_text = false) {
         try {
+            clearError();
             if (!m_assistance_session.enabled()) {
                 throw std::invalid_argument("Enable assistance in the assistance dialog first.");
             }
-            const auto raster = decodeAssistanceReference(reference_id);
             const auto snapshot = authoringSnapshot();
+            const auto source_digest = document_snapshot_digest(snapshot);
+            const auto source_context = captureModalContext();
+            const auto source_workspace = m_workspace;
+            auto raster = decodeAssistanceReference(reference_id);
             const auto reference = snapshot.entities().find(reference_id.trimmed().toStdString());
             const auto calibration = [&]() -> double {
                 try {
@@ -13835,21 +14035,68 @@ public:
                         "distance before generating assistance. Its calibration is missing or invalid.");
                 }
             }();
-            const auto origin = reference == snapshot.entities().end()
-                ? Vec2{} : read_point(reference->second.properties.value("position_m", json{})).value_or(Vec2{});
-            const auto rotation = reference == snapshot.entities().end()
-                ? 0.0 : read_number(reference->second.properties, "rotation_degrees", 0.0) *
-                    std::numbers::pi / 180.0;
-            const auto scale = reference == snapshot.entities().end()
-                ? 1.0 : read_number(reference->second.properties, "scale", 1.0);
-            const AssistanceEngineOptions options{calibration, origin, rotation, scale};
+            const auto& transform_properties = reference->second.properties;
+            Vec2 origin{};
+            if (transform_properties.contains("position_m")) {
+                const auto point = read_point(transform_properties.at("position_m"));
+                if (!point || !std::isfinite(point->x) || !std::isfinite(point->y))
+                    throw std::invalid_argument("Reference position is invalid.");
+                origin = *point;
+            }
+            const auto transform_number = [&](const char* name, double fallback) {
+                const auto found = transform_properties.find(name);
+                if (found == transform_properties.end()) return fallback;
+                if (!found->is_number() || !std::isfinite(found->get<double>()))
+                    throw std::invalid_argument("Reference transform is invalid.");
+                return found->get<double>();
+            };
+            const auto rotation = transform_number("rotation_degrees", 0.0) * std::numbers::pi / 180.0;
+            const auto scale = transform_number("scale", 1.0);
+            const AssistanceEngineOptions options{calibration, origin, rotation, scale, true,
+                reference->second.properties.value("flip_horizontal", false),
+                reference->second.properties.value("flip_vertical", false)};
+            if (kind == AssistanceKind::dimension_extraction &&
+                (recognize_image_text || raster.source_text.empty())) {
+                const auto cancelled = std::make_shared<std::atomic_bool>(false);
+                const auto root = assistanceOcrApplicationRoot();
+                const auto binary_root = std::filesystem::path(QCoreApplication::applicationDirPath().toStdWString());
+                (void)verifiedAssistanceOcrResources(root);
+                WindowsImportWorkerOptions worker;
+                worker.executable = binary_root / "vertex-import-worker.exe";
+                worker.immutable_module_roots = {binary_root, root / "plugins", root / "assets/assistance"};
+                worker.temporary_root = std::filesystem::path(QDir::tempPath().toStdWString());
+                worker.cancellation_requested = cancelled;
+                const auto recognized = runPincOperation(owner, cancelled,
+                    QStringLiteral("Reading text from the selected plan…"),
+                    [raster, worker] { return recognizeAssistanceRaster(raster, worker); },
+                    QStringLiteral("Read plan text"), QStringLiteral("assistanceOcrProgress"),
+                    "Assistance OCR cancelled.");
+                if (!recognized.isolation_controls_attested)
+                    throw std::invalid_argument("Text recognition did not establish its isolation controls.");
+                raster.source_text = recognized.text;
+                raster.text_runs = recognized.runs;
+                raster.text_resources = recognized.resources;
+                raster.text_producer = recognized.producer;
+            }
+            if (!m_assistance_session.enabled() || !modalContextUnchanged(source_context) ||
+                m_workspace != source_workspace || document_snapshot_digest(authoringSnapshot()) != source_digest)
+                throw std::invalid_argument("The project or drawing context changed during assistance. Generate suggestions again.");
+            const auto retain_source = [&](std::vector<AssistanceProposal> proposals) {
+                for (auto& proposal : proposals) {
+                    proposal.preview.arguments["source_document_digest"] = source_digest;
+                    proposal.preview.arguments["source_workspace"] = static_cast<int>(source_workspace);
+                    validate_assistance_proposal(proposal);
+                }
+                return proposals;
+            };
             switch (kind) {
             case AssistanceKind::tracing:
-                return suggest_tracing(raster, options);
+                return retain_source(suggest_tracing(raster, options));
             case AssistanceKind::edge_tracing:
-                return suggest_edge_tracing(raster, options);
+                return retain_source(suggest_edge_tracing(raster, options));
             case AssistanceKind::dimension_extraction:
-                return extract_dimensions(raster, options);
+                return retain_source(extract_dimensions(raster, options,
+                    target_boundary_id.trimmed().toStdString(), target_segment_id.trimmed().toStdString()));
             case AssistanceKind::label_placement:
             case AssistanceKind::natural_language:
                 throw std::invalid_argument("This assistance kind does not use a reference raster.");
@@ -13861,12 +14108,39 @@ public:
         }
     }
 
+    [[nodiscard]] std::vector<AssistanceProposal> stampAssistanceProposals(
+        std::vector<AssistanceProposal> proposals, const DocumentSnapshot& source) const {
+        const auto digest = document_snapshot_digest(source);
+        for (auto& proposal : proposals) {
+            proposal.preview.arguments["source_document_digest"] = digest;
+            proposal.preview.arguments["source_workspace"] = static_cast<int>(m_workspace);
+            validate_assistance_proposal(proposal);
+        }
+        return proposals;
+    }
+
+    void requireCurrentAssistanceSource(const AssistanceProposal& proposal,
+                                        const DocumentSnapshot& source) const {
+        const auto& arguments = proposal.preview.arguments;
+        if (!arguments.contains("source_document_digest") ||
+            !arguments.at("source_document_digest").is_string() ||
+            arguments.at("source_document_digest") != document_snapshot_digest(source) ||
+            !arguments.contains("source_workspace") ||
+            !arguments.at("source_workspace").is_number_integer() ||
+            arguments.at("source_workspace") != static_cast<int>(m_workspace))
+            throw std::invalid_argument("The project or workspace changed, or the suggestion source is missing. Generate suggestions again.");
+    }
+
     [[nodiscard]] std::vector<AssistanceProposal> suggestLabelAssistance() {
         try {
             if (!m_assistance_session.enabled()) {
                 throw std::invalid_argument("Enable assistance in the assistance dialog first.");
             }
             const auto snapshot = authoringSnapshot();
+            SnapshotPlanSceneOptions scene_options;
+            scene_options.metric_units = m_metric_units;
+            PlanSceneCaches scene_caches;
+            const auto scene = projectSnapshotPlanScene(snapshot, scene_options, scene_caches);
             std::vector<AssistanceAnchor> anchors;
             for (const auto& [id, entity] : snapshot.entities()) {
                 if (entity.type == "property" || entity.type == "building" ||
@@ -13875,7 +14149,7 @@ public:
                     !entity.properties.contains("name") || !entity.properties.at("name").is_string()) {
                     continue;
                 }
-                Vec2 position{};
+                std::optional<Vec2> position;
                 for (const auto* key : {"position_m", "base_position_m", "start_m"}) {
                     if (entity.properties.contains(key)) {
                         if (const auto point = read_point(entity.properties.at(key))) {
@@ -13884,9 +14158,20 @@ public:
                         }
                     }
                 }
-                anchors.push_back({id, entity.properties.at("name").get<std::string>(), position});
+                if (entity.type == "measurement_linework") {
+                    const auto decoded = decode_measurement_linework_model(entity.properties.at("model"));
+                    if (decoded.model) position = replay_measurement_linework(*decoded.model).anchor;
+                }
+                if (!position) {
+                    const auto geometry = std::find_if(scene.all_geometry.begin(), scene.all_geometry.end(),
+                        [&](const auto& candidate) { return candidate.id.toStdString() == id; });
+                    if (geometry != scene.all_geometry.end() && !geometry->segments.empty())
+                        position = plan_label_anchor(geometry->segments);
+                }
+                if (position)
+                    anchors.push_back({id, entity.properties.at("name").get<std::string>(), *position});
             }
-            return sketch::suggest_label_placements(anchors);
+            return stampAssistanceProposals(sketch::suggest_label_placements(anchors), snapshot);
         } catch (const std::exception& error) {
             setError(QStringLiteral("Assistance labels: %1").arg(QString::fromUtf8(error.what())));
             return {};
@@ -13899,7 +14184,8 @@ public:
             if (!m_assistance_session.enabled()) {
                 throw std::invalid_argument("Enable assistance in the assistance dialog first.");
             }
-            return parse_natural_language(command.toStdString());
+            const auto snapshot = authoringSnapshot();
+            return stampAssistanceProposals(parse_natural_language(command.toStdString()), snapshot);
         } catch (const std::exception& error) {
             setError(QStringLiteral("Assistance command: %1").arg(QString::fromUtf8(error.what())));
             return {};
@@ -13958,6 +14244,7 @@ public:
         label.content = args.at("content").get<std::string>();
         label.placement.position = *position;
         label.placement.layer_id = context->layer_id;
+        label.model_plan = true;
         AnnotationState addition;addition.labels.push_back(std::move(label));
         const auto encoded_addition=encode_annotation_state(addition,desktop_symbol_catalog());
         auto updated=annotation->second;
@@ -13966,6 +14253,9 @@ public:
         auto& raw_version=updated.properties.at("state").at("version");
         raw_version=std::max(raw_version.get<int>(),encoded_addition.at("version").get<int>());
         updated.properties.at("state").at("labels").push_back(encoded_addition.at("labels").at(0));
+        updated.extensions["assistance_label_provenance"][id] = {
+            {"proposal", encode_assistance_proposal(proposal)},
+            {"accepted_operation", "add_label"}, {"accepted_annotation_id", id}};
         validate_annotation_entity(updated);
         const ApplyEntityChanges command{
             source.revision(), {EntityChange::upsert(std::move(updated))},
@@ -14041,6 +14331,9 @@ public:
             entity.properties["factor_expression"] = "1";
             entity.properties["factor_numerator"] = 1;
             entity.properties["factor_denominator"] = 1;
+            entity.extensions["assistance_provenance"] = {
+                {"proposal", encode_assistance_proposal(proposal)},
+                {"accepted_operation", "add_boundary"}, {"accepted_entity_id", entity_id}};
             return entity;
         };
         auto entity = make_entity(id, boundary, args.value("classification", "measurement"));
@@ -14072,16 +14365,18 @@ public:
         const auto source = authoringSnapshot();
         const auto target_found = source.entities().find(target_value.get<std::string>());
         if (target_found == source.entities().end() ||
-            !can_recognize_boundary_entity_type(target_found->second.type)) {
+            (!can_recognize_boundary_entity_type(target_found->second.type) &&
+             target_found->second.type != "measurement_linework")) {
             throw std::invalid_argument("Assisted dimension target boundary was not found.");
         }
         auto target = target_found->second;
         const auto original_target = target;
-        const auto version = inspect_boundary_entity_version(target);
-        if (version.format == BoundaryEntityFormat::anonymous_legacy) {
-            target = upgrade_legacy_boundary_entity(target);
+        if (target.type != "measurement_linework") {
+            const auto version = inspect_boundary_entity_version(target);
+            if (version.format == BoundaryEntityFormat::anonymous_legacy)
+                target = upgrade_legacy_boundary_entity(target);
         }
-        const auto identified = decode_identified_boundary_entity(target);
+        const auto identified = resolve_dimension_geometry_owner(target);
         if (identified.segments.empty()) throw std::invalid_argument("Target boundary has no segments.");
         auto segment_id = args.value("target_segment_id", std::string{});
         if (segment_id.empty()) {
@@ -14101,6 +14396,11 @@ public:
         auto dimension = encode_boundary_dimension_entity(
             BoundaryDimension{proposal.id, target.id, segment->segment_id, text_position,
                               BoundaryDimensionPlacement::manual, std::nullopt});
+        dimension.extensions["assistance_provenance"] = {
+            {"proposal", encode_assistance_proposal(proposal)},
+            {"accepted_operation", "add_linked_dimension"},
+            {"linked_length_metres", segment_length(segment->segment)},
+            {"recognized_length_metres", args.at("length_metres")}};
         for (const auto* key : {"property_id", "building_id", "floor_id", "layer_id"}) {
             if (target.properties.contains(key)) dimension.properties[key] = target.properties.at(key);
         }
@@ -14120,8 +14420,16 @@ public:
 
     [[nodiscard]] bool acceptAssistanceProposal(const AssistanceProposal& proposal) {
         try {
+            requireCurrentAssistanceSource(proposal, authoringSnapshot());
+            auto resources = default_assistance_resource_ids();
+            if (std::any_of(proposal.resources.begin(), proposal.resources.end(), [](const auto& resource) {
+                    return resource.id == "vertex-ocr-engine-v1" || resource.id == "tessdata-fast-eng-v1";
+                })) {
+                const auto root = assistanceOcrApplicationRoot();
+                for (const auto& resource : verifiedAssistanceOcrResources(root)) resources.push_back(resource.id);
+            }
             const auto request = m_assistance_session.request_acceptance(
-                proposal, true, default_assistance_resource_ids());
+                proposal, true, resources);
             if (request.proposal.preview.command_type == "add_label") {
                 return applyAssistedLabel(request.proposal);
             }
@@ -14136,6 +14444,8 @@ public:
                 if (workspace == "measurement") setWorkspace(Workspace::measurement);
                 else if (workspace == "architectural") setWorkspace(Workspace::architectural);
                 else throw std::invalid_argument("Assisted workspace value is unknown.");
+                if (m_workspace != (workspace == "measurement" ? Workspace::measurement : Workspace::architectural))
+                    throw std::invalid_argument("Finish or cancel the active drawing before changing workspaces.");
                 clearError();
                 return true;
             }
@@ -17091,11 +17401,32 @@ public:
     }
 
     QString commitBuildingObject(Entity candidate, std::uint64_t expected_revision,
-                                 bool replace_selected) {
+                                 bool replace_selected, std::vector<Entity> related_candidates = {}) {
         try {
             if (!m_document->is_editable())
                 throw std::runtime_error("This document is read-only.");
             const auto snapshot = m_document->snapshot();
+            if (snapshot.revision() != expected_revision)
+                throw std::runtime_error("The project changed. Reopen the object editor.");
+            std::vector<EntityChange> changes;
+            for (auto& related : related_candidates) {
+                const auto source = snapshot.entities().find(related.id);
+                if (source == snapshot.entities().end() || related.id == candidate.id ||
+                    source->second.type != "stair" || related.type != "stair" ||
+                    source->second.properties.value("form", std::string{}) != "straight_stair_flight" ||
+                    source->second.properties.at("version") != 1)
+                    throw std::invalid_argument("A related object must be an explicit current straight-stair upgrade.");
+                const auto stair = decode_stair_properties(related.id, related.properties);
+                auto expected = source->second;
+                expected.properties["version"] = 2;
+                expected.properties["form"] = "multi_flight_stair";
+                expected.properties["flights"] = related.properties.at("flights");
+                expected.properties["landings"] = related.properties.at("landings");
+                if (stair.flights.size() != 1 || !stair.landings.empty() ||
+                    stair.flights.front().riser_count != stair.riser_count || related != expected)
+                    throw std::invalid_argument("A hosted stair upgrade must preserve its source geometry and metadata.");
+                changes.push_back(EntityChange::upsert(std::move(related)));
+            }
             auto canonical = encode_building_entity(decode_building_entity(candidate),
                                                     candidate.extensions);
             if (replace_selected) {
@@ -17104,8 +17435,23 @@ public:
                     throw std::runtime_error("Select the original object before applying this edit.");
                 const auto entries = merged_quantity_entries(&*original, candidate, canonical.properties);
                 // Geometry editors must preserve metadata they do not understand.
+                auto edited = std::move(candidate);
                 candidate = *original;
-                candidate.properties.update(canonical.properties);
+                for (const auto& [key, value] : canonical.properties.items()) {
+                    candidate.properties[key] = merge_canonical_metadata(
+                        original->properties.contains(key) ? original->properties.at(key) : json{},
+                        edited.properties.contains(key) ? edited.properties.at(key) : json{}, value);
+                }
+                if (candidate.type == "stair") {
+                    for (const auto* key : {"top_landing", "level_connection", "flights", "landings"})
+                        if (!canonical.properties.contains(key)) candidate.properties.erase(key);
+                }
+                if (candidate.type == "railing") {
+                    if (!canonical.properties.contains("host")) candidate.properties.erase("host");
+                    if (hosted_stair_railing(candidate)) for (const auto* key :
+                        {"base_position_m", "orientation_rad", "orientation_radians", "length_m", "vertical_placement"})
+                        candidate.properties.erase(key);
+                }
                 if (candidate.type == "roof") {
                     if (!canonical.properties.contains("roof_openings")) candidate.properties.erase("roof_openings");
                     if (canonical.extensions.contains("roof_opening_input"))
@@ -17116,11 +17462,22 @@ public:
                 if (snapshot.entities().contains(candidate.id))
                     throw std::runtime_error("An object with this identity already exists.");
                 const auto entries = merged_quantity_entries(nullptr, candidate, canonical.properties);
-                candidate.properties.update(canonical.properties);
+                candidate.properties = merge_canonical_metadata(candidate.properties, candidate.properties,
+                    canonical.properties);
                 if (entries) candidate.properties["quantity_entries"] = *entries;
-                if (!assignDrawingContext(candidate.properties)) return {};
+                if (hosted_stair_railing(candidate)) {
+                    const auto rail = decode_railing_properties(candidate.id, candidate.properties);
+                    const auto host = snapshot.entities().find(rail.host->stair_id);
+                    if (host == snapshot.entities().end()) throw std::invalid_argument("Select a current stair host.");
+                    for (const auto* key : {"property_id", "building_id", "floor_id", "layer_id"})
+                        candidate.properties[key] = host->second.properties.at(key);
+                    if (host->second.properties.contains("phase_id"))
+                        candidate.properties["phase_id"] = host->second.properties.at("phase_id");
+                    else candidate.properties.erase("phase_id");
+                    candidate.properties.erase("vertical_placement");
+                } else if (!assignDrawingContext(candidate.properties)) return {};
                 if (candidate.properties.is_object() &&
-                    !candidate.properties.contains("vertical_placement")) {
+                    !hosted_stair_railing(candidate) && !candidate.properties.contains("vertical_placement")) {
                     const auto layer_id = read_string(candidate.properties, "layer_id");
                     const auto context = layer_id
                         ? organize_project(snapshot).drawing_context(*layer_id)
@@ -17129,9 +17486,10 @@ public:
                 }
             }
             const auto id = id_from(candidate.id);
+            changes.push_back(EntityChange::upsert(std::move(candidate)));
             applyDocumentCommand(ApplyEntityChanges{
                 .expected_revision = expected_revision,
-                .entity_changes = {EntityChange::upsert(std::move(candidate))},
+                .entity_changes = std::move(changes),
                 .message = replace_selected ? "edit building object" : "create building object",
             });
             m_selected_id = id;
@@ -17655,7 +18013,7 @@ public:
                 auto dimension=*decoded.dimension;
                 const auto boundary=source.entities().find(dimension.boundary_id);
                 if (boundary==source.entities().end()) throw std::invalid_argument("The source boundary is missing.");
-                (void)dimension.resolve(boundary->second);
+                (void)dimension.resolve(source);
                 const Vec2 position{dimension.text_position.x+model_delta.x,
                                     dimension.text_position.y+model_delta.y};
                 if (position.x != dimension.text_position.x || position.y != dimension.text_position.y) {
@@ -17737,7 +18095,7 @@ public:
                 return true;
             }
             const auto command = makeSelectionGeometryTranslationCommand(source,model_ids,model_delta,
-                std::move(presentation_changes));
+                std::move(presentation_changes),delta);
             applyAuthoredCommand(command);
             clearError();
             refresh();
@@ -18040,15 +18398,25 @@ public:
                     const auto decoded=decode_boundary_dimension_entity(entity);
                     if (!decoded.supported()) return std::nullopt;
                     const auto& dimension=*decoded.dimension;
-                    if (entity==source.entities().at(entity.id) &&
-                        candidate.at(dimension.boundary_id)==source.entities().at(dimension.boundary_id)) continue;
-                    const auto projection=project_boundary_dimension(dimension,
-                        candidate.at(dimension.boundary_id),metric_units,item.selected,
-                        ansi_boundary_dimensions(source, candidate.at(dimension.boundary_id)));
-                    if (!projection.line) continue;
-                    proposed.segments=projection.line->segments;
+                    const auto& dimension_owner=candidate.at(dimension.boundary_id);
+                    const bool physical_room_dimension=is_physical_wall_room(dimension_owner);
+                    if (!physical_room_dimension && entity==source.entities().at(entity.id) &&
+                        dimension_owner==source.entities().at(dimension.boundary_id)) continue;
+                    try {
+                        const auto projection=project_boundary_dimension(dimension,
+                            dimension_owner,candidate,metric_units,item.selected,
+                            ansi_boundary_dimensions(source, dimension_owner));
+                        if (!projection.line) continue;
+                        proposed.segments=projection.line->segments;
+                        proposed.dimension_end_ticks=projection.line->dimension_end_ticks;
+                    } catch (const std::invalid_argument&) {
+                        if (!physical_room_dimension) throw;
+                        // Wall edits may intentionally stale retained rooms.
+                        // Withhold their old callout without blocking the edit.
+                        proposed.segments.clear();
+                        proposed.dimension_end_ticks=false;
+                    }
                     proposed.holes.clear();
-                    proposed.dimension_end_ticks=projection.line->dimension_end_ticks;
                 } else if (can_recognize_boundary_entity_type(entity.type) && entity!=source.entities().at(entity.id)) {
                     const auto after=decode_identified_boundary_entity(entity);
                     proposed.segments=boundary_geometry(after);
@@ -18276,11 +18644,19 @@ public:
                     const auto decoded=decode_boundary_dimension_entity(entity);
                     if (!decoded.supported()) return std::nullopt;
                     const auto& dimension=*decoded.dimension;
-                    if (entity==source.entities().at(entity.id) &&
-                        candidate.at(dimension.boundary_id)==source.entities().at(dimension.boundary_id)) continue;
-                    auto projected=project_boundary_dimension(dimension,
-                        candidate.at(dimension.boundary_id),metric_units,label.selected,
-                        ansi_boundary_dimensions(source, candidate.at(dimension.boundary_id))).label;
+                    const auto& dimension_owner=candidate.at(dimension.boundary_id);
+                    const bool physical_room_dimension=is_physical_wall_room(dimension_owner);
+                    if (!physical_room_dimension && entity==source.entities().at(entity.id) &&
+                        dimension_owner==source.entities().at(dimension.boundary_id)) continue;
+                    CanvasLabel projected=label;
+                    try {
+                        projected=project_boundary_dimension(dimension,
+                            dimension_owner,candidate,metric_units,label.selected,
+                            ansi_boundary_dimensions(source, dimension_owner)).label;
+                    } catch (const std::invalid_argument&) {
+                        if (!physical_room_dimension) throw;
+                        projected.text.clear();
+                    }
                     // Keep visibility and view-specific typography from the retained scene.
                     auto proposed=label;
                     proposed.position=view_context
@@ -18654,14 +19030,16 @@ public:
             else {
                 auto parts=prepareSelectionTranslation(*m_vertex_preview_source,ids,canvas_delta,canvas);
                 const auto command=makeSelectionGeometryTranslationCommand(*m_vertex_preview_source,
-                    std::move(parts.model_ids),parts.model_delta,std::move(parts.presentation_changes));
+                    std::move(parts.model_ids),parts.model_delta,std::move(parts.presentation_changes),canvas_delta);
                 request.entities_move_candidate=std::make_shared<DocumentSnapshot>(
                     Document::preview_command(*m_vertex_preview_source,command));
             }
-        } catch (const std::exception&) {
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Move preview: %1").arg(QString::fromUtf8(error.what())));
             (void)canvas->completeEntitiesMovePreview(serial,std::nullopt);
             return std::nullopt;
         }
+        clearError();
         request.label_font=canvas->font();
         if (m_running_vertex_preview) {
             (void)m_vertex_preview_queue.cancel(m_vertex_preview_sequence);
@@ -19174,7 +19552,8 @@ public:
     }
 
     std::vector<Entity> independentAreaCopyGraph(const DocumentSnapshot& snapshot,
-                                                std::vector<Entity> graph) const {
+                                                std::vector<Entity> graph,
+                                                bool include_constraints=true) const {
         if (std::none_of(graph.begin(),graph.end(),[](const auto& entity) {
                 return is_closed_boundary_entity(entity.type) || entity.type == "measurement_linework";
             }))
@@ -19220,6 +19599,7 @@ public:
         for (const auto& entity : graph) ids.insert(entity.id);
         for (const auto& [id, entity] : snapshot.entities()) {
             if (entity.type != "constraint") continue;
+            if (!include_constraints) continue;
             const auto decoded = decode_constraint_entity(entity);
             if (!decoded.supported()) {
                 if (entity.properties.contains("bindings") && entity.properties.at("bindings").is_array())
@@ -20085,7 +20465,7 @@ public:
             return false;
         }
         try {
-            BuildingObjectDialog dialog(*original, m_metric_units, owner);
+            BuildingObjectDialog dialog(m_document->snapshot(), *original, m_metric_units, owner);
             const auto set_field = [&](const char* name, const QString& value) {
                 auto* field = dialog.findChild<QLineEdit*>(QString::fromLatin1(name));
                 if (field == nullptr) {
@@ -20291,7 +20671,8 @@ public:
             dimension.id = new_id("dimension");
             // Resolve before committing so an invalid edge pair, shared vertex,
             // or open area boundary cannot create a dangling presentation row.
-            (void)dimension.resolve(target);
+            if (is_physical_wall_room(target)) (void)dimension.resolve(source);
+            else (void)dimension.resolve(target);
             auto encoded = encode_boundary_dimension_entity(dimension);
             for (const auto* key : {"property_id", "building_id", "floor_id", "layer_id"}) {
                 if (target.properties.contains(key)) encoded.properties[key] = target.properties.at(key);
@@ -20344,6 +20725,16 @@ public:
                                                expected_revision);
     }
 
+    QString createChainDimension(const QString& boundary_id, const QStringList& segment_ids,
+                                 Vec2 text_position, std::optional<Revision> expected_revision) {
+        BoundaryDimension dimension;
+        dimension.boundary_id = boundary_id.trimmed().toStdString();
+        for (const auto& id : segment_ids) dimension.segment_chain_ids.push_back(id.trimmed().toStdString());
+        if (!dimension.segment_chain_ids.empty()) dimension.segment_id = dimension.segment_chain_ids.front();
+        dimension.text_position = text_position;
+        return createSemanticBoundaryDimension(std::move(dimension), "Create chain dimension", expected_revision);
+    }
+
     QString createAreaDimension(const QString& boundary_id, Vec2 text_position,
                                 std::optional<Revision> expected_revision) {
         BoundaryDimension dimension;
@@ -20369,7 +20760,7 @@ public:
             auto dimension = *decoded.dimension;
             const auto boundary = source.entities().find(dimension.boundary_id);
             if (boundary == source.entities().end()) throw std::invalid_argument("The source boundary is missing.");
-            (void)dimension.resolve(boundary->second);
+            (void)dimension.resolve(source);
             const auto coordinate = [&](const QString& expression, double original) {
                 // Displaying a double in feet must not round-trip an untouched
                 // coordinate through a rational parser or change automatic origin.
@@ -20442,13 +20833,17 @@ public:
         };
         if (!m_building_edit_context || !modalContextUnchanged(*m_building_edit_context))
             return fail(QStringLiteral("The object editing context changed. Reselect the object before applying changes."));
+        if (!m_building_edit_source || !m_building_edit_workspace ||
+            *m_building_edit_workspace != m_workspace || m_building_edit_selection != m_selected_ids ||
+            document_snapshot_digest(*m_building_edit_source) != document_snapshot_digest(m_document->snapshot()))
+            return fail(QStringLiteral("The object source changed. Reselect it before applying changes."));
         const auto context = *m_building_edit_context;
         const auto original = selectedEntity();
         if (!original || (original->type != "column" && original->type != "beam" &&
                           original->type != "stair" && original->type != "railing"))
             return fail(QStringLiteral("Select a column, beam, stair or railing before applying changes."));
         try {
-            BuildingObjectDialog dialog(*original, m_metric_units, owner);
+            BuildingObjectDialog dialog(*m_building_edit_source, *original, m_metric_units, owner);
             bool changed = false;
             for (const auto& dimension : m_building_dimensions) {
                 if (dimension.edit->isHidden() ||
@@ -20475,7 +20870,8 @@ public:
             const auto candidate = dialog.candidate();
             if (!candidate) return fail(QStringLiteral("Object changes did not produce an editable candidate."));
             if (!modalContextUnchanged(context)) return fail(m_last_error);
-            if (commitBuildingObject(*candidate, context.revision, true).isEmpty()) return fail(m_last_error);
+            if (commitBuildingObject(*candidate, context.revision, true,
+                    dialog.relatedCandidates()).isEmpty()) return fail(m_last_error);
             return true;
         } catch (const std::exception& error) {
             return fail(QStringLiteral("Object changes: %1").arg(QString::fromUtf8(error.what())));
@@ -20527,7 +20923,7 @@ public:
             source.revision(),changes,{},"Inspect detached clipboard geometry"});
         double existing_right=-std::numeric_limits<double>::infinity();
         double copied_left=std::numeric_limits<double>::infinity();
-        const auto geometry_bounds = [](const auto& entities, const auto& accept) {
+        const auto geometry_bounds = [](const auto& entities, const DocumentSnapshot& authority, const auto& accept) {
             const auto wall_plans=document_wall_plan_geometry(entities);
             for (const auto& [id,entity] : entities) {
                 Boundary geometry;
@@ -20539,7 +20935,9 @@ public:
                 } else if (entity.type=="wall") {
                     if (!wall_plans.contains(id)) throw std::invalid_argument("A measured-copy wall has no usable plan footprint.");
                     geometry=wall_plans.at(id).footprint;
-                } else if (can_recognize_building_entity_type(entity.type)) geometry=project_building_plan(decode_building_entity(entity));
+                } else if (can_recognize_building_entity_type(entity.type))
+                    geometry=project_building_plan(decode_building_entity(
+                        effective_building_geometry_entity(authority, entity)), authority.entities());
                 else if (entity.type=="slab" || entity.type=="room") geometry=read_boundary(entity.properties);
                 else if (entity.type==kAnnotationEntityType) {
                     const auto state=decode_annotation_entity(entity);
@@ -20553,8 +20951,8 @@ public:
                 if (!geometry.empty()) accept(boundary_bounds(geometry));
             }
         };
-        geometry_bounds(source.entities(),[&](const auto& bounds){existing_right=std::max(existing_right,bounds.maximum.x);});
-        geometry_bounds(copied,[&](const auto& bounds){copied_left=std::min(copied_left,bounds.minimum.x);});
+        geometry_bounds(source.entities(),source,[&](const auto& bounds){existing_right=std::max(existing_right,bounds.maximum.x);});
+        geometry_bounds(copied,candidate,[&](const auto& bounds){copied_left=std::min(copied_left,bounds.minimum.x);});
         if (!std::isfinite(copied_left))
             throw std::invalid_argument("The complete measured clipboard graph has no usable placement bounds. Nothing was pasted.");
         const bool has_existing_geometry = std::isfinite(existing_right);
@@ -20710,6 +21108,12 @@ public:
                     }
                 }
                 remap.emplace(entity.id, allocate(entity.type));
+                if (multi_flight_stair(entity)) {
+                    const auto stair = decode_stair_properties(entity.id, entity.properties);
+                    for (const auto& child : stair_child_ids(stair))
+                        if (!remap.emplace(child, allocate("stair-child")).second)
+                            throw std::invalid_argument("Clipboard stair child identity is duplicated.");
+                }
                 if (entity.type == "measurement_linework") {
                     const auto decoded = decode_measurement_linework_model(entity.properties.at("model"));
                     if (!decoded.supported()) throw std::invalid_argument(decoded.diagnostic);
@@ -20840,7 +21244,9 @@ public:
                     for (const auto* key : {"property_id", "building_id", "floor_id", "layer_id"})
                         entity.properties.erase(key);
                     if (!assignDrawingContext(entity.properties)) return false;
-                    if (entity.type=="measurement_linework") {
+                    // A copied stair can host copied railings. Both owners
+                    // require complete explicit organization at admission.
+                    if (entity.type=="measurement_linework" || multi_flight_stair(entity)) {
                         const auto context=requireDrawingContext();
                         if (!context) return false;
                         entity.properties["property_id"]=context->property_id;
@@ -20849,7 +21255,7 @@ public:
                         entity.properties["layer_id"]=context->layer_id;
                     }
                     if (entity.type == "wall" || entity.type == "slab" ||
-                        can_recognize_building_entity_type(entity.type)) {
+                        (can_recognize_building_entity_type(entity.type) && !hosted_stair_railing(entity))) {
                         const auto layer_id = read_string(entity.properties, "layer_id");
                         if (layer_id) {
                             const auto context = organize_project(source).drawing_context(*layer_id);
@@ -20859,6 +21265,24 @@ public:
                 }
                 revokeCopiedAppraisalObservation(original,entity);
                 changes.push_back(EntityChange::upsert(std::move(entity)));
+            }
+            for (auto& change : changes) {
+                if (!hosted_stair_railing(change.entity)) continue;
+                const auto rail = decode_railing_properties(change.entity.id, change.entity.properties);
+                const Entity* host = nullptr;
+                for (const auto& other : changes)
+                    if (other.entity.id == rail.host->stair_id) { host = &other.entity; break; }
+                if (!host) {
+                    const auto existing = source.entities().find(rail.host->stair_id);
+                    if (existing != source.entities().end()) host = &existing->second;
+                }
+                if (!host) throw std::invalid_argument("The copied railing's current stair host is missing.");
+                for (const auto* key : {"property_id", "building_id", "floor_id", "layer_id"})
+                    change.entity.properties[key] = host->properties.at(key);
+                if (host->properties.contains("phase_id"))
+                    change.entity.properties["phase_id"] = host->properties.at("phase_id");
+                else change.entity.properties.erase("phase_id");
+                change.entity.properties.erase("vertical_placement");
             }
             const bool measured_placement=placeMeasuredClipboardGraph(source,changes);
             const auto command = validateIndependentAreaCopy(source,ApplyEntityChanges{
@@ -22070,7 +22494,7 @@ public:
                         text = QStringLiteral("Relationship satisfied");
                         if (found->second.type == "dimension") {
                             const auto dimension = *decode_boundary_dimension_entity(found->second).dimension;
-                            const auto resolved = dimension.resolve(snapshot.entities().at(target_entity.id));
+                            const auto resolved = dimension.resolve(snapshot);
                             text = dimension.kind == BoundaryDimensionKind::angle
                                 ? QStringLiteral("%1°").arg(resolved.angle()*180/std::numbers::pi, 0, 'f', 1)
                                 : format_length(resolved.segment_length(), context.metric_units);
@@ -22124,138 +22548,51 @@ public:
     void showPhysicalRoomRepair() {
         try {
             const auto selected = selectedEntity();
-            if (!selected || !is_physical_wall_room(*selected) || m_selected_ids.size()!=1)
-                throw std::invalid_argument("Select one physical room in Layers before repairing it.");
+            if (!selected || m_selected_ids.size() != 1 ||
+                (selected->type != "wall" && !is_physical_wall_room(*selected)))
+                throw std::invalid_argument("Select a wall or a room in Layers to review the rooms in its layer.");
             if (!m_document->is_editable() || m_boundary_session || m_linework_drawing || m_pending_wall_start)
-                throw std::invalid_argument("Finish drawing and use an editable project before repairing a room.");
-            const auto source = authoringSnapshot(); const auto context = captureModalContext();
-            const auto room_id = selected->id; const auto descriptor = decode_physical_wall_room_descriptor(*selected);
-            const auto digest = physical_wall_room_descriptor_digest(*selected);
-            const auto organization = organize_project(source); const auto room_context = organization.drawing_context(room_id);
-            if (!room_context || !room_context->complete()) throw std::invalid_argument("The room's layer needs a resolved building and floor.");
-            QDialog dialog(owner); styleDialog(dialog); dialog.setObjectName(QStringLiteral("physicalRoomRepair"));
-            dialog.setWindowTitle(QStringLiteral("Repair room from walls")); dialog.resize(880,700);
-            auto* layout = new QVBoxLayout(&dialog);
-            auto* help = new QLabel(QStringLiteral("Click inside the intended clear room. Dashed gray shows the previous outline; blue shows current spaces. "
-                "The room keeps its name and classification. Other split pieces remain unassigned."),&dialog);
-            help->setWordWrap(true); layout->addWidget(help);
-            auto* walls = new QComboBox(&dialog); walls->setObjectName(QStringLiteral("physicalRoomRepairSource"));
-            for (const auto& [id,entity] : source.entities()) if (entity.type=="wall" && organization.drawing_context(id)==room_context)
-                walls->addItem(id_from(read_string(entity.properties,"name").value_or(id)),id_from(id));
-            if (!walls->count()) throw std::invalid_argument("No current source walls remain in the room's layer.");
-            const auto original_wall = walls->findData(id_from(descriptor.selected_wall_id));
-            if (original_wall>=0) walls->setCurrentIndex(original_wall);
-            auto* source_row = new QHBoxLayout; source_row->addWidget(new QLabel(QStringLiteral("Source wall"),&dialog));
-            source_row->addWidget(walls,1); layout->addLayout(source_row);
-            auto* correspondence = new QLabel(&dialog);
-            correspondence->setObjectName(QStringLiteral("physicalRoomRepairCorrespondence"));
-            correspondence->setWordWrap(true); correspondence->setTextFormat(Qt::PlainText);
-            layout->addWidget(correspondence);
-            auto* preview = new PlanCanvas(&dialog); preview->setObjectName(QStringLiteral("physicalRoomRepairCanvas"));
-            new BoundaryPreviewFit(preview); preview->setMinimumHeight(380); preview->setGridEnabled(false);
-            preview->setSnapEnabled(false); preview->setOverviewMapEnabled(false); preview->setSelectionTransformEnabled(false,false);
-            layout->addWidget(preview,1);
-            auto* status = new QLabel(&dialog); status->setObjectName(QStringLiteral("physicalRoomRepairStatus"));
-            status->setWordWrap(true); status->setTextFormat(Qt::PlainText); layout->addWidget(status);
-            auto* buttons = new QDialogButtonBox(QDialogButtonBox::Apply|QDialogButtonBox::Cancel,&dialog);
-            auto* apply = buttons->button(QDialogButtonBox::Apply); apply->setObjectName(QStringLiteral("physicalRoomRepairApply"));
-            apply->setText(QStringLiteral("Review and apply")); apply->setEnabled(false); layout->addWidget(buttons);
-            std::optional<PhysicalWallRoomCorrespondenceReport> detection; std::optional<EditBoundaryGeometry> proposal;
-            std::optional<EditBoundaryGeometry> accepted; std::optional<std::size_t> chosen;
-            const auto unchanged = [&] {
-                const auto current=authoringSnapshot();
-                return modalContextUnchanged(context) && m_document->is_editable() && m_selected_ids.size()==1 &&
-                    m_selected_id==id_from(room_id) && current.document_id()==source.document_id() && current.revision()==source.revision() &&
-                    current.entities()==source.entities() && current.assets()==source.assets();
-            };
-            const auto scene = [&] {
-                std::vector<CanvasEntity> entities;
-                CanvasEntity previous{id_from(room_id),QStringLiteral("boundary"),boundary_geometry(decode_identified_boundary_entity(*selected)),0,false};
-                previous.holes=descriptor.holes; previous.stroke_color=QColor(130,143,158); previous.dashed_stroke=true; entities.push_back(std::move(previous));
-                if (detection) for (std::size_t i=0;i<detection->fresh.size();++i) {
-                    const auto& space=detection->fresh[i]; CanvasEntity current{QStringLiteral("candidate:%1").arg(i),QStringLiteral("boundary"),space.boundary,0,false};
-                    current.holes=space.holes; current.stroke_color=QColor(36,107,206);
-                    current.filled=chosen && *chosen==i; current.fill_color=QColor(36,107,206,35); entities.push_back(std::move(current));
-                }
-                preview->setEntities(std::move(entities));
-            };
-            const auto refresh_sources = [&] {
-                detection.reset(); proposal.reset(); chosen.reset(); apply->setEnabled(false); correspondence->clear();
-                try {
-                    if (!unchanged()) throw std::invalid_argument("The project or selection changed. Close this review and start again.");
-                    detection=physical_wall_room_correspondence(source,walls->currentData().toString().toStdString());
-                    const auto retained=std::find_if(detection->retained.begin(),detection->retained.end(),
-                        [&](const auto& value) { return value.room.id==room_id; });
-                    if (retained==detection->retained.end())
-                        correspondence->setText(QStringLiteral("This room is outside the selected wall context."));
-                    else switch (retained->kind) {
-                    case PhysicalWallRoomCorrespondenceKind::unique_continuation:
-                        correspondence->setText(QStringLiteral("This room continues in one current space.")); break;
-                    case PhysicalWallRoomCorrespondenceKind::split:
-                        correspondence->setText(QStringLiteral("This room splits into %1 current spaces. Choose which piece keeps its identity; the other pieces remain unassigned.")
-                            .arg(retained->candidate_indices.size())); break;
-                    case PhysicalWallRoomCorrespondenceKind::merge:
-                        correspondence->setText(QStringLiteral("This room merges with other retained rooms. This review reassigns only the selected room; the other room identities still need review.")); break;
-                    case PhysicalWallRoomCorrespondenceKind::retired:
-                        correspondence->setText(QStringLiteral("No overlapping successor was found. Choose a current space only if this room should be reassigned.")); break;
-                    default:
-                        correspondence->setText(QStringLiteral("The relationship is unresolved. Choose the destination explicitly. %1")
-                            .arg(QString::fromStdString(retained->diagnostic))); break;
+                throw std::invalid_argument("Finish drawing and use an editable project before reviewing rooms.");
+            const auto source = authoringSnapshot();
+            const auto context = captureModalContext();
+            const auto workspace = m_workspace;
+            const auto selection = m_selected_ids;
+            const auto source_digest = document_snapshot_digest(source);
+            const auto organization = organize_project(source);
+            const auto drawing_context = organization.drawing_context(selected->id);
+            if (!drawing_context || !drawing_context->complete())
+                throw std::invalid_argument("The selected object's layer needs a resolved property, building and floor.");
+            auto wall_id = selected->type == "wall" ? selected->id :
+                decode_physical_wall_room_descriptor(*selected).selected_wall_id;
+            const auto wall = source.entities().find(wall_id);
+            if (wall == source.entities().end() || wall->second.type != "wall" ||
+                organization.drawing_context(wall_id) != drawing_context) {
+                wall_id.clear();
+                for (const auto& [id, entity] : source.entities())
+                    if (entity.type == "wall" && organization.drawing_context(id) == drawing_context) {
+                        wall_id = id;
+                        break;
                     }
-                    status->setText(detection->fresh.empty()?QStringLiteral("No clear room was found in these source walls."):
-                        QStringLiteral("Click the current clear room to retain this room's identity."));
-                } catch (const std::exception& error) { status->setText(QString::fromUtf8(error.what())); }
-                scene(); preview->fitView();
-            };
-            preview->setPointPlacementRequested([&](Vec2 point) {
-                proposal.reset(); chosen.reset(); apply->setEnabled(false);
-                try {
-                    if (!unchanged() || !detection || !physical_wall_room_correspondence_is_current(*detection,authoringSnapshot()))
-                        throw std::invalid_argument("The room review is no longer current.");
-                    for (std::size_t i=0;i<detection->fresh.size();++i) {
-                        const auto& space=detection->fresh[i];
-                        if (!PlanCanvas::containsAreaPoint(space.boundary,point) || std::any_of(space.holes.begin(),space.holes.end(),
-                            [&](const auto& hole) { return PlanCanvas::containsAreaPoint(hole,point); })) continue;
-                        if (chosen) throw std::invalid_argument("Several spaces contain this point. Choose an unambiguous interior point.");
-                        chosen=i;
-                    }
-                    if (!chosen) throw std::invalid_argument("Click inside a current clear space, outside wall material and holes.");
-                    const auto& space=detection->fresh.at(*chosen);
-                    proposal=boundaryRedefinitionCommand(source,space.boundary,{},nullptr,true);
-                    PhysicalWallRoomRepairIntent intent; intent.selected_wall_id=walls->currentData().toString().toStdString();
-                    intent.interior_witness=point; intent.reviewed_source_lineage=space.source_lineage; intent.expected_descriptor_digest=digest;
-                    proposal->edit.physical_wall_room_repair=std::move(intent);
-                    status->setText(QStringLiteral("Current clear area: %1 · %2 wall-material hole(s). Attached references are reviewed before applying.")
-                        .arg(format_dimension_area(space.area_square_metres,m_metric_units)).arg(space.holes.size()));
-                    apply->setEnabled(true);
-                } catch (const std::exception& error) { proposal.reset(); chosen.reset(); status->setText(QString::fromUtf8(error.what())); }
-                scene();
-            });
-            QObject::connect(walls,&QComboBox::currentIndexChanged,&dialog,[&] { refresh_sources(); });
-            QObject::connect(buttons,&QDialogButtonBox::rejected,&dialog,&QDialog::reject);
-            QObject::connect(apply,&QPushButton::clicked,&dialog,[&] {
-                try {
-                    if (!proposal || !unchanged() || !detection || !physical_wall_room_correspondence_is_current(*detection,authoringSnapshot()))
-                        throw std::invalid_argument("The room review changed. Choose the current destination again.");
-                    const auto reviewed=reviewBoundaryRedefinition(source,*proposal);
-                    if (!reviewed) return;
-                    if (!unchanged() || !physical_wall_room_correspondence_is_current(*detection,authoringSnapshot()))
-                        throw std::invalid_argument("The room review source changed. Close this review and start again.");
-                    (void)Document::preview_command(source,*reviewed); accepted=*reviewed; dialog.accept();
-                } catch (const std::exception& error) { status->setText(QString::fromUtf8(error.what())); }
-            });
-            QTimer timer(&dialog); timer.setInterval(100);
-            QObject::connect(&timer,&QTimer::timeout,&dialog,[&] { if (!unchanged()) { proposal.reset(); apply->setEnabled(false);
-                status->setText(QStringLiteral("The project or selection changed. Close this review and start again.")); } }); timer.start();
-            refresh_sources();
-            if (dialog.exec()!=QDialog::Accepted) return;
-            if (!accepted || !unchanged() || !detection ||
-                !physical_wall_room_correspondence_is_current(*detection,authoringSnapshot())) {
-                setError(QStringLiteral("The room review source changed. Close this review and start again."));
-                return;
             }
-            (void)Document::preview_command(source,*accepted); applyDocumentCommand(*accepted); clearError(); refresh();
-        } catch (const std::exception& error) { setError(QStringLiteral("Repair room: %1").arg(QString::fromUtf8(error.what()))); }
+            if (wall_id.empty()) throw std::invalid_argument("No source walls remain in this room's layer.");
+            const auto current_source = [&]() {
+                if (!modalContextUnchanged(context) || m_workspace != workspace || m_selected_ids != selection ||
+                    !m_document->is_editable() || m_boundary_session || m_linework_drawing || m_pending_wall_start)
+                    throw std::invalid_argument("The project, workspace or selection changed. Cancel and review the current rooms.");
+                return authoringSnapshot();
+            };
+            PhysicalWallRoomReviewDialog dialog(source, wall_id, m_metric_units, current_source, owner);
+            styleDialog(dialog);
+            if (dialog.exec() != QDialog::Accepted) return;
+            if (!dialog.acceptedCommand() || document_snapshot_digest(current_source()) != source_digest)
+                throw std::invalid_argument("The complete room review source changed. Reopen the review.");
+            (void)Document::preview_command(source, *dialog.acceptedCommand());
+            applyDocumentCommand(*dialog.acceptedCommand());
+            clearError();
+            refresh();
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Review rooms: %1").arg(QString::fromUtf8(error.what())));
+        }
     }
 
     bool redefineSelectedBoundary(const Boundary& boundary, const QString& classification) {
@@ -27757,6 +28094,7 @@ public:
         auto* kind = new QComboBox(&dialog);
         kind->setObjectName(QStringLiteral("dimensionCreateKind"));
         kind->addItem(QStringLiteral("Length"), QStringLiteral("length"));
+        kind->addItem(QStringLiteral("Chain length"), QStringLiteral("chain"));
         kind->addItem(QStringLiteral("Angle"), QStringLiteral("angle"));
         kind->addItem(QStringLiteral("Area"), QStringLiteral("area"));
         auto* first_segment = new QComboBox(&dialog);
@@ -27781,6 +28119,20 @@ public:
         automatic->setChecked(true);
         form->addRow(automatic);
         layout->addLayout(form);
+        auto* chain_preview = new PlanCanvas(&dialog);
+        chain_preview->setObjectName(QStringLiteral("dimensionChainPreview"));
+        chain_preview->setMinimumHeight(180);
+        chain_preview->setMaximumHeight(220);
+        chain_preview->setMetricUnits(m_metric_units);
+        chain_preview->setSnapEnabled(false);
+        chain_preview->setOverviewMapEnabled(false);
+        chain_preview->setSelectionTransformEnabled(false, false);
+        chain_preview->setCanvasBackground(QColor(m_theme == WorkspaceTheme::light ? "#f8fafc" : "#141b27"));
+        layout->addWidget(chain_preview);
+        auto* chain_summary = new QLabel(&dialog);
+        chain_summary->setObjectName(QStringLiteral("dimensionChainSummary"));
+        chain_summary->setWordWrap(true);
+        layout->addWidget(chain_summary);
 
         auto* actions = new QHBoxLayout;
         auto* add_length = new QPushButton(QStringLiteral("Add length"), &dialog);
@@ -27804,22 +28156,28 @@ public:
         const auto show_fields = [=, &dialog] {
             const auto mode = kind->currentData().toString();
             const bool length = mode == QStringLiteral("length");
+            const bool chain = mode == QStringLiteral("chain");
             const bool angle = mode == QStringLiteral("angle");
             const auto show = [form](QWidget* widget, bool visible) {
                 widget->setVisible(visible);
                 if (auto* label = form->labelForField(widget)) label->setVisible(visible);
             };
-            show(first_segment, length || angle);
+            show(first_segment, length || chain || angle);
             if (auto* label = qobject_cast<QLabel*>(form->labelForField(first_segment)))
                 label->setText(length ? QStringLiteral("Edge") : QStringLiteral("First edge"));
-            show(second_segment, angle);
+            show(second_segment, angle || chain);
+            if (auto* label = qobject_cast<QLabel*>(form->labelForField(second_segment)))
+                label->setText(chain ? QStringLiteral("Last edge") : QStringLiteral("Second edge"));
             show(vertex, angle);
-            show(automatic, length);
-            show(x, !length || !automatic->isChecked());
-            show(y, !length || !automatic->isChecked());
-            add_length->setVisible(length);
+            show(automatic, length || chain);
+            show(x, !(length || chain) || !automatic->isChecked());
+            show(y, !(length || chain) || !automatic->isChecked());
+            add_length->setVisible(length || chain);
+            add_length->setText(chain ? QStringLiteral("Add chain length") : QStringLiteral("Add length"));
             add_angle->setVisible(angle);
-            add_area->setVisible(!length && !angle);
+            add_area->setVisible(!length && !chain && !angle);
+            chain_preview->setVisible(chain);
+            chain_summary->setVisible(chain);
             layout->activate();
             dialog.resize(520, dialog.sizeHint().height());
         };
@@ -27828,6 +28186,19 @@ public:
         show_fields();
 
         auto expected_context = captureModalContext();
+        auto expected_source = authoringSnapshot();
+        auto expected_digest = document_snapshot_digest(expected_source);
+        const auto expected_workspace = m_workspace;
+        const auto require_creator_source = [&] {
+            if (!modalContextUnchanged(expected_context) || m_workspace != expected_workspace ||
+                document_snapshot_digest(authoringSnapshot()) != expected_digest)
+                throw std::invalid_argument("The project or drawing context changed. Reopen Add dimensions.");
+        };
+        const auto accept_creator_source = [&] {
+            expected_context = captureModalContext();
+            expected_source = authoringSnapshot();
+            expected_digest = document_snapshot_digest(expected_source);
+        };
         const auto populate_boundaries = [this, boundary] {
             const auto selected = m_selected_id;
             boundary->clear();
@@ -27914,6 +28285,80 @@ public:
         populate_targets();
         populate_shared_vertices();
 
+        const auto selected_chain = [&]() {
+            const auto& owner = expected_source.entities().at(boundary->currentData().toString().toStdString());
+            const auto geometry = resolve_dimension_geometry_owner(owner);
+            const auto first_id = first_segment->currentData().toString().toStdString();
+            const auto last_id = second_segment->currentData().toString().toStdString();
+            const auto first = std::find_if(geometry.segments.begin(), geometry.segments.end(),
+                [&](const auto& edge) { return edge.segment_id == first_id; });
+            if (first == geometry.segments.end() || first_id == last_id)
+                throw std::invalid_argument("Choose different first and last edges for a chain.");
+            BoundaryDimension result;
+            result.id = "chain-preview";
+            result.boundary_id = owner.id;
+            result.segment_id = first_id;
+            const auto start = static_cast<std::size_t>(first - geometry.segments.begin());
+            const IdentifiedSegment* previous = nullptr;
+            for (std::size_t count = 0; count < geometry.segments.size() && count < 128; ++count) {
+                const auto& edge = geometry.segments[(start + count) % geometry.segments.size()];
+                if (previous && previous->end_vertex_id != edge.start_vertex_id)
+                    throw std::invalid_argument("These edges do not form one connected forward path.");
+                result.segment_chain_ids.push_back(edge.segment_id);
+                previous = &edge;
+                if (edge.segment_id == last_id) {
+                    (void)result.resolve(expected_source);
+                    return result;
+                }
+            }
+            throw std::invalid_argument("Choose a connected chain of 2 to 128 edges.");
+        };
+        const auto refresh_chain_preview = [&] {
+            if (kind->currentData() != QStringLiteral("chain")) return;
+            try {
+                require_creator_source();
+                const auto dimension = selected_chain();
+                const auto geometry = resolve_dimension_geometry_owner(expected_source.entities().at(dimension.boundary_id));
+                const auto total = dimension.resolve(expected_source).segment_length_metres;
+                // The dimension owner resolver also admits open measured
+                // strokes. boundary_geometry validates a closed boundary
+                // entity, so use the already replayed segments for this view.
+                Boundary source_path;
+                source_path.reserve(geometry.segments.size());
+                for (const auto& edge : geometry.segments) source_path.push_back(edge.segment);
+                CanvasEntity all{QStringLiteral("chain-source"), QString::fromStdString(geometry.type), std::move(source_path)};
+                all.stroke_color = QColor("#8794a5");
+                CanvasEntity path{QStringLiteral("chain-path"), QStringLiteral("measurement_linework"), {}};
+                path.stroke_color = QColor("#1671f5");
+                path.output_stroke_width_mm = 0.7;
+                path.paper_stroke_width_on_screen = true;
+                std::vector<CanvasLabel> labels;
+                for (const auto& id : dimension.segment_chain_ids) {
+                    const auto edge = std::find_if(geometry.segments.begin(), geometry.segments.end(),
+                        [&](const auto& item) { return item.segment_id == id; });
+                    path.segments.push_back(edge->segment);
+                    if (const auto midpoint = point_at_segment(edge->segment, 0.5)) {
+                        const auto number = static_cast<qsizetype>(edge - geometry.segments.begin()) + 1;
+                        CanvasLabel label{QString::fromStdString(id), *midpoint, QStringLiteral("%1").arg(number)};
+                        label.paper_height_mm = 2.5;
+                        labels.push_back(std::move(label));
+                    }
+                }
+                chain_preview->setEntities({std::move(all), std::move(path)});
+                chain_preview->setLabels(std::move(labels));
+                chain_preview->fitView();
+                chain_summary->setText(QStringLiteral("%1 edges · %2 along the highlighted path")
+                    .arg(dimension.segment_chain_ids.size()).arg(format_length(total, m_metric_units)));
+            } catch (const std::exception& error) {
+                chain_preview->setEntities({});
+                chain_preview->setLabels({});
+                chain_summary->setText(QString::fromUtf8(error.what()));
+            }
+        };
+        for (auto* choice : {kind, boundary, first_segment, second_segment})
+            QObject::connect(choice, &QComboBox::currentIndexChanged, &dialog,
+                [refresh_chain_preview](int) { refresh_chain_preview(); });
+
         const auto parse_position = [x, y] {
             bool x_ok = false;
             bool y_ok = false;
@@ -27926,11 +28371,13 @@ public:
         QObject::connect(add_length, &QPushButton::clicked, &dialog,
                          [&, this] {
             try {
-                if (!modalContextUnchanged(expected_context)) throw std::invalid_argument(lastError().toStdString());
+                require_creator_source();
                 BoundaryDimension dimension;
                 dimension.boundary_id = boundary->currentData().toString().toStdString();
                 dimension.segment_id = first_segment->currentData().toString().toStdString();
                 dimension.kind = BoundaryDimensionKind::segment_length;
+                const bool chain = kind->currentData() == QStringLiteral("chain");
+                if (chain) dimension = selected_chain();
                 if (automatic->isChecked()) {
                     const auto source = authoringSnapshot();
                     const auto& owner=source.entities().at(dimension.boundary_id);
@@ -27965,22 +28412,25 @@ public:
                     }
                     dimension.text_position = {midpoint->x-std::sin(direction)*offset*side,
                                                midpoint->y+std::cos(direction)*offset*side};
-                    dimension.placement = BoundaryDimensionPlacement::automatic;
-                    dimension.automatic_placement_version = 2;
+                    if (!chain) {
+                        dimension.placement = BoundaryDimensionPlacement::automatic;
+                        dimension.automatic_placement_version = 2;
+                    }
                 } else dimension.text_position = parse_position();
-                const auto id = createSemanticBoundaryDimension(std::move(dimension), "Create length dimension", expected_context.revision);
+                const auto id = createSemanticBoundaryDimension(std::move(dimension),
+                    chain ? "Create chain dimension" : "Create length dimension", expected_context.revision);
                 if (id.isEmpty()) throw std::invalid_argument(lastError().toStdString());
-                expected_context = captureModalContext();
-                status->setText(QStringLiteral("Added length dimension."));
+                accept_creator_source();
+                refresh_chain_preview();
+                status->setText(chain ? QStringLiteral("Added chain length dimension.") : QStringLiteral("Added length dimension."));
             } catch (const std::exception& error) {
                 status->setText(QStringLiteral("Length: %1").arg(QString::fromUtf8(error.what())));
             }
         });
         QObject::connect(add_angle, &QPushButton::clicked, &dialog,
-                         [this, boundary, first_segment, second_segment, vertex,
-                          status, parse_position, &expected_context] {
+                         [&, this] {
             try {
-                if (!modalContextUnchanged(expected_context)) throw std::invalid_argument(lastError().toStdString());
+                require_creator_source();
                 if (boundary->currentData().toString().isEmpty() ||
                     first_segment->currentData().toString().isEmpty() ||
                     second_segment->currentData().toString().isEmpty() ||
@@ -27991,22 +28441,22 @@ public:
                     second_segment->currentData().toString(), vertex->currentData().toString(),
                     parse_position(), expected_context.revision);
                 if (id.isEmpty()) throw std::invalid_argument(lastError().toStdString());
-                expected_context = captureModalContext();
+                accept_creator_source();
                 status->setText(QStringLiteral("Added angle dimension %1").arg(id));
             } catch (const std::exception& error) {
                 status->setText(QStringLiteral("Angle: %1").arg(QString::fromUtf8(error.what())));
             }
         });
         QObject::connect(add_area, &QPushButton::clicked, &dialog,
-                         [this, boundary, status, parse_position, &expected_context] {
+                         [&, this] {
             try {
-                if (!modalContextUnchanged(expected_context)) throw std::invalid_argument(lastError().toStdString());
+                require_creator_source();
                 if (boundary->currentData().toString().isEmpty())
                     throw std::invalid_argument("Choose a source boundary.");
                 const auto id = createAreaDimension(boundary->currentData().toString(), parse_position(),
                                                      expected_context.revision);
                 if (id.isEmpty()) throw std::invalid_argument(lastError().toStdString());
-                expected_context = captureModalContext();
+                accept_creator_source();
                 status->setText(QStringLiteral("Added area dimension %1").arg(id));
             } catch (const std::exception& error) {
                 status->setText(QStringLiteral("Area: %1").arg(QString::fromUtf8(error.what())));
@@ -28431,7 +28881,7 @@ public:
         dialog.setObjectName(QStringLiteral("assistanceDialog"));
         dialog.setWindowTitle(QStringLiteral("Assistance"));
         dialog.setModal(true);
-        dialog.resize(680, 500);
+        dialog.resize(840, 640);
 
         auto* layout = new QVBoxLayout(&dialog);
         auto* enabled = new QCheckBox(QStringLiteral("Enable suggestions for this session"), &dialog);
@@ -28442,6 +28892,7 @@ public:
 
         auto* controls = new QHBoxLayout();
         auto* kind = new QComboBox(&dialog);
+        kind->setObjectName(QStringLiteral("assistanceKind"));
         kind->addItem(QStringLiteral("Trace selected reference"),
                       static_cast<int>(AssistanceKind::tracing));
         kind->addItem(QStringLiteral("Trace detected edges"),
@@ -28454,17 +28905,103 @@ public:
                       static_cast<int>(AssistanceKind::natural_language));
         controls->addWidget(kind);
         auto* command = new QLineEdit(&dialog);
+        command->setObjectName(QStringLiteral("assistanceCommand"));
         command->setPlaceholderText(QStringLiteral("label Entry at 1.25, 2.5"));
         command->setVisible(false);
         controls->addWidget(command, 1);
         auto* generate = new QPushButton(QStringLiteral("Generate suggestions"), &dialog);
+        generate->setObjectName(QStringLiteral("assistanceGenerate"));
         controls->addWidget(generate);
         layout->addLayout(controls);
+
+        auto* source_form = new QFormLayout;
+        auto* reference_choice = new QComboBox(&dialog);
+        reference_choice->setObjectName(QStringLiteral("assistanceReference"));
+        auto* target_choice = new QComboBox(&dialog);
+        target_choice->setObjectName(QStringLiteral("assistanceDimensionTarget"));
+        auto* segment_choice = new QComboBox(&dialog);
+        segment_choice->setObjectName(QStringLiteral("assistanceDimensionSegment"));
+        auto* image_text = new QCheckBox(QStringLiteral("Recognize image text even when embedded text is available"), &dialog);
+        image_text->setObjectName(QStringLiteral("assistanceRecognizeImage"));
+        source_form->addRow(QStringLiteral("Reference plan"), reference_choice);
+        source_form->addRow(QStringLiteral("Dimension target"), target_choice);
+        source_form->addRow(QStringLiteral("Target edge"), segment_choice);
+        source_form->addRow(image_text);
+        layout->addLayout(source_form);
+        target_choice->addItem(QStringLiteral("Choose an area or measured line…"), QString{});
+        const auto source = authoringSnapshot();
+        for (const auto& [id, entity] : source.entities()) {
+            if (entity.type == "reference_asset") {
+                reference_choice->addItem(QString::fromStdString(entity.properties.value("name", id)), id_from(id));
+            } else if (can_recognize_boundary_entity_type(entity.type) || entity.type == "measurement_linework") {
+                try {
+                    auto target = entity;
+                    if (target.type != "measurement_linework" &&
+                        inspect_boundary_entity_version(target).format == BoundaryEntityFormat::anonymous_legacy)
+                        target = upgrade_legacy_boundary_entity(target);
+                    (void)resolve_dimension_geometry_owner(target);
+                    target_choice->addItem(QString::fromStdString(entity.properties.value("name", id)), id_from(id));
+                } catch (const std::exception&) { /* Unavailable geometry cannot be an association target. */ }
+            }
+        }
+        if (const auto selected = reference_choice->findData(m_selected_id); selected >= 0)
+            reference_choice->setCurrentIndex(selected);
+        if (const auto selected = target_choice->findData(m_selected_id); selected >= 0)
+            target_choice->setCurrentIndex(selected);
+        const auto populate_segments = [&] {
+            segment_choice->clear();
+            const auto snapshot = authoringSnapshot();
+            const auto found = snapshot.entities().find(target_choice->currentData().toString().toStdString());
+            if (found == snapshot.entities().end()) return;
+            try {
+                if (found->second.type != "measurement_linework" &&
+                    inspect_boundary_entity_version(found->second).format == BoundaryEntityFormat::anonymous_legacy) {
+                    segment_choice->addItem(QStringLiteral("First edge (legacy area)"), QString{});
+                    return;
+                }
+                const auto geometry = resolve_dimension_geometry_owner(found->second);
+                std::size_t number = 0;
+                for (const auto& edge : geometry.segments)
+                    segment_choice->addItem(QStringLiteral("Edge %1 · %2").arg(++number)
+                        .arg(format_length(segment_length(edge.segment), m_metric_units)), id_from(edge.segment_id));
+            } catch (const std::exception&) { /* Regeneration reports the unavailable target. */ }
+        };
+        QObject::connect(target_choice, &QComboBox::currentIndexChanged, &dialog, [&](int) { populate_segments(); });
+        populate_segments();
+        const auto show_reference_fields = [&] {
+            const auto value = static_cast<AssistanceKind>(kind->currentData().toInt());
+            const bool uses_reference = value == AssistanceKind::tracing || value == AssistanceKind::edge_tracing ||
+                                        value == AssistanceKind::dimension_extraction;
+            const bool dimensions = value == AssistanceKind::dimension_extraction;
+            const auto show = [source_form](QWidget* field, bool visible) {
+                field->setVisible(visible);
+                if (auto* label = source_form->labelForField(field)) label->setVisible(visible);
+            };
+            show(reference_choice, uses_reference); show(target_choice, dimensions); show(segment_choice, dimensions);
+            image_text->setVisible(dimensions);
+        };
+        QObject::connect(kind, &QComboBox::currentIndexChanged, &dialog, [&](int) { show_reference_fields(); });
+        show_reference_fields();
 
         auto* list = new QListWidget(&dialog);
         list->setObjectName(QStringLiteral("assistanceProposalList"));
         list->setSelectionMode(QAbstractItemView::SingleSelection);
         layout->addWidget(list, 1);
+        auto* review_canvas = new PlanCanvas(&dialog);
+        review_canvas->setObjectName(QStringLiteral("assistanceReviewCanvas"));
+        review_canvas->setMinimumHeight(190);
+        review_canvas->setMaximumHeight(240);
+        review_canvas->setSnapEnabled(false);
+        review_canvas->setOverviewMapEnabled(false);
+        review_canvas->setSelectionTransformEnabled(false, false);
+        review_canvas->setCanvasBackground(QColor("#ffffff"));
+        new BoundaryPreviewFit(review_canvas);
+        layout->addWidget(review_canvas);
+        auto* review_details = new QLabel(&dialog);
+        review_details->setObjectName(QStringLiteral("assistanceReviewDetails"));
+        review_details->setTextFormat(Qt::PlainText);
+        review_details->setWordWrap(true);
+        layout->addWidget(review_details);
         auto* status = new QLabel(&dialog);
         status->setWordWrap(true);
         status->setTextFormat(Qt::PlainText);
@@ -28473,6 +29010,7 @@ public:
 
         auto* buttons = new QHBoxLayout();
         auto* accept = new QPushButton(QStringLiteral("Accept selected"), &dialog);
+        accept->setObjectName(QStringLiteral("assistanceAccept"));
         auto* close = new QPushButton(QStringLiteral("Close"), &dialog);
         close->setDefault(true);
         buttons->addStretch(1);
@@ -28481,6 +29019,124 @@ public:
         layout->addLayout(buttons);
 
         std::vector<AssistanceProposal> proposals;
+        const auto show_proposal = [&] {
+            review_canvas->setReferences({}); review_canvas->setEntities({}); review_canvas->setLabels({});
+            review_details->clear(); accept->setEnabled(false);
+            const auto* row = list->currentItem();
+            if (!row) return;
+            const auto index = row->data(Qt::UserRole).toInt();
+            if (index < 0 || index >= static_cast<int>(proposals.size())) return;
+            const auto& proposal = proposals[static_cast<std::size_t>(index)];
+            accept->setEnabled(m_assistance_session.enabled());
+            accept->setText(proposal.kind == AssistanceKind::dimension_extraction
+                ? QStringLiteral("Add linked dimension") : QStringLiteral("Accept selected"));
+            try {
+                const auto preview_source = authoringSnapshot();
+                const auto& arguments = proposal.preview.arguments;
+                requireCurrentAssistanceSource(proposal, preview_source);
+                const bool uses_reference = proposal.kind == AssistanceKind::tracing ||
+                    proposal.kind == AssistanceKind::edge_tracing || proposal.kind == AssistanceKind::dimension_extraction;
+                if (uses_reference && !proposal.source.reference_id.empty()) {
+                    const auto raster = decodeAssistanceReference(id_from(proposal.source.reference_id));
+                    QImage source_image(static_cast<int>(raster.width), static_cast<int>(raster.height),
+                                        QImage::Format_Grayscale8);
+                    if (source_image.isNull()) throw std::invalid_argument("The reference preview is unavailable.");
+                    for (std::size_t y = 0; y < raster.height; ++y)
+                        std::copy_n(raster.luminance.data() + y * raster.width, raster.width,
+                                    source_image.scanLine(static_cast<int>(y)));
+                    CanvasReference image{QStringLiteral("assistance-source"), std::move(source_image)};
+                    image.metres_per_source_unit = 1.0;
+                    review_canvas->setReferences({image});
+                    const auto w = double(image.image.width()), h = double(image.image.height());
+                    const auto& rectangle = proposal.source;
+                    const AssistanceEngineOptions preview_options{1.0, {}, 0.0, 1.0, true};
+                    const auto a = assistance_source_point_to_model({rectangle.x * w, rectangle.y * h},
+                        raster.width, raster.height, preview_options);
+                    const auto b = assistance_source_point_to_model(
+                        {(rectangle.x + rectangle.width) * w, (rectangle.y + rectangle.height) * h},
+                        raster.width, raster.height, preview_options);
+                    CanvasEntity region{QStringLiteral("assistance-region"), QStringLiteral("boundary"),
+                        {{{a.x,a.y},{b.x,a.y},0},{{b.x,a.y},{b.x,b.y},0},
+                         {{b.x,b.y},{a.x,b.y},0},{{a.x,b.y},{a.x,a.y},0}}};
+                    region.stroke_color = QColor("#1671f5");
+                    region.filled = true; region.fill_color = QColor("#1671f5"); region.fill_opacity = 0.08;
+                    review_canvas->setEntities({region}); review_canvas->fitView();
+                }
+                if (proposal.kind == AssistanceKind::dimension_extraction) {
+                    const auto target = proposal.preview.arguments.at("target_boundary_id").get<std::string>();
+                    auto owner = preview_source.entities().at(target);
+                    if (owner.type != "measurement_linework" &&
+                        inspect_boundary_entity_version(owner).format == BoundaryEntityFormat::anonymous_legacy)
+                        owner = upgrade_legacy_boundary_entity(owner);
+                    const auto geometry = resolve_dimension_geometry_owner(owner);
+                    auto id = proposal.preview.arguments.value("target_segment_id", std::string{});
+                    if (id.empty()) id = geometry.segments.front().segment_id;
+                    const auto edge = std::find_if(geometry.segments.begin(), geometry.segments.end(),
+                        [&](const auto& item) { return item.segment_id == id; });
+                    if (edge == geometry.segments.end()) throw std::invalid_argument("The target edge is unavailable.");
+                    review_details->setText(QStringLiteral("Recognized: %1 (%2%)\nTarget: %3 · %4\n"
+                        "The linked dimension displays the drawing measurement. Recognized text is retained as its source note.")
+                        .arg(QString::fromStdString(proposal.source.original_text))
+                        .arg(proposal.source.confidence * 100.0, 0, 'f', 0)
+                        .arg(QString::fromStdString(owner.properties.value("name", owner.id)),
+                             format_length(segment_length(edge->segment), m_metric_units)));
+                } else if (proposal.preview.command_type == "add_label") {
+                    const auto position = read_point(arguments.at("position"));
+                    if (!position) throw std::invalid_argument("The proposed label position is invalid.");
+                    CanvasLabel label{id_from(proposal.id), *position,
+                        QString::fromStdString(arguments.at("content").get<std::string>())};
+                    label.color = QColor("#111111");
+                    label.paper_height_mm = 3.0;
+                    review_canvas->setLabels({label});
+                    QString context;
+                    if (arguments.contains("anchor_entity_id")) {
+                        const auto anchor_id = arguments.at("anchor_entity_id").get<std::string>();
+                        const auto& anchor = preview_source.entities().at(anchor_id);
+                        context = QStringLiteral("\nNamed object: %1").arg(
+                            QString::fromStdString(anchor.properties.value("name", anchor_id)));
+                        SnapshotPlanSceneOptions options;
+                        options.metric_units = m_metric_units;
+                        PlanSceneCaches caches;
+                        auto scene = projectSnapshotPlanScene(preview_source, options, caches);
+                        std::erase_if(scene.all_geometry, [&](const auto& geometry) {
+                            return geometry.id.toStdString() != anchor_id;
+                        });
+                        review_canvas->setEntities(std::move(scene.all_geometry));
+                    }
+                    review_canvas->fitView();
+                    review_details->setText(QStringLiteral("Add label: %1\nModel position: %2, %3%4\nSource: %5 (%6%)")
+                        .arg(label.text, format_length(position->x, m_metric_units),
+                             format_length(position->y, m_metric_units), context,
+                             QString::fromStdString(proposal.source.original_text))
+                        .arg(proposal.source.confidence * 100.0, 0, 'f', 0));
+                } else if (proposal.kind == AssistanceKind::natural_language &&
+                           proposal.preview.command_type == "add_boundary") {
+                    const auto boundary = assistanceBoundary(arguments.at("points"));
+                    CanvasEntity geometry{id_from(proposal.id), QStringLiteral("boundary"), boundary};
+                    geometry.stroke_color = QColor("#1671f5");
+                    review_canvas->setEntities({geometry}); review_canvas->fitView();
+                    review_details->setText(QStringLiteral("Draw rectangle: %1 × %2\nClassification: %3\nSource: %4 (%5%)")
+                        .arg(format_length(arguments.at("width_metres").get<double>(), m_metric_units),
+                             format_length(arguments.at("height_metres").get<double>(), m_metric_units),
+                             QString::fromStdString(arguments.at("classification").get<std::string>()),
+                             QString::fromStdString(proposal.source.original_text))
+                        .arg(proposal.source.confidence * 100.0, 0, 'f', 0));
+                } else if (proposal.preview.command_type == "set_workspace") {
+                    review_details->setText(QStringLiteral("Change workspace to %1.\nSource: %2 (%3%)")
+                        .arg(QString::fromStdString(arguments.at("workspace").get<std::string>()),
+                             QString::fromStdString(proposal.source.original_text))
+                        .arg(proposal.source.confidence * 100.0, 0, 'f', 0));
+                } else {
+                    review_details->setText(QStringLiteral("Source: %1 · confidence %2%").arg(
+                        QString::fromStdString(proposal.source.original_text.empty()
+                            ? proposal.source.reference_id : proposal.source.original_text))
+                        .arg(proposal.source.confidence * 100.0, 0, 'f', 0));
+                }
+            } catch (const std::exception& error) {
+                review_details->setText(QString::fromUtf8(error.what())); accept->setEnabled(false);
+            }
+        };
+        QObject::connect(list, &QListWidget::currentRowChanged, &dialog, [&](int) { show_proposal(); });
         const auto kind_name = [](AssistanceKind value) {
             switch (value) {
             case AssistanceKind::tracing: return QStringLiteral("tracing");
@@ -28496,8 +29152,9 @@ public:
             for (std::size_t index = 0; index < proposals.size(); ++index) {
                 const auto& item = proposals[index];
                 auto* row = new QListWidgetItem(
-                    QStringLiteral("Unverified • %1 • %2 • confidence %3%")
-                        .arg(kind_name(item.kind), QString::fromStdString(item.preview.command_type))
+                    QStringLiteral("Unverified · %1 · %2 · %3%")
+                        .arg(kind_name(item.kind), QString::fromStdString(item.source.original_text.empty()
+                            ? item.source.reference_id : item.source.original_text))
                         .arg(item.source.confidence * 100.0, 0, 'f', 0), list);
                 row->setData(Qt::UserRole, static_cast<int>(index));
                 row->setToolTip(QStringLiteral("Source: %1\nAffected: %2")
@@ -28508,39 +29165,59 @@ public:
                                                      ? std::string{} : item.preview.affected_entity_ids.front())));
             }
             if (list->count() > 0) list->setCurrentRow(0);
+            else show_proposal();
         };
-        const auto selected_reference = [&]() -> QString {
-            const auto snapshot = authoringSnapshot();
-            const auto selected = snapshot.entities().find(m_selected_id.toStdString());
-            if (selected != snapshot.entities().end() && selected->second.type == "reference_asset") {
-                return m_selected_id;
-            }
-            for (const auto& [id, entity] : snapshot.entities()) {
-                if (entity.type == "reference_asset") return id_from(id);
-            }
-            return {};
+        std::uint64_t suggestion_context_serial = 0;
+        const auto invalidate_suggestions = [&] {
+            ++suggestion_context_serial;
+            const bool had_suggestions = !proposals.empty();
+            proposals.clear();
+            repopulate();
+            if (had_suggestions) status->setText(QStringLiteral("Options changed. Generate suggestions again."));
         };
+        for (auto* choice : {kind, reference_choice, target_choice, segment_choice})
+            QObject::connect(choice, &QComboBox::currentIndexChanged, &dialog,
+                             [&](int) { invalidate_suggestions(); });
+        QObject::connect(image_text, &QCheckBox::toggled, &dialog,
+                         [&](bool) { invalidate_suggestions(); });
+        QObject::connect(command, &QLineEdit::textChanged, &dialog,
+                         [&](const QString&) { invalidate_suggestions(); });
         QObject::connect(enabled, &QCheckBox::toggled, &dialog,
-                         [this](bool checked) { setAssistanceEnabled(checked); });
+                         [&](bool checked) { setAssistanceEnabled(checked); show_proposal(); });
         QObject::connect(kind, &QComboBox::currentIndexChanged, &dialog, [kind, command](int index) {
             const auto value = static_cast<AssistanceKind>(kind->itemData(index).toInt());
             command->setVisible(value == AssistanceKind::natural_language);
         });
         QObject::connect(generate, &QPushButton::clicked, &dialog, [&] {
+            if (!generate->isEnabled()) return;
+            generate->setEnabled(false);
+            struct GenerateGuard { QPushButton* button; ~GenerateGuard() { button->setEnabled(true); } } guard{generate};
+            const auto generation_context_serial = suggestion_context_serial;
             proposals.clear();
+            repopulate();
             const auto value = static_cast<AssistanceKind>(kind->currentData().toInt());
             if (value == AssistanceKind::natural_language) {
                 proposals = parseAssistanceCommand(command->text());
             } else if (value == AssistanceKind::label_placement) {
                 proposals = suggestLabelAssistance();
             } else {
-                const auto reference = selected_reference();
+                const auto reference = reference_choice->currentData().toString();
                 if (reference.isEmpty()) {
                     status->setText(QStringLiteral("Select or import a reference image first."));
                     repopulate();
                     return;
                 }
-                proposals = suggestReferenceAssistance(reference, value);
+                if (value == AssistanceKind::dimension_extraction && target_choice->currentData().toString().isEmpty()) {
+                    status->setText(QStringLiteral("Choose the area or measured line and edge to associate with the recognized text."));
+                    repopulate(); return;
+                }
+                proposals = suggestReferenceAssistance(reference, value, target_choice->currentData().toString(),
+                    segment_choice->currentData().toString(), image_text->isChecked());
+            }
+            if (generation_context_serial != suggestion_context_serial) {
+                proposals.clear(); repopulate();
+                status->setText(QStringLiteral("Options changed while suggestions were generated. Generate them again."));
+                return;
             }
             repopulate();
             if (proposals.empty()) {
@@ -28562,10 +29239,21 @@ public:
                 status->setText(QStringLiteral("The suggestion list is stale. Generate it again."));
                 return;
             }
+            const auto before = authoringSnapshot();
+            const auto workspace = m_workspace;
             if (acceptAssistanceProposal(proposals[static_cast<std::size_t>(index)])) {
                 proposals.erase(proposals.begin() + index);
+                const auto after = authoringSnapshot();
+                if (m_workspace == workspace && after.document_id() == before.document_id() &&
+                    after.revision() == before.revision() + 1) {
+                    const auto digest = document_snapshot_digest(after);
+                    for (auto& proposal : proposals) {
+                        proposal.preview.arguments["source_document_digest"] = digest;
+                        proposal.preview.arguments["source_workspace"] = static_cast<int>(m_workspace);
+                    }
+                } else proposals.clear();
                 repopulate();
-                status->setText(QStringLiteral("Accepted through the normal command history."));
+                status->setText(QStringLiteral("Suggestion applied."));
             } else {
                 status->setText(lastError());
             }
@@ -28624,7 +29312,7 @@ public:
             {QStringLiteral("Complete bay-window return (B)"), [this] { (void)completeBayWindowReturn(); }},
             {QStringLiteral("Redefine boundary"), [this] { showBoundaryRedefinition(); }},
             {QStringLiteral("Review measured area sources"), [this] { showMeasuredAreaSourceReview(); }},
-            {QStringLiteral("Repair room from walls"), [this] { showPhysicalRoomRepair(); }},
+            {QStringLiteral("Review rooms from walls"), [this] { showPhysicalRoomRepair(); }},
             {QStringLiteral("Detect closed areas from walls or measured lines"), [this] { showAutomaticAreaDetection(); }},
             {QStringLiteral("Measure exterior from walls"), [this] { showWallMeasurementReview(); }},
             {QStringLiteral("Refresh exterior measurement"), [this] { showWallMeasurementReview(true); }},
@@ -28660,7 +29348,7 @@ public:
             {QStringLiteral("Architectural workspace"), [this] { setWorkspace(Workspace::architectural); }},
             {QStringLiteral("Add labels and symbols"), [this] { showAnnotationEditor(); }},
             {QStringLiteral("Text library"), [this] { showTextLibrary(); }},
-            {QStringLiteral("Add length, angle or area dimension"), [this] { showDimensionCreator(); }},
+            {QStringLiteral("Add length, chain, angle or area dimension"), [this] { showDimensionCreator(); }},
             {QStringLiteral("Import reference image"), [this] { showReferenceImport(); }},
             {QStringLiteral("Open project resources"), [this] { showProjectResources(); }},
             {QStringLiteral("Calibrate selected reference image"),
@@ -29418,6 +30106,7 @@ private:
                     if (change.kind != EntityChangeKind::upsert ||
                         source.entities().contains(change.entity.id) ||
                         !is_phase_model_entity(change.entity.type) ||
+                        hosted_stair_railing(change.entity) ||
                         change.entity.type == "building" || change.entity.type == "floor" ||
                         std::find(ids.begin(), ids.end(), change.entity.id) != ids.end()) continue;
                     ids.push_back(change.entity.id);
@@ -29431,10 +30120,35 @@ private:
                     }
                     changed = true;
                 }
+                // A newly hosted rail follows its stair in every alternative.
+                // Admission must not leave an existing rail surviving a
+                // demolished host, including alternatives that are inactive.
+                for (const auto& change : changes->entity_changes) {
+                    if (change.kind != EntityChangeKind::upsert ||
+                        source.entities().contains(change.entity.id) || !hosted_stair_railing(change.entity) ||
+                        std::find(ids.begin(), ids.end(), change.entity.id) != ids.end()) continue;
+                    const auto rail = decode_railing_properties(change.entity.id, change.entity.properties);
+                    if (std::find(ids.begin(), ids.end(), rail.host->stair_id) == ids.end())
+                        throw std::invalid_argument("A new stair railing needs a host in the phase registry.");
+                    ids.push_back(change.entity.id);
+                    if (std::find(baseline.begin(), baseline.end(), rail.host->stair_id) != baseline.end())
+                        baseline.push_back(change.entity.id);
+                    for (auto& alternative : alternatives) {
+                        if (std::find(alternative.demolished_ids.begin(), alternative.demolished_ids.end(),
+                                rail.host->stair_id) != alternative.demolished_ids.end())
+                            alternative.demolished_ids.push_back(change.entity.id);
+                        if (std::find(alternative.proposed_ids.begin(), alternative.proposed_ids.end(),
+                                rail.host->stair_id) != alternative.proposed_ids.end())
+                            alternative.proposed_ids.push_back(change.entity.id);
+                    }
+                    changed = true;
+                }
                 if (changed) {
-                    registry.properties["model"] = ModelPhases::create(
+                    const auto phase_model = ModelPhases::create(
                         std::move(ids), std::move(baseline), std::move(alternatives),
                         model.active_alternative()).to_json();
+                    registry.properties["model"] = merge_canonical_metadata(registry.properties.at("model"),
+                        registry.properties.at("model"), phase_model);
                     std::erase_if(changes->entity_changes, [&](const auto& change) {
                         return change.entity.id == record->entity_id;
                     });
@@ -30061,10 +30775,10 @@ private:
                          [this] { (void)unjoinSelected(ArchitecturalJoinKind::roof); });
         authoring_action("manageNamedViews", QStringLiteral("Named elevations and sections…"),
                          [this] { showNamedViews(); });
-        auto* dimension_action = more_menu->addAction(QStringLiteral("Add length, angle or area dimension…"));
+        auto* dimension_action = more_menu->addAction(QStringLiteral("Add length, chain, angle or area dimension…"));
         dimension_action->setObjectName(QStringLiteral("dimensionCreator"));
         dimension_action->setToolTip(QStringLiteral(
-            "Create an associated length, angle or area dimension from boundary geometry"));
+            "Create an associated length, connected chain, angle or area dimension from boundary geometry"));
         QObject::connect(dimension_action, &QAction::triggered, owner,
                          [this] { showDimensionCreator(); });
         auto* survey_action = more_menu->addAction(QStringLiteral("Survey traverse…"));
@@ -30256,7 +30970,7 @@ private:
         review_measured->setObjectName(QStringLiteral("reviewMeasuredAreaSources"));
         owner->addAction(review_measured);more_menu->addAction(review_measured);
         QObject::connect(review_measured,&QAction::triggered,owner,[this]{showMeasuredAreaSourceReview();});
-        auto* repair_room = new QAction(QStringLiteral("Repair room from walls…"),owner);
+        auto* repair_room = new QAction(QStringLiteral("Review rooms from walls…"),owner);
         repair_room->setObjectName(QStringLiteral("repairPhysicalWallRoom"));
         owner->addAction(repair_room); more_menu->addAction(repair_room);
         QObject::connect(repair_room,&QAction::triggered,owner,[this] { showPhysicalRoomRepair(); });
@@ -32461,7 +33175,7 @@ private:
                 if (!only_walls) {
                     auto parts=prepareSelectionTranslation(*m_wall_move_source,ids,canvas_delta,canvas);
                     (void)makeSelectionGeometryTranslationCommand(*m_wall_move_source,
-                        std::move(parts.model_ids),parts.model_delta,std::move(parts.presentation_changes));
+                        std::move(parts.model_ids),parts.model_delta,std::move(parts.presentation_changes),canvas_delta);
                     throw std::invalid_argument("The selected objects could not be previewed. The project was not changed.");
                 }
                 ConstraintAuthoringIntent intent;
@@ -33250,7 +33964,7 @@ private:
                     const auto source = snapshot.entities().find(dimension.boundary_id);
                     if (source == snapshot.entities().end())
                         throw std::invalid_argument("source boundary is missing");
-                    auto projection=project_boundary_dimension(dimension,source->second,
+                    auto projection=project_boundary_dimension(dimension,source->second,snapshot.entities(),
                         options.metric_units,id_from(id)==options.selected_id, ansi_boundary_dimensions(snapshot, source->second));
                     if (dimension.presentation && !dimension.presentation->visible) continue;
                     if (projection.line) all_geometry.push_back(std::move(*projection.line));
@@ -33263,11 +33977,11 @@ private:
             }
             if (can_recognize_building_entity_type(entity.type)) {
                 try {
-                    const auto resolved = resolve_vertical_placement(snapshot, entity);
-                    const auto key = resolved.type + '\n' + resolved.properties.dump();
+                    const auto resolved = effective_building_geometry_entity(snapshot, entity);
+                    const auto key = building_plan_source_key(snapshot, resolved);
                     auto cached = caches.projections.find(id);
                     if (cached == caches.projections.end() || cached->second.first != key) {
-                        auto projection = project_building_plan(decode_building_entity(resolved));
+                        auto projection = project_building_plan(decode_building_entity(resolved), snapshot.entities());
                         cached = caches.projections.insert_or_assign(
                             id, std::make_pair(key, std::move(projection))).first;
                     }
@@ -34251,11 +34965,11 @@ private:
             const bool resolves_levels = source.type == "wall" || source.type == "slab" ||
                 source.type == "room" || can_recognize_building_entity_type(source.type);
             const auto resolved = resolves_levels
-                ? std::optional<Entity>{resolve_vertical_placement(snapshot, source)}
+                ? std::optional<Entity>{effective_building_geometry_entity(snapshot, source)}
                 : std::nullopt;
             const auto& entity = resolved ? *resolved : source;
             if (can_recognize_building_entity_type(entity.type)) {
-                return make_building_shape(decode_building_entity(entity));
+                return make_building_shape(decode_building_entity(entity), snapshot.entities());
             }
             if (entity.type == "wall") {
                 std::vector<const Entity*> openings;
@@ -34516,9 +35230,9 @@ private:
                         continue;
                     }
                     if (can_recognize_building_entity_type(entity.type)) {
-                        const auto resolved = resolve_vertical_placement(snapshot, entity);
+                        const auto resolved = effective_building_geometry_entity(snapshot, entity);
                         const auto decoded = decode_building_entity(resolved);
-                        const auto projection = cached_projection(id, [&] { return make_building_shape(decoded); });
+                        const auto projection = cached_projection(id, [&] { return make_building_shape(decoded, snapshot.entities()); });
                         if (!projection) continue;
                         result.push_back(decorate_projection(CanvasEntity{
                             id_from(id), QString::fromStdString(entity.type),
@@ -35105,13 +35819,22 @@ private:
         }
     }
 
-    void showOrganizationDialog(const std::string& type) {
+    void showOrganizationDialog(const std::string& type, const QString& clicked_property = {}) {
         const auto modal_context = captureModalContext();
         if (!m_document->is_editable()) {
             setError(QStringLiteral("This document is read-only."));
             return;
         }
         const auto snapshot = m_document->snapshot();
+        const auto source_digest = document_snapshot_digest(snapshot);
+        const auto unchanged = [&] {
+            if (!modalContextUnchanged(modal_context)) return false;
+            if (!m_document->is_editable() || document_snapshot_digest(m_document->snapshot()) != source_digest) {
+                setError(QStringLiteral("The project changed while adding to the hierarchy. Reopen Add to use the current property."));
+                return false;
+            }
+            return true;
+        };
         const auto selected = selectedEntity();
         QString parent_id;
         QString initial_name;
@@ -35125,8 +35848,51 @@ private:
             initial_name = QString::fromStdString(read_string(selected->properties, "name").value_or(""));
         } else {
             const auto expected = type == "building" ? "property" : type == "floor" ? "building" : "floor";
-            if (selected && selected->type == expected) parent_id = id_from(selected->id);
-            else if (const auto context = organize_project(snapshot).drawing_context(m_active_layer_id.toStdString()))
+            const auto organization = organize_project(snapshot);
+            if (!clicked_property.isEmpty()) {
+                const auto property = snapshot.entities().find(clicked_property.toStdString());
+                if (property == snapshot.entities().end() || property->second.type != "property") {
+                    setError(QStringLiteral("The clicked property is no longer available."));
+                    return;
+                }
+                if (type == "building") parent_id = clicked_property;
+                else {
+                    std::vector<std::pair<QString, QString>> parents;
+                    for (const auto& [id, node] : organization.nodes) {
+                        if (node.type != expected || !node.issues.empty() ||
+                            node.context.property_id != clicked_property.toStdString()) continue;
+                        const auto name = read_string(snapshot.entities().at(id).properties, "name").value_or(id);
+                        parents.emplace_back(QStringLiteral("%1 [%2]").arg(QString::fromStdString(name), id_from(id)), id_from(id));
+                    }
+                    std::sort(parents.begin(), parents.end());
+                    if (parents.empty()) {
+                        setError(QStringLiteral("Add a %1 to this property before adding a %2.")
+                            .arg(QString::fromUtf8(expected), QString::fromStdString(type)));
+                        return;
+                    }
+                    if (parents.size() == 1) parent_id = parents.front().second;
+                    else {
+                        QInputDialog chooser(owner);
+                        styleDialog(chooser);
+                        chooser.setObjectName(QStringLiteral("navigatorParentChooser"));
+                        chooser.setWindowTitle(QStringLiteral("Add %1").arg(QString::fromStdString(type)));
+                        chooser.setLabelText(QStringLiteral("Choose the parent %1 in this property").arg(QString::fromUtf8(expected)));
+                        chooser.setInputMode(QInputDialog::TextInput);
+                        chooser.setComboBoxEditable(false);
+                        QStringList labels;
+                        for (const auto& [label, id] : parents) { (void)id; labels.append(label); }
+                        chooser.setComboBoxItems(labels);
+                        if (chooser.exec() != QDialog::Accepted || !unchanged()) return;
+                        const auto chosen = labels.indexOf(chooser.textValue());
+                        if (chosen < 0) {
+                            setError(QStringLiteral("Choose an available parent in this property."));
+                            return;
+                        }
+                        parent_id = parents.at(static_cast<std::size_t>(chosen)).second;
+                    }
+                }
+            } else if (selected && selected->type == expected) parent_id = id_from(selected->id);
+            else if (const auto context = organization.drawing_context(m_active_layer_id.toStdString()))
                 parent_id = id_from(type == "building" ? context->property_id :
                                     type == "floor" ? context->building_id : context->floor_id);
             if (parent_id.isEmpty()) {
@@ -35140,7 +35906,7 @@ private:
             type == "rename" ? QStringLiteral("Rename") : QStringLiteral("Add %1").arg(QString::fromStdString(type)),
             QStringLiteral("Name"), QLineEdit::Normal, initial_name, &accepted);
         if (!accepted) return;
-        if (!modalContextUnchanged(modal_context)) return;
+        if (!unchanged()) return;
         if (type == "rename") renameOrganizationEntity(parent_id, name, modal_context.revision);
         else createOrganization(parent_id, name, type, modal_context.revision);
     }
@@ -35448,12 +36214,12 @@ private:
             auto* rename = menu->addAction(QStringLiteral("Rename property…"));
             const auto property_id = id_from(id);
             QObject::connect(add_building, &QAction::triggered, owner, [this, property_id] {
-                if (selectEntity(property_id)) showOrganizationDialog("building");
+                showOrganizationDialog("building", property_id);
             });
             QObject::connect(add_floor, &QAction::triggered, owner,
-                             [this] { showOrganizationDialog("floor"); });
+                             [this, property_id] { showOrganizationDialog("floor", property_id); });
             QObject::connect(add_layer, &QAction::triggered, owner,
-                             [this] { showOrganizationDialog("layer"); });
+                             [this, property_id] { showOrganizationDialog("layer", property_id); });
             QObject::connect(rename, &QAction::triggered, owner, [this, property_id] {
                 if (selectEntity(property_id)) showOrganizationDialog("rename");
             });
@@ -36552,6 +37318,9 @@ private:
         m_roof_properties_group->setEnabled(false);
         m_roof_edit_context.reset();
         m_building_edit_context.reset();
+        m_building_edit_source.reset();
+        m_building_edit_workspace.reset();
+        m_building_edit_selection.clear();
         const bool dimension_object = building_object &&
             (entity->type == "column" || entity->type == "beam" ||
              entity->type == "stair" || entity->type == "railing");
@@ -36560,6 +37329,9 @@ private:
         m_building_dimensions_error->hide();
         if (dimension_object) {
             m_building_edit_context = captureModalContext();
+            m_building_edit_source = inspector_snapshot;
+            m_building_edit_workspace = m_workspace;
+            m_building_edit_selection = m_selected_ids;
             m_building_properties_group->setTitle(QStringLiteral("%1")
                 .arg(entity->type == "column" ? QStringLiteral("Column") :
                      entity->type == "beam" ? QStringLiteral("Beam") :
@@ -36572,7 +37344,7 @@ private:
                     ? (dimension.suffix == "Width" || dimension.suffix == "TotalRise" ||
                        dimension.suffix == "Going" || dimension.suffix == "RiserCount")
                     : entity->type == "railing"
-                    ? (dimension.suffix == "Length" || dimension.suffix == "Height" ||
+                    ? ((!hosted_stair_railing(*entity) && dimension.suffix == "Length") || dimension.suffix == "Height" ||
                        dimension.suffix == "Thickness" || dimension.suffix == "PostSpacing")
                     : building_form == std::optional<std::string>("circular_column")
                     ? (dimension.suffix == "Radius" || dimension.suffix == "Height")
@@ -36588,12 +37360,13 @@ private:
             }
             // Use the canonical dialog's formatting and field availability. Unchanged
             // inspector text never replaces its decoded values or quantity receipts.
-            BuildingObjectDialog placement_dialog(*entity, m_metric_units, owner);
+            BuildingObjectDialog placement_dialog(inspector_snapshot, *entity, m_metric_units, owner);
             for (auto& placement : m_building_placement) {
                 auto* field = placement_dialog.findChild<QLineEdit*>(QStringLiteral("buildingObject") + placement.suffix);
-                placement.label->setVisible(field != nullptr);
-                placement.edit->setVisible(field != nullptr);
-                if (!field) continue;
+                const bool available = field && !field->isHidden();
+                placement.label->setVisible(available);
+                placement.edit->setVisible(available);
+                if (!available) continue;
                 if (placement.suffix == "OrientationDegrees") {
                     const auto label = entity->type == "column" ? QStringLiteral("Rotation (degrees)")
                                                                : QStringLiteral("Orientation (degrees)");
@@ -37592,7 +38365,7 @@ private:
                     const auto found = physical_rooms.find(id);
                     class_label = found != physical_rooms.end() && found->second.current
                         ? QStringLiteral("Clear room · %1").arg(format_dimension_area(found->second.area_square_metres, m_metric_units))
-                        : QStringLiteral("Stale room · Tools > Repair room from walls");
+                        : QStringLiteral("Stale room · Tools > Review rooms from walls");
                 }
                 if (appraisal && entity.extensions.contains("area_type") && entity.extensions.at("area_type").is_object()) {
                     const auto code = read_string(entity.extensions.at("area_type"), "code");
@@ -40265,8 +41038,8 @@ public:
                         const auto decoded_after = decode_boundary_dimension_entity(proposed.entities().at(id));
                         if (!decoded_after.supported()) throw std::invalid_argument("Dependent dimension cannot be previewed.");
                         const auto& dimension = *decoded_after.dimension;
-                        const auto before_text = dimension_text(before.resolve(*selected));
-                        const auto after_text = dimension_text(dimension.resolve(proposed_entity));
+                        const auto before_text = dimension_text(before.resolve(source));
+                        const auto after_text = dimension_text(dimension.resolve(proposed));
                         const auto target_edge = std::find_if(boundary.segments.begin(), boundary.segments.end(),
                             [&](const auto& item) { return item.segment_id == dimension.segment_id; });
                         const auto dimension_name = dimension.kind == BoundaryDimensionKind::area ? QStringLiteral("Area measurement") :
@@ -40812,16 +41585,20 @@ private:
 
     void showBuildingObjectDialog(bool editing, const QString& requested_type = {}) {
         const auto context = captureModalContext();
+        const auto source = m_document->snapshot();
+        const auto source_digest = document_snapshot_digest(source);
+        const auto selection = m_selected_ids;
+        const auto workspace = m_workspace;
         const auto original = editing ? selectedEntity() : std::optional<Entity>{};
         if (editing && (!original || !can_recognize_building_entity_type(original->type))) {
-            setError(QStringLiteral("Select a column, beam, stair or roof to edit."));
+            setError(QStringLiteral("Select a column, beam, stair, railing or roof to edit."));
             return;
         }
         if (!m_document->is_editable()) {
             setError(QStringLiteral("This document is read-only."));
             return;
         }
-        BuildingObjectDialog dialog(original, m_metric_units, owner);
+        BuildingObjectDialog dialog(source, original, m_metric_units, owner);
         if (!editing && !requested_type.isEmpty()) {
             auto* selector = dialog.findChild<QComboBox*>(QStringLiteral("buildingObjectType"));
             if (selector) selector->setCurrentIndex(selector->findData(requested_type));
@@ -40829,8 +41606,14 @@ private:
         if (dialog.exec() != QDialog::Accepted)
             return;
         if (!modalContextUnchanged(context)) return;
+        if (selection != m_selected_ids || workspace != m_workspace ||
+            source_digest != document_snapshot_digest(m_document->snapshot())) {
+            setError(QStringLiteral("The object source or workspace changed. Reopen the editor."));
+            return;
+        }
         if (const auto candidate = dialog.candidate()) {
-            if (!commitBuildingObject(*candidate, context.revision, editing).isEmpty())
+            if (!commitBuildingObject(*candidate, context.revision, editing,
+                    dialog.relatedCandidates()).isEmpty())
                 setWorkspace(Workspace::architectural);
         }
     }
@@ -41553,6 +42336,9 @@ private:
     std::vector<BuildingDimensionField> m_building_dimensions;
     std::vector<BuildingDimensionField> m_building_placement;
     std::optional<ModalContext> m_building_edit_context;
+    std::optional<DocumentSnapshot> m_building_edit_source;
+    std::optional<Workspace> m_building_edit_workspace;
+    QStringList m_building_edit_selection;
     QWidget* m_material_group{};
     QPushButton* m_door_swing_button{};
     QPushButton* m_opening_assembly_button{};
@@ -42074,8 +42860,9 @@ bool MainWindow::editSelectedWallSlope(QString rise,
 }
 
 QString MainWindow::commitBuildingObject(Entity candidate, std::uint64_t expected_revision,
-                                         bool replace_selected) {
-    return m_impl->commitBuildingObject(std::move(candidate), expected_revision, replace_selected);
+                                          bool replace_selected, std::vector<Entity> related_candidates) {
+    return m_impl->commitBuildingObject(std::move(candidate), expected_revision, replace_selected,
+        std::move(related_candidates));
 }
 
 QString MainWindow::createHostedOpening(QString kind,
@@ -42290,6 +43077,12 @@ QString MainWindow::createLengthDimension(const QString& boundary_id,
                                          expected_revision);
 }
 
+QString MainWindow::createChainDimension(const QString& boundary_id,
+    const QStringList& segment_ids, Vec2 text_position,
+    std::optional<Revision> expected_revision) {
+    return m_impl->createChainDimension(boundary_id, segment_ids, text_position, expected_revision);
+}
+
 QString MainWindow::createAngleDimension(const QString& boundary_id,
     const QString& first_segment_id, const QString& second_segment_id,
     const QString& vertex_id, Vec2 text_position,
@@ -42391,8 +43184,10 @@ void MainWindow::setAssistanceEnabled(bool enabled) {
 }
 
 std::vector<AssistanceProposal> MainWindow::suggestReferenceAssistance(
-    const QString& reference_id, AssistanceKind kind) {
-    return m_impl->suggestReferenceAssistance(reference_id, kind);
+    const QString& reference_id, AssistanceKind kind, const QString& target_boundary_id,
+    const QString& target_segment_id, bool recognize_image_text) {
+    return m_impl->suggestReferenceAssistance(reference_id, kind, target_boundary_id,
+        target_segment_id, recognize_image_text);
 }
 
 std::vector<AssistanceProposal> MainWindow::suggestLabelAssistance() {

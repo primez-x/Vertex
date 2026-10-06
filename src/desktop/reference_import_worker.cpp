@@ -1,4 +1,6 @@
 #include "reference_import.hpp"
+#include "assistance_ocr.hpp"
+#include "assistance_ocr_recognizer.hpp"
 #include "pinc_import_worker.hpp"
 #include "cad_library_bridge.hpp"
 #include "sketch/project_import_worker.hpp"
@@ -231,6 +233,16 @@ int main(int argc, char** argv) {
         }
     }
     if (input.isEmpty()) return 3;
+    if (args[1] == "ocr") {
+        if (page != 0) return 2;
+        try {
+            const auto output = sketch::desktop::recognizeAssistanceOcrFrame(std::span(
+                reinterpret_cast<const std::byte*>(input.constData()), static_cast<std::size_t>(input.size())),
+                sketch::desktop::assistanceOcrApplicationRoot());
+            if (std::fwrite(output.data(), 1, output.size(), stdout) != output.size()) return 5;
+            return std::fflush(stdout) == 0 ? 0 : 5;
+        } catch (...) { return 4; }
+    }
     if (args[1] == "pinc") {
         if (page != 0) return 2;
         try {

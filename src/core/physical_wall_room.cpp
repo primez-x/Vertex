@@ -586,6 +586,21 @@ void classify_correspondence(PhysicalWallRoomCorrespondenceReport& report) {
 }
 } // namespace
 
+PhysicalWallRoomLineageCheck validate_retained_physical_wall_room_lineage(
+    const Entity& room,const DrawingContext& context) {
+    try {
+        const auto descriptor=decode_physical_wall_room_descriptor(room);
+        CorrespondenceBudget budget;
+        const auto lineage=correspondence_lineage(descriptor.source_lineage,descriptor.selected_wall_id,context,budget);
+        const auto boundary=boundary_geometry(decode_identified_boundary_entity(room));
+        budget.geometry(boundary,descriptor.holes);
+        if (boundary.empty()) invalid("retained room outline is empty");
+        (void)correspondence_region(boundary,descriptor.holes,boundary.front().start);
+        return {lineage.elevation,{lineage.owners.begin(),lineage.owners.end()}};
+    } catch (const Json::exception&) { invalid("retained source evidence contains malformed value types"); }
+    catch (const Standard_Failure& e) { invalid(std::string("retained room planar validation failed: ")+e.what()); }
+}
+
 PhysicalWallRoomCorrespondenceReport physical_wall_room_correspondence(const DocumentSnapshot& source,
     std::string_view selected_wall_id) {
     auto detection=detect_physical_wall_spaces(source,selected_wall_id);

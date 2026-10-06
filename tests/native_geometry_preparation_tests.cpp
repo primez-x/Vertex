@@ -6,6 +6,9 @@
 #include "sketch/terrain_surface.hpp"
 #include "sketch/opening_assembly.hpp"
 #include "sketch/project_visibility.hpp"
+#include "sketch/building_entity.hpp"
+#include <BRepBndLib.hxx>
+#include <Bnd_Box.hxx>
 #include "support/noninteractive_errors.hpp"
 #include <BRep_Tool.hxx>
 #include <TopExp_Explorer.hxx>
@@ -93,6 +96,11 @@ PreparedNativeGeometry prepare(const Document& document) {
     auto result = prepare_native_geometry(document.snapshot(), std::nullopt);
     check(result && result->errors.empty(), "dependency fixture must produce valid geometry");
     return std::move(*result);
+}
+
+void architectural_context(Entity& entity) {
+    entity.properties.update({{"property_id", "site"}, {"building_id", "building"},
+        {"floor_id", "floor"}, {"layer_id", "layer"}});
 }
 
 void update(Document& document, Entity entity) {
@@ -193,6 +201,75 @@ void test_terrain_identity() {
           "terrain point elevation must invalidate prepared geometry identity");
 }
 
+void test_hosted_stair_dependencies() {
+    StairFlight stair{"stair", {0, 0, 0}, 0, 8, 2.0, 0.25, 1.0};
+    stair.flights = {{"lower", 4}, {"upper", 4}};
+    stair.landings = {{"turn", 1.0, 0.15, StairTurn::left_quarter, 0.0}};
+    auto source = encode_building_entity(stair);
+    architectural_context(source);
+    source.properties["vertical_placement"] = {{"version", 1}, {"mode", "level"}, {"offset_m", 0.25}};
+    Railing railing{"rail", {}, 0, 0, 0.9, 0.05, 0.5};
+    railing.host = StairRailingHost{"stair", "upper", StairRailingSide::left, 0, 1};
+    auto rail = encode_building_entity(railing);
+    architectural_context(rail);
+    Entity levels{"levels", "vertical_levels", {{"model", nlohmann::json::parse(
+        VerticalLevelGraph({{"ground", 3.0}}).serialize())}}};
+    AssemblyInstance instance{"copy", "type", {}, {}, {}, AssemblyPlacement{"rail"}};
+    const auto catalog = Entity::create("assembly_model", {{"model", AssemblyModel::create(
+        {}, {{"type", "Rail copy", {}, {}, {}}}, {instance}).to_json()}});
+    auto document = Document::create({
+        {"site", "property", nlohmann::json::object()},
+        {"building", "building", {{"property_id", "site"}}},
+        {"floor", "floor", {{"building_id", "building"}, {"vertical_level_binding",
+            {{"version", 1}, {"graph_id", "levels"}, {"level_id", "ground"}}}}},
+        {"layer", "layer", {{"floor_id", "floor"}}}, levels, source, rail, catalog});
+    const auto before = document.snapshot();
+    const auto initial = prepare(document);
+    check_meshed(initial.solids.at("rail").shape);
+    check(document.snapshot().entities() == before.entities() &&
+          document.revision() == before.revision() &&
+          document.snapshot().history().size() == before.history().size() &&
+          document.snapshot().history().front().entities == before.history().front().entities,
+          "host derivation must preserve exact authored entities and history");
+    Bnd_Box box;
+    BRepBndLib::Add(initial.solids.at("rail").shape, box);
+    double x0, y0, z0, x1, y1, z1;
+    box.Get(x0, y0, z0, x1, y1, z1);
+    check(z0 > 4.2 && z0 < 4.6, "hosted rail must use its raised upper flight, exactly once");
+    levels.properties["model"] = nlohmann::json::parse(
+        VerticalLevelGraph({{"ground", 5.0}}).serialize());
+    update(document, levels);
+    const auto raised = prepare(document);
+    const auto child = catalog.id + ":instance:copy";
+    check(initial.solids.at("rail").content != raised.solids.at("rail").content &&
+          initial.solids.at(child).content != raised.solids.at(child).content,
+          "level changes invalidate unchanged rail and assembly-host identities");
+    stair.going = 0.35;
+    auto changed = encode_building_entity(stair);
+    architectural_context(changed);
+    changed.properties["vertical_placement"] = source.properties["vertical_placement"];
+    update(document, changed);
+    const auto extended = prepare(document);
+    check(raised.solids.at("rail").content != extended.solids.at("rail").content &&
+          raised.solids.at(child).content != extended.solids.at(child).content,
+          "flight geometry changes invalidate hosted rails and their assembly copies");
+    const auto before_retirement = document.snapshot();
+    bool host_retirement_refused = false;
+    try {
+        document.apply(ApplyEntityChanges{document.revision(), {EntityChange::erase("stair")}, {},
+            "remove hosted stair"});
+    } catch (const std::exception&) {
+        host_retirement_refused = true;
+    }
+    const auto after_retirement = document.snapshot();
+    check(host_retirement_refused && after_retirement.entities() == before_retirement.entities() &&
+          after_retirement.revision() == before_retirement.revision() &&
+          after_retirement.history().size() == before_retirement.history().size(),
+          "document admission must refuse host retirement before producing a missing-host projection");
+    check(before.entities().at("rail") == rail && before.entities().at("stair") == source,
+          "derived preparation preserves captured authored sources");
+}
+
 void test_opening_assembly_obeys_its_drawing_layer_and_floor() {
     auto wall = walls(1).snapshot().entities().begin()->second;
     wall.id = "wall";
@@ -260,6 +337,7 @@ int main() {
         test_resolved_join_and_opening_identity();
         test_opening_assembly_obeys_its_drawing_layer_and_floor();
         test_terrain_identity();
+        test_hosted_stair_dependencies();
         test_worker_failure_recovery();
         auto document = walls(12);
         const auto before = document.snapshot();

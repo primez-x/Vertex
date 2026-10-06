@@ -59,14 +59,22 @@ inline void reject() { throw std::invalid_argument("Invalid isolated project imp
 struct GeometryBudget {
     std::size_t segments{};
     std::uint64_t pairs{};
+    // Internal callers may identify their construction ledger exhaustion;
+    // isolated protocol validation retains its canonical rejection message.
+    const char* limit_error{};
+
+    [[noreturn]] void reject_limit() const {
+        if (limit_error) throw std::invalid_argument(limit_error);
+        reject();
+    }
 
     void charge(std::size_t count) {
         if (count == 0 || count > project_import_boundary_segment_limit ||
             segments > project_import_geometry_segment_limit ||
-            count > project_import_geometry_segment_limit - segments) reject();
+            count > project_import_geometry_segment_limit - segments) reject_limit();
         const auto pair_count = static_cast<std::uint64_t>(count) * (count - 1) / 2;
         if (pairs > project_import_geometry_pair_limit ||
-            pair_count > project_import_geometry_pair_limit - pairs) reject();
+            pair_count > project_import_geometry_pair_limit - pairs) reject_limit();
         segments += count;
         pairs += pair_count;
     }
@@ -74,7 +82,7 @@ struct GeometryBudget {
         const auto pair_count = static_cast<std::uint64_t>(count) * (count - 1) / 2;
         if (count > project_import_geometry_segment_limit ||
             pairs > project_import_geometry_pair_limit ||
-            pair_count > project_import_geometry_pair_limit - pairs) reject();
+            pair_count > project_import_geometry_pair_limit - pairs) reject_limit();
         pairs += pair_count;
     }
 };
@@ -102,8 +110,10 @@ inline Vec2 point(const nlohmann::json& value) {
     if (!std::isfinite(result.x) || !std::isfinite(result.y)) reject();
     return result;
 }
-inline Segment segment(const nlohmann::json& value) {
-    fields(value, {"start", "end", "sweep_radians"});
+inline Segment segment(const nlohmann::json& value, bool exact_fields = true) {
+    if (exact_fields) fields(value, {"start", "end", "sweep_radians"});
+    else if (!value.is_object() || !value.contains("start") || !value.contains("end") ||
+        !value.contains("sweep_radians")) reject();
     Segment result{point(value.at("start")), point(value.at("end")),
                    number(value, "sweep_radians")};
     try {
@@ -111,12 +121,13 @@ inline Segment segment(const nlohmann::json& value) {
     } catch (...) { reject(); }
     return result;
 }
-inline Boundary boundary(const nlohmann::json& value, bool must_close, GeometryBudget& budget) {
+inline Boundary boundary(const nlohmann::json& value, bool must_close, GeometryBudget& budget,
+                         bool exact_fields = true) {
     if (!value.is_array() || value.empty()) reject();
     budget.charge(value.size());
     Boundary result;
     result.reserve(value.size());
-    for (const auto& item : value) result.push_back(segment(item));
+    for (const auto& item : value) result.push_back(segment(item, exact_fields));
     const auto diagnostics = validate_boundary(result);
     for (const auto& diagnostic : diagnostics) {
         if (!must_close && diagnostic.issue == BoundaryIssue::open_boundary) continue;
@@ -165,6 +176,120 @@ inline void validate_slab(const Entity& entity, GeometryBudget& budget) {
     budget.charge_cross(topology_segments);
     if (validate_boundary_holes(outer, holes).has_value()) reject();
 }
+// These checks deliberately use only the core protocol/analytical geometry.
+// A broker must bound authored parameters before any native solid construction.
+inline void validate_native_context(const Entity& entity) {
+    for (const auto* key : {"property_id", "building_id", "floor_id", "layer_id", "parent_id",
+        "property_ids", "building_ids", "floor_ids", "layer_ids", "parent_ids",
+        "vertical_level_binding", "level_connection"})
+        if (entity.properties.contains(key)) reject();
+    const auto placement = entity.properties.find("vertical_placement");
+    if (placement != entity.properties.end()) {
+        fields(*placement, {"version", "mode", "offset_m"});
+        if (!placement->at("version").is_number_integer() || placement->at("version") != 1 ||
+            placement->at("mode") != "absolute" || std::abs(number(*placement, "offset_m")) > 1e9) reject();
+    }
+}
+inline void validate_room(const Entity& entity, GeometryBudget& budget) {
+    validate_native_context(entity);
+    const auto& p = entity.properties;
+    const auto* outer_key = p.contains("boundary") ? "boundary" : "segments";
+    if (!p.contains(outer_key)) reject();
+    const auto outer = boundary(p.at(outer_key), true, budget, false);
+    std::vector<Boundary> holes;
+    std::size_t topology_segments = outer.size();
+    if (p.contains("holes")) {
+        if (!p.at("holes").is_array() || p.at("holes").size() > 256) reject();
+        for (const auto& value : p.at("holes")) {
+            holes.push_back(boundary(value, true, budget, false));
+            topology_segments += holes.back().size();
+        }
+    }
+    (void)number(p, p.contains("height_m") ? "height_m" : "height", true);
+    (void)number(p, p.contains("elevation_m") ? "elevation_m" : "elevation");
+    budget.charge_cross(topology_segments);
+    if (validate_boundary_holes(outer, holes).has_value()) reject();
+}
+inline void validate_roof(const Entity& entity, GeometryBudget& budget) {
+    validate_native_context(entity);
+    const auto& p = entity.properties;
+    if (!p.contains("version") || !p.at("version").is_number_integer() ||
+        (p.at("version") != 1 && p.at("version") != 2) || !p.contains("form")) reject();
+    const auto form = text(p.at("form"), false);
+    const bool panel = form == "sloped_roof_panel";
+    if (!panel && form != "gable_roof" && form != "hip_roof") reject();
+    if (!p.contains("base_position_m") || !p.at("base_position_m").is_array() ||
+        p.at("base_position_m").size() != 3) reject();
+    for (const auto& coordinate : p.at("base_position_m")) {
+        if (!coordinate.is_number() || !std::isfinite(coordinate.get<double>()) ||
+            std::abs(coordinate.get<double>()) > 1e9) reject();
+    }
+    if (std::abs(number(p, "orientation_rad")) > 1e6) reject();
+    const auto dimension = [&](const char* key, bool positive = true) {
+        const auto value = number(p, key, positive);
+        if (value < 0 || value > 1e6) reject();
+        return value;
+    };
+    const auto length = dimension(panel ? "run_m" : "length_m");
+    const auto span = dimension("span_m");
+    const auto rise = dimension("rise_m", false);
+    const auto pitch = number(p, "pitch_rad");
+    const auto overhang = dimension("overhang_m", false);
+    const auto thickness = dimension("thickness_m");
+    const auto run = panel ? length : span * .5;
+    const auto tolerance = default_geometry_tolerance_metres;
+    if (run <= tolerance) reject();
+    if (!(panel && rise == 0 && pitch == 0)) {
+        if (rise <= tolerance || pitch <= tolerance || pitch >= std::acos(-1.0) * .5 - tolerance) reject();
+        const auto expected_rise = run * std::tan(pitch);
+        if (!std::isfinite(expected_rise) || std::abs(expected_rise) > 1e9 ||
+            std::abs(expected_rise - rise) > std::max(1e-9, std::abs(rise) * 1e-9)) reject();
+    }
+    const auto slope = rise / run;
+    const auto normal_scale = std::sqrt(1 + slope * slope);
+    if (!std::isfinite(normal_scale) || normal_scale > 1e9) reject();
+    if (form == "gable_roof") {
+        const auto inward = slope * thickness / normal_scale;
+        if (length + 2 * overhang > 1e6 || inward <= tolerance || inward >= span * .5 + overhang - tolerance ||
+            std::abs(rise - thickness * normal_scale) > 1e9 || overhang * slope > 1e9) reject();
+    } else if (form == "hip_roof") {
+        const auto ridge_half = (length - span) * .5;
+        if (length < span || (ridge_half != 0 && ridge_half <= tolerance) ||
+            length + 2 * overhang > 1e6 || span + 2 * overhang > 1e6 ||
+            thickness * normal_scale > 1e6 || overhang * slope > 1e9) reject();
+    } else if (std::abs(slope * (length + overhang)) > 1e9 || overhang * slope > 1e9) reject();
+    if (p.at("version") == 1) {
+        if (p.contains("roof_openings")) reject();
+        return;
+    }
+    if (!p.contains("roof_openings") || !p.at("roof_openings").is_array() || p.at("roof_openings").size() > 256) reject();
+    const auto& cuts = p.at("roof_openings");
+    budget.charge_cross(cuts.size());
+    std::set<std::string> ids;
+    struct Cut { double x, y, right, top; };
+    std::vector<Cut> previous;
+    for (const auto& cut : cuts) {
+        if (!cut.is_object() || !cut.contains("id")) reject();
+        const auto id = text(cut.at("id"), false, 128);
+        if (!ids.insert(id).second || !std::all_of(id.begin(), id.end(), [](unsigned char c) {
+            return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.' || c == ':';
+        })) reject();
+        const auto x = number(cut, "x_m"), y = number(cut, "y_m");
+        const auto width = number(cut, "width_m", true), depth = number(cut, "depth_m", true);
+        if (width > 1e6 || depth > 1e6) reject();
+        const auto right = x + width, top = y + depth;
+        const auto xmin = panel ? 0 : -length * .5, ymin = panel ? 0 : -span * .5;
+        const auto xmax = panel ? length : length * .5, ymax = panel ? span : span * .5;
+        const auto clearance = thickness + tolerance;
+        if (!std::isfinite(right) || !std::isfinite(top) || x < xmin + clearance || y < ymin + clearance ||
+            right > xmax - clearance || top > ymax - clearance) reject();
+        for (const auto& prior : previous)
+            if (x <= prior.right + tolerance && right >= prior.x - tolerance &&
+                y <= prior.top + tolerance && top >= prior.y - tolerance) reject();
+        previous.push_back({x, y, right, top});
+    }
+}
 inline void validate_ifc_reference(const Entity& entity) {
     fields(entity.properties, {"ifc_name", "ifc_type"});
     (void)text(entity.properties.at("ifc_name"));
@@ -196,7 +321,7 @@ inline void validate(const ProjectImportCandidate& result) {
             !entity.properties.is_object() || !entity.extensions.is_object()) reject();
         const bool shared = entity.type == "boundary" || entity.type == "wall" || entity.type == "opening";
         const bool dxf = entity.type == "annotation_state";
-        const bool ifc = entity.type == "wall" || entity.type == "slab" ||
+        const bool ifc = entity.type == "wall" || entity.type == "slab" || entity.type == "roof" || entity.type == "room" ||
             entity.type == "opening" || entity.type == "ifc_reference";
         if (!shared && !(result.kind == ProjectImportKind::dxf ? dxf : ifc)) reject();
         if (entity.properties.contains("parent_id") || entity.properties.contains("layer_id")) reject();
@@ -213,6 +338,10 @@ inline void validate(const ProjectImportCandidate& result) {
             if (!walls.emplace(entity.id, wall(entity)).second) reject();
         } else if (entity.type == "slab") {
             validate_slab(entity, geometry_budget);
+        } else if (entity.type == "roof") {
+            validate_roof(entity, geometry_budget);
+        } else if (entity.type == "room") {
+            validate_room(entity, geometry_budget);
         } else if (entity.type == "opening") {
             std::string wall_id;
             auto hosted = opening(entity, wall_id);

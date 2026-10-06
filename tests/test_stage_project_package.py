@@ -76,24 +76,32 @@ def create_project(path):
 
 
 class StageProjectPackageTests(unittest.TestCase):
-    def test_latest_native_format_assets_and_future_format_rejection(self):
+    def test_supported_format_headers_assets_and_future_format_rejection(self):
         fixture = self.fixture()
         self.addCleanup(fixture[0].cleanup)
         _, root, project, _, payload, payload_hash = fixture
+        # These fixture headers exercise package integrity acceptance; they do
+        # not prove semantic validity of entities introduced by newer formats.
+        for version in (1, 46, 47, 48, 49, 50, 51, 52, 53):
+            with self.subTest(version=version):
+                with closing(sqlite3.connect(project)) as database:
+                    database.execute("UPDATE metadata SET value=? WHERE key='format_version'", (str(version),))
+                    database.commit()
+                output = root / f"format-{version}"
+                result = stage.stage_project_package(project, root, output)
+                package = output / "project-package"
+                self.assertEqual(result["project"]["format_version"], version)
+                self.assertFalse(result["offline_qualified"])
+                self.assertEqual((package / result["project"]["path"]).read_bytes(), project.read_bytes())
+                self.assertEqual((package / f"assets/{payload_hash}.bin").read_bytes(), payload)
+                self.assertEqual(stage.verify_package(package)["asset_count"], 1)
         with closing(sqlite3.connect(project)) as database:
-            database.execute("UPDATE metadata SET value='46' WHERE key='format_version'")
+            database.execute("UPDATE metadata SET value='54' WHERE key='format_version'")
             database.commit()
-        result = stage.stage_project_package(project, root, root / "out")
-        package = root / "out/project-package"
-        self.assertEqual(result["project"]["format_version"], 46)
-        self.assertEqual((package / result["project"]["path"]).read_bytes(), project.read_bytes())
-        self.assertEqual((package / f"assets/{payload_hash}.bin").read_bytes(), payload)
-        self.assertEqual(stage.verify_package(package)["asset_count"], 1)
-        with closing(sqlite3.connect(project)) as database:
-            database.execute("UPDATE metadata SET value='47' WHERE key='format_version'")
-            database.commit()
+        original = project.read_bytes()
         with self.assertRaisesRegex(stage.ProjectPackageError, "unsupported project format_version"):
             stage.stage_project_package(project, root, root / "future")
+        self.assertEqual(project.read_bytes(), original)
         self.assertFalse((root / "future/project-package").exists())
 
     def fixture(self):

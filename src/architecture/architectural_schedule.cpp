@@ -2,6 +2,7 @@
 #include "sketch/assembly_model.hpp"
 #include "sketch/building_entity.hpp"
 #include "sketch/document_solid.hpp"
+#include "sketch/project_organization.hpp"
 
 #include <Standard_Failure.hxx>
 #include <array>
@@ -580,17 +581,73 @@ void add_building_scalar(ScheduleRecord& record, const Entity& entity,
     if (std::isfinite(value)) record.properties.emplace(std::string(cell_name), value);
 }
 
+BuildingObject effective_building_object(const DocumentSnapshot& document, const Entity& entity) {
+    auto object = decode_building_entity(entity);
+    if (const auto* rail = std::get_if<Railing>(&object); rail && rail->host) return object;
+    return decode_building_entity(resolve_vertical_placement(document, entity));
+}
+
+std::vector<ScheduleSourceRef> building_geometry_sources(const DocumentSnapshot& document,
+    const Entity& entity, const BuildingObject& object) {
+    std::vector<ScheduleSourceRef> sources{{entity.id, "geometry"}};
+    const Entity* placed = &entity;
+    if (const auto* rail = std::get_if<Railing>(&object); rail && rail->host) {
+        const auto host = document.entities().find(rail->host->stair_id);
+        if (host == document.entities().end() || host->second.type != "stair")
+            throw std::invalid_argument("hosted railing stair is missing");
+        placed = &host->second;
+        sources.push_back({placed->id, "geometry"});
+    }
+    std::set<std::string, std::less<>> visited;
+    for (;;) {
+        if (!visited.insert(placed->id).second) break;
+        if (placed->properties.contains("vertical_placement"))
+            sources.push_back({placed->id, "vertical_placement"});
+        for (const auto* key : {"vertical_level_binding", "level_connection"}) {
+            const auto binding = placed->properties.find(key);
+            if (binding == placed->properties.end() || !binding->is_object()) continue;
+            sources.push_back({placed->id, key});
+            const auto graph_id = binding->find("graph_id");
+            if (graph_id != binding->end() && graph_id->is_string() &&
+                document.entities().contains(graph_id->get<std::string>()))
+                sources.push_back({graph_id->get<std::string>(), "model"});
+        }
+        const Entity* parent = nullptr;
+        for (const auto* key : {"layer_id", "floor_id", "building_id", "property_id"}) {
+            const auto reference = placed->properties.find(key);
+            if (reference == placed->properties.end() || !reference->is_string()) continue;
+            const auto found = document.entities().find(reference->get<std::string>());
+            if (found != document.entities().end()) {
+                sources.push_back({placed->id, key});
+                parent = &found->second;
+                break;
+            }
+        }
+        if (!parent) break;
+        placed = parent;
+    }
+    normalize_sources(sources);
+    return sources;
+}
+
+void add_layout_quantity(ScheduleRecord& record, std::string name, ScheduleValue value) {
+    if (record.properties.contains(name)) return;
+    record.calculated.emplace(std::move(name), ScheduleCalculation{std::move(value),
+        {{record.object_id, "geometry"}}, "Derived from the current authoritative stair layout"});
+}
+
 void append_building_rows(const DocumentSnapshot& document,
                           DocumentScheduleProjection& projection,
                           const std::set<std::string, std::less<>>* visible_entity_ids) {
     std::vector<ScheduleRecord> records;
+    std::map<std::string, std::vector<ScheduleSourceRef>, std::less<>> geometry_sources;
     for (const auto& [id, entity] : document.entities()) {
         if (!can_recognize_building_entity_type(entity.type) ||
             (visible_entity_ids && !visible_entity_ids->contains(id))) {
             continue;
         }
         try {
-            const auto object = decode_building_entity(entity);
+            const auto object = effective_building_object(document, entity);
             ScheduleRecord record;
             record.object_id = id;
             record.kind = ScheduleRowKind::building;
@@ -603,9 +660,14 @@ void append_building_rows(const DocumentSnapshot& document,
             add_building_quantity(record, entity, "height_m", "height", ScheduleUnit::metre);
             add_building_quantity(record, entity, "radius_m", "radius", ScheduleUnit::metre);
             add_building_quantity(record, entity, "length_m", "length", ScheduleUnit::metre);
-            add_building_quantity(record, entity, "run_m", "run", ScheduleUnit::metre);
+            // Stair run and rise are derived from its canonical topology.
+            // Unknown preserved properties with these names are not authoring
+            // authority for a stair and must not shadow the layout quantities.
+            if (!std::holds_alternative<StairFlight>(object))
+                add_building_quantity(record, entity, "run_m", "run", ScheduleUnit::metre);
             add_building_quantity(record, entity, "span_m", "span", ScheduleUnit::metre);
-            add_building_quantity(record, entity, "rise_m", "rise", ScheduleUnit::metre);
+            if (!std::holds_alternative<StairFlight>(object))
+                add_building_quantity(record, entity, "rise_m", "rise", ScheduleUnit::metre);
             add_building_quantity(record, entity, "overhang_m", "overhang", ScheduleUnit::metre);
             add_building_quantity(record, entity, "thickness_m", "thickness", ScheduleUnit::metre);
             add_building_quantity(record, entity, "going_m", "going", ScheduleUnit::metre);
@@ -648,7 +710,35 @@ void append_building_rows(const DocumentSnapshot& document,
                 if (std::isfinite(length))
                     record.properties.emplace("length", ScheduleQuantity{length, ScheduleUnit::metre});
             }
-            const auto shape = make_building_shape(object);
+            if (const auto* stair = std::get_if<StairFlight>(&object)) {
+                const auto layout = derive_stair_layout(*stair);
+                double run = 0.0;
+                for (const auto& flight : layout.flights) run += flight.run;
+                add_layout_quantity(record, "rise", ScheduleQuantity{stair->total_rise, ScheduleUnit::metre});
+                add_layout_quantity(record, "riser_height", ScheduleQuantity{
+                    stair->total_rise / static_cast<double>(stair->riser_count), ScheduleUnit::metre});
+                add_layout_quantity(record, "run", ScheduleQuantity{run, ScheduleUnit::metre});
+                add_layout_quantity(record, "flight_count", static_cast<std::int64_t>(layout.flights.size()));
+                add_layout_quantity(record, "landing_count", static_cast<std::int64_t>(layout.landings.size()));
+            }
+            if (const auto* rail = std::get_if<Railing>(&object); rail && rail->host) {
+                const auto host = document.entities().find(rail->host->stair_id);
+                if (host == document.entities().end() || host->second.type != "stair")
+                    throw std::invalid_argument("hosted railing stair is missing");
+                const auto current_host = decode_building_entity(resolve_vertical_placement(document, host->second));
+                const auto* stair = std::get_if<StairFlight>(&current_host);
+                if (!stair) throw std::invalid_argument("hosted railing source is not a supported stair");
+                const auto layout = derive_hosted_railing_layout(*rail, *stair);
+                const auto& a = layout.rail_start;
+                const auto& b = layout.rail_end;
+                add_layout_quantity(record, "length", ScheduleQuantity{
+                    std::hypot(std::hypot(b.x-a.x, b.y-a.y), b.z-a.z), ScheduleUnit::metre});
+                add_layout_quantity(record, "post_count", static_cast<std::int64_t>(layout.posts.size()));
+                add_layout_quantity(record, "host_stair_id", rail->host->stair_id);
+                add_layout_quantity(record, "host_flight_id", rail->host->flight_id);
+                add_layout_quantity(record, "side", std::string(rail->host->side == StairRailingSide::left ? "left" : "right"));
+            }
+            const auto shape = make_building_shape(object, document.entities());
             const auto volume = solid_volume(shape);
             if (!std::isfinite(volume) || volume <= 0.0)
                 throw std::invalid_argument("building solid volume must be positive and finite");
@@ -656,6 +746,7 @@ void append_building_rows(const DocumentSnapshot& document,
                 ScheduleQuantity{volume, ScheduleUnit::cubic_metre},
                 {{id, "geometry"}},
                 "Net volume calculated from the canonical building solid"});
+            geometry_sources[id] = building_geometry_sources(document, entity, object);
             records.push_back(std::move(record));
         } catch (const Standard_Failure& error) {
             projection.diagnostics.push_back(id + ": building schedule unavailable: " +
@@ -670,9 +761,12 @@ void append_building_rows(const DocumentSnapshot& document,
         for (auto& row : rows) {
             for (auto& [name, cell] : row.cells) {
                 cell.editable = false;
-                cell.explanation = name == "volume"
-                    ? "Derived from the canonical building solid"
-                    : "Authored building-object property; edit the object in the architectural workspace";
+                if (cell.explanation.empty())
+                    cell.explanation = "Authored building-object property; edit the object in the architectural workspace";
+                else {
+                    append_sources(cell.sources, geometry_sources.at(row.object_id));
+                    normalize_sources(cell.sources);
+                }
             }
             projection.snapshot.rows.push_back(std::move(row));
         }
@@ -716,7 +810,10 @@ DocumentScheduleProjection augment(const DocumentSnapshot& document, DocumentSch
                 if (!read_document_slab(entity, slab, error)) throw std::invalid_argument(error);
                 shape = make_slab(slab);
             } else if (can_recognize_building_entity_type(entity.type)) {
-                shape = make_building_shape(decode_building_entity(entity));
+                const auto object = effective_building_object(document, entity);
+                shape = make_building_shape(object, document.entities());
+                append_sources(sources, building_geometry_sources(document, entity, object));
+                normalize_sources(sources);
             } else {
                 throw std::invalid_argument("object has no material solid representation");
             }

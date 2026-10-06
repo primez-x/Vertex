@@ -21,6 +21,7 @@
 #include <QTimer>
 #include <QStandardPaths>
 #include <QTemporaryDir>
+#include <QTableWidget>
 
 #include <algorithm>
 #include <cmath>
@@ -141,16 +142,54 @@ void review_room(MainWindow& window,const std::function<void(QDialog&)>& interac
     QTimer watchdog; watchdog.setSingleShot(true);
     QObject::connect(&watchdog,&QTimer::timeout,&window,[&] {
         auto* dialog=dynamic_cast<QDialog*>(QApplication::activeModalWidget());
-        const auto* status=dialog?dialog->findChild<QLabel*>("physicalRoomRepairStatus"):nullptr;
+        const auto* status=dialog?dialog->findChild<QLabel*>("physicalRoomReviewStatus"):nullptr;
         failure=std::make_exception_ptr(std::runtime_error("Repair review did not close: "+(status?status->text().toStdString():std::string("no modal"))));
         if (dialog) dialog->reject();
     });
     QTimer::singleShot(0,&window,[&] {
         auto* dialog=dynamic_cast<QDialog*>(QApplication::activeModalWidget());
-        try { require(dialog && dialog->objectName()=="physicalRoomRepair","actual native room repair dialog opens"); interaction(*dialog); }
+        try { require(dialog && dialog->objectName()=="physicalRoomReviewDialog","actual complete native room review opens"); interaction(*dialog); }
         catch (...) { failure=std::current_exception(); if (dialog) dialog->reject(); }
     });
     watchdog.start(4000); action->trigger(); watchdog.stop(); if (failure) std::rethrow_exception(failure);
+}
+template<class T> T* review_control(QDialog& dialog,const QString& name) {
+    auto* result=dialog.findChild<T*>(name);
+    if (!result) throw std::runtime_error("Complete room review control missing: "+name.toStdString());
+    return result;
+}
+void choose(QDialog& dialog,const QString& name,const QString& value) {
+    auto* combo=review_control<QComboBox>(dialog,name);const auto index=combo->findData(value);
+    require(index>=0,"complete room review exposes the explicit requested decision");
+    combo->setCurrentIndex(index);QCoreApplication::processEvents();
+}
+void retained_review(QDialog& dialog,const QString& room_id,const QString& area_id,const QString& length_id) {
+    auto* retained=review_control<QTableWidget>(dialog,"physicalRoomReviewRetained");
+    auto* fresh=review_control<QTableWidget>(dialog,"physicalRoomReviewFresh");
+    require(retained->rowCount()==1 && fresh->rowCount()==1 && retained->item(0,1)->text()=="Continuation",
+        "complete review displays the retained room and current analytical continuation");
+    require(review_control<QComboBox>(dialog,"retainedDecision:"+room_id)->currentIndex()==0 &&
+        review_control<QComboBox>(dialog,"freshAssignment:0")->currentIndex()==0 &&
+        !review_control<QPushButton>(dialog,"physicalRoomReviewApply")->isEnabled(),
+        "analytical continuation does not silently assign the old identity or enable Apply");
+    choose(dialog,"retainedDecision:"+room_id,"retain");
+    choose(dialog,"freshAssignment:0","retained:"+room_id);
+    require(review_control<QTableWidget>(dialog,"physicalRoomReviewReferences")->rowCount()==2,
+        "complete review exposes both authored dimension decisions");
+    choose(dialog,"referenceDecision:"+area_id,"keep");
+    choose(dialog,"referenceDecision:"+length_id,"remove");
+    require(review_control<QTableWidget>(dialog,"physicalRoomReviewMappings")->rowCount()==0,
+        "kept whole-room area and explicitly removed edge dimension need no child mapping");
+    review_control<QPushButton>(dialog,"freshPick:0")->click();
+}
+void pick_review(QDialog& dialog,Vec2 point) {
+    auto* preview=dynamic_cast<PlanCanvas*>(review_control<QWidget>(dialog,"physicalRoomReviewCanvas"));
+    require(preview,"complete review uses real PlanCanvas for interior witnesses");
+    click(*preview,point);
+}
+void ready_review(QDialog& dialog) {
+    if (!review_control<QPushButton>(dialog,"physicalRoomReviewApply")->isEnabled())
+        throw std::runtime_error("Complete room review is not ready: "+review_control<QLabel>(dialog,"physicalRoomReviewStatus")->text().toStdString());
 }
 void workflow() {
     QTemporaryDir files;
@@ -217,8 +256,23 @@ void workflow() {
     current_details(window);
     current_schedule(window, id);
     rejects_entity_only_dimension(room);
-    require(window.createAreaDimension(id, {2, 2}).isEmpty(),
-            "desktop cannot create misleading Entity-only source-bound area dimension");
+    const auto identified=decode_identified_boundary_entity(room);
+    const auto lower_edge=std::find_if(identified.segments.begin(),identified.segments.end(),[](const auto& edge) {
+        return std::abs(edge.segment.start.y-.1)<1e-8 && std::abs(edge.segment.end.y-.1)<1e-8;
+    });
+    require(lower_edge!=identified.segments.end(),"independent inside bottom wall face identifies a 3.8 metre edge");
+    const auto area_dimension=window.createAreaDimension(id,{.5,2.4});
+    if (area_dimension.isEmpty()) throw std::runtime_error("Create live physical-room area dimension: "+window.lastError().toStdString());
+    const auto length_dimension=window.createLengthDimension(id,QString::fromStdString(lower_edge->segment_id),{2,-.7});
+    if (length_dimension.isEmpty()) throw std::runtime_error("Create live physical-room edge dimension: "+window.lastError().toStdString());
+    const auto dimension_source=window.document().snapshot();
+    const auto area_value=*decode_boundary_dimension_entity(dimension_source.entities().at(area_dimension.toStdString())).dimension;
+    const auto length_value=*decode_boundary_dimension_entity(dimension_source.entities().at(length_dimension.toStdString())).dimension;
+    assert_near(area_value.resolve(dimension_source).area(),10.24);
+    assert_near(length_value.resolve(dimension_source.entities()).segment_length(),3.8);
+    require(label(drawing,area_dimension).contains("10.24") && label(drawing,length_dimension).contains("3.8") &&
+        geometry(drawing,length_dimension),"user-authored physical-room dimensions show current net area and inside-face length in the canvas");
+    require(window.selectEntity(id),"return to room selection after authoring its dimensions");
 
     drawing.setOverviewMapEnabled(false);
     drawing.setTool(CanvasTool::select);
@@ -252,6 +306,8 @@ void workflow() {
     require(window.saveProjectAs(path) && window.openProject(path) && window.selectEntity(id),
             "physical room saves and reopens through native project workflow");
     require(window.document().snapshot().entities() == saved.entities(), "save/reopen preserve room sources and inline hole");
+    require(label(drawing,area_dimension).contains("10.24") && label(drawing,length_dimension).contains("3.8") &&
+        geometry(drawing,length_dimension),"native save/reopen preserves authored dimensions and requalifies their live values");
     assert_near(physical_wall_room_checks(window.document().snapshot()).at(id.toStdString()).area_square_metres, 10.24);
     current_schedule(window, id);
     current_details(window);
@@ -266,6 +322,17 @@ void workflow() {
             "wall thickness change invalidates persisted room lineage instead of certifying old geometry");
     require(!geometry(drawing, id) && label(drawing, id).isEmpty(),
             "stale physical room suppresses old scene fill, hole and numeric label");
+    require(label(drawing,area_dimension).isEmpty() && label(drawing,length_dimension).isEmpty() &&
+        !geometry(drawing,length_dimension) &&
+        window.document().snapshot().entities().at(area_dimension.toStdString())==dimension_source.entities().at(area_dimension.toStdString()) &&
+        window.document().snapshot().entities().at(length_dimension.toStdString())==dimension_source.entities().at(length_dimension.toStdString()),
+        "source wall edit withholds old dimension numbers and lines while preserving their authored references");
+    for (const auto& dimension:{area_value,length_value}) {
+        bool refused=false;
+        try { (void)dimension.resolve(window.document().snapshot()); }
+        catch (const std::invalid_argument&) { refused=true; }
+        require(refused,"snapshot-aware dimension resolution refuses stale physical-room source values");
+    }
     require(child<QLabel>(window, "calculationNetArea")->text() == QStringLiteral("—") &&
             child<QLabel>(window, "calculationBaseArea")->text() == QStringLiteral("—") &&
             child<QLabel>(window, "calculationStatus")->text().contains(QString::fromStdString(stale.diagnostic)),
@@ -279,28 +346,26 @@ void workflow() {
     rejects_entity_only_dimension(window.document().snapshot().entities().at(id.toStdString()));
     const auto stale_source=window.document().snapshot();
     review_room(window,[&](QDialog& dialog) {
-        auto* preview=dynamic_cast<PlanCanvas*>(dialog.findChild<QWidget*>("physicalRoomRepairCanvas"));
-        auto* apply=dialog.findChild<QPushButton*>("physicalRoomRepairApply");
-        require(preview && apply && !apply->isEnabled(),"repair has a real preview and requires a picked interior");
-        auto* correspondence=dialog.findChild<QLabel*>("physicalRoomRepairCorrespondence");
-        require(correspondence && correspondence->text().contains("continues in one current space"),
-            "repair displays analytical room correspondence without automatically choosing a destination");
-        click(*preview,{2,1}); require(!apply->isEnabled(),"wall-material hole cannot become a repair destination");
-        click(*preview,{2,2}); require(apply->isEnabled(),"actual canvas click chooses current room");
+        retained_review(dialog,id,area_dimension,length_dimension);
+        pick_review(dialog,{2,1}); require(!review_control<QPushButton>(dialog,"physicalRoomReviewApply")->isEnabled(),
+            "wall-material hole cannot become a reviewed destination");
+        pick_review(dialog,{2,2}); ready_review(dialog);
+        auto* preview=dynamic_cast<PlanCanvas*>(review_control<QWidget>(dialog,"physicalRoomReviewCanvas"));
+        require(label(*preview,area_dimension).contains("9.86"),"detached review previews the kept area from current walls and inline hole");
+        require(document_snapshot_digest(window.document().snapshot())==document_snapshot_digest(stale_source),
+            "complete review preview leaves full retained document state untouched");
         auto* buttons=dialog.findChild<QDialogButtonBox*>(); require(buttons,"repair has cancellation controls");
         buttons->button(QDialogButtonBox::Cancel)->click();
     });
-    require(window.document().snapshot().entities()==stale_source.entities() && window.document().revision()==stale_source.revision(),
-        "cancel repair leaves exact stale source and revision untouched");
-    // An accepted dialog can emit callbacks before its caller resumes. Retained
+    require(document_snapshot_digest(window.document().snapshot())==document_snapshot_digest(stale_source),
+        "cancel complete review preserves exact geometry, references, assets and retained history");
+    // An accepted dialog can emit callbacks before its caller resumes.
     // Retained history metadata is part of the captured source even when head
     // geometry, assets, identity and revision are unchanged.
     std::optional<DocumentSnapshot> expected_replacement;
     review_room(window,[&](QDialog& dialog) {
-        auto* preview=dynamic_cast<PlanCanvas*>(dialog.findChild<QWidget*>("physicalRoomRepairCanvas"));
-        auto* apply=dialog.findChild<QPushButton*>("physicalRoomRepairApply");
-        require(preview && apply,"replacement review has real destination controls");
-        click(*preview,{2,2}); require(apply->isEnabled(),"replacement review selects a current destination");
+        retained_review(dialog,id,area_dimension,length_dimension);
+        pick_review(dialog,{2,2}); ready_review(dialog);
         QObject::connect(&dialog,&QDialog::accepted,&dialog,[&] {
             auto replaced=window.document().snapshot();
             auto& records=const_cast<std::vector<RevisionRecord>&>(replaced.history());
@@ -308,7 +373,7 @@ void workflow() {
             window.document()=Document::fork(replaced);
             expected_replacement=window.document().snapshot();
         });
-        apply->click();
+        review_control<QPushButton>(dialog,"physicalRoomReviewApply")->click();
     });
     const auto replaced=window.document().snapshot();
     require(expected_replacement.has_value(),"accepted room review exercises a valid same-head retained-history replacement");
@@ -320,13 +385,37 @@ void workflow() {
     require(window.lastError().contains("review source changed"),"stale accepted room review explains its full-source refusal");
     window.document()=Document::fork(stale_source);
     require(window.selectEntity(id),"fresh room review can restart from the retained source");
+    // Accepted callbacks also exercise the controller's selection and workspace
+    // fences after the dialog's own source check, before the command is applied.
     review_room(window,[&](QDialog& dialog) {
-        auto* preview=dynamic_cast<PlanCanvas*>(dialog.findChild<QWidget*>("physicalRoomRepairCanvas"));
-        auto* apply=dialog.findChild<QPushButton*>("physicalRoomRepairApply"); require(preview && apply,"repair controls exist");
-        click(*preview,{2,2}); require(apply->isEnabled(),"repair destination selected");
+        retained_review(dialog,id,area_dimension,length_dimension);
+        pick_review(dialog,{2,2}); ready_review(dialog);
+        QObject::connect(&dialog,&QDialog::accepted,&dialog,[&] {
+            (void)window.selectEntity("right");
+        });
+        review_control<QPushButton>(dialog,"physicalRoomReviewApply")->click();
+    });
+    require(document_snapshot_digest(window.document().snapshot())==document_snapshot_digest(stale_source) &&
+        window.selectedEntityId()=="right" && window.lastError().contains("selection changed"),
+        "accepted review rejects changed selection without any document mutation");
+    require(window.selectEntity(id),"restart complete review after selection cancellation");
+    review_room(window,[&](QDialog& dialog) {
+        retained_review(dialog,id,area_dimension,length_dimension);
+        pick_review(dialog,{2,2}); ready_review(dialog);
+        QObject::connect(&dialog,&QDialog::accepted,&dialog,[&] { window.setWorkspace(Workspace::architectural); });
+        review_control<QPushButton>(dialog,"physicalRoomReviewApply")->click();
+    });
+    require(document_snapshot_digest(window.document().snapshot())==document_snapshot_digest(stale_source) &&
+        window.workspace()==Workspace::architectural && window.lastError().contains("workspace"),
+        "accepted review rejects changed workspace without geometry, reference or history mutation");
+    window.setWorkspace(Workspace::measurement);
+    require(window.selectEntity(id),"restart complete review in its original workspace");
+    review_room(window,[&](QDialog& dialog) {
+        retained_review(dialog,id,area_dimension,length_dimension);
+        pick_review(dialog,{2,2}); ready_review(dialog);
         const auto directory=qEnvironmentVariable("VERTEX_TEST_CAPTURE_DIR");
         if (!directory.isEmpty()) require(dialog.grab().save(QDir(directory).filePath("physical-room-repair-preview.png")),"actual repair preview capture saves");
-        apply->click();
+        review_control<QPushButton>(dialog,"physicalRoomReviewApply")->click();
     });
     const auto repaired=window.document().snapshot();
     require(repaired.revision()==stale_source.revision()+1 && repaired.entities().at(id.toStdString()).properties.at("classification")==
@@ -334,6 +423,10 @@ void workflow() {
         "repair retains the room identity and class in one revision");
     const auto repaired_check=physical_wall_room_checks(repaired).at(id.toStdString());
     require(repaired_check.current && repaired_check.holes.size()==1,"repair derives current physical room and hole"); assert_near(repaired_check.area_square_metres,9.86);
+    require(repaired.entities().at(area_dimension.toStdString())==stale_source.entities().at(area_dimension.toStdString()) &&
+        !repaired.entities().contains(length_dimension.toStdString()) && label(drawing,area_dimension).contains("9.86") &&
+        !geometry(drawing,length_dimension) && label(drawing,length_dimension).isEmpty(),
+        "one reviewed command keeps the area reference with its new live value and explicitly removes the chosen edge dimension");
     if (repaired.entities().at(exterior.toStdString())!=exterior_before || child<QLabel>(window,"appraisalDetailsGla")->text()!=property_gla_before)
         throw std::runtime_error("room repair cannot change exterior appraisal owner or GLA: owner diff="+
             nlohmann::json::diff(exterior_before.properties,repaired.entities().at(exterior.toStdString()).properties).dump()+
@@ -345,10 +438,14 @@ void workflow() {
         "native repaired room saves and reopens");
     require(window.document().snapshot().entities()==repaired.entities() && physical_wall_room_checks(window.document().snapshot()).at(id.toStdString()).current,
         "reopened repair replays source authority and retains identity");
+    require(label(drawing,area_dimension).contains("9.86") && !window.document().snapshot().entities().contains(length_dimension.toStdString()),
+        "reopened reviewed command retains the kept dimension and explicit reference removal");
     require(window.undoCommand() && window.document().snapshot().entities()==stale_source.entities(),"reopened repair Undo restores prior source evidence");
     require(window.undoCommand() && physical_wall_room_checks(window.document().snapshot()).at(id.toStdString()).current &&
             geometry(drawing, id) && label(drawing, id).contains("10.24 m²"),
             "Undo source edit repairs room projection and derived area");
+    require(label(drawing,area_dimension).contains("10.24") && label(drawing,length_dimension).contains("3.8") && geometry(drawing,length_dimension),
+        "Undo reviewed removal and source edit restores both dimension identities and their original current values");
     current_details(window);
 }
 } // namespace

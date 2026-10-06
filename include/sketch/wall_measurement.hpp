@@ -18,8 +18,9 @@ namespace sketch {
 struct WallMeasurementResult {
     Boundary boundary;
     nlohmann::json source;
-    // Physical source identity for each analytical exterior edge, after the
-    // same winding and seed rotations used for boundary.
+    // Physical source identity for each analytical exterior edge in boundary
+    // order. Fresh v1 results have canonical winding/seed; materialized v2
+    // results retain the captured owner's winding and cyclic start.
     std::vector<std::string> ordered_wall_ids;
 };
 
@@ -71,7 +72,17 @@ struct ExteriorCornerPhysicalContact { std::string owner; bool start; std::strin
 [[nodiscard]] std::vector<BoundaryGeometryEdit> exterior_wall_measurement_source_updates(
     const std::map<std::string, Entity, std::less<>>& original,
     const std::map<std::string, Entity, std::less<>>& proposed,
-    bool validate_final_constraints = true);
+    bool validate_final_constraints = true,
+    const std::map<std::string, Vec2, std::less<>>& rigid_offsets = {});
+
+// Intrinsic v2 lineage validation, independent of today's source-wall presence.
+// Retains every sequential add; bounds wall-pairs * (moves + 2) to 8,388,608
+// before materialization, alongside the independent 4096-offset/2048-wall caps.
+[[nodiscard]] WallMeasurementResult materialize_exterior_wall_measurement(const Entity& owner);
+// Validates one typed translation against retained source and final physical walls.
+[[nodiscard]] WallMeasurementResult derive_translated_exterior_wall_measurement(
+    const std::map<std::string, Entity, std::less<>>& entities, const Entity& owner,
+    const std::vector<std::string>& wall_ids, const nlohmann::json& proof);
 
 // Authored edits opt in explicitly. Completes ordinary wall changes or typed
 // constraint changes through one v6 command; other command types and commands

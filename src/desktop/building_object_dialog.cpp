@@ -54,12 +54,14 @@ struct FormInfo {
     std::string_view label;
 };
 
-constexpr std::array<FormInfo, 8> form_infos{{
+constexpr std::array<FormInfo, 10> form_infos{{
     {"column", "rectangular_column", "Rectangular column"},
     {"column", "circular_column", "Circular column"},
     {"beam", "straight_beam", "Straight beam"},
     {"stair", "straight_stair_flight", "Straight stair flight"},
+    {"stair", "multi_flight_stair", "Multi-flight stair"},
     {"railing", "straight_railing", "Straight railing"},
+    {"railing", "stair_flight_railing", "Stair flight railing"},
     {"roof", "sloped_roof_panel", "Sloped roof panel"},
     {"roof", "gable_roof", "Gable roof"},
     {"roof", "hip_roof", "Hip roof"},
@@ -314,17 +316,19 @@ std::optional<QuantityReceipt> receipt_for_value(const json& value, double autho
 class BuildingObjectDialog::Impl final {
 public:
     Impl(BuildingObjectDialog* dialog, std::optional<Entity> original,
-         bool metric_units)
-        : owner(dialog), original_entity(std::move(original)), metric(metric_units) {
+         bool metric_units, std::optional<DocumentSnapshot> source = std::nullopt)
+        : owner(dialog), original_entity(std::move(original)), source_snapshot(std::move(source)), metric(metric_units) {
         setup();
     }
 
     [[nodiscard]] std::optional<Entity> candidate() const { return candidate_entity; }
+    [[nodiscard]] std::vector<Entity> related_candidates() const { return related_entities; }
 
     [[nodiscard]] QString last_error() const { return error; }
 
     bool submit() {
         candidate_entity.reset();
+        related_entities.clear();
         parsed_quantities.clear();
         if (original_invalid) {
             return false;
@@ -336,12 +340,38 @@ public:
             if (!object.has_value()) {
                 return false;
             }
+            std::vector<Entity> upgrades;
+            if (const auto* rail = std::get_if<Railing>(&*object); rail && rail->host) {
+                if (!source_snapshot) throw std::invalid_argument("A current document is required for hosted railings.");
+                auto entities = source_snapshot->entities();
+                if (const auto found = upgraded_hosts.find(rail->host->stair_id); found != upgraded_hosts.end()) {
+                    entities.insert_or_assign(found->first, found->second);
+                    upgrades.push_back(found->second);
+                }
+                const auto found = entities.find(rail->host->stair_id);
+                if (found == entities.end()) throw std::invalid_argument("The selected stair host is unavailable.");
+                (void)make_building_shape(*object, entities);
+            }
             if (original_entity.has_value()) {
                 const auto canonical = encode_building_entity(*object,
                                                               original_entity->extensions);
                 auto merged = *original_entity;
                 merged.type = canonical.type;
                 merged.properties.update(canonical.properties);
+                preserve_stair_child_metadata(merged.properties, canonical.properties);
+                for (const auto* key : {"top_landing", "level_connection", "host"}) {
+                    if (canonical.properties.contains(key) && canonical.properties.at(key).is_object() &&
+                        original_entity->properties.contains(key) && original_entity->properties.at(key).is_object()) {
+                        auto retained = original_entity->properties.at(key);
+                        retained.update(canonical.properties.at(key));
+                        merged.properties[key] = std::move(retained);
+                    }
+                }
+                if (merged.type == "stair" && !canonical.properties.contains("level_connection"))
+                    merged.properties.erase("level_connection");
+                if (merged.type == "railing" && canonical.properties.contains("host")) {
+                    for (const auto* key : {"base_position_m", "orientation_rad", "length_m"}) merged.properties.erase(key);
+                }
                 if (merged.type == "roof" && !canonical.properties.contains("roof_openings"))
                     merged.properties.erase("roof_openings");
                 apply_quantity_entries(merged.properties, canonical.properties);
@@ -356,9 +386,12 @@ public:
                     {{"version", 1}, {"entries", roof_opening_receipts}};
             }
             clear_error();
+            related_entities = std::move(upgrades);
             owner->accept();
             return true;
         } catch (const std::exception& caught) {
+            candidate_entity.reset();
+            related_entities.clear();
             fail(QStringLiteral("%1").arg(QString::fromUtf8(caught.what())));
             return false;
         }
@@ -486,9 +519,9 @@ private:
                     } else if constexpr (std::is_same_v<Object, Beam>) {
                         return "straight_beam";
                     } else if constexpr (std::is_same_v<Object, StairFlight>) {
-                        return "straight_stair_flight";
+                        return value.flights.empty() ? "straight_stair_flight" : "multi_flight_stair";
                     } else if constexpr (std::is_same_v<Object, Railing>) {
-                        return "straight_railing";
+                        return value.host ? "stair_flight_railing" : "straight_railing";
                     } else if constexpr (std::is_same_v<Object, SlopedRoofPanel>) {
                         return "sloped_roof_panel";
                     } else if constexpr (std::is_same_v<Object, GableRoof>) {
@@ -574,6 +607,12 @@ private:
         landing_check = nullptr;
         level_connection_check = nullptr;
         derived_pitch = nullptr;
+        stair_flights = nullptr;
+        stair_landings = nullptr;
+        stair_summary = nullptr;
+        host_combo = nullptr;
+        host_flight_combo = nullptr;
+        host_side_combo = nullptr;
         if (form_page != nullptr) {
             form_stack->removeWidget(form_page);
             delete form_page;
@@ -612,12 +651,16 @@ private:
                               "buildingObjectUpY", "buildingObjectUpZ", {0.0, 0.0, 1.0});
             add_quantity_field(layout, "Width", "buildingObjectWidth", 0.2);
             add_quantity_field(layout, "Depth", "buildingObjectDepth", 0.3);
-        } else if (form == "straight_stair_flight") {
+        } else if (form == "straight_stair_flight" || form == "multi_flight_stair") {
             add_coordinate_fields(layout, "Base", "buildingObjectBaseX",
                                   "buildingObjectBaseY", "buildingObjectBaseZ", {});
             add_angle_field(layout, "Orientation (degrees)",
                             "buildingObjectOrientationDegrees", 0.0);
             add_integer_field(layout, "Risers", "buildingObjectRiserCount", 10);
+            if (form == "multi_flight_stair") {
+                fields.at("buildingObjectRiserCount")->setReadOnly(true);
+                setup_stair_topology(layout);
+            }
             add_quantity_field(layout, "Total rise", "buildingObjectTotalRise", 2.5);
             add_quantity_field(layout, "Going", "buildingObjectGoing", 0.25);
             add_quantity_field(layout, "Width", "buildingObjectWidth", 1.2);
@@ -675,12 +718,18 @@ private:
                                      "buildingObjectLowerLevel", "buildingObjectUpperLevel"}) {
                 fields.at(name)->setEnabled(false);
             }
-        } else if (form == "straight_railing") {
-            add_coordinate_fields(layout, "Base", "buildingObjectBaseX",
+            if (stair_summary) {
+                for (const auto* name : {"buildingObjectTotalRise", "buildingObjectGoing", "buildingObjectWidth"})
+                    QObject::connect(fields.at(name), &QLineEdit::textChanged, owner, [this] { refresh_stair_summary(); });
+            }
+        } else if (form == "straight_railing" || form == "stair_flight_railing") {
+            if (form == "straight_railing") {
+                add_coordinate_fields(layout, "Base", "buildingObjectBaseX",
                                   "buildingObjectBaseY", "buildingObjectBaseZ", {});
-            add_angle_field(layout, "Orientation (degrees)",
+                add_angle_field(layout, "Orientation (degrees)",
                             "buildingObjectOrientationDegrees", 0.0);
-            add_quantity_field(layout, "Length", "buildingObjectLength", 3.0);
+                add_quantity_field(layout, "Length", "buildingObjectLength", 3.0);
+            } else setup_railing_host(layout);
             add_quantity_field(layout, "Height", "buildingObjectHeight", 1.1);
             add_quantity_field(layout, "Thickness", "buildingObjectThickness", 0.08);
             add_quantity_field(layout, "Post spacing", "buildingObjectPostSpacing", 0.9);
@@ -726,6 +775,7 @@ private:
             populate_from_original();
         }
         refresh_pitch();
+        refresh_stair_summary();
         const bool roof = form_info(form) != nullptr && form_info(form)->type == "roof";
         roof_openings_group->setVisible(roof || roof_openings_table->rowCount() != 0);
         roof_openings_help->setText(roof
@@ -733,6 +783,289 @@ private:
                 ? QStringLiteral("Opening corner X/Y relative to the roof base. Width/depth are plan dimensions.")
                 : QStringLiteral("Opening corner X/Y relative to the roof centre. Width/depth are plan dimensions."))
             : QStringLiteral("This form cannot contain roof openings. Remove them explicitly or choose a roof form."));
+    }
+
+    void preserve_stair_child_metadata(json& merged, const json& canonical) const {
+        if (!original_entity || original_entity->type != "stair") return;
+        for (const auto* key : {"flights", "landings"}) {
+            if (!canonical.contains(key) || !original_entity->properties.contains(key)) continue;
+            const auto& old = original_entity->properties.at(key);
+            if (!old.is_array()) continue;
+            for (auto& child : merged.at(key)) {
+                for (const auto& previous : old) {
+                    if (previous.is_object() && previous.value("id", std::string{}) == child.value("id", std::string{})) {
+                        auto retained = previous;
+                        retained.update(child);
+                        child = std::move(retained);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    static std::string row_id(QTableWidget* table, int row) {
+        return table->item(row, 0)->data(Qt::UserRole).toString().toStdString();
+    }
+
+    void add_stair_flight_row(std::string id, std::size_t risers) {
+        const QSignalBlocker blocker(stair_flights);
+        const auto row = stair_flights->rowCount();
+        stair_flights->insertRow(row);
+        auto* cell = new QTableWidgetItem(QString::number(static_cast<qulonglong>(risers)));
+        cell->setData(Qt::UserRole, qt_string(id));
+        stair_flights->setItem(row, 0, cell);
+    }
+
+    void add_stair_landing_row(const StairConnectingLanding& landing) {
+        const QSignalBlocker blocker(stair_landings);
+        const auto row = stair_landings->rowCount();
+        stair_landings->insertRow(row);
+        const std::array<double, 3> values{landing.depth, landing.thickness, landing.return_gap};
+        const std::array<int, 3> columns{0, 1, 3};
+        const std::array<const char*, 3> keys{"depth_m", "thickness_m", "return_gap_m"};
+        for (std::size_t i = 0; i < columns.size(); ++i) {
+            auto text = display_length(values[i], metric);
+            const auto pointer = "/landings/" + std::to_string(row) + "/" + keys[i];
+            if (const auto receipt = original_quantity_entries.find(pointer); receipt != original_quantity_entries.end()) {
+                if (const auto decoded = receipt_for_value(receipt->second, values[i]); decoded)
+                    text = display_receipt_expression(decoded->quantity, metric);
+            }
+            auto* cell = new QTableWidgetItem(text);
+            cell->setData(Qt::UserRole, qt_string(landing.id));
+            cell->setData(Qt::UserRole + 1, text);
+            cell->setData(Qt::UserRole + 2, values[i]);
+            stair_landings->setItem(row, columns[i], cell);
+        }
+        auto* turns = new QComboBox(stair_landings);
+        turns->addItem(QStringLiteral("Straight"), static_cast<int>(StairTurn::straight));
+        turns->addItem(QStringLiteral("Left 90°"), static_cast<int>(StairTurn::left_quarter));
+        turns->addItem(QStringLiteral("Right 90°"), static_cast<int>(StairTurn::right_quarter));
+        turns->addItem(QStringLiteral("Left 180°"), static_cast<int>(StairTurn::left_half));
+        turns->addItem(QStringLiteral("Right 180°"), static_cast<int>(StairTurn::right_half));
+        turns->setCurrentIndex(turns->findData(static_cast<int>(landing.turn)));
+        stair_landings->setCellWidget(row, 2, turns);
+        QObject::connect(turns, qOverload<int>(&QComboBox::currentIndexChanged), owner, [this] { refresh_stair_summary(); });
+    }
+
+    void setup_stair_topology(QFormLayout* layout) {
+        stair_flights = new QTableWidget(0, 1, form_page);
+        stair_flights->setObjectName(QStringLiteral("buildingObjectStairFlights"));
+        stair_flights->setHorizontalHeaderLabels({QStringLiteral("Risers in flight")});
+        stair_flights->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
+        stair_flights->setSelectionBehavior(QAbstractItemView::SelectRows);
+        stair_flights->setSelectionMode(QAbstractItemView::SingleSelection);
+        stair_flights->setMinimumHeight(110);
+        layout->addRow(QStringLiteral("Ordered flights"), stair_flights);
+        auto* actions = new QWidget(form_page);
+        auto* action_layout = new QHBoxLayout(actions);
+        action_layout->setContentsMargins(0, 0, 0, 0);
+        const auto button = [&](QString title, const char* name, auto action) {
+            auto* result = new QPushButton(title, actions);
+            result->setObjectName(QString::fromLatin1(name));
+            result->setAutoDefault(false);
+            action_layout->addWidget(result);
+            QObject::connect(result, &QPushButton::clicked, owner, action);
+        };
+        button(QStringLiteral("Add"), "buildingObjectAddStairFlight", [this] {
+            add_stair_flight_row(make_stable_id(), 10);
+            add_stair_landing_row({make_stable_id(), 1.2, 0.15, StairTurn::straight, 0});
+            stair_flights->selectRow(stair_flights->rowCount() - 1);
+            refresh_stair_summary();
+        });
+        button(QStringLiteral("Remove"), "buildingObjectRemoveStairFlight", [this] {
+            const auto row = stair_flights->currentRow();
+            if (row < 0 || stair_flights->rowCount() <= 1) return;
+            const QSignalBlocker flights_blocker(stair_flights), landings_blocker(stair_landings);
+            stair_flights->removeRow(row);
+            stair_landings->removeRow(row == 0 ? 0 : row - 1);
+            refresh_stair_summary();
+        });
+        const auto move = [this](int offset) {
+            const auto row = stair_flights->currentRow();
+            const auto target = row + offset;
+            if (row < 0 || target < 0 || target >= stair_flights->rowCount()) return;
+            const QSignalBlocker blocker(stair_flights);
+            auto* a = stair_flights->takeItem(row, 0);
+            auto* b = stair_flights->takeItem(target, 0);
+            stair_flights->setItem(row, 0, b);
+            stair_flights->setItem(target, 0, a);
+            stair_flights->selectRow(target);
+            refresh_stair_summary();
+        };
+        button(QStringLiteral("Up"), "buildingObjectMoveStairFlightUp", [move] { move(-1); });
+        button(QStringLiteral("Down"), "buildingObjectMoveStairFlightDown", [move] { move(1); });
+        layout->addRow(QString(), actions);
+        stair_landings = new QTableWidget(0, 4, form_page);
+        stair_landings->setObjectName(QStringLiteral("buildingObjectStairLandings"));
+        stair_landings->setHorizontalHeaderLabels({QStringLiteral("Depth"), QStringLiteral("Thickness"), QStringLiteral("Turn"), QStringLiteral("Return gap")});
+        stair_landings->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
+        stair_landings->setMinimumHeight(110);
+        layout->addRow(QStringLiteral("Connecting landings"), stair_landings);
+        auto* help = new QLabel(QStringLiteral("Landing 1 connects flights 1 and 2. Reordering moves whole flights and retains landing order. Return gap applies to 180° turns; other turns require zero. Each flight keeps its own riser count."), form_page);
+        help->setWordWrap(true);
+        layout->addRow(help);
+        stair_summary = new QLabel(form_page);
+        stair_summary->setObjectName(QStringLiteral("buildingObjectStairSummary"));
+        stair_summary->setWordWrap(true);
+        layout->addRow(QStringLiteral("Derived summary"), stair_summary);
+        add_stair_flight_row(make_stable_id(), 10);
+        QObject::connect(stair_flights, &QTableWidget::itemChanged, owner, [this] { refresh_stair_summary(); });
+        QObject::connect(stair_landings, &QTableWidget::itemChanged, owner, [this] { refresh_stair_summary(); });
+    }
+
+    void populate_stair_topology(const StairFlight& stair) {
+        const QSignalBlocker flight_blocker(stair_flights), landing_blocker(stair_landings);
+        stair_flights->setRowCount(0);
+        stair_landings->setRowCount(0);
+        for (const auto& flight : stair.flights) add_stair_flight_row(flight.id, flight.riser_count);
+        for (const auto& landing : stair.landings) add_stair_landing_row(landing);
+    }
+
+    void remap_landing_receipts() {
+        if (!original_entity || !original_entity->properties.contains("quantity_entries")) return;
+        for (auto it = original_quantity_entries.begin(); it != original_quantity_entries.end();) {
+            if (it->first.starts_with("/landings/")) it = original_quantity_entries.erase(it);
+            else ++it;
+        }
+        const auto* stair = original_as<StairFlight>();
+        if (!stair) return;
+        const auto& receipts = original_entity->properties.at("quantity_entries");
+        if (!receipts.is_object()) return;
+        for (int row = 0; row < stair_landings->rowCount(); ++row) {
+            const auto id = row_id(stair_landings, row);
+            for (std::size_t old_row = 0; old_row < stair->landings.size(); ++old_row) {
+                if (stair->landings[old_row].id != id) continue;
+                const auto old_prefix = "/landings/" + std::to_string(old_row) + "/";
+                const auto new_prefix = "/landings/" + std::to_string(row) + "/";
+                for (const auto& [pointer, receipt] : receipts.items()) {
+                    if (pointer.starts_with(old_prefix)) original_quantity_entries[new_prefix + pointer.substr(old_prefix.size())] = receipt;
+                }
+            }
+        }
+    }
+
+    bool read_stair_topology(StairFlight& stair, bool record_receipts = true, bool validate = true) {
+        stair.flights.clear(); stair.landings.clear(); stair.riser_count = 0;
+        if (record_receipts) remap_landing_receipts();
+        for (int row = 0; row < stair_flights->rowCount(); ++row) {
+            bool ok{};
+            const auto text = stair_flights->item(row, 0)->text().trimmed();
+            const auto count = text.toULongLong(&ok);
+            if (!ok || count == 0 || count > maximum_risers || text != QString::number(count))
+                throw std::invalid_argument("Each flight must have an integer riser count from 1 to 10000.");
+            stair.flights.push_back({row_id(stair_flights, row), static_cast<std::size_t>(count)});
+            stair.riser_count += static_cast<std::size_t>(count);
+        }
+        for (int row = 0; row < stair_landings->rowCount(); ++row) {
+            const auto length = [&](int column, const char* key) {
+                const auto* cell = stair_landings->item(row, column);
+                const auto pointer = "/landings/" + std::to_string(row) + "/" + key;
+                if (record_receipts) quantity_pointers["stairLanding" + std::to_string(row) + key] = pointer;
+                if (original_entity && cell->text() == cell->data(Qt::UserRole + 1).toString())
+                    return cell->data(Qt::UserRole + 2).toDouble();
+                const auto parsed = parse_quantity(cell->text().toStdString(), metric ? Unit::metre : Unit::foot);
+                if (record_receipts) parsed_quantities.insert_or_assign(pointer, parsed);
+                return parsed.metres;
+            };
+            const auto* turns = qobject_cast<QComboBox*>(stair_landings->cellWidget(row, 2));
+            stair.landings.push_back({row_id(stair_landings, row), length(0, "depth_m"), length(1, "thickness_m"),
+                static_cast<StairTurn>(turns->currentData().toInt()), length(3, "return_gap_m")});
+        }
+        if (validate) validate_stair(stair);
+        return true;
+    }
+
+    void refresh_stair_summary() {
+        if (!stair_summary || loading || !fields.contains("buildingObjectTotalRise")) return;
+        // Count validity is independent of the dimension/shape preview. Keep the
+        // total visible while another field is temporarily invalid.
+        qulonglong total{};
+        bool counts_valid = true;
+        for (int row = 0; row < stair_flights->rowCount(); ++row) {
+            bool ok{};
+            const auto text = stair_flights->item(row, 0)->text().trimmed();
+            const auto count = text.toULongLong(&ok);
+            if (!ok || count == 0 || count > maximum_risers || text != QString::number(count)) counts_valid = false;
+            else total += count;
+        }
+        fields.at("buildingObjectRiserCount")->setText(counts_valid ? QString::number(total) : QStringLiteral("—"));
+        try {
+            StairFlight draft;
+            draft.id = "preview";
+            draft.total_rise = parse_quantity(fields.at("buildingObjectTotalRise")->text().toStdString(), metric ? Unit::metre : Unit::foot).metres;
+            draft.going = parse_quantity(fields.at("buildingObjectGoing")->text().toStdString(), metric ? Unit::metre : Unit::foot).metres;
+            draft.width = parse_quantity(fields.at("buildingObjectWidth")->text().toStdString(), metric ? Unit::metre : Unit::foot).metres;
+            read_stair_topology(draft, false, false);
+            const auto derived = derive_stair_layout(draft);
+            double run{};
+            for (const auto& flight : derived.flights) run += flight.run;
+            stair_summary->setText(QStringLiteral("%1 flights, %2 connecting landings; %3 risers. Total rise %4; uniform riser %5; flight runs total %6.")
+                .arg(draft.flights.size()).arg(draft.landings.size()).arg(draft.riser_count)
+                .arg(display_length(draft.total_rise, metric), display_length(draft.total_rise / static_cast<double>(draft.riser_count), metric), display_length(run, metric)));
+        } catch (const std::exception& caught) {
+            stair_summary->setText(QStringLiteral("Invalid stair: %1").arg(QString::fromUtf8(caught.what())));
+        }
+    }
+
+    void setup_railing_host(QFormLayout* layout) {
+        host_combo = new QComboBox(form_page);
+        host_combo->setObjectName(QStringLiteral("buildingObjectStairHost"));
+        host_combo->addItem(QStringLiteral("Choose a stair…"), QString());
+        if (source_snapshot) {
+            int number{};
+            for (const auto& [id, entity] : source_snapshot->entities()) {
+                if (entity.type != "stair") continue;
+                try {
+                    (void)decode_stair_properties(id, entity.properties);
+                    auto name = QStringLiteral("Stair %1").arg(++number);
+                    if (entity.extensions.contains("name") && entity.extensions.at("name").is_string())
+                        name = qt_string(entity.extensions.at("name").get<std::string>());
+                    host_combo->addItem(name, qt_string(id));
+                } catch (const std::exception&) { /* Unsupported hosts are not authorable. */ }
+            }
+        }
+        layout->addRow(QStringLiteral("Stair host"), host_combo);
+        host_flight_combo = new QComboBox(form_page);
+        host_flight_combo->setObjectName(QStringLiteral("buildingObjectStairHostFlight"));
+        layout->addRow(QStringLiteral("Flight"), host_flight_combo);
+        host_side_combo = new QComboBox(form_page);
+        host_side_combo->setObjectName(QStringLiteral("buildingObjectStairHostSide"));
+        host_side_combo->addItems({QStringLiteral("Left (upward travel)"), QStringLiteral("Right (upward travel)")});
+        layout->addRow(QStringLiteral("Side"), host_side_combo);
+        add_scalar_field(layout, QStringLiteral("Start station (0–1)"), "buildingObjectHostStart", 0);
+        add_scalar_field(layout, QStringLiteral("End station (0–1)"), "buildingObjectHostEnd", 1);
+        auto* note = new QLabel(QStringLiteral("Stations follow the selected flight. Flight rails do not create landing guards. Choosing a straight stair upgrades it to one stable flight when you apply."), form_page);
+        note->setWordWrap(true);
+        layout->addRow(note);
+        QObject::connect(host_combo, qOverload<int>(&QComboBox::currentIndexChanged), owner, [this] { populate_host_flights(); });
+    }
+
+    void populate_host_flights() {
+        if (!host_combo || !host_flight_combo) return;
+        host_flight_combo->clear();
+        const auto id = host_combo->currentData().toString().toStdString();
+        if (id.empty() || !source_snapshot) return;
+        try {
+            auto entity = source_snapshot->entities().at(id);
+            auto stair = decode_stair_properties(id, entity.properties);
+            if (stair.flights.empty()) {
+                auto found = upgraded_hosts.find(id);
+                if (found == upgraded_hosts.end()) {
+                    stair.flights.push_back({make_stable_id(), stair.riser_count});
+                    const auto topology = encode_stair_properties(stair);
+                    // This implicit upgrade authors only the schema and one
+                    // flight identity. Keep unchanged dimensions, nested opaque
+                    // landing/connection content and quantity receipts verbatim.
+                    for (const auto* key : {"version", "form", "flights", "landings"})
+                        entity.properties[key] = topology.at(key);
+                    found = upgraded_hosts.emplace(id, std::move(entity)).first;
+                }
+                stair = decode_stair_properties(id, found->second.properties);
+            }
+            for (std::size_t i = 0; i < stair.flights.size(); ++i)
+                host_flight_combo->addItem(QStringLiteral("Flight %1 (%2 risers)").arg(i + 1).arg(stair.flights[i].riser_count), qt_string(stair.flights[i].id));
+        } catch (const std::exception& caught) { fail(QString::fromUtf8(caught.what())); }
     }
 
     void setup_roof_openings(QVBoxLayout* layout) {
@@ -907,7 +1240,7 @@ private:
         std::string vector_property;
         if (form == "rectangular_column" || form == "circular_column") {
             vector_property = "base_center_m";
-        } else if (form == "straight_stair_flight" || form == "straight_railing" ||
+        } else if (form == "straight_stair_flight" || form == "multi_flight_stair" || form == "straight_railing" ||
                    form == "sloped_roof_panel" ||
                    (form == "gable_roof" || form == "hip_roof")) {
             vector_property = "base_position_m";
@@ -1096,6 +1429,7 @@ private:
                     set_length("buildingObjectWidth", value.width);
                     set_length("buildingObjectDepth", value.depth);
                 } else if constexpr (std::is_same_v<Object, StairFlight>) {
+                    if (stair_flights) populate_stair_topology(value);
                     set_coordinate("buildingObjectBaseX", "buildingObjectBaseY",
                                    "buildingObjectBaseZ", value.base_position);
                     set_angle("buildingObjectOrientationDegrees", value.orientation_radians);
@@ -1128,6 +1462,14 @@ private:
                                  ? qt_string(value.level_connection->upper_level_id)
                                  : QString());
                 } else if constexpr (std::is_same_v<Object, Railing>) {
+                    if (value.host && host_combo) {
+                        host_combo->setCurrentIndex(host_combo->findData(qt_string(value.host->stair_id)));
+                        populate_host_flights();
+                        host_flight_combo->setCurrentIndex(host_flight_combo->findData(qt_string(value.host->flight_id)));
+                        host_side_combo->setCurrentIndex(value.host->side == StairRailingSide::left ? 0 : 1);
+                        set_scalar("buildingObjectHostStart", value.host->start_fraction);
+                        set_scalar("buildingObjectHostEnd", value.host->end_fraction);
+                    }
                     set_coordinate("buildingObjectBaseX", "buildingObjectBaseY",
                                    "buildingObjectBaseZ", value.base_position);
                     set_angle("buildingObjectOrientationDegrees", value.orientation_radians);
@@ -1585,7 +1927,7 @@ private:
                 original_entity.has_value() ? original_entity->id : std::string{},
                 *start, *end, {*up_x, *up_y, *up_z}, *width, *depth};
         }
-        if (form == "straight_stair_flight") {
+        if (form == "straight_stair_flight" || form == "multi_flight_stair") {
             const auto* fallback = original_as<StairFlight>();
             const auto base = read_coordinate(
                 "buildingObjectBaseX", "buildingObjectBaseY", "buildingObjectBaseZ",
@@ -1614,10 +1956,31 @@ private:
             if (level_connection_check->isChecked() && !level_connection.has_value()) {
                 return std::nullopt;
             }
-            return StairFlight{
+            StairFlight result{
                 original_entity.has_value() ? original_entity->id : std::string{},
                 *base, *orientation, *risers, *total_rise, *going, *width, landing,
                 level_connection};
+            if (stair_flights && !read_stair_topology(result)) return std::nullopt;
+            return result;
+        }
+        if (form == "stair_flight_railing") {
+            const auto* fallback = original_as<Railing>();
+            if (!host_combo || host_combo->currentData().toString().isEmpty() ||
+                host_flight_combo->currentData().toString().isEmpty()) {
+                fail(QStringLiteral("Choose a stair and a flight.")); return std::nullopt;
+            }
+            const auto height = read_length("buildingObjectHeight", "Height", true, fallback ? fallback->height : 1.1);
+            const auto thickness = read_length("buildingObjectThickness", "Thickness", true, fallback ? fallback->thickness : 0.08);
+            const auto spacing = read_length("buildingObjectPostSpacing", "Maximum post spacing", true, fallback ? fallback->post_spacing : 0.9);
+            const auto start = read_scalar("buildingObjectHostStart", "Start fraction", fallback && fallback->host ? fallback->host->start_fraction : 0.0);
+            const auto end = read_scalar("buildingObjectHostEnd", "End fraction", fallback && fallback->host ? fallback->host->end_fraction : 1.0);
+            if (!height || !thickness || !spacing || !start || !end) return std::nullopt;
+            Railing result{original_entity ? original_entity->id : std::string{}, {}, 0, 0, *height, *thickness, *spacing};
+            result.host = StairRailingHost{host_combo->currentData().toString().toStdString(),
+                host_flight_combo->currentData().toString().toStdString(),
+                host_side_combo->currentIndex() == 0 ? StairRailingSide::left : StairRailingSide::right, *start, *end};
+            validate_railing(result);
+            return result;
         }
         if (form == "straight_railing") {
             const auto* fallback = original_as<Railing>();
@@ -1803,8 +2166,11 @@ private:
 
     BuildingObjectDialog* owner{};
     std::optional<Entity> original_entity;
+    std::optional<DocumentSnapshot> source_snapshot;
     std::optional<BuildingObject> original_object;
     std::optional<Entity> candidate_entity;
+    std::vector<Entity> related_entities;
+    std::map<std::string, Entity, std::less<>> upgraded_hosts;
     bool metric{};
     bool loading{};
     bool original_invalid{};
@@ -1824,6 +2190,12 @@ private:
     QDialogButtonBox* buttons{};
     QPushButton* submit_button{};
     QCheckBox* landing_check{};
+    QTableWidget* stair_flights{};
+    QTableWidget* stair_landings{};
+    QLabel* stair_summary{};
+    QComboBox* host_combo{};
+    QComboBox* host_flight_combo{};
+    QComboBox* host_side_combo{};
     QCheckBox* level_connection_check{};
     QGroupBox* roof_openings_group{};
     QLabel* roof_openings_help{};
@@ -1841,8 +2213,21 @@ BuildingObjectDialog::BuildingObjectDialog(std::optional<Entity> original,
 
 BuildingObjectDialog::~BuildingObjectDialog() = default;
 
+BuildingObjectDialog::BuildingObjectDialog(const DocumentSnapshot& source,
+                                           std::optional<Entity> original,
+                                           bool metricUnits, QWidget* parent)
+    : QDialog(parent), m_impl(std::make_unique<Impl>(this, std::move(original), metricUnits, source)) {}
+
 std::optional<Entity> BuildingObjectDialog::candidate() const {
     return m_impl->candidate();
+}
+
+std::vector<Entity> BuildingObjectDialog::relatedCandidates() const { return m_impl->related_candidates(); }
+
+std::vector<Entity> BuildingObjectDialog::coordinatedCandidates() const {
+    auto result = relatedCandidates();
+    if (const auto primary = candidate()) result.push_back(*primary);
+    return result;
 }
 
 bool BuildingObjectDialog::submit() { return m_impl->submit(); }

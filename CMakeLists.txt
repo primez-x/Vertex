@@ -37,7 +37,7 @@ if(SKETCH_BUILD_ARCHITECTURE OR SKETCH_BUILD_DESKTOP)
   target_compile_definitions(sketch_architecture PUBLIC ${SKETCH_OCCT_DEFINITIONS})
   target_link_libraries(sketch_architecture PUBLIC sketch_wall_semantics sketch_slab_semantics sketch_terrain_surface sketch_roof_join_semantics sketch_opening_assembly sketch_door_operation TKernel TKMath TKG2d TKG3d TKGeomBase TKBRep TKGeomAlgo TKTopAlgo TKPrim TKBO TKBool)
   add_library(sketch_building_objects src/architecture/building_objects.cpp)
-  target_link_libraries(sketch_building_objects PUBLIC sketch_architecture)
+  target_link_libraries(sketch_building_objects PUBLIC sketch_architecture sketch_stair_semantics)
   add_library(sketch_building_entities src/architecture/building_entity.cpp src/architecture/document_solid.cpp)
   target_link_libraries(sketch_building_entities PUBLIC sketch_building_objects sketch_document)
   add_library(sketch_performance_workload src/core/performance_workload.cpp)
@@ -108,6 +108,17 @@ target_include_directories(sketch_sqlite PUBLIC "${SQLITE_SOURCE_DIR}")
 target_compile_definitions(sketch_sqlite PRIVATE SQLITE_THREADSAFE=1 SQLITE_OMIT_LOAD_EXTENSION SQLITE_DQS=0 SQLITE_DEFAULT_MEMSTATUS=0)
 add_library(sketch_json INTERFACE)
 target_include_directories(sketch_json SYSTEM INTERFACE "${SKETCH_DEPS_DIR}/json/include")
+add_library(sketch_stair_semantics src/core/stair_semantics.cpp)
+target_include_directories(sketch_stair_semantics PUBLIC include)
+target_link_libraries(sketch_stair_semantics PUBLIC sketch_json)
+if(MSVC)
+  target_compile_options(sketch_stair_semantics PRIVATE /W4 /permissive- /utf-8)
+endif()
+if(BUILD_TESTING)
+  add_executable(stair_semantics_tests tests/stair_semantics_tests.cpp)
+  target_link_libraries(stair_semantics_tests PRIVATE sketch_stair_semantics)
+  add_test(NAME stair_semantics COMMAND stair_semantics_tests)
+endif()
 add_library(sketch_project_resource_catalog src/core/project_resource_catalog.cpp)
 target_include_directories(sketch_project_resource_catalog PUBLIC include)
 target_link_libraries(sketch_project_resource_catalog PUBLIC sketch_json bcrypt)
@@ -249,12 +260,20 @@ add_library(sketch_document src/core/document.cpp src/core/document_digest.cpp s
   src/core/boundary_dimension.cpp src/core/sheet_view_entity_codec.cpp
   src/core/annotation_entity_codec.cpp src/core/georeferencing_entity_codec.cpp
   src/core/vertical_level_document_adapter.cpp src/core/project_organization.cpp src/core/survey_source_version.cpp
-  src/core/physical_wall_room_data.cpp)
+  src/core/physical_wall_room_data.cpp src/core/stair_attachment_integrity.cpp)
 target_include_directories(sketch_document PUBLIC include)
-target_link_libraries(sketch_document PUBLIC sketch_json PRIVATE sketch_wall_semantics sketch_roof_join_semantics sketch_boundary_receipts
+target_link_libraries(sketch_document PUBLIC sketch_json sketch_stair_semantics PRIVATE sketch_wall_semantics sketch_roof_join_semantics sketch_boundary_receipts
   sketch_slab_semantics sketch_sheet_view_model sketch_annotation_catalog sketch_assembly_model sketch_model_phases
   sketch_room_relationships sketch_vertical_levels sketch_reference_grid sketch_terrain_surface
   sketch_georeferencing_contract bcrypt)
+if(BUILD_TESTING)
+  add_executable(stair_attachment_integrity_tests tests/stair_attachment_integrity_tests.cpp)
+  target_link_libraries(stair_attachment_integrity_tests PRIVATE sketch_document)
+  add_test(NAME stair_attachment_integrity COMMAND stair_attachment_integrity_tests)
+  if(MSVC)
+    target_compile_options(stair_attachment_integrity_tests PRIVATE /W4 /permissive- /utf-8)
+  endif()
+endif()
 if(SKETCH_BUILD_ARCHITECTURE OR SKETCH_BUILD_DESKTOP)
   add_library(sketch_georeferencing_runtime src/core/georeferencing_runtime.cpp)
   target_include_directories(sketch_georeferencing_runtime PUBLIC include)
@@ -354,21 +373,19 @@ if(SKETCH_BUILD_ARCHITECTURE OR SKETCH_BUILD_DESKTOP)
     PRIVATE sketch_architecture)
   target_sources(sketch_document PRIVATE src/core/physical_wall_space_source.cpp)
   target_link_libraries(sketch_document PRIVATE sketch_physical_clear_kernel)
-  add_library(sketch_physical_wall_spaces src/core/physical_wall_spaces.cpp)
-  target_include_directories(sketch_physical_wall_spaces PUBLIC include)
-  target_link_libraries(sketch_physical_wall_spaces PUBLIC
-    sketch_measurement_area_graph sketch_project_organization)
-  add_library(sketch_physical_wall_room src/core/physical_wall_room.cpp)
-  target_include_directories(sketch_physical_wall_room PUBLIC include)
-  target_link_libraries(sketch_physical_wall_room PUBLIC sketch_physical_wall_spaces)
-  target_link_libraries(sketch_physical_wall_room PRIVATE sketch_architecture)
+  target_sources(sketch_document PRIVATE src/core/physical_wall_spaces.cpp
+    src/core/physical_wall_room.cpp src/core/physical_wall_room_review.cpp
+    src/core/physical_room_dimension_source.cpp)
+  target_compile_definitions(sketch_document PRIVATE VERTEX_HAS_PHYSICAL_ROOM_REVIEW)
+  target_link_libraries(sketch_document PRIVATE sketch_architecture)
+  add_library(sketch_physical_wall_spaces INTERFACE)
+  target_link_libraries(sketch_physical_wall_spaces INTERFACE sketch_document sketch_measurement_area_graph)
+  add_library(sketch_physical_wall_room INTERFACE)
+  target_link_libraries(sketch_physical_wall_room INTERFACE sketch_physical_wall_spaces sketch_architecture)
   target_link_libraries(sketch_dxf_project_exchange PUBLIC sketch_physical_wall_room)
   target_compile_definitions(sketch_dxf_project_exchange PRIVATE SKETCH_PHYSICAL_ROOMS=1)
   target_link_libraries(sketch_ifc_project_exchange PUBLIC sketch_physical_wall_room)
   target_compile_definitions(sketch_ifc_project_exchange PRIVATE SKETCH_PHYSICAL_ROOMS=1)
-  if(MSVC)
-    target_compile_options(sketch_physical_wall_spaces PRIVATE /W4 /permissive- /utf-8)
-  endif()
   if(BUILD_TESTING)
     # These lower-layer checks deliberately omit sketch_document from their
     # link closure. Any accidental upward dependency must fail the link.
@@ -389,6 +406,12 @@ if(SKETCH_BUILD_ARCHITECTURE OR SKETCH_BUILD_DESKTOP)
     add_executable(physical_wall_room_tests tests/physical_wall_room_tests.cpp)
     target_link_libraries(physical_wall_room_tests PRIVATE sketch_physical_wall_room sketch_storage sketch_dxf_project_exchange sketch_ifc_project_exchange)
     add_test(NAME physical_wall_room COMMAND physical_wall_room_tests)
+    add_executable(physical_wall_room_review_tests tests/physical_wall_room_review_tests.cpp)
+    target_link_libraries(physical_wall_room_review_tests PRIVATE sketch_physical_wall_room sketch_storage sketch_exchange)
+    add_test(NAME physical_wall_room_review COMMAND physical_wall_room_review_tests)
+    add_executable(physical_room_dimension_tests tests/physical_room_dimension_tests.cpp)
+    target_link_libraries(physical_room_dimension_tests PRIVATE sketch_physical_wall_room sketch_storage sketch_exchange)
+    add_test(NAME physical_room_dimension COMMAND physical_room_dimension_tests)
     add_executable(physical_wall_room_repair_tests tests/physical_wall_room_repair_tests.cpp)
     target_link_libraries(physical_wall_room_repair_tests PRIVATE sketch_physical_wall_room sketch_storage sketch_exchange)
     add_test(NAME physical_wall_room_repair COMMAND physical_wall_room_repair_tests)
@@ -775,12 +798,21 @@ endif()
 
 if(SKETCH_BUILD_ARCHITECTURE OR SKETCH_BUILD_DESKTOP)
   include(cmake/PlaneGCS.cmake)
-  add_library(sketch_constraint_authoring src/core/constraint_authoring.cpp)
-  target_link_libraries(sketch_constraint_authoring PUBLIC sketch_document sketch_constraints sketch_precision sketch_project_organization)
-  if(MSVC)
-    target_compile_options(sketch_constraint_authoring PRIVATE /W4 /permissive- /utf-8)
-  endif()
+  # Document replay and interactive preparation share the same deterministic
+  # connected solve. Keep it in the authoritative library without a cyclic
+  # document/authoring dependency; the public authoring target remains stable.
+  target_sources(sketch_document PRIVATE src/core/constraint_authoring.cpp)
+  target_compile_definitions(sketch_document PRIVATE VERTEX_HAS_CONSTRAINT_AUTHORING)
+  target_link_libraries(sketch_document PRIVATE sketch_constraints sketch_precision)
+  add_library(sketch_constraint_authoring INTERFACE)
+  target_link_libraries(sketch_constraint_authoring INTERFACE sketch_document sketch_constraints sketch_precision sketch_project_organization)
   if(BUILD_TESTING)
+    add_executable(joint_translation_authoring_tests tests/joint_translation_authoring_tests.cpp)
+    target_link_libraries(joint_translation_authoring_tests PRIVATE sketch_constraint_authoring sketch_storage sketch_exchange sketch_sqlite)
+    add_test(NAME joint_translation_authoring COMMAND joint_translation_authoring_tests)
+    add_executable(tangent_constraint_tests tests/tangent_constraint_tests.cpp)
+    target_link_libraries(tangent_constraint_tests PRIVATE sketch_document sketch_constraints)
+    add_test(NAME tangent_constraint COMMAND tangent_constraint_tests)
     add_executable(constraint_authoring_tests tests/constraint_authoring_tests.cpp)
     target_link_libraries(constraint_authoring_tests PRIVATE sketch_constraint_authoring sketch_storage sketch_appraisal_document)
     add_test(NAME constraint_authoring COMMAND constraint_authoring_tests)
@@ -866,12 +898,23 @@ endif()
 
 if(SKETCH_BUILD_DESKTOP)
   find_package(Qt6 6.8 CONFIG REQUIRED COMPONENTS Core Gui Widgets OpenGL OpenGLWidgets PrintSupport Pdf Svg)
+  find_package(Tesseract 5.5.2 EXACT CONFIG REQUIRED)
   get_target_property(SKETCH_QMAKE_EXECUTABLE Qt6::qmake IMPORTED_LOCATION)
   get_filename_component(SKETCH_QT_BIN "${SKETCH_QMAKE_EXECUTABLE}" DIRECTORY)
   get_filename_component(SKETCH_QT_PREFIX "${SKETCH_QT_BIN}" DIRECTORY)
   add_library(sketch_reference_import src/desktop/reference_import.cpp)
   target_include_directories(sketch_reference_import PUBLIC src/desktop)
   target_link_libraries(sketch_reference_import PUBLIC sketch_windows_import_worker Qt6::Gui)
+  add_library(sketch_assistance_ocr src/desktop/assistance_ocr.cpp)
+  target_include_directories(sketch_assistance_ocr PUBLIC src/desktop)
+  target_link_libraries(sketch_assistance_ocr PUBLIC sketch_assistance_engine sketch_windows_import_worker Qt6::Core)
+  add_library(sketch_assistance_ocr_recognizer src/desktop/assistance_ocr_recognizer.cpp)
+  target_include_directories(sketch_assistance_ocr_recognizer PUBLIC src/desktop)
+  target_link_libraries(sketch_assistance_ocr_recognizer PUBLIC sketch_assistance_ocr PRIVATE Tesseract::libtesseract)
+  add_custom_target(vertex-assistance-runtime
+    COMMAND "${CMAKE_COMMAND}" -E copy_directory "${CMAKE_SOURCE_DIR}/assets/assistance"
+      "${CMAKE_BINARY_DIR}/assets/assistance"
+    VERBATIM)
   add_library(sketch_pinc_import_worker src/desktop/pinc_import_worker.cpp)
   target_include_directories(sketch_pinc_import_worker PUBLIC src/desktop)
   target_link_libraries(sketch_pinc_import_worker PUBLIC sketch_reference_import sketch_pinc_import_candidate_codec)
@@ -885,7 +928,8 @@ if(SKETCH_BUILD_DESKTOP)
   target_include_directories(vertex-import-worker PRIVATE include)
   target_link_libraries(vertex-import-worker PRIVATE
     sketch_dxf_project_exchange sketch_ifc_project_exchange sketch_wall_semantics sketch_pinc_import_worker
-    Qt6::Gui Qt6::Pdf)
+    sketch_assistance_ocr_recognizer Qt6::Gui Qt6::Pdf)
+  add_dependencies(vertex-import-worker vertex-assistance-runtime)
   if(WIN32)
     target_link_libraries(vertex-import-worker PRIVATE windowscodecs ole32)
     set(VERTEX_CAD_RUNTIME_ROOT "${CMAKE_SOURCE_DIR}/.deps/cad-runtime/3.13.15" CACHE PATH
@@ -935,6 +979,7 @@ if(SKETCH_BUILD_DESKTOP)
   endif()
   add_library(sketch_desktop src/desktop/main_window.cpp src/desktop/sketch_pdf_output.cpp
     src/desktop/building_object_dialog.cpp src/desktop/hosted_opening_dialog.cpp src/desktop/constraint_dialog.cpp
+    src/desktop/physical_wall_room_review_dialog.cpp
     src/desktop/constraint_preview_canvas.cpp src/desktop/text_library_dialog.cpp
     src/desktop/text_library_panel.cpp
     src/desktop/appraisal_report_dialog.cpp src/desktop/appraisal_details_panel.cpp
@@ -949,7 +994,7 @@ if(SKETCH_BUILD_DESKTOP)
     PREFIX "/symbols/architectural_v2"
     BASE "${CMAKE_CURRENT_SOURCE_DIR}/assets/symbols/architectural_v2"
     FILES ${VERTEX_ARCHITECTURAL_SYMBOL_SVGS})
-  target_link_libraries(sketch_desktop PUBLIC sketch_reference_import sketch_sheet_layout)
+  target_link_libraries(sketch_desktop PUBLIC sketch_reference_import sketch_sheet_layout sketch_assistance_ocr)
   target_link_libraries(sketch_desktop PUBLIC sketch_section_dimension_resolution)
   target_link_libraries(sketch_desktop PUBLIC sketch_survey_boundary_update)
   target_link_libraries(sketch_desktop PUBLIC sketch_measurement_linework sketch_measurement_area_graph)
@@ -1320,6 +1365,45 @@ if(SKETCH_BUILD_DESKTOP)
     qt_add_resources(physical_wall_room_desktop_tests physical_room_desktop_fonts
       PREFIX "/fonts" BASE assets/fonts FILES assets/fonts/Inter.ttf)
     add_test(NAME physical_wall_room_desktop COMMAND physical_wall_room_desktop_tests)
+    add_executable(physical_wall_room_review_dialog_tests tests/physical_wall_room_review_dialog_tests.cpp)
+    target_link_libraries(physical_wall_room_review_dialog_tests PRIVATE sketch_desktop)
+    qt_add_resources(physical_wall_room_review_dialog_tests physical_room_review_dialog_fonts
+      PREFIX "/fonts" BASE assets/fonts FILES assets/fonts/Inter.ttf)
+    add_test(NAME physical_wall_room_review_dialog COMMAND physical_wall_room_review_dialog_tests)
+    set_tests_properties(physical_wall_room_review_dialog PROPERTIES
+      TIMEOUT 120
+      ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_PLUGIN_PATH=${SKETCH_QT_PREFIX}/plugins"
+      ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${SKETCH_QT_BIN};PATH=path_list_prepend:${CMAKE_SOURCE_DIR}/.deps/native/x64-windows/$<IF:$<CONFIG:Debug>,debug/bin,bin>")
+    if(MSVC)
+      target_compile_options(physical_wall_room_review_dialog_tests PRIVATE /W4 /permissive- /utf-8)
+    endif()
+    add_executable(navigator_add_branch_desktop_tests tests/navigator_add_branch_desktop_tests.cpp)
+    target_link_libraries(navigator_add_branch_desktop_tests PRIVATE sketch_desktop)
+    qt_add_resources(navigator_add_branch_desktop_tests navigator_add_branch_fonts
+      PREFIX "/fonts" BASE assets/fonts FILES assets/fonts/Inter.ttf)
+    add_test(NAME navigator_add_branch_desktop COMMAND navigator_add_branch_desktop_tests)
+    add_executable(chain_dimension_desktop_tests tests/chain_dimension_desktop_tests.cpp)
+    target_link_libraries(chain_dimension_desktop_tests PRIVATE sketch_desktop)
+    add_test(NAME chain_dimension_desktop COMMAND chain_dimension_desktop_tests)
+    set_tests_properties(chain_dimension_desktop PROPERTIES TIMEOUT 60
+      ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_PLUGIN_PATH=${SKETCH_QT_PREFIX}/plugins"
+      ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${SKETCH_QT_BIN};PATH=path_list_prepend:${CMAKE_SOURCE_DIR}/.deps/native/x64-windows/$<IF:$<CONFIG:Debug>,debug/bin,bin>")
+    if(MSVC)
+      target_compile_options(chain_dimension_desktop_tests PRIVATE /W4 /permissive- /utf-8)
+    endif()
+    add_executable(stair_lifecycle_desktop_tests tests/stair_lifecycle_desktop_tests.cpp)
+    target_link_libraries(stair_lifecycle_desktop_tests PRIVATE sketch_desktop)
+    add_test(NAME stair_lifecycle_desktop COMMAND stair_lifecycle_desktop_tests)
+    set_tests_properties(stair_lifecycle_desktop PROPERTIES TIMEOUT 90
+      ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_PLUGIN_PATH=${SKETCH_QT_PREFIX}/plugins"
+      ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${SKETCH_QT_BIN};PATH=path_list_prepend:${CMAKE_SOURCE_DIR}/.deps/native/x64-windows/$<IF:$<CONFIG:Debug>,debug/bin,bin>")
+    if(MSVC)
+      target_compile_options(stair_lifecycle_desktop_tests PRIVATE /W4 /permissive- /utf-8)
+    endif()
+    set_tests_properties(navigator_add_branch_desktop PROPERTIES
+      TIMEOUT 60
+      ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_PLUGIN_PATH=${SKETCH_QT_PREFIX}/plugins"
+      ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${SKETCH_QT_BIN};PATH=path_list_prepend:${CMAKE_SOURCE_DIR}/.deps/native/x64-windows/$<IF:$<CONFIG:Debug>,debug/bin,bin>")
     set_tests_properties(physical_wall_room_desktop PROPERTIES
       ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_PLUGIN_PATH=${SKETCH_QT_PREFIX}/plugins"
       ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${SKETCH_QT_BIN};PATH=path_list_prepend:${CMAKE_SOURCE_DIR}/.deps/native/x64-windows/$<IF:$<CONFIG:Debug>,debug/bin,bin>")
@@ -1388,6 +1472,29 @@ if(SKETCH_BUILD_DESKTOP)
     add_executable(assistance_workflow_tests tests/assistance_workflow_tests.cpp)
     target_link_libraries(assistance_workflow_tests PRIVATE sketch_desktop)
     add_dependencies(assistance_workflow_tests vertex-import-worker)
+    add_executable(assistance_review_dialog_tests tests/assistance_review_dialog_tests.cpp)
+    target_link_libraries(assistance_review_dialog_tests PRIVATE sketch_desktop)
+    add_dependencies(assistance_review_dialog_tests vertex-import-worker)
+    qt_add_resources(assistance_review_dialog_tests assistance_review_fonts
+      PREFIX "/fonts" BASE assets/fonts FILES assets/fonts/Inter.ttf)
+    if(MSVC)
+      target_compile_options(assistance_review_dialog_tests PRIVATE /W4 /permissive- /utf-8)
+    endif()
+    add_test(NAME assistance_review_dialog COMMAND assistance_review_dialog_tests)
+    set_tests_properties(assistance_review_dialog PROPERTIES
+      TIMEOUT 60
+      ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_PLUGIN_PATH=${SKETCH_QT_PREFIX}/plugins"
+      ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${SKETCH_QT_BIN};PATH=path_list_prepend:${CMAKE_SOURCE_DIR}/.deps/native/x64-windows/$<IF:$<CONFIG:Debug>,debug/bin,bin>")
+    add_executable(assistance_ocr_tests tests/assistance_ocr_tests.cpp)
+    target_link_libraries(assistance_ocr_tests PRIVATE sketch_assistance_ocr)
+    add_test(NAME assistance_ocr_codec COMMAND assistance_ocr_tests "${CMAKE_SOURCE_DIR}")
+    add_executable(assistance_ocr_recognition_tests tests/assistance_ocr_recognition_tests.cpp)
+    target_link_libraries(assistance_ocr_recognition_tests PRIVATE sketch_assistance_ocr_recognizer Qt6::Gui)
+    add_dependencies(assistance_ocr_recognition_tests vertex-assistance-runtime)
+    add_test(NAME assistance_ocr_recognition COMMAND assistance_ocr_recognition_tests "${CMAKE_SOURCE_DIR}")
+    set_tests_properties(assistance_ocr_codec assistance_ocr_recognition PROPERTIES
+      ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_PLUGIN_PATH=${SKETCH_QT_PREFIX}/plugins;PATH=${SKETCH_QT_BIN}\;${CMAKE_SOURCE_DIR}/.deps/native/x64-windows/bin\;$ENV{PATH}"
+      TIMEOUT 60)
     add_executable(dxf_desktop_workflow_tests tests/dxf_desktop_workflow_tests.cpp)
     target_link_libraries(dxf_desktop_workflow_tests PRIVATE sketch_desktop)
     add_executable(ifc_desktop_workflow_tests tests/ifc_desktop_workflow_tests.cpp)

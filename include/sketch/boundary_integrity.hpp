@@ -1,5 +1,6 @@
 #pragma once
 #include "sketch/document.hpp"
+#include <set>
 
 namespace sketch {
 [[nodiscard]] std::map<std::string, Entity, std::less<>> transformed_boundary_entities(
@@ -21,6 +22,13 @@ namespace sketch {
 [[nodiscard]] std::map<std::string, Entity, std::less<>> edited_boundary_entities(
     const std::map<std::string, Entity, std::less<>>& source,
     const BoundaryGeometryEdit& edit);
+// Pure reconstruction within an already complete room-review assignment.
+// Only the dedicated intent replayer may publish this candidate. Other reviewed
+// retained owners may temporarily occupy destinations while all assignments
+// are rebuilt; ordinary single-owner commands keep the exclusive-owner guard.
+[[nodiscard]] std::map<std::string, Entity, std::less<>> edited_boundary_entities_for_room_review(
+    const std::map<std::string, Entity, std::less<>>& source,
+    const BoundaryGeometryEdit& edit, const std::set<std::string>& reviewed_owners);
 // Applies solved vertex positions together when sequential intermediate geometry
 // would be invalid. Existing sequential derivations remain byte-compatible.
 [[nodiscard]] std::map<std::string, Entity, std::less<>> edited_boundary_entities_batch(

@@ -24,6 +24,17 @@ bool exact_entity(const Entity& left, const Entity& right) {
     return left == right && left.properties.dump() == right.properties.dump() &&
            left.extensions.dump() == right.extensions.dump();
 }
+// A reviewed automatic set uses one explicitly homogeneous template. Only
+// the analytical target and actual text position may differ across its edges.
+nlohmann::json automatic_dimension_template_metadata(const Entity& entity) {
+    auto properties=entity.properties;
+    properties.erase("text_position");
+    if (properties.contains("target"))
+        for (const auto* key:{"entity_id","segment_id","segment_ids","second_segment_id","vertex_id"})
+            properties.at("target").erase(key);
+    return {{"type",entity.type},{"required",entity.required},
+        {"properties",std::move(properties)},{"extensions",entity.extensions}};
+}
 bool identified_v1(const Entity& entity) {
     return can_recognize_boundary_entity_type(entity.type) &&
         inspect_boundary_entity_version(entity).format == BoundaryEntityFormat::identified_v1;
@@ -717,7 +728,7 @@ static void validate_replacement_linework_face(
 static std::map<std::string, Entity, std::less<>> edited_boundary_entities_impl(
     const std::map<std::string, Entity, std::less<>>& source,
     const BoundaryGeometryEdit& edit, const std::vector<BoundaryGeometryEdit>* batch,
-    bool retained_replay = false) {
+    bool retained_replay = false, const std::set<std::string>& reviewed_room_owners = {}) {
     validate_boundary_geometry_edit(edit);
     const auto found = source.find(edit.boundary_id);
     if (found == source.end()) throw std::invalid_argument("Edited boundary does not exist");
@@ -732,7 +743,7 @@ static std::map<std::string, Entity, std::less<>> edited_boundary_entities_impl(
     std::optional<PhysicalWallRoomDescriptor> repaired_room;
     if (edit.physical_wall_room_repair) {
         if (batch) throw std::invalid_argument("Physical room repair cannot be batched with other geometry edits");
-        repaired_room=validate_physical_wall_room_repair(source,edit);
+        repaired_room=validate_physical_wall_room_repair(source,edit,reviewed_room_owners);
         validate_retained_replacement_deductions(source,original,boundary_geometry(edited));
     }
     if (edit.replacement_linework_sources) {
@@ -744,12 +755,13 @@ static std::map<std::string, Entity, std::less<>> edited_boundary_entities_impl(
         if (batch) throw std::invalid_argument("Wall source replacement cannot be a vertex batch");
         const auto replacement_outline = boundary_geometry(edited);
         try {
-            replacement_source = derive_replacement_exterior_wall_measurement(source, original,
-                edit.replacement_wall_source_ids);
+            replacement_source = edit.wall_source_translation
+                ? derive_translated_exterior_wall_measurement(source,original,edit.replacement_wall_source_ids,*edit.wall_source_translation)
+                : derive_replacement_exterior_wall_measurement(source, original,edit.replacement_wall_source_ids);
         } catch (const std::invalid_argument&) {
-            if (!retained_replay) throw;
+            if (!retained_replay || edit.wall_source_translation) throw;
         }
-        if (retained_replay && (!replacement_source ||
+        if (retained_replay && !edit.wall_source_translation && (!replacement_source ||
             !exact_replacement_outline(replacement_outline, replacement_source->boundary))) {
             // Archives do not identify the numerical kernel, and old commands
             // may survive in newer files. Accept only the complete exact old
@@ -888,6 +900,10 @@ static std::map<std::string, Entity, std::less<>> edited_boundary_entities_impl(
             if (topology_changed) {
                 if (dimension.kind == BoundaryDimensionKind::segment_length &&
                     dimension.placement == BoundaryDimensionPlacement::automatic) {
+                    if (!reviewed_room_owners.empty() && automatic_template &&
+                        automatic_dimension_template_metadata(*automatic_template).dump()!=
+                            automatic_dimension_template_metadata(source.at(id)).dump())
+                        throw std::invalid_argument("Kept automatic dimensions have different styles or metadata. Remove the differing dimensions or review their targets individually.");
                     if (!automatic_template) automatic_template = &source.at(id);
                     retired_dimensions.push_back(id);
                 } else if (removed_references.contains(id)) {
@@ -913,15 +929,15 @@ static std::map<std::string, Entity, std::less<>> edited_boundary_entities_impl(
                         target.at("vertex_id") = mapped_child(dimension.vertex_id, "vertices");
                     }
                     const auto remapped = decode_boundary_dimension_entity(entity);
-                    (void)remapped.dimension->resolve(result.at(edit.boundary_id));
+                    (void)remapped.dimension->resolve(result);
                 }
             } else {
-                (void)dimension.resolve(result.at(edit.boundary_id));
+                (void)dimension.resolve(result);
                 if (dimension.kind == BoundaryDimensionKind::segment_length &&
                     dimension.placement == BoundaryDimensionPlacement::automatic) {
                     const auto side = dimension.automatic_placement_version.value_or(1) == 1 ? 1.0 :
                         (signed_area(boundary_geometry(edited)) > 0 ? -1.0 : 1.0);
-                    dimension.text_position = split_dimension_position(dimension.resolve(result.at(edit.boundary_id)).segment, side);
+                    dimension.text_position = split_dimension_position(dimension.resolve(result).segment, side);
                     entity = encode_boundary_dimension_entity(dimension, &entity);
                 }
             }
@@ -948,9 +964,18 @@ static std::map<std::string, Entity, std::less<>> edited_boundary_entities_impl(
             const auto side = dimension.automatic_placement_version.value_or(1) == 1 ? 1.0 :
                 (signed_area(boundary_geometry(edited)) > 0 ? -1.0 : 1.0);
             dimension.text_position = split_dimension_position(edited.segments[i].segment, side);
-            auto entity = encode_boundary_dimension_entity(dimension);
-            for (const auto* key : {"property_id", "building_id", "floor_id", "layer_id"})
-                if (automatic_template->properties.contains(key)) entity.properties[key] = automatic_template->properties.at(key);
+            auto entity = [&] {
+                if (!reviewed_room_owners.empty()) {
+                    auto template_entity = *automatic_template;
+                    template_entity.id = dimension.id;
+                    return encode_boundary_dimension_entity(dimension, &template_entity);
+                }
+                // Preserve the existing ordinary-command replay dialect.
+                auto legacy=encode_boundary_dimension_entity(dimension);
+                for (const auto* key:{"property_id","building_id","floor_id","layer_id"})
+                    if (automatic_template->properties.contains(key)) legacy.properties[key]=automatic_template->properties.at(key);
+                return legacy;
+            }();
             result.emplace(entity.id, std::move(entity));
         }
     }
@@ -965,12 +990,12 @@ static std::map<std::string, Entity, std::less<>> edited_boundary_entities_impl(
             if (!decoded.supported()) throw std::invalid_argument(decoded.unsupported_reason);
             auto dimension = *decoded.dimension;
             if (dimension.boundary_id != edit.boundary_id) continue;
-            (void)dimension.resolve(result.at(edit.boundary_id));
+            (void)dimension.resolve(result);
             if (dimension.kind != BoundaryDimensionKind::segment_length ||
                 dimension.placement != BoundaryDimensionPlacement::automatic) continue;
             const auto side = dimension.automatic_placement_version.value_or(1) == 1 ? 1.0 :
                 (signed_area(boundary_geometry(edited)) > 0 ? -1.0 : 1.0);
-            dimension.text_position = split_dimension_position(dimension.resolve(result.at(edit.boundary_id)).segment, side);
+            dimension.text_position = split_dimension_position(dimension.resolve(result).segment, side);
             entity = encode_boundary_dimension_entity(dimension, &entity);
         }
     }
@@ -1058,7 +1083,7 @@ static std::map<std::string, Entity, std::less<>> edited_boundary_entities_impl(
                 entity = encode_boundary_dimension_entity(dimension, &entity);
             }
             if (dimension.kind == BoundaryDimensionKind::angle)
-                (void)dimension.resolve(result.at(edit.boundary_id));
+                (void)dimension.resolve(result);
             if (dimension.kind == BoundaryDimensionKind::segment_length &&
                 (!dimension.segment_chain_ids.empty() || dimension.placement == BoundaryDimensionPlacement::manual)) {
                 auto ids = dimension.segment_chain_ids;
@@ -1069,7 +1094,7 @@ static std::map<std::string, Entity, std::less<>> edited_boundary_entities_impl(
                     dimension.segment_chain_ids = std::move(ids);
                     entity = encode_boundary_dimension_entity(dimension, &entity);
                 }
-                (void)dimension.resolve(result.at(edit.boundary_id));
+                (void)dimension.resolve(result);
                 continue;
             }
             if (dimension.kind == BoundaryDimensionKind::segment_length &&
@@ -1106,6 +1131,14 @@ static std::map<std::string, Entity, std::less<>> edited_boundary_entities_impl(
 std::map<std::string, Entity, std::less<>> edited_boundary_entities(
     const std::map<std::string, Entity, std::less<>>& source, const BoundaryGeometryEdit& edit) {
     return edited_boundary_entities_impl(source, edit, nullptr);
+}
+
+std::map<std::string, Entity, std::less<>> edited_boundary_entities_for_room_review(
+    const std::map<std::string, Entity, std::less<>>& source, const BoundaryGeometryEdit& edit,
+    const std::set<std::string>& reviewed_owners) {
+    if (!edit.physical_wall_room_repair || !reviewed_owners.contains(edit.boundary_id))
+        throw std::invalid_argument("Complete room-review reconstruction requires its retained ownership scope");
+    return edited_boundary_entities_impl(source,edit,nullptr,false,reviewed_owners);
 }
 
 std::map<std::string, Entity, std::less<>> replayed_boundary_entities(
@@ -1202,6 +1235,20 @@ std::optional<std::string> validate_boundary_integrity(
                     }
                 }
             }
+            if (entity.properties.contains("wall_measurement_source") &&
+                entity.properties.at("wall_measurement_source").is_object() &&
+                entity.properties.at("wall_measurement_source").contains("version") &&
+                entity.properties.at("wall_measurement_source").at("version")==2) {
+                const auto physical=materialize_exterior_wall_measurement(entity);
+                const auto actual=boundary_geometry(boundary);
+                if (actual.size()!=physical.boundary.size()) throw std::invalid_argument("Physical translation lineage changed topology");
+                for (std::size_t i=0;i<actual.size();++i) {
+                    const auto& a=actual[i]; const auto& b=physical.boundary[i];
+                    if (a.start.x!=b.start.x || a.start.y!=b.start.y || a.end.x!=b.end.x || a.end.y!=b.end.y ||
+                        a.sweep_radians!=b.sweep_radians)
+                        throw std::invalid_argument("Physical translation lineage differs from the retained outline");
+                }
+            }
             if (entity.extensions.contains("boundary_geometry_derivation")) {
                 if (entity.properties.contains("boundary_authoring"))
                     throw std::invalid_argument("Boundary " + id +
@@ -1266,7 +1313,7 @@ std::optional<std::string> validate_boundary_integrity(
         if (owner->second.type == "measurement_linework") {
             // Full analytical resolution also checks shared vertex identity and
             // nondegenerate tangents; edge membership alone is insufficient.
-            (void)dimension.resolve(owner->second);
+            validate_boundary_dimension_target(dimension,owner->second);
             continue;
         }
         const auto boundary_edges = edges.find(owner->first);
@@ -1276,7 +1323,7 @@ std::optional<std::string> validate_boundary_integrity(
             if (!boundary_edges->second.contains(dimension.segment_id))
                 throw std::invalid_argument("Dimension " + id + ": missing identified source segment");
             if (!dimension.segment_chain_ids.empty())
-                (void)dimension.resolve(owner->second);
+                validate_boundary_dimension_target(dimension,owner->second);
         } else if (dimension.kind == BoundaryDimensionKind::angle) {
             if (!boundary_edges->second.contains(dimension.segment_id) ||
                 !boundary_edges->second.contains(dimension.secondary_segment_id)) {

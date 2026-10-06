@@ -1,5 +1,6 @@
 #include "sketch/project_store.hpp"
 #include "sketch/project_exchange.hpp"
+#include "sketch/stair_semantics.hpp"
 #include "sketch/document_digest.hpp"
 #include "sketch/boundary_entity.hpp"
 #include "sketch/boundary_receipt.hpp"
@@ -8,6 +9,7 @@
 #include "sketch/boundary_transform.hpp"
 #include "sketch/constraint_entity.hpp"
 #include "sketch/constraint_wall_edit.hpp"
+#include "sketch/constraint_authoring.hpp"
 #include "sketch/wall_measurement.hpp"
 #include "sketch/measurement_area_graph.hpp"
 #include "sketch/measurement_linework.hpp"
@@ -3473,6 +3475,209 @@ void test_reviewed_physical_room_repair_floor_and_downgrade() {
     }
 }
 
+void test_translated_physical_source_native53_storage() {
+    TempDirectory temp;
+    std::vector<Entity> values{
+        entity("translation-property", "property"),
+        entity("translation-building", "building", {{"property_id", "translation-property"}}),
+        entity("translation-floor", "floor", {{"building_id", "translation-building"}}),
+        entity("translation-layer", "layer", {{"floor_id", "translation-floor"}})};
+    const sketch::Vec2 corners[]{{.3,.2},{4.4,.2},{4.4,3.4},{.3,3.4}};
+    std::vector<std::string> wall_ids;
+    const auto contextualize = [](Entity value) {
+        value.properties["property_id"] = "translation-property";
+        value.properties["building_id"] = "translation-building";
+        value.properties["floor_id"] = "translation-floor";
+        value.properties["layer_id"] = "translation-layer";
+        return value;
+    };
+    for (std::size_t i = 0; i < 4; ++i) {
+        wall_ids.push_back("translation-wall-" + std::to_string(i));
+        const auto a = corners[i], b = corners[(i + 1) % 4];
+        values.push_back(contextualize(entity(wall_ids.back(), "wall",
+            {{"baseline", {{"start", {a.x,a.y}}, {"end", {b.x,b.y}}, {"sweep_radians", 0.0}}},
+             {"thickness_m", .14}, {"height_m", 2.4}, {"elevation_m", 0.0}})));
+    }
+    const auto measured = sketch::derive_exterior_wall_measurement(Document::create(values).snapshot(), wall_ids);
+    sketch::IdentifiedBoundary boundary{"translated-measured", "measurement_boundary", {}};
+    for (std::size_t i = 0; i < measured.boundary.size(); ++i)
+        boundary.segments.push_back({"translated:e" + std::to_string(i), "translated:v" + std::to_string(i),
+            "translated:v" + std::to_string((i + 1) % measured.boundary.size()), measured.boundary[i]});
+    auto owner = contextualize(sketch::encode_identified_boundary_entity(boundary));
+    owner.properties["wall_measurement_source"] = measured.source;
+    values.push_back(owner);
+    auto document = Document::create(values);
+    for (const sketch::Vec2 offset : {sketch::Vec2{.8,.4}, sketch::Vec2{.4,.8}}) {
+        const auto source = document.snapshot();
+        sketch::ConstraintAuthoringIntent intent;
+        intent.joint_translation = sketch::JointTranslationIntent{offset, {owner.id}, {}, wall_ids, true};
+        const auto preview = sketch::preview_constraint_authoring(source, intent);
+        if (!preview.accepted()) {
+            std::string diagnostic="fractional physical perimeter translation rejected:";
+            for (const auto& message:preview.diagnostics()) diagnostic+=" "+message;
+            throw std::runtime_error(diagnostic);
+        }
+        sketch::apply_constraint_authoring(document, preview);
+        const auto translated = sketch::decode_identified_boundary_entity(document.snapshot().entities().at(owner.id));
+        const auto previous = sketch::decode_identified_boundary_entity(source.entities().at(owner.id));
+        for (std::size_t i = 0; i < previous.segments.size(); ++i) {
+            const auto& a = previous.segments[i]; const auto& b = translated.segments[i];
+            require(a.segment_id == b.segment_id && a.start_vertex_id == b.start_vertex_id &&
+                a.end_vertex_id == b.end_vertex_id && b.segment.start.x == a.segment.start.x + offset.x &&
+                b.segment.start.y == a.segment.start.y + offset.y && b.segment.end.x == a.segment.end.x + offset.x &&
+                b.segment.end.y == a.segment.end.y + offset.y,
+                "storage fixture must translate actual identified measured geometry exactly");
+        }
+        require(sketch::wall_measurement_source_current(document.snapshot().entities(), document.snapshot().entities().at(owner.id)),
+            "translated physical source must remain current before testing storage");
+    }
+    const auto head = document.snapshot();
+    require(head.entities().at(owner.id).properties.at("wall_measurement_source").at("version") == 2,
+        "real translated measured owner must carry immutable version2 physical source lineage");
+    auto deleted = Document::fork(head);
+    deleted.apply(ApplyEntityChanges{deleted.revision(), {EntityChange::erase(owner.id)}, {}, "Delete translated measured owner"});
+    document.undo(document.revision());
+    const auto undone = document.snapshot();
+    std::vector<Entity> copied;
+    for (const auto& [id, value] : head.entities()) { (void)id; copied.push_back(value); }
+    const auto imported = Document::create(copied);
+    require(imported.snapshot().history().size() == 1, "entity-only lineage copy must have no originating translation history");
+    for (const auto& snapshot : {head, undone, deleted.snapshot(), imported.snapshot()}) {
+        require(ProjectStore::required_format_version(snapshot) == 53,
+            "head, Undo, deletion history and entity-only physical lineage must require native53");
+        const auto path = temp.path / ("physical-lineage-" + sketch::make_stable_id() + ".bldproj");
+        (void)ProjectStore::save(path, snapshot);
+        sqlite3* database = nullptr;
+        require(sqlite3_open(path.string().c_str(), &database) == SQLITE_OK, "native53 fixture should open metadata");
+        const auto marker = metadata_value(database, "format_version");
+        sqlite3_close(database);
+        require(marker == "53", "native53 save must publish its actual reader marker");
+        auto loaded = ProjectStore::load(path);
+        const auto restored = loaded.document.snapshot();
+        require(restored.entities() == snapshot.entities() && restored.revision() == snapshot.revision() &&
+            restored.history().size() == snapshot.history().size() &&
+            sketch::document_authoring_source_digest_v1(restored) == sketch::document_authoring_source_digest_v1(snapshot),
+            "native53 read must preserve exact entities, revisions, retained history and navigation");
+        for (std::size_t i = 0; i < snapshot.history().size(); ++i) {
+            const auto& expected = snapshot.history()[i]; const auto& actual = restored.history()[i];
+            require(actual.revision == expected.revision && actual.parent_revision == expected.parent_revision &&
+                actual.source_revision == expected.source_revision && actual.action == expected.action &&
+                actual.name == expected.name && actual.entities == expected.entities && actual.assets == expected.assets &&
+                actual.undo_stack == expected.undo_stack && actual.redo_stack == expected.redo_stack,
+                "native53 must reopen every exact retained revision and its navigation stacks");
+        }
+        for (std::size_t i = 1; i <= 2 && i < snapshot.history().size(); ++i)
+            require(restored.history()[i].boundary_constraint_changes &&
+                sketch::command_to_json(*restored.history()[i].boundary_constraint_changes) ==
+                    sketch::command_to_json(*snapshot.history()[i].boundary_constraint_changes),
+                "native53 must retain each actual typed fractional translation command exactly");
+        if (snapshot.entities() == undone.entities()) {
+            require(loaded.document.can_redo(), "native53 Undo must reopen with retained Redo");
+            loaded.document.redo(loaded.document.revision());
+            require(loaded.document.snapshot().entities() == head.entities(), "native53 Redo must restore exact translated owners and walls");
+        }
+        const auto destination = temp.path / ("lineage-extraction-" + sketch::make_stable_id());
+        sketch::extract_project(snapshot, destination);
+        std::ifstream input(destination / "project.json"); nlohmann::json extraction; input >> extraction;
+        require(extraction.at("exchange_version") == 51 && extraction.at("revisions").size() == snapshot.history().size(),
+            "actual physical lineage extraction must retain history and declare exchange51");
+        execute_sql(path, "PRAGMA user_version=52; UPDATE metadata SET value='52' WHERE key='format_version'");
+        rewrite_logical_digest(path);
+        const auto hash = ProjectStore::file_sha256(path);
+        require_error([&] { (void)ProjectStore::load(path); }, StorageErrorCode::unsupported_format,
+            "recomputed logical digest must not downgrade actual physical lineage to native52");
+        require(ProjectStore::file_sha256(path) == hash, "native52 lineage refusal must preserve original bytes");
+    }
+    sketch::ProjectWorkspace workspace(undone); const auto capture = workspace.capture();
+    const auto history = sketch::capture_workspace_history_record(capture);
+    sketch::RecoveryLedger ledger{{"physical-lineage-history", "workspace_history",
+        sketch::encode_workspace_history_record(capture.document(), history, std::nullopt)}};
+    const auto archive_path = temp.path / "physical-lineage-workspace.bldproj";
+    (void)ProjectStore::save_archive(archive_path, {capture.document(), ledger, sketch::ArchiveRole::ordinary});
+    const auto archive = ProjectStore::load_archive(archive_path, sketch::ArchiveRole::ordinary);
+    require(archive.supported() && archive.archive->document().entities() == undone.entities() &&
+        archive.archive->document().revision() == undone.revision() &&
+        sketch::document_authoring_source_digest_v1(archive.archive->document()) == sketch::document_authoring_source_digest_v1(undone) &&
+        archive.archive->recovery().size() == 1 && archive.archive->recovery().front().envelope == ledger.front().envelope &&
+        ProjectStore::required_format_version(archive.archive->document()) == 53,
+        "native53 recovery archive must retain exact physical lineage, navigation and workspace history");
+    require_error([&] { (void)ProjectStore::load(archive_path); }, StorageErrorCode::unsupported_format,
+        "document-only load must preserve native53 workspace recovery history");
+    execute_sql(archive_path, "PRAGMA user_version=52; UPDATE metadata SET value='52' WHERE key='format_version'");
+    rewrite_logical_digest(archive_path); const auto archive_hash = ProjectStore::file_sha256(archive_path);
+    require_error([&] { (void)ProjectStore::load_archive(archive_path, sketch::ArchiveRole::ordinary); },
+        StorageErrorCode::unsupported_format, "rewritten digest must not downgrade native53 recovery lineage");
+    require(ProjectStore::file_sha256(archive_path) == archive_hash, "recovery lineage downgrade refusal preserves bytes");
+    require(ProjectStore::required_format_version(Document::create({entity("opaque-source", "object",
+        {{"wall_measurement_source", head.entities().at(owner.id).properties.at("wall_measurement_source")},
+         {"wall_source_translation", {{"version", 1}, {"offset", {.8,.4}}}}})}).snapshot()) == 1,
+        "unrelated opaque object with physical lineage-like fields must retain native1");
+}
+
+void test_typed_stair_and_owned_railing_history_floors() {
+    const auto context=[](Entity value) {
+        for (const auto& [key,id]:std::vector<std::pair<std::string,std::string>>{
+                 {"property_id","property"},{"building_id","building"},{"floor_id","floor"},{"layer_id","layer"}})
+            value.properties[key]=id;
+        return value;
+    };
+    const std::vector<Entity> organization={entity("property","property"),
+        entity("building","building",{{"property_id","property"}}),
+        entity("floor","floor",{{"building_id","building"}}),
+        entity("layer","layer",{{"floor_id","floor"}})};
+    sketch::StairFlight stair;
+    stair.id="stair"; stair.riser_count=12; stair.total_rise=2.4; stair.going=.3; stair.width=1;
+    stair.flights={{"flight-a",6},{"flight-b",6}};
+    stair.landings={{"landing-a",1,.15,sketch::StairTurn::left_quarter,0}};
+    const auto host=context(entity(stair.id,"stair",sketch::encode_stair_properties(stair)));
+    sketch::Railing railing;
+    railing.id="rail"; railing.height=1; railing.thickness=.05; railing.post_spacing=.5;
+    railing.host=sketch::StairRailingHost{stair.id,"flight-a",sketch::StairRailingSide::left,.1,.9};
+    const auto rail=context(entity(railing.id,"railing",sketch::encode_railing_properties(railing)));
+    for (const bool owned_rail:{false,true}) {
+        auto document=Document::create(organization);
+        std::vector<EntityChange> additions={EntityChange::upsert(host)};
+        if (owned_rail) additions.push_back(EntityChange::upsert(rail));
+        document.apply(ApplyEntityChanges{document.revision(),additions,{},"Add typed stair"});
+        const auto head=document.snapshot();
+        auto deleted=Document::fork(head);
+        std::vector<EntityChange> removals={EntityChange::erase(host.id)};
+        if (owned_rail) removals.push_back(EntityChange::erase(rail.id));
+        deleted.apply(ApplyEntityChanges{deleted.revision(),removals,{},"Delete typed stair"});
+        document.undo(document.revision());
+        const auto floor=owned_rail?52U:51U;
+        for (const auto& snapshot:{head,document.snapshot(),deleted.snapshot()}) {
+            require(ProjectStore::required_format_version(snapshot)==floor,
+                "current, undone and deleted canonical stairs/rails retain their reader floor");
+            TempDirectory temp;const auto path=temp.path/"stair.bldproj";
+            (void)ProjectStore::save(path,snapshot);
+            const auto restored=ProjectStore::load(path).document.snapshot();
+            require(restored.entities()==snapshot.entities() && restored.history().size()==snapshot.history().size(),
+                "typed stair/rail storage reopens exact entities and retained history");
+            const auto destination=temp.path/"extracted";
+            sketch::extract_project(snapshot,destination);
+            std::ifstream input(destination/"project.json");nlohmann::json extraction;input>>extraction;
+            require(extraction.at("exchange_version")==floor-2 && extraction.at("revisions").size()==snapshot.history().size(),
+                "typed stair/rail extraction declares its retained-history reader floor");
+            const auto previous=std::to_string(floor-1);
+            execute_sql(path,"PRAGMA user_version="+previous+"; UPDATE metadata SET value='"+previous+"' WHERE key='format_version'");
+            rewrite_logical_digest(path);const auto hash=ProjectStore::file_sha256(path);
+            require_error([&]{(void)ProjectStore::load(path);},StorageErrorCode::unsupported_format,
+                "rewritten digest cannot downgrade typed stair or owned railing history");
+            require(ProjectStore::file_sha256(path)==hash,"downgrade refusal preserves source bytes");
+        }
+    }
+    stair.flights.clear();stair.landings.clear();
+    railing.host.reset();railing.length=3;
+    require(ProjectStore::required_format_version(Document::create({
+        entity(stair.id,"stair",sketch::encode_stair_properties(stair)),
+        entity(railing.id,"railing",sketch::encode_railing_properties(railing))}).snapshot())==1,
+        "version1 straight stair and independent railing retain native1");
+    require(ProjectStore::required_format_version(Document::create({entity("opaque","vendor",
+        {{"version",2},{"form","multi_flight_stair"}})}).snapshot())==1,
+        "unrelated vendor form collision stays opaque and native1");
+}
+
 void test_native_room_topology_is_validated_on_restore() {
     TempDirectory temp;
     const auto path = temp.path / "room.bldproj";
@@ -3519,6 +3724,8 @@ int main() {
         test_reviewed_exterior_source_reader_floor();
         test_physical_arc_length_history_requires_v12();
         test_direct_curve_length_history_requires_v13();
+        test_typed_stair_and_owned_railing_history_floors();
+        test_translated_physical_source_native53_storage();
         test_native_room_topology_is_validated_on_restore();
         test_reviewed_physical_room_repair_floor_and_downgrade();
         test_styled_dimension_checkpoint_archive_roundtrip();

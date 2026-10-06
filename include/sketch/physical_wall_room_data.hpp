@@ -3,6 +3,7 @@
 #include "sketch/geometry.hpp"
 
 #include <optional>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -23,5 +24,6 @@ struct PhysicalWallRoomDescriptor {
 // Document's source adapter independently rederives the reviewed destination
 // from the preceding state. No caller-supplied geometry or validator authority.
 [[nodiscard]] PhysicalWallRoomDescriptor validate_physical_wall_room_repair(
-    const std::map<std::string,Entity,std::less<>>& source, const BoundaryGeometryEdit& edit);
+    const std::map<std::string,Entity,std::less<>>& source, const BoundaryGeometryEdit& edit,
+    const std::set<std::string>& reviewed_owners = {});
 } // namespace sketch

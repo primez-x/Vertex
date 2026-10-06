@@ -1,6 +1,8 @@
 #include "sketch/desktop/constraint_dialog.hpp"
 #include "sketch/desktop/main_window.hpp"
 #include "sketch/desktop/constraint_preview_canvas.hpp"
+#include "sketch/project_store.hpp"
+#include "sketch/document_digest.hpp"
 #include "support/noninteractive_errors.hpp"
 
 #include <QApplication>
@@ -668,6 +670,153 @@ Segment stored_wall_baseline(const Entity& value) {
     return {{line.at("start")[0].get<double>(), line.at("start")[1].get<double>()},
             {line.at("end")[0].get<double>(), line.at("end")[1].get<double>()},
             line.at("sweep_radians").get<double>()};
+}
+
+void configure_tangent_pair(ConstraintDialog& dialog) {
+    select_relation(dialog,ConstraintRelationKind::tangent);
+    choose_endpoint(dialog,"constraintBinding0","Tangent line","end");
+    choose_endpoint(dialog,"constraintBinding1","Tangent line","start");
+    choose_endpoint(dialog,"constraintBinding2","Tangent arc","start");
+    choose_endpoint(dialog,"constraintBinding3","Tangent arc","end");
+    choose_endpoint(dialog,"constraintAnchor","Tangent arc","end fixed");
+}
+void click_constraint_preview(ConstraintDialog& dialog) {
+    auto* button=dialog.findChild<QPushButton*>("constraintPreviewButton");
+    require(button,"real constraint Preview button is missing");button->click();
+}
+void click_constraint_apply(ConstraintDialog& dialog) {
+    auto* button=dialog.findChild<QPushButton*>("constraintApplyButton");
+    require(button && button->isEnabled(),"current tangent preview must enable the real Apply button");
+    button->click();require(dialog.acceptedPreview().has_value(),"real Apply must return the captured tangent intent");
+}
+std::vector<Entity> tangent_dialog_walls(double sign=1,double line_x=1,bool cusp=false) {
+    auto line=wall();line.id="tangent-line";line.properties["name"]="Tangent line";
+    line.properties["baseline"]={{"start",{line_x,(cusp ? 2. : -2.)*sign}},
+        {"end",{1.,0.}},{"sweep_radians",0.}};
+    auto arc=wall();arc.id="tangent-arc";arc.properties["name"]="Tangent arc";
+    arc.properties["baseline"]={{"start",{1.,0.}},{"end",{0.,sign}},
+        {"sweep_radians",sign*std::numbers::pi/2}};
+    return {line,arc};
+}
+void persisted_tangent_dialog_lifecycle() {
+    for (const double sign : {-1.,1.}) {
+        auto document=Document::create(tangent_dialog_walls(sign));
+        const auto source=document.snapshot();
+        ConstraintDialog cancel(source,"tangent-line",true);configure_tangent_pair(cancel);
+        click_constraint_preview(cancel);
+        require(cancel.findChild<QPushButton*>("constraintApplyButton")->isEnabled(),
+            "independent unit-circle line/arc junction must preview as a smooth tangent");
+        require(document.snapshot().entities()==source.entities() && document.revision()==source.revision(),
+            "tangent preview must remain detached from live geometry and history");
+        cancel.findChild<QDialogButtonBox*>()->button(QDialogButtonBox::Cancel)->click();
+        require(!cancel.acceptedPreview() && document.snapshot().entities()==source.entities() &&
+            document.snapshot().history().size()==source.history().size(),"tangent Cancel published geometry or a relationship");
+
+        ConstraintDialog add(source,"tangent-line",true);configure_tangent_pair(add);
+        click_constraint_preview(add);click_constraint_apply(add);
+        (void)apply_constraint_authoring(document,*add.acceptedPreview());
+        const auto joined=document.snapshot();
+        require(joined.revision()==source.revision()+1 && joined.history().size()==source.history().size()+1,
+            "tangent Apply must add one atomic history step");
+        require(joined.entities().at("tangent-line")==source.entities().at("tangent-line") &&
+            joined.entities().at("tangent-arc")==source.entities().at("tangent-arc"),
+            "already satisfied tangent must preserve exact original geometry");
+        std::string relation_id;
+        for (const auto& [id,entity]:joined.entities()) if (entity.type=="constraint") {
+            const auto saved=decode_constraint_entity(entity);
+            require(saved.supported() && saved.constraint->relation==ConstraintRelationKind::tangent &&
+                entity.properties.at("version")==5,"dialog must persist actual v5 tangent semantics");
+            require(saved.constraint->bindings==std::vector<WallEndpointBinding>{
+                {"tangent-line",WallEndpointRole::end},{"tangent-line",WallEndpointRole::start},
+                {"tangent-arc",WallEndpointRole::start},{"tangent-arc",WallEndpointRole::end}},
+                "dialog must retain the selected contact/other endpoint roles");
+            relation_id=id;
+        }
+        require(!relation_id.empty(),"tangent Apply did not persist a relationship");
+        const auto saved_relation=joined.entities().at(relation_id);
+
+        ConstraintDialog resize(joined,"tangent-arc",true);
+        require(combo(resize,"constraintOperation").currentData().toInt()==0,"curve must offer direct physical length editing");
+        combo(resize,"constraintAnchor").setCurrentIndex(1);
+        resize.setLengthExpression("3.141592653589793 m");
+        click_constraint_preview(resize);
+        require(document.snapshot().entities()==joined.entities(),"connected tangent resize preview mutated its source");
+        click_constraint_apply(resize);(void)apply_constraint_authoring(document,*resize.acceptedPreview());
+        const auto enlarged=document.snapshot();
+        const auto curve=stored_wall_baseline(enlarged.entities().at("tangent-arc"));
+        const auto line=stored_wall_baseline(enlarged.entities().at("tangent-line"));
+        // Doubling a quarter-circle's physical length at fixed signed sweep
+        // doubles its radius. The fixed endpoint is (0,sign), so the contact
+        // becomes (2,-sign), with an independently known vertical derivative.
+        require_near(curve.start.x,2);require_near(curve.start.y,-sign);
+        require_near(curve.end.x,0);require_near(curve.end.y,sign);
+        require_near(segment_length(curve),std::numbers::pi);
+        require(curve.sweep_radians==sign*std::numbers::pi/2,"connected tangent resize changed the signed circular sweep");
+        require_near(line.end.x,2);require_near(line.end.y,-sign);require_near(line.start.x,2);
+        require((line.start.y-line.end.y)*sign<0,"connected tangent resize created a cusp instead of a smooth vertical junction");
+        require(enlarged.entities().at(relation_id)==saved_relation && enlarged.revision()==joined.revision()+1,
+            "geometry resize must retain the tangent relation verbatim in one command");
+        document.undo(document.revision());require(document.snapshot().entities()==joined.entities(),"tangent propagation must undo exactly");
+        document.redo(document.revision());require(document.snapshot().entities()==enlarged.entities(),"tangent propagation must redo exactly");
+
+        QTemporaryDir directory;require(directory.isValid(),"native tangent archive fixture directory is missing");
+        const auto path=std::filesystem::path(directory.filePath("tangent.bldproj").toStdWString());
+        // Undo/Redo append retained navigation records. Save the current head,
+        // including those records, rather than the earlier enlarged snapshot.
+        const auto save_source=document.snapshot();
+        (void)ProjectStore::save(path,save_source);
+        auto reopened=ProjectStore::load(path).document;
+        const auto restored=reopened.snapshot();
+        auto expected_saved=Document::fork(save_source);
+        expected_saved.mark_saved(save_source.revision());
+        require(restored.entities()==save_source.entities() && restored.assets()==save_source.assets() &&
+            restored.history().size()==save_source.history().size() &&
+            document_snapshot_digest(restored)==document_snapshot_digest(expected_saved.snapshot()),
+            "native reopen must preserve tangent geometry, relation and retained history");
+        ConstraintDialog edit(reopened.snapshot(),"tangent-line",true);
+        combo(edit,"constraintOperation").setCurrentIndex(combo(edit,"constraintOperation").findData(2));
+        require(combo(edit,"constraintRelation").currentData().toInt()==static_cast<int>(ConstraintRelationKind::tangent) &&
+            combo(edit,"constraintBinding0").currentText().contains("Tangent line") &&
+            combo(edit,"constraintBinding0").currentText().endsWith("end") &&
+            combo(edit,"constraintBinding2").currentText().contains("Tangent arc") &&
+            combo(edit,"constraintBinding2").currentText().endsWith("start"),
+            "reopened real dialog must reload the saved tangent and contact roles");
+        reopened.undo(reopened.revision());require(reopened.snapshot().entities()==joined.entities(),"reopened tangent resize must undo to original junction");
+        reopened.undo(reopened.revision());require(reopened.snapshot().entities()==source.entities(),"reopened tangent creation must undo to exact unconstrained source");
+        reopened.redo(reopened.revision());reopened.redo(reopened.revision());
+        require(reopened.snapshot().entities()==enlarged.entities(),"reopened tangent history must redo its original geometry");
+    }
+}
+void tangent_dialog_refusals_preserve_source() {
+    for (const bool locked : {false,true}) {
+        auto entities=tangent_dialog_walls(1,locked ? 1.2 : 1.,!locked);
+        if (locked) for (const auto& owner:tangent_dialog_walls(1,1.2)) {
+            const auto segment=stored_wall_baseline(owner);
+            for (const auto role:{WallEndpointRole::start,WallEndpointRole::end}) {
+                PersistentConstraint pin{owner.id+"-"+std::string(wall_endpoint_role_name(role))+"-pin",
+                    ConstraintRelationKind::fixed_anchor,{{owner.id,role}},{},
+                    role==WallEndpointRole::start ? segment.start : segment.end};
+                entities.push_back(encode_constraint_entity(pin));
+            }
+        }
+        auto document=Document::create(entities);const auto before=document.snapshot();
+        ConstraintDialog conflict(before,"tangent-line",true);configure_tangent_pair(conflict);
+        if (!locked) conflict.findChild<QCheckBox*>("constraintMoveConnected")->setChecked(false);
+        click_constraint_preview(conflict);
+        require(!conflict.findChild<QPushButton*>("constraintApplyButton")->isEnabled() &&
+            !conflict.submit() && !conflict.acceptedPreview() && !conflict.lastError().isEmpty(),
+            "cusp/fixed-anchor conflict must explain refusal and disable Apply");
+        require(document.snapshot().entities()==before.entities() && document.snapshot().assets()==before.assets() &&
+            document.snapshot().history().size()==before.history().size() && document.revision()==before.revision(),
+            "tangent conflict changed document geometry, assets or history");
+    }
+    auto document=Document::create(tangent_dialog_walls());const auto before=document.snapshot();
+    ConstraintDialog malformed(before,"tangent-line",true);configure_tangent_pair(malformed);
+    choose_endpoint(malformed,"constraintBinding1","Tangent line","end");
+    click_constraint_preview(malformed);
+    require(!malformed.findChild<QPushButton*>("constraintApplyButton")->isEnabled() && !malformed.submit() &&
+        !malformed.lastError().isEmpty() && document.snapshot().entities()==before.entities() && document.revision()==before.revision(),
+        "same-role malformed tangent pair must refuse through real endpoint controls without mutation");
 }
 
 void direct_curve_length_resize_workflow() {
@@ -1388,6 +1537,13 @@ int main(int argc, char** argv) {
             std::cout << "Physical curve chain editing passed\n";
             return 0;
         }
+        if (app.arguments().contains(QStringLiteral("--tangent-only"))) {
+            persisted_tangent_dialog_lifecycle();tangent_dialog_refusals_preserve_source();
+            std::cout << "Persisted tangent dialog workflows passed\n";
+            return 0;
+        }
+        persisted_tangent_dialog_lifecycle();
+        tangent_dialog_refusals_preserve_source();
         fresh_measured_curve_transform_preserves_source();
         connected_curve_rigid_transforms_preserve_supported_motion();
         generic_curve_transform_and_connected_refusal();

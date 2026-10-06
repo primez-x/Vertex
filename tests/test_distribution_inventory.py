@@ -29,6 +29,103 @@ def write_json(path, value):
 
 
 class DistributionInventoryTests(unittest.TestCase):
+    def bundled_asset_fixture(self):
+        directory, root, manifest, runtime, app, dependency = self.fixture()
+        self.addCleanup(directory.cleanup)
+        model = root / "assets/model.traineddata"
+        model.parent.mkdir()
+        model.write_bytes(b"official model bytes")
+        asset = {"name": "OCR model", "version": "4.1.0", "license": "Apache-2.0",
+                 "path": "assets/model.traineddata", "sha256": digest(model),
+                 "source": "https://example.invalid/models/pinned-commit"}
+        write_json(root / "third_party/dependencies.json", {"bundled_assets": [asset]})
+        component = {"id": "ocr-model", "kind": "asset",
+                     "package": {"name": asset["name"], "version": asset["version"], "license": asset["license"]},
+                     "source": {"kind": "bootstrap-dependency", "dependencies_path": "third_party/dependencies.json",
+                                "asset_name": asset["name"], "paths": [asset["path"]]},
+                     "notice_paths": ["third_party/NOTICE.txt"]}
+        manifest["components"].append(component)
+        return root, manifest, model, asset
+
+    def test_bundled_asset_binds_declared_path_and_bytes(self):
+        root, manifest, model, asset = self.bundled_asset_fixture()
+        result = inventory.build_inventory(root, manifest)
+        row = next(item for item in result["components"] if item["id"] == "ocr-model")
+        self.assertEqual(row["package"]["source"]["asset_path"], asset["path"])
+        self.assertEqual(row["package"]["source"]["declared_sha256"], digest(model))
+        self.assertEqual(row["source_inputs"], [{"path": asset["path"], "kind": "file", "sha256": digest(model)}])
+
+    def test_bundled_asset_rejects_tamper_or_substituted_path(self):
+        for mutation in ("bytes", "path"):
+            with self.subTest(mutation=mutation):
+                root, manifest, model, asset = self.bundled_asset_fixture()
+                if mutation == "bytes":
+                    model.write_bytes(b"substituted model")
+                else:
+                    manifest["components"][-1]["source"]["paths"] = ["third_party/NOTICE.txt"]
+                with self.assertRaises(inventory.InventoryError):
+                    inventory.build_inventory(root, manifest)
+
+    def test_tree_fingerprint_ignores_generated_python_caches(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = pathlib.Path(directory)
+            module = source / "adapter.py"
+            module.write_bytes(b"value = 1\n")
+            original = inventory._tree_sha256(source)
+
+            cache = source / "desktop" / "__pycache__"
+            cache.mkdir(parents=True)
+            generated = [cache / "adapter.cpython-313.pyc", cache / "cache-metadata",
+                         source / "legacy.pyc", source / "optimized.pyo"]
+            for path in generated:
+                path.write_bytes(b"generated cache")
+            self.assertEqual(inventory._tree_sha256(source), original)
+            for path in generated:
+                path.write_bytes(b"changed generated cache")
+            self.assertEqual(inventory._tree_sha256(source), original)
+            for path in generated:
+                path.unlink()
+            cache.rmdir()
+            self.assertEqual(inventory._tree_sha256(source), original)
+
+            module.write_bytes(b"value = 2\n")
+            self.assertNotEqual(inventory._tree_sha256(source), original)
+            module.write_bytes(b"value = 1\n")
+            module.rename(source / "renamed.py")
+            self.assertNotEqual(inventory._tree_sha256(source), original)
+
+    def test_tree_fingerprint_keeps_other_artifacts_and_deterministic_order(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = pathlib.Path(directory)
+            for name in ("z.py", "a.py", "adapter.pyd", "cache.pyc.txt"):
+                (source / name).write_bytes(name.encode("utf-8"))
+            original = inventory._tree_sha256(source)
+            children = list(source.rglob("*"))
+            with mock.patch.object(pathlib.Path, "rglob", return_value=iter(reversed(children))):
+                self.assertEqual(inventory._tree_sha256(source), original)
+            for name in ("adapter.pyd", "cache.pyc.txt"):
+                with self.subTest(artifact=name):
+                    path = source / name
+                    path.write_bytes(b"changed non-cache artifact")
+                    self.assertNotEqual(inventory._tree_sha256(source), original)
+                    path.write_bytes(name.encode("utf-8"))
+
+    def test_tree_fingerprint_rejects_symlinks_even_at_excluded_cache_paths(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = pathlib.Path(directory)
+            cache = source / "__pycache__"
+            cache.mkdir()
+            bytecode = cache / "adapter.cpython-313.pyc"
+            bytecode.write_bytes(b"generated cache")
+            original = pathlib.Path.is_symlink
+            for target in (cache, bytecode):
+                with self.subTest(target=target.name):
+                    def is_symlink(path):
+                        return path == target or original(path)
+                    with mock.patch.object(pathlib.Path, "is_symlink", is_symlink):
+                        with self.assertRaisesRegex(inventory.InventoryError, "Symlink"):
+                            inventory._tree_sha256(source)
+
     def fixture(self):
         directory = tempfile.TemporaryDirectory()
         root = pathlib.Path(directory.name)
@@ -283,6 +380,36 @@ class DistributionInventoryTests(unittest.TestCase):
         self.assertEqual(row["package"]["version"], "2.4.1")
         self.assertEqual(row["package"]["source"]["url"], "git+https://example.invalid/thing@abc123")
         self.assertEqual(row["evidence"]["spdx_path"], "deps/share/thing/vcpkg.spdx.json")
+        self.assertEqual(row["package"]["source"]["license_concluded"], "MIT")
+
+        # An unknown upstream conclusion is retained, never converted into clearance.
+        doc = json.loads(spdx.read_text(encoding="utf-8"))
+        doc["packages"][0]["licenseConcluded"] = "LicenseRef-vcpkg-null"
+        write_json(spdx, doc)
+        manifest["components"][1]["package"]["license"] = "LicenseRef-vcpkg-null"
+        result = inventory.build_inventory(root, manifest)
+        row = next(item for item in result["components"] if item["id"] == "dependency")
+        self.assertEqual(row["package"]["source"]["license_concluded"], "LicenseRef-vcpkg-null")
+        self.assertFalse(result["distribution_qualified"])
+        component = manifest["components"][1]
+        notice = root / "third_party/NOTICE.txt"
+        component["artifacts"] = [{"path": "deps/share/thing/vcpkg.spdx.json", "sha256": digest(spdx)},
+                                  {"path": "third_party/NOTICE.txt", "sha256": digest(notice)}]
+        inventory.build_inventory(root, manifest)
+        original_notice = notice.read_bytes()
+        notice.write_bytes(b"substituted copyright evidence")
+        with self.assertRaisesRegex(inventory.InventoryError, "hash"):
+            inventory.build_inventory(root, manifest)
+        notice.write_bytes(original_notice)
+        original_spdx = spdx.read_bytes()
+        doc["documentNamespace"] = "https://example.invalid/substituted-evidence"
+        write_json(spdx, doc)
+        with self.assertRaisesRegex(inventory.InventoryError, "hash"):
+            inventory.build_inventory(root, manifest)
+        spdx.write_bytes(original_spdx)
+        manifest["components"][1]["package"]["license"] = "BSD-2-Clause"
+        with self.assertRaisesRegex(inventory.InventoryError, "license mismatch"):
+            inventory.build_inventory(root, manifest)
 
     def test_spdx_prefix_is_resolved_from_repository_root(self):
         directory, root, manifest, runtime, app, dependency = self.fixture()

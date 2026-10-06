@@ -207,11 +207,7 @@ void validate_result(const Boundary& result) {
     }
 }
 
-}  // namespace
-
-Boundary project_building_plan(const BuildingObject& object) {
-    try {
-        const auto shape = make_building_shape(object);
+Boundary project_shape(const TopoDS_Shape& shape) {
         if (shape.IsNull()) {
             projection_error("Building object produced a null solid");
         }
@@ -253,6 +249,12 @@ Boundary project_building_plan(const BuildingObject& object) {
         });
         validate_result(result);
         return result;
+}
+
+template<class Builder>
+Boundary checked_projection(Builder&& builder) {
+    try {
+        return project_shape(builder());
     } catch (const std::invalid_argument&) {
         throw;
     } catch (const Standard_Failure& error) {
@@ -262,6 +264,18 @@ Boundary project_building_plan(const BuildingObject& object) {
         throw std::invalid_argument(std::string("Building plan projection failed: ")
                                      + error.what());
     }
+}
+
+}  // namespace
+
+Boundary project_building_plan(const BuildingObject& object) {
+    return checked_projection([&] { return make_building_shape(object); });
+}
+
+Boundary project_building_plan(
+    const BuildingObject& object,
+    const std::map<std::string, Entity, std::less<>>& entities) {
+    return checked_projection([&] { return make_building_shape(object, entities); });
 }
 
 }  // namespace sketch

@@ -349,6 +349,34 @@ TopoDS_Shape make_beam(const Beam& beam) {
 }
 
 TopoDS_Shape make_stair_flight(const StairFlight& flight) {
+    if (!flight.flights.empty() || !flight.landings.empty()) {
+        const auto layout = derive_stair_layout(flight);
+        return build_solid([&] {
+            TopoDS_Compound compound;
+            BRep_Builder builder;
+            builder.MakeCompound(compound);
+            for (const auto& part : layout.flights) {
+                StairFlight primitive;
+                primitive.base_position = part.base_position;
+                primitive.orientation_radians = part.orientation_radians;
+                primitive.riser_count = part.treads.size();
+                primitive.total_rise = part.rise;
+                primitive.going = flight.going;
+                primitive.width = flight.width;
+                builder.Add(compound, make_stair_flight(primitive));
+            }
+            for (const auto& landing : layout.landings) {
+                std::vector<gp_Pnt> polygon;
+                for (auto p : landing.footprint) {
+                    p.z = landing.elevation - landing.thickness;
+                    polygon.push_back(point(p));
+                }
+                builder.Add(compound, make_prism(polygon, gp_Vec(0, 0, landing.thickness),
+                                                 "Connecting landing construction failed"));
+            }
+            return TopoDS_Shape(compound);
+        }, "Multi-flight stair construction failed");
+    }
     finite_coordinate(flight.base_position, "Stair base position must be finite");
     finite_angle(flight.orientation_radians, "Stair orientation must be finite");
     if (flight.riser_count == 0 || flight.riser_count > 10'000) {
@@ -418,6 +446,9 @@ TopoDS_Shape make_stair_flight(const StairFlight& flight) {
 }
 
 TopoDS_Shape make_railing(const Railing& railing) {
+    if (railing.host) {
+        throw std::invalid_argument("Hosted railing requires the current stair map");
+    }
     finite_coordinate(railing.base_position, "Railing base position must be finite");
     finite_angle(railing.orientation_radians, "Railing orientation must be finite");
     positive_dimension(railing.length, "Railing length must be positive");
@@ -490,6 +521,32 @@ TopoDS_Shape make_railing(const Railing& railing) {
             return TopoDS_Shape(compound);
         },
         "Railing construction failed");
+}
+
+TopoDS_Shape make_hosted_railing(const Railing& railing, const StairFlight& current_host) {
+    const auto layout = derive_hosted_railing_layout(railing, current_host);
+    const auto frame = horizontal_frame(layout.orientation_radians, "Hosted railing orientation");
+    return build_solid([&] {
+        TopoDS_Compound compound;
+        BRep_Builder builder;
+        builder.MakeCompound(compound);
+        const auto half = railing.thickness * 0.5;
+        const auto start = translated(point(layout.rail_start), frame.across * -half);
+        const auto end = translated(point(layout.rail_end), frame.across * -half);
+        const std::vector<gp_Pnt> profile{start, end,
+            translated(end, gp_Vec(0, 0, -railing.thickness)),
+            translated(start, gp_Vec(0, 0, -railing.thickness))};
+        builder.Add(compound, make_prism(profile, frame.across * railing.thickness,
+                                         "Hosted sloped top rail construction failed"));
+        for (const auto& post : layout.posts) {
+            const auto corner = translated(point(post.base),
+                                           frame.along * -half + frame.across * -half);
+            builder.Add(compound, make_box(gp_Ax2(corner, gp_Dir(0, 0, 1), gp_Dir(frame.along)),
+                railing.thickness, railing.thickness, post.top.z - post.base.z,
+                "Hosted supported post construction failed"));
+        }
+        return TopoDS_Shape(compound);
+    }, "Hosted railing construction failed");
 }
 
 TopoDS_Shape make_sloped_roof_panel(const SlopedRoofPanel& panel) {

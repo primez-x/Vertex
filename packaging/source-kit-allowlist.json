@@ -15,6 +15,22 @@
     },
     {
       "category": "fixtures",
+      "path": "assets/assistance/ocr-engine-v1.json"
+    },
+    {
+      "category": "fixtures",
+      "path": "assets/assistance/ocr/eng.traineddata"
+    },
+    {
+      "category": "licenses",
+      "path": "assets/assistance/ocr/LICENSE"
+    },
+    {
+      "category": "fixtures",
+      "path": "assets/assistance/ocr/README.upstream.md"
+    },
+    {
+      "category": "fixtures",
       "path": "assets/fonts/Inter.ttf"
     },
     {
@@ -3247,6 +3263,10 @@
     },
     {
       "category": "source",
+      "path": "include/sketch/desktop/application_platform.hpp"
+    },
+    {
+      "category": "source",
       "path": "include/sketch/desktop/appraisal_details_panel.hpp"
     },
     {
@@ -3284,6 +3304,10 @@
     {
       "category": "source",
       "path": "include/sketch/desktop/main_window.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/desktop/physical_wall_room_review_dialog.hpp"
     },
     {
       "category": "source",
@@ -3403,6 +3427,10 @@
     },
     {
       "category": "source",
+      "path": "include/sketch/joint_translation_replay.hpp"
+    },
+    {
+      "category": "source",
       "path": "include/sketch/measurement_area_definition.hpp"
     },
     {
@@ -3455,11 +3483,19 @@
     },
     {
       "category": "source",
+      "path": "include/sketch/physical_room_dimension_source.hpp"
+    },
+    {
+      "category": "source",
       "path": "include/sketch/physical_wall_room.hpp"
     },
     {
       "category": "source",
       "path": "include/sketch/physical_wall_room_data.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/physical_wall_room_review.hpp"
     },
     {
       "category": "source",
@@ -3592,6 +3628,18 @@
     {
       "category": "source",
       "path": "include/sketch/slab_semantics.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/stair_attachment_integrity.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/stair_identity_history.hpp"
+    },
+    {
+      "category": "source",
+      "path": "include/sketch/stair_semantics.hpp"
     },
     {
       "category": "source",
@@ -3884,6 +3932,14 @@
     {
       "category": "source",
       "path": "scripts/production_qualification.py"
+    },
+    {
+      "category": "source",
+      "path": "scripts/qualification/compose_dependency_source_kit.py"
+    },
+    {
+      "category": "source",
+      "path": "scripts/qualification/dependency_source_closure.py"
     },
     {
       "category": "source",
@@ -4287,11 +4343,19 @@
     },
     {
       "category": "source",
+      "path": "src/core/physical_room_dimension_source.cpp"
+    },
+    {
+      "category": "source",
       "path": "src/core/physical_wall_room.cpp"
     },
     {
       "category": "source",
       "path": "src/core/physical_wall_room_data.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/physical_wall_room_review.cpp"
     },
     {
       "category": "source",
@@ -4427,6 +4491,14 @@
     },
     {
       "category": "source",
+      "path": "src/core/stair_attachment_integrity.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/core/stair_semantics.cpp"
+    },
+    {
+      "category": "source",
       "path": "src/core/survey_boundary_update.cpp"
     },
     {
@@ -4559,6 +4631,22 @@
     },
     {
       "category": "source",
+      "path": "src/desktop/assistance_ocr.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/desktop/assistance_ocr.hpp"
+    },
+    {
+      "category": "source",
+      "path": "src/desktop/assistance_ocr_recognizer.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/desktop/assistance_ocr_recognizer.hpp"
+    },
+    {
+      "category": "source",
       "path": "src/desktop/boundary_input_dialog.cpp"
     },
     {
@@ -4604,6 +4692,10 @@
     {
       "category": "source",
       "path": "src/desktop/main_window.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/desktop/physical_wall_room_review_dialog.cpp"
     },
     {
       "category": "source",
@@ -4771,6 +4863,18 @@
     },
     {
       "category": "source",
+      "path": "tests/assistance_ocr_recognition_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/assistance_ocr_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/assistance_review_dialog_tests.cpp"
+    },
+    {
+      "category": "source",
       "path": "tests/assistance_workflow_tests.cpp"
     },
     {
@@ -4912,6 +5016,10 @@
     {
       "category": "source",
       "path": "tests/canvas_label_presentation_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/chain_dimension_desktop_tests.cpp"
     },
     {
       "category": "source",
@@ -5167,6 +5275,10 @@
     },
     {
       "category": "source",
+      "path": "tests/joint_translation_authoring_tests.cpp"
+    },
+    {
+      "category": "source",
       "path": "tests/measurement_area_definition_tests.cpp"
     },
     {
@@ -5291,6 +5403,10 @@
     },
     {
       "category": "source",
+      "path": "tests/navigator_add_branch_desktop_tests.cpp"
+    },
+    {
+      "category": "source",
       "path": "tests/nested_appraisal_copy_desktop_tests.cpp"
     },
     {
@@ -5339,11 +5455,23 @@
     },
     {
       "category": "source",
+      "path": "tests/physical_room_dimension_tests.cpp"
+    },
+    {
+      "category": "source",
       "path": "tests/physical_wall_room_desktop_tests.cpp"
     },
     {
       "category": "source",
       "path": "tests/physical_wall_room_repair_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/physical_wall_room_review_dialog_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/physical_wall_room_review_tests.cpp"
     },
     {
       "category": "source",
@@ -5559,6 +5687,18 @@
     },
     {
       "category": "source",
+      "path": "tests/stair_attachment_integrity_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/stair_lifecycle_desktop_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/stair_semantics_tests.cpp"
+    },
+    {
+      "category": "source",
       "path": "tests/support/boundary_recovery_oracle.hpp"
     },
     {
@@ -5611,6 +5751,10 @@
     },
     {
       "category": "source",
+      "path": "tests/tangent_constraint_tests.cpp"
+    },
+    {
+      "category": "source",
       "path": "tests/terrain_surface_tests.cpp"
     },
     {
@@ -5651,7 +5795,15 @@
     },
     {
       "category": "source",
+      "path": "tests/test_compose_dependency_source_kit.py"
+    },
+    {
+      "category": "source",
       "path": "tests/test_delivery_registry.py"
+    },
+    {
+      "category": "source",
+      "path": "tests/test_dependency_source_closure.py"
     },
     {
       "category": "source",

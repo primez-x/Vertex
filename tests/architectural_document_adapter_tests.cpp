@@ -1,4 +1,5 @@
 #include "sketch/architectural_document_adapter.hpp"
+#include "sketch/vertical_level_document_adapter.hpp"
 #include "sketch/architecture.hpp"
 #include "sketch/building_entity.hpp"
 #include "sketch/boundary_receipt.hpp"
@@ -926,9 +927,245 @@ void test_room_volume_dimensions() {
             "legacy room aliases must resize and remain readable");
 }
 
+void test_multi_flight_stair_attachment_lifecycle() {
+    using namespace sketch;
+    auto property = Entity::create("property"); property.id = "stair-property";
+    auto building = Entity::create("building", {{"property_id",property.id}}); building.id = "stair-building";
+    auto floor = Entity::create("floor", {{"building_id",building.id}}); floor.id = "stair-floor";
+    auto layer = Entity::create("layer", {{"floor_id",floor.id}}); layer.id = "stair-layer";
+    auto stair = encode_building_entity(StairFlight{.id="lifecycle-stair", .base_position={2,3,1},
+        .riser_count=8, .total_rise=2, .going=.3, .width=1,
+        .flights={{"lower-flight",4},{"upper-flight",4}},
+        .landings={{"turn-landing",1.2,.15,StairTurn::left_quarter,0}}});
+    stair.properties["layer_id"] = layer.id;
+    stair.properties["property_id"] = property.id;
+    stair.properties["building_id"] = building.id;
+    stair.properties["floor_id"] = floor.id;
+    stair.properties["flights"][0]["opaque"] = {{"source_id","lower-flight"},{"note","keep"}};
+    stair.properties["landings"][0]["opaque"] = {1,2,3};
+    stair.properties["quantity_entries"] = {{"/going_m",{{"opaque","receipt"}}}};
+    auto rail = encode_building_entity(Railing{.id="lifecycle-rail",.height=1,.thickness=.05,.post_spacing=.4,
+        .host=StairRailingHost{stair.id,"upper-flight",StairRailingSide::left,0,1}});
+    rail.properties["layer_id"] = layer.id;
+    rail.properties["property_id"] = property.id;
+    rail.properties["building_id"] = building.id;
+    rail.properties["floor_id"] = floor.id;
+    rail.properties["host"]["opaque"] = "upper-flight";
+    rail.extensions["source_id"] = stair.id;
+    auto future_host_metadata=Entity::create("railing",{{"version",99},{"form","stair_flight_railing"},
+        {"host",{{"stair_id",stair.id},{"opaque","preserve"}}}});
+    future_host_metadata.id="future-lifecycle-rail";
+    auto document = Document::create({property,building,floor,layer,future_host_metadata});
+    const auto transaction = [&](std::vector<ArchitecturalOperation> operations) {
+        std::vector<std::string> ids;
+        const auto current = document.snapshot();
+        for (const auto& [id,entity] : current.entities()) { (void)entity; ids.push_back(id); }
+        return ArchitecturalTransaction::create(make_stable_id(),"source",ids,std::move(operations),"Stair lifecycle");
+    };
+    const auto transform = [](const std::string& id, ArchitecturalTransform value) {
+        ArchitecturalOperation operation{ArchitecturalAction::transform,id}; operation.transform=value; return operation;
+    };
+    const auto create = [](const Entity& entity) {
+        ArchitecturalOperation operation{ArchitecturalAction::create,entity.id,entity.type};
+        for (const auto& [key,value] : entity.properties.items()) operation.properties[key]=value.dump();
+        return operation;
+    };
+    document.apply(architectural_transaction_command(document.snapshot(),transaction({create(stair),create(rail)}),document.revision()));
+    // Transaction creation transports semantic fields; extension provenance is
+    // already persisted on existing entities and must survive later cloning.
+    auto authored=document.snapshot().entities().at(rail.id); authored.extensions=rail.extensions;
+    document.apply(ApplyEntityChanges{document.revision(),{EntityChange::upsert(authored)}, {},"Attach source metadata"});
+    const auto before = document.snapshot();
+    const auto edited=preview_architectural_transaction(before,transaction({
+        {ArchitecturalAction::property_edit,stair.id,{},{},{{"going_m","0.35"}}}}));
+    require(edited.entities().at(stair.id).properties["going_m"]==.35 &&
+        edited.entities().at(rail.id)==before.entities().at(rail.id) &&
+        edited.entities().at(stair.id).properties["flights"]==stair.properties["flights"] &&
+        edited.entities().at(stair.id).properties["landings"]==stair.properties["landings"],
+        "stair edit changed hosted rail authoring or nested metadata");
+    rejects([&] { (void)preview_architectural_transaction(before,transaction({
+        {ArchitecturalAction::property_edit,stair.id,{},{},{{"flights","[{\"id\":\"lower-flight\",\"riser_count\":8}]"},{"landings","[]"}}}})); });
+    const auto moved_only=preview_architectural_transaction(before,transaction({transform(stair.id,{1,2,3,0,1})}));
+    const auto moved_stair=decode_stair_properties(stair.id,moved_only.entities().at(stair.id).properties);
+    const auto before_layout=derive_hosted_railing_layout(decode_railing_properties(rail.id,rail.properties),decode_stair_properties(stair.id,stair.properties));
+    const auto moved_layout=derive_hosted_railing_layout(decode_railing_properties(rail.id,rail.properties),moved_stair);
+    require(std::abs(moved_layout.rail_start.x-before_layout.rail_start.x-1)<1e-9 &&
+        std::abs(moved_layout.rail_start.y-before_layout.rail_start.y-2)<1e-9 &&
+        std::abs(moved_layout.rail_start.z-before_layout.rail_start.z-3)<1e-9 &&
+        moved_only.entities().at(rail.id)==before.entities().at(rail.id),"host translation did not derive unchanged authored rail");
+    rejects([&] { (void)preview_architectural_transaction(before,transaction({transform(rail.id,{1,0,0,0,1})})); });
+    const ArchitecturalTransform move{5,-2,3,.5,2};
+    const auto preview = preview_architectural_transaction(before,transaction({transform(rail.id,move),transform(stair.id,move)}));
+    require(document.snapshot().entities()==before.entities(),"stair preview mutated source");
+    const auto changed = decode_stair_properties(stair.id,preview.entities().at(stair.id).properties);
+    require(changed.riser_count==8 && changed.flights[0].id=="lower-flight" &&
+        std::abs(changed.total_rise-4)<1e-9 && std::abs(changed.landings[0].depth-2.4)<1e-9 &&
+        std::abs(changed.landings[0].thickness-.3)<1e-9,"stair topology scaled incorrectly");
+    require(std::abs(changed.base_position.x-(4*std::cos(.5)-6*std::sin(.5)+5))<1e-9 &&
+        std::abs(changed.base_position.z-5)<1e-9,"whole stair placement transform incorrect");
+    const auto& changed_rail=preview.entities().at(rail.id);
+    require(changed_rail.properties["height_m"]==2 && changed_rail.properties["thickness_m"]==.1 &&
+        changed_rail.properties["post_spacing_m"]==.8 && !changed_rail.properties.contains("base_position_m"),
+        "hosted rail must scale authored dimensions once without independent placement");
+    require(changed_rail.properties["host"]==rail.properties["host"] &&
+        preview.entities().at(stair.id).properties["flights"][0]["opaque"]==stair.properties["flights"][0]["opaque"] &&
+        preview.entities().at(stair.id).properties["landings"][0]["opaque"]==stair.properties["landings"][0]["opaque"],
+        "nested authoring metadata lost during transform");
+    require(!preview.entities().at(stair.id).properties["quantity_entries"].contains("/going_m"),
+        "changed stair dimension retained stale receipt");
+    rejects([&] { (void)preview_architectural_transaction(before,transaction({transform(stair.id,move),transform(rail.id,{1,0,0,0,1})})); });
+    document.apply(architectural_transaction_command(before,transaction({transform(stair.id,move),transform(rail.id,move)}),before.revision()));
+    const auto transformed = document.snapshot();
+    require(transformed.entities().at(future_host_metadata.id)==future_host_metadata,
+        "stair transform interpreted future railing host metadata");
+    document.undo(document.revision()); require(document.snapshot().entities()==before.entities(),"stair transform undo");
+    document.redo(document.revision()); require(document.snapshot().entities()==transformed.entities(),"stair transform redo");
+    const auto clone = transaction({{ArchitecturalAction::duplicate,rail.id,{},"selected-rail-clone"},
+        {ArchitecturalAction::duplicate,stair.id,{},"stair-clone"}});
+    document.apply(architectural_transaction_command(document.snapshot(),clone,document.revision()));
+    const auto cloned=document.snapshot();
+    const auto& copy=cloned.entities().at("stair-clone");
+    const auto copy_stair=decode_stair_properties(copy.id,copy.properties);
+    require(copy_stair.flights[0].id!=changed.flights[0].id && copy_stair.flights[1].id!=changed.flights[1].id &&
+        copy_stair.landings[0].id!=changed.landings[0].id,"cloned stair reused stable children");
+    require(copy.properties["flights"][0]["opaque"]==stair.properties["flights"][0]["opaque"],"clone rewrote provenance");
+    std::string clone_rail_id;
+    for (const auto& [id,entity] : cloned.entities()) {
+        if (entity.type=="railing" && entity.properties["host"]["stair_id"]==copy.id) {
+            clone_rail_id=id;
+            require(id!=rail.id && entity.properties["host"]["flight_id"]==copy_stair.flights[1].id &&
+                entity.properties["host"]["opaque"]=="upper-flight" && entity.extensions==rail.extensions,
+                "cloned rail must remap only authoritative host references");
+        }
+    }
+    require(clone_rail_id=="selected-rail-clone","stair clone omitted or duplicated selected hosted rail");
+    const auto erase=transaction({{ArchitecturalAction::erase,copy.id},{ArchitecturalAction::erase,clone_rail_id}});
+    document.apply(architectural_transaction_command(cloned,erase,document.revision()));
+    require(document.snapshot().entities()==transformed.entities(),"host deletion did not remove dependent rail atomically");
+    document.undo(document.revision()); require(document.snapshot().entities()==cloned.entities(),"stair delete undo");
+    document.redo(document.revision()); require(document.snapshot().entities()==transformed.entities(),"stair delete redo");
+    const auto path=std::filesystem::temp_directory_path()/(make_stable_id()+".bldproj");
+    (void)ProjectStore::save(path,document.snapshot());
+    auto reopened=ProjectStore::load(path).document;
+    require(reopened.snapshot().entities()==document.snapshot().entities(),"stair lifecycle reopen");
+    reopened.undo(reopened.revision()); require(reopened.snapshot().entities()==cloned.entities(),"stair history reopen undo");
+    std::filesystem::remove(path);
+}
+
+void test_multi_flight_level_placement_lifecycle() {
+    using namespace sketch;
+    const VerticalLevelGraph graph({{"lower",10},{"upper",12}},{{"storey","lower","upper"}});
+    auto levels=Entity::create("vertical_levels",{{"model",nlohmann::json::parse(graph.serialize())}}); levels.id="v2-levels";
+    auto property=Entity::create("property"); property.id="v2-property";
+    auto building=Entity::create("building",{{"property_id",property.id}}); building.id="v2-building";
+    auto floor=Entity::create("floor",{{"building_id",building.id},
+        {"vertical_level_binding",{{"version",1},{"graph_id",levels.id},{"level_id","lower"}}}}); floor.id="v2-floor";
+    auto layer=Entity::create("layer",{{"floor_id",floor.id}}); layer.id="v2-layer";
+    auto stair=encode_building_entity(StairFlight{.id="level-v2-stair",.base_position={2,3,.25},
+        .riser_count=8,.total_rise=2,.going=.3,.width=1,
+        .level_connection=StairLevelConnection{levels.id,"storey","lower","upper"},
+        .flights={{"level-flight-a",4},{"level-flight-b",4}},
+        .landings={{"level-landing",1.2,.15,StairTurn::left_quarter,0}}});
+    stair.properties["layer_id"]=layer.id;
+    stair.properties["property_id"]=property.id;
+    stair.properties["building_id"]=building.id;
+    stair.properties["floor_id"]=floor.id;
+    stair.properties["vertical_placement"]={{"version",1},{"mode","level"},{"offset_m",.5}};
+    stair.properties["flights"][0]["opaque"]="keep";
+    stair.properties["quantity_entries"]={{"/total_rise_m",{{"opaque","old"}}},{"/going_m",{{"opaque","keep"}}}};
+    auto legacy=stair; legacy.id="absolute-v2-upgrade";
+    legacy.properties.erase("vertical_placement"); legacy.properties["base_position_m"]={8,3,4};
+    legacy.properties["flights"][0]["id"]="absolute-flight-a";
+    legacy.properties["flights"][1]["id"]="absolute-flight-b";
+    legacy.properties["landings"][0]["id"]="absolute-landing";
+    auto rail=encode_building_entity(Railing{.id="level-v2-rail",.height=1,.thickness=.05,.post_spacing=.4,
+        .host=StairRailingHost{stair.id,"level-flight-a",StairRailingSide::right,0,1}});
+    rail.properties["layer_id"]=layer.id;
+    rail.properties["property_id"]=property.id;
+    rail.properties["building_id"]=building.id;
+    rail.properties["floor_id"]=floor.id;
+    auto future_rail=Entity::create("railing",{{"version",99},{"form","stair_flight_railing"},
+        {"host",{{"future_payload",{1,2,3}},{"stair_id",stair.id}}}});
+    future_rail.id="future-level-rail";
+    auto legacy_rail=Entity::create("railing",{{"description","Legacy railing"},{"host",{{"opaque",true}}}});
+    legacy_rail.id="legacy-level-rail";
+    auto document=Document::create({levels,property,building,floor,layer,stair,legacy,rail,future_rail,legacy_rail});
+    const auto before=document.snapshot();
+    const auto candidate=prepare_vertical_level_edit(before,levels.id,graph.with_elevation("upper",13));
+    require(document.snapshot().entities()==before.entities(),"level preview mutated source");
+    const auto receipt=apply_vertical_level_edit(document,candidate);
+    require(receipt.affected_stairs.size()==2,"v2 rise propagation omitted connected stairs");
+    const auto raised=document.snapshot();
+    require(raised.entities().at(future_rail.id)==future_rail && raised.entities().at(legacy_rail.id)==legacy_rail,
+        "level edit decoded or changed unrelated opaque railing hosts");
+    require(raised.entities().at(stair.id).properties["total_rise_m"]==3 &&
+        raised.entities().at(stair.id).properties["flights"]==stair.properties["flights"] &&
+        raised.entities().at(stair.id).properties["base_position_m"]==stair.properties["base_position_m"] &&
+        raised.entities().at(rail.id)==rail,"level rise edit changed child identities or authored placement");
+    require(!raised.entities().at(stair.id).properties["quantity_entries"].contains("/total_rise_m") &&
+        raised.entities().at(stair.id).properties["quantity_entries"].contains("/going_m"),"level edit receipt invalidation");
+    const auto effective=decode_stair_properties(stair.id,resolve_vertical_placement(raised,raised.entities().at(stair.id)).properties);
+    require(std::abs(effective.base_position.z-10.75)<1e-9,"level placement origin not resolved once");
+    const auto before_rail=derive_hosted_railing_layout(decode_railing_properties(rail.id,rail.properties),effective);
+    const auto raised_graph=graph.with_elevation("upper",13);
+    const auto translated_graph=raised_graph.with_elevation("upper",15).with_elevation("lower",12);
+    const auto shifted=prepare_vertical_level_edit(raised,levels.id,translated_graph);
+    require(shifted.affected_stairs().empty(),"same-rise level shift should change only graph");
+    (void)apply_vertical_level_edit(document,shifted);
+    const auto after=document.snapshot();
+    require(after.entities().at(stair.id)==raised.entities().at(stair.id) &&
+        after.entities().at(legacy.id)==raised.entities().at(legacy.id),"level shift rewrote authored base coordinates");
+    const auto moved=decode_stair_properties(stair.id,resolve_vertical_placement(after,after.entities().at(stair.id)).properties);
+    const auto after_rail=derive_hosted_railing_layout(decode_railing_properties(rail.id,rail.properties),moved);
+    require(std::abs(moved.base_position.z-12.75)<1e-9 &&
+        std::abs(after_rail.rail_start.z-before_rail.rail_start.z-2)<1e-9,"same-rise level shift did not move stair and rail exactly once");
+    require(resolve_vertical_placement(after,after.entities().at(legacy.id)).properties["base_position_m"][2]==4,
+        "absolute v2 upgrade unexpectedly follows lower-level elevation");
+    document.undo(document.revision()); require(document.snapshot().entities()==raised.entities(),"level shift undo");
+    document.undo(document.revision()); require(document.snapshot().entities()==before.entities(),"v2 rise undo");
+    document.redo(document.revision()); document.redo(document.revision());
+    require(document.snapshot().entities()==after.entities(),"v2 level redo");
+}
+
+void test_unrelated_lifecycle_preserves_opaque_stairs_and_rails() {
+    using namespace sketch;
+    std::vector<Entity> opaque;
+    for (const auto* type : {"stair","railing"}) {
+        for (const auto& properties : {
+            nlohmann::json{{"description","legacy"},{"host",{{"opaque",true}}}},
+            nlohmann::json{{"version",2},{"form","unknown_future_form"},{"host","opaque"}},
+            nlohmann::json{{"version",99},{"form",std::string_view(type)=="stair"?"multi_flight_stair":"stair_flight_railing"},
+                {"host",{{"opaque",{1,2,3}}}}}}) {
+            auto entity=Entity::create(type,properties); entity.id=make_stable_id();
+            entity.extensions["source"]={{"untouched","provenance"}}; opaque.push_back(std::move(entity));
+        }
+    }
+    auto column=encode_building_entity(RectangularColumn{.id="opaque-neighbor-column",.width=.3,.depth=.4,.height=3});
+    auto entities=opaque; entities.push_back(column);
+    auto document=Document::create(std::move(entities));
+    const auto apply=[&](std::vector<ArchitecturalOperation> operations) {
+        const auto source=document.snapshot();
+        std::vector<std::string> ids;
+        for (const auto& [id,entity] : source.entities()) { (void)entity; ids.push_back(id); }
+        const auto transaction=ArchitecturalTransaction::create(make_stable_id(),"source",ids,std::move(operations),"Edit neighbor");
+        document.apply(architectural_transaction_command(source,transaction,source.revision()));
+        const auto after=document.snapshot();
+        for (const auto& preserved : opaque)
+            require(after.entities().at(preserved.id)==preserved,"unrelated lifecycle changed opaque stair or railing");
+    };
+    ArchitecturalOperation transform{ArchitecturalAction::transform,column.id};
+    transform.transform=ArchitecturalTransform{1,2,3,.5,1};
+    apply({transform});
+    apply({{ArchitecturalAction::duplicate,column.id,{},"neighbor-column-clone"}});
+    apply({{ArchitecturalAction::erase,column.id},{ArchitecturalAction::erase,"neighbor-column-clone"}});
+}
+
 int main() {
     try {
         test_typed_join_commands();
+        test_multi_flight_stair_attachment_lifecycle();
+        test_multi_flight_level_placement_lifecycle();
+        test_unrelated_lifecycle_preserves_opaque_stairs_and_rails();
         test_room_volume_dimensions();
         test_material_assignments();
         test_building_transform_updates_canonical_geometry();

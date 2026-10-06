@@ -359,7 +359,8 @@ public:
     // The object dialog and smoke tests share this atomic, validated command.
     // A stale dialog revision cannot overwrite intervening document edits.
     [[nodiscard]] QString commitBuildingObject(
-        Entity candidate, std::uint64_t expected_revision, bool replace_selected = false);
+        Entity candidate, std::uint64_t expected_revision, bool replace_selected = false,
+        std::vector<Entity> related_candidates = {});
     // Creates one opening hosted by the currently selected wall. All numeric
     // values accept the same imperial/metric quantity syntax as the inspector
     // (for example, "3 ft" or "900 mm"). The command previews the complete
@@ -521,6 +522,12 @@ public:
                                                 const QString& segment_id,
                                                 Vec2 text_position,
                                                 std::optional<Revision> expected_revision = std::nullopt);
+    // Measures the analytical length along an ordered, contiguous chain of
+    // 2..128 stable edges, including exact circular arcs.
+    [[nodiscard]] QString createChainDimension(const QString& boundary_id,
+                                               const QStringList& segment_ids,
+                                               Vec2 text_position,
+                                               std::optional<Revision> expected_revision = std::nullopt);
     // Creates a semantic angle dimension from two boundary or measured-stroke edges
     // and their shared vertex. The analytical angle is resolved from current
     // geometry; the text position is stored in model metres.
@@ -650,13 +657,15 @@ public:
     // selected reference retained as the tracing context. Geometry remains
     // authored model data; the reference image is never a measurement source.
     [[nodiscard]] bool beginReferenceTrace();
-    // Optional deterministic assistance is session-scoped and starts disabled.
+    // Optional local assistance is session-scoped and starts disabled.
     // Suggestions are unverified values until this API accepts one through the
     // normal typed command/history path.
     [[nodiscard]] bool assistanceEnabled() const noexcept;
     void setAssistanceEnabled(bool enabled);
     [[nodiscard]] std::vector<AssistanceProposal> suggestReferenceAssistance(
-        const QString& reference_id, AssistanceKind kind);
+        const QString& reference_id, AssistanceKind kind,
+        const QString& target_boundary_id = {}, const QString& target_segment_id = {},
+        bool recognize_image_text = false);
     [[nodiscard]] std::vector<AssistanceProposal> suggestLabelAssistance();
     [[nodiscard]] std::vector<AssistanceProposal> parseAssistanceCommand(
         const QString& command);

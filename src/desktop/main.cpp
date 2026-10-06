@@ -1,4 +1,5 @@
 #include "sketch/desktop/main_window.hpp"
+#include "sketch/desktop/application_platform.hpp"
 #include "sketch/noninteractive_errors.hpp"
 
 #include <QApplication>
@@ -308,6 +309,7 @@ int main(int argc, char** argv) {
             break;
         }
     }
+    sketch::desktop::configure_application_platform();
     QApplication application(argc, argv);
     application.setApplicationName(QStringLiteral("Vertex"));
     application.setApplicationDisplayName(QStringLiteral("Vertex"));

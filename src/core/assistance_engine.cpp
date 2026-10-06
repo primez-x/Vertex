@@ -449,9 +449,15 @@ AssistanceSource source_for(std::string reference_id, std::string original_text,
 }
 
 AssistanceProposal proposal(std::string id, AssistanceKind kind, AssistanceSource source,
-                            AssistanceCommandPreview preview) {
+                            AssistanceCommandPreview preview,
+                            const AssistanceRaster* text_raster = nullptr) {
     AssistanceProposal result{std::move(id), kind, "vertex-assisted-v1",
                               resources(), std::move(source), std::move(preview)};
+    if (text_raster) {
+        if (!text_raster->text_producer.empty()) result.producer = text_raster->text_producer;
+        result.resources.insert(result.resources.end(), text_raster->text_resources.begin(),
+                                text_raster->text_resources.end());
+    }
     validate_assistance_proposal(result);
     return result;
 }
@@ -467,20 +473,6 @@ Json rectangle_points(double width, double height, Vec2 origin = {}) {
                         Json::array({origin.x, origin.y + height})});
 }
 
-Json transformed_rectangle_points(double width, double height, Vec2 origin,
-                                  double rotation_radians) {
-    const auto cosine = std::cos(rotation_radians);
-    const auto sine = std::sin(rotation_radians);
-    const auto transform = [&](double x, double y) {
-        return Vec2{origin.x + cosine * x - sine * y,
-                    origin.y + sine * x + cosine * y};
-    };
-    return Json::array({point_json(transform(0.0, 0.0)),
-                        point_json(transform(width, 0.0)),
-                        point_json(transform(width, height)),
-                        point_json(transform(0.0, height))});
-}
-
 void validate_options(const AssistanceEngineOptions& options) {
     if (!std::isfinite(options.metres_per_pixel) ||
         options.metres_per_pixel < minimum_metres_per_pixel ||
@@ -492,6 +484,15 @@ void validate_options(const AssistanceEngineOptions& options) {
         !(options.image_scale > 0.0) || options.image_scale > 1e4) {
         invalid("assistance reference transform is invalid");
     }
+}
+
+Json reference_transform(const AssistanceRaster& raster, const AssistanceEngineOptions& options) {
+    return {{"source_width", raster.width}, {"source_height", raster.height},
+            {"metres_per_pixel", options.metres_per_pixel},
+            {"origin_metres", point_json(options.origin_metres)},
+            {"rotation_radians", options.rotation_radians}, {"image_scale", options.image_scale},
+            {"centered_source", options.centered_source},
+            {"flip_horizontal", options.flip_horizontal}, {"flip_vertical", options.flip_vertical}};
 }
 
 std::string normalized_quantity_expression(std::string expression) {
@@ -519,15 +520,30 @@ struct DimensionMatch {
 std::vector<DimensionMatch> find_dimension_tokens(std::string_view text) {
     // This deliberately accepts only explicit units. Unqualified numbers in
     // a plan note are too ambiguous to become measurement suggestions.
+    const std::string number =
+        R"((?:[0-9]+\s+[0-9]+/[0-9]+|[0-9]+/[0-9]+|[0-9]+(?:\.[0-9]+)?|\.[0-9]+))";
+    // Compound alternatives precede simple quantities so a feet/inches label
+    // remains one source selection, including its exact spaces and fractions.
     static const std::regex expression(
-        R"((?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)(?:\s+(?:[0-9]+(?:\/[0-9]+)?))?\s*(?:mm|cm|ft|feet|foot|in|inch|inches|m|['"]))",
+        "[+-]?" + number + R"(\s*(?:(?:ft|')\s*)" + number +
+            R"(\s*(?:inches|inch|in|")|(?:mm|cm|feet|foot|ft|inches|inch|in|m|['"])))",
         std::regex_constants::icase);
     std::vector<DimensionMatch> result;
     const std::string input(text);
     for (auto iterator = std::sregex_iterator(input.begin(), input.end(), expression);
          iterator != std::sregex_iterator{}; ++iterator) {
         const auto& match = *iterator;
-        result.push_back({static_cast<std::size_t>(match.position()), match.str()});
+        const auto offset = static_cast<std::size_t>(match.position());
+        const auto end = offset + match.length();
+        const auto adjacent = [](unsigned char character) {
+            return std::isalnum(character) != 0 || character == '_' ||
+                   character == '.' || character == '/' || character == '+' || character == '-';
+        };
+        // Do not extract a positive suffix of a signed/invalid number or a
+        // unit prefix from ordinary words such as "12 models".
+        if ((offset && adjacent(static_cast<unsigned char>(input[offset - 1]))) ||
+            (end < input.size() && adjacent(static_cast<unsigned char>(input[end])))) continue;
+        result.push_back({offset, match.str()});
         if (result.size() == maximum_dimension_proposals) break;
     }
     return result;
@@ -551,6 +567,29 @@ double parse_coordinate(std::string_view value) {
 
 }  // namespace
 
+Vec2 assistance_source_point_to_model(Vec2 source_pixel, std::size_t source_width,
+                                     std::size_t source_height, AssistanceEngineOptions options) {
+    validate_options(options);
+    if (!source_width || !source_height || source_width > maximum_raster_dimension ||
+        source_height > maximum_raster_dimension || !std::isfinite(source_pixel.x) ||
+        !std::isfinite(source_pixel.y) || source_pixel.x < 0 || source_pixel.y < 0 ||
+        source_pixel.x > static_cast<double>(source_width) ||
+        source_pixel.y > static_cast<double>(source_height))
+        invalid("assistance source point or dimensions are invalid");
+    const auto scale = options.metres_per_pixel * options.image_scale;
+    const auto x = (source_pixel.x - (options.centered_source ? source_width * 0.5 : 0.0)) *
+                   scale * (options.flip_horizontal ? -1.0 : 1.0);
+    const auto y = (source_pixel.y - (options.centered_source ? source_height * 0.5 : 0.0)) *
+                   scale * (options.flip_vertical ? -1.0 : 1.0);
+    const auto cosine = std::cos(options.rotation_radians);
+    const auto sine = std::sin(options.rotation_radians);
+    const Vec2 point{options.origin_metres.x + cosine * x - sine * y,
+                     options.origin_metres.y + sine * x + cosine * y};
+    if (!std::isfinite(point.x) || !std::isfinite(point.y))
+        invalid("assistance transformed source point is not representable");
+    return point;
+}
+
 void validate_assistance_raster(const AssistanceRaster& raster) {
     if (!valid_identifier(raster.reference_id)) {
         invalid("assistance raster reference ID is empty or invalid");
@@ -559,6 +598,14 @@ void validate_assistance_raster(const AssistanceRaster& raster) {
         invalid("assistance raster source text is oversized or contains a NUL");
     }
     if (raster.text_runs.size() > 512) invalid("assistance raster has too many text selections");
+    // Validate declarations even when no dimension token is recognized. The
+    // contract owns portable path, text, uniqueness and combined resource caps.
+    if (raster.text_resources.size() > 62) invalid("assistance raster has too many text resources");
+    if (!raster.text_resources.empty() || !raster.text_producer.empty()) {
+        (void)proposal("text-provenance-validation", AssistanceKind::tracing,
+                       source_for(raster.reference_id, {}, 0, 0, 1, 1, 0),
+                       {"validate_text_provenance", {raster.reference_id}, Json::object()}, &raster);
+    }
     std::size_t previous_end = 0;
     for (const auto& run : raster.text_runs) {
         const auto boundary = [&](std::size_t at) {
@@ -573,6 +620,9 @@ void validate_assistance_raster(const AssistanceRaster& raster) {
             run.height <= 0 || run.x + run.width > 1 || run.y + run.height > 1)
             invalid("assistance raster text selection is invalid");
         previous_end = run.offset + run.length;
+        if (run.confidence && (!std::isfinite(*run.confidence) ||
+                               *run.confidence < 0 || *run.confidence > 1))
+            invalid("assistance raster text confidence is invalid");
     }
     if (raster.width == 0 || raster.height == 0 || raster.width > maximum_raster_dimension ||
         raster.height > maximum_raster_dimension) {
@@ -627,7 +677,7 @@ std::vector<AssistanceProposal> suggest_tracing(const AssistanceRaster& raster,
                                              std::to_string(min_y) + ":" +
                                              std::to_string(max_x) + ":" +
                                              std::to_string(max_y) + ":" +
-                                             std::to_string(options.metres_per_pixel));
+                                             reference_transform(raster, options).dump());
     const auto confidence = std::clamp(0.55 + static_cast<double>(range) / 255.0 * 0.35,
                                        0.55, 0.95);
     const auto normalized_x = static_cast<double>(min_x) /
@@ -638,30 +688,28 @@ std::vector<AssistanceProposal> suggest_tracing(const AssistanceRaster& raster,
                                   static_cast<double>(raster.width);
     const auto normalized_height = static_cast<double>(max_y - min_y + 1) /
                                    static_cast<double>(raster.height);
+    const auto transform = [&](std::size_t x, std::size_t y) {
+        return point_json(assistance_source_point_to_model(
+            {static_cast<double>(x), static_cast<double>(y)}, raster.width, raster.height, options));
+    };
     return {proposal(
         id, AssistanceKind::tracing,
         source_for(raster.reference_id, {}, normalized_x, normalized_y,
                    normalized_width, normalized_height, confidence),
         {"add_boundary", {id},
          {{"boundary_id", id},
-          {"points", transformed_rectangle_points(
-              width_metres, height_metres,
-              {options.origin_metres.x + std::cos(options.rotation_radians) *
-                       (static_cast<double>(min_x) * options.metres_per_pixel * options.image_scale) -
-                       std::sin(options.rotation_radians) *
-                       (static_cast<double>(min_y) * options.metres_per_pixel * options.image_scale),
-               options.origin_metres.y + std::sin(options.rotation_radians) *
-                       (static_cast<double>(min_x) * options.metres_per_pixel * options.image_scale) +
-                       std::cos(options.rotation_radians) *
-                       (static_cast<double>(min_y) * options.metres_per_pixel * options.image_scale)},
-              options.rotation_radians)},
+          {"points", Json::array({transform(min_x, min_y), transform(max_x, min_y),
+                                  transform(max_x, max_y), transform(min_x, max_y)})},
           {"closed", true}, {"classification", "measurement"},
           {"source", "deterministic-raster-bbox-v1"},
           {"source_pixel_bounds", Json::array({min_x, min_y, max_x, max_y})},
           {"metres_per_pixel", options.metres_per_pixel},
           {"image_scale", options.image_scale},
           {"rotation_radians", options.rotation_radians},
-           {"origin_metres", point_json(options.origin_metres)}}})};
+          {"origin_metres", point_json(options.origin_metres)},
+          {"centered_source", options.centered_source},
+          {"flip_horizontal", options.flip_horizontal}, {"flip_vertical", options.flip_vertical},
+          {"source_width", raster.width}, {"source_height", raster.height}}})};
 }
 
 std::vector<AssistanceProposal> suggest_edge_tracing(const AssistanceRaster& raster,
@@ -683,15 +731,8 @@ std::vector<AssistanceProposal> suggest_edge_tracing(const AssistanceRaster& ras
     const auto components = trace_components(raster, threshold);
     std::vector<AssistanceProposal> result;
     result.reserve(std::min<std::size_t>(components.size(), 64));
-    const auto cosine = std::cos(options.rotation_radians);
-    const auto sine = std::sin(options.rotation_radians);
     const auto transform = [&](Vec2 point) {
-        const auto scale = options.metres_per_pixel * options.image_scale;
-        const auto source_x = point.x * scale;
-        const auto source_y = point.y * scale;
-        return Vec2{
-            options.origin_metres.x + cosine * source_x - sine * source_y,
-            options.origin_metres.y + sine * source_x + cosine * source_y};
+        return assistance_source_point_to_model(point, raster.width, raster.height, options);
     };
 
     for (std::size_t component_index = 0; component_index < components.size() &&
@@ -758,9 +799,7 @@ std::vector<AssistanceProposal> suggest_edge_tracing(const AssistanceRaster& ras
                                    std::to_string(outer_position) + ":";
             for (const auto point : outer.points)
                 material += std::to_string(point.x) + "," + std::to_string(point.y) + ";";
-            material += std::to_string(options.metres_per_pixel) + ":" +
-                        std::to_string(options.image_scale) + ":" +
-                        std::to_string(options.rotation_radians);
+            material += reference_transform(raster, options).dump();
             const auto id = stable_id("assist-edge-trace", material);
             Json points = Json::array();
             for (const auto point : outer.points)
@@ -796,7 +835,10 @@ std::vector<AssistanceProposal> suggest_edge_tracing(const AssistanceRaster& ras
                   {"metres_per_pixel", options.metres_per_pixel},
                   {"image_scale", options.image_scale},
                   {"rotation_radians", options.rotation_radians},
-                  {"origin_metres", point_json(options.origin_metres)}}}));
+                  {"origin_metres", point_json(options.origin_metres)},
+                  {"centered_source", options.centered_source},
+                  {"flip_horizontal", options.flip_horizontal}, {"flip_vertical", options.flip_vertical},
+                  {"source_width", raster.width}, {"source_height", raster.height}}}));
         }
     }
     return result;
@@ -804,11 +846,16 @@ std::vector<AssistanceProposal> suggest_edge_tracing(const AssistanceRaster& ras
 
 std::vector<AssistanceProposal> extract_dimensions(const AssistanceRaster& raster,
                                                     AssistanceEngineOptions options,
-                                                    std::string target_boundary_id) {
+                                                    std::string target_boundary_id,
+                                                    std::string target_segment_id) {
     validate_assistance_raster(raster);
     validate_options(options);
     if (!target_boundary_id.empty() && !valid_identifier(target_boundary_id)) {
         invalid("dimension target boundary ID is invalid");
+    }
+    if (!target_segment_id.empty() &&
+        (target_boundary_id.empty() || !valid_identifier(target_segment_id))) {
+        invalid("dimension target segment requires a valid boundary and segment ID");
     }
     if (raster.source_text.empty()) return {};
 
@@ -828,20 +875,23 @@ std::vector<AssistanceProposal> extract_dimensions(const AssistanceRaster& raste
             continue;
         }
         if (!(quantity.metres > 0.0) || !std::isfinite(quantity.metres)) continue;
-        const auto material = raster.reference_id + ":" + std::to_string(match.offset) + ":" +
+        auto material = raster.reference_id + ":" + std::to_string(match.offset) + ":" +
                               match.text + ":" + target_boundary_id;
+        if (!target_segment_id.empty()) material += ":segment:" + target_segment_id;
         const auto id = stable_id("assist-dimension", material);
         std::vector<std::string> affected{id};
         if (!target_boundary_id.empty()) affected.push_back(target_boundary_id);
+        if (!target_segment_id.empty() && target_segment_id != target_boundary_id)
+            affected.push_back(target_segment_id);
         Json args{{"length_expression", expression}, {"length_metres", quantity.metres},
                   {"source_text", match.text}, {"source_offset", match.offset},
                   {"target_boundary_id", target_boundary_id}};
-        if (!target_boundary_id.empty()) args["target_segment_id"] = "";
+        if (!target_boundary_id.empty()) args["target_segment_id"] = target_segment_id;
         result.push_back(proposal(
             id, AssistanceKind::dimension_extraction,
             source_for(raster.reference_id, match.text, run->x, run->y, run->width, run->height,
-                       0.86),
-            {"add_dimension_suggestion", std::move(affected), std::move(args)}));
+                       run->confidence.value_or(0.86)),
+            {"add_dimension_suggestion", std::move(affected), std::move(args)}, &raster));
     }
     return result;
 }

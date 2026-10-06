@@ -1,9 +1,14 @@
 #include "sketch/desktop/main_window.hpp"
 #include "sketch/assistance_engine.hpp"
 #include "sketch/boundary_entity.hpp"
+#include "sketch/boundary_dimension.hpp"
+#include "sketch/document_digest.hpp"
+#include "sketch/measurement_linework.hpp"
+#include "sketch/project_organization.hpp"
 #include "support/noninteractive_errors.hpp"
 #include "support/trusted_reference_fixture.hpp"
 #include "reference_import.hpp"
+#include "../src/desktop/plan_canvas.hpp"
 
 #include <QApplication>
 #include <QImage>
@@ -11,6 +16,7 @@
 #include <QTemporaryDir>
 #include <QProcess>
 #include <QDir>
+#include <QTransform>
 #include <nlohmann/json.hpp>
 
 #include <cmath>
@@ -26,12 +32,265 @@ void require(bool condition, const char* message) {
     if (!condition) throw std::runtime_error(message);
 }
 
+void desktop_proposal_guards() {
+    using namespace sketch;
+    using namespace sketch::desktop;
+    for (const bool labels : {false, true}) {
+        MainWindow window;
+        window.setAssistanceEnabled(true);
+        const auto boundary = window.createBoundary(Boundary{
+            {{12, -7}, {16, -7}, 0}, {{16, -7}, {16, -4}, 0},
+            {{16, -4}, {12, -4}, 0}, {{12, -4}, {12, -7}, 0}});
+        require(!boundary.isEmpty(), "proposal guard fixture must create named geometry");
+        auto named_boundary = window.document().snapshot().entities().at(boundary.toStdString());
+        named_boundary.properties["name"] = "Guarded named boundary";
+        window.document().apply(ApplyEntityChanges{window.document().revision(),
+            {EntityChange::upsert(std::move(named_boundary))},
+            {AssetChange::upsert(Asset::create("guard-asset", "application/octet-stream", {std::byte{1}}))},
+            "Seed guard asset"});
+        const auto generate = [&] {
+            const auto proposals = labels ? window.suggestLabelAssistance()
+                : window.parseAssistanceCommand("label Guarded entry at 1, 2");
+            if (proposals.size() != 1)
+                std::cerr << "Desktop " << (labels ? "label" : "command") << " guard fixture proposal count: "
+                          << proposals.size() << "; status: " << window.lastError().toStdString() << '\n';
+            require(proposals.size() == 1, "one explicitly named geometry or command must produce one guarded proposal");
+            return proposals.front();
+        };
+        const auto proposal = generate();
+        const auto source = window.document().snapshot();
+        require(proposal.preview.arguments.at("source_document_digest") == document_snapshot_digest(source) &&
+                proposal.preview.arguments.at("source_workspace") == static_cast<int>(window.workspace()),
+                "every desktop label and command proposal must bind the full current snapshot and workspace");
+        const auto refuse = [&](const AssistanceProposal& rejected) {
+            const auto before = document_snapshot_digest(window.document().snapshot());
+            const auto workspace = window.workspace();
+            require(!window.acceptAssistanceProposal(rejected) && window.workspace() == workspace &&
+                    document_snapshot_digest(window.document().snapshot()) == before,
+                    "missing, malformed or stale desktop guards must refuse without any document or workspace mutation");
+        };
+        for (int malformed = 0; malformed != 6; ++malformed) {
+            auto invalid = proposal;
+            auto& args = invalid.preview.arguments;
+            if (malformed == 0) args.erase("source_document_digest");
+            else if (malformed == 1) args.erase("source_workspace");
+            else if (malformed == 2) args["source_document_digest"] = 12;
+            else if (malformed == 3) args["source_document_digest"] = "";
+            else if (malformed == 4) args["source_workspace"] = double(static_cast<int>(window.workspace()));
+            else args["source_workspace"] = "measurement";
+            refuse(invalid);
+        }
+        for (int changed = 0; changed != 4; ++changed) {
+            auto replacement = source;
+            auto& history = const_cast<std::vector<RevisionRecord>&>(replacement.history());
+            if (changed == 0) history.back().entities.at(boundary.toStdString()).extensions["same_revision_replacement"] = true;
+            else if (changed == 1) {
+                auto& organization = history.back().entities.at(window.activeLayerId().toStdString());
+                organization.properties["name"] = "Replaced organization at same revision";
+            } else if (changed == 2) {
+                auto& asset = history.back().assets.at("guard-asset");
+                asset = Asset::create(asset.id, asset.media_type, {std::byte{2}});
+            } else history.back().action = "Replaced historical source";
+            window.document() = Document::fork(replacement);
+            require(window.document().revision() == source.revision() &&
+                    window.document().snapshot().document_id() == source.document_id(),
+                    "replacement fixture must retain the same document ID and revision");
+            refuse(proposal);
+            window.document() = Document::fork(source);
+        }
+        window.setWorkspace(Workspace::architectural);
+        refuse(proposal);
+        window.setWorkspace(Workspace::measurement);
+        require(window.acceptAssistanceProposal(generate()) && window.document().revision() == source.revision() + 1,
+                "a freshly generated current proposal must remain normally applicable");
+        require(window.undoCommand() && window.document().snapshot().entities() == source.entities(),
+                "guarded label acceptance must undo as one ordinary document operation");
+    }
+    MainWindow drawing;
+    drawing.setAssistanceEnabled(true);
+    require(drawing.beginMeasurementLinework(), "workspace refusal fixture must start an active drawing");
+    const auto command = drawing.parseAssistanceCommand("set workspace architectural");
+    const auto before = document_snapshot_digest(drawing.document().snapshot());
+    require(command.size() == 1 && !drawing.acceptAssistanceProposal(command.front()) &&
+            drawing.workspace() == Workspace::measurement &&
+            document_snapshot_digest(drawing.document().snapshot()) == before,
+            "a workspace operation blocked by an active drawing must report refusal without mutation");
+}
+
+void calibrated_reference_transform_workflow(const QString& directory) {
+    using namespace sketch;
+    using namespace sketch::desktop;
+    using json = nlohmann::json;
+    QImage image(96, 56, QImage::Format_ARGB32);
+    image.fill(Qt::white);
+    for (int y = 6; y <= 36; ++y)
+        for (int x = 6; x <= (y < 28 ? 23 : 55); ++x)
+            image.setPixelColor(x, y, Qt::black);
+    const std::vector<std::pair<QRect, QColor>> markers{
+        {QRect(12, 10, 6, 6), QColor(200, 0, 0)},
+        {QRect(12, 25, 6, 6), QColor(0, 0, 200)},
+        {QRect(43, 29, 6, 6), QColor(0, 80, 0)}};
+    for (const auto& [rect, color] : markers)
+        for (int y = rect.top(); y <= rect.bottom(); ++y)
+            for (int x = rect.left(); x <= rect.right(); ++x)
+                image.setPixelColor(x, y, color);
+    const auto path = QDir(directory).filePath("asymmetric-reference.png");
+    require(image.save(path, "PNG"), "asymmetric transform fixture must save");
+    int fixture_index = 0;
+    for (const auto& [horizontal, vertical] :
+         std::vector<std::pair<bool, bool>>{{false, false}, {true, false},
+                                          {false, true}, {true, true}, {false, false}}) {
+        MainWindow window;
+        const auto reference_id = testing::importOrSeedTrustedReferenceFixture(window, path, image);
+        window.setAssistanceEnabled(true);
+        require(window.calibrateReference(reference_id, "0", "0", "20", "0", "1 m"),
+                "asymmetric reference must calibrate through normal API");
+        const double degrees = fixture_index == 4 ? 0.0 : 37.0;
+        require(window.editReferenceTransform(reference_id, "6", "-3", "0.05", "1.7",
+                    QString::number(degrees), "1", horizontal, vertical, true),
+                "reference transform must retain centered placement, scale and mirrors");
+        require(window.selectEntity({}), "reference capture must clear selection overlays");
+        const auto source = window.document().snapshot();
+        const auto source_reference = source.entities().at(reference_id.toStdString());
+        auto* canvas = dynamic_cast<PlanCanvas*>(window.findChild<QWidget*>("measurementPlanCanvas"));
+        require(canvas != nullptr, "actual MainWindow measurement canvas must exist");
+        canvas->setGridEnabled(false);
+        canvas->setOverviewMapEnabled(false);
+        canvas->setSelectionControlsVisible(false);
+        QImage capture(800, 600, QImage::Format_ARGB32);
+        capture.fill(Qt::white);
+        {
+            QPainter painter(&capture);
+            canvas->renderSceneAt(painter, capture.rect(), 40, {6, -3}, Qt::white);
+        }
+        // Qt's real renderer independently witnesses source-Y and mirroring.
+        // QTransform mirrors the persisted drawImage target rectangle only;
+        // the engine helper is intentionally not used for these expectations.
+        QTransform source_to_model;
+        source_to_model.translate(6, -3);
+        source_to_model.rotate(degrees);
+        source_to_model.scale(horizontal ? -0.085 : 0.085, vertical ? -0.085 : 0.085);
+        source_to_model.translate(-48, -28);
+        for (const auto& [rect, color] : markers) {
+            const auto model = source_to_model.map(QPointF(rect.x() + 3.0, rect.y() + 3.0));
+            const auto screen = QPoint(qRound(400 + (model.x() - 6) * 40),
+                                       qRound(300 - (model.y() + 3) * 40));
+            require(capture.rect().contains(screen), "reference marker must be inside capture");
+            const auto actual = capture.pixelColor(screen);
+            require(std::abs(actual.red() - color.red()) < 12 &&
+                        std::abs(actual.green() - color.green()) < 12 &&
+                        std::abs(actual.blue() - color.blue()) < 12,
+                    "actual canvas pixels disagree with calibrated centered mirrored source mapping");
+        }
+        for (const auto kind : {AssistanceKind::tracing, AssistanceKind::edge_tracing}) {
+            const auto before = window.document().snapshot();
+            const auto proposals = window.suggestReferenceAssistance(reference_id, kind);
+            require(proposals.size() == 1, "asymmetric reference must generate one trace");
+            const auto& proposal = proposals.front();
+            const auto& arguments = proposal.preview.arguments;
+            require(document_snapshot_digest(window.document().snapshot()) == document_snapshot_digest(before),
+                    "generating calibrated trace must preserve the complete source");
+            require(arguments.at("source_document_digest") == document_snapshot_digest(before) &&
+                        arguments.at("source_pixel_bounds") == json::array({6, 6, 55, 36}) &&
+                        arguments.at("centered_source") == true &&
+                        arguments.at("flip_horizontal") == horizontal &&
+                        arguments.at("flip_vertical") == vertical,
+                    "desktop trace must retain raw source bounds, transform and full source proof");
+            require(proposal.source.x == 6.0 / 96 && proposal.source.y == 6.0 / 56 &&
+                        proposal.source.width == 50.0 / 96 && proposal.source.height == 31.0 / 56,
+                    "reference mirror must not rewrite raw normalized source selection");
+            const std::vector<QPointF> pixels = kind == AssistanceKind::tracing
+                ? std::vector<QPointF>{{6, 6}, {55, 6}, {55, 36}, {6, 36}}
+                : std::vector<QPointF>{{6, 6}, {24, 6}, {24, 28}, {56, 28}, {56, 37}, {6, 37}};
+            const auto& points = arguments.at("points");
+            require(points.size() == pixels.size(), "reference transform must preserve L contour topology");
+            for (const auto pixel : pixels) {
+                const auto expected = source_to_model.map(pixel);
+                bool found = false;
+                for (const auto& actual : points)
+                    found |= std::abs(actual.at(0).get<double>() - expected.x()) < 1e-10 &&
+                             std::abs(actual.at(1).get<double>() - expected.y()) < 1e-10;
+                require(found, "MainWindow trace must coincide with real canvas source coordinates");
+            }
+            require(window.acceptAssistanceProposal(proposal) &&
+                        window.document().revision() == before.revision() + 1,
+                    "transformed trace must accept as one normal history command");
+            const auto accepted = window.document().snapshot();
+            const auto boundary = decode_identified_boundary_entity(accepted.entities().at(proposal.id));
+            require(boundary.segments.size() == points.size(), "accepted reference trace must retain analytical contour");
+            for (std::size_t index = 0; index < points.size(); ++index) {
+                const auto& start = boundary.segments[index].segment.start;
+                require(std::abs(start.x - points[index][0].get<double>()) < 1e-10 &&
+                            std::abs(start.y - points[index][1].get<double>()) < 1e-10,
+                        "normal accept must persist the actual transformed proposal geometry");
+            }
+            const auto& provenance = accepted.entities().at(proposal.id).extensions.at("assistance_provenance");
+            require(provenance.at("proposal") == encode_assistance_proposal(proposal) &&
+                        provenance.at("accepted_operation") == "add_boundary" &&
+                        provenance.at("accepted_entity_id") == proposal.id,
+                    "accepted trace must retain the exact reviewed proposal and source transform proof");
+            require(accepted.assets() == source.assets() &&
+                        accepted.entities().at(reference_id.toStdString()) == source_reference,
+                    "trace acceptance must preserve original reference asset and calibration provenance");
+            require(window.undoCommand() && window.document().snapshot().entities() == before.entities() &&
+                        window.document().snapshot().assets() == before.assets(),
+                    "transformed trace Undo must restore complete source entities and assets");
+            require(window.redoCommand() && window.document().snapshot().entities() == accepted.entities() &&
+                        window.document().snapshot().assets() == accepted.assets(),
+                    "transformed trace Redo must restore exact geometry and source proof");
+            const auto project = QDir(directory).filePath(QString("reference-transform-%1.sketch").arg(fixture_index));
+            require(window.saveProjectAs(project) && window.openProject(project) &&
+                        window.document().snapshot().entities() == accepted.entities() &&
+                        window.document().snapshot().assets() == accepted.assets(),
+                    "transformed trace must save and reopen exact geometry and reference provenance");
+            window.setAssistanceEnabled(true);
+        }
+        const auto before_invalid = document_snapshot_digest(window.document().snapshot());
+        require(window.suggestReferenceAssistance(reference_id, static_cast<AssistanceKind>(1234)).empty() &&
+                    !window.lastError().isEmpty() &&
+                    document_snapshot_digest(window.document().snapshot()) == before_invalid,
+                "unrecognized reference assistance kind must refuse without source mutation");
+        for (const QString invalid_number : {QString("nan"), QString("inf")}) {
+            for (int field = 0; field < 4; ++field) {
+                require(!window.editReferenceTransform(reference_id,
+                            field == 0 ? invalid_number : "6", field == 1 ? invalid_number : "-3",
+                            "0.05", field == 2 ? invalid_number : "1.7",
+                            field == 3 ? invalid_number : QString::number(degrees),
+                            "1", horizontal, vertical, true) &&
+                            document_snapshot_digest(window.document().snapshot()) == before_invalid,
+                        "nonfinite reference transforms must refuse without source mutation");
+            }
+        }
+        ++fixture_index;
+    }
+}
+
+void oversized_reference_refusal(const QString& directory) {
+    using namespace sketch;
+    QImage image(8193, 1, QImage::Format_ARGB32);
+    image.fill(Qt::white);
+    const auto path = QDir(directory).filePath("oversized-reference.png");
+    require(image.save(path, "PNG"), "bounded decoder refusal fixture must save");
+    desktop::MainWindow window;
+    const auto id = testing::importOrSeedTrustedReferenceFixture(window, path, image);
+    require(window.calibrateReference(id, "0", "0", "20", "0", "1 m"),
+            "oversized reference must retain valid calibration before decoder refusal");
+    window.setAssistanceEnabled(true);
+    const auto before = document_snapshot_digest(window.document().snapshot());
+    for (const auto kind : {AssistanceKind::tracing, AssistanceKind::edge_tracing,
+                            AssistanceKind::dimension_extraction}) {
+        require(window.suggestReferenceAssistance(id, kind).empty() && !window.lastError().isEmpty() &&
+                    document_snapshot_digest(window.document().snapshot()) == before,
+                "oversized image header must refuse assistance without source mutation");
+    }
+}
+
 void pdf_dimension_import_workflow(const QString& directory) {
     using namespace sketch;
     using json = nlohmann::json;
     QByteArray pdf("%PDF-1.4\n");
     std::vector<int> offsets{0};
-    const QByteArray content("BT /F1 12 Tf 72 650 Td (Wall: 12 ft) Tj ET\n");
+    const QByteArray content("BT /F1 12 Tf 72 650 Td (Wall: 31 ft 6 in) Tj ET\n");
     const std::vector<QByteArray> objects{
         "<< /Type /Catalog /Pages 2 0 R >>",
         "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
@@ -77,7 +336,7 @@ void pdf_dimension_import_workflow(const QString& directory) {
     report.output.resize(static_cast<std::size_t>(bytes.size()));
     std::memcpy(report.output.data(), bytes.constData(), report.output.size());
     const auto decoded = desktop::decodeReferenceBytes(pdf, "pdf", 0, {}, [&](const auto&) { return report; });
-    require(decoded.source_text == "Wall: 12 ft" && decoded.text_runs.size() == 1,
+    require(decoded.source_text == "Wall: 31 ft 6 in" && decoded.text_runs.size() == 1,
             "normal PDF codec path must extract the dimension text and selection");
 
     desktop::MainWindow window;
@@ -110,10 +369,34 @@ void pdf_dimension_import_workflow(const QString& directory) {
     window.setAssistanceEnabled(true);
     require(window.calibrateReference(id, "0", "0", "100", "0", "1 m"),
             "PDF dimension reference must calibrate");
-    const auto proposals = window.suggestReferenceAssistance(id, AssistanceKind::dimension_extraction);
-    require(proposals.size() == 1 && proposals.front().source.original_text == "12 ft" &&
-                std::abs(proposals.front().preview.arguments.at("length_metres").get<double>() - 3.6576) < 1e-9,
+    MeasurementLinework model;
+    model.stroke_id = "reviewed-measured-line"; model.anchor = {0, 0};
+    ConstructionReceipt receipt;
+    receipt.segment_id = "reviewed-segment"; receipt.kind = BoundaryConstructionKind::line_to_point;
+    receipt.start = model.anchor; receipt.chord_end = Vec2{10, 0};
+    model.edges.push_back({receipt.segment_id, "reviewed-start", "reviewed-end", receipt});
+    Entity target; target.id = model.stroke_id; target.type = "measurement_linework";
+    target.required = true;
+    target.properties["model"] = encode_measurement_linework_model(model);
+    const auto context = organize_project(window.document().snapshot()).drawing_context(
+        window.activeLayerId().toStdString());
+    require(context && context->complete(), "workflow fixture must use a complete active drawing context");
+    target.properties["property_id"] = context->property_id;
+    target.properties["building_id"] = context->building_id;
+    target.properties["floor_id"] = context->floor_id;
+    target.properties["layer_id"] = context->layer_id;
+    window.document().apply(ApplyEntityChanges{window.document().revision(),
+        {EntityChange::upsert(target)}, {}, "Seed measured line association target"});
+    const auto generate = [&] { return window.suggestReferenceAssistance(id,
+        AssistanceKind::dimension_extraction, QString::fromStdString(target.id),
+        QString::fromStdString(receipt.segment_id)); };
+    const auto proposals = generate();
+    require(proposals.size() == 1 && proposals.front().source.original_text == "31 ft 6 in" &&
+                std::abs(proposals.front().preview.arguments.at("length_metres").get<double>() - 9.6012) < 1e-9,
             "imported PDF embedded text must produce a parsed dimension proposal");
+    require(proposals.front().preview.arguments.at("source_document_digest") ==
+                document_snapshot_digest(window.document().snapshot()),
+            "initial PDF proposal must bind the complete live source snapshot");
     const auto bounds = decoded.text_runs.front().bounds;
     const auto& source = proposals.front().source;
     require(source.x == bounds.x() && source.y == bounds.y() && source.width == bounds.width() &&
@@ -121,8 +404,67 @@ void pdf_dimension_import_workflow(const QString& directory) {
     const auto project = QDir(directory).filePath("dimensions.sketch");
     require(window.saveProjectAs(project) && window.openProject(project), "PDF text metadata must round-trip");
     window.setAssistanceEnabled(true);
-    require(window.suggestReferenceAssistance(id, AssistanceKind::dimension_extraction) == proposals,
+    const auto reopened_proposals = generate();
+    require(reopened_proposals.size() == 1 &&
+                reopened_proposals.front().preview.arguments.at("source_document_digest") ==
+                    document_snapshot_digest(window.document().snapshot()),
+            "reopened PDF proposal must bind the complete current source snapshot");
+    auto initial_content = proposals;
+    auto reopened_content = reopened_proposals;
+    // Saving changes saved_revision in the full snapshot digest. Compare every
+    // other proposal field while independently checking both live digest fences.
+    initial_content.front().preview.arguments.erase("source_document_digest");
+    reopened_content.front().preview.arguments.erase("source_document_digest");
+    require(reopened_content == initial_content,
             "reopened PDF must reproduce deterministic source bounds and proposals");
+    const auto accepted_source = window.document().snapshot();
+    const auto accepted_proposal = generate().front();
+    const auto retained = encode_assistance_proposal(accepted_proposal);
+    require(window.acceptAssistanceProposal(accepted_proposal), "reviewed measured-line association must accept");
+    const auto accepted = window.document().snapshot();
+    const auto& dimension = accepted.entities().at(accepted_proposal.id);
+    const auto linked = decode_boundary_dimension_entity(dimension);
+    require(linked.dimension && linked.dimension->boundary_id == target.id && linked.dimension->segment_id == receipt.segment_id &&
+                accepted.entities().at(target.id) == accepted_source.entities().at(target.id) &&
+                dimension.extensions.at("assistance_provenance").at("proposal") == retained &&
+                dimension.extensions.at("assistance_provenance").at("linked_length_metres") == 10.0 &&
+                std::abs(dimension.extensions.at("assistance_provenance").at("recognized_length_metres").get<double>() - 9.6012) < 1e-9,
+            "association must retain the immutable proposal while preserving authoritative measured geometry");
+    require(window.undoCommand() && !window.document().snapshot().entities().contains(accepted_proposal.id),
+            "reviewed dimension association must undo normally");
+    require(window.redoCommand() && window.document().snapshot().entities() == accepted.entities(),
+            "reviewed association redo must restore exact entities and provenance");
+    require(window.saveProjectAs(project) && window.openProject(project) &&
+                window.document().snapshot().entities() == accepted.entities(),
+            "reviewed association must save and reopen exact provenance");
+    window.setAssistanceEnabled(true);
+    // The saved head is a redo event and must exactly equal its source record.
+    // Start an ordinary authored head before replacing its state at the same
+    // ID/revision. Removing the reviewed annotation also makes the retained
+    // proposal genuinely applicable if its complete-source fence is omitted.
+    window.document().apply(ApplyEntityChanges{window.document().revision(),
+        {EntityChange::erase(accepted_proposal.id)}, {}, "Prepare retained proposal source fixture"});
+    const auto retained_source = window.document().snapshot();
+    require(!retained_source.history().back().source_revision.has_value() &&
+                !retained_source.entities().contains(accepted_proposal.id),
+            "stale proposal fixture must use an authored head with no existing proposed dimension");
+    for (const bool replace_asset : {false, true}) {
+        window.document() = Document::fork(retained_source);
+        const auto stale = generate().front();
+        auto replacement = window.document().snapshot();
+        auto& record = const_cast<std::vector<RevisionRecord>&>(replacement.history()).back();
+        if (replace_asset) {
+            require(!record.assets.empty(), "reference fixture must retain an asset for replacement fencing");
+            auto& asset = record.assets.begin()->second;
+            asset = Asset::create(asset.id, asset.media_type, {std::byte{42}});
+        } else record.entities.at(target.id).extensions["same_revision_replacement"] = true;
+        window.document() = Document::fork(replacement);
+        const auto before = window.document().snapshot();
+        require(!window.acceptAssistanceProposal(stale) &&
+                    window.document().revision() == before.revision() &&
+                    document_snapshot_digest(window.document().snapshot()) == document_snapshot_digest(before),
+                "same-ID same-revision entity or asset replacement must reject retained proposals without mutation");
+    }
 }
 
 sketch::AssistanceRaster dimension_fixture() {
@@ -152,6 +494,9 @@ int main(int argc, char** argv) {
 
         QTemporaryDir temporary;
         require(temporary.isValid(), "temporary directory must be available");
+        desktop_proposal_guards();
+        calibrated_reference_transform_workflow(temporary.path());
+        oversized_reference_refusal(temporary.path());
         pdf_dimension_import_workflow(temporary.path());
         const auto image_path = std::filesystem::path(temporary.path().toStdWString()) / "plan.png";
         QImage image(80, 60, QImage::Format_ARGB32);
@@ -184,8 +529,16 @@ int main(int argc, char** argv) {
         require_calibration_error();
         require(window.calibrateReference(reference_id, "0", "0", "40", "0", "4 m"),
                 "reference fixture must calibrate from a known distance");
+        const auto before_ocr = document_snapshot_digest(window.document().snapshot());
         require(window.suggestReferenceAssistance(reference_id, AssistanceKind::dimension_extraction).empty(),
                 "raster-only imported reference must yield no text dimension proposals");
+        require(document_snapshot_digest(window.document().snapshot()) == before_ocr,
+                "blank recognition or isolation refusal must preserve the document");
+        if (!window.lastError().isEmpty())
+            require(window.lastError().contains("OCR", Qt::CaseInsensitive) ||
+                        window.lastError().contains("isolation", Qt::CaseInsensitive) ||
+                        window.lastError().contains("unavailable", Qt::CaseInsensitive),
+                    "unqualified OCR must report explicit recognition or isolation refusal");
         const auto calibrated = window.document().snapshot().entities().at(reference_id.toStdString());
         const auto replace_reference = [&](Entity replacement) {
             window.document().apply(ApplyEntityChanges{window.document().revision(),
@@ -222,7 +575,7 @@ int main(int argc, char** argv) {
         require(std::abs(trace.front().preview.arguments.at("metres_per_pixel").get<double>() -
                          0.1) < 1e-12,
                 "trace suggestions must use the known-distance calibration");
-        const auto edge_trace = window.suggestReferenceAssistance(reference_id,
+        auto edge_trace = window.suggestReferenceAssistance(reference_id,
                                                                    AssistanceKind::edge_tracing);
         require(edge_trace.size() == 1 &&
                     edge_trace.front().preview.arguments.at("trace_mode") ==
@@ -245,6 +598,8 @@ int main(int argc, char** argv) {
         require(window.undoCommand() &&
                     !window.document().snapshot().entities().contains(trace_id),
                 "accepted trace must be undoable");
+        edge_trace = window.suggestReferenceAssistance(reference_id, AssistanceKind::edge_tracing);
+        require(edge_trace.size() == 1, "edge trace must regenerate against the current history source");
         const auto edge_id = edge_trace.front().id;
         const auto hole_id = edge_trace.front().preview.arguments.at("hole_ids").at(0)
                                  .get<std::string>();
@@ -263,6 +618,14 @@ int main(int argc, char** argv) {
                     window.document().snapshot().entities().at(edge_id).properties.at(
                         "deduction_ids") == nlohmann::json::array({hole_id}),
                 "accepted edge trace must atomically retain and link enclosed voids");
+        const auto accepted_edge = window.document().snapshot();
+        for (const auto& id : {edge_id, hole_id}) {
+            const auto& provenance = accepted_edge.entities().at(id).extensions.at("assistance_provenance");
+            require(provenance.at("proposal") == encode_assistance_proposal(edge_trace.front()) &&
+                        provenance.at("accepted_operation") == "add_boundary" &&
+                        provenance.at("accepted_entity_id") == id,
+                    "outer and void trace entities must retain the exact reviewed source proposal");
+        }
         require(window.undoCommand() &&
                     !window.document().snapshot().entities().contains(edge_id) &&
                     !window.document().snapshot().entities().contains(hole_id),
@@ -283,6 +646,8 @@ int main(int argc, char** argv) {
         require(!legacy_boundary.isEmpty(), "dimension target boundary must be created");
         auto dimension = extract_dimensions(dimension_fixture()).front();
         dimension.preview.arguments["target_boundary_id"] = legacy_boundary.toStdString();
+        dimension.preview.arguments["source_document_digest"] = document_snapshot_digest(window.document().snapshot());
+        dimension.preview.arguments["source_workspace"] = static_cast<int>(window.workspace());
         const auto dimension_revision = window.document().revision();
         require(window.acceptAssistanceProposal(dimension),
                 "accepted dimension must upgrade and annotate its target boundary");

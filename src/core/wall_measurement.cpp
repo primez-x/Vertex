@@ -876,30 +876,63 @@ std::vector<EdgeKey> edge_keys(const Boundary& boundary) {
 }
 
 void validate_source_schema(const Json& source, std::vector<std::string>& ids) {
-    if (!source.is_object() || source.size() != 3 || !source.contains("version") ||
+    if (!source.is_object() || !source.contains("version") ||
         !source.contains("basis") || !source.contains("walls"))
         reject("Wall measurement source is incomplete");
     const auto& version = source.at("version");
-    if ((!version.is_number_integer() && !version.is_number_unsigned()) || version != 1 ||
+    const bool translated=version==2;
+    if ((!version.is_number_integer() && !version.is_number_unsigned()) || (version != 1 && !translated) ||
+        source.size()!=(translated ? 6U : 3U) ||
         !source.at("basis").is_string() || source.at("basis") != "exterior" ||
         !source.at("walls").is_array() || source.at("walls").empty() ||
         source.at("walls").size() > maximum_source_walls)
         reject("Wall measurement source has an unknown or invalid schema");
+    if (translated && (!source.contains("kernel") || !source.at("kernel").is_string() ||
+        (source.at("kernel")!="stable" && source.at("kernel")!="legacy_v1") ||
+        !source.contains("origin_outline") || !source.at("origin_outline").is_array() ||
+        source.at("origin_outline").size()!=source.at("walls").size() ||
+        !source.contains("translations") || !source.at("translations").is_array() ||
+        source.at("translations").empty() || source.at("translations").size()>4096 || source.dump().size()>1024*1024-4096))
+        reject("Wall translation lineage is malformed or exceeds its budget");
+    if (translated) {
+        // Every sequential add must retain its floating-point result and every
+        // resulting outline must pass topology validation. Bound their combined
+        // quadratic work, including genesis/derived-outline validation, before
+        // any materialization. Four-edge owners still retain all 4096 moves.
+        constexpr std::size_t maximum_replay_pair_checks=8*1024*1024;
+        const auto count=source.at("walls").size();
+        const auto pairs=count*(count-1)/2;
+        if (pairs && source.at("translations").size()+2>maximum_replay_pair_checks/pairs)
+            reject("Wall translation lineage exceeds its combined replay-work budget (8388608 edge-pair checks)");
+    }
     std::set<std::string, std::less<>> seen;
+    std::string previous_id;
     for (const auto& record : source.at("walls")) {
-        if (!record.is_object() || record.size() != 2 || !record.contains("id") ||
+        if (!record.is_object() || record.size() != (translated ? 4U : 2U) || !record.contains("id") ||
             !record.contains("context") || !record.at("id").is_string() ||
             !record.at("context").is_object())
             reject("Wall measurement source record is malformed");
         const auto id = record.at("id").get<std::string>();
         if (id.empty() || !seen.insert(id).second)
             reject("Wall measurement source IDs must be unique and non-empty");
+        if (translated && !previous_id.empty() && id<=previous_id) reject("Wall translation origin records must retain canonical identity order");
+        previous_id=id;
         for (const auto& [key, value] : record.at("context").items()) {
             if (std::find(context_fields.begin(), context_fields.end(), key) == context_fields.end() ||
                 !value.is_string() || value.get_ref<const std::string&>().empty())
                 reject("Wall measurement source context is malformed");
         }
         ids.push_back(id);
+        if (translated) {
+            if (!record.contains("baseline") || !record.at("baseline").is_object() ||
+                record.at("baseline").size()!=3 || !record.at("baseline").contains("sweep_radians") ||
+                !record.contains("thickness_m")) reject("Wall translation origin record is incomplete");
+            (void)baseline(record); (void)thickness(record);
+        }
+    }
+    if (translated) for (const auto& offset:source.at("translations")) {
+        const auto value=point(offset,"Wall translation offset");
+        if (value.x==0 && value.y==0) reject("Wall translation lineage contains an empty operation");
     }
 }
 
@@ -913,7 +946,7 @@ Json normalize_source_order(const Json& source) {
     });
     Json walls = Json::array();
     for (auto& record : records) walls.push_back(std::move(record));
-    return {{"version", 1}, {"basis", "exterior"}, {"walls", std::move(walls)}};
+    auto result=source; result["walls"]=std::move(walls); return result;
 }
 
 bool boundary_context_matches(const Entity& boundary, const Json& source) {
@@ -1039,6 +1072,137 @@ WallMeasurementResult derive_exterior_wall_measurement(
     return derive_exterior_wall_measurement_impl(entities, wall_ids, OffsetKernel::stable);
 }
 
+namespace {
+Json segment_record(const Segment& value) {
+    return {{"start",{value.start.x,value.start.y}},{"end",{value.end.x,value.end.y}},
+        {"sweep_radians",value.sweep_radians}};
+}
+Json outline_record(const Boundary& value) {
+    auto result=Json::array(); for (const auto& edge:value) result.push_back(segment_record(edge)); return result;
+}
+Boundary translation_origin_outline(const Json& source) {
+    Boundary result;
+    for (const auto& edge:source.at("origin_outline")) {
+        if (!edge.is_object() || edge.size()!=3 || !edge.contains("sweep_radians"))
+            reject("Wall translation origin outline is malformed");
+        result.push_back(baseline(Json{{"baseline",edge}}));
+    }
+    if (!validate_boundary(result).empty()) reject("Wall translation origin outline is invalid");
+    return result;
+}
+std::vector<std::string> aligned_physical_ids(const Boundary& actual,const WallMeasurementResult& derived) {
+    std::vector<std::string> result; unsigned matches{};
+    if (actual.size()!=derived.boundary.size()) reject("Wall translation origin changed physical topology");
+    const auto n=actual.size();
+    for (std::size_t shift=0;shift<n;++shift) for (const bool reverse:{false,true}) {
+        std::vector<std::string> ids; bool match=true;
+        for (std::size_t i=0;i<n;++i) {
+            const auto index=(shift+(reverse ? n-i : i))%n;
+            auto edge=derived.boundary[index];
+            if (reverse) { std::swap(edge.start,edge.end); edge.sweep_radians=-edge.sweep_radians; }
+            if (segment_record(actual[i])!=segment_record(edge)) { match=false; break; }
+            ids.push_back(derived.ordered_wall_ids[index]);
+        }
+        if (match) { ++matches; result=std::move(ids); }
+    }
+    if (matches!=1) reject("Wall translation origin does not uniquely match its independently derived physical outline");
+    return result;
+}
+// A v2 materialization is in the retained owner's winding/order. A fresh v1
+// offset is canonical. Carry an edge's direction across both representations
+// rather than treating the old correspondence reversal as the new reversal.
+bool replacement_edge_reversed(bool old_reversed,const Boundary& old,const Boundary& replacement) {
+    return old_reversed != ((signed_area(old)<0.0)!=(signed_area(replacement)<0.0));
+}
+bool translation_walls_current(const std::map<std::string,Entity,std::less<>>& entities,const Json& source) {
+    for (const auto& record:source.at("walls")) {
+        const auto found=entities.find(record.at("id").get<std::string>());
+        if (found==entities.end() || found->second.type!="wall") return false;
+        auto expected=baseline(record);
+        for (const auto& offset:source.at("translations")) expected=transform_segment(expected,
+            PlanarTransform{{},0,false,false,point(offset,"Wall translation offset")});
+        if (segment_record(baseline(found->second.properties))!=segment_record(expected) ||
+            thickness(found->second.properties)!=thickness(record) || wall_context(found->second.properties)!=record.at("context")) return false;
+    }
+    return true;
+}
+}
+
+WallMeasurementResult materialize_exterior_wall_measurement(const Entity& owner) {
+    if (owner.type!="measurement_boundary" || inspect_boundary_entity_version(owner).format!=BoundaryEntityFormat::identified_v1)
+        reject("Physical translation lineage requires an identified measured owner");
+    const auto& source=owner.properties.at("wall_measurement_source");
+    std::vector<std::string> ids; validate_source_schema(source,ids);
+    if (source.at("version")!=2) reject("Retained physical translation materialization requires version two lineage");
+    std::map<std::string,Entity,std::less<>> captured;
+    for (const auto& record:source.at("walls")) {
+        auto properties=record.at("context"); properties["baseline"]=record.at("baseline");
+        properties["thickness_m"]=record.at("thickness_m"); const auto id=record.at("id").get<std::string>();
+        captured.emplace(id,Entity{id,"wall",std::move(properties),false,Json::object()});
+    }
+    const auto derived=derive_exterior_wall_measurement_impl(captured,ids,
+        source.at("kernel")=="stable" ? OffsetKernel::stable : OffsetKernel::legacy_v1);
+    auto outline=translation_origin_outline(source);
+    auto ordered=aligned_physical_ids(outline,derived);
+    for (const auto& offset:source.at("translations")) {
+        const PlanarTransform move{{},0,false,false,point(offset,"Wall translation offset")};
+        for (auto& edge:outline) {
+            edge=transform_segment(edge,move);
+            (void)baseline(Json{{"baseline",segment_record(edge)}});
+        }
+        for (auto& [id,wall]:captured) {
+            wall.properties["baseline"]=segment_record(transform_segment(baseline(wall.properties),move));
+            (void)baseline(wall.properties);
+        }
+        if (!validate_boundary(outline).empty()) reject("Wall translation lineage produced an invalid outline");
+    }
+    return {std::move(outline),source,std::move(ordered)};
+}
+
+WallMeasurementResult derive_translated_exterior_wall_measurement(
+    const std::map<std::string,Entity,std::less<>>& entities,const Entity& owner,
+    const std::vector<std::string>& wall_ids,const Json& proof) {
+    if (!proof.is_object() || (proof.size()!=2 && proof.size()!=3) || !proof.contains("version") ||
+        !proof.at("version").is_number_integer() || proof.at("version")!=1 || !proof.contains("offset"))
+        reject("Typed physical translation proof is malformed");
+    const auto offset=point(proof.at("offset"),"Wall translation offset");
+    if (offset.x==0 && offset.y==0) reject("Physical translation requires a nonzero offset");
+    const auto& previous=owner.properties.at("wall_measurement_source");
+    const auto kernel=previous.at("version")==2 ? previous.at("kernel") :
+        proof.contains("genesis") && proof.at("genesis").is_object() ? proof.at("genesis").value("kernel",Json(nullptr)) : Json(nullptr);
+    if (kernel=="legacy_v1") (void)derive_legacy_replacement_exterior_wall_measurement(entities,owner,wall_ids);
+    else (void)derive_replacement_exterior_wall_measurement(entities,owner,wall_ids);
+    auto retained_ids=exterior_wall_measurement_source_ids(owner),requested=wall_ids;
+    std::sort(retained_ids.begin(),retained_ids.end()); std::sort(requested.begin(),requested.end());
+    if (retained_ids!=requested) reject("Physical translation cannot replace source identities");
+    Json source;
+    if (previous.at("version")==1) {
+        if (proof.size()!=3 || !proof.contains("genesis") || !proof.at("genesis").is_object() || proof.at("genesis").size()!=3 ||
+            !proof.at("genesis").contains("kernel") || !proof.at("genesis").contains("walls") ||
+            !proof.at("genesis").contains("origin_outline")) reject("First physical translation requires its captured genesis");
+        source=proof.at("genesis"); source["version"]=2; source["basis"]="exterior";
+        source["translations"]=Json::array({proof.at("offset")});
+        std::vector<std::string> origin_ids; validate_source_schema(source,origin_ids);
+        std::sort(origin_ids.begin(),origin_ids.end());
+        if (origin_ids!=retained_ids || outline_record(actual_boundary_geometry(owner))!=source.at("origin_outline"))
+            reject("Physical translation genesis differs from the retained owner");
+        Json contexts=Json::array();
+        for (const auto& record:source.at("walls")) contexts.push_back({{"id",record.at("id")},{"context",record.at("context")}});
+        if (normalize_source_order(previous)!=normalize_source_order(Json{{"version",1},{"basis","exterior"},{"walls",contexts}}))
+            reject("Physical translation genesis changed source context");
+    } else {
+        if (proof.size()!=2) reject("Continued physical translation cannot replace its genesis");
+        const auto old=materialize_exterior_wall_measurement(owner);
+        if (outline_record(old.boundary)!=outline_record(actual_boundary_geometry(owner))) reject("Retained physical translation outline was altered");
+        source=previous; source["translations"].push_back(proof.at("offset"));
+    }
+    auto projected=owner; projected.properties["wall_measurement_source"]=source;
+    auto result=materialize_exterior_wall_measurement(projected);
+    if (!translation_walls_current(entities,source) || !boundary_context_matches(owner,source))
+        reject("Translated physical walls differ from their exact retained source records");
+    return result;
+}
+
 WallMeasurementResult derive_legacy_exterior_wall_measurement(
     const std::map<std::string, Entity, std::less<>>& entities,
     const std::vector<std::string>& wall_ids) {
@@ -1064,6 +1228,11 @@ static WallMeasurementResult derive_replacement_exterior_wall_measurement_impl(
         reject("Wall source replacement requires an identified exterior measured area");
     (void)exterior_wall_measurement_source_ids(owner);
     const auto& previous_source = owner.properties.at("wall_measurement_source");
+    if (previous_source.at("version")==2) {
+        const auto retained_translation=materialize_exterior_wall_measurement(owner);
+        if (outline_record(retained_translation.boundary)!=outline_record(actual_boundary_geometry(owner)))
+            reject("Retained physical translation outline differs from its intrinsic proof");
+    }
     const auto organization = organize_project(entities);
     const auto owner_context = organization.drawing_context(owner.id);
     if (!owner_context || !owner_context->complete())
@@ -1139,6 +1308,8 @@ static WallMeasurementResult derive_replacement_exterior_wall_measurement_impl(
     }
     for (const auto* field : {"elevation_m", "elevation"})
         if (owner.properties.contains(field)) { check_plane(number(owner.properties.at(field), "Measured owner elevation")); break; }
+    // Ordinary replacement always derives v1 geometry from the requested IDs.
+    // Only the separately typed translation may retain an exact v2 outline.
     return derive_exterior_wall_measurement_impl(entities, wall_ids, kernel);
 }
 
@@ -1169,6 +1340,11 @@ bool wall_measurement_source_current(const std::map<std::string, Entity, std::le
         validate_source_schema(*source_property, wall_ids);
         const auto actual = actual_boundary_geometry(boundary);
         if (!validate_boundary(actual).empty()) return false;
+        if (source_property->at("version")==2) {
+            const auto expected=materialize_exterior_wall_measurement(boundary);
+            return boundary_context_matches(boundary,*source_property) &&
+                translation_walls_current(entities,*source_property) && outline_record(actual)==outline_record(expected.boundary);
+        }
         const auto matches = [&](OffsetKernel kernel) {
             const auto expected = derive_exterior_wall_measurement_impl(entities, wall_ids, kernel);
             return normalize_source_order(*source_property) == expected.source &&
@@ -1386,10 +1562,13 @@ static std::map<std::string, Entity, std::less<>> inverse_exterior_outline(
     };
     for (const auto kernel : {OffsetKernel::stable, OffsetKernel::legacy_v1}) {
         WallMeasurementResult derived;
-        try { derived = derive_exterior_wall_measurement_impl(original, ids, kernel); }
+        try { derived = owner.properties.at("wall_measurement_source").at("version")==2
+            ? materialize_exterior_wall_measurement(owner) : derive_exterior_wall_measurement_impl(original, ids, kernel); }
         catch (const std::invalid_argument&) { continue; }
         if (normalize_source_order(owner.properties.at("wall_measurement_source")) != derived.source ||
             !boundary_context_matches(owner, derived.source) || actual.size() != derived.boundary.size()) continue;
+        if (owner.properties.at("wall_measurement_source").at("version")==2 &&
+            !wall_measurement_source_current(original,owner)) continue;
         for (std::size_t offset = 0; offset < actual.size(); ++offset)
             for (const bool reverse : {false, true}) {
                 bool match = true;
@@ -1516,13 +1695,14 @@ static std::map<std::string, Entity, std::less<>> inverse_exterior_outline(
     // Compare against the actual forward result; never replace these bytes with
     // the user's target coordinates merely to make exact currentness pass.
     const auto forward = derive_replacement_exterior_wall_measurement(candidate, owner, ids);
+    const auto forward_reversed=replacement_edge_reversed(reversed,old->boundary,forward.boundary);
     std::map<std::string, Segment, std::less<>> exterior;
     for (std::size_t i = 0; i < forward.boundary.size(); ++i)
         exterior.emplace(forward.ordered_wall_ids[i], forward.boundary[i]);
     const auto arc_tolerance=measured_arc_authority ? measured_arc_roundoff(requested) : 0.0;
     for (std::size_t i = 0; i < requested.size(); ++i) {
         auto edge = exterior.at(ordered[i].id);
-        if (reversed) { std::swap(edge.start, edge.end); edge.sweep_radians = -edge.sweep_radians; }
+        if (forward_reversed) { std::swap(edge.start, edge.end); edge.sweep_radians = -edge.sweep_radians; }
         if (measured_arc_authority) {
             validate_measured_arc_edge(edge,requested[i],arc_tolerance);
             continue;
@@ -1739,7 +1919,15 @@ void validate_exterior_segment_arc_result(const std::map<std::string,Entity,std:
 std::vector<BoundaryGeometryEdit> exterior_wall_measurement_source_updates(
     const std::map<std::string, Entity, std::less<>>& original,
     const std::map<std::string, Entity, std::less<>>& proposed,
-    bool validate_final_constraints) {
+    bool validate_final_constraints,
+    const std::map<std::string,Vec2,std::less<>>& rigid_offsets) {
+    for (const auto& [id,offset]:rigid_offsets) {
+        const auto owner=original.find(id);
+        if (owner==original.end() || owner->second.type!="measurement_boundary" ||
+            !owner->second.properties.contains("wall_measurement_source") || !wall_measurement_source_current(original,owner->second) ||
+            !bounded(offset.x) || !bounded(offset.y) || (offset.x==0 && offset.y==0))
+            reject("Rigid exterior translation requires a current retained source and a bounded nonzero offset");
+    }
     const auto same_segment = [](const Segment& a, const Segment& b) {
         return a.start.x == b.start.x && a.start.y == b.start.y &&
             a.end.x == b.end.x && a.end.y == b.end.y && a.sweep_radians == b.sweep_radians;
@@ -1787,17 +1975,21 @@ std::vector<BoundaryGeometryEdit> exterior_wall_measurement_source_updates(
         const auto identified = decode_identified_boundary_entity(owner);
         const auto actual = boundary_geometry(identified);
         std::optional<WallMeasurementResult> old;
+        OffsetKernel original_kernel=OffsetKernel::stable;
         Alignment correspondence;
         for (const auto kernel : {OffsetKernel::stable, OffsetKernel::legacy_v1}) {
             std::optional<WallMeasurementResult> derived;
             try {
-                derived = derive_exterior_wall_measurement_impl(original, ids, kernel);
+                derived = owner.properties.at("wall_measurement_source").at("version")==2
+                    ? materialize_exterior_wall_measurement(owner) : derive_exterior_wall_measurement_impl(original, ids, kernel);
+                if (owner.properties.at("wall_measurement_source").at("version")==2 &&
+                    !wall_measurement_source_current(original,owner)) continue;
                 if (normalize_source_order(owner.properties.at("wall_measurement_source")) != derived->source ||
                     !boundary_context_matches(owner, derived->source)) continue;
             } catch (const std::invalid_argument&) { continue; }
             const auto candidate = align(actual, derived->boundary);
             if (candidate.matches > 1) reject("Automatic exterior update has ambiguous original edge correspondence");
-            if (candidate.matches == 1) { old = std::move(derived); correspondence = candidate; break; }
+            if (candidate.matches == 1) { old = std::move(derived); correspondence = candidate; original_kernel=kernel; break; }
         }
         // Only the original snapshot determines this exemption. A current
         // owner cannot become stale as a result of an authored physical edit.
@@ -1820,7 +2012,22 @@ std::vector<BoundaryGeometryEdit> exterior_wall_measurement_source_updates(
             before_context->building_id != after_context->building_id || before_context->floor_id != after_context->floor_id ||
             before_context->layer_id != after_context->layer_id)
             reject("Automatic exterior update must retain the measured owner's resolved hierarchy");
-        const auto replacement = derive_replacement_exterior_wall_measurement(proposed, owner, ids);
+        std::optional<Json> translation_proof;
+        if (const auto move=rigid_offsets.find(id);move!=rigid_offsets.end()) {
+            translation_proof=Json{{"version",1},{"offset",{move->second.x,move->second.y}}};
+            if (owner.properties.at("wall_measurement_source").at("version")==1) {
+                auto records=Json::array();
+                for (const auto& wall:read_source_walls(original,ids)) records.push_back({{"id",wall.id},{"context",wall.context},
+                    {"baseline",segment_record(wall.baseline)},{"thickness_m",wall.thickness}});
+                std::sort(records.begin(),records.end(),[](const auto& a,const auto& b) {
+                    return a.at("id").template get<std::string>()<b.at("id").template get<std::string>(); });
+                const auto kernel=original_kernel==OffsetKernel::stable ? "stable" : "legacy_v1";
+                (*translation_proof)["genesis"]={{"kernel",kernel},{"walls",records},{"origin_outline",outline_record(actual)}};
+            }
+        }
+        const auto replacement = translation_proof
+            ? derive_translated_exterior_wall_measurement(proposed,owner,ids,*translation_proof)
+            : derive_replacement_exterior_wall_measurement(proposed, owner, ids);
         if (replacement.boundary.size() != old->boundary.size() ||
             replacement.ordered_wall_ids.size() != replacement.boundary.size())
             reject("Automatic exterior update changed analytical topology");
@@ -1830,6 +2037,7 @@ std::vector<BoundaryGeometryEdit> exterior_wall_measurement_source_updates(
                 reject("Automatic exterior update has duplicate physical edge lineage");
         auto retained = identified;
         const auto count = retained.segments.size();
+        const auto replacement_reversed=replacement_edge_reversed(correspondence.reversed,old->boundary,replacement.boundary);
         std::vector<std::size_t> mapped;
         for (std::size_t i = 0; i < count; ++i) {
             const auto old_index = (correspondence.offset + (correspondence.reversed ? count - i : i)) % count;
@@ -1837,11 +2045,11 @@ std::vector<BoundaryGeometryEdit> exterior_wall_measurement_source_updates(
             if (target == new_edges.end()) reject("Automatic exterior update lost physical wall lineage");
             mapped.push_back(target->second);
             auto edge = replacement.boundary[target->second];
-            if (correspondence.reversed) { std::swap(edge.start, edge.end); edge.sweep_radians = -edge.sweep_radians; }
+            if (replacement_reversed) { std::swap(edge.start, edge.end); edge.sweep_radians = -edge.sweep_radians; }
             retained.segments[i].segment = edge;
         }
         for (std::size_t i = 0; i < count; ++i)
-            if (mapped[(i + 1) % count] != (mapped[i] + (correspondence.reversed ? count - 1 : 1)) % count)
+            if (mapped[(i + 1) % count] != (mapped[i] + (replacement_reversed ? count - 1 : 1)) % count)
                 reject("Automatic exterior update changed source-wall corner adjacency");
         if (retained == identified && normalize_source_order(owner.properties.at("wall_measurement_source")) == replacement.source)
             continue;
@@ -1851,10 +2059,14 @@ std::vector<BoundaryGeometryEdit> exterior_wall_measurement_source_updates(
         edit.replacement_segments = encode_identified_boundary_entity(retained).properties.at("segments");
         std::sort(ids.begin(), ids.end());
         edit.replacement_wall_source_ids = std::move(ids);
+        edit.wall_source_translation=std::move(translation_proof);
         updates.emplace(id, std::move(edit));
     }
     // Children must be reconstructed before their updated parents so retained
     // deductions are validated against the complete new child geometry.
+    for (const auto& [id,offset]:rigid_offsets)
+        if (!updates.contains(id) || !updates.at(id).wall_source_translation)
+            reject("Rigid exterior translation did not produce its required physical source completion");
     std::vector<BoundaryGeometryEdit> result;
     std::set<std::string> visiting, visited;
     const auto append = [&](const auto& self, const std::string& id) -> void {
@@ -1920,7 +2132,8 @@ std::map<std::string,Entity,std::less<>> complete_wall_split_measurement_sources
         for(const auto& edge:identified.segments)
             if(edge.segment_id==mapping->segment_id || edge.start_vertex_id==mapping->vertex_id ||
                 edge.end_vertex_id==mapping->vertex_id)reject("Wall split analytical identities must be fresh: "+id);
-        const auto old=derive_exterior_wall_measurement(original,ids);
+        const auto old=owner.properties.at("wall_measurement_source").at("version")==2
+            ? materialize_exterior_wall_measurement(owner) : derive_exterior_wall_measurement(original,ids);
         const auto old_index=std::find(old.ordered_wall_ids.begin(),old.ordered_wall_ids.end(),intent.wall_id);
         if(old_index==old.ordered_wall_ids.end())reject("Wall split measured source lost old physical edge: "+id);
         const auto& old_geometry=old.boundary.at(static_cast<std::size_t>(old_index-old.ordered_wall_ids.begin()));
@@ -1937,15 +2150,21 @@ std::map<std::string,Entity,std::less<>> complete_wall_split_measurement_sources
         if(!retained)reject("Wall split measured source has no analytical edge correspondence: "+id);
         ids.push_back(intent.second_wall_id);
         const auto replacement=derive_replacement_exterior_wall_measurement(result,owner,ids);
+        const auto replacement_reversed=replacement_edge_reversed(reversed,old.boundary,replacement.boundary);
         if(replacement.boundary.size()!=identified.segments.size()+1 ||
             replacement.ordered_wall_ids.size()!=replacement.boundary.size())
             reject("Wall split measured source changed unrelated analytical topology: "+id);
         std::map<std::string,std::size_t,std::less<>> next;
         for(std::size_t i=0;i<replacement.ordered_wall_ids.size();++i)
             if(!next.emplace(replacement.ordered_wall_ids[i],i).second)reject("Wall split source has ambiguous physical lineage: "+id);
-        auto first=replacement.boundary.at(next.at(reversed ? intent.second_wall_id : intent.wall_id));
-        auto second=replacement.boundary.at(next.at(reversed ? intent.wall_id : intent.second_wall_id));
-        if(reversed){std::swap(first.start,first.end);first.sweep_radians=-first.sweep_radians;
+        // The physical split's first ID follows its stored baseline direction,
+        // which may itself oppose the old source's analytical edge direction.
+        const auto original_baseline=baseline(original.at(intent.wall_id).properties);
+        const bool baseline_reversed=dot(subtract(retained->segment.end,retained->segment.start),
+            subtract(original_baseline.end,original_baseline.start))<0;
+        auto first=replacement.boundary.at(next.at(baseline_reversed ? intent.second_wall_id : intent.wall_id));
+        auto second=replacement.boundary.at(next.at(baseline_reversed ? intent.wall_id : intent.second_wall_id));
+        if(replacement_reversed){std::swap(first.start,first.end);first.sweep_radians=-first.sweep_radians;
             std::swap(second.start,second.end);second.sweep_radians=-second.sweep_radians;}
         if(!close(first.end,second.start) || !close(first.start,retained->segment.start) || !close(second.end,retained->segment.end))
             reject("Wall split offset children do not retain the original outer corners: "+id);
@@ -1956,6 +2175,16 @@ std::map<std::string,Entity,std::less<>> complete_wall_split_measurement_sources
         insertion.fraction=segment_length(first)/(segment_length(first)+segment_length(second));
         insertion.new_vertex_id=mapping->vertex_id;insertion.new_segment_id=mapping->segment_id;
         insertion.new_dimension_id=mapping->automatic_dimension_id;
+        // Insertion creates a temporary different edge count. The original v2
+        // proof was validated above; do not attach it to this intermediate
+        // outline. Its v1 context receipt is staged locally until the complete
+        // source-derived redraw below replaces it atomically with final v1.
+        if(owner.properties.at("wall_measurement_source").at("version")==2) {
+            auto contexts=Json::array();
+            for(const auto& record:owner.properties.at("wall_measurement_source").at("walls"))
+                contexts.push_back({{"id",record.at("id")},{"context",record.at("context")}});
+            result.at(id).properties["wall_measurement_source"]={{"version",1},{"basis","exterior"},{"walls",contexts}};
+        }
         result=edited_boundary_entities(result,insertion);
         auto split=decode_identified_boundary_entity(result.at(id));
         const auto split_edge=std::find_if(split.segments.begin(),split.segments.end(),
@@ -1976,7 +2205,10 @@ std::map<std::string,Entity,std::less<>> complete_wall_split_measurement_sources
             }
             if(!lineage)reject("Wall split lost neighboring measured edge: "+id);
             auto after=replacement.boundary.at(next.at(old.ordered_wall_ids.at(*lineage)));
-            if(close(prior->segment.start,old.boundary[*lineage].end)) {std::swap(after.start,after.end);after.sweep_radians=-after.sweep_radians;}
+            const auto old_reversed=close(prior->segment.start,old.boundary[*lineage].end);
+            if(replacement_edge_reversed(old_reversed,old.boundary,replacement.boundary)) {
+                std::swap(after.start,after.end);after.sweep_radians=-after.sweep_radians;
+            }
             edge.segment=after;
         }
         BoundaryGeometryEdit redraw;redraw.boundary_id=redraw.target_id=id;

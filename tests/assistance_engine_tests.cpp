@@ -1,5 +1,6 @@
 #include "sketch/assistance_engine.hpp"
 #include "sketch/assistance_contract.hpp"
+#include "sketch/quantity.hpp"
 #include "support/noninteractive_errors.hpp"
 
 #include <nlohmann/json.hpp>
@@ -7,8 +8,10 @@
 #include <cmath>
 #include <functional>
 #include <iostream>
+#include <limits>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -56,11 +59,129 @@ double polygon_area(const nlohmann::json& points) {
     return std::abs(twice_area) * 0.5;
 }
 
+void centered_reference_transform() {
+    using namespace sketch;
+    auto raster = fixture();
+    raster.width = 32;
+    raster.height = 18;
+    raster.luminance.assign(raster.width * raster.height, 255);
+    for (std::size_t y = 2; y <= 12; ++y)
+        for (std::size_t x = 3; x <= (y < 9 ? 8u : 17u); ++x)
+            raster.luminance[y * raster.width + x] = 0;
+    const auto raw_bbox = suggest_tracing(raster).front();
+    const auto raw_edge = suggest_edge_tracing(raster).front();
+    const auto dimensions = extract_dimensions(raster);
+    for (const bool horizontal : {false, true}) {
+        for (const bool vertical : {false, true}) {
+            AssistanceEngineOptions options{0.2, {6.0, -3.0}, 0.61, 2.0,
+                                             true, horizontal, vertical};
+            // Independent source-space expectations for this off-centre L.
+            const auto expected = [&](Vec2 pixel) {
+                const auto x = (pixel.x - 16.0) * 0.4 * (horizontal ? -1 : 1);
+                const auto y = (pixel.y - 9.0) * 0.4 * (vertical ? -1 : 1);
+                return Vec2{6.0 + std::cos(0.61) * x - std::sin(0.61) * y,
+                            -3.0 + std::sin(0.61) * x + std::cos(0.61) * y};
+            };
+            const auto bbox = suggest_tracing(raster, options).front();
+            const auto edge = suggest_edge_tracing(raster, options).front();
+            const std::vector<Vec2> bbox_pixels{{3, 2}, {17, 2}, {17, 12}, {3, 12}};
+            const std::vector<Vec2> edge_pixels{{3, 2}, {9, 2}, {9, 9},
+                                                {18, 9}, {18, 13}, {3, 13}};
+            for (const auto& [proposal, pixels] :
+                 std::vector<std::pair<AssistanceProposal, std::vector<Vec2>>>{
+                     {bbox, bbox_pixels}, {edge, edge_pixels}}) {
+                const auto& points = proposal.preview.arguments.at("points");
+                require(points.size() == pixels.size(), "reference transform changed contour topology");
+                for (const auto pixel : pixels) {
+                    const auto point = expected(pixel);
+                    bool found = false;
+                    for (const auto& actual : points)
+                        found |= std::abs(actual.at(0).get<double>() - point.x) < 1e-10 &&
+                                 std::abs(actual.at(1).get<double>() - point.y) < 1e-10;
+                    require(found, "centered mirrored reference trace does not match raw source corners");
+                    const auto mapped = assistance_source_point_to_model(pixel, 32, 18, options);
+                    require(std::abs(mapped.x - point.x) < 1e-10 &&
+                                std::abs(mapped.y - point.y) < 1e-10,
+                            "shared reference selection mapping differs from trace geometry");
+                }
+                require(proposal.preview.arguments.at("centered_source") == true &&
+                            proposal.preview.arguments.at("flip_horizontal") == horizontal &&
+                            proposal.preview.arguments.at("flip_vertical") == vertical,
+                        "trace must retain its centered source and mirror transform provenance");
+            }
+            require(bbox.source == raw_bbox.source && edge.source == raw_edge.source &&
+                        bbox.preview.arguments.at("source_pixel_bounds") ==
+                            raw_bbox.preview.arguments.at("source_pixel_bounds") &&
+                        edge.preview.arguments.at("source_pixel_bounds") ==
+                            raw_edge.preview.arguments.at("source_pixel_bounds"),
+                    "mirror transforms must preserve raw unmirrored source selections");
+            require(extract_dimensions(raster, options) == dimensions,
+                    "reference transforms must preserve recognized text and raw text regions");
+            require(bbox.id != raw_bbox.id && edge.id != raw_edge.id,
+                    "transformed trace identity must include reference transform provenance");
+        }
+    }
+    const auto top_left = assistance_source_point_to_model({3, 2}, 32, 18);
+    require(std::abs(top_left.x - 0.03) < 1e-12 && std::abs(top_left.y - 0.02) < 1e-12,
+            "public engine default must retain its top-left positive-Y mapping");
+    const auto outlined = fixture();
+    const auto raw_outline = suggest_edge_tracing(outlined).front();
+    for (const bool horizontal : {false, true}) {
+        for (const bool vertical : {false, true}) {
+            const AssistanceEngineOptions options{0.2, {6, -3}, 0.61, 2,
+                                                    true, horizontal, vertical};
+            const auto mirrored = suggest_edge_tracing(outlined, options).front();
+            require(mirrored.preview.arguments.at("holes").size() == 1,
+                    "mirroring must preserve enclosed source voids");
+            for (const auto& [raw_points, mapped_points] :
+                 std::vector<std::pair<nlohmann::json, nlohmann::json>>{
+                     {raw_outline.preview.arguments.at("points"), mirrored.preview.arguments.at("points")},
+                     {raw_outline.preview.arguments.at("holes").at(0), mirrored.preview.arguments.at("holes").at(0)}}) {
+                require(raw_points.size() == mapped_points.size(), "mirroring must preserve outer and void topology");
+                for (std::size_t index = 0; index < raw_points.size(); ++index) {
+                    const double x = (raw_points[index][0].get<double>() / 0.01 - 12) *
+                                     0.4 * (horizontal ? -1 : 1);
+                    const double y = (raw_points[index][1].get<double>() / 0.01 - 8) *
+                                     0.4 * (vertical ? -1 : 1);
+                    require(std::abs(mapped_points[index][0].get<double>() -
+                                (6 + std::cos(0.61) * x - std::sin(0.61) * y)) < 1e-10 &&
+                                std::abs(mapped_points[index][1].get<double>() -
+                                (-3 + std::sin(0.61) * x + std::cos(0.61) * y)) < 1e-10,
+                            "outer and enclosed void must share the same centered mirrored transform");
+                }
+            }
+        }
+    }
+    for (const auto bad : {std::numeric_limits<double>::infinity(),
+                           std::numeric_limits<double>::quiet_NaN()}) {
+        for (int field = 0; field < 5; ++field) {
+            AssistanceEngineOptions options;
+            if (field == 0) options.metres_per_pixel = bad;
+            if (field == 1) options.origin_metres.x = bad;
+            if (field == 2) options.origin_metres.y = bad;
+            if (field == 3) options.rotation_radians = bad;
+            if (field == 4) options.image_scale = bad;
+            invalid([&] { (void)suggest_tracing(raster, options); });
+            invalid([&] { (void)suggest_edge_tracing(raster, options); });
+            invalid([&] { (void)extract_dimensions(raster, options); });
+            invalid([&] { (void)assistance_source_point_to_model({3, 2}, 32, 18, options); });
+        }
+    }
+    invalid([&] { (void)assistance_source_point_to_model({-1, 2}, 32, 18); });
+    invalid([&] { (void)assistance_source_point_to_model({33, 2}, 32, 18); });
+    invalid([&] { (void)assistance_source_point_to_model({1, 19}, 32, 18); });
+    invalid([&] { (void)assistance_source_point_to_model({1, 1}, 0, 18); });
+    invalid([&] { (void)assistance_source_point_to_model({1, 1}, 8193, 18); });
+    invalid([&] { (void)assistance_source_point_to_model({1, std::numeric_limits<double>::infinity()}, 32, 18); });
+    invalid([&] { (void)assistance_source_point_to_model({std::numeric_limits<double>::quiet_NaN(), 1}, 32, 18); });
+}
+
 }  // namespace
 
 int main() {
     sketch::testing::noninteractive_errors();
     try {
+        centered_reference_transform();
         const auto raster = fixture();
         sketch::validate_assistance_raster(raster);
 
@@ -194,6 +315,61 @@ int main() {
                 "imperial dimension was not parsed exactly");
         for (const auto& proposal : dimensions) sketch::validate_assistance_proposal(proposal);
         require(dimensions == sketch::extract_dimensions(raster), "dimensions must be deterministic");
+        require(dimensions.front().source.confidence == 0.86,
+                "embedded text compatibility confidence changed");
+        auto recognized = raster;
+        recognized.text_runs = {{0, 31, 0.2, 0.4, 0.6, 0.08, 0.23},
+                                {31, raster.source_text.size() - 31, 0.1, 0.6, 0.7, 0.09, 0.91}};
+        recognized.text_producer = "offline-recognizer-v1";
+        recognized.text_resources = {{"recognizer-model", "assets/ocr/model.dat",
+                                      "Offline recognition model", "Apache-2.0", true}};
+        const auto recognized_dimensions = sketch::extract_dimensions(
+            recognized, {}, "boundary-1", "segment-1");
+        require(recognized_dimensions.size() == 2 &&
+                    recognized_dimensions.front().source.confidence == 0.23 &&
+                    recognized_dimensions.back().source.confidence == 0.91,
+                "each dimension must retain its containing recognition run confidence");
+        require(recognized_dimensions.front().source.original_text == "12 ft" &&
+                    recognized_dimensions.front().source.x == 0.2 &&
+                    recognized_dimensions.back().source.y == 0.6 &&
+                    recognized_dimensions.front().producer == recognized.text_producer &&
+                    recognized_dimensions.front().resources.back() == recognized.text_resources.front() &&
+                    recognized_dimensions.front().resources.size() == 3,
+                "recognition text, bounds, producer and resources must survive extraction");
+        require(recognized_dimensions.front().preview.arguments.at("target_segment_id") == "segment-1" &&
+                    recognized_dimensions.front().preview.affected_entity_ids.back() == "segment-1" &&
+                    recognized_dimensions.front().id != sketch::extract_dimensions(
+                        recognized, {}, "boundary-1", "segment-2").front().id,
+                "segment association must remain typed and affect proposal identity");
+        require(sketch::decode_assistance_proposal(sketch::encode_assistance_proposal(
+                    recognized_dimensions.front())) == recognized_dimensions.front(),
+                "recognition provenance and segment must survive envelope serialization");
+        invalid([&] { (void)sketch::extract_dimensions(recognized, {}, {}, "segment-1"); });
+        invalid([&] { (void)sketch::extract_dimensions(recognized, {}, "boundary-1", "unsafe/segment"); });
+        for (const auto confidence : {0.0, 1.0}) {
+            recognized.text_runs.front().confidence = confidence;
+            require(sketch::extract_dimensions(recognized).front().source.confidence == confidence,
+                    "confidence endpoints must remain exact");
+        }
+        for (const auto confidence : {-0.01, 1.01, std::numeric_limits<double>::infinity(),
+                                      std::numeric_limits<double>::quiet_NaN()}) {
+            auto malformed = recognized;
+            malformed.text_runs.front().confidence = confidence;
+            invalid([&] { sketch::validate_assistance_raster(malformed); });
+        }
+        const auto invalid_resource = [&](auto mutate) {
+            auto malformed = recognized;
+            malformed.source_text.clear();
+            malformed.text_runs.clear();
+            mutate(malformed);
+            invalid([&] { (void)sketch::extract_dimensions(malformed); });
+        };
+        invalid_resource([](auto& r) { r.text_resources.front().relative_path = "../model.dat"; });
+        invalid_resource([](auto& r) { r.text_resources.front().license.clear(); });
+        invalid_resource([](auto& r) { r.text_resources.front().id = "assistance-engine-v1"; });
+        invalid_resource([](auto& r) { r.text_resources.push_back(r.text_resources.front()); });
+        invalid_resource([](auto& r) { r.text_resources.resize(63, r.text_resources.front()); });
+        invalid_resource([](auto& r) { r.text_producer = "unsafe\nproducer"; });
         require(dimensions.front().source.x == 0.2 && dimensions.front().source.y == 0.4 &&
                     dimensions.front().source.width == 0.6 && dimensions.front().source.height == 0.08,
                 "dimension source rectangle must use the actual text run bounds");
@@ -203,6 +379,9 @@ int main() {
         invalid_bounds = raster;
         invalid_bounds.text_runs.front().length = raster.source_text.size() + 1;
         invalid([&] { (void)sketch::extract_dimensions(invalid_bounds); });
+        invalid_bounds = recognized;
+        invalid_bounds.text_runs.front().x = std::numeric_limits<double>::quiet_NaN();
+        invalid([&] { (void)sketch::extract_dimensions(invalid_bounds); });
         auto metric_raster = raster;
         metric_raster.source_text = "Reference dimension: 900 mm";
         metric_raster.text_runs.front().length = metric_raster.source_text.size();
@@ -211,6 +390,31 @@ int main() {
                     std::abs(metric_dimensions.front().preview.arguments.at("length_metres").get<double>() -
                              0.9) < 1e-9,
                 "millimetre dimension was not parsed exactly");
+        for (const std::string expression : {"31' 6\"", "31 ft 6 in", "12'6\"",
+                                             "12' 3 1/2\"", "2ft 3/4in", "6 1/2 in"}) {
+            auto compound = recognized;
+            const std::string prefix = "\xC3\x89tage dimension: ";
+            compound.source_text = prefix + expression + "; room 104";
+            compound.text_runs = {{0, compound.source_text.size(), 0.15, 0.25, 0.65, 0.1, 0.37}};
+            const auto proposals = sketch::extract_dimensions(compound);
+            require(proposals.size() == 1 &&
+                        proposals.front().source.original_text == expression &&
+                        proposals.front().preview.arguments.at("source_offset") == prefix.size() &&
+                        proposals.front().source.x == 0.15 &&
+                        proposals.front().source.width == 0.65 &&
+                        proposals.front().source.confidence == 0.37 &&
+                        proposals.front().preview.arguments.at("length_metres").get<double>() ==
+                            sketch::parse_quantity(expression, sketch::Unit::metre).metres,
+                    "explicit compound quantity must remain one exact located recognition");
+        }
+        for (const std::string note : {"Room 104, revision 31, scale 1:50", "12 models and 6 images",
+                                      "-31' 6\"", "-12 ft", "12' 3 1/0\"", "codeA12ftB"}) {
+            auto ambiguous = raster;
+            ambiguous.source_text = note;
+            ambiguous.text_runs = {{0, note.size(), 0.2, 0.4, 0.6, 0.08, 0.6}};
+            require(sketch::extract_dimensions(ambiguous).empty(),
+                    "negative, invalid or unqualified notes must not invent positive dimensions");
+        }
 
         const std::vector<sketch::AssistanceAnchor> anchors{
             {"room-1", "Kitchen", {2.0, 3.0}},

@@ -7,6 +7,7 @@
 #include <cmath>
 #include <cstdint>
 #include <limits>
+#include <numbers>
 #include <set>
 #include <stdexcept>
 #include <string>
@@ -169,6 +170,7 @@ std::optional<ConstraintRelationKind> relation_from_name(std::string_view name) 
         return ConstraintRelationKind::fixed_anchor;
     }
     if (name == "fixed_arc_length") return ConstraintRelationKind::fixed_arc_length;
+    if (name == "tangent") return ConstraintRelationKind::tangent;
     return std::nullopt;
 }
 
@@ -192,6 +194,7 @@ std::size_t expected_binding_count(ConstraintRelationKind relation) {
             return 2;
         case ConstraintRelationKind::parallel:
         case ConstraintRelationKind::perpendicular:
+        case ConstraintRelationKind::tangent:
             return 4;
         case ConstraintRelationKind::fixed_anchor:
             return 1;
@@ -580,10 +583,22 @@ void validate_model(const PersistentConstraint& constraint) {
         case ConstraintRelationKind::coincident:
         case ConstraintRelationKind::parallel:
         case ConstraintRelationKind::perpendicular:
+        case ConstraintRelationKind::tangent:
             if (constraint.length.has_value() || constraint.anchor.has_value()) {
                 invalid("constraint contains semantic fields for the wrong relation");
             }
             break;
+    }
+    if (constraint.relation==ConstraintRelationKind::tangent) {
+        for (const std::size_t i : {0U,2U}) {
+            const auto& contact=constraint.bindings[i];const auto& other=constraint.bindings[i+1];
+            if (contact.owner_id!=other.owner_id || contact.segment_id!=other.segment_id ||
+                contact.role==other.role || (!contact.segment_id.empty() && contact.vertex_id==other.vertex_id))
+                invalid("Tangent requires opposite endpoints of each bound segment");
+        }
+        if (constraint.bindings[0].owner_id==constraint.bindings[2].owner_id &&
+            constraint.bindings[0].segment_id==constraint.bindings[2].segment_id)
+            invalid("Tangent requires two distinct segments");
     }
     if (constraint.relation==ConstraintRelationKind::fixed_arc_length) {
         std::set<std::pair<std::string,std::string>> segments;
@@ -684,6 +699,8 @@ std::string_view constraint_relation_name(ConstraintRelationKind relation) {
             return "fixed_anchor";
         case ConstraintRelationKind::fixed_arc_length:
             return "fixed_arc_length";
+        case ConstraintRelationKind::tangent:
+            return "tangent";
     }
     invalid("unknown constraint relation kind");
 }
@@ -718,11 +735,13 @@ ConstraintEntityDecodeResult decode_constraint_entity(const Entity& entity) {
     }
 
     const auto relation = relation_from_name(relation_text);
-    const bool known=relation && (((version==3 || version==4) && *relation==ConstraintRelationKind::fixed_arc_length) ||
-        ((version==1 || version==2) && *relation!=ConstraintRelationKind::fixed_arc_length));
+    const bool known=relation && ((version==5 && *relation==ConstraintRelationKind::tangent) ||
+        ((version==3 || version==4) && *relation==ConstraintRelationKind::fixed_arc_length) ||
+        ((version==1 || version==2) && *relation!=ConstraintRelationKind::fixed_arc_length &&
+            *relation!=ConstraintRelationKind::tangent));
     if (known) {
-        if ((version==3 || version==4) && (!properties.contains("entity_ids") || properties.contains("wall_ids")))
-            invalid("Fixed arc length requires generic entity_ids owners");
+        if ((version==3 || version==4 || version==5) && (!properties.contains("entity_ids") || properties.contains("wall_ids")))
+            invalid("Curve relations require generic entity_ids owners");
         const auto& bindings = required_property(properties, "bindings");
         const bool count=version==4 ? bindings.is_array() && bindings.size()>=4 &&
             bindings.size()%2==0 && bindings.size()<=2*kMaximumArcChainSegments
@@ -811,8 +830,9 @@ Entity encode_constraint_entity(const PersistentConstraint& constraint, const En
     const bool boundary = std::any_of(constraint.bindings.begin(), constraint.bindings.end(),
         [](const auto& b) { return !b.segment_id.empty(); });
     const bool arc=constraint.relation==ConstraintRelationKind::fixed_arc_length;
-    const bool generic=boundary || arc;
-    properties["version"] = arc ? (constraint.bindings.size()>2 ? 4 : 3) : boundary ? 2 : 1;
+    const bool tangent=constraint.relation==ConstraintRelationKind::tangent;
+    const bool generic=boundary || arc || tangent;
+    properties["version"] = tangent ? 5 : arc ? (constraint.bindings.size()>2 ? 4 : 3) : boundary ? 2 : 1;
     properties["relation"] = std::string(constraint_relation_name(constraint.relation));
     properties["bindings"] = encode_bindings(constraint.bindings, original_bindings);
     properties.erase(generic ? "wall_ids" : "entity_ids");
@@ -851,6 +871,78 @@ IdentifiedBoundary resolve_constraint_segment_owner(const Entity& entity) {
     for (const auto& edge : replay.edges)
         result.segments.push_back({edge.segment_id, edge.start_vertex_id, edge.end_vertex_id, edge.segment});
     return result;
+}
+
+Vec2 constraint_tangent_endpoint_direction(const Segment& segment,WallEndpointRole contact) {
+    if (contact!=WallEndpointRole::start && contact!=WallEndpointRole::end)
+        invalid("Tangent contact role must be start or end");
+    if (!std::isfinite(segment.start.x) || !std::isfinite(segment.start.y) ||
+        !std::isfinite(segment.end.x) || !std::isfinite(segment.end.y) ||
+        !std::isfinite(segment.sweep_radians) || std::abs(segment.sweep_radians)>=2*std::numbers::pi)
+        invalid("Tangent geometry requires finite endpoints and a signed sweep below a full circle");
+    const double dx=segment.end.x-segment.start.x,dy=segment.end.y-segment.start.y;
+    const double chord=std::hypot(dx,dy);
+    if (!std::isfinite(chord) || !(chord>0)) invalid("Tangent requires a finite nondegenerate segment");
+    if (segment.sweep_radians!=0) (void)arc_from_chord_angle(segment.start,segment.end,segment.sweep_radians);
+    const double angle=(contact==WallEndpointRole::start ? -1. : 1.)*segment.sweep_radians/2;
+    const double sign=contact==WallEndpointRole::start ? 1. : -1.;
+    const double x=dx/chord,y=dy/chord;
+    return {sign*(std::cos(angle)*x-std::sin(angle)*y),
+        sign*(std::sin(angle)*x+std::cos(angle)*y)};
+}
+
+double constraint_tangent_angular_residual(const Segment& first,WallEndpointRole first_contact,
+    const Segment& second,WallEndpointRole second_contact) {
+    const auto a=constraint_tangent_endpoint_direction(first,first_contact);
+    const auto b=constraint_tangent_endpoint_direction(second,second_contact);
+    return std::abs(std::atan2(-(a.x*b.y-a.y*b.x),-(a.x*b.x+a.y*b.y)));
+}
+
+std::array<Segment,2> resolve_constraint_tangent_segments(const PersistentConstraint& constraint,
+    const std::map<std::string,Entity,std::less<>>& entities) {
+    validate_model(constraint);
+    if (constraint.relation!=ConstraintRelationKind::tangent)
+        invalid("Tangent segment resolution requires a tangent relation");
+    std::array<Segment,2> segments;
+    for (std::size_t index=0;index<2;++index) {
+        const auto& contact=constraint.bindings[2*index];const auto& other=constraint.bindings[2*index+1];
+        const auto found=entities.find(contact.owner_id);
+        if (found==entities.end() || found->second.id!=contact.owner_id) invalid("Tangent owner identity is missing or inconsistent");
+        const auto& owner=found->second;
+        auto& segment=segments[index];
+        if (contact.segment_id.empty()) {
+            if (owner.type!="wall" || !owner.properties.contains("baseline") ||
+                !owner.properties.contains("thickness_m") || !owner.properties.contains("height_m") ||
+                !owner.properties.contains("elevation_m")) invalid("Tangent baseline requires a genuine physical wall");
+            if (!(json_finite_double(owner.properties.at("thickness_m"),"Wall thickness must be finite")>0) ||
+                !(json_finite_double(owner.properties.at("height_m"),"Wall height must be finite")>0))
+                invalid("Tangent wall dimensions must be positive");
+            (void)json_finite_double(owner.properties.at("elevation_m"),"Wall elevation must be finite");
+            const auto& baseline=owner.properties.at("baseline");
+            const auto point=[&](const char* key) {
+                const auto& value=baseline.at(key);
+                if (!value.is_array() || value.size()!=2) invalid("Tangent endpoint must have two coordinates");
+                return Vec2{json_finite_double(value[0],"Tangent endpoint must be finite"),
+                    json_finite_double(value[1],"Tangent endpoint must be finite")};
+            };
+            segment={point("start"),point("end"),json_finite_double(baseline.at("sweep_radians"),"Tangent sweep must be finite")};
+        } else {
+            const auto boundary=resolve_constraint_segment_owner(owner);
+            const auto edge=std::find_if(boundary.segments.begin(),boundary.segments.end(),
+                [&](const auto& value){return value.segment_id==contact.segment_id;});
+            if (edge==boundary.segments.end()) invalid("Tangent stable segment is missing");
+            for (const auto* binding : {&contact,&other})
+                if ((binding->role==WallEndpointRole::start ? edge->start_vertex_id : edge->end_vertex_id)!=binding->vertex_id)
+                    invalid("Tangent stable vertex does not match its endpoint role");
+            segment=edge->segment;
+        }
+        (void)constraint_tangent_endpoint_direction(segment,contact.role);
+    }
+    if (segments[0].sweep_radians==0 && segments[1].sweep_radians==0)
+        invalid("Tangent requires at least one genuine curved segment");
+    // Coincidence and angular satisfaction are solver/integrity residuals,
+    // not prerequisites: authoring may solve an initially unsatisfied relation.
+    return segments;
 }
 
 Segment resolve_constraint_arc_segment(const PersistentConstraint& constraint,

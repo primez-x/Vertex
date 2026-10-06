@@ -55,6 +55,13 @@ struct IfcProjectImportResult {
 // Fill meshes are opening-local: X spans the jamb chord, Z points up, and the
 // right-handed Y points toward the door swing side (host left for windows).
 // Explicit product placements preserve their actual native world geometry.
+// Canonical panel/gable/hip roofs and authored room volumes (including cuts,
+// curves and holes) use validated native solids as IFCROOF/IFCSPACE tessellations
+// when the bridge is enabled. Current source-bound physical rooms are IFCSPACE
+// net footprints with inner loops and their actual plane; no height is invented.
+// Spaces decompose the storey through IfcRelAggregates. Stale source-bound room
+// geometry is withheld. Complete roof/room authoring metadata is retained in a
+// bounded property envelope, including nested extension metadata.
 // IFC fill OverallWidth is the opening body's local X envelope; retained native
 // curved width_m continues to measure stations along the host arc.
 // Unsupported required objects retain native payload
@@ -76,6 +83,18 @@ struct IfcProjectImportResult {
 // source data; metadata alone never activates native manufacturing semantics.
 // Fill placements compose bounded proper rigid Z-up frames and must agree with
 // the opening and handing; unsupported placement bases remain inactive.
+// Roof/room activation additionally requires exact regenerated native meshes,
+// IFC type, the actual project's linked metre length-unit assignment, and a
+// supported representation context. Orphan unit declarations cannot authorize
+// reconstruction. Their rigid
+// placement frames are composed before comparison. Original level-relative
+// authoring is retained but activation uses resolved world coordinates. Source
+// organization/level links and required state remain in the retained envelope;
+// detached editable candidates diagnose that unreconstructed context and share
+// the worker's bounded pure admission rules. An exchange-wide attempt ledger
+// charges analytical and expected construction work before native regeneration,
+// including failed/mismatching carriers. Foreign roof/space geometries and
+// physical-room source descriptors remain conservative retained candidates.
 [[nodiscard]] IfcProjectImportResult import_project_ifc(
     std::string_view bytes,
     const IfcExchangeLimits& limits = {});

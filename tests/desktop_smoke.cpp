@@ -2492,12 +2492,15 @@ void test_measurement_group_canvas_move_workflow() {
     const auto proposal=canvas->entitiesMovePreview();
     const auto proposed_sofa=std::find_if(proposal.begin(),proposal.end(),[&](const auto& entity){return entity.id==sofa;});
     const auto original_sofa=std::find_if(canvas->entities().begin(),canvas->entities().end(),[&](const auto& entity){return entity.id==sofa;});
+    const auto preview_failure=std::string("mixed measured area and symbol preview is complete and leaves the source unchanged: ")+
+        window.lastError().toStdString()+"; proposed="+std::to_string(proposal.size())+
+        "; pending="+std::to_string(canvas->entitiesMovePreviewPending());
     require(!canvas->entitiesMovePreviewPending() && proposed_sofa!=proposal.end() &&
         original_sofa!=canvas->entities().end() && !proposed_sofa->segments.empty() &&
         std::abs(proposed_sofa->segments.front().start.x-original_sofa->segments.front().start.x-2)<1e-8 &&
         std::abs(proposed_sofa->segments.front().start.y-original_sofa->segments.front().start.y-1)<1e-8 &&
         window.document().snapshot().entities()==source.entities() && window.document().revision()==source.revision(),
-        "mixed measured area and symbol preview is complete and leaves the source unchanged");
+        preview_failure.c_str());
     const auto preview_captures=qEnvironmentVariable("VERTEX_TEST_CAPTURE_DIR");
     if (!preview_captures.isEmpty()) require(QDir().mkpath(preview_captures) &&
         canvas->grab().save(QDir(preview_captures).filePath("measured-mixed-preview.png")),"mixed reference and text preview capture saves");
@@ -2512,8 +2515,14 @@ void test_measurement_group_canvas_move_workflow() {
         const auto before = decode_identified_boundary_entity(original);
         const auto& moved_entity = moved.entities().at(original.id);
         const auto after = decode_identified_boundary_entity(moved_entity);
+        auto retained_extensions = moved_entity.extensions;
+        require(retained_extensions.contains("boundary_geometry_derivation") &&
+                    retained_extensions.at("boundary_geometry_derivation").at("source_boundary_authoring") ==
+                        original.properties.at("boundary_authoring"),
+                "connected movement retains immutable source receipts through its typed geometry derivation");
+        retained_extensions.erase("boundary_geometry_derivation");
         require(after.segments.size()==before.segments.size() && moved_entity.required &&
-                    moved_entity.extensions==original.extensions &&
+                    retained_extensions==original.extensions &&
                     moved_entity.properties.at("classification")==original.properties.at("classification") &&
                     std::abs(signed_area(boundary_geometry(after))-signed_area(boundary_geometry(before)))<1e-8,
                 "area metadata, topology and classification must survive group movement");
@@ -2527,8 +2536,9 @@ void test_measurement_group_canvas_move_workflow() {
                     "all area vertices must move equally with stable IDs");
         }
         const auto old_receipt = decode_boundary_receipt_envelope(original.properties.at("boundary_authoring"));
-        const auto new_receipt = decode_boundary_receipt_envelope(moved_entity.properties.at("boundary_authoring"));
-        require(old_receipt.supported() && new_receipt.supported(),"moved construction evidence must replay");
+        const auto new_receipt = decode_boundary_receipt_envelope(
+            moved_entity.extensions.at("boundary_geometry_derivation").at("source_boundary_authoring"));
+        require(old_receipt.supported() && new_receipt.supported(),"retained construction evidence must replay independently of moved geometry");
         for (std::size_t i=0;i<old_receipt.record->edges.size();++i) {
             const auto& a = old_receipt.record->edges[i].receipt;
             const auto& b = new_receipt.record->edges[i].receipt;

@@ -7,6 +7,7 @@
 
 #include <memory>
 #include <optional>
+#include <vector>
 
 namespace sketch::desktop {
 
@@ -18,6 +19,10 @@ public:
     explicit BuildingObjectDialog(std::optional<Entity> original = std::nullopt,
                                   bool metricUnits = false,
                                   QWidget* parent = nullptr);
+    explicit BuildingObjectDialog(const DocumentSnapshot& source,
+                                  std::optional<Entity> original = std::nullopt,
+                                  bool metricUnits = false,
+                                  QWidget* parent = nullptr);
     ~BuildingObjectDialog() override;
 
     BuildingObjectDialog(const BuildingObjectDialog&) = delete;
@@ -27,6 +32,10 @@ public:
     // copy of the original entity, so opaque properties and extensions remain
     // available to the caller for an atomic Document command.
     [[nodiscard]] std::optional<Entity> candidate() const;
+    // Supplemental host upgrades are returned only after successful submit.
+    // coordinatedCandidates() orders those upgrades before the primary entity.
+    [[nodiscard]] std::vector<Entity> relatedCandidates() const;
+    [[nodiscard]] std::vector<Entity> coordinatedCandidates() const;
 
     // Uses the same widgets and parser as the dialog's Submit button.  On
     // success the dialog accepts itself; on failure it remains open and

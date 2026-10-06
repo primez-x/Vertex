@@ -120,7 +120,8 @@ std::string physical_wall_room_descriptor_digest(const Entity& entity) {
 }
 
 PhysicalWallRoomDescriptor validate_physical_wall_room_repair(
-    const std::map<std::string,Entity,std::less<>>& source,const BoundaryGeometryEdit& edit) {
+    const std::map<std::string,Entity,std::less<>>& source,const BoundaryGeometryEdit& edit,
+    const std::set<std::string>& reviewed_owners) {
     validate_boundary_geometry_edit(edit);
     if (!edit.physical_wall_room_repair) invalid("repair authority is missing");
     const auto found=source.find(edit.boundary_id);
@@ -144,6 +145,16 @@ PhysicalWallRoomDescriptor validate_physical_wall_room_repair(
     const auto context=organization.drawing_context(original.id);
     if (!context || !context->complete() || *context!=detection.context)
         invalid("reviewed destination differs from the retained room drawing context");
+    if (!reviewed_owners.empty()) {
+        if (!reviewed_owners.contains(original.id) || reviewed_owners.size()>2048)
+            invalid("batch ownership scope must contain the repaired retained room");
+        for (const auto& id:reviewed_owners) {
+            const auto other=source.find(id);
+            if (other==source.end() || !is_physical_wall_room(other->second) || inactive.contains(id) ||
+                organization.drawing_context(id)!=context)
+                invalid("batch ownership scope contains a missing, inactive or foreign room");
+        }
+    }
     const PhysicalWallSpace* selected=nullptr;
     for (const auto& space:detection.spaces) if (space.source_lineage==repair.reviewed_source_lineage) {
         if (selected) invalid("reviewed lineage ambiguously identifies multiple destinations");
@@ -171,7 +182,7 @@ PhysicalWallRoomDescriptor validate_physical_wall_room_repair(
         invalid("replacement outer differs from independently detected physical clear geometry");
     std::size_t room_count=0;
     for (const auto& [id,entity]:source) {
-        if (id==original.id || !is_physical_wall_room(entity) || inactive.contains(id)) continue;
+        if (id==original.id || reviewed_owners.contains(id) || !is_physical_wall_room(entity) || inactive.contains(id)) continue;
         if (organization.drawing_context(id)!=context) continue;
         if (++room_count>2048) invalid("destination ownership check exceeds the room budget");
         const auto descriptor=decode_physical_wall_room_descriptor(entity);
@@ -180,12 +191,6 @@ PhysicalWallRoomDescriptor validate_physical_wall_room_repair(
             descriptor.holes.size()==selected->holes.size() &&
             std::equal(descriptor.holes.begin(),descriptor.holes.end(),selected->holes.begin(),exact_boundary))
             invalid("reviewed clear destination is already assigned to another current room: "+id);
-    }
-    for (const auto& [id,entity]:source) {
-        if (entity.type=="dimension" && ((entity.properties.contains("boundary_id") && entity.properties.at("boundary_id")==original.id) ||
-            (entity.properties.contains("target") && entity.properties.at("target").is_object() &&
-             entity.properties.at("target").value("entity_id",std::string{})==original.id)))
-            invalid("source-bound room dimensions require snapshot-aware resolution before repair: "+id);
     }
     return {repair.selected_wall_id,selected->source_lineage,selected->holes};
 }

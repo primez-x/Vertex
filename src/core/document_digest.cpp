@@ -62,7 +62,8 @@ std::string entity_map_digest(const std::map<std::string, Entity, std::less<>>& 
 
 namespace {
 ordered_json snapshot_json(const DocumentSnapshot& snapshot,
-                           std::optional<Revision> through = std::nullopt) {
+                           std::optional<Revision> through = std::nullopt,
+                           bool complete_proofs = false) {
     if (through && (*through >= snapshot.history().size() ||
                     snapshot.history()[static_cast<std::size_t>(*through)].revision != *through)) {
         throw std::invalid_argument("Historical source revision is not retained");
@@ -87,6 +88,8 @@ ordered_json snapshot_json(const DocumentSnapshot& snapshot,
             item["boundary_translation"] = encode_boundary_translation(*record.boundary_translation);
         if (record.boundary_transform)
             item["boundary_transform"] = encode_boundary_transform(*record.boundary_transform);
+        if (complete_proofs && record.boundary_geometry_edit)
+            item["boundary_geometry_edit"] = encode_boundary_geometry_edit(*record.boundary_geometry_edit);
         if (record.boundary_constraint_changes)
             item["boundary_constraint_changes"] = command_to_json(*record.boundary_constraint_changes);
         if (record.boundary_translations)
@@ -107,11 +110,12 @@ ordered_json snapshot_json(const DocumentSnapshot& snapshot,
         ? ordered_json(*snapshot.saved_revision_optional()) : ordered_json(nullptr);
     return value;
 }
-std::string authoring_digest(const DocumentSnapshot& snapshot, std::optional<Revision> through) {
-    auto source = snapshot_json(snapshot, through);
+std::string authoring_digest(const DocumentSnapshot& snapshot, std::optional<Revision> through,
+                             int version = 1) {
+    auto source = snapshot_json(snapshot, through, version >= 2);
     // Frozen v1 hash domain: this is not a displayed or serialized product name.
     // Renaming it would invalidate existing recovery receipts and history fences.
-    ordered_json value{{"domain", "property-studio.authoring-source"}, {"version", 1},
+    ordered_json value{{"domain", version == 1 ? "property-studio.authoring-source" : "vertex.authoring-source"}, {"version", version},
                        {"document_id", snapshot.document_id()}, {"revision", through.value_or(snapshot.revision())},
                        {"history", std::move(source["history"])},
                        {"named_revisions", std::move(source["named_revisions"])}};
@@ -120,7 +124,7 @@ std::string authoring_digest(const DocumentSnapshot& snapshot, std::optional<Rev
 } // namespace
 
 std::string document_snapshot_digest(const DocumentSnapshot& snapshot) {
-    return digest_json(snapshot_json(snapshot));
+    return digest_json(snapshot_json(snapshot, std::nullopt, true));
 }
 
 std::string document_authoring_source_digest_v1(const DocumentSnapshot& snapshot) {
@@ -130,5 +134,27 @@ std::string document_authoring_source_digest_v1(const DocumentSnapshot& snapshot
 std::string document_authoring_source_digest_v1_at_revision(
     const DocumentSnapshot& snapshot, Revision revision) {
     return authoring_digest(snapshot, revision);
+}
+
+std::string document_authoring_source_digest_v2(const DocumentSnapshot& snapshot) {
+    return authoring_digest(snapshot, std::nullopt, 2);
+}
+
+std::string document_authoring_source_digest_v2_at_revision(
+    const DocumentSnapshot& snapshot, Revision revision) {
+    return authoring_digest(snapshot, revision, 2);
+}
+
+std::string document_snapshot_digest_at_revision(
+    const DocumentSnapshot& snapshot, Revision revision, std::optional<Revision> saved_revision) {
+    auto source = snapshot_json(snapshot, revision, true);
+    if (saved_revision && (*saved_revision > revision ||
+        *saved_revision >= snapshot.history().size() ||
+        snapshot.history()[static_cast<std::size_t>(*saved_revision)].revision != *saved_revision))
+        throw std::invalid_argument("Captured save revision does not belong to the authoring history prefix");
+    source["saved_revision"] = saved_revision ? ordered_json(*saved_revision) : ordered_json(nullptr);
+    source["editable"] = true;
+    source["read_only_reason"] = "";
+    return digest_json(source);
 }
 } // namespace sketch

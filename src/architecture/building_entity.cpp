@@ -1,4 +1,5 @@
 #include "sketch/building_entity.hpp"
+#include "sketch/project_organization.hpp"
 
 #include <nlohmann/json.hpp>
 
@@ -19,7 +20,6 @@ using Json = nlohmann::json;
 
 constexpr std::int64_t schema_version = 1;
 constexpr std::size_t maximum_id_bytes = 128;
-constexpr std::size_t maximum_riser_count = 10'000;
 
 [[noreturn]] void invalid(std::string message) {
     throw std::invalid_argument(std::move(message));
@@ -98,25 +98,6 @@ double required_number(const Json& properties, std::string_view key) {
     return finite_number(required_field(properties, key), key);
 }
 
-std::size_t required_riser_count(const Json& properties) {
-    const auto& value = required_field(properties, "riser_count");
-    std::uint64_t unsigned_value = 0;
-    if (value.is_number_unsigned()) {
-        unsigned_value = value.get<std::uint64_t>();
-    } else if (value.is_number_integer()) {
-        const auto signed_value = value.get<std::int64_t>();
-        if (signed_value < 0) {
-            invalid("Building entity field riser_count must be a positive bounded integer");
-        }
-        unsigned_value = static_cast<std::uint64_t>(signed_value);
-    } else {
-        invalid("Building entity field riser_count must be a positive bounded integer");
-    }
-    if (unsigned_value == 0 || unsigned_value > maximum_riser_count) {
-        invalid("Building entity field riser_count is outside the supported range");
-    }
-    return static_cast<std::size_t>(unsigned_value);
-}
 
 void require_schema_version(const Json& properties, bool roof) {
     const auto& value = required_field(properties, "version");
@@ -135,60 +116,6 @@ void require_schema_version(const Json& properties, bool roof) {
     }
 }
 
-std::optional<StairLanding> landing_field(const Json& properties) {
-    const auto& value = required_field(properties, "top_landing");
-    if (value.is_null()) {
-        return std::nullopt;
-    }
-    require_object(value, "Building entity top_landing");
-    return StairLanding{
-        .depth = required_number(value, "depth_m"),
-        .thickness = required_number(value, "thickness_m"),
-    };
-}
-
-void validate_reference_id(std::string_view id, std::string_view context) {
-    if (id.empty() || id.size() > 256 || id.find('\0') != std::string_view::npos) {
-        invalid(std::string(context) + " is empty or invalid");
-    }
-    try {
-        // JSON's UTF-8 validation keeps level/link identifiers portable while
-        // allowing the same non-ASCII IDs accepted by VerticalLevelGraph.
-        (void)Json(std::string(id)).dump();
-    } catch (const Json::exception&) {
-        invalid(std::string(context) + " is not valid UTF-8");
-    }
-}
-
-std::string required_reference_id(const Json& value, std::string_view key) {
-    const auto result = string_field(required_field(value, key), key);
-    validate_reference_id(result, key);
-    return result;
-}
-
-std::optional<StairLevelConnection> level_connection_field(const Json& properties) {
-    const auto found = properties.find("level_connection");
-    if (found == properties.end()) {
-        return std::nullopt;
-    }
-    require_object(*found, "Building entity level_connection");
-    const auto& value = *found;
-    const auto& version = required_field(value, "version");
-    if ((!version.is_number_integer() && !version.is_number_unsigned()) ||
-        version != 1) {
-        invalid("Building entity level_connection version must be 1");
-    }
-    StairLevelConnection result{
-        .graph_entity_id = required_reference_id(value, "graph_id"),
-        .link_id = required_reference_id(value, "link_id"),
-        .lower_level_id = required_reference_id(value, "lower_level_id"),
-        .upper_level_id = required_reference_id(value, "upper_level_id"),
-    };
-    if (result.lower_level_id == result.upper_level_id) {
-        invalid("Building entity level_connection lower and upper levels must differ");
-    }
-    return result;
-}
 
 Json vec3_json(const Vec3& value) {
     Json result = Json::array();
@@ -247,50 +174,11 @@ Entity encode_one(const Beam& object, const Json& metadata) {
 }
 
 Entity encode_one(const StairFlight& object, const Json& metadata) {
-    auto properties = base_properties("straight_stair_flight");
-    properties["base_position_m"] = vec3_json(object.base_position);
-    properties["orientation_rad"] = object.orientation_radians;
-    properties["riser_count"] = object.riser_count;
-    properties["total_rise_m"] = object.total_rise;
-    properties["going_m"] = object.going;
-    properties["width_m"] = object.width;
-    if (object.top_landing.has_value()) {
-        properties["top_landing"] = {
-            {"depth_m", object.top_landing->depth},
-            {"thickness_m", object.top_landing->thickness},
-        };
-    } else {
-        properties["top_landing"] = nullptr;
-    }
-    if (object.level_connection.has_value()) {
-        const auto& connection = *object.level_connection;
-        validate_id(connection.graph_entity_id, "Stair level graph entity ID");
-        validate_reference_id(connection.link_id, "Stair level link ID");
-        validate_reference_id(connection.lower_level_id, "Stair lower level ID");
-        validate_reference_id(connection.upper_level_id, "Stair upper level ID");
-        if (connection.lower_level_id == connection.upper_level_id) {
-            invalid("Stair level connection lower and upper levels must differ");
-        }
-        properties["level_connection"] = {
-            {"version", 1},
-            {"graph_id", connection.graph_entity_id},
-            {"link_id", connection.link_id},
-            {"lower_level_id", connection.lower_level_id},
-            {"upper_level_id", connection.upper_level_id},
-        };
-    }
-    return create_entity("stair", object, std::move(properties), metadata);
+    return create_entity("stair", object, encode_stair_properties(object), metadata);
 }
 
 Entity encode_one(const Railing& object, const Json& metadata) {
-    auto properties = base_properties("straight_railing");
-    properties["base_position_m"] = vec3_json(object.base_position);
-    properties["orientation_rad"] = object.orientation_radians;
-    properties["length_m"] = object.length;
-    properties["height_m"] = object.height;
-    properties["thickness_m"] = object.thickness;
-    properties["post_spacing_m"] = object.post_spacing;
-    return create_entity("railing", object, std::move(properties), metadata);
+    return create_entity("railing", object, encode_railing_properties(object), metadata);
 }
 
 void encode_roof_openings(Json& properties, const std::vector<RoofOpening>& openings) {
@@ -406,36 +294,14 @@ BuildingObject decode_beam(const Entity& entity, const Json& properties,
 
 BuildingObject decode_stair(const Entity& entity, const Json& properties,
                             std::string_view form) {
-    if (form != "straight_stair_flight") {
-        invalid("Unsupported stair building form: " + std::string(form));
-    }
-    return StairFlight{
-        .id = entity.id,
-        .base_position = required_vec3(properties, "base_position_m"),
-        .orientation_radians = required_number(properties, "orientation_rad"),
-        .riser_count = required_riser_count(properties),
-        .total_rise = required_number(properties, "total_rise_m"),
-        .going = required_number(properties, "going_m"),
-        .width = required_number(properties, "width_m"),
-        .top_landing = landing_field(properties),
-        .level_connection = level_connection_field(properties),
-    };
+    (void)form;
+    return decode_stair_properties(entity.id, properties);
 }
 
 BuildingObject decode_railing(const Entity& entity, const Json& properties,
                               std::string_view form) {
-    if (form != "straight_railing") {
-        invalid("Unsupported railing building form: " + std::string(form));
-    }
-    return Railing{
-        .id = entity.id,
-        .base_position = required_vec3(properties, "base_position_m"),
-        .orientation_radians = required_number(properties, "orientation_rad"),
-        .length = required_number(properties, "length_m"),
-        .height = required_number(properties, "height_m"),
-        .thickness = required_number(properties, "thickness_m"),
-        .post_spacing = required_number(properties, "post_spacing_m"),
-    };
+    (void)form;
+    return decode_railing_properties(entity.id, properties);
 }
 
 BuildingObject decode_roof(const Entity& entity, const Json& properties,
@@ -486,6 +352,10 @@ BuildingObject decode_roof(const Entity& entity, const Json& properties,
 }
 
 void validate_geometry(const BuildingObject& object) {
+    if (const auto* rail = std::get_if<Railing>(&object); rail && rail->host) {
+        validate_railing(*rail);
+        return;
+    }
     try {
         (void)make_building_shape(object);
     } catch (const std::exception& error) {
@@ -512,7 +382,8 @@ BuildingObject decode_building_entity(const Entity& entity) {
         invalid("Unsupported building entity type: " + entity.type);
     }
     require_object(entity.properties, "Building entity properties");
-    require_schema_version(entity.properties, entity.type == "roof");
+    if (entity.type != "stair" && entity.type != "railing")
+        require_schema_version(entity.properties, entity.type == "roof");
     const auto form = form_field(entity.properties);
 
     BuildingObject object;
@@ -554,6 +425,19 @@ TopoDS_Shape make_building_shape(const BuildingObject& object) {
             }
         },
         object);
+}
+
+TopoDS_Shape make_building_shape(
+    const BuildingObject& object,
+    const std::map<std::string, Entity, std::less<>>& entities) {
+    const auto* railing = std::get_if<Railing>(&object);
+    if (!railing || !railing->host) return make_building_shape(object);
+    const auto host = entities.find(railing->host->stair_id);
+    if (host == entities.end() || host->second.type != "stair")
+        invalid("Hosted railing stair does not exist in the current entity map");
+    const auto effective = resolve_vertical_placement(entities, host->second);
+    const auto stair = decode_stair_properties(effective.id, effective.properties);
+    return make_hosted_railing(*railing, stair);
 }
 
 }  // namespace sketch

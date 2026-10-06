@@ -100,3 +100,111 @@ inspection; exact artwork count; comparison of project and generated source-kit
 selections; official Qt and Microsoft licensing documentation. No dependency
 downloads, installations, native builds, external mutations, or production
 clearance were performed.
+
+## Executable dependency source-closure audit
+
+`scripts/qualification/dependency_source_closure.py` now verifies a selected
+distribution inventory, its runtime/component receipts, every listed binary and
+notice, exact source archive checksums, historical vcpkg recipe files, and an
+optional frozen offline package. With `--bundle-root`, it also verifies every
+package payload hash and uses the package's application source kit rather than
+the changing working tree. Explicit build receipts are hashed without copying
+their machine-specific contents. Report publication uses a unique sibling file
+and atomic replacement; malformed inputs or hash drift fail without replacing
+the previous report. The tool performs no download, extraction or build.
+
+The stable `vertex-candidate` audit observed 38 components, 113 inventory
+binaries and 4,162 verified package files. Its packaged runtime manifest hash is
+`f7abb108576eae9c089b8b469cc1730d8397a02b9a635269b9715d16950c60ce`,
+and `bin/vertex.exe` is
+`6221781b06c2a4be8d0c9f4842543fbb9b3fb7a36df98ccc31b32057021aa556`.
+These identify this observation; subsequent candidates require a fresh audit.
+The generated JSON and official metadata receipt remain ignored under
+`artifacts/reset-delivery/dependency-source-closure/`.
+
+| Resolved technical fact | Remaining qualification |
+|---|---|
+| Exact sources are locally present for 20 component entries. This includes the 12 vcpkg entries, whose installed SPDX resource SHA-512 checksums match cached archives and whose historical recipe/patch SHA-256 checksums match local files. OCCT, Eigen, PROJ and native SQLite retain exact upstream revisions/URLs and recipe option expressions in the report. PlaneGCS retains its FreeCAD commit and modified local source receipt. Bootstrap SQLite, the single-header JSON source and CPython 3.13.15 source archive are also byte-bound. | Local availability does not establish inclusion in the distributable source kit, an actual binary/source derivation, complete embedded-source closure, or an offline rebuild. Recipe expressions and installed status receipts need actual expanded configure/build controls. |
+| Official Qt 6.8.3 source archive URLs and SHA-256 checksums are resolved for qtbase, qtsvg and Qt PDF's QtWebEngine source archive. The prebuilt module SBOM revision locators and observed qconfig variables remain separate evidence. | None of those three source archives is in the inspected local caches. The qtpdf SBOM locator alone must not be substituted for the source payload. Exact prebuilt revision/options, PDFium/Chromium source and complete notices still require qualification. |
+| Exact official PyPI metadata was observed for all 11 locked wheel project/version pairs. Ten publish source distributions with authoritative archive URLs and SHA-256 checksums; none of these ten source archives is locally cached. IfcOpenShell 0.8.3.post2 publishes no source distribution in that metadata response. | Source distributions do not establish exact wheel/native-library derivation. Resolve the IfcOpenShell wheel binding or qualify the controlled replacement. Retain embedded GEOS, OpenBLAS, OpenSSL, libffi and other source/build/notice obligations. |
+| All frozen package files match, and the import-worker's individually listed source files match its source kit. The application and CLI `src` directory aggregate receipts differ from the frozen kit. The current source tree includes generated Python cache content that the allowlist omits. | Root should make source-tree receipts exclude generated/cache files consistently with the source kit, then regenerate the next candidate. Keep this historical mismatch explicit; the audit does not relabel an unmatched aggregate receipt as complete. |
+| The remaining 17 source-status entries are the three Qt modules, 11 wheel projects, Inter's unrecorded editable/source payload, and the two unmatched application/CLI aggregate receipts. One additional entry is the MSVC redistributable rights review. | Preserve the existing font/artwork authorization evidence and resolve any required provenance facts. MSVC distributor eligibility and applicable terms remain external facts. URLs and pointer notices never count as delivered source or complete notice text. |
+
+The [official Qt archive index](https://download.qt.io/archive/qt/6.8/6.8.3/submodules/)
+and its [qtbase checksum metadata](https://download.qt.io/archive/qt/6.8/6.8.3/submodules/qtbase-everywhere-src-6.8.3.tar.xz.mirrorlist),
+[qtsvg checksum metadata](https://download.qt.io/archive/qt/6.8/6.8.3/submodules/qtsvg-everywhere-src-6.8.3.tar.xz.mirrorlist),
+and [QtWebEngine checksum metadata](https://download.qt.io/archive/qt/6.8/6.8.3/submodules/qtwebengine-everywhere-src-6.8.3.tar.xz.mirrorlist)
+support the pinned archive receipts. Qt's [PDF build instructions](https://wiki.qt.io/QtPDF_Build_Instructions)
+identify QtWebEngine as the PDF source repository and describe disabling the
+WebEngine build when building PDF alone. This is upstream guidance, not evidence
+that the selected prebuilt 6.8.3 binaries used those exact build options. The
+[exact IfcOpenShell PyPI metadata](https://pypi.org/pypi/ifcopenshell/0.8.3.post2/json)
+supports the observed absence of an sdist for that release.
+
+Run the audit after selecting and freezing a candidate:
+
+```text
+python -B scripts/qualification/dependency_source_closure.py --workspace . --inventory artifacts/runtime/distribution-inventory.json --bundle-root artifacts/packages/vertex-candidate --upstream-metadata artifacts/reset-delivery/dependency-source-closure/upstream-metadata.json --output artifacts/reset-delivery/dependency-source-closure/current-candidate.json
+python -B -m unittest discover -s tests -p test_dependency_source_closure.py -v
+```
+
+The output directory must already exist. The optional upstream metadata file is
+a locally reviewed receipt, not a live network operation; its hash and declared
+official response digests are retained. Without it, wheel sources remain
+unresolved. Optional `--build-receipt` arguments bind additional exact files;
+they do not certify that a receipt produced the selected binary. Exit zero
+means the audit completed consistently, including recorded gaps. Both
+`licensing_clearance` and `corresponding_source_qualified` remain false for every
+component and for the report. The ten focused tests verify receipt integrity,
+frozen-source selection, conservative wheel/pointer handling, input boundaries
+and atomic failure preservation; they do not certify distribution rights.
+
+## Current OCR source batch (2026-10-06)
+
+The current component manifest declares 12 additional runtime owners for the
+14 DLLs reached by the real offline OCR runtime: Tesseract 5.5.2, libarchive
+3.8.8, Leptonica 1.87.0, curl 8.22.0, liblzma 5.8.3, LZ4 1.10.0, zstd 1.5.7,
+giflib 6.1.3, libjpeg-turbo 3.2.0, libwebp 1.6.0#3 (three DLLs), OpenJPEG 2.5.4
+and TIFF 4.7.2. Existing bzip2, zlib and PNG owners cover the shared imports.
+OpenSSL is installed but is absent from this OCR runtime closure. Static code
+embedded in these libraries still requires its own source/notice review.
+
+All 14 installed DLLs match their installed SPDX file checksums and ownership
+relationships. All twelve installed SPDX resource SHA-512 values match existing
+archives under `.deps/vcpkg/downloads/`; all 67 declared recipe/patch files match
+their installed SPDX SHA-256 values under `.deps/vcpkg/ports/`. The audit records
+these exact archives, recipes, upstream locators and recipe option expressions;
+it does not download replacements or infer expanded native build options.
+
+Three installed ports conclude `LicenseRef-vcpkg-null`. The manifest retains
+that exact expression, and the inventory explicitly exposes `license_concluded`.
+Their copyright and SPDX files are pinned as manifest artifacts. The following
+observations concern those exact installed notices and are not substituted SPDX
+conclusions or redistribution clearance:
+
+| Port | Installed notice observation | SHA-256 of pinned copyright |
+|---|---|---|
+| Leptonica 1.87.0 | Two-clause BSD redistribution conditions and disclaimer are present. | `87829abb5bbb00b55a107365da89e9a33f86c4250169e5a1e5588505be7d5806` |
+| libarchive 3.8.8 | Default two-clause BSD terms plus identified UC Regents terms, public-domain code, triple-licensed files and varying build-script terms. Per-file terms are controlling. | `30e556b3959e3985d66efefec5eaac51d4995053caa1d3cffe6eb916f146f229` |
+| liblzma 5.8.3 | The XZ licensing summary identifies the liblzma library as 0BSD, distinguishes command-line/build-system terms, and points to separate full license texts. Those referenced texts still need staging/review. | `616a3ad264ce29b8f1cb97e53037b139d406899ca8d1f799651e17bfa09830b8` |
+
+The fixed GPL engine descriptor is a separate workspace asset. The worker's
+source closure now includes `assistance_ocr.cpp/.hpp` and
+`assistance_ocr_recognizer.cpp/.hpp`. The English model is a separate Apache-2.0
+asset pinned to tessdata_fast 4.1.0 commit
+`65727574dfcd264acbb0c3e07860e4e9e9b22185` and SHA-256
+`7d4322bd2a7749724879683fc3912cb542f19906c83bcc1a52132556427170b2`.
+Both the tracked model and original `.deps/downloads/ocr/eng.traineddata` cache
+copy are byte-bound; its LICENSE and upstream README are notice inputs.
+The source audit records the exact distributed model as `upstream_asset`,
+including frozen-package mapping and a separate `distributed_asset_recorded`
+status. Training/generation evidence is not assessed; no training-data delivery
+obligation or new application requirement is inferred from the model receipt.
+
+These checks apply to current installed dependency inputs, not the old frozen
+candidate. Its 38-component/113-binary evidence above remains historical and
+unchanged. Root must generate a new candidate inventory after the final native
+payload is selected, stage the complete exact source/notice inputs, resolve the
+three unknown conclusions and other embedded/alternative terms, and qualify
+the offline rebuild. Distribution, licensing and corresponding-source
+qualification remain false; this source batch does not accept D02 or D07.

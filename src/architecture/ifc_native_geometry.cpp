@@ -1,6 +1,8 @@
 #include "sketch/ifc_native_geometry.hpp"
 #include "sketch/architecture.hpp"
 #include "sketch/hosted_opening_geometry.hpp"
+#include "sketch/building_entity.hpp"
+#include "sketch/document_solid.hpp"
 
 #include <BRepMesh_IncrementalMesh.hxx>
 #include <BRep_Tool.hxx>
@@ -109,5 +111,60 @@ std::vector<IfcNativeMesh> ifc_native_fill_mesh(const Wall& wall, const HostedOp
     std::size_t vertices, std::size_t triangles) {
     preflight(wall, vertices, triangles);
     return tessellate(make_opening_assembly(wall, opening, assembly, operation), vertices, triangles);
+}
+
+std::vector<IfcNativeMesh> ifc_native_roof_mesh(const Entity& roof,
+    std::size_t vertices, std::size_t triangles) {
+    if (roof.type != "roof") throw std::invalid_argument("ifc_native_roof_type_invalid");
+    const auto openings = roof.properties.find("roof_openings");
+    const auto cuts = openings != roof.properties.end() && openings->is_array() ? openings->size() : 0;
+    if (cuts > 256) throw std::invalid_argument("ifc_mesh_budget_exceeded");
+    if (vertices < 24 + cuts * 16 || triangles < 12 + cuts * 16)
+        throw std::invalid_argument("ifc_mesh_budget_exceeded");
+    return tessellate(make_building_shape(decode_building_entity(roof)), vertices, triangles);
+}
+
+std::vector<IfcNativeMesh> ifc_native_room_mesh(const Entity& room,
+    std::size_t vertices, std::size_t triangles) {
+    if (room.type != "room") throw std::invalid_argument("ifc_native_room_type_invalid");
+    if (!vertices || !triangles) throw std::invalid_argument("ifc_mesh_budget_exceeded");
+    // Check the input's minimum triangulation cost before the solid decoder
+    // enters OCCT. Actual storage is charged again by the shared tessellator.
+    std::size_t edges = 0;
+    std::size_t stations = 0;
+    const auto storage = std::min(vertices, triangles);
+    const auto charge = [&](const nlohmann::json& boundary) {
+        if (!boundary.is_array() || boundary.size() > storage / 4 - edges || boundary.size() > 2048 - edges)
+            throw std::invalid_argument("ifc_mesh_budget_exceeded");
+        edges += boundary.size();
+        for (const auto& edge : boundary) {
+            // Structure/numbers are strictly decoded below; malformed data
+            // does not get a speculative geometry substitute in this preflight.
+            if (!edge.is_object() || !edge.contains("sweep_radians") || !edge.at("sweep_radians").is_number() ||
+                !edge.contains("start") || !edge.contains("end") || !edge.at("start").is_array() || !edge.at("end").is_array() ||
+                edge.at("start").size() != 2 || edge.at("end").size() != 2) continue;
+            const auto angle = std::abs(edge.at("sweep_radians").get<double>());
+            if (!std::isfinite(angle) || angle <= 1e-7) continue;
+            const auto& a = edge.at("start"); const auto& b = edge.at("end");
+            if (!a[0].is_number() || !a[1].is_number() || !b[0].is_number() || !b[1].is_number()) continue;
+            const auto radius = std::hypot(b[0].get<double>()-a[0].get<double>(),b[1].get<double>()-a[1].get<double>()) /
+                (2.0*std::abs(std::sin(angle*.5)));
+            const auto step = 2.0*std::acos(std::clamp(1.0-ifc_native_mesh_deviation_m*.5/radius,-1.0,1.0));
+            const auto needed = std::ceil(angle/step);
+            if (!std::isfinite(needed) || needed < 1 || needed > static_cast<double>(storage/64-stations))
+                throw std::invalid_argument("ifc_mesh_budget_exceeded");
+            stations += static_cast<std::size_t>(needed);
+        }
+    };
+    if (room.properties.contains("boundary")) charge(room.properties.at("boundary"));
+    else if (room.properties.contains("segments")) charge(room.properties.at("segments"));
+    if (room.properties.contains("holes") && room.properties.at("holes").is_array()) {
+        if (room.properties.at("holes").size() > 256) throw std::invalid_argument("ifc_mesh_budget_exceeded");
+        for (const auto& hole : room.properties.at("holes")) charge(hole);
+    }
+    RoomVolume volume;
+    std::string error;
+    if (!read_document_room(room, volume, error)) throw std::invalid_argument(error);
+    return tessellate(make_room_volume(volume), vertices, triangles);
 }
 } // namespace sketch

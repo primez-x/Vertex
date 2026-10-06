@@ -3,6 +3,7 @@
 #include "sketch/boundary_entity.hpp"
 
 #include <cstdint>
+#include <map>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -83,6 +84,9 @@ struct BoundaryDimension {
     // Resolves stable analytical targets from identified boundaries or replayed
     // measured strokes. Area dimensions require an identified boundary owner.
     [[nodiscard]] BoundaryDimensionResolution resolve(const Entity& boundary_entity) const;
+    [[nodiscard]] BoundaryDimensionResolution resolve(
+        const std::map<std::string, Entity, std::less<>>& entities) const;
+    [[nodiscard]] BoundaryDimensionResolution resolve(const DocumentSnapshot& snapshot) const;
 };
 
 // Unsupported future versions or dimension kinds remain opaque and retain
@@ -111,7 +115,20 @@ struct BoundaryDimensionDecodeResult {
 // stable vertex IDs. This view does not confer closed-area semantics on strokes.
 // Unsupported or malformed owners throw std::invalid_argument.
 [[nodiscard]] IdentifiedBoundary resolve_dimension_geometry_owner(const Entity& entity);
+// Structural retained-target admission only: verifies identified edges/vertices,
+// chains and topology without certifying current physical-room source geometry
+// or returning a quantity. Stale physical rooms may remain stored and editable.
+void validate_boundary_dimension_target(
+    const BoundaryDimension& dimension, const Entity& boundary_entity);
 [[nodiscard]] BoundaryDimensionResolution resolve_boundary_dimension(
     const BoundaryDimension& dimension, const Entity& boundary_entity);
+// Authoritative retained-map/snapshot resolution also qualifies source-bound
+// physical rooms from current walls and returns net clear area including holes.
+// Stale, malformed or unsupported sources throw without changing stored data.
+[[nodiscard]] BoundaryDimensionResolution resolve_boundary_dimension(
+    const BoundaryDimension& dimension,
+    const std::map<std::string, Entity, std::less<>>& entities);
+[[nodiscard]] BoundaryDimensionResolution resolve_boundary_dimension(
+    const BoundaryDimension& dimension, const DocumentSnapshot& snapshot);
 
 }  // namespace sketch

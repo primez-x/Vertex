@@ -1,6 +1,7 @@
 #pragma once
 #include "sketch/boundary_edit.hpp"
 #include "sketch/boundary_identity_history.hpp"
+#include "sketch/stair_identity_history.hpp"
 #include "sketch/geometry.hpp"
 #include "sketch/quantity.hpp"
 
@@ -196,6 +197,23 @@ struct WallSplitIntent {
     std::vector<WallSplitMeasuredOwnerIds> measured_owners;
 };
 
+// One translation across selected rigid owners and selected physical walls.
+// All selected points are exact targets in one connected constraint solve;
+// existing fixed anchors never move merely because their owner is selected.
+struct JointTranslationIntent {
+    Vec2 offset;
+    std::vector<std::string> rigid_boundary_ids;
+    std::vector<std::string> rigid_stroke_ids;
+    std::vector<std::string> partial_wall_ids;
+    bool move_connected_objects{true};
+    // Independent selected saved callouts follow the offset once. Callouts
+    // owned by a selected rigid owner already follow that owner's provenance.
+    std::vector<std::string> dimension_ids;
+    // Optional view-XY displacement for symbols, overlay labels and references.
+    // Model-plan labels and analytical geometry retain offset in world XY.
+    std::optional<Vec2> presentation_offset;
+};
+
 // Geometry is replayed before the relation changes are validated.
 // The original entity_changes lane contains only constraints. Version six's
 // physical lane admits existing-wall changes under ordinary provenance rules;
@@ -267,6 +285,15 @@ struct ApplyBoundaryConstraintChanges {
     std::optional<TransformBoundaries> rigid_group_transform;
     // Retain the dialect even if a caller strips its rigid proof.
     bool rigid_group_completion{};
+    // Envelope seventeen replays one connected solve from selected source IDs.
+    // The independent envelope-sixteen lanes retain their disjoint contract.
+    std::optional<JointTranslationIntent> joint_translation;
+    bool joint_translation_completion{};
+    // Envelope eighteen admits complete reviewed room dispositions only.
+    // Geometry, new identities and reference changes are reconstructed from
+    // this semantic intent; ordinary entity payloads cannot lend authority.
+    nlohmann::json room_review_intent=nullptr;
+    bool room_review_completion{};
 };
 
 using Command = std::variant<ApplyEntityChanges, NameRevision, TranslateBoundary,
@@ -427,6 +454,7 @@ private:
     std::optional<std::string> unsupported_constraint_history_reason_;
     std::optional<std::string> session_read_only_reason_;
     BoundaryIdentityHistory boundary_identity_history_;
+    StairIdentityHistory stair_identity_history_;
 };
 
 }  // namespace sketch

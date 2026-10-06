@@ -227,9 +227,9 @@ public:
         for (const auto kind : {ConstraintRelationKind::horizontal, ConstraintRelationKind::vertical,
             ConstraintRelationKind::coincident, ConstraintRelationKind::fixed_length,
             ConstraintRelationKind::parallel, ConstraintRelationKind::perpendicular, ConstraintRelationKind::fixed_anchor,
-            ConstraintRelationKind::fixed_arc_length})
+            ConstraintRelationKind::fixed_arc_length, ConstraintRelationKind::tangent})
             relation->addItem(relation_label(kind), static_cast<int>(kind));
-        relation->setToolTip(QStringLiteral("Curve length measures along a curved wall, measured segment or boundary edge. Endpoint distance measures straight between points. Direction relationships use the straight line between endpoints."));
+        relation->setToolTip(QStringLiteral("Curve length measures along an arc. Endpoint distance measures straight between points. Tangent joins two segments smoothly at their chosen contact endpoints; choose contact then opposite endpoint for each segment."));
         form->addRow(QStringLiteral("Relationship"), relation);
         for (std::size_t index = 0; index < bindings.size(); ++index) {
             bindings[index] = new QComboBox(body);
@@ -582,7 +582,7 @@ public:
             label->setText(wall_resize ? (measured_mode ? QStringLiteral("Segment length") : curved_wall ? QStringLiteral("Curve length") : QStringLiteral("Wall length")) : kind == ConstraintRelationKind::fixed_arc_length
                 ? (arc_chain ? QStringLiteral("Total curve length") : QStringLiteral("Curve length")) : QStringLiteral("Endpoint distance"));
         const auto count = kind == ConstraintRelationKind::fixed_anchor ? 1U :
-            (kind == ConstraintRelationKind::parallel || kind == ConstraintRelationKind::perpendicular ? 4U : 2U);
+            (kind == ConstraintRelationKind::parallel || kind == ConstraintRelationKind::perpendicular || kind == ConstraintRelationKind::tangent ? 4U : 2U);
         form->setRowVisible(stroke_segment,measured_mode && operation==0);
         form->setRowVisible(existing, operation >= 2);
         form->setRowVisible(relation, editing_relation);
@@ -591,6 +591,10 @@ public:
         for (std::size_t i = 0; i < bindings.size(); ++i) {
             bindings[i]->setEnabled(!arc_chain);
             form->setRowVisible(bindings[i], editing_relation && !arc_chain && i < count);
+            if (auto* label=qobject_cast<QLabel*>(form->labelForField(bindings[i])))
+                label->setText(kind==ConstraintRelationKind::tangent
+                    ? (i%2==0 ? QStringLiteral("Segment %1 contact").arg(i/2+1) : QStringLiteral("Segment %1 other end").arg(i/2+1))
+                    : QStringLiteral("Endpoint %1").arg(i+1));
         }
         form->setRowVisible(length, operation == 0 || (editing_relation &&
             (kind == ConstraintRelationKind::fixed_length || kind == ConstraintRelationKind::fixed_arc_length)));
@@ -648,7 +652,7 @@ public:
             value.id = operation == 2 ? selected_constraint->id : new_constraint_id;
             value.relation = static_cast<ConstraintRelationKind>(relation->currentData().toInt());
             const auto count = value.relation == ConstraintRelationKind::fixed_anchor ? 1U :
-                (value.relation == ConstraintRelationKind::parallel || value.relation == ConstraintRelationKind::perpendicular ? 4U : 2U);
+                (value.relation == ConstraintRelationKind::parallel || value.relation == ConstraintRelationKind::perpendicular || value.relation == ConstraintRelationKind::tangent ? 4U : 2U);
             for (std::size_t i = 0; i < count; ++i) {
                 const auto index = bindings[i]->currentIndex();
                 if (index < 0 || static_cast<std::size_t>(index) >= endpoints.size())
@@ -667,6 +671,8 @@ public:
                 value.length = parse_quantity(length->text().toStdString(), unit);
             if (value.relation == ConstraintRelationKind::fixed_arc_length)
                 (void)resolve_constraint_arc_segment(value, snapshot.entities());
+            if (value.relation == ConstraintRelationKind::tangent)
+                (void)resolve_constraint_tangent_segments(value,snapshot.entities());
             if (value.relation == ConstraintRelationKind::fixed_anchor)
                 value.anchor = Vec2{parse_quantity(anchor_x->text().toStdString(), unit).metres,
                                     parse_quantity(anchor_y->text().toStdString(), unit).metres};

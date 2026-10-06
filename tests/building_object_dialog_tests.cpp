@@ -2,6 +2,7 @@
 #include "sketch/quantity.hpp"
 
 #include "sketch/building_entity.hpp"
+#include "sketch/vertical_levels.hpp"
 #include "support/noninteractive_errors.hpp"
 
 #include <QApplication>
@@ -73,9 +74,9 @@ void select_form(BuildingObjectDialog& dialog, std::string_view form) {
         type = "column";
     } else if (form == "straight_beam") {
         type = "beam";
-    } else if (form == "straight_stair_flight") {
+    } else if (form == "straight_stair_flight" || form == "multi_flight_stair") {
         type = "stair";
-    } else if (form == "straight_railing") {
+    } else if (form == "straight_railing" || form == "stair_flight_railing") {
         type = "railing";
     } else {
         type = "roof";
@@ -741,6 +742,156 @@ void test_roof_form_changes_preserve_opening_draft() {
             "changing away from roof should require explicit opening removal");
 }
 
+void test_multiflight_widgets_preserve_identity_and_metadata() {
+    BuildingObjectDialog dialog(std::nullopt, true);
+    select_form(dialog, "multi_flight_stair");
+    auto* flights = dialog.findChild<QTableWidget*>("buildingObjectStairFlights");
+    auto* landings = dialog.findChild<QTableWidget*>("buildingObjectStairLandings");
+    require(flights && landings && flights->rowCount() == 1, "multi-flight authoring table missing");
+    flights->item(0, 0)->setText("5");
+    dialog.findChild<QPushButton*>("buildingObjectAddStairFlight")->click();
+    flights->item(1, 0)->setText("7");
+    landings->item(0, 0)->setText("1500 mm");
+    auto* turn = qobject_cast<QComboBox*>(landings->cellWidget(0, 2));
+    require(turn != nullptr, "connecting landing turn selector missing");
+    turn->setCurrentIndex(turn->findData(static_cast<int>(sketch::StairTurn::left_quarter)));
+    require(dialog.submit(), "valid multi-flight stair should submit");
+    auto original = *dialog.candidate();
+    auto stair = sketch::decode_stair_properties(original.id, original.properties);
+    require(stair.riser_count == 12 && stair.flights.size() == 2 &&
+                stair.landings.front().turn == sketch::StairTurn::left_quarter,
+            "table edits must author exact counts and turn");
+    original.properties["future_stair"] = {{"opaque", true}};
+    original.properties["flights"][0]["future_flight"] = 42;
+    original.properties["level_connection"] = {{"version", 1}, {"graph_id", "graph"},
+        {"link_id", "link"}, {"lower_level_id", "lower"}, {"upper_level_id", "upper"}, {"future_connection", 17}};
+    original.extensions["future_metadata"] = "preserved";
+    BuildingObjectDialog edit(original, true);
+    flights = edit.findChild<QTableWidget*>("buildingObjectStairFlights");
+    flights->selectRow(1);
+    edit.findChild<QPushButton*>("buildingObjectMoveStairFlightUp")->click();
+    require(edit.submit(), "reordered stair should submit");
+    const auto edited = *edit.candidate();
+    const auto reordered = sketch::decode_stair_properties(edited.id, edited.properties);
+    require(reordered.flights[0].id == stair.flights[1].id && reordered.flights[1].id == stair.flights[0].id &&
+                reordered.landings[0].id == stair.landings[0].id && reordered.riser_count == 12,
+            "reorder must preserve stable IDs and counts");
+    require(edited.properties.at("flights")[1].at("future_flight") == 42 &&
+                edited.properties.at("future_stair") == original.properties.at("future_stair") &&
+                edited.extensions == original.extensions,
+            "multi-flight edits must retain opaque child and entity metadata");
+    require_quantity_receipt(edited, "/landings/0/depth_m", "1500 mm", "mm", 3, 2);
+    require(edited.properties.at("level_connection") == original.properties.at("level_connection"),
+            "untouched connection must preserve opaque nested metadata");
+    BuildingObjectDialog disconnect(edited, true);
+    check(disconnect, "buildingObjectLevelConnectionEnabled").setChecked(false);
+    require(disconnect.submit() && !disconnect.candidate()->properties.contains("level_connection") &&
+                !sketch::decode_stair_properties(disconnect.candidate()->id, disconnect.candidate()->properties).level_connection,
+            "explicit disconnect must remove canonical connection while retaining stair topology");
+    BuildingObjectDialog invalid(edited, true);
+    invalid.findChild<QTableWidget*>("buildingObjectStairFlights")->item(0, 0)->setText("0");
+    require(!invalid.submit() && !invalid.candidate() && !invalid.lastError().isEmpty(),
+            "invalid flight count must reject complete candidate");
+}
+
+void test_hosted_railing_candidates_are_atomic_and_cancel_is_immutable() {
+    auto document = sketch::Document::create();
+    const sketch::VerticalLevelGraph levels({{"lower", 0}, {"upper", 2.5}}, {{"link", "lower", "upper"}});
+    const auto level_entity = Entity::create("vertical_levels", {{"model", nlohmann::json::parse(levels.serialize())}});
+    auto host = sketch::encode_building_entity(sketch::StairFlight{"host", {}, 0, 10, 2.5, 0.25, 1.2,
+        sketch::StairLanding{1.2, 0.15}, sketch::StairLevelConnection{level_entity.id, "link", "lower", "upper"}});
+    host.properties["future_host"] = 23;
+    host.properties["top_landing"]["future_payload"] = {{"version", 8}, {"data", {"opaque", 17}}};
+    host.properties["quantity_entries"] = {
+        {"/top_landing/depth_m", {{"version", 1}, {"original_expression", "1200 mm"}, {"entered_unit", "mm"},
+            {"exact_metres", {{"numerator", 6}, {"denominator", 5}}}}},
+        {"/going_m", {{"version", 1}, {"original_expression", "250 mm"}, {"entered_unit", "mm"},
+            {"exact_metres", {{"numerator", 1}, {"denominator", 4}}}}},
+        {"/future_dimension_m", {{"version", 9}, {"future_payload", "retain verbatim"}}}};
+    host.extensions["name"] = "Hall stairs";
+    document.apply(sketch::ApplyEntityChanges{document.snapshot().revision(),
+        {sketch::EntityChange::upsert(level_entity), sketch::EntityChange::upsert(host)}, {}, "host"});
+    const auto source = document.snapshot();
+    BuildingObjectDialog dialog(source, std::nullopt, true);
+    select_form(dialog, "stair_flight_railing");
+    auto& hosts = combo(dialog, "buildingObjectStairHost");
+    hosts.setCurrentIndex(hosts.findData(QStringLiteral("host")));
+    require(dialog.submit(), "hosted railing should submit with explicit v1 host choice");
+    require(dialog.relatedCandidates().size() == 1 && dialog.coordinatedCandidates().size() == 2,
+            "v1 host upgrade and railing must be coordinated candidates");
+    const auto upgrade = dialog.relatedCandidates().front();
+    const auto railing = sketch::decode_railing_properties(dialog.candidate()->id, dialog.candidate()->properties);
+    const auto upgraded_stair = sketch::decode_stair_properties(upgrade.id, upgrade.properties);
+    require(railing.host && railing.host->flight_id == upgraded_stair.flights.front().id &&
+                upgrade.properties.at("future_host") == 23 && upgrade.extensions == host.extensions,
+            "hosted railing must reference generated stable flight while preserving host metadata");
+    auto expected_upgrade = host.properties;
+    for (const auto* key : {"version", "form", "flights", "landings"}) expected_upgrade[key] = upgrade.properties.at(key);
+    require(upgrade.properties == expected_upgrade && upgraded_stair.flights.front().id != host.id &&
+                !upgraded_stair.flights.front().id.empty(),
+            "host upgrade must change only topology schema and retain all nested metadata and receipts");
+    require_quantity_receipt(upgrade, "/top_landing/depth_m", "1200 mm", "mm", 6, 5);
+    const auto old_layout = sketch::derive_stair_layout(sketch::decode_stair_properties(host.id, host.properties));
+    const auto upgraded_layout = sketch::derive_stair_layout(upgraded_stair);
+    require(old_layout.flights.front().run == upgraded_layout.flights.front().run &&
+                old_layout.flights.front().rise == upgraded_layout.flights.front().rise &&
+                old_layout.flights.front().orientation_radians == upgraded_layout.flights.front().orientation_radians &&
+                old_layout.landings.front().elevation == upgraded_layout.landings.front().elevation,
+            "implicit host upgrade must preserve stair and top landing geometry");
+    for (std::size_t index = 0; index < old_layout.flights.front().treads.size(); ++index) {
+        for (std::size_t corner = 0; corner < 4; ++corner) {
+            const auto before = old_layout.flights.front().treads[index].footprint[corner];
+            const auto after = upgraded_layout.flights.front().treads[index].footprint[corner];
+            require(before.x == after.x && before.y == after.y && before.z == after.z,
+                    "upgrade must preserve every original tread corner");
+        }
+    }
+    require(!dialog.candidate()->properties.contains("base_position_m") &&
+                !dialog.candidate()->properties.contains("length_m"), "hosted rail must not persist independent placement");
+    require(document.snapshot().entities() == source.entities(), "submit must not mutate source document");
+    BuildingObjectDialog cancel(source, std::nullopt, true);
+    select_form(cancel, "stair_flight_railing");
+    combo(cancel, "buildingObjectStairHost").setCurrentIndex(1);
+    cancel.reject();
+    require(!cancel.candidate() && cancel.relatedCandidates().empty() &&
+                document.snapshot().entities() == source.entities(), "Cancel must discard candidates and source mutation");
+    BuildingObjectDialog invalid(source, std::nullopt, true);
+    select_form(invalid, "stair_flight_railing");
+    require(!invalid.submit() && !invalid.candidate(), "host selection must be explicit");
+    combo(invalid, "buildingObjectStairHost").setCurrentIndex(1);
+    const auto selected_flight = combo(invalid, "buildingObjectStairHostFlight").currentData();
+    set_field(invalid, "buildingObjectHostStart", "0.8");
+    set_field(invalid, "buildingObjectHostEnd", "0.2");
+    require(!invalid.submit() && invalid.relatedCandidates().empty(), "invalid hosted station range must discard all candidates");
+    set_field(invalid, "buildingObjectHostStart", "0");
+    set_field(invalid, "buildingObjectHostEnd", "1");
+    require(invalid.submit() && combo(invalid, "buildingObjectStairHostFlight").currentData() == selected_flight &&
+                sketch::decode_railing_properties(invalid.candidate()->id, invalid.candidate()->properties).host->flight_id == selected_flight.toString().toStdString(),
+            "retry must retain the generated stable flight identity");
+
+    auto existing_rail = *dialog.candidate();
+    existing_rail.properties["host"]["future_anchor"] = "preserved";
+    existing_rail.properties["future_rail"] = 52;
+    existing_rail.extensions["future_metadata"] = "rail";
+    const auto upgraded_source = sketch::Document::create({level_entity, upgrade}).snapshot();
+    BuildingObjectDialog edit(upgraded_source, existing_rail, true);
+    require(combo(edit, "buildingObjectStairHostFlight").currentData().toString().toStdString() == railing.host->flight_id,
+            "hosted edit must select the original stable flight");
+    require(edit.findChild<QLineEdit*>("buildingObjectBaseX") == nullptr &&
+                edit.findChild<QLineEdit*>("buildingObjectLength") == nullptr,
+            "hosted editor must not expose independently authored placement");
+    combo(edit, "buildingObjectStairHostSide").setCurrentIndex(1);
+    set_field(edit, "buildingObjectHeight", "3 ft");
+    require(edit.submit() && edit.relatedCandidates().empty(), "v2 hosted edit must not upgrade any host");
+    const auto changed_rail = *edit.candidate();
+    const auto changed = sketch::decode_railing_properties(changed_rail.id, changed_rail.properties);
+    require(changed.host->flight_id == railing.host->flight_id && changed.host->side == sketch::StairRailingSide::right &&
+                changed_rail.properties.at("host").at("future_anchor") == "preserved" &&
+                changed_rail.properties.at("future_rail") == 52 && changed_rail.extensions == existing_rail.extensions,
+            "hosted edit must preserve identity and opaque metadata while changing authored side");
+    require_quantity_receipt(changed_rail, "/height_m", "3 ft", "ft", 1143, 1250);
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -780,6 +931,8 @@ int main(int argc, char** argv) {
         test_roof_openings_create_edit_remove_and_preserve_units();
         test_roof_opening_validation_is_atomic();
         test_roof_form_changes_preserve_opening_draft();
+        test_multiflight_widgets_preserve_identity_and_metadata();
+        test_hosted_railing_candidates_are_atomic_and_cancel_is_immutable();
         return 0;
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';

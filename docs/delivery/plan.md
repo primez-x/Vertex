@@ -35,16 +35,21 @@ build directories after relocation; never rewrite old absolute CMake caches.
 Project-format migration is separately tested with historical/recovery files,
 unknown content, failure/rollback, and preserved originals.
 
-No goal loop is used. Resume [progress.md](progress.md), reconcile it with Git
-and actual evidence, and continue the next unfinished task. Never restart
+The latest instruction requires continuous execution until the full product
+exit. A goal tracks that terminal condition while [progress.md](progress.md)
+remains the durable resumption record. Reconcile it with Git and actual evidence,
+and continue the next unfinished task. Never restart
 completed work after compaction. Build affected targets after a meaningful
 source batch; package only a coherent human-test candidate or release.
 Documentation, status requests and unchanged source do not trigger builds.
 
 Root owns integration, shared controller/commands, format floors, CMake,
 generators, migration, Git and native jobs. Delegates receive exclusive paths.
-All source/header/test/script writers freeze during native jobs. One root-owned
-job runs at a time; silence or a polling timeout does not permit restarting it.
+Freeze every source, header, test, script and resource consumed by the current
+native job. Independent work outside that input set may continue. Checks use
+frozen executable/resource inputs; changed sources require affected rebuilding
+before their results apply. One root-owned job runs at a time; silence or a
+polling timeout does not permit restarting it.
 
 ## Accountable production packages
 

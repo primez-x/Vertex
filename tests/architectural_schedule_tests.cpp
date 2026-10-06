@@ -27,6 +27,10 @@ Entity assigned(Entity value) {
     value.properties["material_assignment"] = {{"version",1},{"catalog_id","catalog"},{"material_id","solid"}};
     return value;
 }
+void architectural_context(Entity& value) {
+    value.properties.update(Json{{"property_id", "property"}, {"building_id", "building"},
+        {"floor_id", "floor"}, {"layer_id", "layer"}});
+}
 const ScheduleRow& row(const DocumentScheduleProjection& projection, const std::string& id) {
     const auto found = std::find_if(projection.snapshot.rows.begin(), projection.snapshot.rows.end(),
         [&](const auto& value) { return value.object_id == id + ":material"; });
@@ -389,6 +393,89 @@ void test_building_object_rows_expose_dimensions_and_solid_volume() {
                 !connected_row->cells.at("level_link_id").editable,
             "building schedule should expose connected stair level provenance");
 }
+
+void test_multi_flight_and_hosted_railing_quantities() {
+    StairFlight stair{"multi", {}, 0, 8, 2.0, 0.25, 1.0};
+    stair.flights = {{"first", 4}, {"second", 4}};
+    stair.landings = {{"turn", 1.0, 0.15, StairTurn::left_quarter, 0}};
+    Railing railing{"hosted", {}, 0, 0, 0.9, 0.05, 0.5};
+    railing.host = StairRailingHost{"multi", "second", StairRailingSide::right, 0, 1};
+    auto catalog = Entity::create("assembly_model", {{"model", AssemblyModel::create(
+        {{"solid", "Solid material"}}, {}, {}).to_json()}});
+    catalog.id = "catalog";
+    auto stair_entity = assigned(encode_building_entity(stair));
+    architectural_context(stair_entity);
+    stair_entity.properties["run_m"] = 99.0;
+    stair_entity.properties["rise_m"] = 99.0;
+    auto rail_entity = assigned(encode_building_entity(railing));
+    architectural_context(rail_entity);
+    rail_entity.properties["length"] = 99.0;
+    rail_entity.properties["post_count"] = 99;
+    auto document = Document::create({catalog,
+        {"property", "property", Json::object()},
+        {"building", "building", {{"property_id", "property"}}},
+        {"floor", "floor", {{"building_id", "building"}}},
+        {"layer", "layer", {{"floor_id", "floor"}}}, stair_entity, rail_entity});
+    const auto source = document.snapshot();
+    const auto projected = build_architectural_schedules(document.snapshot());
+    require(projected.diagnostics.empty(), "valid multi-flight stair and hosted rail produce quantities");
+    const auto building_row = [](const auto& result, const std::string& id) -> const ScheduleRow& {
+        const auto found = std::find_if(result.snapshot.rows.begin(), result.snapshot.rows.end(),
+            [&](const auto& candidate) { return candidate.object_id == id; });
+        if (found == result.snapshot.rows.end()) throw std::runtime_error("missing stair quantity row");
+        return *found;
+    };
+    const auto& stairs = building_row(projected, "multi");
+    require(std::get<ScheduleQuantity>(stairs.cells.at("rise").value).value == 2.0 &&
+        std::get<ScheduleQuantity>(stairs.cells.at("riser_height").value).value == 0.25 &&
+        std::get<ScheduleQuantity>(stairs.cells.at("run").value).value == 2.0 &&
+        std::get<std::int64_t>(stairs.cells.at("flight_count").value) == 2 &&
+        std::get<std::int64_t>(stairs.cells.at("landing_count").value) == 1,
+        "canonical stair layout overrides unrelated opaque rise/run properties");
+    const auto& rails = building_row(projected, "hosted");
+    const auto expected_length = std::hypot(0.95, 0.95);
+    require(std::abs(std::get<ScheduleQuantity>(rails.cells.at("length").value).value - expected_length) < 1e-9 &&
+        std::get<std::int64_t>(rails.cells.at("post_count").value) == 4 &&
+        std::get<std::string>(rails.cells.at("host_stair_id").value) == "multi" &&
+        std::get<std::string>(rails.cells.at("host_flight_id").value) == "second" &&
+        std::get<std::string>(rails.cells.at("side").value) == "right",
+        "hosted rail quantities include actual pitch-line length and stable attachment");
+    require(document.snapshot().entities() == source.entities() &&
+        document.snapshot().entities().at("multi").properties.at("run_m") == 99.0 &&
+        document.snapshot().entities().at("multi").properties.at("rise_m") == 99.0 &&
+        document.snapshot().entities().at("hosted").properties.at("length") == 99.0 &&
+        document.snapshot().entities().at("hosted").properties.at("post_count") == 99,
+        "schedule derivation preserves opaque source properties without trusting them");
+    require(std::find(rails.cells.at("volume").sources.begin(), rails.cells.at("volume").sources.end(),
+        ScheduleSourceRef{"multi", "geometry"}) != rails.cells.at("volume").sources.end() &&
+        std::find(row(projected, "hosted").cells.at("volume").sources.begin(),
+            row(projected, "hosted").cells.at("volume").sources.end(), ScheduleSourceRef{"multi", "geometry"}) !=
+            row(projected, "hosted").cells.at("volume").sources.end(),
+        "hosted solid and material volumes retain current stair provenance");
+    const auto visible = build_architectural_schedules(document.snapshot(), {"hosted"});
+    require(building_row(visible, "hosted").cells.contains("length") && visible.diagnostics.empty(),
+        "a visible railing can use an existing host outside the schedule filter");
+    stair.going = 0.35;
+    auto changed_stair = assigned(encode_building_entity(stair));
+    architectural_context(changed_stair);
+    document.apply(ApplyEntityChanges{document.revision(),
+        {EntityChange::upsert(std::move(changed_stair))}, {}, "extend host"});
+    const auto changed = build_architectural_schedules(document.snapshot());
+    require(std::get<ScheduleQuantity>(building_row(changed, "hosted").cells.at("length").value).value > expected_length,
+        "unchanged rail schedule recalculates after host geometry changes");
+    auto future_rail = assigned(encode_building_entity(railing));
+    architectural_context(future_rail);
+    future_rail.properties["version"] = 3;
+    const auto unavailable = build_architectural_schedules(Document::create({catalog,
+        {"property", "property", Json::object()},
+        {"building", "building", {{"property_id", "property"}}},
+        {"floor", "floor", {{"building_id", "building"}}},
+        {"layer", "layer", {{"floor_id", "floor"}}}, stair_entity, future_rail}).snapshot());
+    require(std::none_of(unavailable.snapshot.rows.begin(), unavailable.snapshot.rows.end(),
+        [](const auto& candidate) { return candidate.object_id == "hosted"; }) &&
+        !row(unavailable, "hosted").cells.contains("volume") && !unavailable.diagnostics.empty(),
+        "unsupported future hosted rail withholds building and material quantities");
+}
 }
 int main() {
     try {
@@ -398,6 +485,7 @@ int main() {
         test_composite_slab_layers_produce_material_quantities();
         test_placed_assemblies_produce_read_only_quantity_rows();
         test_building_object_rows_expose_dimensions_and_solid_volume();
+        test_multi_flight_and_hosted_railing_quantities();
         std::cout<<"architectural schedule tests passed\n";
         return 0;
     }

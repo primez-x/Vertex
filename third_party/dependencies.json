@@ -10,6 +10,17 @@
       "sha256": "29160a80ff49ddcab2c97711247e08b1fab27a484a329ce8b813d820dc559031",
       "license_path": "assets/fonts/OFL.txt",
       "source": "https://github.com/google/fonts/tree/0b58fb370093f9a9f4ff785d94405710b79de67c/ofl/inter"
+    },
+    {
+      "name": "Tesseract English fast model",
+      "version": "4.1.0",
+      "commit": "65727574dfcd264acbb0c3e07860e4e9e9b22185",
+      "license": "Apache-2.0",
+      "path": "assets/assistance/ocr/eng.traineddata",
+      "sha256": "7d4322bd2a7749724879683fc3912cb542f19906c83bcc1a52132556427170b2",
+      "license_path": "assets/assistance/ocr/LICENSE",
+      "source": "https://github.com/tesseract-ocr/tessdata_fast/tree/65727574dfcd264acbb0c3e07860e4e9e9b22185",
+      "url": "https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/65727574dfcd264acbb0c3e07860e4e9e9b22185/eng.traineddata"
     }
   ],
   "bootstrap_dependencies": [

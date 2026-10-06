@@ -160,7 +160,12 @@ def _tree_sha256(path: pathlib.Path) -> str:
             _error(f"Symlink is not valid source evidence: {child}")
         if not child.is_file():
             continue
-        relative = child.relative_to(path).as_posix()
+        relative_path = child.relative_to(path)
+        # Runtime bytecode is omitted from source kits and cannot fingerprint
+        # workspace source. Check symlinks above before excluding cache paths.
+        if "__pycache__" in relative_path.parts or child.suffix.lower() in {".pyc", ".pyo"}:
+            continue
+        relative = relative_path.as_posix()
         digest.update(relative.encode("utf-8"))
         digest.update(b"\0")
         try:
@@ -622,6 +627,7 @@ def _spdx_context(root: pathlib.Path, component: dict[str, Any]) -> tuple[dict[s
         "package_name": package["name"],
         "package_version": expected_package["version"],
         "evidence_package_version": module_revision,
+        "license_concluded": license_expression,
         "url": download_location,
         "homepage": package.get("homepage"),
         "upstream_sources": upstream_sources,
@@ -834,6 +840,12 @@ def _bootstrap_context(root: pathlib.Path, component: dict[str, Any]) -> dict[st
     if item.get("kind") is not None:
         _require_string(item.get("kind"), f"component {component['id']} dependency kind")
     item_hash = _validate_sha256(item.get("sha256"), f"component {component['id']} dependency sha256")
+    asset_path = None
+    if source.get("asset_name"):
+        asset_path = _canonical_relative(item.get("path"), f"component {component['id']} asset path")
+        _require(asset_path in source.get("paths", []),
+                 f"component {component['id']} source paths omit declared asset path")
+        _describe_path(root, asset_path, item_hash)
     artifacts = _validate_artifacts(component.get("artifacts"), f"component {component['id']}.artifacts")
     if item.get("filename"):
         _require(any(pathlib.PurePosixPath(artifact["path"]).name == item["filename"]
@@ -852,6 +864,7 @@ def _bootstrap_context(root: pathlib.Path, component: dict[str, Any]) -> dict[st
         "artifact_filename": item.get("filename"),
         "destination": item.get("destination"),
         "kind_detail": item.get("kind"),
+        "asset_path": asset_path,
     }
 
 
@@ -1250,7 +1263,6 @@ def build_inventory(root: pathlib.Path | str, manifest: dict[str, Any],
         source_paths = (payload["source_inputs"] if source["kind"] == "locked-archive"
                         else _describe_paths(root, source, component) if source.get("paths") else [])
         if source_paths:
-            payload = dict(payload)
             payload["source_inputs"] = source_paths
         static_inputs.append({
             "component_id": component["id"],

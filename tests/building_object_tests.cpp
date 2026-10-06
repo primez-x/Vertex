@@ -446,6 +446,33 @@ void test_roof_openings() {
     rejected([&] { (void)make_hip_roof(hip); }, "zero opening width rejected");
 }
 
+void test_multi_flight_solids_and_hosted_posts() {
+    using namespace sketch;
+    StairFlight stair{"multi", {0,0,2}, 0, 8, 1.6, 0.3, 1.0};
+    stair.flights = {{"lower",4},{"upper",4}};
+    stair.landings = {{"return",1.2,0.15,StairTurn::left_half,0.2}};
+    const auto shape = make_stair_flight(stair);
+    valid_solid(shape, "multi-flight compound must be valid");
+    // Each four-riser prism: going*width*riser*(1+2+3+4).
+    near(solid_volume(shape), 2*0.3*1.0*0.2*10 + 1.2*2.2*0.15, 1e-8,
+         "independent half-turn flights and full-width landing volume");
+    require(solid_count(shape)==3, "two flights plus one connecting landing");
+    const auto box = bounds(shape);
+    near(box.ymax,2.2,1e-7,"half-turn landing covers both flights and gap");
+    near(box.zmax,3.6,1e-7,"uniform rise reaches final elevation");
+    Railing rail{"hosted",{},0,0,0.9,0.04,0.45,
+        StairRailingHost{"multi","upper",StairRailingSide::right,0,1}};
+    rejected([&]{(void)make_railing(rail);}, "hostless dispatch refuses authored hosted rail");
+    const auto rail_shape=make_hosted_railing(rail,stair);
+    valid_solid(rail_shape,"hosted rail and posts are actual solids");
+    const auto layout=derive_hosted_railing_layout(rail,stair);
+    require(solid_count(rail_shape)==static_cast<int>(layout.posts.size()+1),
+            "one real sloped rail and one solid per supported post");
+    double expected=(1.2-0.04)*0.04*0.04;
+    for(const auto& post:layout.posts)expected+=0.04*0.04*(post.top.z-post.base.z);
+    near(solid_volume(rail_shape),expected,1e-9,"independent sloped rail and vertical post volume");
+}
+
 int main() {
     try {
         test_vertical_columns_are_real_solids();
@@ -455,6 +482,7 @@ int main() {
         test_roofs_are_planar_thickened_panels();
         test_hip_roofs();
         test_roof_openings();
+        test_multi_flight_solids_and_hosted_posts();
         std::cout << "Building object solid tests passed\n";
         return 0;
     } catch (const std::exception& error) {

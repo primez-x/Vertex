@@ -76,6 +76,21 @@ struct PerpendicularConstraint {
     ConstraintPointId second_end;
 };
 
+// Coincident contact endpoints with opposite outward analytical derivatives.
+// Sweeps are the authoritative fixed signed circular sweeps; zero is a line.
+// At least one segment must be curved. Native start/end orientation is retained.
+struct TangentConstraint {
+    ConstraintId id;
+    ConstraintPointId first_start;
+    ConstraintPointId first_end;
+    ConstraintPointId second_start;
+    ConstraintPointId second_end;
+    double first_sweep_radians{};
+    double second_sweep_radians{};
+    bool first_at_start{true};
+    bool second_at_start{true};
+};
+
 struct FixedAnchorConstraint {
     ConstraintId id;
     ConstraintPointId point;
@@ -100,7 +115,7 @@ using PlanarConstraint =
     std::variant<HorizontalConstraint, VerticalConstraint, CoincidentConstraint,
                  FixedLengthConstraint, ParallelConstraint, PerpendicularConstraint,
                  FixedAnchorConstraint, AffineStationConstraint,
-                 WeightedLengthSumConstraint>;
+                 WeightedLengthSumConstraint, TangentConstraint>;
 
 enum class WindingOrientation { clockwise = -1, counter_clockwise = 1 };
 

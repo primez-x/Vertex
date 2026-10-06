@@ -1,5 +1,7 @@
 #pragma once
 
+#include "sketch/stair_semantics.hpp"
+
 #include <TopoDS_Shape.hxx>
 
 #include <cstddef>
@@ -12,11 +14,6 @@ namespace sketch {
 // Three-dimensional semantic coordinates use metres.  The architectural
 // solid builders keep these values separate from OCCT implementation types so
 // callers can persist parameters without serialising a derived BRep shape.
-struct Vec3 {
-    double x{};
-    double y{};
-    double z{};
-};
 
 struct RectangularColumn {
     std::string id;
@@ -60,35 +57,12 @@ struct Beam {
 // the flight width extends to the left of that run.  A top landing is an
 // explicit slab at the finished flight elevation, with its depth along the
 // run and its thickness along +Z.
-struct StairLanding {
-    double depth{};
-    double thickness{};
-};
 
 // A stair level connection binds the lower and upper ends of a flight to one
 // validated vertical-level graph.  The graph and link IDs are Document-owned;
 // level IDs are resolved inside that graph at the Document validation boundary.
 // This is persisted authoring data.  Geometry remains derived from the stair
 // dimensions, and a connection never rewrites the stair's base coordinates.
-struct StairLevelConnection {
-    std::string graph_entity_id;
-    std::string link_id;
-    std::string lower_level_id;
-    std::string upper_level_id;
-    bool operator==(const StairLevelConnection&) const = default;
-};
-
-struct StairFlight {
-    std::string id;
-    Vec3 base_position{};
-    double orientation_radians{};
-    std::size_t riser_count{};
-    double total_rise{};
-    double going{};
-    double width{};
-    std::optional<StairLanding> top_landing;
-    std::optional<StairLevelConnection> level_connection;
-};
 
 [[nodiscard]] TopoDS_Shape make_stair_flight(const StairFlight& flight);
 
@@ -98,17 +72,9 @@ struct StairFlight {
 // The shared thickness is used for the square rail and post sections.  This
 // deliberately keeps the first railing form deterministic and editable while
 // leaving curved/guard-specific profiles for a future schema version.
-struct Railing {
-    std::string id;
-    Vec3 base_position{};
-    double orientation_radians{};
-    double length{};
-    double height{};
-    double thickness{};
-    double post_spacing{};
-};
-
 [[nodiscard]] TopoDS_Shape make_railing(const Railing& railing);
+[[nodiscard]] TopoDS_Shape make_hosted_railing(const Railing& railing,
+                                              const StairFlight& current_host);
 
 // A sloped panel starts at base_position, whose XY location is the lower
 // left corner of the un-overhung horizontal footprint and whose Z is the

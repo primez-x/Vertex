@@ -20,7 +20,7 @@ MAX_IFC_VERTICES = 1_000_000
 MAX_SECTION_POINTS = 100_000
 MAX_SECTION_RINGS = 4096
 NATIVE_DXF_APPID = "VERTEX_ENTITY_V1"
-NATIVE_IFC_PSET = "Pset_VertexExchange_v1"
+NATIVE_IFC_PSETS = frozenset(("Pset_VertexExchange_v1", "Pset_VertexExchange_v2"))
 
 
 def _input(data):
@@ -507,7 +507,7 @@ def project_ifc(data: bytes) -> dict:
     for relation in model.by_type("IfcRelDefinesByProperties"):
         definitions=relation.RelatingPropertyDefinition
         definitions=definitions if isinstance(definitions,tuple) else (definitions,)
-        if any(definition and definition.is_a("IfcPropertySet") and definition.Name==NATIVE_IFC_PSET for definition in definitions):
+        if any(definition and definition.is_a("IfcPropertySet") and definition.Name in NATIVE_IFC_PSETS for definition in definitions):
             native.update(product.id() for product in relation.RelatedObjects)
     settings=ifcopenshell.geom.settings()
     settings.set("use-world-coords",True)

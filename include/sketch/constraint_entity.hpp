@@ -6,6 +6,7 @@
 #include "sketch/quantity.hpp"
 
 #include <cstdint>
+#include <array>
 #include <map>
 #include <optional>
 #include <string>
@@ -19,7 +20,8 @@ namespace sketch {
 // view only: it never grants a stroke closed-boundary or area semantics.
 [[nodiscard]] IdentifiedBoundary resolve_constraint_segment_owner(const Entity& entity);
 
-// Existing names are stable v1/v2 relation spellings; fixed_arc_length is v3/v4.
+// Existing names are stable v1/v2 spellings; fixed_arc_length is v3/v4 and
+// smooth endpoint tangent is exclusively v5.
 // The codec deliberately does not expose solver point coordinates.
 enum class ConstraintRelationKind {
     horizontal,
@@ -30,6 +32,7 @@ enum class ConstraintRelationKind {
     perpendicular,
     fixed_anchor,
     fixed_arc_length,
+    tangent,
 };
 
 enum class WallEndpointRole { start, end };
@@ -54,6 +57,19 @@ struct PersistentConstraint {
     std::optional<Quantity> length;
     std::optional<Vec2> anchor;
 };
+
+// Tangent v5 binds [first contact, first other, second contact, second other].
+// Every pair is one full segment with opposite native endpoint roles. Geometry
+// and signed sweeps come from the owners, never saved solver coefficients.
+[[nodiscard]] std::array<Segment, 2> resolve_constraint_tangent_segments(
+    const PersistentConstraint& constraint,
+    const std::map<std::string, Entity, std::less<>>& entities);
+[[nodiscard]] Vec2 constraint_tangent_endpoint_direction(
+    const Segment& segment, WallEndpointRole contact);
+// Smooth junction residual in [0,pi]; a same-direction outward cusp is pi.
+[[nodiscard]] double constraint_tangent_angular_residual(
+    const Segment& first, WallEndpointRole first_contact,
+    const Segment& second, WallEndpointRole second_contact);
 
 // The original entity is retained verbatim when semantics are not understood,
 // so a later version can interpret its opaque payload without data loss.
@@ -102,7 +118,8 @@ struct ConstraintEntityDecodeResult {
 
 // Encodes baseline-only relations as v1, boundary relations as v2, and
 // physical fixed_arc_length as v3 for one arc or v4 for a directed arc chain
-// (generic entity_ids owners).
+// (generic entity_ids owners). Tangent is exclusively v5 with contact/other
+// endpoint pairs and generic entity_ids owners.
 // When original is provided, its stable id/type,
 // required flag, unrelated properties, extensions, and opaque future fields
 // are retained while canonical v1 fields are replaced. The original must be a

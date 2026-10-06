@@ -77,6 +77,9 @@ struct BoundaryGeometryEdit {
     bool allow_automatic_angle_removal{};
     // Version seven: source-bound physical room repair, exclusively.
     std::optional<PhysicalWallRoomRepairIntent> physical_wall_room_repair;
+    // Version eight: exact physical-source translation. Genesis is captured
+    // once; later operations carry only their next sequential offset.
+    std::optional<nlohmann::json> wall_source_translation;
 
     bool operator==(const BoundaryGeometryEdit& other) const {
         return boundary_id == other.boundary_id && kind == other.kind &&
@@ -96,7 +99,8 @@ struct BoundaryGeometryEdit {
             replacement_linework_sources == other.replacement_linework_sources &&
             fresh_topology == other.fresh_topology &&
             allow_automatic_angle_removal == other.allow_automatic_angle_removal &&
-            physical_wall_room_repair == other.physical_wall_room_repair;
+            physical_wall_room_repair == other.physical_wall_room_repair &&
+            wall_source_translation == other.wall_source_translation;
     }
 };
 
@@ -118,7 +122,7 @@ inline void validate_boundary_geometry_edit(const BoundaryGeometryEdit& edit) {
         (!edit.replacement_segments.is_null() || !edit.replacement_authoring.is_null() ||
          !edit.replacement_properties.empty() || !edit.replacement_dimension_ids.empty() ||
          !edit.replacement_child_mapping.empty() || !edit.replacement_removed_reference_ids.empty() ||
-         !edit.replacement_wall_source_ids.empty() || edit.replacement_linework_sources || edit.fresh_topology || edit.allow_automatic_angle_removal || edit.physical_wall_room_repair))
+         !edit.replacement_wall_source_ids.empty() || edit.replacement_linework_sources || edit.fresh_topology || edit.allow_automatic_angle_removal || edit.physical_wall_room_repair || edit.wall_source_translation))
         throw std::invalid_argument("Boundary coordinate edit contains redefinition fields");
     if (edit.kind != BoundaryGeometryEditKind::reconstruct_arc && edit.arc_construction)
         throw std::invalid_argument("Boundary geometry edit contains arc reconstruction fields");
@@ -217,6 +221,21 @@ inline void validate_boundary_geometry_edit(const BoundaryGeometryEdit& edit) {
                 }
             }
         }
+        if (edit.wall_source_translation) {
+            const auto& proof=*edit.wall_source_translation;
+            if (edit.replacement_wall_source_ids.empty() || edit.fresh_topology || edit.allow_automatic_angle_removal ||
+                edit.physical_wall_room_repair || edit.replacement_linework_sources ||
+                !edit.replacement_authoring.is_null() || !edit.replacement_properties.empty() ||
+                !edit.replacement_dimension_ids.empty() || !edit.replacement_child_mapping.empty() ||
+                !edit.replacement_removed_reference_ids.empty() || !proof.is_object() ||
+                (proof.size()!=2 && proof.size()!=3) || !proof.contains("version") ||
+                !proof.at("version").is_number_integer() || proof.at("version")!=1 || !proof.contains("offset") ||
+                !proof.at("offset").is_array() || proof.at("offset").size()!=2 ||
+                !proof.at("offset")[0].is_number() || !proof.at("offset")[1].is_number() ||
+                !std::isfinite(proof.at("offset")[0].get<double>()) || !std::isfinite(proof.at("offset")[1].get<double>()) ||
+                (proof.size()==3 && (!proof.contains("genesis") || !proof.at("genesis").is_object())))
+                throw std::invalid_argument("Physical source translation proof is invalid");
+        }
         if (edit.physical_wall_room_repair) {
             const auto& repair=*edit.physical_wall_room_repair;
             if (!edit.fresh_topology || !edit.replacement_wall_source_ids.empty() || edit.replacement_linework_sources ||
@@ -241,6 +260,7 @@ inline void validate_boundary_geometry_edit(const BoundaryGeometryEdit& edit) {
                 nlohmann::json(edit.replacement_wall_source_ids).dump().size()) +
             (edit.replacement_linework_sources ? edit.replacement_linework_sources->dump().size() : std::size_t{0}) +
             (edit.physical_wall_room_repair ? edit.physical_wall_room_repair->reviewed_source_lineage.dump().size()+256 : std::size_t{0}) +
+            (edit.wall_source_translation ? edit.wall_source_translation->dump().size() : std::size_t{0}) +
             (edit.fresh_topology ? std::size_t{40} : std::size_t{0}) +
             (edit.allow_automatic_angle_removal ? std::size_t{80} : std::size_t{0}) >
             1024 * 1024 - 4096)
@@ -327,6 +347,10 @@ inline nlohmann::json encode_boundary_geometry_edit(const BoundaryGeometryEdit& 
                 {"reviewed_source_lineage",repair.reviewed_source_lineage},
                 {"expected_descriptor_digest",repair.expected_descriptor_digest}};
         }
+        if (edit.wall_source_translation) {
+            result["version"]=8;
+            result["wall_source_translation"]=*edit.wall_source_translation;
+        }
         return result;
     }
     if (edit.kind == BoundaryGeometryEditKind::reconstruct_arc) {
@@ -344,20 +368,21 @@ inline nlohmann::json encode_boundary_geometry_edit(const BoundaryGeometryEdit& 
 
 inline BoundaryGeometryEdit decode_boundary_geometry_edit(const nlohmann::json& value) {
     if (!value.is_object() || !value.contains("version") ||
-        !value.at("version").is_number_integer() || (value.at("version") != 1 && value.at("version") != 2 && value.at("version") != 3 && value.at("version") != 4 && value.at("version") != 5 && value.at("version") != 6 && value.at("version") != 7) ||
+        !value.at("version").is_number_integer() || (value.at("version") != 1 && value.at("version") != 2 && value.at("version") != 3 && value.at("version") != 4 && value.at("version") != 5 && value.at("version") != 6 && value.at("version") != 7 && value.at("version") != 8) ||
         !value.contains("kind") || !value.at("kind").is_string() ||
         !value.contains("boundary_id") || !value.at("boundary_id").is_string()) {
         throw std::invalid_argument("Boundary geometry edit envelope is invalid");
     }
     const auto kind = value.at("kind").get<std::string>();
     const bool physical_room_repair=value.at("version")==7;
+    const bool source_translation=value.at("version")==8;
     const bool linework_source_replacement = value.at("version") == 6;
     const bool automatic_angle_removal = value.at("version") == 5 || linework_source_replacement || physical_room_repair;
     const bool fresh_topology = value.at("version") == 4 || automatic_angle_removal;
-    const bool wall_source_replacement = !physical_room_repair && (value.at("version") == 3 || fresh_topology);
+    const bool wall_source_replacement = !physical_room_repair && (value.at("version") == 3 || fresh_topology || source_translation);
     const bool reference_plan = value.at("version") == 2 || wall_source_replacement || physical_room_repair;
     if (reference_plan && kind != "redefine_boundary")
-        throw std::invalid_argument("Boundary redefinition versions two through seven require redefinition intent");
+        throw std::invalid_argument("Boundary redefinition versions two through eight require redefinition intent");
     BoundaryGeometryEdit result;
     result.boundary_id = value.at("boundary_id").get<std::string>();
     if (kind == "move_vertex") {
@@ -418,6 +443,7 @@ inline BoundaryGeometryEdit decode_boundary_geometry_edit(const nlohmann::json& 
         if (automatic_angle_removal) expected.insert("allow_automatic_angle_removal");
         if (linework_source_replacement) expected.insert("replacement_linework_sources");
         if (physical_room_repair) expected.insert("physical_wall_room_repair");
+        if (source_translation) expected.insert("wall_source_translation");
         std::set<std::string> actual;
         for (const auto& [key, ignored] : value.items()) { (void)ignored; actual.insert(key); }
         if (actual != expected || !value.at("replacement_dimension_ids").is_array())
@@ -452,6 +478,7 @@ inline BoundaryGeometryEdit decode_boundary_geometry_edit(const nlohmann::json& 
             result.replacement_wall_source_ids = value.at("replacement_wall_source_ids").get<std::vector<std::string>>();
         }
         if (linework_source_replacement) result.replacement_linework_sources = value.at("replacement_linework_sources");
+        if (source_translation) result.wall_source_translation=value.at("wall_source_translation");
         if (physical_room_repair) {
             const auto& repair=value.at("physical_wall_room_repair");
             if (!repair.is_object() || repair.size()!=5 || !repair.contains("version") ||

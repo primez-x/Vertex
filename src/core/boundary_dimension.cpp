@@ -1,5 +1,9 @@
 #include "sketch/boundary_dimension.hpp"
 #include "sketch/measurement_linework.hpp"
+#include "sketch/physical_wall_room_data.hpp"
+#ifdef VERTEX_HAS_PHYSICAL_ROOM_REVIEW
+#include "sketch/physical_room_dimension_source.hpp"
+#endif
 
 #include <algorithm>
 #include <cmath>
@@ -608,21 +612,9 @@ IdentifiedBoundary resolve_dimension_geometry_owner(const Entity& entity) {
     return decode_identified_boundary_entity(entity);
 }
 
-BoundaryDimensionResolution resolve_boundary_dimension(const BoundaryDimension& dimension,
-                                                        const Entity& boundary_entity) {
-    validate_model(dimension);
-    // This Entity-only resolver has no live wall snapshot. It cannot certify
-    // clear-room geometry or its holes after a physical source edit.
-    if (boundary_entity.type == "room_boundary" &&
-        boundary_entity.extensions.contains("physical_wall_room"))
-        invalid("Source-bound room dimensions require current physical-room geometry; use the room quantity in Details");
-    if (boundary_entity.id != dimension.boundary_id) {
-        invalid("dimension source boundary id does not match target entity id");
-    }
-    if (dimension.kind == BoundaryDimensionKind::area && boundary_entity.type == "measurement_linework") {
-        invalid("area dimensions cannot target measured strokes");
-    }
-    const auto source = resolve_dimension_geometry_owner(boundary_entity);
+static BoundaryDimensionResolution resolve_identified_dimension(
+    const BoundaryDimension& dimension, const IdentifiedBoundary& source,
+    std::optional<double> net_clear_area = std::nullopt) {
     if (dimension.kind == BoundaryDimensionKind::segment_length) {
         if (!dimension.segment_chain_ids.empty()) {
             const IdentifiedSegment* first = nullptr;
@@ -675,7 +667,7 @@ BoundaryDimensionResolution resolve_boundary_dimension(const BoundaryDimension& 
     if (!closed_boundary(boundary)) {
         invalid("area dimension source boundary must be closed");
     }
-    const auto area = std::abs(signed_area(boundary));
+    const auto area = net_clear_area.value_or(std::abs(signed_area(boundary)));
     if (!std::isfinite(area) || area <= default_geometry_tolerance_metres *
                                       default_geometry_tolerance_metres) {
         invalid("area dimension source boundary has no measurable area");
@@ -683,8 +675,66 @@ BoundaryDimensionResolution resolve_boundary_dimension(const BoundaryDimension& 
     return BoundaryDimensionResolution{{}, 0.0, BoundaryDimensionKind::area, 0.0, area};
 }
 
+static BoundaryDimensionResolution resolve_retained_dimension_target(
+    const BoundaryDimension& dimension, const Entity& boundary_entity) {
+    validate_model(dimension);
+    if (boundary_entity.id != dimension.boundary_id)
+        invalid("dimension source boundary id does not match target entity id");
+    if (dimension.kind == BoundaryDimensionKind::area && boundary_entity.type == "measurement_linework")
+        invalid("area dimensions cannot target measured strokes");
+    return resolve_identified_dimension(dimension, resolve_dimension_geometry_owner(boundary_entity));
+}
+
+void validate_boundary_dimension_target(const BoundaryDimension& dimension,
+                                       const Entity& boundary_entity) {
+    // Any analytical work here is discarded. This admits stable retained
+    // targets, including stale physical rooms, without publishing their values
+    // or changing the source-bound marker to bypass currentness checks.
+    (void)resolve_retained_dimension_target(dimension, boundary_entity);
+}
+
+BoundaryDimensionResolution resolve_boundary_dimension(const BoundaryDimension& dimension,
+                                                        const Entity& boundary_entity) {
+    validate_model(dimension);
+    // This Entity-only resolver has no live wall snapshot. It cannot certify
+    // clear-room geometry or its holes after a physical source edit.
+    if (is_physical_wall_room(boundary_entity))
+        invalid("Source-bound room dimensions require current physical-room geometry; use authoritative map or snapshot resolution");
+    return resolve_retained_dimension_target(dimension, boundary_entity);
+}
+
+BoundaryDimensionResolution resolve_boundary_dimension(const BoundaryDimension& dimension,
+    const std::map<std::string, Entity, std::less<>>& entities) {
+    validate_model(dimension);
+    const auto owner = entities.find(dimension.boundary_id);
+    if (owner == entities.end()) invalid("dimension source owner is missing from the authoritative map");
+    if (owner->second.id != dimension.boundary_id)
+        invalid("dimension source owner identity differs from its authoritative map key");
+    if (!is_physical_wall_room(owner->second)) return resolve_boundary_dimension(dimension, owner->second);
+#ifdef VERTEX_HAS_PHYSICAL_ROOM_REVIEW
+    const auto current = resolve_physical_room_dimension_source(owner->second, entities);
+    return resolve_identified_dimension(dimension, current.boundary, current.area_square_metres);
+#else
+    invalid("Physical room dimension resolution is unavailable in this runtime");
+#endif
+}
+
+BoundaryDimensionResolution resolve_boundary_dimension(const BoundaryDimension& dimension,
+                                                        const DocumentSnapshot& snapshot) {
+    return resolve_boundary_dimension(dimension, snapshot.entities());
+}
+
 BoundaryDimensionResolution BoundaryDimension::resolve(const Entity& boundary_entity) const {
     return resolve_boundary_dimension(*this, boundary_entity);
+}
+
+BoundaryDimensionResolution BoundaryDimension::resolve(
+    const std::map<std::string, Entity, std::less<>>& entities) const {
+    return resolve_boundary_dimension(*this, entities);
+}
+
+BoundaryDimensionResolution BoundaryDimension::resolve(const DocumentSnapshot& snapshot) const {
+    return resolve_boundary_dimension(*this, snapshot);
 }
 
 }  // namespace sketch

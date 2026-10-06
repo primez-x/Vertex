@@ -22,6 +22,18 @@ namespace sketch {
 [[nodiscard]] std::string document_authoring_source_digest_v1_at_revision(
     const DocumentSnapshot& snapshot, Revision revision);
 
+// Version two includes every retained typed proof, including geometry edits.
+// Version-one persisted hashes keep their original domain and serialization.
+[[nodiscard]] std::string document_authoring_source_digest_v2(const DocumentSnapshot& snapshot);
+[[nodiscard]] std::string document_authoring_source_digest_v2_at_revision(
+    const DocumentSnapshot& snapshot, Revision revision);
+
+// Reconstruct an editable authoring snapshot from its exact retained prefix.
+// The recorded save revision must be null or belong to that prefix.
+[[nodiscard]] std::string document_snapshot_digest_at_revision(
+    const DocumentSnapshot& snapshot, Revision revision,
+    std::optional<Revision> saved_revision);
+
 // Binds every entity field in the displayed candidate, including opaque
 // metadata. This digest does not replace semantic Document validation.
 [[nodiscard]] std::string entity_map_digest(

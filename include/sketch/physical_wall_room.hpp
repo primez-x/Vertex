@@ -17,6 +17,14 @@ struct PhysicalWallRoomCheck {
     std::vector<Boundary> holes;
     double area_square_metres{};
 };
+struct PhysicalWallRoomLineageCheck {
+    double effective_elevation_m{};
+    std::vector<std::string> source_owner_ids;
+};
+// The same strict captured-v1 lineage/region admission as correspondence,
+// without a document or fresh-source comparison. Malformed evidence rejects.
+[[nodiscard]] PhysicalWallRoomLineageCheck validate_retained_physical_wall_room_lineage(
+    const Entity& room,const DrawingContext& context);
 // Current values are rederived from physical walls, never claimed persisted
 // areas. Malformed/future/stale owners receive diagnostics and empty geometry.
 // Detection is cached within this call; no caller-owned document is modified.

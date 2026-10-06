@@ -283,6 +283,49 @@ void connected_stair_retains_levels() {
     near(resized.total_rise,2,"connected stair rise retained");
 }
 
+void multi_flight_resize_contract() {
+    auto property=Entity::create("property"); property.id="resize-property";
+    auto building=Entity::create("building",{{"property_id",property.id}}); building.id="resize-building";
+    auto floor=Entity::create("floor",{{"building_id",building.id}}); floor.id="resize-floor";
+    auto layer=Entity::create("layer",{{"floor_id",floor.id}}); layer.id="resize-layer";
+    auto straight=encode_building_entity(StairFlight{.id="straight-v2",.riser_count=8,.total_rise=2,
+        .going=.3,.width=1,.flights={{"straight-flight",8}}});
+    straight.properties["layer_id"]=layer.id;
+    straight.properties["property_id"]=property.id;
+    straight.properties["building_id"]=building.id;
+    straight.properties["floor_id"]=floor.id;
+    straight.properties["flights"][0]["source"]="unchanged";
+    auto turned=encode_building_entity(StairFlight{.id="turned-v2",.riser_count=8,.total_rise=2,
+        .going=.3,.width=1,.flights={{"turn-flight-a",4},{"turn-flight-b",4}},
+        .landings={{"turn-landing",1.2,.1,StairTurn::left_quarter,0}}});
+    turned.properties["layer_id"]=layer.id;
+    turned.properties["property_id"]=property.id;
+    turned.properties["building_id"]=building.id;
+    turned.properties["floor_id"]=floor.id;
+    auto rail=encode_building_entity(Railing{.id="resize-hosted-rail",.height=1,.thickness=.05,.post_spacing=.4,
+        .host=StairRailingHost{straight.id,"straight-flight",StairRailingSide::right,0,1}});
+    rail.properties["layer_id"]=layer.id;
+    rail.properties["property_id"]=property.id;
+    rail.properties["building_id"]=building.id;
+    rail.properties["floor_id"]=floor.id;
+    auto future_rail=Entity::create("railing",{{"version",99},{"form","stair_flight_railing"},{"host","opaque"}});
+    future_rail.id="resize-future-rail";
+    auto doc=Document::create({property,building,floor,layer,straight,turned,rail,future_rail});
+    const auto before=doc.snapshot();
+    rejects([&] { (void)plan_axis_resize_command(before,turned.id,2,3,{}); });
+    rejects([&] { (void)plan_axis_resize_command(before,rail.id,2,3,{}); });
+    doc.apply(plan_axis_resize_command(before,straight.id,2,3,{}));
+    const auto after=doc.snapshot();
+    const auto result=decode_stair_properties(straight.id,after.entities().at(straight.id).properties);
+    near(result.going,.6,"v2 straight plan going"); near(result.width,3,"v2 straight plan width");
+    near(result.total_rise,2,"v2 straight rise retained");
+    require(after.entities().at(straight.id).properties["flights"]==straight.properties["flights"],
+        "plan resize lost child metadata");
+    require(after.entities().at(rail.id)==rail,"plan resize rewrote authored railing placement");
+    require(after.entities().at(future_rail.id)==future_rail,"plan resize interpreted opaque future railing host");
+    require(doc.snapshot().entities()!=before.entities(),"straight v2 resize was ineffective");
+}
+
 void constraints_and_manufactured_opening_failures() {
     auto wall=Entity::create("wall", {{"baseline",edge(0,0,4,0)},
         {"thickness_m",.2},{"height_m",3},{"elevation_m",0}});
@@ -378,6 +421,7 @@ int main() {
         roofs_beams_and_railings();
         rotated_physical_footprints_match_gesture_and_anchor();
         connected_stair_retains_levels();
+        multi_flight_resize_contract();
         constraints_and_manufactured_opening_failures();
         failures_are_atomic();
         std::cout << "plan axis resize tests passed\n";
