@@ -588,6 +588,9 @@ public:
     void setWitnessAlignmentRequested(std::function<void(bool horizontal)> callback);
     void setDirectionalAlignmentRequested(
         std::function<void(int dx, int dy, bool intersections_only)> callback);
+    void setDrawingCornerJumpRequested(std::function<bool()> callback);
+    void setDrawingTravelRequested(std::function<bool(int dx, int dy)> callback);
+    void setDrawingPenUpRequested(std::function<bool()> callback);
     // Exact world-axis targets from visible structural source geometry. Ctrl
     // uses endpoint coordinates; Ctrl+Shift requires an actual ray contact.
     [[nodiscard]] std::optional<Vec2> directionalDrawingAlignment(
@@ -918,6 +921,9 @@ private:
     std::function<void()> m_bay_window_return_requested;
     std::function<void(bool)> m_witness_alignment_requested;
     std::function<void(int, int, bool)> m_directional_alignment_requested;
+    std::function<bool()> m_drawing_corner_jump_requested;
+    std::function<bool(int, int)> m_drawing_travel_requested;
+    std::function<bool()> m_drawing_pen_up_requested;
     std::function<void()> m_auto_close_drawing_requested;
     std::function<bool(const QString&)> m_drawing_text_requested;
     std::function<void()> m_draft_undo_requested;

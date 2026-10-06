@@ -2,7 +2,7 @@
 
 Standalone residential architectural plan symbols for Vertex and other sketching/CAD applications.
 
-- 342 individual SVG files (320 imported symbols, two overhead wall cabinets and 20 Pinc-comparison additions)
+- 345 individual SVG files (320 imported symbols, two overhead wall cabinets, 20 Pinc-comparison additions and three window counterparts)
 - Organized by category
 - Each component has a scalable viewBox; nominal footprints are recorded separately from artwork padding
 - White fill, dark defined linework, minimal/no 3D depth

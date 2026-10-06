@@ -1,4 +1,5 @@
 #include "sketch/desktop/main_window.hpp"
+#include "sketch/document_digest.hpp"
 #include "sketch/measurement_linework.hpp"
 #include "../src/desktop/plan_canvas.hpp"
 #include "support/noninteractive_errors.hpp"
@@ -18,6 +19,7 @@
 #include <QStandardPaths>
 #include <QTemporaryDir>
 #include <QTimer>
+#include <QToolButton>
 #include <QUuid>
 #include <cmath>
 #include <iostream>
@@ -33,7 +35,10 @@ PlanCanvas& prepare(MainWindow& window) {
     window.setAttribute(Qt::WA_DontShowOnScreen, true);
     window.resize(1400, 900); window.show(); events();
     auto* canvas = dynamic_cast<PlanCanvas*>(window.findChild<QWidget*>(QStringLiteral("measurementPlanCanvas")));
-    require(canvas, "native canvas exists"); canvas->setOverviewMapEnabled(false); canvas->setSnapEnabled(false);
+    require(canvas, "native canvas exists"); canvas->setOverviewMapEnabled(false);
+    auto* snap=window.findChild<QToolButton*>(QStringLiteral("snapTool"));
+    require(snap,"native fixture has persistent Snap control");
+    snap->setChecked(false); canvas->setSnapEnabled(false);
     return *canvas;
 }
 void click(PlanCanvas& canvas, Vec2 point, Qt::MouseButton button = Qt::LeftButton) {
@@ -129,7 +134,11 @@ void test_native_precise_lift_and_point_jump() {
     auto* lift=window.findChild<QAction*>(QStringLiteral("liftMeasuredPen")); require(lift,"native Lift measured pen command exists");
     lift->trigger(); click(canvas,{6,7}); click(canvas,{8,7});
     auto snapshot=window.document().snapshot(); std::size_t count=0;
-    for(const auto& [other_id,entity]:snapshot.entities()) if(entity.type=="measurement_linework") { ++count; if(other_id!=id.toStdString()) require(equal(decode_measurement_linework_model(entity.properties.at("model")).model->anchor,{6,7}),"native lift next click is actual anchor without connector"); }
+    for(const auto& [other_id,entity]:snapshot.entities()) if(entity.type=="measurement_linework") { ++count; if(other_id!=id.toStdString()) {
+        const auto anchor=decode_measurement_linework_model(entity.properties.at("model")).model->anchor;
+        if (!equal(anchor,{6,7})) std::cerr<<"lift anchor="<<anchor.x<<","<<anchor.y<<"; "<<window.lastError().toStdString()<<'\n';
+        require(equal(anchor,{6,7}),"native lift next click is actual anchor without connector");
+    } }
     require(count==2,"native pen-up creates second stroke"); window.finishMeasurementLinework();
     require(window.selectEntity(id),"native jump selects saved measured stroke");
     auto* jump=window.findChild<QAction*>(QStringLiteral("jumpBoundaryVertex")); require(jump,"native point jump action exists");
@@ -157,6 +166,61 @@ void test_read_only_projection_and_unknown_model() {
     for(const auto& projected:opaque_canvas.entities()) require(projected.id.toStdString()!=id,"unknown model is never guessed into canvas geometry");
     require(opaque.document().snapshot().entities().at(id)==entity,"unknown model remains opaque and unchanged");
 }
+
+void test_parked_public_input_rejects_replaced_head() {
+    MainWindow seed;
+    require(seed.beginMeasurementLinework() && seed.appendMeasurementLineworkPoint({0,0}) &&
+        seed.appendMeasurementLineworkPoint({2,0}),"parked public-input fixture has a saved measured edge");
+    seed.finishMeasurementLinework();
+    const auto seeded=seed.document().snapshot();
+    const auto source_id=stroke(seeded).id;
+    const auto decoded=decode_measurement_linework_model(stroke(seeded).properties.at("model"));
+    const auto source_vertex=decoded.model->edges.front().start_vertex_id;
+    std::vector<Entity> entities;
+    for (const auto& [id,entity] : seeded.entities()) entities.push_back(entity);
+    const auto asset=Asset::create("public-parked-source","application/octet-stream",{std::byte{1}});
+    for (const bool change_asset : {false,true}) for (const auto operation : {0,1,2,3}) {
+        auto document=std::make_shared<Document>(Document::create(entities,{asset}));
+        MainWindow window(document); auto& canvas=prepare(window); window.setMetricUnits(true);
+        require(window.beginMeasurementLinework() && window.appendMeasurementLineworkPoint({4,4}),
+            "public-input fixture starts an independent exact anchor");
+        QKeyEvent enter(QEvent::KeyPress,Qt::Key_Return,Qt::NoModifier);
+        QApplication::sendEvent(&canvas,&enter); events();
+        require(canvas.boundaryDraftPreview() && !canvas.boundaryDraftPreview()->rubber_band,
+            "public-input fixture parks its native pen");
+        const auto source=window.document().snapshot(); auto altered=source;
+        auto& record=const_cast<std::vector<RevisionRecord>&>(altered.history()).front();
+        if (change_asset) record.assets.at(asset.id)=Asset::create(asset.id,asset.media_type,{std::byte{2}});
+        else record.entities.at(source_id).extensions["replacement_fixture"]=true;
+        window.document()=Document::fork(altered);
+        window.setMetricUnits(true); events();
+        const auto replaced=window.document().snapshot();
+        bool accepted=false;
+        if (operation==0) accepted=window.appendMeasurementLineworkPoint({5,4});
+        else if (operation==1) accepted=window.appendMeasurementLineworkHeading(QStringLiteral("1 m"),QStringLiteral("0 deg"));
+        else if (operation==2) accepted=window.relocateMeasurementLinework({5,4});
+        else accepted=window.jumpMeasurementLineworkVertex(QString::fromStdString(source_id),
+            QString::fromStdString(source_vertex),replaced.revision());
+        const auto rejected=window.document().snapshot();
+        require(!accepted && rejected.revision()==replaced.revision() && rejected.entities()==replaced.entities() &&
+            rejected.assets()==replaced.assets() && document_snapshot_digest(rejected)==document_snapshot_digest(replaced),
+            "public measured pen operations reject same-head source replacement without geometry or history edits");
+        require(window.lastError().contains(QStringLiteral("parked drawing")) && !canvas.boundaryDraftPreview(),
+            "public measured rejection explains the stale context and retires its transient pen");
+        require(window.beginMeasurementLinework() && window.appendMeasurementLineworkPoint({8,8}) &&
+            window.appendMeasurementLineworkPoint({8,10}),"explicit restart can draw a fresh measured edge");
+        const auto restarted=window.document().snapshot(); bool found=false;
+        for (const auto& [id,entity] : restarted.entities()) if (entity.type=="measurement_linework" && id!=source_id) {
+            const auto model=decode_measurement_linework_model(entity.properties.at("model"));
+            require(model.supported(),"restarted public measured edge retains a supported model");
+            const auto replay=replay_measurement_linework(*model.model);
+            require(!found && replay.edges.size()==1 && equal(replay.edges.front().segment.start,{8,8}) &&
+                equal(replay.edges.front().segment.end,{8,10}),"public restart creates one edge from its new anchor");
+            found=true;
+        }
+        require(found,"public restart persists its independent measured stroke");
+    }
+}
 }
 int main(int argc,char** argv) {
     sketch::testing::noninteractive_errors(); QStandardPaths::setTestModeEnabled(true); QApplication application(argc,argv);
@@ -164,7 +228,12 @@ int main(int argc,char** argv) {
     try {
         require(QFontDatabase::addApplicationFont(QStringLiteral(":/fonts/Inter.ttf")) >= 0, "bundled Inter font loads");
         application.setFont(QFont(QStringLiteral("Inter"),10));
+        if (QCoreApplication::arguments().contains(QStringLiteral("--parked-only"))) {
+            test_parked_public_input_rejects_replaced_head();
+            std::cout << "Parked measurement linework tests passed\n"; return 0;
+        }
         test_native_stroke_and_saved_projection(); test_precise_pen_up_jump_and_stale_input(); test_native_precise_lift_and_point_jump(); test_read_only_projection_and_unknown_model();
+        test_parked_public_input_rejects_replaced_head();
     }
     catch(const std::exception& error) { std::cerr << "measurement_linework_desktop_tests: " << error.what() << '\n'; return 1; }
     std::cout << "Measurement linework desktop tests passed\n"; return 0;

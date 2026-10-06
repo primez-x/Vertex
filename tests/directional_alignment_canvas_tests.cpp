@@ -399,6 +399,36 @@ void directional_dispatch_requires_focused_idle_drawing_context() {
     require(input.cursorPosition() == 4 && requests.size() == count,
         "Ctrl+Arrow retains native word navigation in focused text input");
 }
+
+void travel_dispatch_preserves_native_gesture_arbitration() {
+    PlanCanvas canvas;
+    canvas.setAttribute(Qt::WA_DontShowOnScreen,true);
+    canvas.resize(600,400); canvas.show();
+    QApplication::setActiveWindow(&canvas); canvas.setFocus(); events();
+    canvas.setTool(CanvasTool::wall);
+    int jumps=0, walks=0, lifts=0;
+    canvas.setDrawingCornerJumpRequested([&] { ++jumps; return true; });
+    canvas.setDrawingTravelRequested([&](int dx,int dy) { require(dx==1 && dy==0,"travel preserves arrow axis"); ++walks; return true; });
+    canvas.setDrawingPenUpRequested([&] { ++lifts; return true; });
+    key(canvas,Qt::Key_J); key(canvas,Qt::Key_Right); key(canvas,Qt::Key_Return);
+    require(jumps==1 && walks==1 && lifts==1,"idle native keys dispatch corner jump, walk and pen-up");
+    for (const auto modifiers : {Qt::ControlModifier,Qt::ShiftModifier,Qt::AltModifier}) {
+        key(canvas,Qt::Key_J,modifiers); key(canvas,Qt::Key_Right,modifiers);
+    }
+    key(canvas,Qt::Key_J,Qt::NoModifier,true); key(canvas,Qt::Key_Right,Qt::NoModifier,true);
+    canvas.setPointPlacementRequested([](Vec2) {});
+    key(canvas,Qt::Key_J); key(canvas,Qt::Key_Right); key(canvas,Qt::Key_Return);
+    canvas.setPointPlacementRequested({});
+    auto selected=structural("wall",{{{0,0},{1,0},0}});
+    selected.id="selected"; canvas.setEntities({selected}); canvas.setSelectedId("selected");
+    key(canvas,Qt::Key_J); key(canvas,Qt::Key_Right); key(canvas,Qt::Key_Return);
+    canvas.setSelectedIds({});
+    mouse(canvas,QEvent::MouseButtonPress,{0,0},Qt::MiddleButton,Qt::MiddleButton);
+    key(canvas,Qt::Key_J); key(canvas,Qt::Key_Right); key(canvas,Qt::Key_Return);
+    mouse(canvas,QEvent::MouseButtonRelease,{0,0},Qt::MiddleButton);
+    require(jumps==1 && walks==1 && lifts==1,
+        "modifiers, repeats, placement, selection and active pan suppress travel dispatch");
+}
 PlanCanvas& native_canvas(MainWindow& window) {
     window.setMetricUnits(true);
     window.setAttribute(Qt::WA_DontShowOnScreen, true);
@@ -863,6 +893,7 @@ int main(int argc, char** argv) {
         shallow_arc_intersection_keeps_the_first_actual_contact();
         malformed_geometry_and_non_cardinal_directions_fail_closed();
         directional_dispatch_requires_focused_idle_drawing_context();
+        travel_dispatch_preserves_native_gesture_arbitration();
         ctrl_arrow_proposes_exact_native_wall_endpoint();
         native_intersection_shortcut_requires_an_actual_crossing();
         recovered_directional_cursor_keeps_its_transverse_coordinate();

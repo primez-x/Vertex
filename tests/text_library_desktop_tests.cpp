@@ -17,12 +17,14 @@
 #include <QImage>
 #include <QKeyEvent>
 #include <QListWidget>
+#include <QLineEdit>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPdfDocument>
 #include <QPdfSelection>
 #include <QPushButton>
 #include <QTemporaryDir>
+#include <QTabWidget>
 #include <QTimer>
 #include <QVariant>
 
@@ -267,6 +269,75 @@ void actual_dialog_and_canvas_placement_obey_input_and_revision_fences() {
         "read-only transition and direct commands must refuse text mutation");
 }
 
+void inline_library_placement_and_drawing_guard() {
+    QTemporaryDir directory;
+    require(directory.isValid(),"inline labels need a temporary local library");
+    const auto library_path=directory.filePath(QStringLiteral("inline-library.json"));
+    TextLibraryStore store(library_path);const auto entry=reusable();store.upsert(entry);
+    MainWindow window({},nullptr,library_path);display(window);
+    auto* sidebar=window.findChild<QTabWidget*>(QStringLiteral("sidebarTabs"));
+    auto* pages=window.findChild<QTabWidget*>(QStringLiteral("libraryPages"));
+    auto* list=window.findChild<QListWidget*>(QStringLiteral("textLibraryPanelList"));
+    auto* search=window.findChild<QLineEdit*>(QStringLiteral("textLibraryPanelSearch"));
+    require(sidebar&&pages&&list&&search,"Library includes a persistent searchable Labels page");
+    int labels_page=-1;
+    for(int index=0;index<pages->count();++index)
+        if(pages->tabText(index)==QStringLiteral("Labels")) labels_page=index;
+    require(labels_page>=0,"Labels is an explicit Library view");
+    sidebar->setCurrentIndex(1);pages->setCurrentIndex(labels_page);QApplication::processEvents();
+    search->setText(QStringLiteral("Inspection note"));
+    require(list->count()==1,"inline search finds the saved reusable entry");
+    const auto activate=[&] {
+        const auto position=QPointF(list->visualItemRect(list->item(0)).center());
+        QMouseEvent press(QEvent::MouseButtonPress,position,list->viewport()->mapToGlobal(position.toPoint()),
+            Qt::LeftButton,Qt::LeftButton,Qt::NoModifier);
+        QApplication::sendEvent(list->viewport(),&press);
+        QMouseEvent release(QEvent::MouseButtonRelease,position,list->viewport()->mapToGlobal(position.toPoint()),
+            Qt::LeftButton,Qt::NoButton,Qt::NoModifier);
+        QApplication::sendEvent(list->viewport(),&release);
+        QApplication::processEvents();
+    };
+    const auto before=window.document().snapshot();activate();
+    require(!QApplication::activeModalWidget() && window.document().revision()==before.revision(),
+        "one inline click arms text without a dialog or document change");
+    click(canvas(window),{2,1});
+    const auto placed_id=window.selectedEntityId();const auto placed=window.document().snapshot();
+    const auto instance=label(window,placed_id);
+    require(placed.revision()==before.revision()+1 && instance.content==entry.content &&
+        instance.style.font_family==entry.style.font_family && instance.style.text_alignment==entry.style.text_alignment &&
+        instance.placement.layer_id==window.activeLayerId().toStdString(),
+        "inline placement creates one styled label on the active layer");
+    require(window.undoCommand() && window.document().snapshot().entities()==before.entities() && window.redoCommand(),
+        "inline placement is one undoable operation");
+    window.setWorkspaceTheme(sketch::WorkspaceTheme::light);
+    capture(window,QStringLiteral("inline-label-library-light.png"));
+    require(window.selectEntity({}),"clear placed label selection");
+    const auto cancellation_revision=window.document().revision();activate();escape(canvas(window));
+    require(window.document().revision()==cancellation_revision,
+        "cancelling armed inline text creates no document revision");
+    require(window.beginMeasurementLinework() && window.appendMeasurementLineworkPoint({0,0}),
+        "start an anchored measured stroke before testing label arbitration");
+    const auto pending=window.document().snapshot();activate();
+    require(!window.lastError().isEmpty() && window.document().revision()==pending.revision() &&
+        window.document().snapshot().entities()==pending.entities(),
+        "inline label activation refuses to interrupt a measured stroke");
+    require(window.appendMeasurementLineworkHeading(QStringLiteral("2 m"),QStringLiteral("0")),
+        "refused label placement preserves the measured pen for its next edge");
+    window.finishMeasurementLinework();
+    activate();
+    const auto armed=window.document().snapshot();
+    auto property=armed.entities().at("property-1");property.properties["inline_external"]="retained";
+    window.document().apply(sketch::ApplyEntityChanges{armed.revision(),
+        {sketch::EntityChange::upsert(property)}, {}, "inline label external context change"});
+    const auto external=window.document().snapshot();click(canvas(window),{3,1});
+    require(window.document().revision()==external.revision() && window.document().snapshot().entities()==external.entities(),
+        "stale inline placement cannot change a newer project head");
+    window.setWorkspaceTheme(sketch::WorkspaceTheme::dark);capture(window,QStringLiteral("inline-label-library-dark.png"));
+    const auto path=directory.filePath(QStringLiteral("inline-labels.bldproj"));
+    require(window.saveProjectAs(path) && window.openProject(path) && label(window,placed_id).content==entry.content,
+        "inline labels survive normal native save and reopen");
+}
+
 void named_horizontal_plan_inverts_placement() {
     for (const auto direction_z : {-1.0,1.0}) {
         QTemporaryDir directory;
@@ -374,6 +445,7 @@ int main(int argc,char** argv) {
         app.setFont(QFont(QStringLiteral("Inter"),10));
         copied_entries_and_raw_metadata_survive_library_changes();
         actual_dialog_and_canvas_placement_obey_input_and_revision_fences();
+        inline_library_placement_and_drawing_guard();
         named_horizontal_plan_inverts_placement();
         std::cout<<"text_library_desktop_tests passed\n";return 0;
     } catch(const std::exception& error){std::cerr<<"text_library_desktop_tests: "<<error.what()<<'\n';return 1;}

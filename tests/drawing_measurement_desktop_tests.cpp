@@ -1,6 +1,9 @@
 #include "sketch/desktop/main_window.hpp"
+#include "sketch/desktop/drawing_input_panel.hpp"
 #include "sketch/document.hpp"
+#include "sketch/document_digest.hpp"
 #include "sketch/boundary_entity.hpp"
+#include "sketch/measurement_linework.hpp"
 #include "../src/desktop/plan_canvas.hpp"
 #include "support/noninteractive_errors.hpp"
 
@@ -14,8 +17,10 @@
 #include <QLineEdit>
 #include <QListWidget>
 #include <QMenu>
+#include <QPushButton>
 #include <QMouseEvent>
 #include <QStandardPaths>
+#include <QTemporaryDir>
 #include <QTimer>
 #include <QToolButton>
 #include <QUuid>
@@ -485,6 +490,370 @@ void test_idle_selected_object_keeps_context_menu() {
             window.document().snapshot().entities()==before.entities(),
             "idle stationary right click retains the selected object's menu without cancelling selection");
 }
+
+void test_pen_up_travel_and_initial_wall_offset() {
+    MainWindow window;
+    auto& canvas=prepare(window);
+    window.setMetricUnits(true);
+    canvas.setViewTransform({2,1},80);
+    const auto source=window.createStraightWall({0,0},{4,0});
+    require(!source.isEmpty(),"travel fixture creates its structural baseline");
+    require(window.selectEntity({}),"clear structural fixture selection");
+    click(canvas,{-1,1});
+    canvas.setFocus();
+    mouse(canvas,QEvent::MouseMove,screen(canvas,{0,0}));
+    key(canvas,Qt::Key_J);
+    const auto type=[&](const QString& expression) {
+        canvas.setFocus();
+        for (const auto character : expression) {
+            auto* focused=QApplication::focusWidget();
+            require(focused,"travel input retains native focus");
+            key(*focused,character.toUpper().unicode(),QString(character));
+        }
+    };
+    type(QStringLiteral("1.25 m"));
+    auto* input=window.findChild<QLineEdit*>(QStringLiteral("drawingLengthInput"));
+    require(input,"travel fixture has compact exact entry");
+    const auto revision=window.document().revision();
+    key(*input,Qt::Key_Right);
+    require(window.document().revision()==revision,"initial parallel offset does not commit a wall");
+    if (!window.selectedEntityId().isEmpty())
+        throw std::runtime_error((QStringLiteral("initial offset unexpectedly selected: ")+window.selectedEntityId()).toStdString());
+    require(canvas.boundaryDraftPreview() && canvas.boundaryDraftPreview()->pen_position &&
+            close(*canvas.boundaryDraftPreview()->pen_position,{1.25,0}),
+            "initial offset retains its exact parked start after native focus events");
+    mouse(canvas,QEvent::MouseMove,screen(canvas,{3,2}));
+    require(!canvas.wallPreview(),
+        "parked wall offset suppresses hover rubber band");
+    const auto before=window.document().snapshot();
+    type(QStringLiteral("2 m"));
+    if (!window.selectedEntityId().isEmpty())
+        throw std::runtime_error((QStringLiteral("resume typing unexpectedly selected: ")+window.selectedEntityId()).toStdString());
+    key(*input,Qt::Key_Up);
+    const auto after=window.document().snapshot();
+    if (after.revision()==before.revision())
+        throw std::runtime_error((QStringLiteral("perpendicular wall resume: ")+window.lastError()).toStdString());
+    const auto wall=new_wall(before,after);
+    require(close(wall.start,{1.25,0}) && close(wall.end,{1.25,2}),
+        "perpendicular exact input creates the first wall from the offset start");
+    const auto require_parked=[&](Vec2 expected,const char* message) {
+        const auto preview=canvas.boundaryDraftPreview();
+        if (!preview || !preview->pen_position || !close(*preview->pen_position,expected) || canvas.wallPreview())
+            throw std::runtime_error(std::string(message)+"; selected="+window.selectedEntityId().toStdString()+
+                "; error="+window.lastError().toStdString()+"; canvas_focus="+std::to_string(canvas.hasFocus())+
+                "; parked_preview="+std::to_string(preview.has_value())+"; wall_preview="+
+                std::to_string(canvas.wallPreview().has_value()));
+    };
+    key(canvas,Qt::Key_Return);
+    require_parked({1.25,2},"Enter after exact wall commit retains its pen-up endpoint");
+    const auto parked=window.document().snapshot();
+    auto* empty_input=window.findChild<QLineEdit*>(QStringLiteral("drawingLengthInput"));
+    require(empty_input && empty_input->text().isEmpty(),"parked navigation retains empty compact entry");
+    mouse(canvas,QEvent::MouseMove,screen(canvas,{4,0}));
+    empty_input->setFocus();
+    require(empty_input->hasFocus(),"empty compact input owns the keyboard corner-jump event");
+    key(*empty_input,Qt::Key_J);
+    require_parked({4,0},"focused-input corner jump retains the chosen exact endpoint");
+    mouse(canvas,QEvent::MouseMove,screen(canvas,{0,0}));
+    canvas.setFocus();
+    require(canvas.hasFocus(),"canvas owns the keyboard corner-jump event");
+    key(canvas,Qt::Key_J);
+    require_parked({0,0},"canvas corner jump retains the chosen exact endpoint");
+    require(window.document().revision()==parked.revision(),"corner jump has no history edit");
+    canvas.setFocus();
+    require(canvas.hasFocus(),"canvas owns the keyboard endpoint-walk event");
+    key(canvas,Qt::Key_Right);
+    require_parked({4,0},"canvas arrow walks the connected endpoint without drawing");
+    canvas.setFocus();
+    key(canvas,Qt::Key_Left);
+    require_parked({0,0},"canvas return walk retains its pen-up endpoint");
+    empty_input->setFocus();
+    require(empty_input->hasFocus(),"empty compact input owns the keyboard endpoint-walk event");
+    key(*empty_input,Qt::Key_Right);
+    require_parked({4,0},"focused-input arrow walks the connected endpoint without drawing");
+    key(*empty_input,Qt::Key_Left);
+    require_parked({0,0},"focused-input return walk retains its pen-up endpoint");
+    require(window.document().revision()==parked.revision(),"repeated focused-input endpoint walks have no history edit");
+    mouse(canvas,QEvent::MouseMove,screen(canvas,{3,3}));
+    require(!canvas.wallPreview(),"pen-up endpoint walk suppresses hover rubber band");
+    click(canvas,{0,2});
+    if (window.document().revision()==parked.revision())
+        throw std::runtime_error((QStringLiteral("walked wall click resume: ")+window.lastError()).toStdString());
+    const auto resumed=new_wall(parked,window.document().snapshot());
+    require(close(resumed.start,{0,0}) && close(resumed.end,{0,2}),
+        "endpoint walk parks at the connected baseline end and deliberate click resumes");
+    key(canvas,Qt::Key_Return);
+    const auto retained=window.document().snapshot();
+    require(window.selectEntity(source),"parked context fixture deliberately selects an existing wall");
+    input->setText(QStringLiteral("1 m"));
+    key(*input,Qt::Key_Up);
+    require(window.document().revision()==retained.revision() &&
+            window.document().snapshot().entities()==retained.entities() && !window.lastError().isEmpty(),
+            "legitimate selection still rejects parked input without editing geometry");
+}
+
+void test_empty_keypad_enter_matches_keyboard() {
+    DrawingInputPanel panel;
+    panel.setAttribute(Qt::WA_DontShowOnScreen,true);
+    panel.show();
+    auto* toggle=panel.findChild<QToolButton*>(QStringLiteral("drawingKeypadToggle"));
+    require(toggle,"compact drawing input exposes keypad");
+    toggle->click();
+    QPushButton* enter=nullptr;
+    for (auto* button : panel.findChildren<QPushButton*>())
+        if (button->text()==QStringLiteral("Enter")) enter=button;
+    require(enter && enter->isVisible(),"expanded keypad exposes Enter");
+    int empty_command=0, submitted=0;
+    panel.setEmptyCommandRequested([&](int command) { empty_command=command; return true; });
+    panel.setSubmitRequested([&](const QString& text,DrawingCardinalDirection direction) {
+        require(text==QStringLiteral("2 m") && direction==DrawingCardinalDirection::right,
+            "nonempty keypad Enter preserves exact direction submission");
+        ++submitted; return true;
+    });
+    const auto press=[&] {
+        const auto point=QRectF(enter->rect()).center();
+        QMouseEvent down(QEvent::MouseButtonPress,point,enter->mapToGlobal(point.toPoint()),
+            Qt::LeftButton,Qt::LeftButton,Qt::NoModifier);
+        QMouseEvent up(QEvent::MouseButtonRelease,point,enter->mapToGlobal(point.toPoint()),
+            Qt::LeftButton,Qt::NoButton,Qt::NoModifier);
+        QApplication::sendEvent(enter,&down);
+        QApplication::sendEvent(enter,&up);
+        process_events();
+    };
+    press();
+    require(empty_command==Qt::Key_Return && submitted==0,
+        "empty keypad Enter dispatches pen-up rather than direction navigation");
+    panel.beginText(QStringLiteral("2 m"));
+    empty_command=0;
+    press();
+    require(empty_command==0 && submitted==1 && panel.inputText().isEmpty(),
+        "nonempty keypad Enter submits and clears exact input once");
+}
+
+void test_focused_empty_enter_finishes_outline() {
+    MainWindow window;
+    auto& canvas=prepare(window);
+    require(window.beginBoundaryDrawing(BoundaryAuthoringMode::draw_first,QStringLiteral("measurement")),
+        "focused Enter fixture starts an outline");
+    canvas.setSnapEnabled(false);
+    const auto revision=window.document().revision();
+    click(canvas,{0,0}); click(canvas,{2,0}); click(canvas,{2,2});
+    auto* input=window.findChild<QLineEdit*>(QStringLiteral("drawingLengthInput"));
+    require(input && input->text().isEmpty(),"outline retains empty exact input");
+    input->setFocus();
+    key(*input,Qt::Key_Return);
+    require(!canvas.boundaryDraftPreview() && window.document().revision()==revision+1,
+        "empty focused input Enter uses ordinary outline closure exactly once");
+}
+
+void test_measured_typed_travel_and_context_fence() {
+    for (const bool metric : {false,true}) {
+        MainWindow window;
+        auto& canvas=prepare(window);
+        window.setMetricUnits(metric);
+        auto* snap=window.findChild<QToolButton*>(QStringLiteral("snapTool"));
+        require(snap,"typed travel fixture has the persistent Snap control");
+        snap->setChecked(false);
+        canvas.setSnapEnabled(false);
+        canvas.setViewTransform({0,0},80);
+        require(window.beginMeasurementLinework(),"typed travel starts native measured lines");
+        click(canvas,{0,0});
+        click(canvas,{1,0});
+        const auto saved=window.document().snapshot();
+        bool exact_source=false;
+        for (const auto& [id,entity] : saved.entities()) if (entity.type=="measurement_linework") {
+            const auto decoded=decode_measurement_linework_model(entity.properties.at("model"));
+            require(decoded.supported(),"typed travel source retains a supported canonical model");
+            const auto replay=replay_measurement_linework(*decoded.model);
+            require(!exact_source && replay.edges.size()==1 && close(replay.edges.front().segment.start,{0,0}) &&
+                close(replay.edges.front().segment.end,{1,0}),"typed travel starts from the intended unsnapped one-metre source edge");
+            exact_source=true;
+        }
+        require(exact_source,"typed travel fixture persists its exact source edge");
+        canvas.setFocus();
+        key(canvas,Qt::Key_Return);
+        mouse(canvas,QEvent::MouseMove,screen(canvas,{6,4}));
+        canvas.setFocus();
+        key(canvas,Qt::Key_J);
+        const auto type=[&](const QString& expression) {
+            canvas.setFocus();
+            for (const auto character : expression) {
+                auto* focused=QApplication::focusWidget();
+                require(focused,"typed travel keeps native exact input focus");
+                key(*focused,character.toUpper().unicode(),QString(character));
+            }
+        };
+        type(metric ? QStringLiteral("1.234567 m") : QStringLiteral("1 1/8 in"));
+        auto* input=window.findChild<QLineEdit*>(QStringLiteral("drawingLengthInput"));
+        require(input,"typed travel has exact input");
+        key(*input,Qt::Key_Right);
+        const auto travel=metric ? 1.234567 : 1.125*.0254;
+        require(window.document().revision()==saved.revision() &&
+                    window.document().snapshot().entities()==saved.entities(),
+                "typed travel preserves saved measured geometry and history");
+        mouse(canvas,QEvent::MouseMove,screen(canvas,{-3,-2}));
+        const auto parked=canvas.boundaryDraftPreview();
+        if (!parked || !parked->pen_position || !close(*parked->pen_position,{1+travel,0}) || parked->rubber_band)
+            throw std::runtime_error("fractional or metric exact landing remains parked during hover; metric="+
+                std::to_string(metric)+"; expected_x="+std::to_string(1+travel)+"; actual_x="+
+                (parked && parked->pen_position ? std::to_string(parked->pen_position->x) : "unavailable")+
+                "; actual_y="+(parked && parked->pen_position ? std::to_string(parked->pen_position->y) : "unavailable")+
+                "; selected="+window.selectedEntityId().toStdString()+"; error="+window.lastError().toStdString());
+        type(QStringLiteral("2 m"));
+        key(*input,Qt::Key_Up);
+        const auto drawn=window.document().snapshot();
+        if (drawn.revision()!=saved.revision()+1)
+            throw std::runtime_error("typed drawing resumes with one measured edge; selected="+
+                window.selectedEntityId().toStdString()+"; error="+window.lastError().toStdString()+
+                "; metric="+std::to_string(metric));
+        std::optional<Segment> second;
+        for (const auto& [id,entity] : drawn.entities()) if (entity.type=="measurement_linework" &&
+            !saved.entities().contains(id)) {
+            const auto& model=entity.properties.at("model");
+            const auto decoded=decode_measurement_linework_model(model);
+            require(decoded.supported(),"resumed measured stroke retains its supported canonical model");
+            const auto replay=replay_measurement_linework(*decoded.model);
+            require(replay.edges.size()==1,"travel creates no manufactured measured edge");
+            second=replay.edges.front().segment;
+        }
+        require(second && close(second->start,{1+travel,0}) && close(second->end,{1+travel,2}),
+                "resumed measured edge uses its exact relocated start");
+        key(canvas,Qt::Key_Return);
+        window.setMetricUnits(!metric);
+        const auto changed=window.document().snapshot();
+        click(canvas,{2,3});
+        require(window.document().snapshot().entities()==changed.entities() &&
+                    window.document().revision()==changed.revision(),
+                "changed drawing context rejects a parked destination click without geometry");
+        require(!window.lastError().isEmpty(),"context rejection explains why the parked input was not applied");
+    }
+}
+void test_parked_drawing_rejects_replaced_head() {
+    // A refreshed scene must not lend new authority to a retained pen anchor.
+    for (const bool measured : {false,true}) for (const bool change_asset : {false,true})
+        for (const auto operation : {0,1,2,3,4}) {
+            MainWindow seed;
+            const auto source_id=seed.createStraightWall({0,0},{4,0});
+            require(!source_id.isEmpty(),"replacement fixture has a connected structural baseline");
+            const auto seeded=seed.document().snapshot();
+            std::vector<Entity> entities;
+            for (const auto& [id,entity] : seeded.entities()) entities.push_back(entity);
+            auto asset=Asset::create("parked-source","application/octet-stream",{std::byte{1}});
+            auto document=std::make_shared<Document>(Document::create(std::move(entities),{asset}));
+            MainWindow window(document);
+            auto& canvas=prepare(window);
+            window.setMetricUnits(true);
+            auto* snap=window.findChild<QToolButton*>(QStringLiteral("snapTool"));
+            require(snap,"replacement fixture has the persistent Snap control");
+            snap->setChecked(false);
+            canvas.setSnapEnabled(false);
+            canvas.setViewTransform({2,1},80);
+            require(window.selectEntity({}),"replacement fixture starts without a retained selection");
+            if (measured) require(window.beginMeasurementLinework(),"replacement fixture starts measured drawing");
+            // A click on the saved wall selects it in hybrid mode. J explicitly
+            // parks the pen at its exact corner without drawing or picking it.
+            mouse(canvas,QEvent::MouseMove,screen(canvas,{0,0}));
+            canvas.setFocus();
+            require(canvas.hasFocus(),"replacement fixture canvas owns the initial corner jump");
+            key(canvas,Qt::Key_J);
+            const auto parked=canvas.boundaryDraftPreview();
+            if (!parked || !parked->pen_position || !close(*parked->pen_position,{0,0}) || parked->rubber_band)
+                throw std::runtime_error("replacement fixture retains a pen-up anchor before replacing its source; measured="+
+                    std::to_string(measured)+"; asset="+std::to_string(change_asset)+"; operation="+
+                    std::to_string(operation)+"; selected="+window.selectedEntityId().toStdString()+"; error="+
+                    window.lastError().toStdString()+"; parked_preview="+std::to_string(parked.has_value())+
+                    "; wall_preview="+std::to_string(canvas.wallPreview().has_value()));
+            const auto source=window.document().snapshot();
+            auto altered=source;
+            auto& record=const_cast<std::vector<RevisionRecord>&>(altered.history()).front();
+            if (change_asset) record.assets.at(asset.id)=Asset::create(asset.id,asset.media_type,{std::byte{2}});
+            else record.entities.at(source_id.toStdString()).extensions["replacement_fixture"]=true;
+            window.document()=Document::fork(altered);
+            const auto replaced=window.document().snapshot();
+            require(replaced.document_id()==source.document_id() && replaced.revision()==source.revision() &&
+                (change_asset ? replaced.assets()!=source.assets() : replaced.entities()!=source.entities()),
+                "replacement preserves document identity and revision while changing retained authority");
+            // Refresh projection without changing units, layer, tool or selection.
+            window.setMetricUnits(true); process_events();
+            auto* input=window.findChild<QLineEdit*>(QStringLiteral("drawingLengthInput"));
+            require(input,"replaced source still exposes the native parked input before rejection");
+            if (operation==0) { input->setFocus(); input->setText(QStringLiteral("1 m")); key(*input,Qt::Key_Right); }
+            else if (operation==1) click(canvas,{0,2});
+            else if (operation==2) {
+                mouse(canvas,QEvent::MouseMove,screen(canvas,{4,0}));
+                canvas.setFocus();
+                require(canvas.hasFocus(),"replaced-source canvas owns its corner-jump event");
+                key(canvas,Qt::Key_J);
+            } else {
+                input->setFocus();
+                require(input->hasFocus(),"replaced-source compact input owns its empty command event");
+                key(*input,operation==3 ? Qt::Key_Right : Qt::Key_Return);
+            }
+            const auto rejected=window.document().snapshot();
+            require(rejected.revision()==replaced.revision() && rejected.entities()==replaced.entities() &&
+                rejected.assets()==replaced.assets() && document_snapshot_digest(rejected)==document_snapshot_digest(replaced),
+                "stale parked input preserves every entity, asset and history record");
+            require(window.lastError().contains(QStringLiteral("parked drawing")) && !canvas.boundaryDraftPreview(),
+                "stale parked input explains the changed source and retires the old anchor");
+            click(canvas,{6,6});
+            require(window.document().revision()==replaced.revision(),"fresh restart creates no connector from a stale anchor");
+            click(canvas,{6,8});
+            const auto restarted=window.document().snapshot();
+            if (!measured) {
+                const auto segment=new_wall(replaced,restarted);
+                require(close(segment.start,{6,6}) && close(segment.end,{6,8}),"fresh wall restarts from the deliberate new anchor");
+            } else {
+                std::optional<Segment> segment;
+                for (const auto& [id,entity] : restarted.entities()) if (entity.type=="measurement_linework" && !replaced.entities().contains(id)) {
+                    const auto decoded=decode_measurement_linework_model(entity.properties.at("model"));
+                    require(decoded.supported(),"fresh measured restart retains its canonical model");
+                    const auto replay=replay_measurement_linework(*decoded.model);
+                    require(replay.edges.size()==1 && !segment,"fresh measured restart persists one independent edge");
+                    segment=replay.edges.front().segment;
+                }
+                require(segment && close(segment->start,{6,6}) && close(segment->end,{6,8}),"fresh measured restart uses the deliberate new anchor");
+            }
+        }
+}
+
+void test_parked_drawing_history_workspace_and_reopen_fences() {
+    for (const bool measured : {false,true}) {
+        MainWindow window;
+        auto& canvas=prepare(window);
+        window.setMetricUnits(true);
+        auto* snap=window.findChild<QToolButton*>(QStringLiteral("snapTool"));
+        require(snap,"history fixture has the persistent Snap control");
+        snap->setChecked(false); canvas.setSnapEnabled(false);
+        if (measured) require(window.beginMeasurementLinework(),"history fixture starts measured drawing");
+        click(canvas,{0,0}); click(canvas,{2,0});
+        const auto saved=window.document().snapshot();
+        canvas.setFocus(); key(canvas,Qt::Key_Return);
+        window.setWorkspace(Workspace::architectural);
+        require(window.workspace()==Workspace::measurement && window.document().snapshot().entities()==saved.entities() &&
+            !window.lastError().isEmpty(),"workspace transition refuses a live parked pen without editing committed geometry");
+        require(window.undoCommand(),"parked undo retires its pen and undoes the committed edge");
+        require(!canvas.boundaryDraftPreview() && !canvas.wallPreview(),"undo removes the retired parked preview");
+        require(window.redoCommand() && window.document().snapshot().entities()==saved.entities(),"redo restores the committed geometry exactly");
+        click(canvas,{6,6});
+        require(window.document().snapshot().entities()==saved.entities(),"redo does not restore a stale parked anchor");
+        key(canvas,Qt::Key_Return);
+        key(canvas,Qt::Key_Escape);
+        window.setWorkspace(Workspace::architectural);
+        require(window.workspace()==Workspace::architectural,"cancelled parked pen permits the workspace transition");
+        window.setWorkspace(Workspace::measurement);
+        click(canvas,{7,7});
+        require(window.document().snapshot().entities()==saved.entities(),"workspace return begins a new anchor without a stale connector");
+        key(canvas,Qt::Key_Return);
+        QTemporaryDir directory;
+        const auto path=directory.filePath(QStringLiteral("parked.bldproj"));
+        require(window.saveProjectAs(path) && window.openProject(path),"parked project saves and reopens through the native transition");
+        require(!canvas.boundaryDraftPreview() && !canvas.wallPreview(),"reopen retires every local parked preview");
+        const auto reopened=window.document().snapshot();
+        click(canvas,{8,8});
+        require(window.document().snapshot().entities()==reopened.entities() && window.document().revision()==reopened.revision(),
+            "reopened drawing creates a fresh anchor without reconnecting the former parked pen");
+    }
+}
 } // namespace
 
 int main(int argc,char** argv) {
@@ -496,6 +865,16 @@ int main(int argc,char** argv) {
     const auto font=QFontDatabase::addApplicationFont(QStringLiteral(":/fonts/Inter.ttf"));
     if (font>=0) QApplication::setFont(QFont(QFontDatabase::applicationFontFamilies(font).front(),10));
     try {
+        if (QCoreApplication::arguments().contains(QStringLiteral("--travel-only"))) {
+            test_empty_keypad_enter_matches_keyboard();
+            test_focused_empty_enter_finishes_outline();
+            test_pen_up_travel_and_initial_wall_offset();
+            test_measured_typed_travel_and_context_fence();
+            test_parked_drawing_rejects_replaced_head();
+            test_parked_drawing_history_workspace_and_reopen_fences();
+            std::cout<<"Drawing travel tests passed\n";
+            return 0;
+        }
         if (QCoreApplication::arguments().contains(QStringLiteral("--overview-navigation-only"))) {
             test_overview_navigation_preserves_native_authoring_drafts();
             std::cout<<"Overview authoring navigation tests passed\n";
@@ -509,6 +888,12 @@ int main(int argc,char** argv) {
         test_mouse_wall_and_measurement_closure_retain_exact_off_grid_anchor();
         test_new_symbol_placement_right_cancel();
         test_idle_selected_object_keeps_context_menu();
+        test_pen_up_travel_and_initial_wall_offset();
+        test_empty_keypad_enter_matches_keyboard();
+        test_focused_empty_enter_finishes_outline();
+        test_measured_typed_travel_and_context_fence();
+        test_parked_drawing_rejects_replaced_head();
+        test_parked_drawing_history_workspace_and_reopen_fences();
     } catch (const std::exception& error) {
         std::cerr<<"drawing_measurement_desktop_tests: "<<error.what()<<'\n';
         return 1;

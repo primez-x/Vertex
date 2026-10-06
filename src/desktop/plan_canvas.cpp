@@ -1938,6 +1938,16 @@ void PlanCanvas::setDirectionalAlignmentRequested(std::function<void(int, int, b
     m_directional_alignment_requested = std::move(callback);
 }
 
+void PlanCanvas::setDrawingCornerJumpRequested(std::function<bool()> callback) {
+    m_drawing_corner_jump_requested = std::move(callback);
+}
+void PlanCanvas::setDrawingTravelRequested(std::function<bool(int, int)> callback) {
+    m_drawing_travel_requested = std::move(callback);
+}
+void PlanCanvas::setDrawingPenUpRequested(std::function<bool()> callback) {
+    m_drawing_pen_up_requested = std::move(callback);
+}
+
 void PlanCanvas::setAutoCloseDrawingRequested(std::function<void()> callback) {
     m_auto_close_drawing_requested = std::move(callback);
 }
@@ -4177,6 +4187,25 @@ void PlanCanvas::wheelEvent(QWheelEvent* event) {
 
 void PlanCanvas::keyPressEvent(QKeyEvent* event) {
     if (event->key() != Qt::Key_Space) m_pending_dimension_space_tap.reset();
+    if (hasFocus() && event->modifiers() == Qt::NoModifier && !event->isAutoRepeat() &&
+        drawingCommandIdle() && !m_point_placement_requested && selectedIds().isEmpty() &&
+        (m_tool == CanvasTool::select || m_tool == CanvasTool::wall || m_tool == CanvasTool::boundary)) {
+        bool consumed = false;
+        if (event->key() == Qt::Key_J && m_drawing_corner_jump_requested)
+            consumed = m_drawing_corner_jump_requested();
+        else if (m_drawing_travel_requested) {
+            int dx = 0, dy = 0;
+            switch (event->key()) {
+            case Qt::Key_Right: dx = 1; break;
+            case Qt::Key_Left: dx = -1; break;
+            case Qt::Key_Up: dy = 1; break;
+            case Qt::Key_Down: dy = -1; break;
+            default: break;
+            }
+            if (dx || dy) consumed = m_drawing_travel_requested(dx, dy);
+        }
+        if (consumed) { event->accept(); return; }
+    }
     if ((event->key() == Qt::Key_H || event->key() == Qt::Key_V) &&
         hasFocus() && event->modifiers() == Qt::NoModifier && !event->isAutoRepeat() &&
         drawingCommandIdle() && !m_point_placement_requested &&
@@ -4266,6 +4295,11 @@ void PlanCanvas::keyPressEvent(QKeyEvent* event) {
         // Navigation may already have abandoned a selected proposal. Never
         // fall through to ordinary Finish while that gesture is still active.
         if (event->modifiers() != Qt::NoModifier || !drawingCommandIdle()) {
+            event->accept();
+            return;
+        }
+        if (!m_point_placement_requested && selectedIds().isEmpty() &&
+            m_drawing_pen_up_requested && m_drawing_pen_up_requested()) {
             event->accept();
             return;
         }

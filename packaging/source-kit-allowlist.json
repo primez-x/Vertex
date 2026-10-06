@@ -1527,6 +1527,34 @@
     },
     {
       "category": "docs",
+      "path": "docs/delivery/compatibility-acquisition.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/delivery/component-qualification.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/delivery/plan.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/delivery/progress.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/delivery/README.md"
+    },
+    {
+      "category": "docs",
+      "path": "docs/delivery/requirements.json"
+    },
+    {
+      "category": "docs",
+      "path": "docs/delivery/user-feedback.md"
+    },
+    {
+      "category": "docs",
       "path": "docs/dependencies/cad-runtime.md"
     },
     {
@@ -3271,6 +3299,10 @@
     },
     {
       "category": "source",
+      "path": "include/sketch/desktop/text_library_panel.hpp"
+    },
+    {
+      "category": "source",
       "path": "include/sketch/detail/persistent_sequence.hpp"
     },
     {
@@ -3772,6 +3804,10 @@
     {
       "category": "source",
       "path": "scripts/completion_audit.py"
+    },
+    {
+      "category": "source",
+      "path": "scripts/delivery_registry.py"
     },
     {
       "category": "source",
@@ -4632,6 +4668,10 @@
     {
       "category": "source",
       "path": "src/desktop/text_library_dialog.cpp"
+    },
+    {
+      "category": "source",
+      "path": "src/desktop/text_library_panel.cpp"
     },
     {
       "category": "source",
@@ -5611,6 +5651,10 @@
     },
     {
       "category": "source",
+      "path": "tests/test_delivery_registry.py"
+    },
+    {
+      "category": "source",
       "path": "tests/test_distribution_inventory.py"
     },
     {
@@ -5724,6 +5768,10 @@
     {
       "category": "source",
       "path": "tests/text_library_desktop_tests.cpp"
+    },
+    {
+      "category": "source",
+      "path": "tests/text_library_panel_tests.cpp"
     },
     {
       "category": "source",

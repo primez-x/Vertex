@@ -110,12 +110,14 @@ commit requires a separate, explicitly designed transaction/reconciliation path.
 The boundary is injectable and all its operations, including abandonment and
 destruction, must be nonblocking. The dispatcher enforces acceptance deadlines;
 it cannot interrupt a boundary implementation that blocks or prevent a dishonest
-worker from writing externally. No native subprocess launcher, IPC transport,
-OS sandbox, worker kill/reap implementation or vendor adapter is supplied here.
-The synthetic boundary is **not proof of process isolation**. A production
-transport must provide that isolation and bounded lifecycle independently, encode
-and validate wire replies, enforce preparation-only authority, and translate
-vendor-specific failures before it can be qualified.
+worker from writing externally. The opt-in
+[Windows appraisal transport](appraisal-native-transport.md) supplies no-window
+subprocess launch, bounded framed IPC and Job Object kill/reap handling. These
+trusted-local transport facilities do not establish an OS sandbox, a vendor
+adapter, or a qualified caller protocol. Synthetic boundaries and transport
+fixtures are **not proof of vendor interoperability or process isolation**.
+Production adapters must qualify restricted deployment, lifecycle and wire
+replies, preparation-only authority and vendor-specific failures independently.
 
 Synthetic tests establish DTO validation, deterministic round trips,
 selected-field safety, mapping failure behavior and the dispatcher state machine.

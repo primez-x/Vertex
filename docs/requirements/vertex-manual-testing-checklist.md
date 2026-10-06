@@ -1,6 +1,6 @@
 # Vertex user testing checklist
 
-423 practical tasks, grouped by how you use the app (including U100a). This replaces the earlier engineering-oriented checklist. The old 130-item list is preserved separately as engineering-requirements-checklist.md.
+450 practical tasks, grouped by how you use the app (U001–U449 plus U100a). This replaces the earlier engineering-oriented checklist. The old 130-item list is preserved separately as engineering-requirements-checklist.md.
 
 This is a user acceptance list for the intended app, not a claim that every listed action is implemented or working in the current preview. If you cannot find a control, or a feature is absent, mark **Blocked / missing** and describe it. Specialized sections can be skipped if you do not use them or lack the device or sample files.
 
@@ -219,7 +219,7 @@ Start with the workspace, draw a room, close it with the mouse, drag-select it, 
 
 ## Draw rooms and measured boundaries
 
-Choose **Measurement** in the left panel before testing measured-boundary
+Choose **Area** in Draw in the left panel before testing measured-boundary
 drawing below. **Wall** draws physical walls and is the default for a new
 drawing; switching modes does not change existing geometry.
 
@@ -243,8 +243,8 @@ drawing; switching modes does not change existing geometry.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
-- [ ] **U033 — Finish an unfinished polygon with right-click**
-  - Expected: You can complete the drawing without adding an unwanted node.
+- [ ] **U033 — Cancel pending drawing with right-click**
+  - Expected: A stationary right-click cancels the pending segment or unplaced object without adding a node. Committed walls and measured segments persist; a completed area remains. Right-drag pans without cancelling.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
@@ -333,13 +333,13 @@ drawing; switching modes does not change existing geometry.
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U050 — Automatically close a nearly finished boundary**
-  - Steps: In Wall mode, draw three sides of a rectangle and press A. Inspect the closing wall and its dimensions, then Undo and Redo. Repeat in Measurement mode. In Define First, place each side's dimension before pressing A, then move the pointer to position the closing dimension and press Enter to anchor it. Also try clicking to place a dimension. Try A with only one side or an outline whose closing edge crosses another side.
+  - Steps: In Wall mode, draw three sides of a rectangle and press A. Inspect the closing wall and its dimensions, then Undo and Redo. Repeat in Area mode. In Define First, place each side's dimension before pressing A, then move the pointer to position the closing dimension and press Enter to anchor it. Also try clicking to place a dimension. Try A with only one side or an outline whose closing edge crosses another side.
   - Expected: A adds the remaining side to the original starting point using normal wall or measurement geometry. Define First waits for the closing dimension instead of placing it automatically. Invalid closure is explained without adding geometry. In an Appraisal/Exterior project, closing the wall outline also creates its exterior measurement in the same undoable operation.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U051 — Complete a bay-window shape**
-  - Steps: In Wall mode, begin an outline, draw an angled side outward and a straight bay front, then press B. Continue drawing the surrounding outline. Undo and Redo the return before closing. Repeat in Measurement mode, using Complete bay-window return from Commands. In Define First, place the pending dimensions before pressing B. Save and reopen the completed drawing.
+  - Steps: In Wall mode, begin an outline, draw an angled side outward and a straight bay front, then press B. Continue drawing the surrounding outline. Undo and Redo the return before closing. Repeat in Area mode, using Complete bay-window return from Commands. In Define First, place the pending dimensions before pressing B. Save and reopen the completed drawing.
   - Expected: B adds one matching angled return with the same length as the first angled side. Drawing remains active; the application does not close across the bay opening. The return has the normal wall thickness or measurement dimensions. Undo removes only the return and Redo restores it. The finished drawing and dimensions survive reopening.
   - Also try: Press B after only one side, after a curved side, with Ctrl held, and while entering a name in a text field. Try an invalid backwards bay.
   - Expected: Invalid geometry is explained without adding a side. Modified keys and typing do not trigger bay completion.
@@ -696,7 +696,7 @@ drawing; switching modes does not change existing geometry.
 ## Symbols, furniture and component library
 
 - [ ] **U109 — Open the visible component library**
-  - Expected: The left-panel Symbols tab opens without a modal. All categories reports 322 placeable components, including the supplied SVG library and two overhead wall cabinets. Search for base cabinet, wall cabinet, and fridge. Old procedural compatibility definitions do not clutter the placement list.
+  - Expected: The left-panel Library tab opens without a modal. Search for base cabinet, wall cabinet, and fridge; each has recognizable artwork and a useful physical size. Browse all categories and verify distinct useful families. Old procedural compatibility definitions do not clutter the placement list; aliases and resized duplicates do not count as new artwork.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
@@ -951,8 +951,8 @@ drawing; switching modes does not change existing geometry.
 ## Walls, doors and windows in 2D and 3D
 
 - [ ] **U156 — Draw a straight architectural wall**
-  - Steps: Start a new project. Confirm Wall is the drawing mode without choosing a separate Draw tool. Enter thickness and height in the Library tab, then click the start and end. Click two more endpoints to extend the chain, then press Escape. Drag empty canvas to pan. Select a wall, drag inside its selection to move it, then click outside once to deselect before starting another wall. Choose Measurement and draw a closed appraisal boundary.
-  - Expected: Both wall faces appear at the entered thickness during preview and after placement, with a live length and retained wall measurements. Escape keeps completed walls. Preview and committed endpoints agree. Measurement creates an area rather than another wall. 3D shows the same physical walls. Changing thickness later updates the footprint; wall length labels agree in print/export and after save/reopen.
+  - Steps: Start a new project. Confirm Wall is the drawing mode without choosing a separate Draw tool. Enter thickness and height in the Library tab, then click the start and end. Click two more endpoints to extend the chain, then press Escape. Drag empty canvas to pan. Select a wall, drag inside its selection to move it, then click outside once to deselect before starting another wall. Choose Area and draw a closed appraisal boundary.
+  - Expected: Both wall faces appear at the entered thickness during preview and after placement, with a live length and retained wall measurements. Escape keeps completed walls. Preview and committed endpoints agree. Area creates a measured boundary rather than another wall. 3D shows the same physical walls. Changing thickness later updates the footprint; wall length labels agree in print/export and after save/reopen.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
@@ -1299,11 +1299,13 @@ drawing; switching modes does not change existing geometry.
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U220 — Open print preview**
+  - Steps: Choose the output page in **Sheet settings**, set the plan viewport's scale in **Sheet layout manager…**, then open **Print selected sheet (draft)**.
   - Expected: The preview matches the selected sheet, orientation and scale.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U221 — Export PDF**
+  - Steps: Use **Export selected sheet PDF** for the selected page at its declared viewport scale. Also use **Export sketch PDF** and compare its tight crop of the visible drawing; that sketch is for report insertion and does not establish physical sheet scale.
   - Expected: Text, lines, dimensions, fills and symbols are present and readable.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
@@ -1319,6 +1321,7 @@ drawing; switching modes does not change existing geometry.
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U224 — Print a measured line on paper**
+  - Steps: Set the viewport scale in **Sheet layout manager…**, use **Print selected sheet (draft)** and print at actual size without fitting to the printer page. Measure a known line on the paper.
   - Expected: The physical length agrees with the chosen print scale.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
@@ -1621,7 +1624,7 @@ drawing; switching modes does not change existing geometry.
   - Notes / steps to reproduce: ____________________
 
 - [ ] **U278 — Print the automatic appraisal area summary**
-  - Expected: Create and qualify a 10 ft × 10 ft above-grade finished dwelling boundary. Open **Sheet layout...**, add **Appraisal area summary**, and export the drawing set to PDF. The sheet shows Qualified under the declared Vertex policy, Above-grade finished (GLA) at 100.00 ft², and matching property/building/floor totals. Remove a required appraisal fact and export again; the sheet says **Unqualified - automatic totals withheld** and contains no appraisal area values.
+  - Expected: Create and qualify a 10 ft × 10 ft above-grade finished dwelling boundary. Open **Sheet layout manager…**, add **Appraisal area summary**, and use **Export drawing set PDF**. The sheet shows Qualified under the declared Vertex policy, Above-grade finished (GLA) at 100.00 ft², and matching property/building/floor totals. Remove a required appraisal fact and export again; the sheet says **Unqualified - automatic totals withheld** and contains no appraisal area values.
   - Result: Not tested
   - Notes / steps to reproduce: ____________________
 
@@ -1793,7 +1796,7 @@ drawing; switching modes does not change existing geometry.
   - Notes: ______________________________
 
 - [ ] **U305 — Add a plan sheet with an appraisal summary**
-  - Steps: Draw a qualified appraisal plan. Open **Sheet layout…**, select a horizontal plan and click **Create appraisal plan sheet**. Cancel once, then repeat and accept. Adjust scale if needed. Undo, redo, save, reopen and export the drawing set to PDF.
+  - Steps: Draw a qualified appraisal plan. Open **Sheet layout manager…**, select a horizontal plan and click **Create appraisal plan sheet**. Cancel once, then repeat and accept. Adjust scale if needed. Undo, redo, save, reopen and use **Export drawing set PDF**.
   - Expected: Cancel adds nothing. Accept adds one A3 page with a large plan and separate area summary while preserving the previous sheets. One Undo removes the entire addition; Redo restores it. Reopening and PDF retain both placements and the qualified quantities. A summary too long for its box identifies omitted rows and points to the complete report.
   - Result: Not tested
   - Notes: ______________________________
@@ -1852,7 +1855,7 @@ drawing; switching modes does not change existing geometry.
   - Notes: ______________________________
 
 - [ ] **U313 — Enter a measured outline without opening a dialog for every edge**
-  - Steps: Choose Measurement, click a start point and type lengths followed by Right, Up and Left. Undo and Redo an unfinished edge, then press Enter on the canvas to close. Repeat through Define First, placing each requested dimension before entering the next edge.
+  - Steps: Choose Area, click a start point and type lengths followed by Right, Up and Left. Undo and Redo an unfinished edge, then press Enter on the canvas to close. Repeat through Define First, placing each requested dimension before entering the next edge.
   - Expected: Typed measurements retain their units. Draft Undo/Redo leaves the saved drawing unchanged until closure; the completed area is one undoable operation. Define First waits for each dimension placement. The existing D dialog remains available for angles and curves.
   - Result: Not tested
   - Notes: ______________________________
@@ -2186,7 +2189,7 @@ drawing; switching modes does not change existing geometry.
 ## Keyboard alignment while drawing
 
 - [ ] **U365 — Align a side with the outline's starting point**
-  - Steps: Start an outline in Wall mode and draw two sides ending diagonally from the starting point. Check the X and Y guide choices. Press X; inspect the proposed horizontal side, then press Enter to accept it. Repeat with Y for a vertical side. Continue and close the outline. Repeat in Measurement mode and in Define First, placing each dimension before proposing the next side. Undo, Redo, save and reopen.
+  - Steps: Start an outline in Wall mode and draw two sides ending diagonally from the starting point. Check the X and Y guide choices. Press X; inspect the proposed horizontal side, then press Enter to accept it. Repeat with Y for a vertical side. Continue and close the outline. Repeat in Area mode and in Define First, placing each dimension before proposing the next side. Undo, Redo, save and reopen.
   - Expected: X ends the next horizontal side at the starting point's X coordinate. Y ends the next vertical side at its Y coordinate. The guide shows its length. X/Y preview a side without creating it; Enter commits the exact proposed endpoint. The starting point and previous sides stay in place. The committed side uses normal dimensions and drawing history.
   - Also try: Move the mouse after proposing a side, cancel with Escape, use X/Y while typing in a name field, and hold Ctrl while pressing them. Change the active layer or undo an earlier side before accepting a proposal.
   - Expected: An abandoned or stale proposal cannot commit. Typing and modified keys keep their ordinary behavior. A zero-length alignment is unavailable.
@@ -2194,7 +2197,7 @@ drawing; switching modes does not change existing geometry.
   - Notes: ______________________________
 
 - [ ] **U366 — Align a drawing side with other walls using the arrow keys**
-  - Steps: Draw a wall above the area where you will draw another outline. Start that outline below it. Press Ctrl+Right repeatedly to preview alignment with the existing wall's endpoint X coordinates, then Enter to accept the desired side. Try the other arrow directions. Press Ctrl+Shift+Arrow toward a wall crossing the cursor's horizontal or vertical path. Repeat in Measurement and Define First, placing each pending dimension before the next side. Try the same operations from Tools → Directional alignment. Undo, Redo, save and reopen the finished drawing.
+  - Steps: Draw a wall above the area where you will draw another outline. Start that outline below it. Press Ctrl+Right repeatedly to preview alignment with the existing wall's endpoint X coordinates, then Enter to accept the desired side. Try the other arrow directions. Press Ctrl+Shift+Arrow toward a wall crossing the cursor's horizontal or vertical path. Repeat in Area and Define First, placing each pending dimension before the next side. Try the same operations from Tools → Directional alignment. Undo, Redo, save and reopen the finished drawing.
   - Expected: Ctrl+Arrow advances through visible structural endpoint coordinates without changing the other coordinate. Ctrl+Shift+Arrow stops at an actual line or curve intersection in that direction. The guide displays the proposed length, and only Enter creates the side. A direction with no target leaves the cursor and proposal unchanged. Accepted geometry and dimensions use normal history and persist after reopening.
   - Also try: Move the pointer after proposing a side, change the displayed scene, type Ctrl+Arrow inside a text field, and use the keys during canvas dragging. Hide the target wall's layer. Place a symbol or reference image near the proposed path.
   - Expected: Abandoned or stale proposals cannot commit. Text navigation and canvas dragging remain available. Hidden walls, symbol artwork, reference images and grid lines do not become alignment targets.
@@ -2204,7 +2207,7 @@ drawing; switching modes does not change existing geometry.
 ## Reviewing measured-area sources
 
 - [ ] **U367 — Reassign an appraisal area after its measured lines split it**
-  - Steps: In Measurement draw mode, create a closed outline with an internal divider and define its areas. Set one area's facts to dwelling and another to garage. Add another divider that splits the dwelling. Select its retained area, open Details and click Review measured sources (also available by right-clicking the area). Choose a face; inspect the blue proposed outline against the gray retained outline. Apply it, resolving any referenced dimensions explicitly. Review the other affected areas as needed. Undo, Redo, save and reopen.
+  - Steps: In Area draw mode, create a closed outline with an internal divider and define its areas. Set one area's facts to dwelling and another to garage. Add another divider that splits the dwelling. Select its retained area, open Details and click Review measured sources (also available by right-clicking the area). Choose a face; inspect the blue proposed outline against the gray retained outline. Apply it, resolving any referenced dimensions explicitly. Review the other affected areas as needed. Undo, Redo, save and reopen.
   - Expected: The selected area keeps its name, classification and facts while adopting only the chosen face. GLA updates after all affected areas and declarations are current. Newly unassigned faces are not silently classified or included. A face already assigned to another current area is unavailable. Cancel changes nothing.
   - Also try: Select a different face, cancel reference review, or change the project/units/layer while the dialog is open. Hide the source layer normally and review through Details.
   - Expected: An abandoned or stale review cannot apply. Normal layer hiding does not alter appraisal totals or invalidate source geometry.
@@ -2648,13 +2651,13 @@ drawing; switching modes does not change existing geometry.
 ## Rooms measured from physical walls
 
 - [ ] **U433 — Create and classify a room inside drawn walls**
-  - Steps: Draw four connected walls to make a closed room. Select one wall and use **Create room boundary from selected geometry** in Commands. Open **Library > Area classes**, choose a classification and apply it to the detected space or its row. Select the room and open **Details**.
+  - Steps: Draw four connected walls to make a closed room. Select one wall and use **Create room boundary from selected geometry** in Commands. Open **Library > Area classes**, choose a classification and apply it to the detected space or its row. Double-click the room to open floating **Properties** and inspect **Area calculation**. The left **Details** tab reports property GLA; creating or classifying this physical room does not qualify or add it to GLA.
   - Expected: A named room follows the clear inside faces of the walls. Its area excludes wall thickness. Applying a classification changes the room's classification without moving walls. Repeating room creation does not create a duplicate current room.
   - Result: Not tested
   - Notes: ______________________________
 
 - [ ] **U434 — Exclude an interior wall from clear room area**
-  - Steps: In a metric test project, draw a 4 m by 3 m rectangle using wall baselines and 0.2 m wall thickness. Add an isolated 2 m long, 0.2 m thick wall entirely inside. Detect and create the room, then select it and open **Details**.
+  - Steps: In a metric test project, draw a 4 m by 3 m rectangle using wall baselines and 0.2 m wall thickness. Add an isolated 2 m long, 0.2 m thick wall entirely inside. Detect and create the room, then double-click it to open floating **Properties** and inspect **Area calculation**. Read property GLA separately in the left **Details** tab; this clear room area is not an additional GLA contribution.
   - Expected: Outer clear area is 10.64 m², the interior wall deducts 0.40 m², and net clear room area is 10.24 m². The room fill excludes the interior wall footprint.
   - Result: Not tested
   - Notes: ______________________________

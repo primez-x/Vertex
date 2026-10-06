@@ -23,6 +23,7 @@ public:
     void setSubmitRequested(std::function<bool(const QString&, DrawingCardinalDirection)> callback);
     void setInputStarted(std::function<void()> callback);
     void setCancelRequested(std::function<void()> callback);
+    void setEmptyCommandRequested(std::function<bool(int)> callback);
     void beginText(const QString& text);
     void clearInput();
     void setError(const QString& error);
@@ -44,6 +45,7 @@ private:
     std::function<bool(const QString&, DrawingCardinalDirection)> m_submitRequested;
     std::function<void()> m_inputStarted;
     std::function<void()> m_cancelRequested;
+    std::function<bool(int)> m_emptyCommandRequested;
     bool m_metricUnits{};
     bool m_hadInput{};
     bool m_updatingPlacement{};

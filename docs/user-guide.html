@@ -32,8 +32,41 @@
   project copy and preserves the original. The application keeps local recovery copies
   while a project is being edited.</p>
 
+  <h2>Draw and furnish a room</h2>
+  <ol>
+    <li>In <strong>Layers</strong>, click the layer that should own the drawing.
+    Choose <strong>Wall</strong> in Draw and set thickness and height in
+    <strong>Library</strong>. Click the room's corners, then its first corner to
+    close the wall loop.</li>
+    <li>Select a wall. Press <kbd>Ctrl</kbd>+<kbd>K</kbd> and choose
+    <strong>Create room boundary from selected geometry</strong>. Name the room,
+    then use <strong>Library &gt; Area classes</strong> to classify it. Double-click
+    the room to open floating Properties and read its clear area under
+    <strong>Area calculation</strong>.</li>
+    <li>Drag furniture from Library onto the plan. Select a placed symbol and
+    use its side handles to adjust its size. Use <strong>Door</strong> or
+    <strong>Window</strong> in Library, choose the style and dimensions, then
+    hover over a wall and click the opening preview.</li>
+    <li>Right-click a wall and choose <strong>Change length…</strong> to review
+    its new length and connected movement. Double-click the wall to change
+    thickness in Properties. A retained room whose wall sources have changed
+    needs an explicit <strong>Tools &gt; Repair room from walls</strong> review.</li>
+    <li>For appraisal, select a perimeter wall and choose
+    <strong>Measure exterior from walls…</strong>. Review and create the separate
+    measurement. Use the left <strong>Details &gt; Setup</strong> and
+    <strong>Edit facts</strong> controls to qualify GLA. Clear room area and
+    property GLA are separate calculations.</li>
+    <li>Save, try Undo and Redo, then reopen the project and check the room,
+    furniture, openings and measurements.</li>
+    <li>Use command search for <strong>Edit sheet layout</strong> to open
+    <strong>Sheet layout manager…</strong>. Set the plan viewport's scale and
+    placement, then use <strong>Export selected sheet PDF</strong> or
+    <strong>Print selected sheet (draft)</strong>. Check that the whole room and
+    its labels fit the sheet. Print at actual size to retain that scale.</li>
+  </ol>
+
   <h2>Drawing in 2D</h2>
-  <p>Choose <strong>Wall</strong> to draw physical walls, or <strong>Measurement</strong>
+  <p>Choose <strong>Wall</strong> to draw physical walls, or <strong>Area</strong>
   to draw an appraisal boundary. Wall is the default. Click to place the start,
   then click each next endpoint. Click the original anchor to close and finish
   the outline, or press <kbd>Esc</kbd> or right-click to cancel the pending wall
@@ -264,7 +297,7 @@
   apply only to that saved view. Hidden views remain in the view selector so you
   can restore them. Reset clears the chosen scope. These settings survive history
   and reopening and use the same scene in the canvas and sheet/PDF output.</p>
-  <p>Choose <strong>Measurement</strong> for appraisal boundaries. Draw a boundary
+  <p>Choose <strong>Area</strong> in Draw for appraisal boundaries. Draw a boundary
   directly, or choose <strong>Define area before drawing</strong> when the classification and
   target area should be established first. Enter distances with units such as
   <code>12 ft 6 in</code>, <code>3/8 in</code>, or <code>4.2 m</code>. Snap, grid, closure,
@@ -392,7 +425,7 @@
   withholding qualified totals. An area with malformed facts or geometry remains
   in the report with its issue and unavailable quantities. Select that row and
   use <strong>Show on canvas</strong> to locate and repair its source.</p>
-  <p>In <strong>Sheet layout…</strong>, choose a horizontal plan and click
+  <p>In <strong>Sheet layout manager…</strong>, choose a horizontal plan and click
   <strong>Create appraisal plan sheet</strong>. This adds an A3 page with a
   1:100 plan and area summary, preserving existing sheets. Adjust its scale and
   placements for the property, then accept. The bounded summary refers to the
@@ -506,11 +539,20 @@
   preserving the open drawing and its later work.</p>
 
   <h2>Output</h2>
-  <p>Use <strong>Print preview</strong>, <strong>Export draft PDF</strong>, or
-  <strong>Export draft SVG</strong>. Choose the paper size in the sheet/output settings and
-  adjust sheet viewports for independent scales. Draft output carries a visible draft
-  marker and a neighboring fingerprint file that records the influencing project and
-  renderer inputs.</p>
+  <p>For output at a chosen physical scale, select the output page in
+  <strong>Sheet settings</strong>, then use <strong>Sheet layout manager…</strong>
+  to set each viewport's scale and placement. Use
+  <strong>Export selected sheet PDF</strong>, <strong>Print selected sheet (draft)</strong>,
+  or <strong>Export draft SVG</strong>. Print the sheet at actual size, without
+  fitting it to the printer page, to retain the selected scale. Use
+  <strong>Export drawing set PDF</strong> for multiple sheets. Draft sheet output
+  carries a visible draft marker and a neighboring fingerprint file that records
+  the influencing project and renderer inputs.</p>
+  <p><strong>Export sketch PDF</strong> saves the visible drawing as a tightly
+  cropped vector image for inserting into a report. Its crop and the
+  <strong>Sketch composition guide</strong> do not establish a physical sheet
+  scale. Use selected-sheet output when a printed measurement must match a
+  declared scale.</p>
 
   <h2>Command search and shortcuts</h2>
   <p>Press <kbd>Ctrl</kbd>+<kbd>K</kbd> and type a command name. The list includes drawing,

@@ -2,6 +2,7 @@
 #include "sketch/annotation_entity_codec.hpp"
 #include "sketch/boundary_dimension.hpp"
 #include "sketch/physical_wall_room.hpp"
+#include "sketch/document_digest.hpp"
 #include "../src/desktop/plan_canvas.hpp"
 #include "support/noninteractive_errors.hpp"
 
@@ -281,6 +282,9 @@ void workflow() {
         auto* preview=dynamic_cast<PlanCanvas*>(dialog.findChild<QWidget*>("physicalRoomRepairCanvas"));
         auto* apply=dialog.findChild<QPushButton*>("physicalRoomRepairApply");
         require(preview && apply && !apply->isEnabled(),"repair has a real preview and requires a picked interior");
+        auto* correspondence=dialog.findChild<QLabel*>("physicalRoomRepairCorrespondence");
+        require(correspondence && correspondence->text().contains("continues in one current space"),
+            "repair displays analytical room correspondence without automatically choosing a destination");
         click(*preview,{2,1}); require(!apply->isEnabled(),"wall-material hole cannot become a repair destination");
         click(*preview,{2,2}); require(apply->isEnabled(),"actual canvas click chooses current room");
         auto* buttons=dialog.findChild<QDialogButtonBox*>(); require(buttons,"repair has cancellation controls");
@@ -288,6 +292,34 @@ void workflow() {
     });
     require(window.document().snapshot().entities()==stale_source.entities() && window.document().revision()==stale_source.revision(),
         "cancel repair leaves exact stale source and revision untouched");
+    // An accepted dialog can emit callbacks before its caller resumes. Retained
+    // Retained history metadata is part of the captured source even when head
+    // geometry, assets, identity and revision are unchanged.
+    std::optional<DocumentSnapshot> expected_replacement;
+    review_room(window,[&](QDialog& dialog) {
+        auto* preview=dynamic_cast<PlanCanvas*>(dialog.findChild<QWidget*>("physicalRoomRepairCanvas"));
+        auto* apply=dialog.findChild<QPushButton*>("physicalRoomRepairApply");
+        require(preview && apply,"replacement review has real destination controls");
+        click(*preview,{2,2}); require(apply->isEnabled(),"replacement review selects a current destination");
+        QObject::connect(&dialog,&QDialog::accepted,&dialog,[&] {
+            auto replaced=window.document().snapshot();
+            auto& records=const_cast<std::vector<RevisionRecord>&>(replaced.history());
+            records.back().action+=" (room review source replacement)";
+            window.document()=Document::fork(replaced);
+            expected_replacement=window.document().snapshot();
+        });
+        apply->click();
+    });
+    const auto replaced=window.document().snapshot();
+    require(expected_replacement.has_value(),"accepted room review exercises a valid same-head retained-history replacement");
+    require(replaced.document_id()==stale_source.document_id() && replaced.revision()==stale_source.revision() &&
+        replaced.entities()==stale_source.entities() && replaced.assets()==stale_source.assets() &&
+        expected_replacement && document_snapshot_digest(replaced)==document_snapshot_digest(*expected_replacement) &&
+        replaced.history().back().action!=stale_source.history().back().action,
+        "same-head replacement is preserved without committing a stale room repair");
+    require(window.lastError().contains("review source changed"),"stale accepted room review explains its full-source refusal");
+    window.document()=Document::fork(stale_source);
+    require(window.selectEntity(id),"fresh room review can restart from the retained source");
     review_room(window,[&](QDialog& dialog) {
         auto* preview=dynamic_cast<PlanCanvas*>(dialog.findChild<QWidget*>("physicalRoomRepairCanvas"));
         auto* apply=dialog.findChild<QPushButton*>("physicalRoomRepairApply"); require(preview && apply,"repair controls exist");

@@ -6,7 +6,7 @@ with the supplied archives. Configuration and compilation do not fetch them.
 The SQLite SHA3 digest was checked against the official download page; the
 manifest additionally records our downloaded SHA256 for repeatable builds.
 
-The original application remains private. Third-party copyrights and license
+Vertex source is public under GPL-3.0-or-later. Third-party copyrights and license
 terms continue to apply. Dynamic LGPL components require their corresponding
 source, license notices, replaceability/relinking rights and any required
 installation information in the eventual distribution. The complete dependency

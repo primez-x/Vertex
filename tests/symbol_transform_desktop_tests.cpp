@@ -15,6 +15,8 @@
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDir>
+#include <QElapsedTimer>
+#include <QEventLoop>
 #include <QImage>
 #include <QKeyEvent>
 #include <QLineEdit>
@@ -303,6 +305,7 @@ void requireRenderedDegrees(sketch::desktop::PlanCanvas& canvas, double degrees)
 void rotateGesture(sketch::desktop::PlanCanvas& canvas, double from, double to,
                    Qt::KeyboardModifiers modifiers = Qt::NoModifier,
                    std::optional<double> expected_live_degrees = std::nullopt) {
+    QApplication::processEvents();
     if (expected_live_degrees) canvas.setCanvasBackground(Qt::white);
     canvas.setSnapEnabled(false);
     canvas.setOverviewMapEnabled(false);
@@ -330,18 +333,19 @@ void rotateGesture(sketch::desktop::PlanCanvas& canvas, double from, double to,
     require(axes && std::isfinite(axes->depth_metres) && axes->depth_metres > 0 &&
                 close_enough(std::remainder(axes->rotation_radians-from, 2*std::acos(-1.0)), 0),
             "rotation fixture must start at its retained oriented pin");
-    const auto stroke = selected->type == QStringLiteral("wall") && selected->segments.size() == 1
-        ? std::max(selected->thickness_metres, .04) : selected->stroke_width_metres;
-    const auto padding = std::isfinite(stroke) && stroke > 0
-        ? 6.0 + stroke*canvas.viewScale()*.5 : 7.5;
-    const auto depth = std::max(44.0, axes->depth_metres*canvas.viewScale() + 2*padding);
-    const auto radius = depth*.5 + 24.0;
     const auto view_center = canvas.viewCenter();
     const auto center = QRectF(canvas.rect()).center() + QPointF(
         (axes->center.x-view_center.x)*canvas.viewScale(),
         -(axes->center.y-view_center.y)*canvas.viewScale());
+    // Annotation avoidance can move the painted pin. Press its actual public
+    // position, retaining the same semantic angle and pivot assertions.
+    const auto handle=canvas.selectionRotationHandlePosition();
+    require(handle.has_value(),"rotation fixture exposes its painted pin");
+    const auto vector=*handle-center;
     const auto pin = [&](double angle) {
-        return center + QPointF(-std::sin(angle)*radius, -std::cos(angle)*radius);
+        const auto turn=-(angle-from);
+        return center+QPointF(vector.x()*std::cos(turn)-vector.y()*std::sin(turn),
+                             vector.x()*std::sin(turn)+vector.y()*std::cos(turn));
     };
     require(QRectF(canvas.rect()).adjusted(12,12,-12,-12).contains(pin(from)),
             "rotation fixture's outward pin is clipped by the viewport");
@@ -362,6 +366,12 @@ void rotateGesture(sketch::desktop::PlanCanvas& canvas, double from, double to,
                 "live rotation capture failed");
     }
     mouse(QEvent::MouseButtonRelease, pin(to));
+    QElapsedTimer completion;
+    completion.start();
+    while (canvas.entityTransformPreviewPending() && completion.elapsed()<5000)
+        QApplication::processEvents(QEventLoop::AllEvents,20);
+    require(!canvas.entityTransformPreviewPending(),
+        "exact rotation preview and release must complete within five seconds");
     QApplication::processEvents();
 }
 
@@ -634,6 +644,9 @@ void requireCommittedGestures(const QTemporaryDir& directory) {
     require(plan != nullptr, "gesture architectural canvas is missing");
     const auto column_before = window.document().revision();
     rotateGesture(*plan, 0, half_pi);
+    if (window.document().revision()!=column_before+1)
+        std::cerr<<"column rotation pending="<<plan->entityTransformPreviewPending()
+                 <<"; "<<window.lastError().toStdString()<<'\n';
     const auto check_column = [&](double angle) {
         const auto model = decode_building_entity(window.document().snapshot().entities().at(column_id.toStdString()));
         const auto& column = std::get<RectangularColumn>(model);

@@ -283,7 +283,10 @@ void test_stale_maps_layer_phase_and_workspace() {
         const auto rejected=window.document().snapshot();
         require(rejected.revision()==source.revision() && rejected.document_id()==source.document_id(), "same identity and revision changed source admits no edge");
         require(asset_change ? rejected.assets()!=source.assets() : rejected.entities()!=source.entities(), "source-map test actually changes its intended authority map");
-        for (const auto& [id,entity] : window.document().snapshot().entities()) require(entity.type!="measurement_linework", "stale source maps cannot create a stroke");
+        {
+            const auto stale_source = window.document().snapshot();
+            for (const auto& [id,entity] : stale_source.entities()) require(entity.type!="measurement_linework", "stale source maps cannot create a stroke");
+        }
     }
     MainWindow layer; auto& layer_canvas=prepare(layer); const auto original=layer.activeLayerId();
     const auto floor=QString::fromStdString(layer.document().snapshot().entities().at(original.toStdString()).properties.at("floor_id").get<std::string>());
@@ -293,7 +296,10 @@ void test_stale_maps_layer_phase_and_workspace() {
     input(layer,layer_canvas,[&](BoundaryInputDialog& dialog) { require(layer.setActiveLayer(sibling), "change precision source layer"); accept(dialog); });
     require(layer.document().snapshot().entities()==layer_before.entities(), "obsolete layer dialog creates no measured edge");
     MainWindow phase; auto& phase_canvas=prepare(phase); std::vector<std::string> registry;
-    for (const auto& [id,entity] : phase.document().snapshot().entities()) if (entity.type=="building" || entity.type=="floor") registry.push_back(id);
+    {
+        const auto registry_source = phase.document().snapshot();
+        for (const auto& [id,entity] : registry_source.entities()) if (entity.type=="building" || entity.type=="floor") registry.push_back(id);
+    }
     const auto phases=ModelPhases::create(registry,registry,{{"precision-alternative","Precision alternative",{}, {}}});
     phase.document().apply(ApplyEntityChanges{.expected_revision=phase.document().revision(),
         .entity_changes={EntityChange::upsert(Entity::create("model_phases",{{"model",phases.to_json()}}))},.message="precision phase fixture"});
@@ -301,7 +307,10 @@ void test_stale_maps_layer_phase_and_workspace() {
     const auto phase_revision=phase.document().revision();
     input(phase,phase_canvas,[&](BoundaryInputDialog& dialog) { require(phase.selectRemodelingAlternative(QStringLiteral("precision-alternative")), "change semantic phase while precision dialog is open"); accept(dialog); });
     require(phase.document().revision()==phase_revision+1, "phase change is the only admitted document operation");
-    for (const auto& [id,entity] : phase.document().snapshot().entities()) require(entity.type!="measurement_linework", "stale phase dialog creates no stroke");
+    {
+        const auto stale_phase = phase.document().snapshot();
+        for (const auto& [id,entity] : stale_phase.entities()) require(entity.type!="measurement_linework", "stale phase dialog creates no stroke");
+    }
     MainWindow workspace; auto& workspace_canvas=prepare(workspace); require(workspace.beginMeasurementLinework() && workspace.appendMeasurementLineworkPoint({0,0}), "workspace guard fixture starts");
     const auto workspace_before=workspace.document().snapshot();
     input(workspace,workspace_canvas,[&](BoundaryInputDialog& dialog) { workspace.finishMeasurementLinework(); workspace.setWorkspace(Workspace::architectural); accept(dialog); });

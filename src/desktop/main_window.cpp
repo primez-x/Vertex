@@ -32,6 +32,7 @@
 #include "sketch/desktop/drawing_input_panel.hpp"
 #include "sketch/desktop/sheet_layout_dialog.hpp"
 #include "sketch/desktop/text_library_dialog.hpp"
+#include "sketch/desktop/text_library_panel.hpp"
 #include "sketch/desktop/appraisal_report_dialog.hpp"
 #include "sketch/desktop/appraisal_details_panel.hpp"
 #include "sketch/desktop/area_class_palette.hpp"
@@ -14191,7 +14192,10 @@ public:
             m_document->revision() != m_linework_drawing->revision ||
             (expected_revision && *expected_revision != m_document->revision()))
             throw std::invalid_argument("The measured-line drawing source changed or is read-only. Finish and restart the stroke.");
-        const auto context = organize_project(m_document->snapshot()).drawing_context(m_active_layer_id.toStdString());
+        const auto snapshot = m_document->snapshot();
+        if (m_drawing_parked && !drawingTravelSourceCurrent(snapshot))
+            throw std::invalid_argument("The parked drawing source changed. Cancel and start again.");
+        const auto context = organize_project(snapshot).drawing_context(m_active_layer_id.toStdString());
         if (!context || *context != m_linework_drawing->context)
             throw std::invalid_argument("The measured-line drawing context changed. Finish and restart the stroke.");
     }
@@ -14280,6 +14284,7 @@ public:
     bool appendLineworkReceipt(ConstructionReceipt receipt,
                                std::optional<Revision> expected_revision = std::nullopt) {
         try {
+            if (m_drawing_parked) requireDrawingTravelCurrent();
             requireLineworkDrawing(expected_revision);
             const auto& drawing = *m_linework_drawing;
             if (!drawing.has_anchor) throw std::invalid_argument("Place the measured-line starting point first.");
@@ -14320,6 +14325,7 @@ public:
             history_revisions.back() = m_document->revision();
             m_linework_drawing->history_revisions = std::move(history_revisions);
             ++m_linework_drawing->history_index;
+            resetDrawingTravel();
             m_last_cursor = edge.segment.end;
             refresh();
             if (closed) finishMeasurementLinework();
@@ -14333,6 +14339,7 @@ public:
 
     bool appendMeasurementLineworkPoint(Vec2 point, std::optional<Revision> expected_revision = std::nullopt) {
         try {
+            if (m_drawing_parked) requireDrawingTravelCurrent();
             requireLineworkDrawing(expected_revision);
             if (!std::isfinite(point.x) || !std::isfinite(point.y)) throw std::invalid_argument("Enter a finite measured point.");
             if (!m_linework_drawing->has_anchor) {
@@ -14354,6 +14361,7 @@ public:
     bool appendMeasurementLineworkHeading(const QString& distance, const QString& heading,
                                           std::optional<Revision> expected_revision = std::nullopt) {
         try {
+            if (m_drawing_parked) requireDrawingTravelCurrent();
             requireLineworkDrawing(expected_revision);
             if (!m_linework_drawing->has_anchor) throw std::invalid_argument("Place the starting point first.");
             ConstructionReceipt receipt;
@@ -14369,6 +14377,7 @@ public:
 
     void finishMeasurementLinework() {
         if (!m_linework_drawing) return;
+        resetDrawingTravel();
         clearDrawingAlignment(false);
         clearDrawingAlignment();
         m_linework_drawing.reset();
@@ -14380,6 +14389,7 @@ public:
 
     bool relocateMeasurementLinework(Vec2 point, std::optional<Revision> expected_revision = std::nullopt) {
         try {
+            if (m_drawing_parked) requireDrawingTravelCurrent();
             requireLineworkDrawing(expected_revision);
             if (!std::isfinite(point.x) || !std::isfinite(point.y)) throw std::invalid_argument("Enter a finite pen-up point.");
             finishMeasurementLinework();
@@ -14391,6 +14401,7 @@ public:
 
     bool jumpMeasurementLineworkVertex(const QString& entity_id, const QString& vertex_id, Revision expected_revision) {
         try {
+            if (m_drawing_parked) requireDrawingTravelCurrent();
             if (!m_document->is_editable() || m_document->revision() != expected_revision)
                 throw std::invalid_argument("The point-jump source changed or is read-only.");
             if (m_linework_drawing) requireLineworkDrawing(expected_revision);
@@ -14420,13 +14431,15 @@ public:
     void refreshLineworkPreview() {
         if (!m_linework_drawing) return;
         BoundaryDraftPreview preview;
-        preview.instruction = QStringLiteral("Measured lines  •  Click nodes  •  Enter/right click finishes  •  D precise line or curve");
+        preview.instruction = m_drawing_parked
+            ? QStringLiteral("Pen parked  •  Arrows walk corners  •  Type a length or click a destination to draw")
+            : QStringLiteral("Measured lines  •  J jump/travel  •  Enter lifts pen  •  Right click finishes  •  D precise");
         if (m_linework_drawing->has_anchor) {
             const auto pen = lineworkPen();
             preview.anchor = m_linework_drawing->model.anchor; preview.pen_position = pen;
             preview.length_snap_active = true;
             const auto endpoint = m_drawing_alignment ? m_drawing_alignment->segment.end : m_last_cursor;
-            if (std::hypot(endpoint.x-pen.x, endpoint.y-pen.y) > default_geometry_tolerance_metres) {
+            if (!m_drawing_parked && std::hypot(endpoint.x-pen.x, endpoint.y-pen.y) > default_geometry_tolerance_metres) {
                 preview.rubber_band = Segment{pen, endpoint, 0};
                 preview.labels.push_back({{(pen.x+endpoint.x)/2, (pen.y+endpoint.y)/2},
                     PlanCanvas::drawingLengthText(segment_length(*preview.rubber_band), m_metric_units)});
@@ -14438,6 +14451,7 @@ public:
 
     void preciseLineworkInput(PlanCanvas* source_canvas = nullptr) {
         try {
+            if (m_drawing_parked) requireDrawingTravelCurrent();
             requireLineworkDrawing();
             const auto context = captureModalContext(); const auto drawing = *m_linework_drawing;
             const auto snapshot = m_document->snapshot();
@@ -21141,6 +21155,8 @@ public:
             const auto identified = decode_identified_boundary_entity(*selected);
             const auto point = jump_to_boundary_vertex(
                 identified, vertex_id.trimmed().toStdString());
+            if (m_boundary_session)
+                throw std::invalid_argument("The unfinished outline was kept. It cannot relocate its current edge start; finish the outline before jumping.");
             if (m_linework_drawing) {
                 const auto snapshot = m_document->snapshot();
                 const auto context = organize_project(snapshot).drawing_context(selected->id);
@@ -22131,6 +22147,10 @@ public:
             if (original_wall>=0) walls->setCurrentIndex(original_wall);
             auto* source_row = new QHBoxLayout; source_row->addWidget(new QLabel(QStringLiteral("Source wall"),&dialog));
             source_row->addWidget(walls,1); layout->addLayout(source_row);
+            auto* correspondence = new QLabel(&dialog);
+            correspondence->setObjectName(QStringLiteral("physicalRoomRepairCorrespondence"));
+            correspondence->setWordWrap(true); correspondence->setTextFormat(Qt::PlainText);
+            layout->addWidget(correspondence);
             auto* preview = new PlanCanvas(&dialog); preview->setObjectName(QStringLiteral("physicalRoomRepairCanvas"));
             new BoundaryPreviewFit(preview); preview->setMinimumHeight(380); preview->setGridEnabled(false);
             preview->setSnapEnabled(false); preview->setOverviewMapEnabled(false); preview->setSelectionTransformEnabled(false,false);
@@ -22140,7 +22160,7 @@ public:
             auto* buttons = new QDialogButtonBox(QDialogButtonBox::Apply|QDialogButtonBox::Cancel,&dialog);
             auto* apply = buttons->button(QDialogButtonBox::Apply); apply->setObjectName(QStringLiteral("physicalRoomRepairApply"));
             apply->setText(QStringLiteral("Review and apply")); apply->setEnabled(false); layout->addWidget(buttons);
-            std::optional<PhysicalWallSpaces> detection; std::optional<EditBoundaryGeometry> proposal;
+            std::optional<PhysicalWallRoomCorrespondenceReport> detection; std::optional<EditBoundaryGeometry> proposal;
             std::optional<EditBoundaryGeometry> accepted; std::optional<std::size_t> chosen;
             const auto unchanged = [&] {
                 const auto current=authoringSnapshot();
@@ -22152,19 +22172,37 @@ public:
                 std::vector<CanvasEntity> entities;
                 CanvasEntity previous{id_from(room_id),QStringLiteral("boundary"),boundary_geometry(decode_identified_boundary_entity(*selected)),0,false};
                 previous.holes=descriptor.holes; previous.stroke_color=QColor(130,143,158); previous.dashed_stroke=true; entities.push_back(std::move(previous));
-                if (detection) for (std::size_t i=0;i<detection->spaces.size();++i) {
-                    const auto& space=detection->spaces[i]; CanvasEntity current{QStringLiteral("candidate:%1").arg(i),QStringLiteral("boundary"),space.boundary,0,false};
+                if (detection) for (std::size_t i=0;i<detection->fresh.size();++i) {
+                    const auto& space=detection->fresh[i]; CanvasEntity current{QStringLiteral("candidate:%1").arg(i),QStringLiteral("boundary"),space.boundary,0,false};
                     current.holes=space.holes; current.stroke_color=QColor(36,107,206);
                     current.filled=chosen && *chosen==i; current.fill_color=QColor(36,107,206,35); entities.push_back(std::move(current));
                 }
                 preview->setEntities(std::move(entities));
             };
             const auto refresh_sources = [&] {
-                detection.reset(); proposal.reset(); chosen.reset(); apply->setEnabled(false);
+                detection.reset(); proposal.reset(); chosen.reset(); apply->setEnabled(false); correspondence->clear();
                 try {
                     if (!unchanged()) throw std::invalid_argument("The project or selection changed. Close this review and start again.");
-                    detection=detect_physical_wall_spaces(source,walls->currentData().toString().toStdString());
-                    status->setText(detection->spaces.empty()?QStringLiteral("No clear room was found in these source walls."):
+                    detection=physical_wall_room_correspondence(source,walls->currentData().toString().toStdString());
+                    const auto retained=std::find_if(detection->retained.begin(),detection->retained.end(),
+                        [&](const auto& value) { return value.room.id==room_id; });
+                    if (retained==detection->retained.end())
+                        correspondence->setText(QStringLiteral("This room is outside the selected wall context."));
+                    else switch (retained->kind) {
+                    case PhysicalWallRoomCorrespondenceKind::unique_continuation:
+                        correspondence->setText(QStringLiteral("This room continues in one current space.")); break;
+                    case PhysicalWallRoomCorrespondenceKind::split:
+                        correspondence->setText(QStringLiteral("This room splits into %1 current spaces. Choose which piece keeps its identity; the other pieces remain unassigned.")
+                            .arg(retained->candidate_indices.size())); break;
+                    case PhysicalWallRoomCorrespondenceKind::merge:
+                        correspondence->setText(QStringLiteral("This room merges with other retained rooms. This review reassigns only the selected room; the other room identities still need review.")); break;
+                    case PhysicalWallRoomCorrespondenceKind::retired:
+                        correspondence->setText(QStringLiteral("No overlapping successor was found. Choose a current space only if this room should be reassigned.")); break;
+                    default:
+                        correspondence->setText(QStringLiteral("The relationship is unresolved. Choose the destination explicitly. %1")
+                            .arg(QString::fromStdString(retained->diagnostic))); break;
+                    }
+                    status->setText(detection->fresh.empty()?QStringLiteral("No clear room was found in these source walls."):
                         QStringLiteral("Click the current clear room to retain this room's identity."));
                 } catch (const std::exception& error) { status->setText(QString::fromUtf8(error.what())); }
                 scene(); preview->fitView();
@@ -22172,16 +22210,17 @@ public:
             preview->setPointPlacementRequested([&](Vec2 point) {
                 proposal.reset(); chosen.reset(); apply->setEnabled(false);
                 try {
-                    if (!unchanged() || !detection) throw std::invalid_argument("The room review is no longer current.");
-                    for (std::size_t i=0;i<detection->spaces.size();++i) {
-                        const auto& space=detection->spaces[i];
+                    if (!unchanged() || !detection || !physical_wall_room_correspondence_is_current(*detection,authoringSnapshot()))
+                        throw std::invalid_argument("The room review is no longer current.");
+                    for (std::size_t i=0;i<detection->fresh.size();++i) {
+                        const auto& space=detection->fresh[i];
                         if (!PlanCanvas::containsAreaPoint(space.boundary,point) || std::any_of(space.holes.begin(),space.holes.end(),
                             [&](const auto& hole) { return PlanCanvas::containsAreaPoint(hole,point); })) continue;
                         if (chosen) throw std::invalid_argument("Several spaces contain this point. Choose an unambiguous interior point.");
                         chosen=i;
                     }
                     if (!chosen) throw std::invalid_argument("Click inside a current clear space, outside wall material and holes.");
-                    const auto& space=detection->spaces.at(*chosen);
+                    const auto& space=detection->fresh.at(*chosen);
                     proposal=boundaryRedefinitionCommand(source,space.boundary,{},nullptr,true);
                     PhysicalWallRoomRepairIntent intent; intent.selected_wall_id=walls->currentData().toString().toStdString();
                     intent.interior_witness=point; intent.reviewed_source_lineage=space.source_lineage; intent.expected_descriptor_digest=digest;
@@ -22196,9 +22235,12 @@ public:
             QObject::connect(buttons,&QDialogButtonBox::rejected,&dialog,&QDialog::reject);
             QObject::connect(apply,&QPushButton::clicked,&dialog,[&] {
                 try {
-                    if (!proposal || !unchanged()) throw std::invalid_argument("The room review changed. Choose the current destination again.");
+                    if (!proposal || !unchanged() || !detection || !physical_wall_room_correspondence_is_current(*detection,authoringSnapshot()))
+                        throw std::invalid_argument("The room review changed. Choose the current destination again.");
                     const auto reviewed=reviewBoundaryRedefinition(source,*proposal);
-                    if (!reviewed || !unchanged()) return;
+                    if (!reviewed) return;
+                    if (!unchanged() || !physical_wall_room_correspondence_is_current(*detection,authoringSnapshot()))
+                        throw std::invalid_argument("The room review source changed. Close this review and start again.");
                     (void)Document::preview_command(source,*reviewed); accepted=*reviewed; dialog.accept();
                 } catch (const std::exception& error) { status->setText(QString::fromUtf8(error.what())); }
             });
@@ -22206,7 +22248,12 @@ public:
             QObject::connect(&timer,&QTimer::timeout,&dialog,[&] { if (!unchanged()) { proposal.reset(); apply->setEnabled(false);
                 status->setText(QStringLiteral("The project or selection changed. Close this review and start again.")); } }); timer.start();
             refresh_sources();
-            if (dialog.exec()!=QDialog::Accepted || !accepted || !unchanged()) return;
+            if (dialog.exec()!=QDialog::Accepted) return;
+            if (!accepted || !unchanged() || !detection ||
+                !physical_wall_room_correspondence_is_current(*detection,authoringSnapshot())) {
+                setError(QStringLiteral("The room review source changed. Close this review and start again."));
+                return;
+            }
             (void)Document::preview_command(source,*accepted); applyDocumentCommand(*accepted); clearError(); refresh();
         } catch (const std::exception& error) { setError(QStringLiteral("Repair room: %1").arg(QString::fromUtf8(error.what()))); }
     }
@@ -23117,6 +23164,10 @@ public:
     }
 
     bool undoCommand() {
+        if (m_drawing_parked) {
+            if (m_linework_drawing) finishMeasurementLinework();
+            else finishWallChain();
+        }
         clearDrawingAlignment();
         if (!m_document->is_editable()) {
             if (m_linework_drawing) finishMeasurementLinework();
@@ -23180,6 +23231,10 @@ public:
     }
 
     bool redoCommand() {
+        if (m_drawing_parked) {
+            if (m_linework_drawing) finishMeasurementLinework();
+            else finishWallChain();
+        }
         clearDrawingAlignment();
         if (!m_document->is_editable()) {
             if (m_linework_drawing) finishMeasurementLinework();
@@ -27437,7 +27492,7 @@ public:
         cancelAreaClass();
         try {
             if (!m_document->is_editable()) throw std::invalid_argument("This document is read-only.");
-            if (m_boundary_session || m_pending_wall_start || !m_pending_symbol_id.isEmpty() || !m_pending_opening_kind.isEmpty())
+            if (m_boundary_session || m_linework_drawing || m_pending_wall_start || !m_pending_symbol_id.isEmpty() || !m_pending_opening_kind.isEmpty())
                 throw std::invalid_argument("Finish or cancel the current drawing before placing text.");
             validateTextPlacementEntry(entry);
             if (!requireDrawingContext()) return false;
@@ -27468,6 +27523,28 @@ public:
             setError(QStringLiteral("Text placement: %1").arg(QString::fromUtf8(error.what())));
             return false;
         }
+    }
+
+    void refreshInlineTextLibrary() {
+        if (!m_inline_text_library) return;
+        std::vector<TextLibraryEntry> entries;
+        for (const auto& value : default_label_templates()) {
+            auto title=QString::fromUtf8(value.content.data(),static_cast<qsizetype>(value.content.size())).simplified();
+            if (title.size()>64) title=title.left(61)+QStringLiteral("…");
+            entries.push_back({value.id,title.toStdString(),value.category,value.content,{}});
+        }
+        try {
+            auto& store=textLibraryStore();
+            store.reload();
+            entries.insert(entries.end(),store.entries().begin(),store.entries().end());
+            m_inline_text_library->setStatus({});
+        } catch (const std::exception& error) {
+            // Built-in text remains usable when a custom library cannot load.
+            // Clear old user rows instead of offering stale cached entries.
+            m_inline_text_library->setStatus(QStringLiteral("Custom labels could not load: %1")
+                .arg(QString::fromUtf8(error.what())));
+        }
+        m_inline_text_library->setEntries(entries);
     }
 
     void showTextLibrary() {
@@ -30073,15 +30150,16 @@ private:
         auto* jump_vertex_action = new QAction(QStringLiteral("Jump to boundary vertex…"), owner);
         jump_vertex_action->setObjectName(QStringLiteral("jumpBoundaryVertex"));
         jump_vertex_action->setText(QStringLiteral("Jump to measured or boundary vertex…"));
-        auto* lift_pen_action = new QAction(QStringLiteral("Lift measured pen"), owner);
+        auto* lift_pen_action = new QAction(QStringLiteral("Lift drawing pen (Enter)"), owner);
         lift_pen_action->setObjectName(QStringLiteral("liftMeasuredPen"));
-        lift_pen_action->setToolTip(QStringLiteral("Keep the current measured stroke and click a new starting point without a connecting edge."));
+        lift_pen_action->setToolTip(QStringLiteral("Keep committed walls or measured lines. Arrows walk connected corners; a distance and arrow travels without drawing."));
         QObject::connect(lift_pen_action, &QAction::triggered, owner, [this] {
-            if (!m_linework_drawing) return;
-            try { requireLineworkDrawing(); }
-            catch (const std::exception& error) { setError(QString::fromUtf8(error.what())); return; }
-            finishMeasurementLinework(); (void)beginMeasurementLinework();
+            (void)liftDrawingPen();
         });
+        auto* travel_action = more_menu->addAction(QStringLiteral("Jump to corner / typed travel (J)"));
+        travel_action->setObjectName(QStringLiteral("jumpDrawingCorner"));
+        travel_action->setToolTip(QStringLiteral("Hover near a structural corner and jump exactly to it. Else type distance + direction to travel without an edge."));
+        QObject::connect(travel_action,&QAction::triggered,owner,[this] { (void)jumpDrawingCorner(); });
         auto* align_x_action = new QAction(QStringLiteral("Align horizontal side to original start X (X)"), owner);
         align_x_action->setObjectName(QStringLiteral("drawingAlignStartX"));
         align_x_action->setToolTip(QStringLiteral("Propose a horizontal side ending at the original start X coordinate; Enter accepts it."));
@@ -30447,7 +30525,7 @@ private:
         m_drawing_mode_combo->setToolTip(QStringLiteral(
             "Choose whether empty plan clicks create walls, measured areas, or loose measured lines. Selection and panning remain available."));
         m_drawing_mode_combo->addItem(QStringLiteral("Wall"), QStringLiteral("wall"));
-        m_drawing_mode_combo->addItem(QStringLiteral("Measurement"), QStringLiteral("measurement"));
+        m_drawing_mode_combo->addItem(QStringLiteral("Area"), QStringLiteral("measurement"));
         m_drawing_mode_combo->addItem(QStringLiteral("Measured lines"), QStringLiteral("measurement_linework"));
         m_drawing_mode_combo->setCurrentIndex(0);
         drawing_mode_layout->addWidget(drawing_mode_label);
@@ -30486,6 +30564,19 @@ private:
         library_pages->addTab(components_page, QStringLiteral("Components"));
         m_area_class_palette = new AreaClassPalette(library_pages);
         library_pages->addTab(m_area_class_palette, QStringLiteral("Area classes"));
+        m_inline_text_library=new TextLibraryPanel(library_pages);
+        library_pages->addTab(m_inline_text_library,QStringLiteral("Labels"));
+        m_inline_text_library->setPlaceRequested([this](const TextLibraryEntry& entry) {
+            if (beginTextPlacement(entry)) m_inline_text_library->setStatus({});
+            else m_inline_text_library->setStatus(lastError());
+        });
+        m_inline_text_library->setManageRequested([this] {
+            showTextLibrary();
+            refreshInlineTextLibrary();
+        });
+        QObject::connect(library_pages,&QTabWidget::currentChanged,owner,[this,library_pages](int) {
+            if (library_pages->currentWidget()==m_inline_text_library) refreshInlineTextLibrary();
+        });
         m_area_class_palette->setArmRequested([this](QString classification) { armAreaClass(classification); });
         m_area_class_palette->setAddTypesRequested([this] { addMissingAreaTypes(); });
         m_area_class_palette->setCancelRequested([this] { cancelAreaClass(); });
@@ -30892,7 +30983,7 @@ private:
         auto* text_button = new QToolButton(components_header);
         text_button->setObjectName(QStringLiteral("openTextLibrary"));
         text_button->setText(QStringLiteral("+ Text"));
-        text_button->setToolTip(QStringLiteral("Choose or edit reusable text, then click to place it"));
+        text_button->setToolTip(QStringLiteral("Open the Labels library"));
         text_button->setAutoRaise(true);
         components_header_layout->addWidget(text_button);
         symbols_layout->addWidget(components_header);
@@ -30969,8 +31060,10 @@ private:
                          [this](int index) { selectSymbolVariant(index); });
         QObject::connect(m_symbol_list, &QListWidget::itemActivated, owner,
                          [this](QListWidgetItem* item) { armSymbolPlacement(item); });
-        QObject::connect(text_button, &QToolButton::clicked, owner, [this] {
-            showTextLibrary();
+        QObject::connect(text_button, &QToolButton::clicked, owner, [this,library_pages,sidebar_tabs] {
+            sidebar_tabs->setCurrentIndex(1);
+            library_pages->setCurrentWidget(m_inline_text_library);
+            refreshInlineTextLibrary();
         });
         populateSymbolLibrary();
 
@@ -32251,6 +32344,17 @@ private:
                 resetDrawingInputContext();
                 m_measurementCanvas->setFocus(Qt::OtherFocusReason);
             });
+            m_drawing_input->setEmptyCommandRequested([this](int key) {
+                if (key == Qt::Key_J) return jumpDrawingCorner();
+                if (key == Qt::Key_Return || key == Qt::Key_Enter) {
+                    if (liftDrawingPen()) return true;
+                    QKeyEvent finish(QEvent::KeyPress,key,Qt::NoModifier);
+                    QApplication::sendEvent(m_measurementCanvas,&finish);
+                    return finish.isAccepted();
+                }
+                return walkDrawingEndpoint(key == Qt::Key_Right ? 1 : key == Qt::Key_Left ? -1 : 0,
+                    key == Qt::Key_Up ? 1 : key == Qt::Key_Down ? -1 : 0);
+            });
             canvas->setDrawingTextRequested([this](const QString& text) {
                 if (!drawingInputReady()) return false;
                 m_drawing_input->beginText(text);
@@ -32618,6 +32722,15 @@ private:
         canvas->setDirectionalAlignmentRequested([this, canvas](int dx, int dy, bool intersections_only) {
             if (canvas == m_measurementCanvas && m_workspace == Workspace::measurement)
                 proposeDirectionalDrawingAlignment(dx, dy, intersections_only);
+        });
+        canvas->setDrawingCornerJumpRequested([this,canvas] {
+            return canvas == m_measurementCanvas && jumpDrawingCorner();
+        });
+        canvas->setDrawingTravelRequested([this,canvas](int dx,int dy) {
+            return canvas == m_measurementCanvas && walkDrawingEndpoint(dx,dy);
+        });
+        canvas->setDrawingPenUpRequested([this,canvas] {
+            return canvas == m_measurementCanvas && liftDrawingPen();
         });
         canvas->setAutoCloseDrawingRequested([this] { (void)autoCloseActiveDrawing(); });
         canvas->setDraftRedoRequested([this] {
@@ -38131,6 +38244,16 @@ private:
             setError(QStringLiteral("The project changed before this drawing input could be applied."));
             return;
         }
+        if (m_drawing_parked) {
+            try { requireDrawingTravelCurrent(); }
+            catch (const std::exception& error) { setError(QString::fromUtf8(error.what())); return; }
+            if (m_drawing_travel_armed && !original_input) {
+                try { (void)parkDrawingAt(point,false); }
+                catch (const std::exception& error) { setError(QString::fromUtf8(error.what())); }
+                return;
+            }
+            resetDrawingTravel();
+        }
         if (m_linework_drawing) {
             if (original_input) (void)appendLineworkReceipt(*original_input, expected_revision);
             else (void)appendMeasurementLineworkPoint(point, expected_revision);
@@ -38293,7 +38416,9 @@ private:
                     showWallChainMeasurementCompletion(measurement_completion);
                     return;
                 }
-                clearPreview();
+                // The next wall needs the same focused length editor. Hiding
+                // it here can queue a navigator property pick before it reopens.
+                clearPreview(true, m_tool == CanvasTool::wall);
                 if (m_tool == CanvasTool::wall) {
                     m_pending_wall_start = point;
                     m_wall_chain_anchor = chain_anchor;
@@ -38469,6 +38594,251 @@ private:
         setTool(CanvasTool::select);
     }
 
+    void resetDrawingTravel() {
+        ++m_drawing_travel_generation;
+        m_drawing_parked = false;
+        m_drawing_travel_armed = false;
+        m_drawing_travel_context.reset();
+        m_drawing_travel_source.reset();
+        if (m_tool == CanvasTool::wall) {
+            m_measurementCanvas->setBoundaryDraftPreview(std::nullopt);
+            m_architecturalCanvas->setBoundaryDraftPreview(std::nullopt);
+        }
+    }
+
+    bool drawingTravelAvailable() const {
+        return m_document->is_editable() && m_workspace == Workspace::measurement &&
+            m_measurementCanvas->drawingCommandIdle() && m_selected_ids.isEmpty() &&
+            m_pending_symbol_id.isEmpty() && m_pending_opening_kind.isEmpty() &&
+            !m_text_placement_context && !m_plan_label_context && !m_armed_area_class;
+    }
+
+    bool drawingTravelSourceCurrent(const DocumentSnapshot& snapshot) const {
+        return m_drawing_travel_context && m_drawing_travel_source &&
+            m_document == m_drawing_travel_context->document &&
+            snapshot.document_id() == m_drawing_travel_source->document_id() &&
+            snapshot.revision() == m_drawing_travel_source->revision() &&
+            snapshot.entities() == m_drawing_travel_source->entities() &&
+            snapshot.assets() == m_drawing_travel_source->assets();
+    }
+
+    void requireDrawingTravelCurrent() {
+        if (!m_drawing_travel_context)
+            throw std::invalid_argument("The parked drawing is unavailable. Start a new drawing.");
+        if (!drawingTravelSourceCurrent(m_document->snapshot())) {
+            // Retire only local input. A refreshed scene cannot authorize the
+            // anchor retained from a different head, even at the same revision.
+            clearPreview(false);
+            m_tool = CanvasTool::select;
+            syncToolControls();
+            refreshActions();
+            throw std::invalid_argument("The parked drawing source changed. Start a new drawing.");
+        }
+        if (!m_measurementCanvas->drawingCommandIdle())
+            throw std::invalid_argument("Finish the active canvas gesture before using the parked drawing.");
+        if (!drawingTravelAvailable()) {
+            if (!m_selected_ids.isEmpty())
+                throw std::invalid_argument("Clear the selection before using the parked pen.");
+            if (!m_document->is_editable() || m_workspace != Workspace::measurement)
+                throw std::invalid_argument("Use the parked pen in an editable 2D drawing.");
+            if (!m_pending_symbol_id.isEmpty() || !m_pending_opening_kind.isEmpty())
+                throw std::invalid_argument("Finish component placement before using the parked pen.");
+            if (m_text_placement_context || m_plan_label_context)
+                throw std::invalid_argument("Finish label placement before using the parked pen.");
+            throw std::invalid_argument("Finish area classification before using the parked pen.");
+        }
+        const auto& context = *m_drawing_travel_context;
+        if (m_document != context.document || m_document->revision() != context.revision ||
+            m_selected_id != context.selected_id || m_active_layer_id != context.layer_id ||
+            m_metric_units != context.metric_units || m_tool != m_drawing_travel_tool)
+            throw std::invalid_argument("The parked drawing context changed. Cancel and start again.");
+        if (m_linework_drawing) requireLineworkDrawing(context.revision);
+        if (m_tool == CanvasTool::wall && (!m_pending_wall_start || !m_wall_chain_anchor))
+            throw std::invalid_argument("The parked wall start is unavailable.");
+    }
+
+    std::vector<CanvasEntity> drawingTravelSources() const {
+        const auto snapshot = m_document->snapshot();
+        if (m_drawing_parked && !drawingTravelSourceCurrent(snapshot))
+            throw std::invalid_argument("The parked drawing source changed. Cancel and start again.");
+        if (m_drawing_alignment_scene_document != m_document || !m_drawing_alignment_scene_source ||
+            snapshot.revision() != m_drawing_alignment_scene_source->revision() ||
+            snapshot.entities() != m_drawing_alignment_scene_source->entities() ||
+            snapshot.assets() != m_drawing_alignment_scene_source->assets())
+            throw std::invalid_argument("The visible structural sources changed. Refresh before travelling.");
+        const auto organization = organize_project(snapshot);
+        const auto active = organization.drawing_context(m_active_layer_id.toStdString());
+        if (!active) throw std::invalid_argument("Choose an active drawing floor first.");
+        std::vector<CanvasEntity> sources;
+        for (const auto& entity : m_measurementCanvas->entities()) {
+            const auto found = snapshot.entities().find(entity.id.toStdString());
+            if (found == snapshot.entities().end() ||
+                (found->second.type != "wall" && found->second.type != "measurement_linework" &&
+                 !is_closed_boundary_entity(found->second.type))) continue;
+            const auto context = organization.drawing_context(found->first);
+            if (!context || context->property_id != active->property_id ||
+                context->building_id != active->building_id || context->floor_id != active->floor_id) continue;
+            sources.push_back(entity);
+        }
+        return sources;
+    }
+
+    void refreshParkedDrawing() {
+        if (m_linework_drawing) { refreshLineworkPreview(); return; }
+        if (!m_pending_wall_start) return;
+        m_measurementCanvas->setWallPreview(std::nullopt);
+        m_architecturalCanvas->setWallPreview(std::nullopt);
+        BoundaryDraftPreview preview;
+        preview.pen_position = *m_pending_wall_start;
+        preview.instruction = m_drawing_travel_armed
+            ? QStringLiteral("Travel armed  •  Type distance + arrow  •  J near a corner jumps")
+            : QStringLiteral("Pen parked  •  Arrows walk corners  •  Type a length or click a destination to draw");
+        m_measurementCanvas->setBoundaryDraftPreview(preview);
+        m_architecturalCanvas->setBoundaryDraftPreview(std::move(preview));
+        updateDrawingInput();
+    }
+
+    bool parkDrawingAt(Vec2 point, bool typed_travel) {
+        if (!drawingTravelAvailable() || !std::isfinite(point.x) || !std::isfinite(point.y))
+            throw std::invalid_argument("Choose a finite point in the active drawing.");
+        if (m_boundary_session)
+            throw std::invalid_argument("This unfinished outline cannot relocate its pen. Its edges were kept; continue it or finish before jumping.");
+        if (m_linework_drawing) {
+            if (!relocateMeasurementLinework(point,m_document->revision())) return false;
+        } else if (m_creation_mode == DrawingMode::measured_lines && m_tool == CanvasTool::select) {
+            if (!beginMeasurementLinework() || !appendMeasurementLineworkPoint(point)) return false;
+        } else {
+            if (m_tool != CanvasTool::wall &&
+                !(m_tool == CanvasTool::select && m_creation_mode == DrawingMode::wall)) return false;
+            // Retire the old chain in place. The cancellation route hides the
+            // focused length editor and temporarily switches to selection,
+            // allowing a queued navigator pick to select the property.
+            clearDrawingAlignment(false);
+            resetDrawingTravel();
+            m_tool = CanvasTool::wall;
+            m_pending_wall_start = point;
+            m_wall_chain_anchor = point;
+            m_wall_chain_has_segments = false;
+            m_wall_chain_previous_id.clear();
+            m_wall_chain_owner_ids.clear();
+            m_wall_input_preferences = {};
+        }
+        ++m_drawing_travel_generation;
+        m_drawing_parked = true;
+        m_drawing_travel_armed = typed_travel;
+        m_drawing_travel_context = captureModalContext();
+        m_drawing_travel_source = m_document->snapshot();
+        m_drawing_travel_tool = m_tool;
+        m_last_cursor = point;
+        syncToolControls();
+        refreshParkedDrawing();
+        refreshCursorLabel(point);
+        clearError();
+        return true;
+    }
+
+    bool jumpDrawingCorner() {
+        if (!drawingTravelAvailable()) return false;
+        try {
+            if (m_boundary_session)
+                throw std::invalid_argument("The unfinished outline was kept. Pen relocation is available for walls and measured lines; finish this outline before jumping.");
+            if (m_drawing_parked) requireDrawingTravelCurrent();
+            const auto sources = drawingTravelSources();
+            std::optional<Vec2> nearest;
+            QString source_id;
+            double best = 14.0 / m_measurementCanvas->viewScale();
+            for (const auto& entity : sources) for (const auto point : entity.snap_points) {
+                if (!std::isfinite(point.x) || !std::isfinite(point.y)) continue;
+                const auto distance = std::hypot(point.x-m_last_cursor.x,point.y-m_last_cursor.y);
+                if (distance < best || (distance == best && (!nearest || entity.id < source_id))) {
+                    nearest = point; best = distance; source_id = entity.id;
+                }
+            }
+            const auto start = nearest ? *nearest : drawingInputReady() ? drawingAlignmentStart() : m_last_cursor;
+            if (!parkDrawingAt(start,!nearest)) return false;
+            owner->statusBar()->showMessage(nearest
+                ? QStringLiteral("Jumped to exact corner. Pen parked; type a length or click a destination to draw.")
+                : QStringLiteral("Travel armed. Type a distance and press its direction arrow; no edge is drawn."),5000);
+            return true;
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Jump: %1").arg(QString::fromUtf8(error.what()))); return true;
+        }
+    }
+
+    bool liftDrawingPen() {
+        if (!drawingTravelAvailable() || m_drawing_alignment || m_drawing_alignment_invalidated) return false;
+        // Outline Enter retains its ordinary receipt-bearing close/finish path.
+        // Jump relocation remains separately guarded until outlines support it.
+        if (m_boundary_session) return false;
+        if (!drawingInputReady()) return false;
+        try {
+            if (m_drawing_parked) requireDrawingTravelCurrent();
+            const auto point = drawingAlignmentStart();
+            if (!parkDrawingAt(point,true)) return false;
+            owner->statusBar()->showMessage(QStringLiteral("Pen up. Arrows walk connected endpoints; distance + arrow travels without drawing."),5000);
+            return true;
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Pen up: %1").arg(QString::fromUtf8(error.what()))); return true;
+        }
+    }
+
+    bool walkDrawingEndpoint(int dx, int dy) {
+        if (!m_drawing_parked || !drawingTravelAvailable() || std::abs(dx)+std::abs(dy) != 1) return false;
+        try {
+            requireDrawingTravelCurrent();
+            const auto origin = drawingAlignmentStart();
+            std::optional<Vec2> target;
+            double best_dot = .35, best_length = std::numeric_limits<double>::infinity();
+            QString best_source;
+            for (const auto& entity : drawingTravelSources()) for (const auto& segment : entity.snap_segments) {
+                if (!std::isfinite(segment.start.x) || !std::isfinite(segment.start.y) ||
+                    !std::isfinite(segment.end.x) || !std::isfinite(segment.end.y) ||
+                    !std::isfinite(segment.sweep_radians)) continue;
+                std::optional<Vec2> other;
+                if (std::hypot(segment.start.x-origin.x,segment.start.y-origin.y) <= default_geometry_tolerance_metres) other = segment.end;
+                else if (std::hypot(segment.end.x-origin.x,segment.end.y-origin.y) <= default_geometry_tolerance_metres) other = segment.start;
+                if (!other) continue;
+                const auto length = std::hypot(other->x-origin.x,other->y-origin.y);
+                if (!std::isfinite(length) || length <= default_geometry_tolerance_metres) continue;
+                const auto dot = ((other->x-origin.x)*dx+(other->y-origin.y)*dy)/length;
+                if (dot <= .35) continue;
+                if (!target || dot > best_dot || (dot == best_dot && (length < best_length ||
+                    (length == best_length && (entity.id < best_source || (entity.id == best_source &&
+                        std::pair{other->x,other->y} < std::pair{target->x,target->y})))))) {
+                    target = *other; best_dot = dot; best_length = length; best_source = entity.id;
+                }
+            }
+            if (target) {
+                (void)parkDrawingAt(*target,false);
+                owner->statusBar()->showMessage(QStringLiteral("Walked to connected corner. Pen up; arrows continue without drawing."),4000);
+            } else owner->statusBar()->showMessage(QStringLiteral("No connected endpoint in that direction."),2500);
+            return true;
+        } catch (const std::exception& error) {
+            setError(QStringLiteral("Wall walk: %1").arg(QString::fromUtf8(error.what()))); return true;
+        }
+    }
+
+    bool initialWallOffset(Vec2 origin, Vec2 target, bool vertical) const {
+        if (m_tool != CanvasTool::wall || m_wall_chain_has_segments) return false;
+        const auto tolerance = default_geometry_tolerance_metres;
+        for (const auto& entity : drawingTravelSources()) for (const auto& segment : entity.snap_segments) {
+            if (segment.sweep_radians != 0 || !std::isfinite(segment.start.x) || !std::isfinite(segment.start.y) ||
+                !std::isfinite(segment.end.x) || !std::isfinite(segment.end.y)) continue;
+            const auto x = segment.end.x-segment.start.x, y = segment.end.y-segment.start.y;
+            const auto length = std::hypot(x,y);
+            if (!std::isfinite(length) || length <= tolerance ||
+                (vertical ? std::abs(x)/length : std::abs(y)/length) > 1e-9) continue;
+            const auto on_segment = [&](Vec2 point) {
+                const auto px = point.x-segment.start.x, py = point.y-segment.start.y;
+                const auto along = (px*x+py*y)/length;
+                return std::isfinite(along) && along >= -tolerance && along <= length+tolerance &&
+                    std::abs(px*(y/length)-py*(x/length)) <= tolerance;
+            };
+            if (on_segment(origin) && on_segment(target)) return true;
+        }
+        return false;
+    }
+
     bool drawingInputReady() const {
         if (!m_document->is_editable() || m_workspace != Workspace::measurement ||
             !m_pending_symbol_id.isEmpty() || !m_pending_opening_kind.isEmpty()) return false;
@@ -38509,6 +38879,7 @@ private:
         m_drawing_input_wall_previous_id = m_wall_chain_previous_id;
         m_drawing_input_wall_owner_ids = m_wall_chain_owner_ids;
         m_drawing_input_wall_has_segments = m_wall_chain_has_segments;
+        m_drawing_input_travel_generation = m_drawing_travel_generation;
         m_drawing_input_boundary = m_boundary_session
             ? std::optional{m_boundary_session->view()} : std::nullopt;
         if (m_drawing_input_boundary) m_drawing_input_boundary->pointer.reset();
@@ -38533,6 +38904,7 @@ private:
             return false;
         };
         try {
+            if (m_drawing_parked) requireDrawingTravelCurrent();
             if (!drawingInputReady() || !m_drawing_input_context || !m_drawing_input_snapshot)
                 return reject(QStringLiteral("Start an edge before entering its length."));
             const auto context = *m_drawing_input_context;
@@ -38540,6 +38912,7 @@ private:
             if (m_document != context.document || current.revision() != context.revision ||
                 m_selected_id != context.selected_id || m_active_layer_id != context.layer_id ||
                 m_metric_units != context.metric_units || m_tool != m_drawing_input_tool ||
+                m_drawing_input_travel_generation != m_drawing_travel_generation ||
                 m_workspace != m_drawing_input_workspace ||
                 current.entities() != m_drawing_input_snapshot->entities() ||
                 current.assets() != m_drawing_input_snapshot->assets())
@@ -38559,6 +38932,22 @@ private:
                                   direction == DrawingCardinalDirection::down;
             const auto rise = vertical ? signed_distance : zero;
             const auto run = vertical ? zero : signed_distance;
+            if (m_drawing_parked) requireDrawingTravelCurrent();
+            if (m_drawing_travel_armed || (m_tool == CanvasTool::wall && !m_wall_chain_has_segments)) {
+                ConstructionReceipt receipt;
+                receipt.kind = BoundaryConstructionKind::line_rise_run;
+                receipt.start = drawingAlignmentStart(); receipt.rise = rise; receipt.run = run;
+                const auto replay = replay_construction_receipt(receipt,
+                    ConstructionReplayContext{receipt.start,std::nullopt,std::nullopt,default_geometry_tolerance_metres});
+                if (m_drawing_travel_armed || initialWallOffset(receipt.start,replay.segment.end,vertical)) {
+                    if (!parkDrawingAt(replay.segment.end,false)) return reject(lastError());
+                    resetDrawingInputContext();
+                    clearError();
+                    m_measurementCanvas->setFocus(Qt::OtherFocusReason);
+                    owner->statusBar()->showMessage(QStringLiteral("Exact landing recorded. Type a length or click a destination to draw."),4000);
+                    return true;
+                }
+            }
             if (m_linework_drawing) {
                 if (!m_drawing_input_linework || m_drawing_input_linework->stroke_id != m_linework_drawing->model.stroke_id ||
                     encodeLineworkInputState(*m_drawing_input_linework) != encodeLineworkInputState(m_linework_drawing->model))
@@ -38879,7 +39268,7 @@ private:
         if (m_drawing_mode_combo) {
             m_drawing_mode_combo->setEnabled(world_xy);
             m_drawing_mode_combo->setToolTip(world_xy
-                ? QStringLiteral("Choose whether empty plan clicks create walls, measured areas, or loose measured lines. Selection and panning remain available.")
+                ? QStringLiteral("Choose walls, measured areas, or loose measured lines. Walls/lines: J jumps or arms travel; Enter lifts the pen; arrows walk corners. Selection and panning remain available.")
                 : QStringLiteral("Wall and measurement authoring uses the conventional 2D world-XY canvas. Switch to the 2D workspace first."));
         }
         m_measurementCanvas->setTool(m_tool);
@@ -38917,7 +39306,8 @@ private:
     }
     void toggleOverviewMap() { setOverviewMap(!m_overview_map_enabled); }
 
-    void clearPreview(bool retire = true) {
+    void clearPreview(bool retire = true, bool preserve_drawing_input = false) {
+        resetDrawingTravel();
         m_linework_drawing.reset();
         m_drawing_alignment.reset();
         m_drawing_alignment_invalidated = false;
@@ -38927,7 +39317,7 @@ private:
         resetDrawingInputContext();
         if (m_drawing_input) {
             m_drawing_input->clearInput();
-            m_drawing_input->hide();
+            if (!preserve_drawing_input) m_drawing_input->hide();
         }
         m_pending_opening_kind.clear();
         m_pending_opening_symbol_id.clear();
@@ -38969,6 +39359,7 @@ private:
     }
 
     void refreshWallPreview(Vec2 end, bool semantic_change = true) {
+        if (m_drawing_parked) { refreshParkedDrawing(); return; }
         updateDrawingInput();
         refreshDrawingWitnesses(semantic_change);
         if (m_drawing_alignment) end = m_drawing_alignment->segment.end;
@@ -38995,6 +39386,7 @@ private:
     }
 
     void finishWallChain() {
+        resetDrawingTravel();
         clearDrawingAlignment();
         if (!m_pending_wall_start) return;
         const bool kept_segments = m_wall_chain_has_segments;
@@ -40851,6 +41243,7 @@ private:
     std::shared_ptr<Document> m_document;
     QString m_text_library_path;
     std::unique_ptr<TextLibraryStore> m_text_library;
+    TextLibraryPanel* m_inline_text_library{};
     std::optional<ModalContext> m_text_placement_context;
     std::unique_ptr<ProjectWorkspace> m_project_workspace;
     RecoveryLedger m_recovery_ledger;
@@ -41052,6 +41445,13 @@ private:
     Workspace m_drawing_witness_workspace{Workspace::measurement};
     bool m_drawing_witness_editable{};
     DrawingInputPanel* m_drawing_input{};
+    bool m_drawing_parked{};
+    bool m_drawing_travel_armed{};
+    std::uint64_t m_drawing_travel_generation{};
+    std::uint64_t m_drawing_input_travel_generation{};
+    std::optional<ModalContext> m_drawing_travel_context;
+    std::optional<DocumentSnapshot> m_drawing_travel_source;
+    CanvasTool m_drawing_travel_tool{CanvasTool::select};
     std::optional<ModalContext> m_drawing_input_context;
     std::optional<DocumentSnapshot> m_drawing_input_snapshot;
     std::optional<BoundaryAuthoringState> m_drawing_input_boundary;

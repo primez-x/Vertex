@@ -37,7 +37,7 @@ DrawingInputPanel::DrawingInputPanel(QWidget* parent) : QWidget(parent) {
     m_input->setPlaceholderText(QStringLiteral("Length (ft)"));
     m_input->setAccessibleName(QStringLiteral("Drawing length"));
     m_input->setToolTip(QStringLiteral(
-        "Type a length and press an arrow to add an edge. Enter repeats the selected direction. Ctrl+arrow edits text."));
+        "Type a length and press an arrow to draw. J jumps or arms travel. Empty Enter lifts the pen; empty arrows walk connected corners. Ctrl+arrow edits text."));
     m_input->setMaxLength(256);
     m_input->setMinimumWidth(60);
     m_input->installEventFilter(this);
@@ -103,7 +103,11 @@ DrawingInputPanel::DrawingInputPanel(QWidget* parent) : QWidget(parent) {
         connect(key, &QPushButton::clicked, this, [this, label] {
             m_input->setFocus(Qt::OtherFocusReason);
             if (label == QStringLiteral("Enter")) {
-                submit(m_selectedDirection);
+                if (m_input->text().isEmpty()) {
+                    if (m_emptyCommandRequested) m_emptyCommandRequested(Qt::Key_Return);
+                } else {
+                    submit(m_selectedDirection);
+                }
             } else if (label == QStringLiteral("Backspace")) {
                 m_input->backspace();
             } else {
@@ -188,7 +192,12 @@ void DrawingInputPanel::selectDirection(DrawingCardinalDirection direction) {
 
 void DrawingInputPanel::submit(DrawingCardinalDirection direction) {
     selectDirection(direction);
-    if (!m_submitRequested || m_input->text().isEmpty()) {
+    if (m_input->text().isEmpty()) {
+        const std::array<int,4> keys{Qt::Key_Right,Qt::Key_Up,Qt::Key_Left,Qt::Key_Down};
+        if (m_emptyCommandRequested) m_emptyCommandRequested(keys[static_cast<std::size_t>(direction)]);
+        return;
+    }
+    if (!m_submitRequested) {
         return;
     }
     const auto callback = m_submitRequested;
@@ -200,6 +209,10 @@ void DrawingInputPanel::submit(DrawingCardinalDirection direction) {
     }
 }
 
+void DrawingInputPanel::setEmptyCommandRequested(std::function<bool(int)> callback) {
+    m_emptyCommandRequested = std::move(callback);
+}
+
 bool DrawingInputPanel::eventFilter(QObject* watched, QEvent* event) {
     if (watched == m_input && event->type() == QEvent::ShortcutOverride) {
         auto* key = static_cast<QKeyEvent*>(event);
@@ -207,6 +220,7 @@ bool DrawingInputPanel::eventFilter(QObject* watched, QEvent* event) {
                            key->key() == Qt::Key_Left || key->key() == Qt::Key_Down;
         const bool enter = key->key() == Qt::Key_Return || key->key() == Qt::Key_Enter;
         if (key->key() == Qt::Key_Escape ||
+            (key->key() == Qt::Key_J && key->modifiers() == Qt::NoModifier && m_input->text().isEmpty()) ||
             (arrow && key->modifiers() == Qt::NoModifier) ||
             (enter && !(key->modifiers() &
                         (Qt::ControlModifier | Qt::AltModifier | Qt::MetaModifier)))) {
@@ -216,6 +230,13 @@ bool DrawingInputPanel::eventFilter(QObject* watched, QEvent* event) {
     }
     if (watched == m_input && event->type() == QEvent::KeyPress) {
         auto* key = static_cast<QKeyEvent*>(event);
+        if (key->modifiers() == Qt::NoModifier && m_input->text().isEmpty() &&
+            (key->key() == Qt::Key_Return || key->key() == Qt::Key_Enter || key->key() == Qt::Key_J ||
+             key->key() == Qt::Key_Right || key->key() == Qt::Key_Left ||
+             key->key() == Qt::Key_Up || key->key() == Qt::Key_Down)) {
+            if (!key->isAutoRepeat() && m_emptyCommandRequested) m_emptyCommandRequested(key->key());
+            return true;
+        }
         if (key->key() == Qt::Key_Escape) {
             clearInput();
             const auto callback = m_cancelRequested;

@@ -16,6 +16,12 @@ workflows to pass one production acceptance gate together.
 
 ## Build
 
+The [consolidated delivery plan](docs/delivery/plan.md) and
+[execution record](docs/delivery/progress.md) are the current schedule. Historical
+plans retain their behavior contracts and evidence. Routine development uses
+one checkout and the same Debug/Release directories; build affected targets
+and package coherent user-test candidates rather than each continuation.
+
 The application uses C++20, Visual Studio 2022 Build Tools with the x64 C++
 workload, Windows SDK, CMake/Ninja, and Python 3.12. From PowerShell in this
 directory, prepare pinned dependencies explicitly, then build:

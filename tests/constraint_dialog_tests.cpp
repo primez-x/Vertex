@@ -511,8 +511,11 @@ void curved_wall_workspace_entrypoints() {
             "save/reopen must restore the original curve without derivation after undo");
         require(window.redoCommand() && window.redoCommand(), "derived curve fixture must redo both edits");
         std::vector<EntityChange> unlock;
-        for (const auto& [constraint_id, entity] : window.document().snapshot().entities())
-            if (entity.type == "constraint") unlock.push_back(EntityChange::erase(constraint_id));
+        {
+            const auto unlock_source = window.document().snapshot();
+            for (const auto& [constraint_id, entity] : unlock_source.entities())
+                if (entity.type == "constraint") unlock.push_back(EntityChange::erase(constraint_id));
+        }
         window.document().apply(ApplyEntityChanges{window.document().revision(),unlock,{},"remove locks before rigid transforms"});
         require(window.selectEntity(id), "derived curve transform selection failed");
         const auto transform_source=window.document().snapshot();

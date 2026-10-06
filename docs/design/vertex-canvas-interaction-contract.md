@@ -15,7 +15,7 @@ classification and manual dimension placement before the outline is complete.
 | Gesture | Measurement plan | Architectural plan | 3D |
 |---|---|---|---|
 | Left click on object | Select the top visible hit | Select the top visible hit | Select the visible object |
-| Left click on empty canvas | Start a measured boundary or place its next node; clicking the first node closes it | Start a wall or place its end point | Clear selection |
+| Left click on empty canvas | Clear a retained selection first; otherwise start/place a point for the Draw choice (Wall by default, Area, or Measured lines); returning to the original node closes an eligible chain | Clear a retained selection; conventional wall authoring uses the 2D workspace | Clear selection |
 | Left drag from empty canvas | Pan without placing a node | Pan without placing a wall point | No model edit |
 | Left drag from selected object | Move the selected object or compatible selected group in one undoable transaction | Move the selected object or compatible selected group in one undoable transaction | Reserved for an explicitly armed Move command |
 | Left drag from unselected object | Pan; click first if the object should move | Pan; click first if the object should move | Select only |
@@ -25,8 +25,8 @@ classification and manual dimension placement before the outline is complete.
 | Right-to-left Ctrl marquee | Add crossing or enclosed objects | Add crossing or enclosed objects | Planned |
 | Middle drag | Pan from any hit location without changing geometry or a draft | Pan from any hit location without changing geometry | Pan |
 | Space + left drag | Pan from any hit location without changing geometry or a draft | Pan from any hit location without changing geometry | Pan |
-| Right click | Select an unselected hit, preserve a selected group member, then open object, canvas, or active-boundary actions | Select an unselected hit, preserve a selected group member, then open object or canvas actions | Open object or view actions |
-| Right drag | No model action and no context menu | No model action and no context menu | Orbit |
+| Right click | Cancel a pending drawing or new placement while retaining committed geometry; otherwise open relevant object/canvas actions | Cancel a pending new placement; otherwise open relevant object/canvas actions | Open object or view actions |
+| Right drag | Pan without changing geometry, cancelling the draft, or opening a menu | Pan without changing geometry or opening a menu | Orbit |
 | Wheel | Zoom about the pointer without changing the draft | Zoom about the pointer | Zoom |
 | Double click on object | Preserve an existing selected group member, otherwise select the target, then open contextual properties once | Same | Open contextual properties for the selected object |
 | Double click on empty canvas | No special action | No special action | No special action |

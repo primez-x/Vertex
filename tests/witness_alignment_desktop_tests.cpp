@@ -239,8 +239,11 @@ void alignment(bool measurement,bool horizontal) {
             same(canvas.wallPreview()->start,target),"physical Redo restores literal projection and pen");
         const auto redone=window.document().snapshot();
         key(canvas,Qt::Key_Return); unchanged(redone,window.document().snapshot());
-        require(canvas.wallPreview() && same(canvas.wallPreview()->start,target),
-                "ordinary Wall Enter preserves baseline no-op behavior and accepted pen");
+        require(!canvas.wallPreview() && canvas.boundaryDraftPreview() &&
+                canvas.boundaryDraftPreview()->pen_position &&
+                same(*canvas.boundaryDraftPreview()->pen_position,target) &&
+                !canvas.boundaryDraftPreview()->rubber_band,
+                "ordinary Wall Enter parks the exact accepted pen without changing geometry");
         key(canvas,Qt::Key_Escape); unchanged(redone,window.document().snapshot());
         reopened(window,accepted,directory,horizontal ? "wall-X" : "wall-Y");
     }
@@ -361,8 +364,11 @@ void stale(bool measurement,int change) {
         mouse(canvas,QEvent::MouseMove,screen(canvas,{2,4})); require(!selected(canvas),"mouse movement clears proposal");
         unchanged(before,window.document().snapshot()); key(canvas,Qt::Key_Return);
         if (!measurement) { unchanged(before,window.document().snapshot());
-            require(canvas.wallPreview() && same(canvas.wallPreview()->start,endpoint),
-                    "normal Wall Enter after mouse invalidation remains the baseline no-op"); }
+            require(!canvas.wallPreview() && canvas.boundaryDraftPreview() &&
+                    canvas.boundaryDraftPreview()->pen_position &&
+                    same(*canvas.boundaryDraftPreview()->pen_position,endpoint) &&
+                    !canvas.boundaryDraftPreview()->rubber_band,
+                    "normal Wall Enter after mouse invalidation parks the accepted pen without a stale edge"); }
         else {
             const auto snapshot=window.document().snapshot(); const auto boundaries=ids(snapshot,"measurement_boundary");
             require(boundaries.size()==1 && !canvas.boundaryDraftPreview(),"normal Enter after invalidation finishes measurement");
@@ -475,17 +481,20 @@ void checkpoint_failure_rollback() {
     window.document().apply(ApplyEntityChanges{window.document().revision(),{EntityChange::upsert(property)}, {},
         "Change source outside active workspace"});
     const auto changed=window.document().snapshot();
-    const auto verify=[&] {
+    const auto verify=[&](const char* phase) {
         unchanged(changed,window.document().snapshot());
         require(canvas.boundaryDraftPreview() && same_segments(canvas.boundaryDraftPreview()->segments,draft.segments) &&
             canvas.boundaryDraftPreview()->labels.size()==draft.labels.size() &&
             canvas.boundaryDraftPreview()->instruction==draft.instruction,
             "failed checkpoint rolls back candidate geometry, dimensions and phase");
+        if (!window.lastError().contains("checkpoint failed"))
+            std::cerr << "checkpoint rollback " << phase << " lastError: "
+                      << window.lastError().toStdString() << '\n';
         require(window.lastError().contains("checkpoint failed"),
             "fixture reaches actual recovery checkpoint refusal rather than proposal rejection");
     };
-    click(canvas,{2,4}); verify();
-    key(canvas,Qt::Key_Return); verify();
+    click(canvas,{2,4}); verify("click");
+    key(canvas,Qt::Key_Return); verify("Enter");
 }
 
 void pending_dimension_guards() {

@@ -793,8 +793,8 @@ void test_keyboard_only_boundary_authoring() {
         }
         auto* drawing_mode = window.findChild<QComboBox*>(QStringLiteral("drawingMode"));
         require(drawing_mode && drawing_mode->currentData() == QStringLiteral("measurement") &&
-                    drawing_mode->currentText() == QStringLiteral("Measurement"),
-                "successful explicit Draw First or Define First must select Measurement drawing mode");
+                    drawing_mode->currentText() == QStringLiteral("Area"),
+                "successful explicit Draw First or Define First must select Area drawing mode");
         drive_boundary_modal(window,*drawing,Qt::Key_D,[&](QDialog* modal) {
             auto* input=dynamic_cast<sketch::desktop::BoundaryInputDialog*>(modal);
             require(input!=nullptr,"D must open native keyboard anchor form");
@@ -1221,7 +1221,7 @@ void test_saved_boundary_draft_resumes_without_unsaved_warning() {
         auto* resumed_canvas = canvas(resumed, QStringLiteral("measurementPlanCanvas"));
         const auto& resumed_preview = resumed_canvas->boundaryDraftPreview();
         require(mode->currentData() == QStringLiteral("measurement") &&
-                    mode->currentText() == QStringLiteral("Measurement") &&
+                    mode->currentText() == QStringLiteral("Area") &&
                     resumed_preview && same_boundary(resumed_preview->segments, original.segments),
                 QStringLiteral("resuming a boundary must present Measurement mode and retain its saved geometry; "
                                "data='%1' text='%2' index=%3 preview=%4 actualEdges=%5 expectedEdges=%6 "
@@ -2145,7 +2145,7 @@ void start_define_first_with_keyboard(MainWindow& window, PlanCanvas& drawing) {
     auto* mode = window.findChild<QComboBox*>(QStringLiteral("drawingMode"));
     require(mode && mode->currentData() == QStringLiteral("measurement") &&
                 mode->currentIndex() == mode->findData(QStringLiteral("measurement")) &&
-                mode->currentText() == QStringLiteral("Measurement"),
+                mode->currentText() == QStringLiteral("Area"),
             "successful Define First shortcut must present Measurement in the Draw selector");
 }
 

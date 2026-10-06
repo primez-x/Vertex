@@ -361,6 +361,7 @@ if(SKETCH_BUILD_ARCHITECTURE OR SKETCH_BUILD_DESKTOP)
   add_library(sketch_physical_wall_room src/core/physical_wall_room.cpp)
   target_include_directories(sketch_physical_wall_room PUBLIC include)
   target_link_libraries(sketch_physical_wall_room PUBLIC sketch_physical_wall_spaces)
+  target_link_libraries(sketch_physical_wall_room PRIVATE sketch_architecture)
   target_link_libraries(sketch_dxf_project_exchange PUBLIC sketch_physical_wall_room)
   target_compile_definitions(sketch_dxf_project_exchange PRIVATE SKETCH_PHYSICAL_ROOMS=1)
   target_link_libraries(sketch_ifc_project_exchange PUBLIC sketch_physical_wall_room)
@@ -935,6 +936,7 @@ if(SKETCH_BUILD_DESKTOP)
   add_library(sketch_desktop src/desktop/main_window.cpp src/desktop/sketch_pdf_output.cpp
     src/desktop/building_object_dialog.cpp src/desktop/hosted_opening_dialog.cpp src/desktop/constraint_dialog.cpp
     src/desktop/constraint_preview_canvas.cpp src/desktop/text_library_dialog.cpp
+    src/desktop/text_library_panel.cpp
     src/desktop/appraisal_report_dialog.cpp src/desktop/appraisal_details_panel.cpp
     src/desktop/drawing_input_panel.cpp src/desktop/area_class_palette.cpp)
   target_link_libraries(sketch_desktop PUBLIC sketch_text_library)
@@ -971,6 +973,17 @@ if(SKETCH_BUILD_DESKTOP)
     qt_add_resources(text_library_desktop_tests text_library_test_fonts PREFIX "/fonts" BASE assets/fonts
       FILES assets/fonts/Inter.ttf)
     add_test(NAME text_library_desktop COMMAND text_library_desktop_tests)
+    add_executable(text_library_panel_tests tests/text_library_panel_tests.cpp)
+    target_link_libraries(text_library_panel_tests PRIVATE sketch_desktop)
+    qt_add_resources(text_library_panel_tests text_library_panel_test_fonts
+      PREFIX "/fonts" BASE assets/fonts FILES assets/fonts/Inter.ttf)
+    add_test(NAME text_library_panel COMMAND text_library_panel_tests)
+    set_tests_properties(text_library_panel PROPERTIES
+      ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_PLUGIN_PATH=${SKETCH_QT_PREFIX}/plugins"
+      ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${SKETCH_QT_BIN};PATH=path_list_prepend:${CMAKE_SOURCE_DIR}/.deps/native/x64-windows/$<IF:$<CONFIG:Debug>,debug/bin,bin>")
+    if(MSVC)
+      target_compile_options(text_library_panel_tests PRIVATE /W4 /permissive- /utf-8)
+    endif()
     add_executable(wall_dimension_desktop_tests tests/wall_dimension_desktop_tests.cpp)
     target_link_libraries(wall_dimension_desktop_tests PRIVATE sketch_desktop)
     qt_add_resources(wall_dimension_desktop_tests wall_dimension_test_fonts PREFIX "/fonts" BASE assets/fonts
