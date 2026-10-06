@@ -1,13 +1,16 @@
 #include "../src/desktop/plan_canvas.hpp"
 #include "../src/desktop/sketch_content_bounds.hpp"
+#include "../src/desktop/draft_image_stamp.hpp"
 #include "support/noninteractive_errors.hpp"
 
 #include <QApplication>
 #include <QCryptographicHash>
 #include <QFontDatabase>
+#include <QFile>
 #include <QPainter>
 #include <QPicture>
 #include <QSvgRenderer>
+#include <QTemporaryDir>
 
 #include <cmath>
 #include <iostream>
@@ -295,6 +298,51 @@ void decorated_svg_matches_direct_paint() {
             "recording preserves decorated SVG shape and opacity without duplicate decoration");
     require_contained_ink(value);
 }
+
+void draft_footer_preserves_model_and_is_stable() {
+    QTemporaryDir directory;
+    require(directory.isValid(), "draft footer temporary directory");
+    QImage original(616, 855, QImage::Format_ARGB32);
+    original.fill(QColor(17, 31, 47, 90));
+    for (const auto& stamp : {QStringLiteral("DRAFT — internal checkpoint"),
+                             QStringLiteral("DRAFT\nLong internal checkpoint text that must wrap "
+                                            "within a narrow output image without clipping.")}) {
+        const auto first = directory.filePath("first.png");
+        const auto second = directory.filePath("second.png");
+        require(original.save(first) && stampDraftImage(first, stamp), "first footer export");
+        const QImage first_image(first);
+        require(first_image.width() == original.width() && first_image.height() > original.height(),
+                "footer grows image below model");
+        require(first_image.copy(original.rect()) == original, "footer preserves every model/alpha pixel");
+        // Exercise platform glyph caches at differing sizes before the next
+        // export; layout/output must not depend on earlier UI text painting.
+        QImage pollution(800, 400, QImage::Format_ARGB32);
+        pollution.fill(Qt::white);
+        QPainter painter(&pollution);
+        for (int size = 7; size <= 37; ++size) {
+            QFont font("Arial"); font.setPixelSize(size); font.setBold(size % 2);
+            painter.setFont(font);
+            painter.drawText(QPointF(size * .13, size * 9.1), stamp);
+        }
+        require(painter.end(), "glyph cache pollution painting completes");
+        require(original.save(second) && stampDraftImage(second, stamp), "second footer export");
+        require(QImage(second) == first_image, "draft footer pixels are independent of glyph cache history");
+        QFile first_file(first), second_file(second);
+        require(first_file.open(QIODevice::ReadOnly) && second_file.open(QIODevice::ReadOnly),
+                "read footer encoded output");
+        require(first_file.readAll() == second_file.readAll(), "encoded footer output is deterministic");
+        bool has_red_text = false;
+        for (int y = original.height(); y < first_image.height(); ++y) {
+            for (int x = 0; x < first_image.width(); ++x) {
+                const auto pixel = first_image.pixelColor(x, y);
+                has_red_text |= pixel.red() > pixel.green() + 30 && pixel.green() < 200;
+            }
+        }
+        require(has_red_text, "footer contains visible draft text");
+    }
+    require(!stampDraftImage(directory.filePath("missing.png"), "DRAFT"),
+            "missing source image is rejected");
+}
 }
 
 int main(int argc, char** argv) {
@@ -310,6 +358,7 @@ int main(int argc, char** argv) {
         std::cout << "text_and_subpixel_strokes\n" << std::flush; text_and_subpixel_strokes();
         std::cout << "forwarding_state_and_primitives\n" << std::flush; forwarding_state_and_primitives();
         std::cout << "decorated_svg_matches_direct_paint\n" << std::flush; decorated_svg_matches_direct_paint();
+        std::cout << "draft_footer_preserves_model_and_is_stable\n" << std::flush; draft_footer_preserves_model_and_is_stable();
         std::cout << "Sketch content output tests passed\n";
         return 0;
     } catch (const std::exception& error) {
